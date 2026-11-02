@@ -339,9 +339,13 @@ exact bucket, contiguous range (rangeCursor), membership, order. Its type
 is an opaque token discharged by runtime traits, as Structures does today
 (STR-Key, STR-SortedRun); the same holds for codecs (BE-Code's premises
 are trait obligations, like Leibniz admissibility). A codec obligation
-records its exact codec: the codec that Structures input columns declare for
-the column's logical type, or identity when none is declared; conflicting
-declarations are rejected. Canonicalization instead
+records \code{codec\_id: Option<CodecId>} from Structures input columns for
+the column's logical type, with \code{None} denoting identity. The declaration
+boundary interns missing ids once by opaque token spelling; automatic equal
+spellings share an id, while explicitly different ids remain distinct.
+Conflicting recorded ids for one logical type are rejected even if the codec
+types have the same spelling. The accompanying \code{codec: Option<syn::Type>}
+is only a printing payload, never the identity comparison. Canonicalization instead
 records the checked canonical reference (a \textsc{PL-Distinct} rows provider,
 an existence-only Built index, or the host carrier), or for the returned
 answer its recorded identity index, and grading records the boundary's level;
@@ -570,17 +574,21 @@ A planner is an advice generator, not another interpretation of Sequence.
 Its inputs are a Sequence program $t$, a machine $M$, and an ordered catalog
 $K$ of target-supplied provider token declarations (including \code{Distinct} canonical rows providers),
 entries keyed by token id with admissible levels, and codec tokens keyed by
-exact codec (or identity). The catalog discharges a codec obligation only by
-the token of its recorded codec, and a canon obligation only at its recorded
-level through its recorded token; an obligation without a recorded token or
-level is unmet.
+\code{codec\_id: Option<CodecId>} (\code{None} is identity).
+A single catalog codec token must match the obligation's recorded id,
+required ordering and every graded level; the codec type is only printed.
+Canon obligations are discharged only at their recorded level through their
+recorded token; a missing token or level is unmet.
+Builtin syntactic \code{Dense} codec tokens are absent: they cannot authorize
+arbitrary declaration-local ids. Custom codecs require explicit tokens.
 The GPU \code{decompose} adapter optionally accepts
-\code{codecs [CodecToken \{ codec: Some(Type), ordered: true, levels: [[host], [host, device]] \}]}.
-Each declaration has exactly the Sequence \code{CodecToken} fields:
-\code{codec} is \code{Some(Type)} or \code{None} (identity),
-\code{ordered} is a Boolean, and \code{levels} lists explicit level paths.
-These tokens extend the target catalog; omitted arguments add no tokens.
-No codec capability is inferred from an input schema or a Rust type spelling.
+\code{codecs [CodecToken \{ codec\_id: Some(0), codec: Some(Type), ordered: true, levels: [[host], [host, device]] \}]}.
+The fields occur in the order shown: \code{codec\_id} is \code{Some(u32)} or
+\code{None}; \code{codec} is \code{Some(Type)} or \code{None} (identity pairs
+both fields as \code{None}); \code{ordered} is a Boolean; and \code{levels}
+lists explicit level paths. These tokens extend the target catalog; omitted
+arguments add no tokens. No codec capability is inferred from an input schema
+or a Rust type spelling.
 GPU publication provider-build records also name the exact device-layout
 indices they construct. The checker requires every non-host layout exactly
 once in order; host-only layouts retain their host construction. Printers
@@ -1415,9 +1423,9 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  a\in\{\mathrm{range},\mathrm{runs},\mathrm{columns},\mathrm{radix}\}\quad
  I=p.\mathrm{input}\quad I\ne\bot\Longrightarrow I.\mathrm{keys}\leq |I.\mathrm{columns}|}
  {\mathrm{abi}(p)=a\quad\mathrm{schema}(p)=I\quad
- \mathrm{encoded}(I_i)\iff I_i.\mathrm{codec}\ne\varnothing}
-\Rule{GPU-CodecIdentity}{\forall (T,c),(T,c')\in\mathrm{declaredSymbols}.\ c=c'}
- {\mathrm{codecs}(T)=c\quad\mathrm{captureCodec}(x:T)=\mathrm{codecs}(T)}
+ \mathrm{encoded}(I_i)\iff I_i.\mathrm{codecId}\ne\varnothing}
+\Rule{GPU-CodecIdentity}{\forall (T,i,c),(T,i',c')\in\mathrm{declaredSymbols}.\ i=i'}
+ {\mathrm{codecId}(T)=i\quad\mathrm{captureCodecId}(x:T)=\mathrm{codecId}(T)}
 \Rule{GPU-ProviderLayout}{T=\text{recorded built provider}\quad
  a=\text{checked catalog ABI of }T\quad K=\mathrm{concat}(\mathrm{levels})\quad
  P=\text{recorded complete scan or reconstructed lookup payload}}
@@ -1456,8 +1464,9 @@ Native run and column Host scans require an input schema whose arity and opaque
 logical type tokens equal the source relation's ordered declaration; catalog
 templates may omit it. Contiguous ranges require the range ABI and range read capability;
 resident-column bounds require the columns ABI. Codec identities are compared
-as opaque recorded types across input schemas before translating expressions;
-a conflict is rejected, never overwritten.
+by recorded \code{CodecId} across input schemas before translating expressions;
+a conflict is rejected, never overwritten. The codec type $c$ is only the
+printing payload; equal spelling does not equate explicitly different ids.
 Thus a compared column and its closed capture use the same declared encoding.
 The GPU binding pass records one catalog-backed provider realization for both
 resident and computed paths; the checker validates supplied records without

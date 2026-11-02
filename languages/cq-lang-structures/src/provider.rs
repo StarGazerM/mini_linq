@@ -11,7 +11,7 @@
 //! ```text
 //! Provider    ::= "@" Ident ["(" Provider ")"] [InputSchema] [RadixAdvice] "as" RustType
 //! InputSchema ::= "input" "{" "keys" Integer ";" "columns" "[" InputColumn,* "]" "}"
-//! InputColumn ::= RustType "=>" RustType ["codec" RustType]
+//! InputColumn ::= RustType "=>" RustType ["codec" ["[" CodecId "]"] RustType]
 //! RadixAdvice ::= "radix" "{" "word" RustType ";" "offset" RustType ";"
 //!                 "ratio" Integer ";" "radix_bits" Integer ";" "merge_tile" Integer "}"
 //! Declaration ::= Ident "=" RustType "{" Fact,* "}" ";"
@@ -194,12 +194,69 @@ pub struct InputSchema {
     pub columns: Vec<InputColumn>,
 }
 
+/// Declaration-table identity; Rust spelling is never an admission key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CodecId(pub u32);
+
+impl syn::parse::Parse for CodecId {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let content;
+        syn::bracketed!(content in input);
+        let value: syn::LitInt = content.parse()?;
+        if !content.is_empty() {
+            return Err(content.error("a codec identity is one integer"));
+        }
+        Ok(Self(value.base10_parse()?))
+    }
+}
+
+impl ToTokens for CodecId {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let value = syn::Index::from(self.0 as usize);
+        tokens.extend(quote::quote!([#value]));
+    }
+}
+
 /// All three types are opaque. Codec presence, not spelling, records encoding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InputColumn {
     pub logical: syn::Type,
     pub storage: syn::Type,
     pub codec: Option<syn::Type>,
+    pub codec_id: Option<CodecId>,
+}
+
+/// Intern authored codec spellings once; already recorded identities are opaque.
+pub fn intern_codecs<'a>(columns: impl IntoIterator<Item = &'a mut InputColumn>) {
+    let mut columns: Vec<_> = columns.into_iter().collect();
+    if columns
+        .iter()
+        .all(|column| column.codec.is_none() || column.codec_id.is_some())
+    {
+        return;
+    }
+    let mut identities = std::collections::BTreeMap::new();
+    let mut next = 0u32;
+    for column in &columns {
+        if let (Some(codec), Some(id)) = (&column.codec, column.codec_id) {
+            identities
+                .entry(codec.to_token_stream().to_string())
+                .or_insert(id);
+            next = next.max(id.0.saturating_add(1));
+        }
+    }
+    for column in &mut columns {
+        if column.codec_id.is_none() {
+            if let Some(codec) = &column.codec {
+                let spelling = codec.to_token_stream().to_string();
+                column.codec_id = Some(*identities.entry(spelling).or_insert_with(|| {
+                    let id = CodecId(next);
+                    next += 1;
+                    id
+                }));
+            }
+        }
+    }
 }
 
 /// The generic arguments of `ty`'s last path segment when the spelling ends
@@ -576,16 +633,22 @@ impl syn::parse::Parse for InputColumn {
         let logical = input.parse()?;
         input.parse::<Token![=>]>()?;
         let storage = input.parse()?;
-        let codec = if input.peek(kw::codec) {
+        let (codec_id, codec) = if input.peek(kw::codec) {
             input.parse::<kw::codec>()?;
-            Some(input.parse()?)
+            let id = if input.peek(syn::token::Bracket) {
+                Some(input.parse()?)
+            } else {
+                None
+            };
+            (id, Some(input.parse()?))
         } else {
-            None
+            (None, None)
         };
         Ok(Self {
             logical,
             storage,
             codec,
+            codec_id,
         })
     }
 }
@@ -604,10 +667,11 @@ impl ToTokens for InputColumn {
             logical,
             storage,
             codec,
+            codec_id,
         } = self;
         tokens.extend(quote::quote!(#logical => #storage));
         if let Some(codec) = codec {
-            tokens.extend(quote::quote!(codec #codec));
+            tokens.extend(quote::quote!(codec #codec_id #codec));
         }
     }
 }
@@ -1084,6 +1148,16 @@ fn check_instance(providers: &Providers, provider: &Provider, in_routed: bool) -
         check_slot(provider, index, rule)?;
     }
     if let Some(input) = &provider.input {
+        if input
+            .columns
+            .iter()
+            .any(|column| column.codec.is_some() != column.codec_id.is_some())
+        {
+            return error(
+                &provider.token,
+                "codec identity must accompany its declared spelling",
+            );
+        }
         if input.key_count > input.columns.len() {
             return error(&provider.token, "input key count exceeds column count");
         }

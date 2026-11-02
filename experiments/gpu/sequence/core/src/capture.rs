@@ -760,7 +760,8 @@ mod tests {
         codecs
             .record(
                 &syn::parse_quote!(TestSymbol),
-                &syn::parse_quote!(TestCodec),
+                Some(cq_lang_structures::provider::CodecId(0)),
+                Some(&syn::parse_quote!(TestCodec)),
             )
             .unwrap();
         captures.value(

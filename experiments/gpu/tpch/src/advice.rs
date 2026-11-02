@@ -154,19 +154,21 @@ impl Pipeline {
         // Groups publish one row per key. MatchingLines retains the Lineitem
         // identity through a unique Orders join; dictionary code sets are unique.
         keys.iter()
-            .map(|(relation, columns)| cq_lang_sequence::EvidenceFact::TrustedKey {
-                source: cq_lang_sequence::EvidenceSource::Authored {
-                    provenance: syn::LitStr::new(
-                        &format!("TPC-H {query} stage {stage} publication contract"),
-                        proc_macro2::Span::call_site(),
-                    ),
+            .map(
+                |(relation, columns)| cq_lang_sequence::EvidenceFact::TrustedKey {
+                    source: cq_lang_sequence::EvidenceSource::Authored {
+                        provenance: syn::LitStr::new(
+                            &format!("TPC-H {query} stage {stage} publication contract"),
+                            proc_macro2::Span::call_site(),
+                        ),
+                    },
+                    subject: quote::format_ident!("{relation}"),
+                    columns: columns
+                        .iter()
+                        .map(|column| quote::format_ident!("{column}"))
+                        .collect(),
                 },
-                subject: quote::format_ident!("{relation}"),
-                columns: columns
-                    .iter()
-                    .map(|column| quote::format_ident!("{column}"))
-                    .collect(),
-            })
+            )
             .collect()
     }
 

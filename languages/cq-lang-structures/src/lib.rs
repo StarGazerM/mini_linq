@@ -62,7 +62,7 @@
 pub use cq_lang_physical as physical;
 
 pub mod provider;
-pub use provider::{Capability, Declaration, Facts, Provider, Providers};
+pub use provider::{Capability, CodecId, Declaration, Facts, Provider, Providers};
 pub mod stats;
 
 use quote::ToTokens;
@@ -127,7 +127,7 @@ pub mod kw {
     syn::custom_keyword!(columns);
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Structures {
     pub structures_token: kw::structures,
     #[syn(braced)]
@@ -137,9 +137,28 @@ pub struct Structures {
     #[syn(in = brace)]
     pub publications: stats::Publications,
     #[syn(in = brace)]
-    #[parse(parse_entries)]
     #[to_tokens(|tokens, entries| quote::TokenStreamExt::append_all(tokens, entries))]
     pub entries: Vec<Entry>,
+}
+
+impl syn::parse::Parse for Structures {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let structures_token = input.parse()?;
+        let content;
+        let brace = syn::braced!(content in input);
+        let providers = content.parse()?;
+        let publications = content.parse()?;
+        let entries = parse_entries(&content)?;
+        let mut structures = Self {
+            structures_token,
+            brace,
+            providers,
+            publications,
+            entries,
+        };
+        structures.intern_codecs();
+        Ok(structures)
+    }
 }
 
 fn parse_entries(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Entry>> {
@@ -618,6 +637,30 @@ impl Structure {
 }
 
 impl Structures {
+    /// Intern opaque codec spellings once at the input declaration boundary.
+    /// Explicit identities survive printing and distinguish otherwise identical
+    /// spellings. Unnumbered declarations of one spelling share one identity.
+    pub fn intern_codecs(&mut self) {
+        fn collect<'a>(
+            provider: &'a mut Provider,
+            columns: &mut Vec<&'a mut provider::InputColumn>,
+        ) {
+            if let Some(input) = &mut provider.input {
+                columns.extend(&mut input.columns);
+            }
+            if let Some(inner) = &mut provider.inner {
+                collect(inner, columns);
+            }
+        }
+        let mut columns = Vec::new();
+        for entry in &mut self.entries {
+            if let Some(provider) = entry.structure.provider_mut() {
+                collect(provider, &mut columns);
+            }
+        }
+        provider::intern_codecs(columns);
+    }
+
     /// Declare `declared` tokens that entries reference and drop every
     /// unreferenced declaration, keeping table order (STR-Provider).
     pub fn declare(&mut self, declared: &[Declaration]) {
@@ -633,6 +676,7 @@ impl Structures {
         self.providers
             .declarations
             .retain(|declaration| referenced.contains(&declaration.token.to_string()));
+        self.intern_codecs();
     }
 }
 

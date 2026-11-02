@@ -690,6 +690,7 @@ fn compile_stage(
                     .map(|column| cq_lang_structures::provider::InputColumn {
                         logical: column.ty.clone(),
                         storage: column.ty.clone(),
+                        codec_id: None,
                         codec: None,
                     })
                     .collect(),
@@ -789,15 +790,18 @@ fn compile_stage(
                     std::iter::once(cq_lang_sequence::EvidenceFact::Count {
                         source: cq_lang_sequence::EvidenceSource::Authored {
                             provenance: syn::LitStr::new(
-                                &format!("{} row counts", manifest.root.join("manifest.json").display()),
+                                &format!(
+                                    "{} row counts",
+                                    manifest.root.join("manifest.json").display()
+                                ),
                                 proc_macro2::Span::call_site(),
                             ),
                         },
                         subject: subject.clone(),
                         rows,
                     })
-                    .chain(
-                        key.map(|columns| cq_lang_sequence::EvidenceFact::TrustedKey {
+                    .chain(key.map(|columns| {
+                        cq_lang_sequence::EvidenceFact::TrustedKey {
                             source: cq_lang_sequence::EvidenceSource::Authored {
                                 provenance: syn::LitStr::new(
                                     "TPC-H schema primary keys retained by the loader",
@@ -806,8 +810,8 @@ fn compile_stage(
                             },
                             subject,
                             columns,
-                        }),
-                    )
+                        }
+                    }))
                 })
                 .collect(),
         };

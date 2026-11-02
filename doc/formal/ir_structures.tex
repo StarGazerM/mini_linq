@@ -14,7 +14,7 @@ Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | typed)
 Cap ::= exact | range | membership | ordered | distinct | resident
 Provider ::= @x [(Provider)] [InputSchema] as Type
 InputSchema ::= input { keys N; columns [InputColumn,...] }
-InputColumn ::= Type => Type [codec Type]
+InputColumn ::= Type => Type [codec ["[" N "]"] Type]
 Entry ::= r = Provider [K]... [supports [Support,...]] [items (rows | columns)]
               [membership] [payload[P] constants{c = term, ...}];
         | r host ReaderRef = Provider [K]... [supports [Support,...]];
@@ -51,8 +51,16 @@ accounting, composition with the inner's generic argument index, supplementary
 join-filter eligibility, sharing with pool and task readers, a packed-key
 width limit, native ABI, contiguous-range eligibility and bounds source.
 Native Host input instances additionally record ordered logical/storage columns
-and optional codecs; all types are opaque. Codec presence records encoding.
-Every later pass reads these facts; none inspects a spelling.
+and optional codecs. Each \code{InputColumn} stores
+\code{codec\_id: Option<CodecId>} beside \code{codec: Option<syn::Type>}, with
+\code{cq\_lang\_structures::provider::CodecId(pub u32)}.
+Source \code{codec Type} may omit the id; the Structures declaration boundary
+interns missing ids once by opaque token spelling, locally to that declaration
+context. Repeated automatically interned spellings share an id.
+Explicit \code{codec [0] Type} and \code{codec [1] Type} remain distinct even
+with the same spelling; explicit ids are preserved. \code{None} is identity.
+Later passes compare recorded ids, never codec types; the type is only a
+printing payload after interning. Codec-id presence records encoding.
 Comparing token ids is identity, not recognition.
 \begin{mathpar}
 \Rule{STR-Provider}{\mathsf{tokens}(t)=\mathrm{dom}(\mathsf{decls}(t))\quad

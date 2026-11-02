@@ -1,5 +1,5 @@
 //! Checked bindings for declared packed-run inputs.
-use cq_lang_structures::provider::NativeAbi;
+use cq_lang_structures::provider::{CodecId, NativeAbi};
 use cq_lang_structures::{Program, Structure, physical::symbol_name};
 use quote::quote;
 use std::collections::BTreeMap;
@@ -7,27 +7,32 @@ use syn::Type;
 
 /// Compared columns share one checked encoding for each logical Rust type.
 #[derive(Default)]
-pub(crate) struct Codecs(Vec<(Type, Type)>);
+pub(crate) struct Codecs(Vec<(Type, Option<CodecId>, Option<Type>)>);
 
 impl Codecs {
     pub fn get(&self, logical: &Type) -> Option<&Type> {
         self.0
             .iter()
-            .find(|(ty, _)| ty == logical)
-            .map(|(_, codec)| codec)
+            .find(|(ty, _, _)| ty == logical)
+            .and_then(|(_, _, codec)| codec.as_ref())
     }
 
     /// Formal rule GPU-CodecIdentity: conflicting encodings of a logical symbol type are rejected before capture lowering.
-    pub fn record(&mut self, logical: &Type, codec: &Type) -> syn::Result<()> {
-        if let Some(previous) = self.get(logical) {
-            if previous != codec {
+    pub fn record(
+        &mut self,
+        logical: &Type,
+        codec_id: Option<CodecId>,
+        codec: Option<&Type>,
+    ) -> syn::Result<()> {
+        if let Some((_, previous, _)) = self.0.iter().find(|(ty, _, _)| ty == logical) {
+            if *previous != codec_id {
                 return Err(syn::Error::new_spanned(
-                    codec,
+                    logical,
                     "conflicting codecs for a logical symbol type",
                 ));
             }
         } else {
-            self.0.push((logical.clone(), codec.clone()));
+            self.0.push((logical.clone(), codec_id, codec.cloned()));
         }
         Ok(())
     }
@@ -41,9 +46,7 @@ impl Codecs {
             };
             if let Some(input) = &keyed.provider.input {
                 for column in &input.columns {
-                    if let Some(codec) = &column.codec {
-                        codecs.record(&column.logical, codec)?;
-                    }
+                    codecs.record(&column.logical, column.codec_id, column.codec.as_ref())?;
                 }
             }
         }
@@ -289,6 +292,37 @@ mod tests {
         };
         bind.annotation = None;
         assert!(facts.rust_requires_host(&operator));
+    }
+
+    #[test]
+    fn codec_identity_uses_ids_not_type_payloads() {
+        let logical = syn::parse_quote!(Logical);
+        let codec = syn::parse_quote!(Codec);
+        let alias = syn::parse_quote!(AnotherSpelling);
+        let mut codecs = Codecs::default();
+        codecs
+            .record(&logical, Some(CodecId(7)), Some(&codec))
+            .unwrap();
+        codecs
+            .record(&logical, Some(CodecId(7)), Some(&alias))
+            .unwrap();
+        assert_eq!(codecs.get(&logical), Some(&codec));
+        assert!(
+            codecs
+                .record(&logical, Some(CodecId(8)), Some(&codec))
+                .is_err()
+        );
+        assert!(codecs.record(&logical, None, None).is_err());
+
+        let mut identity = Codecs::default();
+        identity.record(&logical, None, None).unwrap();
+        identity.record(&logical, None, None).unwrap();
+        assert_eq!(identity.get(&logical), None);
+        assert!(
+            identity
+                .record(&logical, Some(CodecId(7)), Some(&codec))
+                .is_err()
+        );
     }
 
     #[test]

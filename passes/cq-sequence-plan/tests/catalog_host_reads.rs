@@ -40,6 +40,7 @@ fn catalog() -> Catalog {
     let mut catalog = Catalog {
         codecs: vec![CodecToken {
             codec: None,
+            codec_id: None,
             ordered: true,
             levels: vec![host.clone(), device.clone(), block.clone()],
         }],

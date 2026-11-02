@@ -146,8 +146,18 @@ IR (contract 7).
 The native GPU boundary records these facts in the provider IR:
 declarations carry `abi range|runs|columns`, `contiguous_range` and
 `bounds resident_columns`; Host instances carry
-`input { keys n; columns [Logical => Storage codec Codec, ...] }`.
-All types remain opaque, and codec presence alone records encoding.
+`input { keys n; columns [Logical => Storage codec [0] Codec, ...] }`.
+Each `InputColumn` carries `codec_id: Option<CodecId>` beside the opaque
+`codec: Option<syn::Type>`, with `cq_lang_structures::provider::CodecId(pub u32)`.
+At the Structures declaration boundary, missing ids are interned once by
+opaque token spelling, locally to that declaration context. Repeated automatic
+declarations of the same spelling share an id; explicitly different ids remain
+distinct even when their spellings match. Source `codec Codec` is accepted and
+interned there; recorded forms retain the id. `None` denotes identity.
+Sequence obligations, catalog admission and GPU compatibility compare recorded
+ids, never codec types. After interning, the type is only a printing payload.
+Custom catalog codec capabilities must explicitly name the local id; builtin
+syntactic `Dense` tokens cannot authorize arbitrary declaration-local ids.
 Native run/column scans require input schemas; catalog templates may omit
 them. Binding copies the recorded schema to Built instances rather than
 recovering layout or codecs from provider generic arguments.

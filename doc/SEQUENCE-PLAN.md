@@ -95,9 +95,9 @@ pub struct LevelNode { pub name: Ident, pub collaborative: bool, pub dynamic: bo
 /// catalog-declared token must equal it. No catalog fact is read from a Rust spelling.
 pub struct Catalog { pub declarations: Vec<cq_lang_structures::Declaration>, pub providers: Vec<CatalogEntry>, pub codecs: Vec<CodecToken> }
 pub struct CatalogEntry { pub provider: cq_lang_structures::Provider, pub levels: Vec<Vec<String>> }
-/// `codec` is the exact codec declared by Structures input columns (`None`: identity);
-/// a codec obligation is discharged only by its recorded codec's token (BE-Code).
-pub struct CodecToken { pub codec: Option<syn::Type>, pub ordered: bool, pub levels: Vec<Vec<String>> }
+/// `codec_id` is the Structures declaration-local identity (`None`: identity).
+/// BE-Code admission compares ids, ordering and levels; `codec` is only printed.
+pub struct CodecToken { pub codec_id: Option<cq_lang_structures::provider::CodecId>, pub codec: Option<syn::Type>, pub ordered: bool, pub levels: Vec<Vec<String>> }
 /// Canonical rows records are typed by tokens declaring `distinct` (PL-Distinct); a canon
 /// obligation is admitted at its graded level through its recorded rows or answer-index token.
 
@@ -185,9 +185,30 @@ and task machines use one item with dynamic widths. Each target exports
 `machine()` and `catalog()`. Catalog levels are explicit absolute paths beginning
 with `host`; an empty list admits no levels. Provider type patterns allow `_`
 type/const arguments and `'_` lifetimes while retaining the author's actual type.
-Native catalogs describe the storage providers, identity/dense codecs and set
-canonicalizers; the GPU catalog describes resident `RangeProvider`,
-`DenseDictionary`/identity codes and publication-level `PackedCanon`/`WideCanon`.
+Native catalogs describe the storage providers, identity codec and set
+canonicalizers; the GPU catalog describes resident `RangeProvider`, identity
+codes and publication-level `PackedCanon`/`WideCanon`. There are no builtin
+syntactic `Dense` codec tokens: a target cannot authorize an arbitrary
+declaration-local codec id by recognizing its type.
+
+`cq_lang_structures::provider::CodecId(pub u32)` names a codec within a
+Structures declaration context. `InputColumn` records `codec_id: Option<CodecId>`
+beside `codec: Option<syn::Type>`. Source `codec Type` may omit the id; the
+declaration boundary interns it once by opaque token spelling. Automatically
+interned equal spellings share an id, but explicit `codec [0] Type` and
+`codec [1] Type` remain distinct. `None` is identity, not an unresolved encoded
+codec. `Obligation::Codec` and `CodecToken` retain the id and type; subsequent
+checking and admission compare only the id, while the type is a printing
+payload. Conflicting ids for one logical type reject even if the codec
+spellings match.
+
+Custom GPU admission is explicit:
+`decompose(codecs [CodecToken { codec_id: Some(0), codec: Some(Type),
+ordered: true, levels: [[host], [host, device]] }])`.
+`codec_id` is `Some(u32)` or `None`; identity pairs `None` with `codec: None`.
+The fields precede `ordered` and `levels` as shown. Each token must name the
+recorded local id and satisfy the requested ordering and all graded levels.
+Omitting `codecs` adds no custom capabilities; codec types never grant them.
 
 Checks (each a named `// Formal rule BE-…:` marker):
 - BE-Alpha: every Term is well-formed over Structures (named results exist, `map` names a total segment, `lookup` key ⊆ heading, `compact` names a select).
@@ -286,7 +307,6 @@ checked by `check_rewrite`:
 | `tile(d, n [, items m])` | a Def | `tile n [items m]` around it | BE-Partition (views are bijections) |
 | `choose(d, len x < k => a, else => b)` or `choose(d, workers < k => a, else => b)` | guards + two Defs | `choose` | BE-Choose |
 | `output(protocol)` | `count` / `reserve` / `bounded(n)` | set the final store's protocol | output paragraph |
-| `codec(R.c => Type)` | host column, codec type token | record codec obligation | BE-Code |
 | `canon(d => Type)` | canon provider type token | record | BE-Canon |
 
 Acceptance per macro: applies, round-trips, `check_rewrite` passes, and a
@@ -604,8 +624,10 @@ Decision procedure (bounded enumeration, no search):
 4. Obligations: validate each reported codec/canon/provider obligation
    against catalog capabilities at its level. Structures already records
    provider and canon types; planning does not replace them or introduce
-   codec/canon selection syntax. Codec laws remain abstract runtime
-   premises, with catalog support validated here. Missing support rejects
+   codec/canon selection syntax. Codec obligations carry the recorded
+   `codec_id`; a single catalog token must match that id, required ordering
+   and all graded levels. Codec types are printing payloads, not admission
+   keys. Codec laws remain abstract runtime premises. Missing support rejects
    with the obligation.
 
 Integration acceptance contracts (not a report of executed checks):

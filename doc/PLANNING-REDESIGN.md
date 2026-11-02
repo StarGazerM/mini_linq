@@ -75,7 +75,16 @@ planned in this baseline.
      `syn::Type` for meaning: no integer/`Decimal`/`String`/`Option`/float
      lists, no wrapping rewrite, no Ord/Eq syntax checks (rustc enforces
      trait bounds). Sizes and encodings come from recorded representation
-     facts (codecs, providers).
+     facts (codecs, providers). Structures input columns record
+     `codec_id: Option<CodecId>` beside the opaque codec type; `None` is
+     identity. The declaration boundary interns omitted ids once by opaque
+     token spelling: the same automatically interned spelling shares an id,
+     while explicit different ids remain distinct even for the same spelling.
+     Source syntax accepts `codec Type` or `codec [0] Type`. Later checking,
+     GPU compatibility and catalog admission compare recorded ids, never
+     codec types; the type is only retained for printing. Catalogs provide
+     identity by default, not syntactic `Dense` authorization for local ids;
+     custom codecs require explicit matching catalog declarations.
    - GPU: a row-dependent Rust expression is emitted verbatim and compiled by
      cuda-oxide. It may run on device iff every column it reads has an
      identity device representation (no codec) and its other inputs are
@@ -832,6 +841,15 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
    assertions separately from intentional public API, expanded-Rust and
    Round fixture goldens; retain semantic assertions where spelling is not
    itself the contract.
+7. **Declaration identity owners — logical-type ids (contract 7).**
+   CodecId closes codec identity comparison, but locating the codec declaration
+   for a logical type still compares `syn::Type`: Sequence `StructuresProof`
+   construction and `codec_obligations`
+   (`languages/cq-lang-sequence/src/contract.rs`), GPU `Codecs::get` / `record`
+   (`experiments/gpu/sequence/core/src/runs.rs`), and GPU Datalog `Symbols`
+   (`experiments/gpu/datalog/src/storage.rs`). Intern logical-type ids once at
+   their declaration table and propagate those ids to these lookups; codec-id
+   admission alone does not close this separate type-identity gap.
 
 ## Progress
 

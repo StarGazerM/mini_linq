@@ -151,20 +151,25 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     catalog.register(providers::declaration("packed_canon"), levels.clone());
     catalog.register(providers::declaration("wide_canon"), levels.clone());
     // `None` is the identity representation of columns without a declared codec.
-    catalog.codecs = [
-        None,
-        Some::<syn::Type>(syn::parse_quote!(
-            ::cq_gpu_sequence_runtime::DenseDictionary<'_>
-        )),
-    ]
-    .into_iter()
-    .map(|codec| CodecToken {
-        codec,
+    catalog.codecs = vec![CodecToken {
+        codec_id: None,
+        codec: None,
         ordered: true,
         levels: std::iter::once(vec!["host".into()])
             .chain(levels.iter().cloned())
             .collect(),
-    })
-    .collect();
+    }];
     catalog
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn default_catalog_only_authorizes_identity() {
+        let catalog = super::catalog();
+        assert_eq!(catalog.codecs.len(), 1);
+        assert_eq!(catalog.codecs[0].codec_id, None);
+        assert_eq!(catalog.codecs[0].codec, None);
+        assert!(catalog.codecs[0].ordered);
+    }
 }

@@ -1437,17 +1437,30 @@ empty \code{next\_init} is checked but never printed. It requires every column
 type to be a supported fixed-width integer or a declared symbol type, and each
 source layout to be the default \code{HashSet} or \code{HashMap} with the
 default hasher, so erasure is exact. A symbol type is named with its codec by the rewrite's
-\code{symbols(T => C, ...)} argument, where \code{C: SymbolCodec<T>} is an
-injective map to \code{u32} codes with its inverse, fixed for the process, so
+\code{symbols(T => [7] C, ...)} argument; \code{symbols(T => C, ...)}
+omits the id for one-time interning across that advice by opaque token spelling.
+Automatic equal spellings share an id; explicit different ids remain distinct.
+Here \code{C: SymbolCodec<T>} is an injective map to \code{u32} codes
+with its inverse, fixed for the process, so
 equal symbols have equal codes in every relation and round. The device sees only codes; strings never leave the host.
 Relations, columns, keys and layout maintenance are unchanged. Storage records
-the declared codec map and resolved geometric maintenance ratio in
-\code{device}; \code{DeviceRuns<W>} carries no logical schema metadata.
+the declared codec map in \code{cq\_lang\_datalog\_storage::DeviceStorage.symbols}
+as \code{Vec<SymbolCodec>}, whose records have \code{logical: Type},
+\code{codec\_id: CodecId} and \code{codec: Type}. Their stored syntax uses
+\code{SymbolCodec \{ logical, codec\_id: [7], codec \}}.
+The resolved geometric maintenance ratio is also recorded in \code{device};
+\code{DeviceRuns<W>} carries no logical schema metadata. Input schemas copy
+the recorded source ids; checking compares ids and never re-interns codec types.
 The device record also carries GPU provider declarations keyed by the Storage
 token, with \code{abi runs}; maintained layouts, negative projections and IDB
 delta/NEW views use the same \code{device\_layout} identity. Each relation and
 layout records an explicit input schema: key count and ordered
-\code{logical => storage codec C} columns (the codec is optional).
+\code{logical => storage codec [N] C} columns (the codec is optional).
+Source records may omit \code{[N]}; the Structures declaration boundary
+interns missing ids once by opaque codec spelling. Automatic equal spellings
+share an id, while explicit different ids remain distinct. The input record
+carries \code{codec\_id: Option<CodecId>} beside the printing-only codec type;
+\code{None} denotes identity. Sequence and GPU checks compare recorded ids.
 These records are produced from relation declarations, layout permutations and
 the authored codec map, not recovered from Rust types. Storage checks token
 membership, schema cardinality, logical column order and key boundaries.
@@ -1462,9 +1475,9 @@ is checked by Rust's \code{Scalar} bounds rather than by type-name recognition.
 \begin{mathpar}
 \Rule{DL-DeviceSymbols}{D=\mathrm{Storage.device.symbols}\quad
  \mathrm{dom}(D)\text{ consists of distinct, declared nonnative logical types}\quad
- \forall(T,C)\in D.\ C\text{ satisfies the symbol-codec laws}}
- {\mathrm{codec}(T)=D(T)\quad
-  \mathrm{deviceType}(T)=\code{Symbol<T,D(T)>}\text{ for }T\in\mathrm{dom}(D)}
+ \forall(T,i,C)\in D.\ C\text{ satisfies the symbol-codec laws}}
+ {\mathrm{codecId}(T)=D(T).\mathrm{codecId}\quad
+  \mathrm{deviceType}(T)=\code{Symbol<T,D(T).codec>}\text{ for }T\in\mathrm{dom}(D)}
 \end{mathpar}
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad

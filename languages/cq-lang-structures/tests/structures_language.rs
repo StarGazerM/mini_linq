@@ -2,6 +2,31 @@
 use cq_lang_structures as structures;
 use quote::{ToTokens, quote};
 
+#[test]
+fn codec_declarations_intern_once_and_preserve_explicit_identity() {
+    use structures::provider::{CodecId, InputSchema, intern_codecs};
+    let mut input: InputSchema = syn::parse_quote!(input {
+        keys 0;
+        columns [
+            A => Code codec Codec,
+            B => Code codec Codec,
+            C => Code codec [7] Other,
+            D => Code codec [8] Other
+        ]
+    });
+    intern_codecs(&mut input.columns);
+    assert_eq!(input.columns[0].codec_id, input.columns[1].codec_id);
+    assert_eq!(input.columns[2].codec_id, Some(CodecId(7)));
+    assert_eq!(input.columns[3].codec_id, Some(CodecId(8)));
+    assert_ne!(input.columns[2].codec_id, input.columns[3].codec_id);
+    let printed: InputSchema = syn::parse2(input.to_token_stream()).unwrap();
+    assert_eq!(input, printed);
+    let id = input.columns[0].codec_id;
+    input.columns[0].codec = Some(syn::parse_quote!(RenamedOpaqueCodec));
+    intern_codecs(&mut input.columns);
+    assert_eq!(input.columns[0].codec_id, id);
+}
+
 /// Provider tokens that entry rewrites in these tests introduce (STR-Provider).
 fn declarations() -> Vec<structures::Declaration> {
     let base: structures::Providers = syn::parse_quote!(providers {

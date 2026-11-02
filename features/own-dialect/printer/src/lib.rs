@@ -725,10 +725,8 @@ impl Push<'_> {
         } else {
             match self.keyed(reader, &keyed.right, &columns)? {
                 Access::Rows => {
-                    let label = syn::Lifetime::new(
-                        &format!("'__cq_nonempty_{reader}"),
-                        Span::mixed_site(),
-                    );
+                    let label =
+                        syn::Lifetime::new(&format!("'__cq_nonempty_{reader}"), Span::mixed_site());
                     let rows = self.emit(&right, quote!(break #label true;))?;
                     quote!(#label: { #rows false })
                 }

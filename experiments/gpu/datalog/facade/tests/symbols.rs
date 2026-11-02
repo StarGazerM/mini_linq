@@ -53,7 +53,7 @@ use cq_gpu_datalog::bind_inputs as resident_inputs;
 
 engine!(cpu, {});
 engine!(gpu, {
-    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(TestSymbol => TestCodec), ratio(8))];
+    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(TestSymbol => [0] TestCodec), ratio(8))];
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [resident_inputs, ::cq_gpu_sequence::bind_runs];
@@ -61,6 +61,7 @@ engine!(gpu, {
         stage = ::cq_gpu_sequence::stage;
         decompose = [::cq_gpu_sequence::decompose(codecs [
             CodecToken {
+                codec_id: Some(0),
                 codec: Some(TestCodec),
                 ordered: true,
                 levels: [[host], [host, device], [host, device, block], [host, device, block, lane]],

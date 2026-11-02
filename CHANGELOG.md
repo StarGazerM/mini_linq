@@ -65,6 +65,24 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   Sequence `key` is replaced by advice-only `planning_key` and explicitly
   semantic `trusted_key`; only the latter feeds key-dependent rewrites.
 
+- Codec identity is now `cq_lang_structures::provider::CodecId(pub u32)`.
+  Structures `InputColumn`, Sequence `Obligation::Codec` and `CodecToken`
+  record `codec_id: Option<CodecId>` beside the printing-only codec type;
+  `None` denotes identity. The Structures declaration boundary interns omitted
+  ids once by opaque token spelling, so automatic equal spellings share an id
+  but explicitly different ids stay distinct even with identical spellings.
+  Input syntax accepts `codec [0] Type` or an omitted id to be interned.
+  Checking, GPU compatibility and catalog admission compare recorded ids,
+  never codec types. Builtin syntactic `Dense` catalog tokens are removed;
+  custom codecs must be supplied explicitly. GPU arguments use
+  `decompose(codecs [CodecToken { codec_id: Some(0), codec: Some(Type),
+  ordered: true, levels: [[host], [host, device]] }])`; identity uses
+  `codec_id: None, codec: None`. Codec injectivity/order laws remain premises.
+  GPU Datalog advice also accepts `symbols(T => [7] Codec)`; omitted ids
+  in `symbols(T => Codec)` are interned once across the advice. Storage retains
+  named logical/codec_id/codec records, and input schemas copy those ids;
+  checkers compare recorded ids without re-interning.
+
 - F5: task decomposition recognizes independent union arms beneath unary
   consumers (including the canonicalization of lowered set union), publishes
   each arm separately, and concatenates/canonicalizes at host. The dispatch
@@ -186,13 +204,13 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   propagate instead of silently becoming negative uniqueness decisions.
 
 - Sequence catalog admission no longer admits silently. `Obligation::Codec`
-  records its exact codec (the declared Structures input codec of each
-  column's logical type, `None` for identity; conflicting declarations are a
-  BE-Code error) and only that `CodecToken { codec, .. }` discharges it.
+  records the declared Structures input `codec_id` of each column's logical
+  type (`None` for identity; conflicting ids are a BE-Code error), and only a
+  `CodecToken` matching that id, ordering and every graded level discharges it.
   `Obligation::Canon` records the answer boundary's identity index
   (`answer_index`) and the `level` grading assigns; the catalog check reads
   them exactly instead of accepting any Distinct entry or defaulting to host.
-  `CodecToken.ty` is replaced by `codec: Option<syn::Type>`.
+  Codec types are retained only as `codec: Option<syn::Type>` printing payloads.
 
 - Sequence placement recognizes a native host provider by its token's declared
   `abi` fact (GPU-NativeAbi) instead of inferring nativeness from catalog

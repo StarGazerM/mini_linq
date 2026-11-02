@@ -423,12 +423,13 @@ impl Catalog {
     }
 }
 
-/// A value-refinement token; `ordered` certifies monotone encoding. `codec`
-/// is the exact codec a Structures input column declares; `None` is the
-/// identity representation of a column without a declared codec.
+/// A value-refinement token; `ordered` certifies monotone encoding.
+/// `codec_id` is the declaration-table identity (`None`: identity representation).
+/// The opaque `codec` payload is retained only for printing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodecToken {
     pub codec: Option<syn::Type>,
+    pub codec_id: Option<cq_lang_structures::CodecId>,
     pub ordered: bool,
     pub levels: Vec<Vec<String>>,
 }
@@ -470,12 +471,13 @@ pub struct Dispatch {
 /// Runtime premises recorded for discharge by target traits and translations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Obligation {
-    /// `columns` carry the exact recorded `codec` (the codec their logical
-    /// type's Structures input columns declare; `None`: identity).
+    /// The exact declaration-table codec identity of these columns.
+    /// `codec` is an opaque printing payload; `None` denotes identity.
     Codec {
         columns: Vec<String>,
         ordered: bool,
         codec: Option<syn::Type>,
+        codec_id: Option<cq_lang_structures::CodecId>,
     },
     Provider {
         provider: String,

@@ -114,6 +114,7 @@ syntax_text!(
     cq_syntax::RelationDecl,
     cq_lang_cq::Program,
     cq_lang_structures::Declaration,
+    cq_lang_structures::CodecId,
     cq_lang_structures::provider::InputSchema,
     cq_stage::Pipeline,
     cq_stage::Context,

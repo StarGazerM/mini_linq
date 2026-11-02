@@ -2,16 +2,16 @@
 use cq_datalog_support::ensure;
 use cq_lang_datalog_storage::{
     self as storage, DeviceRelation, DeviceScratch, DeviceState, DeviceStorage, Hasher,
-    LayoutProtocol, Program, Provider, Providers, provider,
+    LayoutProtocol, Program, Provider, Providers, SymbolCodec, provider,
 };
-use cq_lang_structures::provider::{InputColumn, InputSchema};
+use cq_lang_structures::provider::{CodecId, InputColumn, InputSchema, intern_codecs};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Expr, Ident, Type};
 
 /// Explicit, syntactically matched logical-type to host-codec declarations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Symbols(pub Vec<(Type, Type)>);
+pub struct Symbols(pub Vec<SymbolCodec>);
 
 impl syn::parse::Parse for Symbols {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
@@ -27,15 +27,31 @@ impl syn::parse::Parse for Symbols {
         }
         let content;
         syn::parenthesized!(content in input);
-        let mut symbols = Self::default();
+        let mut columns: Vec<InputColumn> = Vec::new();
         while !content.is_empty() {
             let ty: Type = content.parse()?;
             content.parse::<syn::Token![=>]>()?;
+            let codec_id = if content.peek(syn::token::Bracket) {
+                let id;
+                syn::bracketed!(id in content);
+                let value = id.parse::<syn::LitInt>()?.base10_parse::<u32>()?;
+                if !id.is_empty() {
+                    return Err(id.error("expected one codec id"));
+                }
+                Some(CodecId(value))
+            } else {
+                None
+            };
             let codec: Type = content.parse()?;
-            if symbols.codec(&ty).is_some() {
+            if columns.iter().any(|column| column.logical == ty) {
                 return Err(syn::Error::new_spanned(ty, "duplicate symbol type"));
             }
-            symbols.0.push((ty, codec));
+            columns.push(InputColumn {
+                storage: ty.clone(),
+                logical: ty,
+                codec_id,
+                codec: Some(codec),
+            });
             if content.is_empty() {
                 break;
             }
@@ -44,7 +60,17 @@ impl syn::parse::Parse for Symbols {
         if !input.is_empty() {
             return Err(input.error("unexpected device_storage arguments"));
         }
-        Ok(symbols)
+        intern_codecs(&mut columns);
+        Ok(Self(
+            columns
+                .into_iter()
+                .map(|column| SymbolCodec {
+                    logical: column.logical,
+                    codec_id: column.codec_id.expect("declared codec was interned"),
+                    codec: column.codec.expect("symbol declarations have codecs"),
+                })
+                .collect(),
+        ))
     }
 }
 struct Advice {
@@ -98,11 +124,12 @@ impl syn::parse::Parse for Advice {
 }
 
 impl Symbols {
+    fn declaration(&self, ty: &Type) -> Option<&SymbolCodec> {
+        self.0.iter().find(|symbol| &symbol.logical == ty)
+    }
+
     pub fn codec(&self, ty: &Type) -> Option<&Type> {
-        self.0
-            .iter()
-            .find(|(logical, _)| logical == ty)
-            .map(|(_, codec)| codec)
+        self.declaration(ty).map(|symbol| &symbol.codec)
     }
 
     pub fn device_type(&self, ty: &Type) -> Type {
@@ -120,6 +147,7 @@ impl Symbols {
                 .map(|ty| InputColumn {
                     logical: (*ty).clone(),
                     storage: self.device_type(ty),
+                    codec_id: self.declaration(ty).map(|symbol| symbol.codec_id),
                     codec: self.codec(ty).cloned(),
                 })
                 .collect(),
@@ -127,7 +155,8 @@ impl Symbols {
     }
 
     fn validate(&self, program: &Program) -> syn::Result<()> {
-        for (ty, _) in &self.0 {
+        for symbol in &self.0 {
+            let ty = &symbol.logical;
             if !program
                 .incremental
                 .strata
@@ -153,13 +182,13 @@ impl Symbols {
             .as_ref()
             .ok_or_else(|| syn::Error::new_spanned(program, "missing device storage advice"))?;
         let symbols = Self(advice.symbols.clone());
-        for (index, (ty, _)) in symbols.0.iter().enumerate() {
+        for (index, symbol) in symbols.0.iter().enumerate() {
             if symbols.0[..index]
                 .iter()
-                .any(|(previous, _)| previous == ty)
+                .any(|previous| previous.logical == symbol.logical)
             {
                 return Err(syn::Error::new_spanned(
-                    ty,
+                    &symbol.logical,
                     "symbol declarations require unique logical types",
                 ));
             }
@@ -678,19 +707,18 @@ fn check_input(
         "device input schema has an incorrect key boundary or column count",
     )?;
     for (column, ty) in input.columns.iter().zip(logical) {
+        let declared = symbols.declaration(ty);
         ensure(
-            column.logical == **ty && column.codec.as_ref() == symbols.codec(ty),
+            column.logical == **ty
+                && column.codec_id == declared.map(|symbol| symbol.codec_id)
+                && column.codec.is_some() == declared.is_some(),
             program,
             "device column disagrees with its logical schema or declared codec",
         )?;
         // Scalar's sealed implementation set checks fixed-width integer support
         // in rustc, including aliases. Do not classify a type by its spelling.
-        let storage: Type = match &column.codec {
-            Some(codec) => syn::parse_quote!(::gpu_datalog_runtime::Symbol<#ty, #codec>),
-            None => (*ty).clone(),
-        };
         ensure(
-            column.storage == storage,
+            column.storage == symbols.device_type(ty),
             program,
             "device column storage disagrees with its codec ABI",
         )?;
@@ -759,6 +787,32 @@ mod tests {
         assert!(syn::parse2::<Symbols>(quote!(symbols(String))).is_err());
         assert!(syn::parse2::<Symbols>(quote!(symbols(String => A) extra)).is_err());
         assert!(syn::parse2::<Symbols>(quote!(codecs(String => A))).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(symbols(String => [4294967296] A))).is_err());
+        assert!(syn::parse2::<Symbols>(quote!(symbols(String => [1, 2] A))).is_err());
+    }
+
+    #[test]
+    fn symbol_advice_interns_once_and_preserves_explicit_ids() {
+        let symbols: Symbols = syn::parse_quote!(symbols(
+            First => Codec,
+            Second => Codec,
+            Third => [7] Codec,
+            Fourth => [8] Codec,
+        ));
+        assert_eq!(symbols.0[0].codec_id, symbols.0[1].codec_id);
+        assert_eq!(symbols.0[2].codec_id, CodecId(7));
+        assert_eq!(symbols.0[3].codec_id, CodecId(8));
+        let input = symbols.input(
+            &symbols
+                .0
+                .iter()
+                .map(|symbol| &symbol.logical)
+                .collect::<Vec<_>>(),
+            0,
+        );
+        for (column, symbol) in input.columns.iter().zip(&symbols.0) {
+            assert_eq!(column.codec_id, Some(symbol.codec_id));
+        }
     }
 
     #[test]
@@ -812,6 +866,7 @@ mod tests {
                     .iter()
                     .all(|column| column.logical == syn::parse_quote!(String)
                         && column.storage == ty
+                        && column.codec_id == Some(cq_lang_structures::provider::CodecId(0))
                         && column.codec == Some(syn::parse_quote!(TextCodec)))
             );
         }
@@ -823,8 +878,22 @@ mod tests {
         // recognizing the spelling of String in the query compiler.
         assert!(compile(&source).is_ok());
         assert!(compile_with(&source, quote!(symbols(other::String => TextCodec))).is_err());
+        for mutate in [
+            (|device: &mut DeviceStorage| device.symbols[0].codec_id = CodecId(99))
+                as fn(&mut DeviceStorage),
+            |device| device.relations[0].input.columns[0].codec_id = Some(CodecId(99)),
+            |device| device.layouts[0].input.columns[0].codec_id = Some(CodecId(99)),
+            |device| device.delta_layouts[0].input.columns[0].codec_id = Some(CodecId(99)),
+            |device| device.negations[0].input.columns[0].codec_id = Some(CodecId(99)),
+            |device| device.layouts[0].input.columns[0].codec_id = None,
+        ] {
+            let mut changed = target.clone();
+            mutate(changed.device.as_mut().unwrap());
+            assert!(check(&source, &changed).is_err());
+            assert!(check_device(&changed).is_err());
+        }
         let mut changed = target.clone();
-        changed.device.as_mut().unwrap().symbols[0].1 = syn::parse_quote!(WrongCodec);
+        changed.device.as_mut().unwrap().symbols[0].codec = syn::parse_quote!(WrongCodec);
         assert!(check(&source, &changed).is_err());
         assert!(check_device(&changed).is_err());
         let mut changed = target.clone();
@@ -1120,6 +1189,10 @@ mod tests {
             },
             |d| d.negations[0].input.columns[0].logical = syn::parse_quote!(Wrong),
             |d| d.layouts[0].input.columns[0].codec = Some(syn::parse_quote!(WrongCodec)),
+            |d| {
+                d.layouts[0].input.columns[0].codec_id =
+                    Some(cq_lang_structures::provider::CodecId(999))
+            },
             |d| d.relations[2].candidates_init = syn::parse_quote!(custom()),
             |d| d.relations[2].arena = syn::parse_quote!(Custom),
             |d| d.relations[2].next = syn::parse_quote!(empty_then_extend),

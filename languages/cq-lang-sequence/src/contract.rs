@@ -62,7 +62,7 @@ struct StructuresProof {
     lookups: LookupIndex,
     queries: std::rc::Rc<lookup_semantics::Queries>,
     /// Declared input codec of each logical type (BE-Code); one per type.
-    codecs: Vec<(syn::Type, syn::Type)>,
+    codecs: Vec<(syn::Type, cq_lang_structures::CodecId, syn::Type)>,
 }
 
 struct CheckedProof {
@@ -132,7 +132,7 @@ impl Checker {
         let queries = self.support.queries(&program.physical, &analysis.physical);
         // BE-Code obligations name a column's codec: the one its logical type's
         // input columns declare; differing declarations leave it ambiguous.
-        let mut codecs: Vec<(syn::Type, syn::Type)> = Vec::new();
+        let mut codecs: Vec<(syn::Type, cq_lang_structures::CodecId, syn::Type)> = Vec::new();
         for entry in &program.structures.entries {
             let (cq_lang_structures::Structure::Host { keyed, .. }
             | cq_lang_structures::Structure::Built { keyed, .. }) = &entry.structure
@@ -143,15 +143,20 @@ impl Checker {
                 let Some(codec) = &column.codec else {
                     continue;
                 };
+                let id = column.codec_id.expect("Structures checks codec identities");
                 match codecs
                     .iter()
-                    .find(|(logical, _)| *logical == column.logical)
+                    .find(|(logical, _, _)| *logical == column.logical)
                 {
-                    Some((_, previous)) if previous != codec => {
-                        return fail(codec, "BE-Code", "conflicting codecs for one logical type");
+                    Some((_, previous, _)) if *previous != id => {
+                        return fail(
+                            codec,
+                            "BE-Code",
+                            "conflicting codec identities for one logical type",
+                        );
                     }
                     Some(_) => {}
-                    None => codecs.push((column.logical.clone(), codec.clone())),
+                    None => codecs.push((column.logical.clone(), id, codec.clone())),
                 }
             }
         }
@@ -533,9 +538,13 @@ impl Checked<'_> {
     /// logical type (`None`: no declared codec, the identity representation).
     /// Codec injectivity and monotonicity are deliberately not claimed statically.
     fn codec_obligations(&mut self, columns: Vec<String>, ordered: bool) {
-        let mut groups: Vec<(Option<syn::Type>, Vec<String>)> = Vec::new();
+        let mut groups: Vec<(
+            Option<cq_lang_structures::CodecId>,
+            Option<syn::Type>,
+            Vec<String>,
+        )> = Vec::new();
         for column in columns {
-            let codec = self
+            let declared = self
                 .analysis
                 .structures
                 .physical
@@ -546,16 +555,24 @@ impl Checked<'_> {
                     self.prefix
                         .codecs
                         .iter()
-                        .find(|(declared, _)| declared == logical)
-                })
-                .map(|(_, codec)| codec.clone());
-            match groups.iter_mut().find(|(recorded, _)| *recorded == codec) {
-                Some((_, columns)) => columns.push(column),
-                None => groups.push((codec, vec![column])),
+                        .find(|(declared, _, _)| declared == logical)
+                });
+            let codec_id = declared.map(|(_, id, _)| *id);
+            match groups
+                .iter_mut()
+                .find(|(recorded, _, _)| *recorded == codec_id)
+            {
+                Some((_, _, columns)) => columns.push(column),
+                None => groups.push((
+                    codec_id,
+                    declared.map(|(_, _, codec)| codec.clone()),
+                    vec![column],
+                )),
             }
         }
-        for (codec, columns) in groups {
+        for (codec_id, codec, columns) in groups {
             self.analysis.obligations.push(Obligation::Codec {
+                codec_id,
                 columns,
                 ordered,
                 codec,

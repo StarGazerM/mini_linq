@@ -2532,7 +2532,7 @@ mod tests {
     }
 
     #[test]
-    fn binding_rejects_conflicting_logical_symbol_codecs() {
+    fn binding_rejects_same_spelling_with_conflicting_codec_ids() {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i32,b:i32) = (&data.r);
@@ -2542,9 +2542,9 @@ mod tests {
                 return result as answer(x,y);
             }
             structures { providers { device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> { reads [exact, range, membership, resident], build typed, abi runs }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
-                r host scan = @device_layout input { keys 1; columns [i32 => ::gpu_datalog_runtime::Symbol<i32, FirstCodec> codec FirstCodec, i32 => ::gpu_datalog_runtime::Symbol<i32, SecondCodec> codec SecondCodec] } as ::gpu_datalog_runtime::DeviceLayout<
-                    (::gpu_datalog_runtime::Symbol<i32, FirstCodec>,),
-                    (::gpu_datalog_runtime::Symbol<i32, SecondCodec>,)> [];
+                r host scan = @device_layout input { keys 1; columns [i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [7] Codec, i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [8] Codec] } as ::gpu_datalog_runtime::DeviceLayout<
+                    (::gpu_datalog_runtime::Symbol<i32, Codec>,),
+                    (::gpu_datalog_runtime::Symbol<i32, Codec>,)> [];
                 result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }
@@ -2558,6 +2558,7 @@ mod tests {
                 result_rows at host.device;
             }
         };
+        assert!(crate::runs::Codecs::check(&program.structures).is_err());
         assert!(cq_lang_sequence::check_grading(&program, &crate::machine()).is_err());
     }
 

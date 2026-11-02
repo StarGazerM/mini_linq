@@ -14,3 +14,6 @@ cq-sequence-plan = { path = "../../../../passes/cq-sequence-plan" }
 cq-stage = { path = "../../../../facade/cq-stage" }
 proc-macro2 = "1"
 syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+quote = "1"

@@ -49,7 +49,7 @@ pub struct Program {
 pub struct DeviceStorage {
     /// GPU read facts keyed by the Storage provider token, never its spelling.
     pub providers: Vec<Declaration>,
-    pub symbols: Vec<(Type, Type)>,
+    pub symbols: Vec<SymbolCodec>,
     /// Geometric run-maintenance advice consumed by every state initializer.
     pub ratio: usize,
     /// Per declaration: relation-order rows and candidate storage.
@@ -62,6 +62,19 @@ pub struct DeviceStorage {
     pub negations: Vec<DeviceState>,
     pub scratch: DeviceScratch,
 }
+
+/// Authored codec declaration; device storage copies its interned identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolCodec {
+    pub logical: Type,
+    pub codec_id: cq_lang_structures::CodecId,
+    pub codec: Type,
+}
+record!(SymbolCodec {
+    logical: Type,
+    codec_id: cq_lang_structures::CodecId,
+    codec: Type
+});
 /// Relation-order packed rows: EDB upload, rule candidates and output decoding.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceRelation {
@@ -108,7 +121,7 @@ pub struct DeviceScratch {
 }
 record!(DeviceStorage {
     providers: Vec<Declaration>,
-    symbols: Vec<(Type, Type)>,
+    symbols: Vec<SymbolCodec>,
     ratio: usize,
     relations: Vec<DeviceRelation>,
     layouts: Vec<DeviceState>,
@@ -486,11 +499,12 @@ pub mod contract {
                 program,
                 "device maintenance ratio must be at least two",
             )?;
-            for (index, (ty, _)) in device.symbols.iter().enumerate() {
+            for (index, symbol) in device.symbols.iter().enumerate() {
+                let ty = &symbol.logical;
                 ensure(
                     !device.symbols[..index]
                         .iter()
-                        .any(|(previous, _)| previous == ty),
+                        .any(|previous| previous.logical == *ty),
                     program,
                     "duplicate logical symbol type",
                 )?;

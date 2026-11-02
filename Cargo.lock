@@ -252,6 +252,7 @@ dependencies = [
  "cq-sequence-plan",
  "cq-stage",
  "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

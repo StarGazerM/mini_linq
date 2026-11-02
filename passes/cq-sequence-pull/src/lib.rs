@@ -76,19 +76,14 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
             levels.clone(),
         );
     }
-    // Codec registration only: these tokens authorize representations; this catalog does not execute logical decoding.
-    // `None` is the identity representation of columns without a declared codec.
-    catalog.codecs = [
-        None,
-        Some::<syn::Type>(syn::parse_quote!(::cq_storage::sequence::Dense<_>)),
-    ]
-    .into_iter()
-    .map(|codec| CodecToken {
-        codec,
+    // Identity is intrinsic. Declared codecs require explicit declaration-id
+    // tokens; a Rust spelling (including Dense<_>) grants no capability.
+    catalog.codecs = vec![CodecToken {
+        codec_id: None,
+        codec: None,
         ordered: true,
-        levels: levels.clone(),
-    })
-    .collect();
+        levels,
+    }];
     catalog
 }
 

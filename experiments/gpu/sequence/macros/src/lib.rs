@@ -40,6 +40,26 @@ impl syn::parse::Parse for CodecDeclarations {
             name(&declarations, "CodecToken")?;
             let fields;
             syn::braced!(fields in declarations);
+            name(&fields, "codec_id")?;
+            fields.parse::<syn::Token![:]>()?;
+            let variant: syn::Ident = fields.parse()?;
+            let codec_id = if variant == "Some" {
+                let id;
+                syn::parenthesized!(id in fields);
+                let value = id.parse::<syn::LitInt>()?.base10_parse::<u32>()?;
+                if !id.is_empty() {
+                    return Err(id.error("expected one codec id"));
+                }
+                Some(cq_lang_structures::provider::CodecId(value))
+            } else if variant == "None" {
+                None
+            } else {
+                return Err(syn::Error::new(
+                    variant.span(),
+                    "expected `Some(integer)` or `None`",
+                ));
+            };
+            fields.parse::<syn::Token![,]>()?;
             name(&fields, "codec")?;
             fields.parse::<syn::Token![:]>()?;
             let variant: syn::Ident = fields.parse()?;
@@ -89,6 +109,7 @@ impl syn::parse::Parse for CodecDeclarations {
                 return Err(fields.error("unexpected CodecToken field"));
             }
             tokens.push(cq_lang_sequence::CodecToken {
+                codec_id,
                 codec,
                 ordered,
                 levels,
@@ -205,4 +226,48 @@ pub fn capture_constants(input: TokenStream) -> TokenStream {
         cq_gpu_sequence_core::constants::compile(source)
     })
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cq_lang_structures::provider::CodecId;
+    use quote::quote;
+
+    #[test]
+    fn codec_declarations_require_explicit_identity() {
+        let declarations = syn::parse2::<CodecDeclarations>(quote!(codecs [
+            CodecToken {
+                codec_id: Some(7),
+                codec: Some(Codec),
+                ordered: true,
+                levels: [[host, device]],
+            },
+            CodecToken {
+                codec_id: None,
+                codec: None,
+                ordered: true,
+                levels: [[host]],
+            },
+        ]))
+        .unwrap();
+        assert_eq!(declarations.0[0].codec_id, Some(CodecId(7)));
+        assert_eq!(declarations.0[0].codec, Some(syn::parse_quote!(Codec)));
+        assert_eq!(declarations.0[1].codec_id, None);
+        assert_eq!(declarations.0[1].codec, None);
+
+        for declaration in [
+            quote!(codec: Some(Codec), ordered: true, levels: [[host]]),
+            quote!(codec_id: Some(4294967296), codec: Some(Codec), ordered: true, levels: [[host]]),
+            quote!(codec_id: Some(7, 8), codec: Some(Codec), ordered: true, levels: [[host]]),
+            quote!(codec_id: Some(CodecId(7)), codec: Some(Codec), ordered: true, levels: [[host]]),
+        ] {
+            assert!(
+                syn::parse2::<CodecDeclarations>(quote!(
+                    codecs [CodecToken { #declaration }]
+                ))
+                .is_err()
+            );
+        }
+    }
 }

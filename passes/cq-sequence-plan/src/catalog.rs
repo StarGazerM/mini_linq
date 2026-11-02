@@ -40,9 +40,9 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                     |registered| registered.contains(level),
                 )
             }),
-            Obligation::Codec { ordered, codec, .. } => {
-                codec_available(analysis, catalog, codec.as_ref(), *ordered)
-            }
+            Obligation::Codec {
+                ordered, codec_id, ..
+            } => codec_available(analysis, catalog, *codec_id, *ordered),
             Obligation::Failure { .. } => true,
         };
         if !available {
@@ -105,11 +105,11 @@ pub(crate) fn canon_available(
 pub(crate) fn codec_available(
     analysis: &Analysis,
     catalog: &Catalog,
-    codec: Option<&syn::Type>,
+    codec_id: Option<cq_lang_sequence::structures::CodecId>,
     ordered: bool,
 ) -> bool {
     catalog.codecs.iter().any(|token| {
-        token.codec.as_ref() == codec
+        token.codec_id == codec_id
             && (!ordered || token.ordered)
             && analysis
                 .levels
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn codec_obligations_record_the_declared_codec_and_admit_only_its_token() {
         let mut analysis = cq_lang_sequence::contract::check(&encoded()).unwrap();
-        let declared: syn::Type = syn::parse_quote!(Codec);
+        let declared = cq_lang_sequence::structures::CodecId(0);
         let codecs: Vec<_> = analysis
             .obligations
             .iter()
@@ -309,24 +309,28 @@ mod tests {
                 Obligation::Codec {
                     columns,
                     ordered,
-                    codec,
-                } => Some((columns.clone(), *ordered, codec.clone())),
+                    codec_id,
+                    ..
+                } => Some((columns.clone(), *ordered, *codec_id)),
                 _ => None,
             })
             .collect();
         // The canon heading splits by the recorded codec of each column.
         assert!(
-            codecs.contains(&(vec!["a".into()], false, Some(declared.clone()))),
+            codecs.contains(&(vec!["a".into()], false, Some(declared))),
             "{codecs:?}"
         );
         assert!(
             codecs.contains(&(vec!["b".into()], false, None)),
             "{codecs:?}"
         );
-        let token = |codec: Option<syn::Type>, ordered| cq_lang_sequence::CodecToken {
-            codec,
-            ordered,
-            levels: vec![vec!["host".into()]],
+        let token = |codec_id: Option<cq_lang_sequence::structures::CodecId>, ordered| {
+            cq_lang_sequence::CodecToken {
+                codec: codec_id.map(|_| syn::parse_quote!(Codec)),
+                codec_id,
+                ordered,
+                levels: vec![vec!["host".into()]],
+            }
         };
         let mut catalog = Catalog {
             codecs: vec![token(None, true)],
@@ -335,37 +339,92 @@ mod tests {
         // Legal: identity columns use the identity token.
         assert!(codec_available(&analysis, &catalog, None, true));
         // Illegal: neither identity nor another codec discharges `Codec`.
-        assert!(!codec_available(
-            &analysis,
-            &catalog,
-            Some(&declared),
-            false
-        ));
+        assert!(!codec_available(&analysis, &catalog, Some(declared), false));
         catalog
             .codecs
-            .push(token(Some(syn::parse_quote!(OtherCodec)), true));
-        assert!(!codec_available(
-            &analysis,
-            &catalog,
-            Some(&declared),
-            false
-        ));
+            .push(token(Some(cq_lang_sequence::structures::CodecId(1)), true));
+        assert!(!codec_available(&analysis, &catalog, Some(declared), false));
         // Legal: the exact token, certifying order only when it declares it.
-        catalog.codecs.push(token(Some(declared.clone()), false));
-        assert!(codec_available(&analysis, &catalog, Some(&declared), false));
-        assert!(!codec_available(&analysis, &catalog, Some(&declared), true));
+        catalog.codecs.push(token(Some(declared), false));
+        assert!(codec_available(&analysis, &catalog, Some(declared), false));
+        assert!(!codec_available(&analysis, &catalog, Some(declared), true));
         // A later token may supply order even when the first matching token does not.
-        catalog.codecs.push(token(Some(declared.clone()), true));
-        assert!(codec_available(&analysis, &catalog, Some(&declared), true));
+        catalog.codecs.push(token(Some(declared), true));
+        assert!(codec_available(&analysis, &catalog, Some(declared), true));
         // Illegal: a graded level the token does not register.
         analysis
             .levels
             .insert("answer".into(), vec!["host".into(), "device".into()]);
         assert!(!codec_available(&analysis, &catalog, None, true));
-        let mut graded = token(Some(declared.clone()), true);
+        let mut graded = token(Some(declared), true);
         graded.levels.push(vec!["host".into(), "device".into()]);
         catalog.codecs.push(graded);
-        assert!(codec_available(&analysis, &catalog, Some(&declared), true));
+        assert!(codec_available(&analysis, &catalog, Some(declared), true));
+    }
+
+    #[test]
+    fn codec_admission_rejects_a_mutated_id_without_inspecting_its_spelling() {
+        use cq_lang_sequence::structures::CodecId;
+        let analysis = cq_lang_sequence::contract::check(&encoded()).unwrap();
+        let mut catalog = Catalog {
+            codecs: vec![cq_lang_sequence::CodecToken {
+                codec_id: Some(CodecId(0)),
+                codec: Some(syn::parse_quote!(Codec)),
+                ordered: true,
+                levels: vec![vec!["host".into()]],
+            }],
+            ..Catalog::default()
+        };
+        assert!(codec_available(&analysis, &catalog, Some(CodecId(0)), true));
+        catalog.codecs[0].codec_id = Some(CodecId(1));
+        assert!(!codec_available(
+            &analysis,
+            &catalog,
+            Some(CodecId(0)),
+            true
+        ));
+        // Equal spelling never merges explicitly different declarations.
+        assert!(codec_available(&analysis, &catalog, Some(CodecId(1)), true));
+        catalog.codecs[0].codec = Some(syn::parse_quote!(AnotherOpaqueSpelling));
+        assert!(codec_available(&analysis, &catalog, Some(CodecId(1)), true));
+    }
+
+    #[test]
+    fn same_spelling_with_distinct_declared_ids_is_a_conflicting_encoding() {
+        let mut program = encoded();
+        program.structures.structures.entries[1]
+            .structure
+            .provider_mut()
+            .unwrap()
+            .input = Some(syn::parse_quote!(input {
+            keys 0; columns [i32 => Code codec [0] Codec, i64 => i64]
+        }));
+        assert!(cq_lang_sequence::contract::check(&program).is_ok());
+        let input = program.structures.structures.entries[1]
+            .structure
+            .provider_mut()
+            .unwrap()
+            .input
+            .as_mut()
+            .unwrap();
+        // The same spelling under an explicitly different declaration is not
+        // the same encoding of the shared logical i32 column.
+        input.columns[0].codec_id = Some(cq_lang_sequence::structures::CodecId(1));
+        assert!(cq_lang_sequence::contract::check(&program).is_err());
+    }
+
+    #[test]
+    fn codec_declarations_require_recorded_ids_after_parsing() {
+        let mut program = encoded();
+        let input = program
+            .structures
+            .structures
+            .entries
+            .iter_mut()
+            .find_map(|entry| entry.structure.provider_mut()?.input.as_mut())
+            .unwrap();
+        input.columns[0].codec_id = None;
+        assert!(cq_lang_sequence::contract::check(&program).is_err());
     }
 
     #[test]

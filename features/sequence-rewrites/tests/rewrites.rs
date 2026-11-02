@@ -310,7 +310,10 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
     planning.evidence = syn::parse_quote! {
         evidence from authored("downgraded trusted-key fixture") { planning_key R [id]; }
     };
-    assert!(checker.check(&planning).is_err(), "cached proofs cannot use planning keys");
+    assert!(
+        checker.check(&planning).is_err(),
+        "cached proofs cannot use planning keys"
+    );
     let mut projected = keyed.clone();
     if let cq_lang_sequence::structures::physical::Operator::Rename(rename) =
         &mut projected.structures.physical.program.definitions[0].operator
