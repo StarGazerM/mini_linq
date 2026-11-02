@@ -50,6 +50,15 @@ struct Provider {
     view: Ident,
     payload: Vec<String>,
     keys: Vec<String>,
+    radix: Option<RadixKernel>,
+}
+
+/// Kernel ABI of a recorded radix provider: the key view is `Provider::view`.
+#[derive(Clone)]
+pub struct RadixKernel {
+    pub items: Ident,
+    /// One item lane per payload column, in payload order.
+    pub lanes: Vec<Type>,
 }
 
 trait DirectoryPrint {
@@ -781,6 +790,7 @@ impl Rows {
                             view: provider_view,
                             keys: provider_payload[..recorded.keys.len()].to_vec(),
                             payload: provider_payload,
+                            radix: None,
                         },
                     );
                     run_providers.insert(provider_name.clone());
@@ -813,6 +823,129 @@ impl Rows {
                     ));
                 }
                 let layout = &provider_layouts[name][0];
+                if let Some(radix) = &layout.radix {
+                    // Formal rule GPU-RadixSourceBuild: the recorded K/V lanes,
+                    // W/O and params; the provider spelling is rustc-checked.
+                    let descriptor = |column: &String| -> syn::Result<TokenStream> {
+                        let source = realization.columns.get(column).ok_or_else(|| {
+                            syn::Error::new_spanned(
+                                definition,
+                                "T-Gpu: radix provider column has no resident origin",
+                            )
+                        })?;
+                        let index = fields[source].0;
+                        Ok(quote!(unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::new(
+                            #host.storage().columns[#index].clone(), #host_length)? }))
+                    };
+                    let keys = layout.keys.iter().map(descriptor).collect::<syn::Result<Vec<_>>>()?;
+                    let values =
+                        layout.payload.iter().map(descriptor).collect::<syn::Result<Vec<_>>>()?;
+                    let ty = &layout.ty;
+                    let key_types = &radix.key_types;
+                    let lanes = &radix.lanes;
+                    let word = &radix.word;
+                    let offset = &radix.offset;
+                    let ratio = radix.params.ratio;
+                    let radix_bits = radix.params.radix_bits;
+                    let merge_tile_rows = radix.params.merge_tile_rows;
+                    let owner = format_ident!("__cq_sequence_provider_{}", name);
+                    let view = format_ident!("__cq_sequence_provider_view_{}", name);
+                    let items = format_ident!("__cq_sequence_provider_items_{}", name);
+                    build.extend(quote! {
+                        let #owner: #ty = ::cq_gpu_sequence_runtime::radix_layout::<
+                            (#(#key_types,)*), (#(#lanes,)*), #word, #offset,
+                            (#(::gpu_datalog_runtime::Buffer<#lanes>,)*)
+                        >(
+                            &__cq_pool,
+                            ::gpu_datalog_runtime::RadixRunParams {
+                                ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows,
+                            },
+                            &[#(#keys),*],
+                            &[#(#values),*],
+                            (#selection).as_ref(),
+                        )?;
+                    });
+                    // GPU-Smallest ChoiceCarrier::PositionTag: a side's key
+                    // slots and candidate ordinals fit the tag's low bits.
+                    let tag_bits = analysis
+                        .gpu_bindings
+                        .realization
+                        .smallest
+                        .values()
+                        .filter(|record| record.sides.iter().any(|side| side.provider == *name))
+                        .map(|record| {
+                            let cq_lang_sequence::gpu::realization::ChoiceCarrier::PositionTag {
+                                choice_bits,
+                            } = record.carrier;
+                            31 - choice_bits
+                        })
+                        .min();
+                    if let Some(bits) = tag_bits {
+                        build.extend(quote! {
+                            if #owner.len() >= 1usize << #bits {
+                                return Err("GPU-Smallest: a candidate side exceeds its position tag".into());
+                            }
+                        });
+                    }
+                    parameters.push((
+                        view.clone(),
+                        syn::parse_quote!(::gpu_datalog_runtime::RadixLayoutView<#word, #offset>),
+                        quote!(#owner.view()),
+                    ));
+                    parameters.push((
+                        items.clone(),
+                        syn::parse_quote!(::gpu_datalog_runtime::RadixItemsView),
+                        quote!(#owner.items_view()),
+                    ));
+                    // Scans read the resident source, never the grouped items.
+                    let reads = realization
+                        .columns
+                        .iter()
+                        .filter_map(|(column, source)| {
+                            columns.get(column).map(|&slot| {
+                                let param = &fields[source].1;
+                                (slot, quote!(#param))
+                            })
+                        })
+                        .collect();
+                    let (positions, length) = if interval.is_some() {
+                        let selected = format_ident!("__cq_sequence_selected_{}", name);
+                        let param = format_ident!("__cq_sequence_selected_rows_{}", name);
+                        build.extend(quote! {
+                            let #selected = ::cq_gpu_sequence_runtime::select(
+                                __cq_pool.clone(), &(#selection).expect("recorded selection"))?;
+                        });
+                        parameters.push((
+                            param.clone(),
+                            syn::parse_quote!(*const u32),
+                            quote!(#selected.ptr()),
+                        ));
+                        (Some(param), quote!(#selected.len()))
+                    } else {
+                        (None, quote!(#host_length))
+                    };
+                    sources.insert(
+                        name.clone(),
+                        Source {
+                            reads,
+                            length,
+                            positions,
+                        },
+                    );
+                    providers.insert(
+                        name.clone(),
+                        Provider {
+                            view,
+                            payload: layout.payload.clone(),
+                            keys: layout.keys.clone(),
+                            radix: Some(RadixKernel {
+                                items,
+                                lanes: lanes.clone(),
+                            }),
+                        },
+                    );
+                    continue;
+                }
                 if layout.abi != ProviderAbi::Range {
                     return Err(error(
                         "GPU-ProviderLayout: recorded provider cannot build resident columns",
@@ -918,6 +1051,7 @@ impl Rows {
                         view,
                         payload,
                         keys,
+                        radix: None,
                     },
                 );
             } else {
@@ -1133,6 +1267,10 @@ impl Rows {
     pub fn run_provider(&self, name: &str) -> bool {
         self.run_providers.contains(name)
     }
+    /// The kernel ABI of a recorded radix provider.
+    pub fn radix_provider(&self, name: &str) -> Option<&RadixKernel> {
+        self.providers.get(name).and_then(|provider| provider.radix.as_ref())
+    }
     /// The device value of an answer column: its row slot, or the kernel
     /// scalar of a capture answer column (IF-Capture).
     pub fn output_value(&self, column: &str) -> syn::Result<TokenStream> {
@@ -1282,6 +1420,7 @@ impl Rows {
                         view: view.clone(),
                         payload: payload.clone(),
                         keys: keys.clone(),
+                        radix: None,
                     },
                 );
             }

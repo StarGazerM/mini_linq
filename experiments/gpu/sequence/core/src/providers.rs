@@ -1,6 +1,7 @@
 //! GPU provider tokens (STR-Provider): resident range reads, device layouts
-//! and columns, and the canonical distinct builds. A token's facts are
-//! declared here once; recorded entries carry its id and spelling.
+//! and columns, grouped radix indices and the canonical distinct builds. A
+//! token's facts are declared here once; recorded entries carry its id and
+//! spelling.
 use cq_lang_structures::{Declaration, Providers};
 
 /// Every GPU declaration, in catalog order.
@@ -11,6 +12,9 @@ pub fn declarations() -> Vec<Declaration> {
         };
         device_layout = ::gpu_datalog_runtime::DeviceLayout<_, _> {
             reads [exact, range, membership, resident], build macro, abi runs
+        };
+        radix_layout = ::gpu_datalog_runtime::RadixLayout<_, _, _, _, _> {
+            reads [exact, range, membership, candidates], build macro, abi radix
         };
         device_columns = ::cq_gpu_runtime::DeviceColumns<_> {
             reads [], build macro, abi columns, bounds resident_columns

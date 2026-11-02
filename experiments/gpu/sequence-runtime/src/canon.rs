@@ -124,8 +124,9 @@ impl Drop for CanonScratch {
 
 /// One recorded field in a packed key. Its decoded value is
 /// `base + ((key >> shift) & ((1 << bits) - 1))`.
-/// Zero-bit fields represent constants; a full-width field is also supported
-/// when its complete unsigned offset domain fits after adding `base`.
+/// Zero-bit fields represent constants. Packed values are encodings of i64
+/// values, so a field's decoded domain is `[base, min(base + 2^bits - 1,
+/// i64::MAX)]`: a span rounded up to `bits` never claims values above i64.
 #[derive(Clone, Copy, Debug)]
 pub struct PackedField {
     pub shift: u32,
@@ -138,9 +139,8 @@ impl PackedField {
         if self.bits > 64 || self.shift.checked_add(self.bits).is_none() {
             return Err("packed field width overflows".into());
         }
-        let maximum = self.base as i128 + ((1_i128 << self.bits) - 1);
-        let max =
-            i64::try_from(maximum).map_err(|_| "packed field's decoded domain exceeds i64")?;
+        let maximum = (self.base as i128 + ((1_i128 << self.bits) - 1)).min(i64::MAX as i128);
+        let max = maximum as i64;
         Ok(Bounds::Inclusive {
             min: self.base,
             max,

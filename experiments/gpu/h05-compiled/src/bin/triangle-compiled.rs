@@ -1,5 +1,7 @@
 #![recursion_limit = "1024"]
-//! Directed i64 triangles over the authored Sequence range providers.
+//! Directed i64 triangles: `probe first [b]` over authored Range providers,
+//! the default GPU triangle plan (`triangle-smallest` is the measured,
+//! slower `probe smallest` radix configuration).
 //!
 //! IDs remain native i64 values through upload, range payload packing and
 //! output decoding. The recorded dense directory still requires nonnegative
@@ -36,7 +38,7 @@ fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
     Ok(rows)
 }
 
-// Preserve the written Smallest triangle and its signed vertex types.
+// The default first-probe triangle with signed vertex types.
 fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, (i64, i64, i64)> {
     cq_sequence_rewrites::grade! {
         arguments { gpu, Edges at host, ByB at host, ByA at host, result at device };
@@ -46,7 +48,7 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             l = pipe rename E@0 {src -> a,dst -> b};
             r = let rename E@1 {src -> b,dst -> c};
             s = let rename E@2 {src -> a,dst -> c};
-            candidate = pipe probe smallest [b] l,r;
+            candidate = pipe probe first [b] l,r;
             checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
@@ -54,7 +56,7 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             l host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
             r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
             s host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b][c];
+            r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b];
             s = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a][c];
             r rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
             s rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;

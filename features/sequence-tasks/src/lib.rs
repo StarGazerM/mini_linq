@@ -182,6 +182,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 ty: syn::parse_quote!(::cq_storage::sharded::Sharded<#ty, _>),
                 inner: Some(Box::new(inner)),
                 input: None,
+                radix: None,
             },
             levels: levels.clone(),
         });

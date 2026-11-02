@@ -79,6 +79,7 @@ pub fn instance(token: &str, ty: syn::Type) -> Provider {
         token: declaration(token).token,
         inner: None,
         input: None,
+        radix: None,
         ty,
     }
 }

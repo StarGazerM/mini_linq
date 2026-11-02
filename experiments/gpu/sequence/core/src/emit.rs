@@ -241,6 +241,8 @@ enum Operation {
         keys: Vec<String>,
         membership: bool,
         negated: bool,
+        /// The PH-Smallest probe this range read realizes (GPU-Smallest).
+        smallest: Option<String>,
     },
     Flatten,
     Tile,
@@ -425,6 +427,7 @@ impl<'a> Compiler<'a> {
                         keys: keys.clone(),
                         membership: true,
                         negated,
+                        smallest: None,
                     });
                     chain.result = result.clone();
                 }
@@ -492,11 +495,20 @@ impl<'a> Compiler<'a> {
                             })?;
                         chain.result = result;
                     }
+                    let smallest = (!membership
+                        && self
+                            .analysis
+                            .gpu_bindings
+                            .realization
+                            .smallest
+                            .contains_key(&chain.result))
+                    .then(|| chain.result.clone());
                     chain.operations.push(Operation::Lookup {
                         provider: self.rows.provider_name(&provider, &keys)?,
                         keys: keys.clone(),
                         membership,
                         negated: false,
+                        smallest,
                     });
                 }
                 Ok(chains)
@@ -616,6 +628,212 @@ impl<'a> Compiler<'a> {
             .ok_or_else(|| error(format!("missing device column {column}")))
     }
 
+    /// GPU-RadixEncodedProbe of a radix provider over the leading bound key
+    /// fields `keys`, encoded once: binds `(__low, __high, __fits)`. A key
+    /// named by `bound` reads that expression instead of its row slot.
+    fn radix_probe(
+        &self,
+        provider: &str,
+        keys: &[String],
+        bound: Option<(&str, TokenStream)>,
+    ) -> syn::Result<TokenStream> {
+        let (view, _, order) = self.rows.provider(provider)?;
+        if order.len() < keys.len() || order[..keys.len()].iter().any(|key| !keys.contains(key)) {
+            return Err(error(
+                "GPU-RadixProvider: lookup keys are not a checked leading key prefix",
+            ));
+        }
+        let columns = order[..keys.len()]
+            .iter()
+            .map(|key| match &bound {
+                Some((column, value)) if column == key => Ok(value.clone()),
+                _ => {
+                    let slot = self.slot(key)?;
+                    Ok(quote!(__row[#slot] as i64))
+                }
+            })
+            .collect::<syn::Result<Vec<_>>>()?;
+        let count = keys.len() as u32;
+        Ok(quote! {
+            let __values: [i64; #count as usize] = [#(#columns),*];
+            let (__low, __high, __fits) = ::gpu_datalog_runtime::radix_run::device::encode_prefix(
+                #view, __values.as_ptr(), #count);
+        })
+    }
+
+    /// GPU-Smallest selection: per bound row, the exact distinct candidate
+    /// count of every recorded side (`__counts`) and the first minimum side
+    /// (`__choice`). Each side's encoded prefix interval is `__low_j/__high_j`.
+    fn smallest_choice(&self, probe: &str) -> syn::Result<TokenStream> {
+        let record = &self.analysis.gpu_bindings.realization.smallest[probe];
+        let mut sides = TokenStream::new();
+        for (index, side) in record.sides.iter().enumerate() {
+            let provider = self.rows.provider_name(&side.provider, &{
+                let mut keys = side.prefix.clone();
+                keys.push(record.column.clone());
+                keys
+            })?;
+            let view = self.rows.provider(&provider)?.0;
+            let probe = self.radix_probe(&provider, &side.prefix, None)?;
+            let low = format_ident!("__low_{index}");
+            let high = format_ident!("__high_{index}");
+            let count = format_ident!("__count_{index}");
+            sides.extend(quote! {
+                let (#low, #high, #count) = {
+                    #probe
+                    let __count = if __fits {
+                        ::gpu_datalog_runtime::radix_run::device::distinct(#view.keys, __low, __high)
+                    } else { 0u64 };
+                    (__low, __high, __count)
+                };
+            });
+            if index == 0 {
+                sides.extend(quote! { let mut __choice = 0u32; let mut __minimum = #count; });
+            } else {
+                let index = index as u32;
+                sides.extend(quote! {
+                    if #count < __minimum { __choice = #index; __minimum = #count; }
+                });
+            }
+        }
+        Ok(sides)
+    }
+
+    /// The recorded position-tag layout of a smallest probe: `(low bits,
+    /// choice mask)` (ChoiceCarrier::PositionTag).
+    fn smallest_tag(&self, probe: &str) -> (u32, u32) {
+        let record = &self.analysis.gpu_bindings.realization.smallest[probe];
+        let cq_lang_sequence::gpu::realization::ChoiceCarrier::PositionTag { choice_bits } =
+            record.carrier;
+        (31 - choice_bits, (1u32 << choice_bits) - 1)
+    }
+
+    /// The radix provider name and full key of every recorded side.
+    fn smallest_sides(&self, probe: &str) -> syn::Result<Vec<(String, Vec<String>)>> {
+        let record = &self.analysis.gpu_bindings.realization.smallest[probe];
+        record
+            .sides
+            .iter()
+            .map(|side| {
+                let mut keys = side.prefix.clone();
+                keys.push(record.column.clone());
+                Ok((self.rows.provider_name(&side.provider, &keys)?, keys))
+            })
+            .collect()
+    }
+
+    /// The smallest probe's parent read: counts and the choice once per row;
+    /// the child range carries the choice in its position tag
+    /// (ChoiceCarrier::PositionTag). A one-run chosen side starts at its
+    /// prefix interval's first key slot (direct), otherwise at ordinal 0.
+    fn smallest_lookup(&self, probe: &str) -> syn::Result<TokenStream> {
+        let choice = self.smallest_choice(probe)?;
+        let (low_bits, _) = self.smallest_tag(probe);
+        let mut direct = TokenStream::new();
+        for (index, (provider, _)) in self.smallest_sides(probe)?.iter().enumerate() {
+            let view = self.rows.provider(provider)?.0;
+            let low = format_ident!("__low_{index}");
+            let high = format_ident!("__high_{index}");
+            let index = index as u32;
+            direct.extend(quote! {
+                if __choice == #index && #view.keys.run_count == 1 {
+                    let (__first, _) = ::gpu_datalog_runtime::radix_run::device::interval(
+                        ::gpu_datalog_runtime::radix_run::device::run(#view.keys, 0), #low, #high);
+                    __tag = (1u32 << 31) | (__choice << #low_bits) | __first as u32;
+                }
+            });
+        }
+        Ok(quote! {
+            let (mut __begin, mut __end) = (0u32, 0u32);
+            if __live {
+                #choice
+                let mut __tag = __choice << #low_bits;
+                #direct
+                __begin = __tag;
+                __end = __tag + __minimum as u32;
+            }
+        })
+    }
+
+    /// The smallest probe's child load at tagged position `position`: the
+    /// chosen side's candidate key slot (direct, or the tagged ordinal's
+    /// distinct key), kept iff every other side holds `(prefix, candidate)`.
+    fn smallest_payload(&self, probe: &str, position: TokenStream) -> syn::Result<TokenStream> {
+        let record = &self.analysis.gpu_bindings.realization.smallest[probe];
+        let column = self.slot(&record.column)?;
+        let (low_bits, choice_mask) = self.smallest_tag(probe);
+        let mut arms = TokenStream::new();
+        let providers = self.smallest_sides(probe)?;
+        for (index, (provider, _)) in providers.iter().enumerate() {
+            let (view, payload, _) = self.rows.provider(provider)?;
+            let radix = self
+                .rows
+                .radix_provider(provider)
+                .ok_or_else(|| error("GPU-Smallest: side is not a recorded radix provider"))?;
+            let lane_index = payload
+                .iter()
+                .position(|column| *column == record.column)
+                .ok_or_else(|| error("GPU-Smallest: candidate column is not an item lane"))?;
+            let lane = &radix.lanes[lane_index];
+            let items = &radix.items;
+            let lane_index = lane_index as u32;
+            let prefix = self.radix_probe(provider, &record.sides[index].prefix, None)?;
+            let mut members = TokenStream::new();
+            for (other, (provider, keys)) in providers.iter().enumerate() {
+                if other == index {
+                    continue;
+                }
+                let other_view = self.rows.provider(provider)?.0;
+                let probe =
+                    self.radix_probe(provider, keys, Some((&record.column, quote!(__candidate))))?;
+                members.extend(quote! {
+                    if __live {
+                        #probe
+                        let _ = __high;
+                        __live = __fits && ::gpu_datalog_runtime::radix_run::device::contains(
+                            #other_view.keys, __low);
+                    }
+                });
+            }
+            let index = index as u32;
+            arms.extend(quote! {
+                if __choice == #index {
+                    let (__run, __slot) = if __direct {
+                        (0u32, __local)
+                    } else {
+                        #prefix
+                        let _ = __fits;
+                        ::gpu_datalog_runtime::radix_run::device::distinct_at(
+                            #view.keys, __low, __high, __local)
+                    };
+                    let __first = ::gpu_datalog_runtime::radix_run::device::offset(
+                        ::gpu_datalog_runtime::radix_run::device::run(#view.keys, __run), __slot);
+                    let __candidate = ::gpu_datalog_runtime::radix_run::device::item::<#lane>(
+                        #items, __run, #lane_index, __first) as i64;
+                    __row[#column] = __candidate;
+                    #members
+                }
+            });
+        }
+        Ok(quote! {
+            let __tagged = (#position) as u32;
+            let __direct = (__tagged >> 31) != 0;
+            let __choice = (__tagged >> #low_bits) & #choice_mask;
+            let __local = (__tagged & ((1u32 << #low_bits) - 1)) as u64;
+            #arms
+        })
+    }
+
+    /// Every side's bound prefix slot: each candidate's tests re-read them.
+    fn smallest_carried(&self, probe: &str) -> syn::Result<BTreeSet<usize>> {
+        self.analysis.gpu_bindings.realization.smallest[probe]
+            .sides
+            .iter()
+            .flat_map(|side| &side.prefix)
+            .map(|column| self.slot(column))
+            .collect()
+    }
+
     fn lookup(
         &self,
         provider: &str,
@@ -623,6 +841,42 @@ impl<'a> Compiler<'a> {
         membership: bool,
     ) -> syn::Result<TokenStream> {
         let (view, payload, order) = self.rows.provider(provider)?;
+        if self.rows.radix_provider(provider).is_some() {
+            let probe = self.radix_probe(provider, keys, None)?;
+            let run = format_ident!("__cq_run_{provider}");
+            return Ok(if membership {
+                quote! {
+                    let mut __member_found = false;
+                    if __live {
+                        #probe
+                        if __fits {
+                            let mut __index = 0u32;
+                            while __index < #view.keys.run_count {
+                                let (__first, __last) = ::gpu_datalog_runtime::radix_run::device::interval(
+                                    ::gpu_datalog_runtime::radix_run::device::run(#view.keys, __index),
+                                    __low, __high);
+                                __member_found |= __first < __last;
+                                __index += 1;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Per run: the run-local item interval of the encoded key interval.
+                quote! {
+                    let (mut __begin, mut __end) = (0u32, 0u32);
+                    if __live {
+                        #probe
+                        if __fits {
+                            let (__first, __last) = ::gpu_datalog_runtime::radix_run::device::interval_items(
+                                ::gpu_datalog_runtime::radix_run::device::run(#view.keys, #run),
+                                __low, __high);
+                            (__begin, __end) = (__first as u32, __last as u32);
+                        }
+                    }
+                }
+            });
+        }
         if self.rows.run_provider(provider) {
             if order.len() < keys.len() || order[..keys.len()].iter().any(|key| !keys.contains(key))
             {
@@ -741,8 +995,34 @@ impl<'a> Compiler<'a> {
         })
     }
 
-    fn payload(&self, provider: &str, position: TokenStream) -> syn::Result<TokenStream> {
+    fn payload(
+        &self,
+        provider: &str,
+        bound: &[String],
+        position: TokenStream,
+    ) -> syn::Result<TokenStream> {
         let (view, payload, _) = self.rows.provider(provider)?;
+        if let Some(radix) = self.rows.radix_provider(provider) {
+            // Item lanes hold native values: a positional read, no decode.
+            // Bound key columns stay the parent's carried values.
+            let run = format_ident!("__cq_run_{provider}");
+            let items = &radix.items;
+            let assignments = payload
+                .iter()
+                .zip(&radix.lanes)
+                .enumerate()
+                .filter(|(_, (column, _))| !bound.contains(column))
+                .map(|(index, (column, lane))| {
+                    let slot = self.slot(column)?;
+                    let index = index as u32;
+                    Ok(quote! {
+                        __row[#slot] = ::gpu_datalog_runtime::radix_run::device::item::<#lane>(
+                            #items, #run, #index, (#position) as u64) as i64;
+                    })
+                })
+                .collect::<syn::Result<Vec<_>>>()?;
+            return Ok(quote!(#(#assignments)*));
+        }
         if self.rows.run_provider(provider) {
             let run = format_ident!("__cq_run_{provider}");
             // DECODE V: P4 run-provider payload unpack widens keys and code-only fields before relational consumers.
@@ -847,6 +1127,7 @@ impl Kernel<'_, '_> {
                     provider,
                     keys,
                     membership,
+                    smallest,
                     ..
                 } => {
                     if !membership {
@@ -856,6 +1137,9 @@ impl Kernel<'_, '_> {
                     }
                     for column in keys {
                         live.insert(self.compiler.slot(column)?);
+                    }
+                    if let Some(probe) = smallest {
+                        live.extend(self.compiler.smallest_carried(probe)?);
                     }
                 }
                 Operation::Fold(monoid) => {
@@ -1020,8 +1304,13 @@ impl Kernel<'_, '_> {
                 keys,
                 membership,
                 negated,
+                smallest,
             } => {
-                let lookup = row.rewrite(self.compiler.lookup(provider, keys, *membership)?)?;
+                let lookup = match smallest {
+                    Some(probe) => self.compiler.smallest_lookup(probe)?,
+                    None => self.compiler.lookup(provider, keys, *membership)?,
+                };
+                let lookup = row.rewrite(lookup)?;
                 if *membership {
                     let rest = self.scalar_operations(rest, row)?;
                     // Formal rule E-Neg: anti membership keeps precisely the rows
@@ -1030,7 +1319,8 @@ impl Kernel<'_, '_> {
                         quote!(#lookup __live = __live && (__member_found != #negated); #rest),
                     );
                 }
-                if self.virtual_range.as_deref() == Some(provider)
+                if smallest.is_none()
+                    && self.virtual_range.as_deref() == Some(provider)
                     && rest
                         .iter()
                         .all(|op| matches!(op, Operation::Flatten | Operation::Store))
@@ -1077,7 +1367,11 @@ impl Kernel<'_, '_> {
                 let owner = format_ident!("__owner_{begin_offset}");
                 let mut shared = TokenStream::new();
                 let mut child = DeviceRow::default();
-                for slot in self.live_columns(rest)?.difference(&payload_columns) {
+                let mut parents = self.live_columns(rest)?;
+                if let Some(probe) = smallest {
+                    parents.extend(self.compiler.smallest_carried(probe)?);
+                }
+                for slot in parents.difference(&payload_columns) {
                     let ty = self.code_type(*slot);
                     let at = self.shared.parent(8)?;
                     let id = format_ident!("__parent_{at}");
@@ -1111,7 +1405,14 @@ impl Kernel<'_, '_> {
                 let tile = strip
                     .rows
                     .ok_or_else(|| error("GPU-Launch: expansion strip lacks its batch rows"))?;
-                let payload = self.compiler.payload(provider, quote!(__child_position))?;
+                let payload = match smallest {
+                    Some(probe) => self
+                        .compiler
+                        .smallest_payload(probe, quote!(__child_position))?,
+                    None => self
+                        .compiler
+                        .payload(provider, keys, quote!(__child_position))?,
+                };
                 let (_, partition, _, _) = self.partition_rows(rest, &strip, StripeInput {
                         items: strip.items,
                         inherited: child,
@@ -1196,12 +1497,18 @@ impl Kernel<'_, '_> {
                     #children_loop
                     ::cuda_device::thread::sync_threads();
                 };
-                if self.compiler.rows.run_provider(provider) {
+                if smallest.is_none() && self.compiler.rows.run_provider(provider) {
                     let view = self.compiler.rows.provider(provider)?.0;
                     let run = format_ident!("__cq_run_{provider}");
                     // Run bounds are uniform descriptor metadata: every lane
                     // executes every run's existing segmented collective.
                     Ok(quote! { for #run in 0..#view.run_count { #expansion } })
+                } else if smallest.is_none() && self.compiler.rows.radix_provider(provider).is_some() {
+                    let view = self.compiler.rows.provider(provider)?.0;
+                    let run = format_ident!("__cq_run_{provider}");
+                    // GPU-RadixCursor: each run's local item interval is one
+                    // segmented collective; runs are uniform descriptor metadata.
+                    Ok(quote! { for #run in 0..#view.keys.run_count { #expansion } })
                 } else {
                     Ok(expansion)
                 }
@@ -2545,7 +2852,12 @@ fn translate_observed(
                         #unpack
                     }
                 } else if let Some(provider) = &compiler.stored[prior].range {
-                    let payload = compiler.payload(provider, quote!(__source_position))?;
+                    if compiler.rows.radix_provider(provider).is_some() {
+                        return Err(error(
+                            "GPU-RadixProvider: a deferred range publication needs a contiguous range provider",
+                        ));
+                    }
+                    let payload = compiler.payload(provider, &[], quote!(__source_position))?;
                     let payload_columns = compiler.rows.provider(provider)?.1;
                     let copy = analysis.structures.physical.headings
                         [&compiler.stored[prior].result]

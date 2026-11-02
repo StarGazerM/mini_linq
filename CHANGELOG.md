@@ -15,6 +15,31 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Removed the unused dense-row carrier path and narrowing membership helper.
   Regressions reproduce the failures before repair; Sequence/core and SRD
   exactness pass, and TPC-H SF1 advised/automatic are each 26/26 exact.
+- P4-GPU slice B: GPU CQ built indices over `RadixLayout` and genuine
+  `probe smallest`. The GPU catalog registers `radix_layout` (reads
+  exact/range/membership/candidates, abi radix) after the existing tokens;
+  each instance carries authored `radix { word; offset; ratio; radix_bits;
+  merge_tile }` advice (GPU-RadixAdvice). GPU binding records
+  `ProviderAbi::Radix` with key/lane carriers, advice and read forms
+  (GPU-RadixProvider); builds use `RadixLayout::from_sources`
+  (GPU-RadixSourceBuild); probes encode once into whole-word intervals
+  (GPU-RadixEncodedProbe); `device::distinct`/`distinct_at` give exact union
+  candidate counts (GPU-RadixCandidates). GPU-Smallest records each
+  PH-Smallest probe's column, sides, exact counts and first-in-order ties and
+  rejects non-radix sides (never a First probe); the blanket T-Gpu smallest
+  rejection is removed. Retain/Expand stay unregistered. Packed canonical
+  field bounds saturate at `i64::MAX` instead of rejecting 64-bit spans with
+  a positive base. The parent row counts and chooses once and passes the
+  choice in a recorded position tag (`ChoiceCarrier::PositionTag`). The new
+  authored `triangle-smallest` binary (radix sides, smallest, WideCanon) is
+  exact on DBLP and on full-domain signed i64 DBLP, but 1.54× slower in
+  paired timing than `triangle-compiled`, which is now the `probe first`
+  Range plan. Radix smallest is not a default anywhere.
+  GPU TPC-H SF1 advised/automatic are 26/26 exact each, with generated
+  `queries.rs`/`plans.json` byte-identical to `17a14b93` apart from the
+  build directory and generation times; srd-doop-gpu field-flow exactness
+  passes; all 46 expanded-Rust targets match `17a14b93`, 29 with the
+  `cq-sequence-tasks` runtime fingerprint change (`radix: None` field).
 
 - Sequence rewrites now reject non-retention Structures/Physical changes with
   `BE-PhysicalPreserved`, including support-equivalent join reordering.

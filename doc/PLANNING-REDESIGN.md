@@ -615,12 +615,27 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   per-publication cached snapshot with identity and resident count and no
   host sync, republish reuse, narrow item columns, run-local match cursors
   with retained witnesses, execution-pool-qualified reads under
-  fork/join readiness; GPU-RadixLayout/Cursor/LaneRead law tests). Remaining:
-  slice A compiler records/checkers (using the provider declaration format
-  now implemented by C7Provider G1; no RadixRun catalog token yet), then index selection
-  records it as a provider for GPU CQ built indices (range reads unblock
-  `probe smallest`, `triangle-compiled`, L&E match-set reuse), GPU Datalog
-  layouts (replacing plain-word `DeviceRuns`), and GPU canonical indices.
+  fork/join readiness; GPU-RadixLayout/Cursor/LaneRead law tests).
+  **Slice B done for GPU CQ built indices and non-witness smallest**: the
+  `radix_layout` token (reads exact/range/membership/candidates, abi radix,
+  registered after existing tokens) with authored per-instance advice
+  (GPU-RadixAdvice), the `ProviderAbi::Radix` binding record
+  (GPU-RadixProvider), resident-source builds (GPU-RadixSourceBuild),
+  once-encoded whole-word probes (GPU-RadixEncodedProbe), exact union
+  candidate counts (GPU-RadixCandidates) and the PH-Smallest realization
+  record (GPU-Smallest; other side shapes are rejected, never First);
+  the authored `triangle-smallest` configuration runs `probe smallest` over
+  two radix sides, exact on dblp and on dblp with full-domain signed i64 IDs.
+  **Radix smallest is not a default anywhere**: after computing the choice
+  once per outer row, it remains 1.54× slower than the default
+  `triangle-compiled` `probe first` Range plan on DBLP (paired, both locks).
+  The remaining kernel is a latency-bound chain of u128 binary searches.
+  Remaining: a faster smallest
+  read (e.g. dense or cached candidate directories, measured) before any
+  default use, Retain/Expand (retained L&E witnesses need the GPU target's
+  witness support), encoded FOR key packing (two P4 DECODE V sites), GPU
+  Datalog layouts (replacing plain-word `DeviceRuns`), and GPU canonical
+  indices.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with

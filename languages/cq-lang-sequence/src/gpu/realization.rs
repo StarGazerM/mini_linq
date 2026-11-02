@@ -244,4 +244,65 @@ pub struct Realization {
     pub steps: Vec<(String, Step)>,
     pub output: Option<HostOutput>,
     pub captures: Captures,
+    /// PH-Smallest probes realized by exact candidate counts, by Physical probe.
+    pub smallest: BTreeMap<String, SmallestRealization>,
+}
+
+/// One PH-Smallest side: a radix provider (rows-provider name) read under
+/// the bound `prefix`, enumerating the realization's candidate column.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmallestSide {
+    pub provider: String,
+    pub prefix: Vec<String>,
+}
+
+/// The exact count compared between sides.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CandidateCount {
+    /// Distinct candidate keys over the union of all runs (never a sum of
+    /// per-run or occurrence counts).
+    ExactUnion,
+}
+
+/// Which side enumerates when several have the minimum count.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ties {
+    /// The first minimum side in recorded order.
+    FirstInOrder,
+}
+
+/// How the parent row's choice reaches each candidate child row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChoiceCarrier {
+    /// The parent counts every side and chooses once; each child position is
+    /// a u32 tag: bit 31 marks a direct slot (the chosen side has one run, so
+    /// its candidates are the contiguous key slots of the prefix interval),
+    /// the next `choice_bits` bits hold the chosen side and the low
+    /// `31 - choice_bits` bits the key slot or the distinct-candidate
+    /// ordinal. Every side's build is checked at runtime to hold fewer than
+    /// `2^(31 - choice_bits)` occurrences.
+    PositionTag { choice_bits: u32 },
+}
+
+impl ChoiceCarrier {
+    /// The carrier of `sides` alternatives: the fewest bits naming each.
+    pub fn for_sides(sides: usize) -> Self {
+        Self::PositionTag {
+            choice_bits: usize::BITS - sides.saturating_sub(1).leading_zeros(),
+        }
+    }
+}
+
+/// Formal rule GPU-Smallest: per bound row, count every side's distinct
+/// candidates exactly, enumerate the first minimum side's candidates (none
+/// when it is empty) and keep a candidate iff every other side contains it.
+/// The chain's later reads run as authored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmallestRealization {
+    pub column: String,
+    /// Every Physical side once, in PH-Smallest order.
+    pub sides: Vec<SmallestSide>,
+    pub count: CandidateCount,
+    pub ties: Ties,
+    pub carrier: ChoiceCarrier,
 }

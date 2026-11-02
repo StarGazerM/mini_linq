@@ -397,8 +397,10 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `experiments/gpu/h05-compiled/src/bin/printer-oracle.rs:66` | P | diagnostic projection answer publication feeds the exact host oracle assertion. |
 | `experiments/gpu/h05-compiled/src/bin/printer-oracle.rs:110` | P | diagnostic repeated-head answer publication checks lossy projection deduplication. |
 | `experiments/gpu/h05-compiled/src/bin/printer-smoke.rs:42` | P | diagnostic smoke answer publication exposes host tuples for reference comparison. |
-| `experiments/gpu/h05-compiled/src/bin/triangle-compiled.rs:129` | P | diagnostic triangle answer publication exposes logical tuples for CPU comparison. |
-| `experiments/gpu/h05-compiled/src/bin/triangle-compiled.rs:190` | P | diagnostic signed-boundary triangle publication exposes reconstructed result tuples. |
+| `experiments/gpu/h05-compiled/src/bin/triangle-compiled.rs:132` | P | diagnostic triangle answer publication exposes logical tuples for CPU comparison. |
+| `experiments/gpu/h05-compiled/src/bin/triangle-compiled.rs:193` | P | diagnostic signed-boundary triangle publication exposes reconstructed result tuples. |
+| `experiments/gpu/h05-compiled/src/bin/triangle-smallest.rs:137` | P | diagnostic triangle answer publication exposes logical tuples for CPU comparison. |
+| `experiments/gpu/h05-compiled/src/bin/triangle-smallest.rs:214` | P | diagnostic signed-boundary triangle publication exposes reconstructed result tuples. |
 | `experiments/gpu/h05-compiled/src/main.rs:200` | P | diagnostic final chained H05 answer publishes logical host tuples for exact checking. |
 | `experiments/gpu/h05-compiled/src/main.rs:203` | P | diagnostic final H05 answer inverts order, supplier and nation ordinal domains. |
 | `experiments/gpu/h05-reference/src/kernels.rs:101` | V | both FOR directory offsets are reconstructed before join expansion; P6 use plain index directories. |

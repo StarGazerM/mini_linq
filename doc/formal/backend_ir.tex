@@ -1310,7 +1310,7 @@ unrecorded columns are unknown. Encoded or unknown Rust reads execute at host,
 and encoded relational operands follow \textsc{GPU-Capture}.
 \begin{mathpar}
 \Rule{GPU-NativeAbi}{p.\mathrm{token}=t\quad \Delta(t).\mathrm{abi}=a\quad
- a\in\{\mathrm{range},\mathrm{runs},\mathrm{columns}\}\quad
+ a\in\{\mathrm{range},\mathrm{runs},\mathrm{columns},\mathrm{radix}\}\quad
  I=p.\mathrm{input}\quad I\ne\bot\Longrightarrow I.\mathrm{keys}\leq |I.\mathrm{columns}|}
  {\mathrm{abi}(p)=a\quad\mathrm{schema}(p)=I\quad
  \mathrm{encoded}(I_i)\iff I_i.\mathrm{codec}\ne\varnothing}
@@ -1320,6 +1320,27 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  a=\text{checked catalog ABI of }T\quad K=\mathrm{concat}(\mathrm{levels})\quad
  P=\text{recorded complete scan or reconstructed lookup payload}}
  {\mathrm{layout}=(T,a,K,P,\text{provider directory policy})}
+\Rule{GPU-RadixAdvice}{\Delta(t).\mathrm{abi}=\mathrm{radix}\iff p.\mathrm{radix}=(W,O,\rho,r,m)\quad
+ \rho\geq 2\quad r\leq 32\quad m\geq 1}
+ {\mathrm{advice}(p)=(W,O,\rho,r,m)\text{ authored per instance; nothing chooses it}}
+\Rule{GPU-RadixProvider}{\mathrm{layout}(T)=(T,\mathrm{radix},K,P,\bot)\quad
+ K_i,P_j\text{ carriers of the recorded column types}\quad
+ R=\text{every lookup prefix of }K\text{ and every PH-Smallest side served by }T}
+ {\mathrm{radix}(T)=(K,P,\mathrm{advice}(T),R)\text{, checked against its sources}}
+\Rule{GPU-RadixCandidates}{[\ell,h]=\text{encoded interval of a bound prefix}\quad
+ \mathrm{runs}=\rho_0,\dots,\rho_{n-1}}
+ {\mathsf{distinct}(\ell,h)=\bigl|\bigcup_i \{k\in\rho_i\mid \ell\le k\le h\}\bigr|\quad
+ \mathsf{distinctAt}\text{ enumerates each key once, in its oldest run}}
+\Rule{GPU-RadixEncodedProbe}{v_1..v_q\text{ bound leading fields}\quad
+ v_i\in\mathrm{dom}(f_i)}
+ {[\ell,h]=[\mathsf{enc}(v)\cdot 0^{*},\ \mathsf{enc}(v)\cdot 1^{*}]\text{ formed once; whole-word compares, no }h{+}1}
+\Rule{GPU-RadixSourceBuild}{S_K,S_V\text{ resident sources of }K,V\quad
+ \pi\text{ recorded selection or identity}}
+ {\mathsf{fromSources}=\mathsf{publish}(\mathsf{pack}_K(S_K\circ\pi),\ \mathsf{lanes}_V(S_V\circ\pi))}
+\Rule{GPU-Smallest}{\mathsf{probe\ smallest}\text{ with sides }(T_j,\mathit{pre}_j)_{j<k}\text{ over }c\quad
+ \mathrm{radix}(T_j)\ni(\mathit{pre}_j,\mathrm{Candidates}\ c)}
+ {n_j=\mathsf{distinct}_j\quad j^{*}=\min\{j\mid n_j=\min n\}\quad
+ \text{emit }x\in\mathsf{distinctAt}_{j^{*}}\text{ iff }\forall j\ne j^{*}.\ (\mathit{pre}_j,x)\in T_j}
 \Rule{GPU-GroupProvider}{G.\mathrm{ty}=\text{recorded GPU accumulator provider}\quad
  G\text{ is keyed}}
  {\mathsf{group}_{\rm gpu}(G)=G.\mathrm{ty}::\mathsf{fold}(G)}

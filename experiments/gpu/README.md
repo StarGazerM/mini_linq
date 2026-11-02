@@ -1325,8 +1325,9 @@ normally, with positive translation and executable tuple-comparison tests in
 place of the rejection fixture. Range payloads support `u32`, `i32`, and full
 signed `i64`, including values outside the 32-bit domain. Their fused gather
 and FOR packing preserves 64-bit extrema and decodes without narrowing.
-`triangle-compiled EDGES --check` uploads native i64 IDs, executes the authored
-Smallest/First plan, and compares actual GPU tuples with its CPU reference.
+`triangle-compiled EDGES --check` uploads native i64 IDs, executes the default
+`probe first` plan over Range providers, and compares actual GPU tuples with
+its CPU reference (`triangle-smallest` is the authored smallest configuration).
 It reports one discarded warmup and five measured resident calls, including
 per-call and median GPU build/kernel/dedup/total timings and query wall time.
 `--check` separately times the CPU tuple reference and checks every GPU call.
@@ -1367,14 +1368,38 @@ base-build timing boundary. Upload and answer download are excluded.
 | H05 B SF10 | 72,983 | 10.202752 | 9.899072 | 10.264289 | 9.909329 |
 | H05 R SF10 | 72,983 | 10.323200 | 9.899072 | 10.388337 | 9.909329 |
 
-`triangle-compiled /data/dataset/graph/com-dblp.ungraph.txt --check` retains
-1,049,866 distinct native-i64 edges and produces exactly 2,224,385 tuples,
-equal to its independent CPU reference on every call. One warmup is excluded
-from five GPU samples; the CPU reference is measured once.
+`triangle-compiled` (default) runs `probe first [b]` over Range providers
+(`r [b]`, `s [a][c]`, PackedCanon). `triangle-smallest` is an authored
+configuration that runs `probe smallest [b]` over two radix layouts
+(`r [b][c]`, `s [a][c]`, GPU-Smallest) with WideCanon output. With `--check`
+on `/data/dataset/graph/com-dblp.ungraph.txt` (1,049,866 distinct native-i64
+edges) both produce exactly 2,224,385 tuples, equal to the independent CPU
+reference on every call; `triangle-smallest` is also exact on the same graph
+with IDs relabeled across the full signed i64 domain
+(`x * 0x9E3779B97F4A7C15` wrapping), which the dense Range directory cannot
+represent.
 
-| Triangle workload | Build ms | Kernel ms | Dedup ms | GPU total ms | Query wall ms | CPU reference ms |
-|---|---:|---:|---:|---:|---:|---:|
-| DBLP, native i64 | 2.062880 | 3.302496 | 0.627648 | 6.020128 | 6.082209 | 244.443683 |
+Paired timing (`compare/p4_gpu_triangle_smallest.paired.json`, RTX 6000 Ada,
+timing and GPU locks held, five interleaved process pairs, each one warmup
+plus five resident calls; medians of per-process medians), DBLP:
+
+| Triangle binary (DBLP) | Build ms | Kernel ms | Dedup ms | GPU total ms | Minor faults |
+|---|---:|---:|---:|---:|---:|
+| `triangle-compiled` (probe first, Range) | 0.485 | 1.347 | 0.303 | 2.129 | 24,712 |
+| `triangle-smallest` (probe smallest, radix) | 0.975 | 1.939 | 0.366 | 3.278 | 22,765 |
+
+Smallest is 1.54× slower in GPU total (bootstrap 95% CI 1.52–1.55×), so it is
+not the default. The first smallest kernel took 3.795 ms (2.42× total): nsys
+attributed 77% of GPU time to the dispatch kernel, whose children recomputed
+every side's counts and choice per candidate. The parent now counts and
+chooses once and passes the choice in the child position tag
+(ChoiceCarrier::PositionTag), and a one-run chosen side passes its first key
+slot so children skip `distinct_at`. ncu on the remaining kernel (2.36 ms
+under profiling, 64 registers, 61% achieved occupancy, 20% memory and 39%
+SM throughput) indicates a latency-bound chain of dependent u128 binary
+searches (prefix interval, membership, the authored `lookup s [a,c]`)
+against the Range plan's one dense-directory read per edge; build also
+doubles (radix grouping of two u128-keyed layouts).
 
 The H05 samples are retained in
 `compare/gpu_sequence_device_stores.results.json` and

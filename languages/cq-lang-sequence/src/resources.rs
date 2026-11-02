@@ -24,6 +24,10 @@ enum Operation {
         keys: Columns,
         payload: Columns,
         membership: bool,
+        /// Columns the expansion's children read from their parent besides
+        /// its later uses: every PH-Smallest side's bound prefix, which each
+        /// candidate's membership tests re-read (GPU-Smallest).
+        carried: Columns,
     },
     Flatten,
     Tile {
@@ -423,13 +427,23 @@ impl<'p> Builder<'p> {
             payload
         };
         for chain in &mut chains {
+            let mut carried = Columns::new();
             if !membership {
                 chain.result = self.lookup_result(&provider, &keys, &chain.result)?;
+                for candidate in cq_lang_structures::physical::candidate_prefixes(
+                    &self.program.structures.physical,
+                    &self.analysis.structures.physical,
+                ) {
+                    if symbol_name(candidate.reader) == chain.result {
+                        carried.extend(candidate.sides.into_iter().flat_map(|(_, prefix)| prefix));
+                    }
+                }
             }
             chain.operations.push(Operation::Lookup {
                 keys: keys.clone(),
                 payload: payload.clone(),
                 membership,
+                carried,
             });
         }
         Ok(chains)
@@ -608,12 +622,13 @@ impl<'p> Builder<'p> {
                     keys,
                     payload,
                     membership,
-                    ..
+                    carried,
                 } => {
                     if !membership {
                         live.retain(|column| !payload.contains(column));
                     }
                     live.extend(keys.iter().cloned());
+                    live.extend(carried.iter().cloned());
                 }
                 Operation::Fold(monoid) => live = fold_columns(monoid),
                 _ => {}
@@ -708,12 +723,14 @@ impl<'p> Builder<'p> {
                 Operation::Lookup {
                     payload,
                     membership: false,
+                    carried,
                     ..
                 } => {
                     if virtual_range && terminal_range(rest) {
                         return Ok(());
                     }
-                    let live = self.live(rest, sink);
+                    let mut live = self.live(rest, sink);
+                    live.extend(carried.iter().cloned());
                     let parents = live
                         .difference(payload)
                         .map(|name| self.column(name))

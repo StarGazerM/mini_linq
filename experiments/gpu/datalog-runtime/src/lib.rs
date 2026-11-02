@@ -24,8 +24,9 @@ pub use layout::{
 };
 pub use pack::{Column, Packing, Word};
 pub use radix_run::{
-    DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixLayout, RadixMatch,
-    RadixMatches, RadixRunParams, RadixSnapshot,
+    DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixItemsView, RadixKeysView,
+    RadixLayout, RadixLayoutView, RadixMatch, RadixMatches, RadixRunParams, RadixSnapshot,
+    SourceItemColumns, SourceLane,
 };
 pub use runs::{AdmissionTimings, DeviceRuns, Run, RunView};
 pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};

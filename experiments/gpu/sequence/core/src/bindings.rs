@@ -1,6 +1,7 @@
 //! Catalog-backed GPU provider realization; printers only consume these facts.
 use cq_lang_sequence::gpu::bindings::{
-    Bindings, DirectoryPolicy, NativeLookup, ProviderAbi, ProviderLayout,
+    Bindings, DirectoryPolicy, NativeLookup, ProviderAbi, ProviderLayout, RadixParams, RadixRead,
+    RadixRealization,
 };
 use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::provider::NativeAbi;
@@ -9,6 +10,171 @@ use std::collections::{BTreeMap, BTreeSet};
 
 fn error(message: &str) -> syn::Error {
     syn::Error::new(proc_macro2::Span::call_site(), message)
+}
+
+/// The device carrier of a recorded Physical column: codec columns are u32 codes.
+fn carrier(
+    analysis: &Analysis,
+    codecs: &crate::runs::Codecs,
+    name: &str,
+    column: &str,
+) -> syn::Result<syn::Type> {
+    let ty = analysis
+        .structures
+        .physical
+        .rows
+        .get(name)
+        .and_then(|row| row.types.get(column))
+        .ok_or_else(|| error("GPU-RadixProvider: column lacks a recorded Physical type"))?;
+    Ok(if codecs.get(ty).is_some() {
+        syn::parse_quote!(u32)
+    } else {
+        ty.clone()
+    })
+}
+
+/// Whether the Sequence lookup `(name, keys)` is the bound-prefix read of a
+/// PH-Smallest probe, which its recorded Candidates read realizes instead.
+fn smallest_reader(program: &Program, name: &str, keys: &[String]) -> bool {
+    use cq_lang_structures::physical::{Choice, Operator};
+    program
+        .structures
+        .physical
+        .program
+        .definitions
+        .iter()
+        .any(|definition| match &definition.operator {
+            Operator::Probe(_, keyed) if matches!(keyed.choice, Some(Choice::Smallest(_))) => {
+                let mut columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+                columns.sort();
+                symbol_name(&keyed.right) == name && columns == keys
+            }
+            _ => false,
+        })
+}
+
+/// Every read one radix layout of `name` (key order `keys`) serves: the
+/// Sequence lookups whose keys are a leading prefix of its keys, and the
+/// PH-Smallest sides `[prefix][column]` it supplies.
+fn radix_reads(
+    program: &Program,
+    analysis: &Analysis,
+    name: &str,
+    keys: &[String],
+) -> Vec<(Vec<String>, RadixRead)> {
+    let mut reads = Vec::new();
+    for (provider, lookup) in analysis.capabilities.keys() {
+        let leading: BTreeSet<_> = keys.iter().take(lookup.len()).collect();
+        if provider != name
+            || lookup.len() > keys.len()
+            || lookup.iter().collect::<BTreeSet<_>>() != leading
+            || smallest_reader(program, name, lookup)
+        {
+            continue;
+        }
+        let form = if lookup.len() == keys.len() {
+            RadixRead::Group
+        } else {
+            RadixRead::Prefix
+        };
+        reads.push((lookup.clone(), form));
+    }
+    for candidate in cq_lang_structures::physical::candidate_prefixes(
+        &program.structures.physical,
+        &analysis.structures.physical,
+    ) {
+        for (side, prefix) in &candidate.sides {
+            let mut leading = keys[..keys.len().saturating_sub(1)].to_vec();
+            leading.sort();
+            if side == name
+                && keys.last() == Some(&candidate.column)
+                && leading == *prefix
+            {
+                reads.push((
+                    prefix.clone(),
+                    RadixRead::Candidates {
+                        column: candidate.column.clone(),
+                    },
+                ));
+            }
+        }
+    }
+    reads.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    reads.dedup();
+    reads
+}
+
+/// Formal rule GPU-RadixProvider: `K`/`V` lanes are the recorded carriers
+/// of the key and payload columns; `W`/`O`/params are the instance's advice.
+fn radix_realization(
+    program: &Program,
+    analysis: &Analysis,
+    codecs: &crate::runs::Codecs,
+    name: &str,
+    provider: &cq_lang_structures::Provider,
+    keys: &[String],
+    payload: &[String],
+) -> syn::Result<RadixRealization> {
+    let advice = provider
+        .radix
+        .as_ref()
+        .ok_or_else(|| error("GPU-RadixProvider: radix instance lacks its advice"))?;
+    Ok(RadixRealization {
+        key_types: keys
+            .iter()
+            .map(|column| carrier(analysis, codecs, name, column))
+            .collect::<syn::Result<_>>()?,
+        lanes: payload
+            .iter()
+            .map(|column| carrier(analysis, codecs, name, column))
+            .collect::<syn::Result<_>>()?,
+        word: advice.word.clone(),
+        offset: advice.offset.clone(),
+        params: RadixParams {
+            ratio: advice.ratio,
+            radix_bits: advice.radix_bits,
+            merge_tile_rows: advice.merge_tile,
+        },
+        reads: radix_reads(program, analysis, name, keys),
+    })
+}
+
+/// GPU-RadixProvider checker: the recorded carriers, advice and read forms
+/// agree with their sources; the key word is never chosen here.
+fn check_radix(
+    program: &Program,
+    analysis: &Analysis,
+    codecs: &crate::runs::Codecs,
+    name: &str,
+    provider: &cq_lang_structures::Provider,
+    layout: &ProviderLayout,
+    radix: &RadixRealization,
+) -> bool {
+    let Some(advice) = &provider.radix else {
+        return false;
+    };
+    let carriers = |columns: &[String], types: &[syn::Type]| {
+        columns.len() == types.len()
+            && columns.iter().zip(types).all(|(column, ty)| {
+                carrier(analysis, codecs, name, column).is_ok_and(|expected| expected == *ty)
+            })
+    };
+    let mut reads = radix.reads.clone();
+    reads.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    reads.dedup();
+    !layout.keys.is_empty()
+        && carriers(&layout.keys, &radix.key_types)
+        && carriers(&layout.payload, &radix.lanes)
+        && radix.word == advice.word
+        && radix.offset == advice.offset
+        && radix.params
+            == RadixParams {
+                ratio: advice.ratio,
+                radix_bits: advice.radix_bits,
+                merge_tile_rows: advice.merge_tile,
+            }
+        && reads.len() == radix.reads.len()
+        && reads == radix_reads(program, analysis, name, &layout.keys)
 }
 
 /// Formal rule GPU-ProviderLayout: catalog selection records construction ABI,
@@ -28,6 +194,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         })
         .collect();
     let context = cq_print::Context::new(&program.structures, &analysis.structures);
+    let codecs = crate::runs::Codecs::check(&program.structures)?;
     for (name, layouts) in &analysis.structures.built {
         let mut recorded = Vec::new();
         for (levels, provider) in layouts {
@@ -53,6 +220,16 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                         _ => unreachable!(),
                     }
                 }
+                Some(NativeAbi::Radix) => {
+                    catalog
+                        .providers
+                        .iter()
+                        .find(|token| token.provider.same_token(provider))
+                        .ok_or_else(|| {
+                            error("GPU-ProviderLayout: built provider has no catalog token")
+                        })?;
+                    (ProviderAbi::Radix, None)
+                }
                 _ => (ProviderAbi::Host, None),
             };
             let payload = if scanned.contains(name) || abi != ProviderAbi::Range {
@@ -65,12 +242,16 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                 payload.dedup();
                 payload
             };
+            let radix = (abi == ProviderAbi::Radix)
+                .then(|| radix_realization(program, analysis, &codecs, name, provider, &keys, &payload))
+                .transpose()?;
             recorded.push(ProviderLayout {
                 ty: ty.clone(),
                 abi,
                 keys,
                 payload,
                 directory,
+                radix,
             });
         }
         result.providers.insert(name.clone(), recorded);
@@ -208,6 +389,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     let catalog = crate::catalog();
     crate::domains::check(program, analysis, records)?;
     let context = cq_print::Context::new(&program.structures, &analysis.structures);
+    let codecs = crate::runs::Codecs::check(&program.structures)?;
     if records.providers.len() != analysis.structures.built.len() {
         return Err(error("GPU-ProviderLayout: incomplete provider records"));
     }
@@ -277,14 +459,25 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                             .any(|token| token.provider.same_token(provider))
                         && layout.directory.is_none()
                 }
+                ProviderAbi::Radix => {
+                    analysis.structures.facts(provider).abi == Some(NativeAbi::Radix)
+                        && catalog.providers.iter().any(|token| token.provider.same_token(provider))
+                        && layout.directory.is_none()
+                        && layout.radix.as_ref().is_some_and(|radix| {
+                            check_radix(program, analysis, &codecs, name, provider, layout, radix)
+                        })
+                }
                 ProviderAbi::Host => {
                     layout.directory.is_none()
                         && !matches!(
                             analysis.structures.facts(provider).abi,
-                            Some(NativeAbi::Range | NativeAbi::Runs)
+                            Some(NativeAbi::Range | NativeAbi::Runs | NativeAbi::Radix)
                         )
                 }
             };
+            if (layout.abi == ProviderAbi::Radix) != layout.radix.is_some() {
+                return Err(error("GPU-RadixProvider: radix facts recorded off a radix layout"));
+            }
             if !valid {
                 return Err(error("GPU-ProviderLayout: provider catalog ABI mismatch"));
             }

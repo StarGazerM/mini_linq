@@ -553,6 +553,63 @@ impl RangeDescriptor {
     }
 }
 
+/// Formal rule GPU-RadixSourceBuild over resident CQ sources: one radix
+/// publication of the key and value descriptor columns, restricted to the
+/// recorded half-open selection when present. Every column shares `pool`
+/// and the same live row count; keys and lanes follow the caller's recorded
+/// schema (`K`, `C`), checked against the layout's types by the runtime.
+pub fn radix_layout<K, V, W, O, C>(
+    pool: &Arc<Pool>,
+    params: gpu_datalog_runtime::RadixRunParams,
+    keys: &[ColumnDescriptor],
+    values: &[ColumnDescriptor],
+    selection: Option<&RangeSelection>,
+) -> Result<gpu_datalog_runtime::RadixLayout<K, V, W, O, C>>
+where
+    K: gpu_datalog_runtime::ScalarTuple,
+    V: gpu_datalog_runtime::ScalarTuple,
+    W: gpu_datalog_runtime::Word + 'static,
+    O: gpu_datalog_runtime::OffsetWord,
+    C: gpu_datalog_runtime::SourceItemColumns,
+{
+    let rows = keys
+        .iter()
+        .chain(values)
+        .map(|column| column.rows)
+        .next()
+        .ok_or("radix layout needs a source column")?;
+    if keys
+        .iter()
+        .chain(values)
+        .any(|column| column.rows != rows || !Arc::ptr_eq(column.pool(), pool))
+    {
+        return Err("radix source columns must share the pool and live row count".into());
+    }
+    let selected = selection
+        .map(|selection| select(pool.clone(), selection))
+        .transpose()?;
+    let (positions, count) = match &selected {
+        Some(selected) if selected.is_empty() => (std::ptr::null(), 0),
+        Some(selected) => (selected.ptr(), selected.len()),
+        None => (std::ptr::null(), rows),
+    };
+    let keys = keys.iter().map(ColumnDescriptor::view).collect::<Vec<_>>();
+    let values = values.iter().map(ColumnDescriptor::view).collect::<Vec<_>>();
+    // SAFETY: descriptors own their columns, whose live prefixes are ready on
+    // `pool`'s stream (ColumnDescriptor contract); selected positions are
+    // produced on the same stream and index that prefix.
+    unsafe {
+        gpu_datalog_runtime::RadixLayout::from_sources(
+            pool.clone(),
+            params,
+            &keys,
+            &values,
+            positions,
+            count,
+        )
+    }
+}
+
 /// Nonowning generated-kernel ABI. Keep the provider alive and use its stream.
 /// Offsets have `domain + 1` entries; payload columns have `len` entries.
 #[repr(C)]

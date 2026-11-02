@@ -51,7 +51,8 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
     assert_eq!(analysis.results["result"], "checked");
 
     // An authored smallest probe is not permission to emit a first-probe
-    // fallback. Keep the unsupported target policy visible beside width coverage.
+    // fallback: a non-radix side (here a Range provider) has no exact
+    // candidate reads, so GPU-Smallest rejects the program.
     let mut smallest = program.clone();
     smallest.structures.physical.program.definitions[3].operator =
         syn::parse_quote!(probe smallest [b] l,r);
@@ -76,7 +77,9 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
         .declare(&cq_gpu_sequence::providers::declarations());
     let analysis = check_grading(&smallest, &cq_gpu_sequence::machine()).unwrap();
     let error = cq_gpu_sequence::translate(&smallest, &analysis).unwrap_err();
-    assert!(error.to_string().contains("probe smallest is not realized"));
+    assert!(error
+        .to_string()
+        .contains("T-Gpu: probe smallest is realized only over two-level radix layouts"));
 }
 
 #[test]

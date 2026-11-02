@@ -339,15 +339,16 @@ Borrowing prevents mutation while any cursor or slice remains live.
 Unit tests in `radix_run.rs` exercise lazy reads, geometric transitions, and
 merge-path boundaries against a stable occurrence oracle.
 
-### 8.2 Device RadixRun (GPU, runtime only)
+### 8.2 Device RadixRun (GPU)
 
 `gpu_datalog_runtime::radix_run::DeviceRadixRun<W,O,C>`
 (`experiments/gpu/datalog-runtime/src/radix_run.rs`) is the CUDA counterpart of
 `RadixRun`, with the same grouped storage laws (GPU-RadixRun,
 GPU-RadixPublish, GPU-RadixItemColumns), plus its typed view `RadixLayout`
-(GPU-RadixLayout, GPU-RadixCursor, GPU-RadixLaneRead). No compiler, IR or
-printer selects either yet; provider choices are recorded upstream later,
-never by type name.
+(GPU-RadixLayout, GPU-RadixCursor, GPU-RadixLaneRead). GPU CQ built indices
+select `RadixLayout` only through the authored `radix_layout` provider token
+(P4-GPU slice B, below); Datalog layouts and canonical indices do not use it
+yet. Provider choices are recorded upstream, never by type name.
 
 - **Key law.** `W: Word` (`u64`, `u128`, `[u64; L]`) is the DL-DevicePacking
   word: most-significant-first lanes are the one `OrderKey` embedding. Keys are
@@ -426,11 +427,44 @@ never by type name.
   results reach main-stream consumers after join readiness, and owners
   outlive every stream user. The runtime never relaunches a read on the
   snapshot's own stream.
-- **Not in this slice.** No catalog token, provider declaration, Candidates
-  or Distinct capability, set build or compiler record exists yet; arity above
-  12 item columns has no `DeviceItemColumns` implementation; builds above
-  `u32::MAX` rows and offset-carrier overflow at a merge are rejected errors
-  (no widening, no chunked build).
+- **CQ built indices and smallest (P4-GPU slice B).** The GPU catalog
+  declares `radix_layout = ::gpu_datalog_runtime::RadixLayout<_,_,_,_,_>
+  { reads [exact, range, membership, candidates], build macro, abi radix }`,
+  registered after the existing tokens so unadvised catalog choices are
+  unchanged. Every instance carries authored advice `radix { word W; offset
+  O; ratio N; radix_bits N; merge_tile N }` (GPU-RadixAdvice); nothing
+  chooses these. GPU binding records `ProviderAbi::Radix` with the key and
+  value-lane carriers taken from recorded column types (dictionary codes as
+  `u32`), the advice and the read form of each lookup it serves: whole key
+  (Group), leading prefix (Prefix) or PH-Smallest side (Candidates)
+  (GPU-RadixProvider). The build is `RadixLayout::from_sources` over the
+  resident columns (GPU-RadixSourceBuild: key packing and lane-filling
+  kernels, optional recorded selection, the ordinary grouped build). Reads
+  encode the bound prefix once into an inclusive whole-word interval
+  (`device::encode_prefix`, GPU-RadixEncodedProbe) and expand each run's
+  local item interval; payload values are read from item lanes, not decoded.
+  `device::distinct` counts the distinct keys of an interval over the union
+  of all runs (each key once, in its oldest run; never a per-run sum) and
+  `device::distinct_at` enumerates the same keys (GPU-RadixCandidates).
+  GPU-Smallest records, per PH-Smallest probe, the candidate column, every
+  side in order, exact union counts and first-in-order ties; a side that is
+  not a two-level radix layout with a Candidates read rejects the program
+  (never a First probe). Per bound row the parent counts every side once and
+  picks the first minimum; the choice reaches the candidate children in the
+  recorded position tag (`ChoiceCarrier::PositionTag`: direct-slot bit,
+  choice bits, then the key slot when the chosen side has one run or the
+  distinct ordinal otherwise; builds over `2^(31 - choice_bits)` occurrences
+  are rejected at runtime). Each candidate is kept iff every other side
+  contains it. Only the authored `triangle-smallest` configuration uses it;
+  radix smallest is no default anywhere (1.54× slower than the Range
+  `probe first` triangle on DBLP).
+- **Not yet.** Retain/Expand supports are not declared: the GPU target
+  rejects witnesses and staging, so retained smallest witnesses (L&E) wait
+  for that target feature. No Distinct capability or set build exists; arity
+  above 12 item columns has no `DeviceItemColumns` implementation; builds
+  above `u32::MAX` rows and offset-carrier overflow at a merge are rejected
+  errors (no widening, no chunked build). FOR-coded sources are decoded once
+  during the build (two registered P4 DECODE V sites).
 - **Relation to existing device storage.** `DeviceRuns`/`DeviceLayout` (unique
   packed-word sets with admission) and `RangeProvider` (dense `u32` domain
   directory) are unchanged; this provider is the occurrence-preserving,
@@ -458,6 +492,16 @@ key tuples and all-equal keys; `u128` `(i64, u64)` keys at both extrema with
 present and absent prefix intervals; six unmerged runs; demand of one of
 three value columns, wrong lane types, out-of-range columns and foreign
 snapshot columns; and schema/lane-domain rejection.
+
+`tests/radix_candidates.rs` runs test kernels that mirror the emitted reads:
+duplicate-heavy multi-run lookups through `encode_prefix`/`interval_items`
+equal `cq_storage::RadixRun` stable groups; `from_sources` over Plain columns,
+with and without a reversed selection, equals the CPU build; `distinct`/
+`distinct_at` over four unmerged runs with repeated keys count and enumerate
+each candidate once; random 2- and 3-way smallest over full-domain signed
+`i64` prefixes and candidates (absent prefixes included) matches a
+candidate-set oracle in counts, first-minimum choice and answers; and fixed
+cases cover ties, all-empty probes and an empty side.
 
 ## 9. Grouped runs in the compiler's semantics
 

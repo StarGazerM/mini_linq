@@ -5,10 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::gpu::bindings::ProviderAbi;
 use cq_lang_sequence::gpu::realization::{
-    BaseBounds, BoundSource, Captures, DescriptorBounds, Granularity, GroupCompletion, GroupInput,
-    HostEvaluation, HostOutput, HostUnion, Interval, Phase, ProviderBuild, Realization,
-    SourceAccess, SourceOrigin, SourceRealization, Step, TerminalGroup, Transfer, TransferSource,
-    UnionArm,
+    BaseBounds, BoundSource, CandidateCount, Captures, ChoiceCarrier, DescriptorBounds, Granularity,
+    GroupCompletion, GroupInput, HostEvaluation, HostOutput, HostUnion, Interval, Phase,
+    ProviderBuild, Realization, SmallestRealization, SmallestSide, SourceAccess, SourceOrigin,
+    SourceRealization, Step, TerminalGroup, Ties, Transfer, TransferSource, UnionArm,
 };
 use cq_lang_sequence::gpu::{Grid, Publication};
 use cq_lang_sequence::{Analysis, Program, Term};
@@ -41,12 +41,14 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
         let captures = captures(&facts)?;
         let sources = sources(&facts, &captures)?;
         let (steps, output) = Steps::new(&facts, &sources).run()?;
+        let smallest = smallest(&facts)?;
         Ok(Realization {
             rejection: None,
             sources,
             steps,
             output,
             captures,
+            smallest,
         })
     })();
     let realization = match selected {
@@ -64,6 +66,140 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
     };
     check(program, analysis, &realization)?;
     Ok(realization)
+}
+
+/// The radix layout of `side` read as `[prefix][column]`, with its recorded
+/// Candidates read and declared `candidates` reads.
+fn candidate_layout<'a>(
+    analysis: &'a Analysis,
+    side: &str,
+    prefix: &[String],
+    column: &str,
+) -> Option<&'a cq_lang_sequence::gpu::bindings::ProviderLayout> {
+    let layouts = analysis.gpu_bindings.providers.get(side)?;
+    let built = analysis.structures.built.get(side)?;
+    layouts.iter().zip(built).find_map(|(layout, (levels, provider))| {
+        let mut leading = levels.first()?.clone();
+        leading.sort();
+        (layout.abi == ProviderAbi::Radix
+            && levels.len() == 2
+            && leading == prefix
+            && levels[1] == [column.to_owned()]
+            && analysis
+                .structures
+                .facts(provider)
+                .reads(&cq_lang_structures::provider::Capability::Candidates)
+            && layout.radix.as_ref().is_some_and(|radix| {
+                radix.reads.contains(&(
+                    prefix.to_vec(),
+                    cq_lang_sequence::gpu::bindings::RadixRead::Candidates {
+                        column: column.to_owned(),
+                    },
+                ))
+            }))
+        .then_some(layout)
+    })
+}
+
+/// Formal rule GPU-Smallest: a PH-Smallest probe is realized only when every
+/// side is a two-level radix layout with exact candidate reads; otherwise the
+/// target rejects it (never a First probe).
+fn smallest(facts: &Facts) -> syn::Result<BTreeMap<String, SmallestRealization>> {
+    use cq_lang_structures::physical::{Choice, Operator};
+    let physical = &facts.program.structures.physical;
+    let candidates =
+        cq_lang_structures::physical::candidate_prefixes(physical, &facts.analysis.structures.physical);
+    let mut realized = BTreeMap::new();
+    for definition in &physical.program.definitions {
+        if !matches!(&definition.operator,
+            Operator::Probe(_, keyed) if matches!(keyed.choice, Some(Choice::Smallest(_))))
+        {
+            continue;
+        }
+        let reader = symbol_name(&definition.name);
+        let rejection = || {
+            error(
+                "T-Gpu: probe smallest is realized only over two-level radix layouts `[prefix][v]` with candidates reads on every side",
+            )
+        };
+        let candidate = candidates
+            .iter()
+            .find(|candidate| symbol_name(candidate.reader) == reader)
+            .ok_or_else(rejection)?;
+        let mut sides = Vec::new();
+        for (side, prefix) in &candidate.sides {
+            candidate_layout(facts.analysis, side, prefix, &candidate.column)
+                .ok_or_else(rejection)?;
+            sides.push(SmallestSide {
+                provider: side.clone(),
+                prefix: prefix.clone(),
+            });
+        }
+        realized.insert(
+            reader,
+            SmallestRealization {
+                column: candidate.column.clone(),
+                carrier: ChoiceCarrier::for_sides(sides.len()),
+                sides,
+                count: CandidateCount::ExactUnion,
+                ties: Ties::FirstInOrder,
+            },
+        );
+    }
+    Ok(realized)
+}
+
+/// GPU-Smallest checker: one record per PH-Smallest probe, over the same
+/// candidate column, every Physical side once in order, each a two-level
+/// radix layout with a recorded Candidates read. Selection is not invoked.
+fn check_smallest(
+    facts: &Facts,
+    records: &BTreeMap<String, SmallestRealization>,
+) -> syn::Result<()> {
+    use cq_lang_structures::physical::{Choice, Operator};
+    let physical = &facts.program.structures.physical;
+    let candidates =
+        cq_lang_structures::physical::candidate_prefixes(physical, &facts.analysis.structures.physical);
+    let probes: BTreeSet<_> = physical
+        .program
+        .definitions
+        .iter()
+        .filter(|definition| matches!(&definition.operator,
+            Operator::Probe(_, keyed) if matches!(keyed.choice, Some(Choice::Smallest(_)))))
+        .map(|definition| symbol_name(&definition.name))
+        .collect();
+    if records.keys().cloned().collect::<BTreeSet<_>>() != probes {
+        return Err(error("GPU-Smallest: every smallest probe needs exactly one realization"));
+    }
+    for (reader, record) in records {
+        let candidate = candidates
+            .iter()
+            .find(|candidate| symbol_name(candidate.reader) == *reader)
+            .ok_or_else(|| error("GPU-Smallest: realization of a probe without an intersection"))?;
+        let SmallestRealization {
+            column,
+            sides,
+            count: CandidateCount::ExactUnion,
+            ties: Ties::FirstInOrder,
+            carrier,
+        } = record;
+        if *carrier != ChoiceCarrier::for_sides(sides.len()) {
+            return Err(error("GPU-Smallest: choice carrier does not name every side"));
+        }
+        if *column != candidate.column
+            || sides.len() != candidate.sides.len()
+            || sides.iter().zip(&candidate.sides).any(|(side, (build, prefix))| {
+                side.provider != *build
+                    || side.prefix != *prefix
+                    || candidate_layout(facts.analysis, build, prefix, column).is_none()
+            })
+        {
+            return Err(error(
+                "GPU-Smallest: sides must be every Physical side once, each a candidates radix layout",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Checked facts shared by selection and checking. No realization policy.
@@ -1109,6 +1245,7 @@ pub(crate) fn check(
         .flat_map(|row| row.types.keys().cloned())
         .collect();
     crate::capture::check(&records.captures, &columns, &facts.codecs)?;
+    check_smallest(&facts, &records.smallest)?;
     let host_bound = host_bound(&facts.definitions, &records.captures);
     let grid = |grid: &Grid| match grid {
         Grid::KernelOccupancy => true,
@@ -1177,12 +1314,12 @@ pub(crate) fn check(
                     .providers
                     .get(name)
                     .is_some_and(|layouts| {
-                        layouts
-                            .iter()
-                            .any(|layout| layout.abi == ProviderAbi::Range)
+                        layouts.iter().any(|layout| {
+                            matches!(layout.abi, ProviderAbi::Range | ProviderAbi::Radix)
+                        })
                     });
                 if !built {
-                    return Err(error("provider access without a recorded Range layout"));
+                    return Err(error("provider access without a recorded Range or Radix layout"));
                 }
                 selection.as_ref()
             }

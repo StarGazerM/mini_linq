@@ -25,7 +25,7 @@ use crate::{
     Column, Packing, Result, Word,
 };
 use cuda_core::{DeviceCopy, LaunchConfig1D};
-use gpu_device_columns::{Buffer, Pool};
+use gpu_device_columns::{Buffer, Pool, SourceView};
 use rccl_cub::{DeviceArithmeticRange, DeviceMap, DeviceSliceRead, DeviceSliceWrite};
 use std::{
     any::Any,
@@ -325,6 +325,106 @@ tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8);
 tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9);
 tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10);
 tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10, L:11);
+
+/// An integer item lane filled from a decoded resident source value (its
+/// i64 bit pattern). The recorded value schema guarantees the source column's
+/// domain fits the lane ([`LaneKind::holds`]), so the conversion is exact.
+pub trait SourceLane: ItemLane {
+    fn from_source(value: i64) -> Self;
+}
+macro_rules! source_lanes {
+    ($($ty:ty),*) => {$(
+        impl SourceLane for $ty {
+            #[inline(always)]
+            fn from_source(value: i64) -> Self {
+                value as $ty
+            }
+        }
+    )*};
+}
+source_lanes!(u8, i8, u16, i16, u32, i32, u64, i64);
+
+/// Item layouts that a build fills from resident source columns, one source
+/// per lane in layout order.
+pub trait SourceItemColumns: DeviceItemColumns {
+    #[doc(hidden)]
+    fn from_sources(
+        kernels: &ItemKernels,
+        sources: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self>;
+}
+
+impl SourceItemColumns for () {
+    fn from_sources(_: &ItemKernels, _: &[SourceView], _: *const u32, _: usize) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<T: SourceLane> SourceItemColumns for Buffer<T> {
+    fn from_sources(
+        kernels: &ItemKernels,
+        sources: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self> {
+        let [source] = sources else {
+            return Err("one source column per item lane".into());
+        };
+        // SAFETY: the lane kernel initializes every position before publication.
+        let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
+        if rows != 0 {
+            let module = &kernels.module;
+            let initial = module.prepare_source_lane::<T>(ItemKernels::shape())?;
+            let config = kernels.config(initial.function(), rows)?;
+            module.source_lane::<T>(
+                kernels.pool.stream(),
+                &module.prepare_source_lane::<T>(config)?,
+                *source,
+                positions,
+                rows as u64,
+                output.ptr(),
+            )?;
+        }
+        Ok(output)
+    }
+}
+
+macro_rules! source_columns {
+    ($($C:ident),+) => {
+        impl<$($C: SourceItemColumns),+> SourceItemColumns for ($($C,)+) {
+            fn from_sources(
+                kernels: &ItemKernels,
+                sources: &[SourceView],
+                positions: *const u32,
+                rows: usize,
+            ) -> Result<Self> {
+                if sources.len() != Self::COLUMNS {
+                    return Err("one source column per item lane".into());
+                }
+                let mut _at = 0;
+                Ok(($({
+                    let part = &sources[_at.._at + $C::COLUMNS];
+                    _at += $C::COLUMNS;
+                    $C::from_sources(kernels, part, positions, rows)?
+                },)+))
+            }
+        }
+    };
+}
+source_columns!(A);
+source_columns!(A, B);
+source_columns!(A, B, C);
+source_columns!(A, B, C, D);
+source_columns!(A, B, C, D, E);
+source_columns!(A, B, C, D, E, F);
+source_columns!(A, B, C, D, E, F, G);
+source_columns!(A, B, C, D, E, F, G, H);
+source_columns!(A, B, C, D, E, F, G, H, I);
+source_columns!(A, B, C, D, E, F, G, H, I, J);
+source_columns!(A, B, C, D, E, F, G, H, I, J, K);
+source_columns!(A, B, C, D, E, F, G, H, I, J, K, L);
 
 /// Caller-recorded provider parameters; the runtime chooses none of them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1372,12 +1472,74 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
             .snapshot
             .probe_intervals(pool, low, high, count)
     }
+
+    /// Every item column's address table (position reads by run).
+    pub fn items_view(&self) -> RadixItemsView {
+        self.publication.snapshot.items_view()
+    }
+}
+
+impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: SourceItemColumns>
+    RadixLayout<K, V, W, O, C>
+{
+    /// Formal rule GPU-RadixSourceBuild: one publication of `rows` occurrences
+    /// read from resident source columns (through `positions` unless null):
+    /// key fields packed by `K`'s packing into whole `W` keys, one item lane
+    /// per value source. Grouping is the ordinary GPU-RadixPublish build; the
+    /// only host synchronization is its group-count download.
+    ///
+    /// # Safety
+    /// Every source must describe initialized values of its schema column at
+    /// every read row, ready on `pool`'s stream and immutable during the
+    /// build; `positions`, unless null, addresses `rows` such device rows.
+    pub unsafe fn from_sources(
+        pool: Arc<Pool>,
+        params: RadixRunParams,
+        keys: &[SourceView],
+        values: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self> {
+        let packing = Self::derive_packing()?;
+        Self::check_schema(&packing)?;
+        if keys.len() != K::COLUMNS.len() || values.len() != C::COLUMNS {
+            return Err("radix sources differ from the layout's key and value schema".into());
+        }
+        let mut run = DeviceRadixRun::<W, O, C>::new(pool.clone(), params)?;
+        if rows != 0 {
+            u32::try_from(rows).map_err(|_| "radix source build exceeds the u32 row domain")?;
+            let sources = Buffer::from_host_async(pool.clone(), keys)?;
+            let fields = Buffer::from_host_async(
+                pool.clone(),
+                &packing.packed_fields().collect::<Vec<_>>(),
+            )?;
+            // SAFETY: the pack kernel initializes every key before grouping.
+            let words = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
+            let module = &run.kernels.module;
+            let initial = module.prepare_pack_sources::<W>(ItemKernels::shape())?;
+            let config = run.kernels.config(initial.function(), rows)?;
+            module.pack_sources::<W>(
+                pool.stream(),
+                &module.prepare_pack_sources::<W>(config)?,
+                sources.ptr(),
+                fields.ptr(),
+                keys.len() as u32,
+                positions,
+                rows as u64,
+                words.ptr(),
+            )?;
+            let items = C::from_sources(&run.kernels, values, positions, rows)?;
+            run.publish(&words, &items, rows)?;
+        }
+        Self::publish(&run, packing)
+    }
 }
 
 /// Pointer-only reads usable inside generated device kernels.
 pub mod device {
     use super::{
-        OffsetWord, RadixItemColumn, RadixItemsView, RadixKeysView, RadixMatch, RadixRunView,
+        OffsetWord, RadixItemColumn, RadixItemsView, RadixKeysView, RadixLayoutView, RadixMatch,
+        RadixRunView,
     };
     use crate::Word;
 
@@ -1628,18 +1790,242 @@ pub mod device {
         };
         unsafe { *(address as *const T).add((cursor.begin + offset) as usize) }
     }
+
+    /// Formal rule GPU-RadixEncodedProbe: the inclusive key interval of the
+    /// leading `count` key fields bound to `values` (each as its i64 bit
+    /// pattern), encoded once into whole words: the bound fields' sign-bit
+    /// encodings, then all-zero (low) or all-one (high) remaining key bits.
+    /// No `high + 1` is formed. `false` when a value lies outside its
+    /// field's domain (no key can match).
+    /// # Safety
+    /// `view.fields` must address `count <= view.field_count` live descriptors
+    /// and `values` `count` initialized values readable on this device.
+    #[inline(always)]
+    pub unsafe fn encode_prefix<W: Word, O: OffsetWord>(
+        view: RadixLayoutView<W, O>,
+        values: *const i64,
+        count: u32,
+    ) -> (W, W, bool) {
+        let mut low = W::zero();
+        let mut remaining = view.bits;
+        let mut index = 0;
+        while index < count {
+            let field = unsafe { *view.fields.add(index as usize) };
+            let value = unsafe { *values.add(index as usize) };
+            let fits = if field.bits >= 64 {
+                true
+            } else if field.signed != 0 {
+                let half = 1_i64 << (field.bits - 1);
+                value >= -half && value < half
+            } else {
+                value >= 0 && value < (1_i64 << field.bits)
+            };
+            if !fits {
+                return (low, low, false);
+            }
+            let mask = u64::MAX >> (64 - field.bits);
+            let sign = if field.signed != 0 {
+                1_u64 << (field.bits - 1)
+            } else {
+                0
+            };
+            low.insert(field.shift, field.bits, ((value as u64) & mask) ^ sign);
+            remaining = field.shift;
+            index += 1;
+        }
+        let mut high = low;
+        let mut lane = 0;
+        while lane * 64 < remaining {
+            let bits = (remaining - lane * 64).min(64);
+            high.set_lane(lane, high.lane(lane) | (u64::MAX >> (64 - bits)));
+            lane += 1;
+        }
+        (low, high, true)
+    }
+
+    /// Run-local item interval `[begin, end)` of the keys in inclusive `[low, high]`.
+    /// # Safety
+    /// `run` must describe a live run readable on this device.
+    #[inline(always)]
+    pub unsafe fn interval_items<W: Word, O: OffsetWord>(
+        run: RadixRunView<W, O>,
+        low: W,
+        high: W,
+    ) -> (u64, u64) {
+        let (first, last) = unsafe { interval(run, low, high) };
+        unsafe { (offset(run, first), offset(run, last)) }
+    }
+
+    /// Whether a run older than `before` holds `key`.
+    #[inline(always)]
+    unsafe fn older<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        before: u32,
+        key: W,
+    ) -> bool {
+        let mut index = 0;
+        while index < before {
+            if unsafe { search(run(view, index), key) }.1 {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    /// Formal rule GPU-RadixCandidates: the exact number of distinct keys in
+    /// inclusive `[low, high]` over the union of all runs. Keys are distinct
+    /// within a run, so one run's count is its slot interval; across runs a
+    /// key counts once, in its oldest run (never a sum of per-run counts).
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn distinct<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        low: W,
+        high: W,
+    ) -> u64 {
+        let mut total = 0;
+        let mut index = 0;
+        while index < view.run_count {
+            let current = unsafe { run(view, index) };
+            let (first, last) = unsafe { interval(current, low, high) };
+            if index == 0 {
+                total += last - first;
+            } else {
+                let mut slot = first;
+                while slot < last {
+                    let key = unsafe { *current.keys.add(slot as usize) };
+                    total += !unsafe { older(view, index, key) } as u64;
+                    slot += 1;
+                }
+            }
+            index += 1;
+        }
+        total
+    }
+
+    /// The `ordinal`-th distinct key of [`distinct`]'s enumeration (runs
+    /// oldest first, keys ascending within a run, each key in its oldest
+    /// run) as `(run, slot)`. Requires `ordinal < distinct(view, low, high)`.
+    /// # Safety
+    /// `view` must describe live runs readable on this device.
+    #[inline(always)]
+    pub unsafe fn distinct_at<W: Word, O: OffsetWord>(
+        view: RadixKeysView<W, O>,
+        low: W,
+        high: W,
+        mut ordinal: u64,
+    ) -> (u32, u64) {
+        let mut index = 0;
+        while index < view.run_count {
+            let current = unsafe { run(view, index) };
+            let (first, last) = unsafe { interval(current, low, high) };
+            if index == 0 {
+                if ordinal < last - first {
+                    return (0, first + ordinal);
+                }
+                ordinal -= last - first;
+            } else {
+                let mut slot = first;
+                while slot < last {
+                    let key = unsafe { *current.keys.add(slot as usize) };
+                    if !unsafe { older(view, index, key) } {
+                        if ordinal == 0 {
+                            return (index, slot);
+                        }
+                        ordinal -= 1;
+                    }
+                    slot += 1;
+                }
+            }
+            index += 1;
+        }
+        (view.run_count, 0)
+    }
 }
 
 #[cuda_host::cuda_module]
 mod radix_kernels {
     use crate::{
+        layout::PackedField,
         radix_run::{
             device, IntervalProbe, ItemLane, KeyProbe, OffsetWord, RadixItemColumn, RadixKeysView,
-            RadixMatch, RadixRunView, SIDE,
+            RadixMatch, RadixRunView, SourceLane, SIDE,
         },
         Word,
     };
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
+    use gpu_device_columns::{decode_source, SourceView};
+
+    /// Pack each read row's key fields (most significant first, sign bit
+    /// flipped for signed fields) into one whole key word.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn pack_sources<W: Word>(
+        sources: *const SourceView,
+        fields: *const PackedField,
+        field_count: u32,
+        positions: *const u32,
+        rows: u64,
+        keys: *mut W,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while row < rows {
+            let source = if positions.is_null() {
+                row
+            } else {
+                unsafe { *positions.add(row as usize) as u64 }
+            };
+            let mut key = W::zero();
+            let mut index = 0;
+            while index < field_count {
+                let field = unsafe { *fields.add(index as usize) };
+                // DECODE V: radix source build reconstructs resident FOR values before key packing; P4 pack encoded order keys directly.
+                let value = unsafe { decode_source(*sources.add(index as usize), source) } as u64;
+                let mask = u64::MAX >> (64 - field.bits);
+                let sign = if field.signed != 0 {
+                    1_u64 << (field.bits - 1)
+                } else {
+                    0
+                };
+                key.insert(field.shift, field.bits, (value & mask) ^ sign);
+                index += 1;
+            }
+            unsafe {
+                *keys.add(row as usize) = key;
+            }
+            row += stride;
+        }
+    }
+
+    /// Fill one item lane with each read row's source value.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn source_lane<T: SourceLane>(
+        input: SourceView,
+        positions: *const u32,
+        rows: u64,
+        output: *mut T,
+    ) {
+        let mut row = thread::index_1d().get() as u64;
+        let stride = thread::gridDim_x() as u64 * 256;
+        while row < rows {
+            let source = if positions.is_null() {
+                row
+            } else {
+                unsafe { *positions.add(row as usize) as u64 }
+            };
+            unsafe {
+                // DECODE V: radix source build reconstructs resident FOR payloads into native item lanes; P4 retain encoded lanes.
+                *output.add(row as usize) = T::from_source(decode_source(input, source));
+            }
+            row += stride;
+        }
+    }
 
     /// Mark group starts of the permuted keys; entry `rows` is the terminal.
     #[kernel]

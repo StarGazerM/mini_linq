@@ -39,6 +39,7 @@ pub(crate) fn input_providers(program: &Program) -> syn::Result<BTreeMap<String,
             token: source.token.clone(),
             inner: None,
             input: Some(input.clone()),
+            radix: None,
             ty: source.ty.clone(),
         }
     };

@@ -9,16 +9,18 @@
 //! obligations. Comparing a recorded token id with an id is identity, not
 //! recognition.
 //! ```text
-//! Provider    ::= "@" Ident ["(" Provider ")"] [InputSchema] "as" RustType
+//! Provider    ::= "@" Ident ["(" Provider ")"] [InputSchema] [RadixAdvice] "as" RustType
 //! InputSchema ::= "input" "{" "keys" Integer ";" "columns" "[" InputColumn,* "]" "}"
 //! InputColumn ::= RustType "=>" RustType ["codec" RustType]
+//! RadixAdvice ::= "radix" "{" "word" RustType ";" "offset" RustType ";"
+//!                 "ratio" Integer ";" "radix_bits" Integer ";" "merge_tile" Integer "}"
 //! Declaration ::= Ident "=" RustType "{" Fact,* "}" ";"
 //! Fact ::= "reads" "[" ("exact" | "range" | "membership" | "ordered"
-//!              | "distinct" | "resident"),* "]"
+//!              | "distinct" | "resident" | "candidates"),* "]"
 //!        | "supports" "[" ("retain" | "expand" | "keys"),* "]"
 //!        | "build" ("inferred" | "macro") | "accounting" ("rows" | "keys")
 //!        | ("nested" | "routed") Integer | "join_filter" | "shared"
-//!        | "packed_bits" Integer | "abi" ("range" | "runs" | "columns")
+//!        | "packed_bits" Integer | "abi" ("range" | "runs" | "columns" | "radix")
 //!        | "contiguous_range" | "bounds" "resident_columns"
 //! ```
 
@@ -62,6 +64,12 @@ pub mod kw {
     syn::custom_keyword!(contiguous_range);
     syn::custom_keyword!(bounds);
     syn::custom_keyword!(resident_columns);
+    syn::custom_keyword!(radix);
+    syn::custom_keyword!(word);
+    syn::custom_keyword!(offset);
+    syn::custom_keyword!(ratio);
+    syn::custom_keyword!(radix_bits);
+    syn::custom_keyword!(merge_tile);
 }
 
 /// Declared read capabilities, discharged against Sequence obligations.
@@ -79,16 +87,23 @@ pub enum Capability {
     /// each stored row once. Such a provider may type a canonical rows record
     /// (a canon result's identity index, SRDatalog's sorted array).
     Distinct,
+    /// Formal rule GPU-RadixCandidates: for a two-level `[prefix][v]` instance,
+    /// enumerate each distinct `v` under a bound prefix exactly once, with the
+    /// exact distinct count across every publication (union, not a sum of
+    /// per-run counts) and membership of `(prefix, v)`. `Range` alone never
+    /// discharges this obligation of a PH-Smallest candidate side.
+    Candidates,
 }
 
 impl Capability {
-    const ALL: [(Capability, &'static str); 6] = [
+    const ALL: [(Capability, &'static str); 7] = [
         (Capability::Exact, "exact"),
         (Capability::Range, "range"),
         (Capability::Membership, "membership"),
         (Capability::Ordered, "ordered"),
         (Capability::Distinct, "distinct"),
         (Capability::Resident, "resident"),
+        (Capability::Candidates, "candidates"),
     ];
 
     fn name(&self) -> &'static str {
@@ -136,6 +151,22 @@ pub enum NativeAbi {
     Range,
     Runs,
     Columns,
+    /// Grouped radix index (`RadixLayout`): whole packed order keys, explicit
+    /// item lanes; every instance records its [`RadixAdvice`].
+    Radix,
+}
+
+/// Formal rule GPU-RadixAdvice: authored per-instance parameters of a radix
+/// provider. The key word and offset carriers are opaque spellings that the
+/// printer passes as the instance's generic arguments (rustc checks them
+/// against the instance spelling); the runtime chooses none of them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RadixAdvice {
+    pub word: syn::Type,
+    pub offset: syn::Type,
+    pub ratio: usize,
+    pub radix_bits: u32,
+    pub merge_tile: u32,
 }
 
 /// The recorded source of native input column bounds.
@@ -226,6 +257,7 @@ impl Declaration {
             token: self.token.clone(),
             inner: None,
             input: None,
+            radix: None,
             ty: self.ty.clone(),
         }
     }
@@ -264,6 +296,7 @@ impl Declaration {
             token: self.token.clone(),
             inner: Some(Box::new(inner)),
             input: None,
+            radix: None,
             ty,
         })
     }
@@ -275,6 +308,7 @@ pub struct Provider {
     pub token: Ident,
     pub inner: Option<Box<Provider>>,
     pub input: Option<InputSchema>,
+    pub radix: Option<RadixAdvice>,
     /// Printed spelling only.
     pub ty: syn::Type,
 }
@@ -317,11 +351,17 @@ impl syn::parse::Parse for Provider {
         } else {
             None
         };
+        let radix = if input.peek(kw::radix) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
         input.parse::<Token![as]>()?;
         Ok(Self {
             token,
             inner,
             input: schema,
+            radix,
             ty: input.parse()?,
         })
     }
@@ -332,9 +372,10 @@ impl ToTokens for Provider {
         let token = &self.token;
         let ty = &self.ty;
         let input = &self.input;
+        let radix = &self.radix;
         tokens.extend(match &self.inner {
-            Some(inner) => quote::quote!(@#token(#inner) #input as #ty),
-            None => quote::quote!(@#token #input as #ty),
+            Some(inner) => quote::quote!(@#token(#inner) #input #radix as #ty),
+            None => quote::quote!(@#token #input #radix as #ty),
         });
     }
 }
@@ -357,6 +398,56 @@ impl syn::parse::Parse for InputSchema {
             return Err(body.error("expected end of input schema"));
         }
         Ok(Self { key_count, columns })
+    }
+}
+
+impl syn::parse::Parse for RadixAdvice {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::radix>()?;
+        let body;
+        syn::braced!(body in input);
+        body.parse::<kw::word>()?;
+        let word = body.parse()?;
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::offset>()?;
+        let offset = body.parse()?;
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::ratio>()?;
+        let ratio = body.parse::<syn::LitInt>()?.base10_parse()?;
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::radix_bits>()?;
+        let radix_bits = body.parse::<syn::LitInt>()?.base10_parse()?;
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::merge_tile>()?;
+        let merge_tile = body.parse::<syn::LitInt>()?.base10_parse()?;
+        if !body.is_empty() {
+            return Err(body.error("expected end of radix advice"));
+        }
+        Ok(Self {
+            word,
+            offset,
+            ratio,
+            radix_bits,
+            merge_tile,
+        })
+    }
+}
+
+impl ToTokens for RadixAdvice {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let Self {
+            word,
+            offset,
+            ratio,
+            radix_bits,
+            merge_tile,
+        } = self;
+        let ratio = proc_macro2::Literal::usize_unsuffixed(*ratio);
+        let radix_bits = proc_macro2::Literal::u32_unsuffixed(*radix_bits);
+        let merge_tile = proc_macro2::Literal::u32_unsuffixed(*merge_tile);
+        tokens.extend(quote::quote!(radix {
+            word #word; offset #offset; ratio #ratio; radix_bits #radix_bits; merge_tile #merge_tile
+        }));
     }
 }
 
@@ -558,6 +649,7 @@ impl syn::parse::Parse for Declaration {
                     "range" => NativeAbi::Range,
                     "runs" => NativeAbi::Runs,
                     "columns" => NativeAbi::Columns,
+                    "radix" => NativeAbi::Radix,
                     _ => return error(&abi, "unknown native ABI"),
                 });
             } else if lookahead.peek(kw::contiguous_range) {
@@ -641,6 +733,7 @@ impl ToTokens for Declaration {
                 NativeAbi::Range => quote::quote!(abi range),
                 NativeAbi::Runs => quote::quote!(abi runs),
                 NativeAbi::Columns => quote::quote!(abi columns),
+                NativeAbi::Radix => quote::quote!(abi radix),
             });
         }
         if *contiguous_range {
@@ -688,6 +781,7 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
                 token: declaration.token.clone(),
                 inner: None,
                 input: None,
+                radix: None,
                 ty: syn::parse_quote!(_),
             })?;
         }
@@ -746,6 +840,29 @@ fn check_instance(providers: &Providers, provider: &Provider, in_routed: bool) -
         if input.key_count > input.columns.len() {
             return error(&provider.token, "input key count exceeds column count");
         }
+    }
+    let radix = declaration.facts.abi == Some(NativeAbi::Radix);
+    match &provider.radix {
+        None if radix => {
+            return error(
+                &provider.token,
+                "a radix provider instance records its radix advice",
+            );
+        }
+        Some(_) if !radix => {
+            return error(&provider.token, "radix advice requires the radix ABI");
+        }
+        Some(advice) => {
+            concrete_type(&advice.word)?;
+            concrete_type(&advice.offset)?;
+            if advice.ratio < 2 || advice.radix_bits > 32 || advice.merge_tile == 0 {
+                return error(
+                    &provider.token,
+                    "radix advice needs ratio >= 2, radix_bits <= 32 and merge_tile >= 1",
+                );
+            }
+        }
+        None => {}
     }
     match (declaration.facts.composition, &provider.inner) {
         (None, None) => Ok(()),

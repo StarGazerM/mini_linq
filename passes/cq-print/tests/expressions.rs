@@ -75,6 +75,7 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
                     token: declaration.token.clone(),
                     inner: None,
                     input: None,
+                    radix: None,
                     ty: provider.clone(),
                 };
             }
