@@ -828,12 +828,21 @@ impl Rows {
                             )
                         })?;
                         let index = fields[source].0;
-                        Ok(quote!(unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::new(
-                            #host.storage().columns[#index].clone(), #host_length)? }))
+                        Ok(
+                            quote!(unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::new(
+                            #host.storage().columns[#index].clone(), #host_length)? }),
+                        )
                     };
-                    let keys = layout.keys.iter().map(descriptor).collect::<syn::Result<Vec<_>>>()?;
-                    let values =
-                        layout.payload.iter().map(descriptor).collect::<syn::Result<Vec<_>>>()?;
+                    let keys = layout
+                        .keys
+                        .iter()
+                        .map(descriptor)
+                        .collect::<syn::Result<Vec<_>>>()?;
+                    let values = layout
+                        .payload
+                        .iter()
+                        .map(descriptor)
+                        .collect::<syn::Result<Vec<_>>>()?;
                     let ty = &layout.ty;
                     let key_types = &radix.key_types;
                     let lanes = &radix.lanes;
@@ -1263,7 +1272,9 @@ impl Rows {
     }
     /// The kernel ABI of a recorded radix provider.
     pub fn radix_provider(&self, name: &str) -> Option<&RadixKernel> {
-        self.providers.get(name).and_then(|provider| provider.radix.as_ref())
+        self.providers
+            .get(name)
+            .and_then(|provider| provider.radix.as_ref())
     }
     /// The device value of an answer column: its row slot, or the kernel
     /// scalar of a capture answer column (IF-Capture).
@@ -2239,10 +2250,10 @@ mod tests {
                 result = let canon project filtered keep {id};
                 return result as answer(id);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 h host scan = @host_scan as ::core::iter::Map<_,_> [];
-                h = @sorted_run as ::cq_storage::SortedRun<_,_> [];
+                h rows = @vec as ::std::vec::Vec<_>;
                 result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
                 result canon = rows;
             }

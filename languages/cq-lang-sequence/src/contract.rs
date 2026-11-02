@@ -1408,6 +1408,16 @@ impl Checked<'_> {
     ) -> syn::Result<()> {
         let name = symbol_name(provider);
         let key = (name.clone(), keys.to_vec());
+        // An empty key enumerates the recorded whole relation, not an index.
+        // Retention was checked by provider(); no keyed trait is required.
+        if keys.is_empty()
+            && (self.analysis.structures.host_read(&name)
+                || self.analysis.structures.retained.contains_key(&name)
+                || self.analysis.structures.selections.contains_key(&name))
+        {
+            self.analysis.capabilities.insert(key, Capability::Exact);
+            return Ok(());
+        }
         if let Some(reader) = reader {
             let requirement = self
                 .analysis

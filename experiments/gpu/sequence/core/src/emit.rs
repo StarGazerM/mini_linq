@@ -1503,7 +1503,9 @@ impl Kernel<'_, '_> {
                     // Run bounds are uniform descriptor metadata: every lane
                     // executes every run's existing segmented collective.
                     Ok(quote! { for #run in 0..#view.run_count { #expansion } })
-                } else if smallest.is_none() && self.compiler.rows.radix_provider(provider).is_some() {
+                } else if smallest.is_none()
+                    && self.compiler.rows.radix_provider(provider).is_some()
+                {
                     let view = self.compiler.rows.provider(provider)?.0;
                     let run = format_ident!("__cq_run_{provider}");
                     // GPU-RadixCursor: each run's local item interval is one
@@ -4644,7 +4646,9 @@ mod tests {
             } else {
                 (
                     quote!(filtered rows = @vec as ::std::vec::Vec<_>;),
-                    Some(quote!(vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };)),
+                    Some(
+                        quote!(vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };),
+                    ),
                 )
             };
             let program: Program = syn::parse2(quote! {

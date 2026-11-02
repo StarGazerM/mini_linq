@@ -711,10 +711,11 @@ impl<'a> Emitter<'a> {
                 partitioned: input.partitioned,
             });
         }
-        if self
-            .context()
-            .forcing_witness(&result, &right, &columns)
-            .is_some()
+        if columns.is_empty()
+            || self
+                .context()
+                .forcing_witness(&result, &right, &columns)
+                .is_some()
             || self.analysis.structures.stages.contains_key(&result)
         {
             return self.map(&Ident::new(&result, provider.span()), input, true);

@@ -230,6 +230,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-gpu-sequence-core"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-physical-realization",
+ "cq-print",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-gpu-sequence-macros"
+version = "0.1.0"
+dependencies = [
+ "cq-gpu-sequence-core",
+ "cq-lang-sequence",
+ "cq-lang-structures",
+ "cq-sequence-plan",
+ "cq-stage",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -805,6 +831,7 @@ version = "0.1.0"
 dependencies = [
  "core-pass-fixtures",
  "cq-elaborate",
+ "cq-gpu-sequence-macros",
  "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-ix",

@@ -205,7 +205,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
     };
     for (result, reads) in &analysis.keyed_reads {
         for (reader, columns, supply) in reads {
-            if *supply != SupplyKind::Stream || matches!(operators[reader], Operator::Merge(..)) {
+            if columns.is_empty()
+                || *supply != SupplyKind::Stream
+                || matches!(operators[reader], Operator::Merge(..))
+            {
                 continue;
             }
             // Smallest enumerates candidate keys, rather than probing the
@@ -411,6 +414,9 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         }
         if analysis.hosts.contains_key(&name) && analysis.modes[&name] == ModeKind::Pipe {
             for (reader, columns, supply) in analysis.keyed_reads.get(&name).into_iter().flatten() {
+                if columns.is_empty() {
+                    continue;
+                }
                 let rd = &program
                     .definitions
                     .iter()
@@ -568,6 +574,10 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         let direct_union = matches!(&definition.operator,Operator::Union(union) if union.origin.as_ref().is_none_or(|origin|origin.over.is_none()));
         if analysis.modes[&name] != ModeKind::Let
             || analysis.scanned.contains(&name) && !direct_union
+            || analysis
+                .keyed_reads
+                .get(&name)
+                .is_some_and(|reads| reads.iter().any(|(_, columns, _)| columns.is_empty()))
         {
             continue;
         }

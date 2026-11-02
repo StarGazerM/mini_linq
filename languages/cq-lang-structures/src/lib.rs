@@ -740,14 +740,14 @@ impl Analysis {
             .min_by_key(|((levels, _), depth)| (levels.len() != *depth, levels.len()))
     }
 
-    /// Reads of `result` that enumerate its rows: every read except stream
-    /// keyed reads, which a reusable structure answers. Const and range
-    /// supplies may scan and filter the stored rows (STR-Range).
+    /// Reads of `result` that enumerate its rows: every read except nonempty
+    /// stream-keyed reads, which a reusable structure answers. Const and range
+    /// supplies may scan and filter stored rows; empty keys scan all rows.
     pub fn scan_reads(&self, result: &str) -> usize {
         let keyed = self.physical.keyed_reads.get(result).map_or(0, |reads| {
             reads
                 .iter()
-                .filter(|(_, _, supply)| *supply == SupplyKind::Stream)
+                .filter(|(_, columns, supply)| !columns.is_empty() && *supply == SupplyKind::Stream)
                 .count()
         });
         self.physical
@@ -757,9 +757,9 @@ impl Analysis {
     }
 
     /// Formal rule STR-RowsByValue: a stored `let` result's rows record is
-    /// held as storage only when it has more than one consumer (its scan reads
-    /// plus the Built entries constructed from it). Otherwise its build is
-    /// bound by value and moved into that single consumer: one scan reader, or
+    /// held for a replaying empty-key stream read or more than one consumer
+    /// (scan reads plus Built entries). Otherwise its build is bound by value
+    /// and moved into that single consumer: one scan reader, or
     /// the one Built entry. Filtered builds replay their direct source, so an
     /// unscanned filtered result never holds rows. Selections and keysets keep
     /// their own sources.
@@ -767,6 +767,11 @@ impl Analysis {
         let scans = self.scan_reads(result);
         self.physical.modes.get(result) != Some(&ModeKind::Let)
             || self.selections.contains_key(result)
+            || self.physical.keyed_reads.get(result).is_some_and(|reads| {
+                reads
+                    .iter()
+                    .any(|(_, columns, supply)| columns.is_empty() && *supply == SupplyKind::Stream)
+            })
             || self.keysets.keys().any(|(name, _)| name == result)
             || scans + self.built.get(result).map_or(0, Vec::len) > 1
                 && !(scans == 0 && self.filtered.contains_key(result))
@@ -1126,6 +1131,12 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 return error(&entry.name, "structure must name a Physical result");
             };
             keyed.check_support()?;
+            if keyed.columns().next().is_none() {
+                return error(
+                    keyed,
+                    "a built index requires at least one key column; use rows for a whole-relation read",
+                );
+            }
             let mut all = BTreeSet::new();
             for column in keyed.columns() {
                 if !heading.contains(&symbol_name(column)) {
@@ -1308,7 +1319,11 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     // Only stream supplies require reusable storage. Const supplies always
     // have the direct-host or scan-and-filter implementation available.
     let answered = |result: &str, columns: &[String]| -> bool {
-        analysis.host_read(result) || analysis.built_on(result, columns).is_some()
+        analysis.host_read(result)
+            || columns.is_empty()
+                && (analysis.retained.contains_key(result)
+                    || analysis.selections.contains_key(result))
+            || analysis.built_on(result, columns).is_some()
     };
     for (result, reads) in &analysis.physical.keyed_reads {
         for (reader, columns, supply) in reads {
@@ -1510,7 +1525,10 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 .into_iter()
                 .flatten()
             {
-                if !analysis.host_read(&name) || analysis.reads.contains_key(reader) {
+                if columns.is_empty()
+                    || !analysis.host_read(&name)
+                    || analysis.reads.contains_key(reader)
+                {
                     continue;
                 }
                 let read = (

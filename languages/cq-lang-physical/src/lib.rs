@@ -1498,6 +1498,8 @@ pub fn inherited_key(
 /// payload and free-variable dependencies, without additional ordering barriers.
 /// PH-KeyProjection additionally permits a private retained key view on a
 /// smallest membership edge; erasing that view restores the exact named graph.
+/// PH-ConstantGuard permits a private literal-column rename/select/project
+/// expansion; erasure restores the original occurrence's literal restrictions.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let source_facts = contract::check(source)?;
     let target_facts = contract::check(target)?;
@@ -1515,6 +1517,102 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         .collect();
     let mut key_views = BTreeSet::new();
     let mut projected_memberships = BTreeSet::new();
+    let mut constant_guards = BTreeSet::new();
+    for definition in &source.program.definitions {
+        let Operator::Rename(original) = &definition.operator else {
+            continue;
+        };
+        let Some(constants) = &original.constants else {
+            continue;
+        };
+        if constants.equalities.is_empty() {
+            continue;
+        }
+        let Some(replacement) = target_definitions.get(&symbol_name(&definition.name)) else {
+            continue;
+        };
+        let Operator::Project(project) = &replacement.operator else {
+            continue;
+        };
+        let Some(filtered) = target_definitions.get(&symbol_name(&project.input)) else {
+            continue;
+        };
+        let Operator::Select(select) = &filtered.operator else {
+            continue;
+        };
+        let Some(raw) = target_definitions.get(&symbol_name(&select.input)) else {
+            continue;
+        };
+        let Operator::Rename(renamed) = &raw.operator else {
+            continue;
+        };
+        // PH-ConstantGuard: inspect the recorded expansion, not the producer's
+        // naming algorithm. Private pipe intermediates introduce exactly the
+        // literal columns that the original occurrence restricted.
+        if [raw, filtered].iter().any(|d| {
+            source_definitions.contains_key(&symbol_name(&d.name))
+                || !matches!(d.mode, Mode::Pipe(_))
+                || d.canon.is_some()
+                || target
+                    .program
+                    .definitions
+                    .iter()
+                    .flat_map(|d| d.operator.operands())
+                    .filter(|operand| **operand == d.name)
+                    .count()
+                    != 1
+        }) || raw.name == filtered.name
+            || renamed.constants.is_some()
+            || renamed.mapping.len() != original.mapping.len() + constants.equalities.len()
+            || project
+                .attributes
+                .iter()
+                .ne(original.mapping.iter().map(|m| &m.target))
+        {
+            continue;
+        }
+        let mut restored = renamed.clone();
+        restored.mapping = original.mapping.clone();
+        restored.constants = original.constants.clone();
+        if &restored != original
+            || !renamed
+                .mapping
+                .iter()
+                .take(original.mapping.len())
+                .eq(original.mapping.iter())
+        {
+            continue;
+        }
+        let mut conditions = Vec::new();
+        let mut valid = true;
+        for (mapping, equality) in renamed
+            .mapping
+            .iter()
+            .skip(original.mapping.len())
+            .zip(&constants.equalities)
+        {
+            let cq_syntax::EqualityValue::Literal(value) = &equality.right else {
+                valid = false;
+                break;
+            };
+            if mapping.source != equality.left {
+                valid = false;
+                break;
+            }
+            let variable = &mapping.target;
+            conditions.push(quote::quote!(#variable = #value));
+        }
+        if !valid {
+            continue;
+        }
+        let expected: cq_syntax::algebra::Theta = syn::parse2(quote::quote!(#(#conditions),*))?;
+        if select.condition != expected {
+            continue;
+        }
+        key_views.insert(symbol_name(&raw.name));
+        key_views.insert(symbol_name(&filtered.name));
+        constant_guards.insert(symbol_name(&definition.name));
+    }
     for (position, definition) in target.program.definitions.iter().enumerate() {
         if !matches!(&definition.operator, Operator::Probe(_, key)
             if matches!(key.choice, Some(Choice::Smallest(_))))
@@ -1579,6 +1677,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
                 .is_none_or(|target| {
                     !same_logical_operator(&definition.operator, &target.operator)
                         && !projected_memberships.contains(&symbol_name(&definition.name))
+                        && !constant_guards.contains(&symbol_name(&definition.name))
                 })
         })
     {

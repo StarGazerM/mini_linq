@@ -85,17 +85,10 @@ pub fn compile(source: &Program) -> syn::Result<Program> {
     Ok(target)
 }
 
-/// Re-derive the complete expected rewrite, including freshness and all records.
+/// Check the actual literal guard expansion through PH-ConstantGuard erasure.
+/// Fresh names are immaterial; predicates, source columns and projection are not.
 pub fn check(source: &Program, target: &Program) -> syn::Result<()> {
-    let expected = derive(source)?;
-    if target != &expected {
-        return Err(syn::Error::new_spanned(
-            target,
-            "PH-ConstantGuard differs from the source-derived literal guard rewrite",
-        ));
-    }
-    physical::contract::check(target)?;
-    Ok(())
+    physical::check_rewrite(source, target)
 }
 
 #[cfg(test)]
@@ -128,6 +121,31 @@ mod tests {
         changed.program.definitions[0].name = syn::parse_quote!(not_the_fresh_name);
         assert!(check(&source, &changed).is_err());
     }
+    #[test]
+    fn guard_erasure_checks_records_not_generated_names() {
+        let source = source();
+        let target: Program = syn::parse_quote! { physical {
+            relation R(x:i32,y:i32);
+            input = pipe rename R@0 {y -> y, x -> literal_column};
+            restricted = pipe select input if (literal_column = 7);
+            r = let project restricted keep {y};
+            return r as answer(y);
+        } };
+        check(&source, &target).unwrap();
+        let mut changed = target.clone();
+        let Operator::Rename(rename) = &mut changed.program.definitions[0].operator else {
+            panic!()
+        };
+        rename.mapping[1].source = syn::parse_quote!(y);
+        assert!(check(&source, &changed).is_err());
+        let mut changed = target;
+        let Operator::Project(project) = &mut changed.program.definitions[2].operator else {
+            panic!()
+        };
+        project.attributes = syn::parse_quote!(literal_column);
+        assert!(check(&source, &changed).is_err());
+    }
+
     #[test]
     fn unchanged_atoms_remain_exact() {
         let source: Program = syn::parse_quote! { physical {

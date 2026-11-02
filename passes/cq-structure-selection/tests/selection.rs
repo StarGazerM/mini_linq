@@ -25,6 +25,26 @@ fn contract(program: &structures::Program) -> syn::Result<structures::Analysis> 
 }
 
 #[test]
+fn cartesian_probe_scans_retained_rows_and_rejects_empty_key_indexes() {
+    let source: physical::Program = syn::parse_quote!(physical {
+        relation r0(c0:i32); relation r1(c0:i32,c1:i32);
+        left = pipe rename r0@0 {c0 -> v0};
+        right = let rename r1@1 {c0 -> v1, c1 -> v2};
+        joined = pipe probe first [] left,right;
+        result = let canon project joined keep {v0,v2};
+        return result as answer(v0,v2);
+    });
+    let mut target = compile(&source).unwrap();
+    let facts = contract(&target).unwrap();
+    assert!(facts.built.get("right").is_none_or(Vec::is_empty));
+    check(&source, &target).unwrap();
+    target.structures.entries.push(syn::parse_quote!(
+        right = @hash_index as ::cq_storage::HashIndex<'_, _, _> [];
+    ));
+    assert!(check(&source, &target).is_err());
+}
+
+#[test]
 fn nonleading_native_point_uses_scan_and_rejects_authored_native() {
     let source: physical::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32) host [b] reads [exact];
@@ -1019,7 +1039,7 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
 }
 
 #[test]
-fn nonemptiness_and_keyed_membership_share_a_trie_with_an_empty_first_level() {
+fn nonemptiness_scans_rows_beside_a_nonempty_keyed_membership_index() {
     let p: physical::Program = syn::parse_quote! { physical {
         relation L(a: i32); relation R(a: i32);
         l = pipe rename L@0 { a -> x }; r = let rename R@1 { a -> x };
@@ -1030,12 +1050,10 @@ fn nonemptiness_and_keyed_membership_share_a_trie_with_an_empty_first_level() {
         return result as answer(x);
     }};
     let target = compile(&p).unwrap();
-    assert_eq!(
-        built_entries(&target),
-        syn::parse_quote!(structures { providers { trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 }; hash_set = ::cq_storage::HashSet<_> { reads [membership], build typed, accounting keys, shared }; }
-            r = @trie(@hash_set as ::cq_storage::HashSet<_>) as ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [][x];
-        })
-    );
+    let facts = contract(&target).unwrap();
+    assert!(facts.retained.contains_key("r"));
+    assert_eq!(facts.built["r"].len(), 1);
+    assert_eq!(facts.built["r"][0].0, vec![vec!["x".to_owned()]]);
     check(&p, &target).unwrap();
 }
 

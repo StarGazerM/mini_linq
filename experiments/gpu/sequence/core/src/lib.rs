@@ -153,7 +153,9 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     // `None` is the identity representation of columns without a declared codec.
     catalog.codecs = [
         None,
-        Some::<syn::Type>(syn::parse_quote!(::cq_gpu_sequence_runtime::DenseDictionary<'_>)),
+        Some::<syn::Type>(syn::parse_quote!(
+            ::cq_gpu_sequence_runtime::DenseDictionary<'_>
+        )),
     ]
     .into_iter()
     .map(|codec| CodecToken {

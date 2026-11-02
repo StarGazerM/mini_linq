@@ -735,6 +735,14 @@ stream source retains filtered rows rather than filtering a reusable host scan.
 No missing demand is synthesized; merge has its own ordering premise; the check
 accepts any admissible recorded decisions. \emph{Refinement:} erasure equals the
 source RA, and modes only change evaluation.
+The optional \textsc{PH-ConstantGuard} Physical rewrite exposes a literal-bearing
+rename as a private pipe rename, a private pipe selection of the same literal
+equalities, and a projection onto exactly the original mapped columns.
+The checker inspects those recorded operators: the source relation and occurrence,
+original mappings, literal values and columns remain identical; each intermediate
+is new and used exactly once. Erasure contracts this checked expansion back to
+the original rename, including its literal restrictions. No Rust expressions or
+types are recognized, and the producer is not rerun by the checker.
 
 \subsection{Structure selection: Physical $\to$ Structures}
 The default constructor copies Physical and records default types for every
@@ -743,8 +751,13 @@ for the selected keyed layouts; dedup and computed-head boundaries record
 the Sort strategy rather than a provider type;
 compatible membership prefixes may share a curried structure; a smallest
 intersection records two candidate levels per retained side; const/range
-supplies never justify a build. This restriction concerns predicate reads,
-not atom literals: literal-bearing renames always build their filtered relation.
+supplies never justify a build. Empty-key probes read the whole relation by rows
+or scan; they never justify a built index. The Structures contract rejects every
+zero-column built index. Both CPU pull and push realizations enumerate the
+recorded whole-relation rows for a cartesian probe and test a witness for
+empty-key membership; neither refers to a keyed fallback for those reads.
+The const/range restriction concerns predicate reads, not atom literals:
+literal-bearing renames always build their filtered relation.
 Their entries use the ordinary \code{let} retention and index rules, without
 filtered-storage annotations. Literal restriction and projection belong only to
 the occurrence's row source; GPU materializes that source in the build phase.

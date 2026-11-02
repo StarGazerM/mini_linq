@@ -4,6 +4,36 @@ use cq_testkit::{PassCase, SCENARIOS, Scenario, semantics};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
+#[test]
+fn cartesian_let_operands_use_whole_relation_reads() {
+    use std::collections::HashSet;
+    let r0 = [(1,), (2,)];
+    let r1 = [(3, 4), (5, 6)];
+    cq_storage::counters::reset();
+    let built: HashSet<_> = ::mini_linq::compile! {
+        pipeline { physical = [::cq_rewrites::build_host_reads]; }
+        struct BuiltCartesian;
+        relation r0(c0: i32); relation r1(c0: i32, c1: i32);
+        relation answer(c0: i32, c1: i32);
+        answer(v0, v2) :- r0(v0), r1(v1, v2);
+    }.collect();
+    assert_eq!(cq_storage::counters::snapshot().index_builds, 0);
+    let fine: HashSet<_> = ::mini_linq::compile! {
+        pipeline { plan = ::cq_planners::order(written, fine); }
+        struct FineCartesian;
+        relation r0(c0: i32); relation r1(c0: i32, c1: i32);
+        relation answer(c0: i32, c1: i32);
+        answer(v0, v2) :- r0(v0), r1(v1, v2);
+    }.collect();
+    let expected = HashSet::from([(&1, &4), (&1, &6), (&2, &4), (&2, &6)]);
+    assert_eq!(built, expected);
+    assert_eq!(fine, expected);
+    // Fine splitting may rejoin on v1; only zero-column indexes are forbidden.
+    assert!(cq_storage::counters::operators().iter().all(|operator| {
+        operator.label.kind != "INDEX_BUILD" || !operator.label.key.is_empty()
+    }));
+}
+
 type Rewrite = fn(&ir::Program, TokenStream) -> syn::Result<ir::Program>;
 
 fn scenario(name: &str) -> &'static Scenario {

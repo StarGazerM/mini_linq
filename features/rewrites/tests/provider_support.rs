@@ -312,7 +312,7 @@ execution_case!(alias_staged, ProviderAlias; cq_rewrites::expand_lookups(2),);
 execution_case!(alias_combined, ProviderAlias; cq_rewrites::expand_lookups(2), cq_rewrites::retain_lookups,);
 
 #[test]
-fn unit_key_support_preserves_cartesian_occurrences() {
+fn whole_relation_reads_preserve_cartesian_occurrences() {
     let left = [(2_i64,), (1,), (2,)];
     let right = [(10_i64,), (11,), (10,)];
     let visits = &RefCell::new(Vec::new());
@@ -328,13 +328,10 @@ fn unit_key_support_preserves_cartesian_occurrences() {
             out = let canon project observed keep {x,y};
             return out as answer(x,y);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; custom_provider = CustomProvider<_, _> { reads [exact, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
-            r = @custom_provider as ProviderAlias<_,_> [] supports [expand];
-            s share = lookup r [] first s force p;
-            s repr = tuples witness { r [] at s as _ };
-            p stage = batch 2 expand;
+            r rows = @vec as ::std::vec::Vec<_>;
             out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     }

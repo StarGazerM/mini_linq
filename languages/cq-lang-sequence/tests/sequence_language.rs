@@ -1875,7 +1875,7 @@ fn membership_compact_records_polarity_and_never_enumerates() {
 }
 
 #[test]
-fn empty_key_membership_uses_named_reader_not_scan_adapter() {
+fn empty_key_membership_reads_the_whole_relation_without_an_index_obligation() {
     for operation in ["semi", "anti"] {
         let program: Program = syn::parse_str(&format!(
             "physical {{
@@ -1886,12 +1886,10 @@ fn empty_key_membership_uses_named_reader_not_scan_adapter() {
                 return scan as answer(a);
             }} structures {{ providers {{
                 scan_adapter = ScanAdapter {{ reads [], build inferred }};
-                membership_provider = MembershipProvider {{ reads [membership], build inferred }};
                 sort = ::cq_storage::dedup::Sort {{ reads [distinct], build inferred, shared }};
             }}
                 l host scan = @scan_adapter as ScanAdapter [];
                 r host scan = @scan_adapter as ScanAdapter [];
-                r host result(scan) = @membership_provider as MembershipProvider [];
                 scan rows = @sort as ::cq_storage::dedup::Sort; scan canon = rows;
             }} sequence {{
                 answer = compact scan lookup r [] rows l;
@@ -1899,11 +1897,10 @@ fn empty_key_membership_uses_named_reader_not_scan_adapter() {
         ))
         .unwrap();
         let analysis = contract::check(&program).unwrap();
-        assert!(analysis.obligations.iter().any(|obligation| matches!(
+        assert!(!analysis.obligations.iter().any(|obligation| matches!(
             obligation,
-            Obligation::Provider { provider, keys, capability: Capability::Membership, instance }
+            Obligation::Provider { provider, keys, .. }
                 if provider == "r" && keys.is_empty()
-                    && instance.token == "membership_provider"
         )));
     }
 }

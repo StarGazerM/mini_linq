@@ -566,6 +566,24 @@ impl Push<'_> {
                 let left = symbol_name(&keyed.left);
                 let right = symbol_name(&keyed.right);
                 let columns = sorted(&keyed.columns);
+                if columns.is_empty() {
+                    let row = self.carrier(result, |column| {
+                        let source = if self.heading(&right).iter().any(|c| c == column) {
+                            &right
+                        } else {
+                            &left
+                        };
+                        let value = self.access(source, column);
+                        if source == &left && self.infos[source].computed.contains(column) {
+                            quote!(::core::clone::Clone::clone(&#value))
+                        } else {
+                            value
+                        }
+                    });
+                    let pattern = self.bind_columns(result, self.carried(result), false);
+                    let inner = self.emit(&right, quote!(let #pattern = #row; #sink))?;
+                    return self.emit(&left, inner);
+                }
                 let (lookup, payload) = match self.keyed(result, &keyed.right, &columns)? {
                     Access::Host(access) => (
                         self.host_lookup(&left, &access, false, false),
@@ -702,7 +720,14 @@ impl Push<'_> {
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
         let columns = sorted(&keyed.columns);
-        let test = if let Some(test) = self.keyset_contains(&left, &right, &columns) {
+        let test = if columns.is_empty() {
+            let label = syn::Lifetime::new(
+                &format!("'__cq_nonempty_{reader}"),
+                Span::mixed_site(),
+            );
+            let rows = self.emit(&right, quote!(break #label true;))?;
+            quote!(#label: { #rows false })
+        } else if let Some(test) = self.keyset_contains(&left, &right, &columns) {
             test
         } else {
             match self.keyed(reader, &keyed.right, &columns)? {

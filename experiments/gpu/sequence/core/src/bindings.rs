@@ -86,10 +86,7 @@ fn radix_reads(
         for (side, prefix) in &candidate.sides {
             let mut leading = keys[..keys.len().saturating_sub(1)].to_vec();
             leading.sort();
-            if side == name
-                && keys.last() == Some(&candidate.column)
-                && leading == *prefix
-            {
+            if side == name && keys.last() == Some(&candidate.column) && leading == *prefix {
                 reads.push((
                     prefix.clone(),
                     RadixRead::Candidates {
@@ -243,7 +240,9 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                 payload
             };
             let radix = (abi == ProviderAbi::Radix)
-                .then(|| radix_realization(program, analysis, &codecs, name, provider, &keys, &payload))
+                .then(|| {
+                    radix_realization(program, analysis, &codecs, name, provider, &keys, &payload)
+                })
                 .transpose()?;
             recorded.push(ProviderLayout {
                 ty: ty.clone(),
@@ -461,7 +460,10 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 }
                 ProviderAbi::Radix => {
                     analysis.structures.facts(provider).abi == Some(NativeAbi::Radix)
-                        && catalog.providers.iter().any(|token| token.provider.same_token(provider))
+                        && catalog
+                            .providers
+                            .iter()
+                            .any(|token| token.provider.same_token(provider))
                         && layout.directory.is_none()
                         && layout.radix.as_ref().is_some_and(|radix| {
                             check_radix(program, analysis, &codecs, name, provider, layout, radix)
@@ -476,7 +478,9 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 }
             };
             if (layout.abi == ProviderAbi::Radix) != layout.radix.is_some() {
-                return Err(error("GPU-RadixProvider: radix facts recorded off a radix layout"));
+                return Err(error(
+                    "GPU-RadixProvider: radix facts recorded off a radix layout",
+                ));
             }
             if !valid {
                 return Err(error("GPU-ProviderLayout: provider catalog ABI mismatch"));

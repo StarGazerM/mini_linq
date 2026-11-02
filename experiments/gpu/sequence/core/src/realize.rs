@@ -5,10 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::gpu::bindings::ProviderAbi;
 use cq_lang_sequence::gpu::realization::{
-    BaseBounds, BoundSource, CandidateCount, Captures, ChoiceCarrier, DescriptorBounds, Granularity,
-    GroupCompletion, GroupInput, HostEvaluation, HostOutput, HostUnion, Interval, Phase,
-    ProviderBuild, Realization, SmallestRealization, SmallestSide, SourceAccess, SourceOrigin,
-    SourceRealization, Step, TerminalGroup, Ties, Transfer, TransferSource, UnionArm,
+    BaseBounds, BoundSource, CandidateCount, Captures, ChoiceCarrier, DescriptorBounds,
+    Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput, HostUnion, Interval,
+    Phase, ProviderBuild, Realization, SmallestRealization, SmallestSide, SourceAccess,
+    SourceOrigin, SourceRealization, Step, TerminalGroup, Ties, Transfer, TransferSource, UnionArm,
 };
 use cq_lang_sequence::gpu::{Grid, Publication};
 use cq_lang_sequence::{Analysis, Program, Term};
@@ -78,27 +78,30 @@ fn candidate_layout<'a>(
 ) -> Option<&'a cq_lang_sequence::gpu::bindings::ProviderLayout> {
     let layouts = analysis.gpu_bindings.providers.get(side)?;
     let built = analysis.structures.built.get(side)?;
-    layouts.iter().zip(built).find_map(|(layout, (levels, provider))| {
-        let mut leading = levels.first()?.clone();
-        leading.sort();
-        (layout.abi == ProviderAbi::Radix
-            && levels.len() == 2
-            && leading == prefix
-            && levels[1] == [column.to_owned()]
-            && analysis
-                .structures
-                .facts(provider)
-                .reads(&cq_lang_structures::provider::Capability::Candidates)
-            && layout.radix.as_ref().is_some_and(|radix| {
-                radix.reads.contains(&(
-                    prefix.to_vec(),
-                    cq_lang_sequence::gpu::bindings::RadixRead::Candidates {
-                        column: column.to_owned(),
-                    },
-                ))
-            }))
-        .then_some(layout)
-    })
+    layouts
+        .iter()
+        .zip(built)
+        .find_map(|(layout, (levels, provider))| {
+            let mut leading = levels.first()?.clone();
+            leading.sort();
+            (layout.abi == ProviderAbi::Radix
+                && levels.len() == 2
+                && leading == prefix
+                && levels[1] == [column.to_owned()]
+                && analysis
+                    .structures
+                    .facts(provider)
+                    .reads(&cq_lang_structures::provider::Capability::Candidates)
+                && layout.radix.as_ref().is_some_and(|radix| {
+                    radix.reads.contains(&(
+                        prefix.to_vec(),
+                        cq_lang_sequence::gpu::bindings::RadixRead::Candidates {
+                            column: column.to_owned(),
+                        },
+                    ))
+                }))
+            .then_some(layout)
+        })
 }
 
 /// Formal rule GPU-Smallest: a PH-Smallest probe is realized only when every
@@ -107,8 +110,10 @@ fn candidate_layout<'a>(
 fn smallest(facts: &Facts) -> syn::Result<BTreeMap<String, SmallestRealization>> {
     use cq_lang_structures::physical::{Choice, Operator};
     let physical = &facts.program.structures.physical;
-    let candidates =
-        cq_lang_structures::physical::candidate_prefixes(physical, &facts.analysis.structures.physical);
+    let candidates = cq_lang_structures::physical::candidate_prefixes(
+        physical,
+        &facts.analysis.structures.physical,
+    );
     let mut realized = BTreeMap::new();
     for definition in &physical.program.definitions {
         if !matches!(&definition.operator,
@@ -158,18 +163,24 @@ fn check_smallest(
 ) -> syn::Result<()> {
     use cq_lang_structures::physical::{Choice, Operator};
     let physical = &facts.program.structures.physical;
-    let candidates =
-        cq_lang_structures::physical::candidate_prefixes(physical, &facts.analysis.structures.physical);
+    let candidates = cq_lang_structures::physical::candidate_prefixes(
+        physical,
+        &facts.analysis.structures.physical,
+    );
     let probes: BTreeSet<_> = physical
         .program
         .definitions
         .iter()
-        .filter(|definition| matches!(&definition.operator,
-            Operator::Probe(_, keyed) if matches!(keyed.choice, Some(Choice::Smallest(_)))))
+        .filter(|definition| {
+            matches!(&definition.operator,
+            Operator::Probe(_, keyed) if matches!(keyed.choice, Some(Choice::Smallest(_))))
+        })
         .map(|definition| symbol_name(&definition.name))
         .collect();
     if records.keys().cloned().collect::<BTreeSet<_>>() != probes {
-        return Err(error("GPU-Smallest: every smallest probe needs exactly one realization"));
+        return Err(error(
+            "GPU-Smallest: every smallest probe needs exactly one realization",
+        ));
     }
     for (reader, record) in records {
         let candidate = candidates
@@ -184,15 +195,20 @@ fn check_smallest(
             carrier,
         } = record;
         if *carrier != ChoiceCarrier::for_sides(sides.len()) {
-            return Err(error("GPU-Smallest: choice carrier does not name every side"));
+            return Err(error(
+                "GPU-Smallest: choice carrier does not name every side",
+            ));
         }
         if *column != candidate.column
             || sides.len() != candidate.sides.len()
-            || sides.iter().zip(&candidate.sides).any(|(side, (build, prefix))| {
-                side.provider != *build
-                    || side.prefix != *prefix
-                    || candidate_layout(facts.analysis, build, prefix, column).is_none()
-            })
+            || sides
+                .iter()
+                .zip(&candidate.sides)
+                .any(|(side, (build, prefix))| {
+                    side.provider != *build
+                        || side.prefix != *prefix
+                        || candidate_layout(facts.analysis, build, prefix, column).is_none()
+                })
         {
             return Err(error(
                 "GPU-Smallest: sides must be every Physical side once, each a candidates radix layout",
@@ -306,7 +322,13 @@ impl<'a> Facts<'a> {
             .output
             .as_ref()
             .map(|(name, _)| name.clone())
-            .or_else(|| program.sequence.definitions.last().map(|d| symbol_name(&d.name)));
+            .or_else(|| {
+                program
+                    .sequence
+                    .definitions
+                    .last()
+                    .map(|d| symbol_name(&d.name))
+            });
         let host_level = |name: &str| {
             analysis
                 .levels
@@ -320,13 +342,17 @@ impl<'a> Facts<'a> {
                     .is_some_and(|term: &&Term| matches!(term, Term::Store { .. }))
             })
         });
-        let unions = program.sequence.definitions.iter().filter_map(|definition| {
-            let name = symbol_name(&definition.name);
-            (host_level(&name)
-                && matches!(definition.term, Term::Store { .. })
-                && host_union(&definition.term, &sequence).is_some())
-            .then_some(name)
-        });
+        let unions = program
+            .sequence
+            .definitions
+            .iter()
+            .filter_map(|definition| {
+                let name = symbol_name(&definition.name);
+                (host_level(&name)
+                    && matches!(definition.term, Term::Store { .. })
+                    && host_union(&definition.term, &sequence).is_some())
+                .then_some(name)
+            });
         let published = dispatched
             .cloned()
             .chain(unions)
@@ -1355,7 +1381,9 @@ pub(crate) fn check(
                         })
                     });
                 if !built {
-                    return Err(error("provider access without a recorded Range or Radix layout"));
+                    return Err(error(
+                        "provider access without a recorded Range or Radix layout",
+                    ));
                 }
                 // One owner per provider: a publication step building the
                 // same result's providers excludes a source-built provider.
@@ -1718,14 +1746,22 @@ mod tests {
         let realization = select(&program, &analysis).unwrap();
         assert_eq!(realization.rejection, None);
         assert!(realization.steps.iter().any(|(publication, step)| {
-            publication == "r" && matches!(step, Step::Dispatch { provider: Some(_), .. })
+            publication == "r"
+                && matches!(
+                    step,
+                    Step::Dispatch {
+                        provider: Some(_),
+                        ..
+                    }
+                )
         }));
         assert!(!matches!(
             realization.sources["r"].access,
             SourceAccess::Provider { .. }
         ));
         let mut duplicated = realization;
-        duplicated.sources.get_mut("r").unwrap().access = SourceAccess::Provider { selection: None };
+        duplicated.sources.get_mut("r").unwrap().access =
+            SourceAccess::Provider { selection: None };
         assert!(check(&program, &analysis, &duplicated).is_err());
     }
 }
