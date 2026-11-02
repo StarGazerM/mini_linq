@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use cq_workloads::typed::Case;
-use duckdb::Connection;
+use cq_testkit::duckdb::Connection;
 
 use crate::{Result, Scale, ScenarioSelection, Selection};
 
@@ -33,17 +33,7 @@ pub(super) fn golden(
             "SELECT CAST(COLUMNS(*) AS VARCHAR) FROM ({}) AS answer",
             case.sql.trim().trim_end_matches(';'),
         );
-        let mut statement = connection.prepare(&sql)?;
-        let mut query = statement.query([])?;
-        let arity = query.as_ref().expect("live prepared query").column_count();
-        let mut rows = Vec::new();
-        while let Some(row) = query.next()? {
-            rows.push(
-                (0..arity)
-                    .map(|i| row.get::<_, String>(i))
-                    .collect::<duckdb::Result<Vec<_>>>()?,
-            );
-        }
+        let rows = connection.query(&sql)?;
         let bytes = cq_workloads::typed::canonical_bytes(rows);
         let path = case.path("golden").with_extension("csv");
         if write {
@@ -98,11 +88,11 @@ fn load(case: &Case, write: bool) -> Result<Connection> {
                 quote_string(&parquet.to_string_lossy()),
             ))?;
         }
-        let mismatch: bool = connection.query_row(&format!(
+        let mismatch = connection.scalar(&format!(
             "SELECT EXISTS ((SELECT * FROM {name} EXCEPT ALL SELECT * FROM read_parquet({path})) UNION ALL (SELECT * FROM read_parquet({path}) EXCEPT ALL SELECT * FROM {name}))",
             path = quote_string(&parquet.to_string_lossy()),
-        ), [], |row| row.get(0))?;
-        if mismatch {
+        ))?;
+        if mismatch == "true" {
             return Err(format!(
                 "{} has different rows from {}",
                 parquet.display(),

@@ -42,13 +42,6 @@ members = [
 exclude = ["features", "tools/fixtures"]
 resolver = "3"
 
-# Keep optional testkit DuckDB native archives small.
-[profile.dev.package.libduckdb-sys]
-debug = false
-
-[profile.test.package.libduckdb-sys]
-debug = false
-
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"

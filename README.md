@@ -109,8 +109,15 @@ pairwise pipeline coverage per classic/retail family, plus a joining triangle
 kernel's full 2,400 supported configurations. Push excludes merge/smallest;
 native leading merge reads require ordered hosts. Named kernel targets split
 compilation by planner; their profiles omit debug data. UI fixtures cover
-unsupported choices and malformed retained layouts. The workload alias enables
-its DuckDB oracle. The PDF
+unsupported choices and malformed retained layouts. Workload oracle commands
+run the prebuilt DuckDB CLI (`duckdb` on PATH, or the executable selected by
+`DUCKDB_CLI`); they never compile or link DuckDB C++. Install the CLI before
+running golden, fuzz, or TPC-H commands. The `cq-testkit/duckdb` and xtask
+`oracle` features gate Rust oracle code only. Sessions exchange exact CSV
+values and Parquet inputs through temporary files. TPC-H benchmark DuckDB
+timings include CLI CSV serialization, transfer and parsing, unlike the
+historical embedded-library Arrow measurements; process startup and loading
+remain outside query timing. The PDF
 build requires `latexmk` and the TeX packages in `doc/formal/common.tex`.
 
 ```sh

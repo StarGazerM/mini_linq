@@ -7,7 +7,7 @@ use comparison::normalize_set;
 mod data;
 
 use crate::Result;
-use duckdb::{Connection, types::ValueRef};
+use cq_testkit::duckdb::Connection;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -552,7 +552,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
         "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations; proc macros at opt-level 3); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time; null/NA when Cargo reused an up-to-date worker",
-        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop; duckdb_1_median_ms includes prepare/optimization and Arrow result materialization; duckdb_1_execute_median_ms prepares once untimed and times execution plus Arrow result materialization (MiniLinq plans at compile time)",
+        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop for MiniLinq; DuckDB CLI timings include query execution, CSV serialization, file transfer and parsing; duckdb_1_median_ms also includes prepare/optimization; duckdb_1_execute_median_ms prepares once untimed; CLI process startup and table loading are excluded",
         "sf_0_1_gate":"SF 1/10: every query/configuration worker checked at SF 0.1 before timing; SF 0.1: timed workers check exact answers before sampling",
         "memory_method":"getrusage(RUSAGE_SELF) ru_maxrss in KiB (Darwin bytes converted); process lifetime high water includes load, warmup, answers and correctness; not incremental query-only memory; NA on non-Unix",
         "fault_method":"getrusage(RUSAGE_SELF) ru_minflt/ru_majflt deltas immediately around each query, outside its wall timer; excludes load, result canonicalization/comparison and drop; query_* TSV fields are paired with the median-time sample, samples_* JSON arrays share timing order; warm_* records first-touch warm execution separately; RSS is process lifetime high water at the end of that query",
@@ -727,8 +727,7 @@ fn duck_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Ve
     let mut samples = Vec::new();
     for index in 0..=runs {
         let started = Instant::now();
-        let mut statement = connection.prepare(sql)?;
-        let result: Vec<_> = statement.query_arrow([])?.collect();
+        let result = connection.query(sql)?;
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         std::hint::black_box(&result);
         if index > 0 {
@@ -739,22 +738,20 @@ fn duck_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Ve
     Ok((samples[runs / 2], samples))
 }
 
-/// The same query boundary without parse, bind and optimization: the statement
-/// is prepared once outside the timer, then each sample executes it and
-/// materializes its Arrow result. This matches MiniLinq's boundary, whose
-/// planning happens at Rust compile time.
+/// Prepare once outside sampling; CLI CSV serialization and transfer are included.
 fn duck_execute_time(connection: &Connection, sql: &str, runs: usize) -> Result<(f64, Vec<f64>)> {
-    let mut statement = connection.prepare(sql)?;
+    connection.execute_batch(&format!("PREPARE cq_benchmark AS {}", sql.trim().trim_end_matches(';')))?;
     let mut samples = Vec::new();
     for index in 0..=runs {
         let started = Instant::now();
-        let result: Vec<_> = statement.query_arrow([])?.collect();
+        let result = connection.query("EXECUTE cq_benchmark")?;
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         std::hint::black_box(&result);
         if index > 0 {
             samples.push(elapsed);
         }
     }
+    connection.execute_batch("DEALLOCATE cq_benchmark")?;
     samples.sort_by(f64::total_cmp);
     Ok((samples[runs / 2], samples))
 }
@@ -766,36 +763,19 @@ struct Answers {
 }
 
 fn answer_set(connection: &Connection, sql: &str) -> Result<Answers> {
-    let mut statement = connection.prepare(sql)?;
-    let mut query = statement.query([])?;
-    let columns = query
-        .as_ref()
-        .ok_or("missing oracle statement")?
-        .column_count();
-    let mut rows = Vec::new();
+    let schema = connection.query(&format!("DESCRIBE {}", sql.trim().trim_end_matches(';')))?;
+    let rows = connection.query(sql)?;
     let mut decimal_columns = BTreeSet::new();
-    while let Some(row) = query.next()? {
-        let mut values = Vec::new();
-        for column in 0..columns {
-            let text =
-                match row.get_ref(column)? {
-                    ValueRef::Null => "\\N".to_owned(),
-                    ValueRef::Int(v) => v.to_string(),
-                    ValueRef::BigInt(v) => v.to_string(),
-                    ValueRef::HugeInt(v) => v.to_string(),
-                    ValueRef::Decimal(v) => {
-                        decimal_columns.insert(column);
-                        v.to_string()
-                    }
-                    ValueRef::Text(v) => std::str::from_utf8(v)?.to_owned(),
-                    other => return Err(format!(
-                        "oracle output type requires explicit exact comparison support: {other:?}"
-                    )
-                    .into()),
-                };
-            values.push(text);
+    for (column, description) in schema.iter().enumerate() {
+        let ty = &description[1];
+        if ty.starts_with("DECIMAL(") {
+            // Preserve the previous witness convention for empty result sets.
+            if !rows.is_empty() {
+                decimal_columns.insert(column);
+            }
+        } else if !matches!(ty.as_str(), "INTEGER" | "BIGINT" | "HUGEINT" | "VARCHAR") {
+            return Err(format!("oracle output type requires explicit exact comparison support: {ty}").into());
         }
-        rows.push(values);
     }
     Ok(Answers {
         rows: normalize_set(rows, &decimal_columns),

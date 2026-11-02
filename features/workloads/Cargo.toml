@@ -63,12 +63,6 @@ prettyplease = "0.2"
 [profile.dev.build-override]
 opt-level = 3
 
-[profile.dev.package.libduckdb-sys]
-debug = false
-
-[profile.test.package.libduckdb-sys]
-debug = false
-
 # The explicit kernel matrix is large; omit debug data from its test binaries.
 [profile.dev.package.cq-workload-corpus]
 debug = 0

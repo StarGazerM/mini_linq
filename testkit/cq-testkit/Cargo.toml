@@ -12,7 +12,7 @@ categories = ["development-tools::testing"]
 [features]
 default = []
 golden = []
-duckdb = ["dep:duckdb", "golden"]
+duckdb = ["dep:csv", "dep:tempfile", "golden"]
 
 [dependencies]
 # Links raw-rustc generated-program fixtures against the storage runtime dependencies.
@@ -27,4 +27,5 @@ cq-lang-physical = { path = "../../languages/cq-lang-physical", version = "0.1.0
 cq-lang-structures = { path = "../../languages/cq-lang-structures", version = "0.1.0" }
 cq-syntax = { path = "../../languages/cq-syntax", version = "0.1.0" }
 syn.workspace = true
-duckdb = { version = "=1.10505.0", features = ["bundled"], optional = true }
+csv = { version = "1", optional = true }
+tempfile = { version = "3", optional = true }

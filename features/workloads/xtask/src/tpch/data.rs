@@ -1,5 +1,5 @@
 use crate::Result;
-use duckdb::Connection;
+use cq_testkit::duckdb::Connection;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -19,9 +19,8 @@ pub(super) fn dbgen(root: &Path, sf: &str) -> Result<Database> {
     std::fs::create_dir_all(&directory)?;
     let path = directory.join("dbgen.duckdb");
     let probe = Connection::open_in_memory()?;
-    let version: String = probe.query_row("SELECT version()", [], |row| row.get(0))?;
-    let threads: usize =
-        probe.query_row("SELECT current_setting('threads')", [], |row| row.get(0))?;
+    let version = probe.scalar("SELECT version()")?;
+    let threads = probe.scalar("SELECT current_setting('threads')")?.parse()?;
     drop(probe);
     let expected = format!("TPC-H-derived\nDuckDB {version}\nCALL dbgen(sf={sf})\n");
     let marker = directory.join("dbgen.manifest");
@@ -42,9 +41,7 @@ pub(super) fn dbgen(root: &Path, sf: &str) -> Result<Database> {
             "SET extension_directory={};",
             literal(&extensions.to_string_lossy())
         ))?;
-        if connection.execute_batch("LOAD tpch").is_err() {
-            install_tpch(&connection, &extensions, &version)?;
-        }
+        install_tpch(&connection, &extensions, &version)?;
         let started = Instant::now();
         connection.execute_batch(&format!("CALL dbgen(sf={sf}); CHECKPOINT;"))?;
         drop(connection);
@@ -64,7 +61,7 @@ pub(super) fn dbgen(root: &Path, sf: &str) -> Result<Database> {
 fn install_tpch(connection: &Connection, extensions: &Path, version: &str) -> Result<()> {
     // DuckDB's HTTPS repository route first needs httpfs. Download the official
     // signed archive directly, then let DuckDB install and verify it locally.
-    let platform: String = connection.query_row("PRAGMA platform", [], |row| row.get(0))?;
+    let platform = connection.scalar("PRAGMA platform")?;
     let download = extensions.join("downloads").join(version).join(&platform);
     std::fs::create_dir_all(&download)?;
     let archive = download.join("tpch.duckdb_extension.gz");
