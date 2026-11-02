@@ -304,6 +304,67 @@ fn closed_lets_and_guards_are_captures_in_dependency_order() {
 }
 
 #[test]
+fn closed_let_where_equality_becomes_a_closed_relational_restriction() {
+    let source = cq(quote! {
+        struct CaptureLiteral;
+        relation R(x: i32);
+        answer(x) :- R(x), let c: i32 = 7, where c == 7;
+    });
+    cq::contract::check(&source).unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.captures.items.len(), 1);
+    let cq::BodyItem::Constraint(condition) = &normal.query.body[1] else {
+        panic!("capture equality must remain a relational restriction");
+    };
+    assert_eq!(condition.variables().count(), 0);
+    assert_eq!(
+        condition
+            .parameters()
+            .map(|expression| expression.to_token_stream().to_string())
+            .collect::<Vec<_>>(),
+        ["c"]
+    );
+    cq::normal::check(&normal).unwrap();
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    assert_eq!(
+        syn::parse2::<cq::Program>(normal.to_token_stream()).unwrap(),
+        normal
+    );
+}
+
+#[test]
+fn opaque_closed_let_guard_and_head_keep_capture_where_in_scope() {
+    let source = cq(quote! {
+        struct CaptureOpaque;
+        relation R(x: i32); relation answer(x: i32, value: i32);
+        answer(x, closed_value(2)) :- R(x),
+            let c: i32 = closed_value(0), if closed_value(1) == 7, where c == 7;
+    });
+    cq::contract::check(&source).unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    assert_eq!(normal.query.body.len(), 2);
+    assert_eq!(normal.query.captures.items.len(), 3);
+    let cq::BodyItem::Constraint(condition) = &normal.query.body[1] else {
+        panic!("capture equality must remain a relational restriction");
+    };
+    assert_eq!(condition.variables().count(), 0);
+    assert_eq!(condition.parameters().count(), 1);
+    let captures = normal.query.captures.to_token_stream().to_string();
+    for index in 0..3 {
+        assert_eq!(
+            captures.matches(&format!("closed_value ({index})")).count(),
+            1
+        );
+    }
+    cq::normal::check(&normal).unwrap();
+    assert_eq!(cq::normal::normalize(&normal).unwrap(), normal);
+    assert_eq!(
+        syn::parse2::<cq::Program>(normal.to_token_stream()).unwrap(),
+        normal
+    );
+}
+
+#[test]
 fn tuple_annotations_do_not_supply_destructured_output_types() {
     let source = cq(quote! {
         struct Q; relation R(t:i32);

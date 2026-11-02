@@ -291,3 +291,43 @@ fn finite_branch_domains_keep_suffix_constraints() {
     assert_eq!(answers!(|), BTreeSet::from([1, 2]));
     assert_eq!(answers!(else), BTreeSet::from([1, 2]));
 }
+
+#[test]
+fn closed_capture_where_restricts_answers_and_evaluates_host_values_once() {
+    let R = [(1_i32,), (2,), (2,), (3,)];
+    let literal: BTreeSet<_> = mini_linq::mini_linq! {
+        struct CaptureLiteral;
+        relation R(x: i32);
+        answer(x) :- R(x), let c: i32 = 7, where c == 7;
+    }
+    .map(|(x,)| *x)
+    .collect();
+    assert_eq!(literal, BTreeSet::from([1, 2, 3]));
+
+    for captured in [7, 8] {
+        let calls = std::cell::Cell::new([0; 3]);
+        let closed_value = |index: usize| {
+            let mut counts = calls.get();
+            counts[index] += 1;
+            calls.set(counts);
+            [captured, 7, 9][index]
+        };
+        let answers: BTreeSet<_> = mini_linq::mini_linq! {
+            struct CaptureOpaque;
+            relation R(x: i32); relation answer(x: i32, value: i32);
+            answer(x, closed_value(2)) :- R(x), let c: i32 = closed_value(0),
+                if closed_value(1) == 7, where c == 7;
+        }
+        .map(|(x, value)| (*x, value))
+        .collect();
+        assert_eq!(
+            answers,
+            if captured == 7 {
+                BTreeSet::from([(1, 9), (2, 9), (3, 9)])
+            } else {
+                BTreeSet::new()
+            }
+        );
+        assert_eq!(calls.get(), [1, 1, 1]);
+    }
+}

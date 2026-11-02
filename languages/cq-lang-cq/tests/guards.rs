@@ -72,6 +72,7 @@ fn where_supports_comparisons_membership_ranges_and_closed_rust() {
         "x == (limit + 1)",
         "x == { let temporary = host(); temporary }",
         "x == call::<First, Second>()",
+        "x == capture { value: host() }",
         "x == || host()",
         "x in [1, 2, 3]",
         "x in [host(), y, constants.limit]",

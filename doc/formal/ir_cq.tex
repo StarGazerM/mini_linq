@@ -187,6 +187,11 @@ interfaces keep their binders. A \code{let} capture is printed once and shared
 through a handle (the value itself when \code{Copy}, else an \code{Arc}) whose
 binder is a reference; an \code{if} capture gates the whole answer; a reference copies
 (or, for a guard, reads) the host value (IF-Capture).
+Capture binders are in scope when checking the body and head. After hoisting,
+their occurrences on either side of a relational \code{where} predicate are
+closed host operands, including equalities resolved before hoisting. Such a
+predicate remains a relational restriction, not an opaque Rust guard; its
+capture value is evaluated once without recognizing or rewriting Rust.
 
 \paragraph{Contract.}
 $\mathsf{CQScope}(s)$ is the scope rules plus:

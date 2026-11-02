@@ -30,7 +30,9 @@ pub fn parse_where(input: ParseStream<'_>) -> syn::Result<Constraint> {
         && !input.peek(Token![;])
         && !(input.peek(crate::algebra::kw::group) && input.peek2(syn::token::Bracket))
     {
-        if input.peek(Token![,]) {
+        if input.peek(Token![,])
+            || (input.peek(crate::capture::kw::capture) && input.peek2(syn::token::Brace))
+        {
             if let Ok(constraint) = predicate(tokens.clone()) {
                 return Ok(constraint);
             }

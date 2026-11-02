@@ -233,11 +233,25 @@ pub fn walk(body: &CommaList<BodyItem>) -> Vec<&BodyItem> {
     items
 }
 
-pub(crate) fn resolve_constraints(body: &mut CommaList<BodyItem>, logical: &BTreeSet<String>) {
+pub(crate) fn resolve_constraints(
+    body: &mut CommaList<BodyItem>,
+    logical: &BTreeSet<String>,
+    captures: &BTreeSet<String>,
+) {
     let mut prefix = BTreeSet::new();
     let mut forbidden = BTreeSet::new();
     let mut resolved = CommaList::new();
     for mut item in std::mem::take(body) {
+        // A-Capture: a previously resolved equality can lose its query binder
+        // when a closed let is hoisted. Reclassify it without inspecting Rust.
+        if let BodyItem::Equality(equality) = &item {
+            if equality
+                .variables()
+                .any(|variable| captures.contains(&symbol_name(variable)))
+            {
+                item = BodyItem::Constraint(crate::Constraint::from_equality(equality));
+            }
+        }
         match &mut item {
             BodyItem::Block(block) => {
                 let facts = block.analyze(&prefix);
@@ -247,7 +261,7 @@ pub(crate) fn resolve_constraints(body: &mut CommaList<BodyItem>, logical: &BTre
                         .cloned()
                         .chain(bound(&branch.body).into_keys())
                         .collect();
-                    resolve_constraints(&mut branch.body, &branch_logical);
+                    resolve_constraints(&mut branch.body, &branch_logical, captures);
                 }
                 forbidden.extend(facts.locals.into_iter().flatten());
                 prefix.extend(facts.interface.into_keys());
@@ -260,6 +274,15 @@ pub(crate) fn resolve_constraints(body: &mut CommaList<BodyItem>, logical: &BTre
                 prefix.extend(rust::bindings(&binding.pattern).iter().map(symbol_name))
             }
             BodyItem::Constraint(constraint) => {
+                constraint.map_terms(&mut |term| {
+                    if let crate::syntax::constraint::Term::Variable(variable) = term {
+                        if captures.contains(&symbol_name(variable)) {
+                            *term = crate::syntax::constraint::Term::Closed(
+                                syn::parse_quote!(#variable),
+                            );
+                        }
+                    }
+                });
                 constraint.resolve(&logical.union(&forbidden).cloned().collect());
             }
             _ => (),

@@ -507,7 +507,7 @@ fn hoist(query: &mut super::Query) {
     }
     query.body = items.into_iter().flatten().collect();
     let logical = super::blocks::bound(&query.body).into_keys().collect();
-    super::blocks::resolve_constraints(&mut query.body, &logical);
+    super::blocks::resolve_constraints(&mut query.body, &logical, &query.captures.names());
 }
 
 /// Formal rule A-CaptureRef: a query-closed branch `let`/`if` is

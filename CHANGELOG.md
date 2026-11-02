@@ -7,6 +7,12 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Fix CQ normalization of `where` predicates over hoisted closed `let` captures:
+  capture binders remain in scope and both predicate operands resolve as closed
+  host values, including previously canonicalized equalities. Regression tests
+  cover literal and opaque let/guard/head captures and facade answer correctness
+  with host-once evaluation.
+
 - GPU correctness: preserve full-width secondary membership keys, intersect
   folded equality bounds with preceding constraints, and reject unmapped live
   row reads instead of substituting zero. Flat publications now write only

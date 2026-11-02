@@ -161,7 +161,7 @@ impl syn::parse::Parse for Query {
         // A later query binder is still a query variable and must pass the
         // written-scope check; an enclosing value is a captured parameter.
         let logical = blocks::bound(&query.body).into_keys().collect();
-        blocks::resolve_constraints(&mut query.body, &logical);
+        blocks::resolve_constraints(&mut query.body, &logical, &query.captures.names());
         Ok(query)
     }
 }
@@ -523,7 +523,7 @@ fn check_query(
     blocks::types(schema, &query.body, &BTreeMap::new())?;
     // Formal rule WF-Capture: captures read no query variable and bind host names only.
     query.captures.check(&logical)?;
-    let mut body_variables = check_body(schema, &query.body, &logical, BTreeSet::new())?;
+    let body_variables = check_body(schema, &query.body, &logical, query.captures.names())?;
     let check_uses = |expr: &syn::Expr, bound: &BTreeSet<String>| -> syn::Result<()> {
         if let Some(name) = rust::known_uses(expr, &logical).difference(bound).next() {
             return Err(syn::Error::new_spanned(
@@ -562,7 +562,6 @@ fn check_query(
         }
         check_uses(expression, &body_variables)?;
     }
-    body_variables.extend(query.captures.names());
     for variable in query.head.variables() {
         if !declared_output && !body_variables.contains(&symbol_name(variable)) {
             return Err(syn::Error::new_spanned(
