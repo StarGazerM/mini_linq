@@ -204,6 +204,34 @@ pub enum Term {
     Union(Vec<Term>),
 }
 
+/// Stable constructor ordinals for recorded lookup decisions. Addresses are
+/// invocation-local indexes only; analysis stores ordinals, never addresses.
+pub(crate) fn lookup_slots(sequence: &Sequence) -> BTreeMap<*const Term, usize> {
+    fn visit(term: &Term, slots: &mut BTreeMap<*const Term, usize>) {
+        if matches!(term, Term::Lookup { .. }) {
+            slots.insert(term, slots.len());
+        }
+        match term {
+            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner)
+            | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner)
+            | Term::Tile { inner, .. } | Term::PartitionK { inner, .. }
+            | Term::Lookup { inner, .. } | Term::Store { inner, .. } => visit(inner, slots),
+            Term::Choose(arms) => {
+                for (_, arm) in arms { visit(arm, slots); }
+            }
+            Term::Union(arms) => {
+                for arm in arms { visit(arm, slots); }
+            }
+            Term::Rows(_) | Term::Ref(_) => {}
+        }
+    }
+    let mut slots = BTreeMap::new();
+    for definition in &sequence.definitions {
+        visit(&definition.term, &mut slots);
+    }
+    slots
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Monoid {
     Count,
@@ -501,8 +529,8 @@ pub struct Analysis {
     pub partial_groups: BTreeMap<String, Vec<bool>>,
     /// BE-PrefixBound: checked cardinality/key facts, indexed by Physical result.
     pub prefix_bounds: BTreeMap<String, bounds::Bound>,
-    /// BE-GroupKey: owners whose group valuation streams remain unique after
-    /// removal of their upstream canonicalizers.
+    /// BE-GroupKey: owners whose slot-zero Group valuation stream remains
+    /// unique after removal of its upstream canonicalizers.
     pub canon_free_groups: BTreeSet<String>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
@@ -521,6 +549,11 @@ pub struct Analysis {
     /// recorded inner instance of its routed token (STR-Routed).
     pub routed_providers: BTreeMap<String, BTreeMap<usize, structures::Provider>>,
     pub capabilities: BTreeMap<(String, Vec<String>), Capability>,
+    /// BE-NativeBind requirements of actually checked result readers.
+    pub lookup_capabilities:
+        BTreeMap<(String, structures::ReaderRef<String>, Vec<String>), Capability>,
+    /// Physical reader chosen for each Lookup constructor in program preorder.
+    pub lookup_readers: BTreeMap<usize, structures::ReaderRef<String>>,
     /// Providers evaluated directly by each named definition, excluding Ref
     /// dependencies and support-equal Map reheadings.
     pub provider_reads: BTreeMap<String, BTreeSet<String>>,

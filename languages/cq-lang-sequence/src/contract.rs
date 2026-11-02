@@ -44,6 +44,7 @@ struct Fact {
 struct Checked<'a> {
     program: &'a Program,
     analysis: Analysis,
+    lookup_slots: BTreeMap<*const Term, usize>,
     facts: BTreeMap<String, Fact>,
     stored_results: BTreeSet<String>,
     result_keys: BTreeMap<String, (String, Vec<String>)>,
@@ -238,32 +239,11 @@ fn check_native_read(
     Ok(())
 }
 
-pub(crate) fn check_native_grading(program: &Program, analysis: &Analysis) -> syn::Result<()> {
-    for definition in &program.structures.physical.program.definitions {
-        let keyed = match &definition.operator {
-            Operator::Probe(_, keyed)
-            | Operator::Merge(_, keyed)
-            | Operator::Semi(_, keyed)
-            | Operator::Anti(_, keyed) => keyed,
-            _ => continue,
-        };
-        let provider = symbol_name(&keyed.right);
-        let mut keys: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
-        keys.sort();
-        let Some(required) = analysis.capabilities.get(&(provider.clone(), keys.clone())) else {
-            continue;
-        };
-        let required = if matches!(definition.operator, Operator::Semi(..) | Operator::Anti(..)) {
-            &Capability::Membership
-        } else {
-            required
-        };
-        if let Some(native) = analysis.structures.natives.get(&(
-            provider,
-            cq_lang_structures::ReaderRef::Result(symbol_name(&definition.name)),
-            keys,
-        )) {
-            check_native_read(&keyed.right, native.read, required)?;
+pub(crate) fn check_native_grading(analysis: &Analysis) -> syn::Result<()> {
+    for (key, required) in &analysis.lookup_capabilities {
+        if let Some(native) = analysis.structures.natives.get(key) {
+            let provider = Ident::new(&key.0, proc_macro2::Span::call_site());
+            check_native_read(&provider, native.read, required)?;
         }
     }
     Ok(())
@@ -323,6 +303,7 @@ fn analyze_in(
     }
     let mut checker = Checked {
         program,
+        lookup_slots: crate::lookup_slots(&program.sequence),
         analysis: Analysis {
             structures: prefix.analysis.clone(),
             evidence: program.evidence.clone(),
@@ -344,6 +325,8 @@ fn analyze_in(
             host_tiles: BTreeMap::new(),
             routed_providers: BTreeMap::new(),
             capabilities: BTreeMap::new(),
+            lookup_capabilities: BTreeMap::new(),
+            lookup_readers: BTreeMap::new(),
             provider_reads: BTreeMap::new(),
             levels: BTreeMap::new(),
             dispatches: Vec::new(),
@@ -1039,6 +1022,12 @@ impl Checked<'_> {
                     }
                 });
                 let reader = reader.map(|definition| definition.name.clone());
+                if let Some(reader) = &reader {
+                    self.analysis.lookup_readers.insert(
+                        self.lookup_slots[&(term as *const Term)],
+                        cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
+                    );
+                }
                 let capability = if self
                     .analysis
                     .structures
@@ -1230,7 +1219,7 @@ impl Checked<'_> {
                     fact.shape = vec![fact.len.clone()];
                 }
                 fact.unique = Some(group.keys.iter().map(symbol_name).collect());
-                if fact.canon_free_unique.is_some() {
+                if group_slot == 0 && fact.canon_free_unique.is_some() {
                     self.analysis.canon_free_groups.insert(owner.into());
                 }
                 // Canon removal does not cross a Group boundary.
@@ -1419,6 +1408,16 @@ impl Checked<'_> {
     ) -> syn::Result<()> {
         let name = symbol_name(provider);
         let key = (name.clone(), keys.to_vec());
+        if let Some(reader) = reader {
+            let requirement = self.analysis.lookup_capabilities.entry((
+                name.clone(),
+                cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
+                keys.to_vec(),
+            )).or_insert(required.clone());
+            if *requirement == Capability::Membership && required == Capability::Exact {
+                *requirement = Capability::Exact;
+            }
+        }
         // Check the actual reader before using a capability cached for another
         // reader or a retained provider recorded for the same result and keys.
         let native = reader.and_then(|reader| {

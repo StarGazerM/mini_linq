@@ -1154,6 +1154,63 @@ fn native_lookup_and_map_use_their_own_reader_record() {
 }
 
 #[test]
+fn mixed_native_exact_and_merge_fallback_keep_reader_requirements_separate() {
+    for probe in [
+        quote!(),
+        quote!(exact = map j rows l;),
+        quote!(exact = flatten lookup r [a] rows l;),
+    ] {
+        let p: Program = syn::parse2(quote! {
+            physical {
+                relation L(a:i32);
+                relation S(a:i32);
+                relation R(a:i32,b:i32) host [a] reads [exact];
+                l = pipe rename L@0 {a -> a};
+                s = pipe rename S@1 {a -> a};
+                r = pipe rename R@2 {a -> a,b -> b};
+                j = pipe probe first [a] l,r;
+                m = let canon merge[a] s,r;
+                answer = let canon union j,m;
+                return answer as answer(a,b);
+            }
+            structures {
+                providers {
+                    reader = Reader { reads [exact, range, membership], build inferred };
+                    ordered = Ordered { reads [exact, range, membership, ordered], build inferred };
+                    sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                }
+                l host scan = @reader as Reader [];
+                s host scan = @reader as Reader [];
+                r host scan = @reader as Reader [];
+                r native result(j) = exact [a];
+                s host result(m) = @ordered as Ordered [a];
+                r host result(m) = @ordered as Ordered [a];
+                m rows = @sort as ::cq_storage::dedup::Sort;
+                m canon = rows;
+                answer rows = @sort as ::cq_storage::dedup::Sort;
+                answer canon = rows;
+            }
+            sequence {
+                #probe
+                out = flatten lookup r [a] rows s;
+            }
+        }).unwrap();
+        let analysis = check_grading(&p, &sequential()).unwrap();
+        let key = |reader: &str| (
+            "r".into(),
+            cq_lang_structures::ReaderRef::Result(reader.into()),
+            vec!["a".into()],
+        );
+        assert_eq!(analysis.lookup_capabilities[&key("m")], Capability::Ordered);
+        if probe.is_empty() {
+            assert!(!analysis.lookup_capabilities.contains_key(&key("j")));
+        } else {
+            assert_eq!(analysis.lookup_capabilities[&key("j")], Capability::Exact);
+        }
+    }
+}
+
+#[test]
 fn tiled_host_sources_cannot_discard_native_scan_records() {
     for (body, tiled) in [
         (quote!(a = rows r;), false),
@@ -2148,6 +2205,44 @@ fn grouped_fold_records_result_cardinality_and_store_owner() {
             assert_eq!(analysis.lengths["groups"], Len::Scan("groups".into()));
         }
     }
+}
+
+#[test]
+fn nested_group_does_not_certify_outer_group_canon_removal() {
+    let p: Program = syn::parse_quote! {
+        physical {
+            relation R(k:i32);
+            r = let canon rename R@0 {k -> k};
+            inner = pipe group r by [k] { n: usize = count(); };
+            projected = let canon project inner keep {n};
+            outer = pipe group projected by [] { total: usize = count(); };
+            return outer as answer(total);
+        }
+        structures {
+            providers {
+                reader = Reader { reads [exact, range, membership], build inferred };
+                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                groups = ::std::collections::HashMap<_, _> { reads [], build typed };
+            }
+            r host scan = @reader as Reader [];
+            r rows = @sort as ::cq_storage::dedup::Sort;
+            r canon = rows;
+            inner group = @groups as ::std::collections::HashMap<_, _>;
+            projected rows = @sort as ::cq_storage::dedup::Sort;
+            projected canon = rows;
+        }
+        sequence {
+            input = store canon rows r;
+            out = store group outer canon map projected group inner rows r;
+        }
+    };
+    let analysis = check_grading(&p, &sequential()).unwrap();
+    assert_eq!(analysis.partial_groups["out"].len(), 2);
+    assert!(!analysis.canon_free_groups.contains("out"));
+    let mut without_outer_canon = p.clone();
+    without_outer_canon.sequence.definitions[1].term =
+        syn::parse_quote!(store group outer map projected group inner rows r);
+    reject(&without_outer_canon, "BE-Group");
 }
 
 #[test]

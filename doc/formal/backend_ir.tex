@@ -100,16 +100,19 @@ Machine grading adds Range obligations when a non-leaf collective needs
 indexed bucket offsets, or a distributing tile cuts the flattened bucket
 stream across executors. This distinction preserves exact routed-provider
 reads inside a whole task-local segment without weakening collective scans.
-BE-NativeBind checks the native record for the lookup's own result reader and
-key, never another reader's record. For required capabilities membership,
+BE-NativeBind records each checked lookup's required capability by provider,
+result reader and key, and checks only that reader's native record.
+For required capabilities membership,
 exact, range, ordered and candidates, respectively, the covering native reads
 are $\{\mathsf{membership},\mathsf{exact}\}$, $\{\mathsf{exact}\}$,
 $\{\mathsf{range},\mathsf{ordered}\}$, $\{\mathsf{ordered}\}$ and
 $\{\mathsf{candidates}\}$. Sequence keyed lookups additionally admit only
 recorded exact or membership reads; ordered merges and native range or
 candidate reads require a supported recorded fallback instead.
-The checker reapplies BE-NativeBind after grading adds Range obligations,
-so a native lookup promoted to Range is rejected before printing.
+Grading promotes these per-lookup requirements when it adds Range obligations;
+the checker reapplies BE-NativeBind only to those recorded lookups,
+so a native lookup promoted to Range is rejected before printing. An aggregate
+provider/key capability never strengthens another reader's requirement.
 Under BE-Alpha, constructors are lifted through outer tile levels:
 \code{map}, \code{compact}, \code{lookup}, \code{fold}, \code{canon} and
 \code{store} operate on innermost rows and preserve those outer partitions;
@@ -133,7 +136,7 @@ one part; a separated store publishes the concatenation of its outer parts.
 \Rule{BE-NativeBind}{\mathsf{host}(r)\quad c=\mathsf{result}(\mathsf{reader})\quad
  \mathsf{native}(r,c,K)=(\rho,\ldots)\\
  \rho\in\{\mathsf{exact},\mathsf{membership}\}\quad
- \mathsf{required}(c)\sqsubseteq\rho\text{, including after grading}}
+ \mathsf{required}(r,c,K)\sqsubseteq\rho\text{, including after grading}}
  {\text{the lookup of }r\text{ on }K\text{ is discharged by the host; no provider or codec premise}}
 
 \Rule{BE-Partition}{\{P_k\}\text{ disjoint}\quad\textstyle\bigcup_kP_k=[0,|t|)\quad
@@ -1562,8 +1565,9 @@ without the canonical-valuation store. Renames translate keys, joins combine
 them, scalar binds and filters preserve them, and projection must retain a key.
 Expanding Rust binds and unions supply no such certificate. Analysis records
 \code{canon\_free\_groups} by transferring positional keys independently of
-canonicalizers along each group's input stream. The planner reads that fact,
-applies \code{group\_without\_canon} only to admitted owners, and propagates
+canonicalizers along the rewrite-target group's input stream (group slot zero).
+A nested group's certificate does not certify its enclosing group.
+The planner reads that fact, applies \code{group\_without\_canon} only to admitted owners, and propagates
 rewrite errors; trial success is not a uniqueness decision. The rewrite
 requires this recorded premise and still checks the resulting program.
 Proof caches include evidence, so removing an assertion cannot reuse its proof. GPU interpretation

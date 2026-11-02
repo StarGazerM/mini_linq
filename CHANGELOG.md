@@ -7,6 +7,31 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- DriftFix1: IF-Capture binds each host value once and gives every `move`
+  closure that reads it an owned `Clone::clone` at closure creation, rebinding
+  the capture reference inside that closure. Nested closures own their own
+  clones; there is no per-row clone inserted into the closure body, type-based
+  ownership choice, compiler-introduced `Rc`/`Arc`, or forced answer collection.
+  A closure created per row still pays its own creation-time clone per row.
+  Typed `Capture::Domain` records carry the declared domain, operation
+  (`exact`, `lower`, or `upper`) and closed operand through the IR; printing
+  realizes that record rather than recognizing generated Rust calls.
+  Domain identity is interned once in the declaration table and recorded by
+  id in captures; A-Domain and WF-Domain compare those ids, not Rust syntax.
+  The former `cq_storage::capture::Value::new(c).share()` handle protocol and
+  its runtime module are removed.
+
+- GPU realization records a single provider-build owner: a source or a
+  publication step, never both. The realization checker rejects duplicate
+  source/publication ownership before emission; printers consume the checked
+  records instead of selecting another provider owner.
+
+- Retire obsolete Arc/share-handle approvals from the optional
+  `tools/expanded_gate_classes_interned_strings.json` expanded-output ledger.
+  Its historical exact hashes do not approve the owned-clone/typed-domain
+  cutover. Unrelated reviewed rules remain; removing obsolete approvals is
+  fail-closed, so new capture hunks require their own reviewed hashes.
+
 - Elaboration redesign slice 3a: relational predicate placement is recorded in
   VO. `cq-order` emits `restrict R@i where P;` at the head of each scope
   (O-Restrict) from one shared definition, `hypergraph::local_predicates`
@@ -29,7 +54,8 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   BE-GroupKey canon-free group facts. Retention replay consumes these records,
   with explicit tile/threshold parameters and checked root, first-bound and
   following-expansion premises; it no longer reruns bound production.
-  Group canon removal is selected from the recorded fact and rewrite failures
+  Group canon removal is selected only from the outermost Group constructor's
+  recorded fact (slot zero), never a nested Group's fact, and rewrite failures
   propagate instead of silently becoming negative uniqueness decisions.
 
 - Sequence catalog admission no longer admits silently. `Obligation::Codec`
@@ -64,6 +90,10 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   Generated-code compatibility: merge readers select a recorded ordered fallback
   rather than a native ordered lookup, which Sequence cannot execute. The checker
   continues to reject authored native ordered Sequence lookups.
+  BE-NativeBind records the required capability per actually checked lookup
+  `(provider, reader, keys)`. Grading promotes only the affected lookup
+  requirements and rechecks each against its own native read, not an aggregate
+  requirement shared by unrelated readers.
 
 - IX correspondence now checks per-read requirement coverage, no extras, and
   first-use naming without replaying demand construction. Physical lowering
@@ -347,16 +377,17 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
   A-Domain code) is a point-read key like a literal (`Select::constant_keys`
   returns `Term`s): leading map keys read directly through
   `cq_storage::dispatch::BorrowedPointRead`, which owns the borrowed key once
-  per read (`OwnKey`) and otherwise falls back to the scan. IF-Capture binds
-  each `let` capture in a handle that `move` closures clone and rebind
-  (`cq_print::own_captures` takes the handles), so a lazy answer is no
-  longer collected because of a capture. The printer emits
-  `cq_storage::capture::Value::new(c).share()` for every capture and Rust
-  method resolution picks the handle: a `Copy` value is its own handle
-  (nothing is allocated), any other value shares one `Arc` (an `Arc` for
-  every capture made CPU `retail_h07` 1.058 [1.047, 1.137] slower than
-  `c395fe83`; with the handle choice it is 0.961 [0.805, 1.104] against
-  `17a14b93`). GPU TPC-H timing now includes the final answer download for
+  per read (`OwnKey`) and otherwise falls back to the scan. The following
+  IF-Capture handle design is historical, superseded by DriftFix1's owned
+  clone per closure above: each `let` capture was bound in a handle that
+  `move` closures cloned and rebound, keeping lazy answers uncollected.
+  The printer emitted `cq_storage::capture::Value::new(c).share()` and Rust
+  method resolution selected either the `Copy` value itself or one shared
+  `Arc` for a non-`Copy` value. Historical measurements of that removed
+  design: an `Arc` for every capture made CPU `retail_h07` 1.058
+  [1.047, 1.137] slower than `c395fe83`; with handle choice it was 0.961
+  [0.805, 1.104] against `17a14b93`. These are not measurements of the current
+  owned-clone design. GPU TPC-H timing now includes the final answer download for
   every query (the stage frontend times every stage's `to_host`, which the
   removed standalone path did not); paired GPU comparisons use a base built
   with the same boundary.

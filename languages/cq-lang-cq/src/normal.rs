@@ -125,10 +125,15 @@ pub fn check(module: &Program) -> syn::Result<()> {
 /// Formal rule A-Domain: Translate a closed operand compared with a code-domain column once on the host.
 pub fn normalize(module: &Program) -> syn::Result<Program> {
     super::contract::check(module)?;
-    let declarations: BTreeMap<_, _> = module.inputs().map(|d| (symbol_name(&d.name), d)).collect();
+    let mut normal = module.clone();
+    cq_syntax::intern_domains(&mut normal.declarations);
+    let declarations: BTreeMap<_, _> = normal
+        .declarations
+        .iter()
+        .map(|d| (symbol_name(&d.name), d))
+        .collect();
     let mut names = reserved(module);
     if module.query.group.is_some() {
-        let mut normal = module.clone();
         super::domain::translate(
             &mut normal.query.body,
             &declarations,
@@ -138,7 +143,6 @@ pub fn normalize(module: &Program) -> syn::Result<Program> {
         check(&normal)?;
         return Ok(normal);
     }
-    let mut normal = module.clone();
     hoist(&mut normal.query);
     let mut bound = BTreeSet::new();
     let logical: BTreeSet<String> = super::blocks::bound(&normal.query.body)

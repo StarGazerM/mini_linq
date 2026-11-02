@@ -54,12 +54,12 @@ arguments, fresh $k$ starts at \code{__cq_i_j}; cases are tried in order:
  {q\leadsto_{NF}q[y:=x]\text{ without the solved identity}}
 
 \Rule{A-Domain}{x\ op\ t\text{ (in }\code{where}\text{, an atom or negated-atom position, membership or range)}\quad
- x\text{ at a column of domain }D:T\quad Q\vdash t:\mathsf{Closed}\quad k\text{ fresh}\\
+ x\text{ at a column of recorded domain id }d\text{ and payload }D:T\quad Q\vdash t:\mathsf{Closed}\quad k\text{ fresh}\\
  (op',f)=\begin{cases}(op,\mathsf{exact})&op\in\{=,\ne\}\text{ or a position}\\
  (op,\mathsf{lower})&op\in\{<,\geq\}\\
  (<,\mathsf{upper})&op={\leq}\\
  ({\geq},\mathsf{upper})&op={>}\end{cases}}
- {x\ op\ t\leadsto_{NF}x\ op'\ k\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{Domain}(k,T,f,D,t)]]}
+ {x\ op\ t\leadsto_{NF}x\ op'\ k\quad[\mathsf{captures}:=\mathsf{captures}\concat[\mathsf{Domain}(k,T,f,d,D,t)]]}
 \end{mathpar}
 A-Domain runs once per operand at normalization; a literal membership
 \code{x in [t, ...]} first becomes the disjunction of $x=t_i$, \code{x in a..b}
@@ -74,7 +74,9 @@ which no row carries. \textsf{exact} needs \code{CodeDomain};
 comparison on an unordered domain is rejected by rustc. Columns without a
 domain keep their operands unchanged. The captured code is then an ordinary
 closed operand (A-Closed, IF-Capture); its typed domain record is carried unchanged.
-Already recorded translations of the same declared domain stay unchanged.
+Already recorded translations with the same domain id stay unchanged.
+The declaration table interns domain spellings once; A-Domain compares only
+those recorded ids, not Rust expressions.
 Authored Rust calls, even identically spelled, never establish this provenance.
 Replace the atom by $\mathit{before}\concat[R(\bar a')]\concat\mathit{after}$.
 Identities are relational clauses, not guards. Row-dependent Rust guards,
@@ -1241,6 +1243,8 @@ covering exact operators decide membership either way.
 \Rule{SEL-NativeHost}{
  r=\mathsf{rename}(R)\text{ read by }c\text{ on }C\quad
  \neg\mathsf{merge}(c)\quad
+ \bigl(\mathsf{point}(c)\Rightarrow
+   \mathsf{leadingPrefix}_R(\mathsf{renames}(C))\bigr)\quad
  \rho=\min_{\mathsf{need}(c)}\{\rho\in\mathsf{hostReads}(R,\mathsf{renames}(C))\}
 }{
  \mathsf{native}(r,c,C)=(\rho,\mathsf{declOrder}_R(C))\quad
@@ -1253,3 +1257,6 @@ Merge readers always record an ordered fallback rather than a native ordered
 read: Sequence keyed lookups do not execute native ordered reads. This selection
 policy preserves supported generated code; the checker still rejects authored
 native ordered Sequence lookups.
+Point readers with non-leading keys retain scan-and-filter rather than a native
+point read. Native scans do not replace Physical host renames that are both
+canonical and piped: their ordered host canonical source must be preserved.

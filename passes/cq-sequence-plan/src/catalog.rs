@@ -108,17 +108,14 @@ pub(crate) fn codec_available(
     codec: Option<&syn::Type>,
     ordered: bool,
 ) -> bool {
-    catalog
-        .codecs
-        .iter()
-        .find(|token| token.codec.as_ref() == codec)
-        .is_some_and(|token| {
-            (!ordered || token.ordered)
-                && analysis
-                    .levels
-                    .values()
-                    .all(|level| token.levels.contains(level))
-        })
+    catalog.codecs.iter().any(|token| {
+        token.codec.as_ref() == codec
+            && (!ordered || token.ordered)
+            && analysis
+                .levels
+                .values()
+                .all(|level| token.levels.contains(level))
+    })
 }
 
 /// Check the complete target promise, including scheduled read levels.
@@ -357,11 +354,18 @@ mod tests {
         catalog.codecs.push(token(Some(declared.clone()), false));
         assert!(codec_available(&analysis, &catalog, Some(&declared), false));
         assert!(!codec_available(&analysis, &catalog, Some(&declared), true));
+        // A later token may supply order even when the first matching token does not.
+        catalog.codecs.push(token(Some(declared.clone()), true));
+        assert!(codec_available(&analysis, &catalog, Some(&declared), true));
         // Illegal: a graded level the token does not register.
         analysis
             .levels
             .insert("answer".into(), vec!["host".into(), "device".into()]);
         assert!(!codec_available(&analysis, &catalog, None, true));
+        let mut graded = token(Some(declared.clone()), true);
+        graded.levels.push(vec!["host".into(), "device".into()]);
+        catalog.codecs.push(graded);
+        assert!(codec_available(&analysis, &catalog, Some(&declared), true));
     }
 
     #[test]

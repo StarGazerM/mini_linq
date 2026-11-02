@@ -40,6 +40,9 @@ struct Checker<'a> {
     tilings: BTreeMap<String, Vec<crate::Tiling>>,
     parts: BTreeMap<String, Option<usize>>,
     range_reads: BTreeSet<(String, Vec<String>)>,
+    lookup_slots: BTreeMap<*const Term, usize>,
+    lookup_readers: &'a BTreeMap<usize, cq_lang_structures::ReaderRef<String>>,
+    range_lookups: BTreeSet<(String, cq_lang_structures::ReaderRef<String>, Vec<String>)>,
     publication: Option<usize>,
     publication_tile: Option<&'a Term>,
 }
@@ -177,6 +180,9 @@ pub(crate) fn check_grading_in(
         tilings: BTreeMap::new(),
         parts: BTreeMap::new(),
         range_reads: BTreeSet::new(),
+        lookup_slots: crate::lookup_slots(&program.sequence),
+        lookup_readers: &analysis.lookup_readers,
+        range_lookups: BTreeSet::new(),
         publication: None,
         publication_tile: None,
     };
@@ -214,6 +220,13 @@ pub(crate) fn check_grading_in(
     }
     analysis.collectives = checker.collectives;
     analysis.tilings = checker.tilings;
+    for key in checker.range_lookups {
+        if let Some(capability) = analysis.lookup_capabilities.get_mut(&key)
+            && *capability != crate::Capability::Ordered
+        {
+            *capability = crate::Capability::Range;
+        }
+    }
     for key in checker.range_reads {
         if let Some(capability) = analysis.capabilities.get_mut(&key) {
             if *capability != crate::Capability::Ordered {
@@ -235,7 +248,7 @@ pub(crate) fn check_grading_in(
             }
         }
     }
-    crate::contract::check_native_grading(program, &analysis)?;
+    crate::contract::check_native_grading(&analysis)?;
     for (dispatch, unit) in analysis.dispatches.iter().enumerate() {
         analysis.obligations.push(Obligation::Failure {
             dispatch,
@@ -722,6 +735,9 @@ impl<'a> Checker<'a> {
             } => {
                 let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
                 keys.sort();
+                if let Some(reader) = self.lookup_readers.get(&self.lookup_slots[&(term as *const Term)]) {
+                    self.range_lookups.insert((symbol_name(provider), reader.clone(), keys.clone()));
+                }
                 self.range_reads.insert((symbol_name(provider), keys));
                 self.require_ranges(inner);
             }

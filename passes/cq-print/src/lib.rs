@@ -104,8 +104,6 @@ pub struct Context<'a> {
     pub captures: BTreeMap<String, Ident>,
     /// Host-once `if` capture values; the answer is empty unless all hold.
     pub gates: Vec<Ident>,
-    /// Whether generator item types can require host key annotations.
-    pub has_generators: bool,
     /// Shared binding callables and their unchanged query input names.
     pub binding_functions: BTreeMap<String, (Ident, Vec<Ident>)>,
     /// The identifier every result binds each of its columns to.
@@ -384,9 +382,6 @@ impl<'a> Context<'a> {
         let binding_functions =
             ownership::binding_captures(module, analysis, &mut statements, &mut used);
         bound |= !binding_functions.is_empty();
-        let has_generators = module.physical.program.definitions.iter().any(|definition| {
-            matches!(&definition.operator, Operator::Bind(bind) if bind.for_token.is_some())
-        });
         let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
         for candidate in physical::candidate_prefixes(&module.physical, &analysis.physical) {
             for (name, prefix) in candidate.sides {
@@ -411,7 +406,6 @@ impl<'a> Context<'a> {
             parameters,
             captures,
             gates,
-            has_generators,
             binding_functions,
             idents: BTreeMap::new(),
             carried_columns: structures::demand::carried_columns(module, analysis),

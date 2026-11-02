@@ -5,16 +5,16 @@
 //! (a query-closed host value implementing `cq_storage::CodeDomain`). The
 //! domain fact, never the column type or an operand's Rust shape, decides that
 //! a closed operand compared with the column is translated once on the host:
-//! A-Domain records the operation, declared domain, and operand as a typed
-//! `Capture::Domain`; only printers realize its runtime call. The comparison
-//! then reads the capture like any closed operand. Later IRs carry captures
+//! A-Domain records the operation, interned declaration-table domain id, opaque
+//! domain payload, and operand as `Capture::Domain`; only printers realize its call.
+//! The comparison reads the capture like any closed operand. Later IRs carry captures
 //! and declarations unchanged; printers decide nothing about domains.
 //! DO NOT inspect column types, recognize literal kinds, or translate per row.
 
 use super::{BodyItem, CommaList, Program, normal, rust};
 use crate::symbol_name;
 use cq_syntax::{
-    CodeDomain, ColumnDecl, EqualityValue,
+    CodeDomain, ColumnDecl, DomainId, EqualityValue,
     capture::{Capture, Captures, DomainCapture, DomainFunction},
     constraint::{Comparison, Constraint, Term},
 };
@@ -36,8 +36,8 @@ impl Column {
             ty: declaration.ty.clone(),
         }
     }
-    fn key(&self) -> Option<&CodeDomain> {
-        self.domain.as_ref()
+    fn key(&self) -> Option<DomainId> {
+        self.domain.as_ref().and_then(|domain| domain.id)
     }
 }
 
@@ -103,7 +103,7 @@ fn variables(
 /// The domain function of a recorded A-Domain capture named by `term`.
 fn domain_function(
     term: &Term,
-    domain: &CodeDomain,
+    domain: DomainId,
     captures: &Captures,
 ) -> Option<DomainFunction> {
     let Term::Closed(syn::Expr::Path(path)) = term else {
@@ -114,7 +114,7 @@ fn domain_function(
         let Capture::Domain(capture) = capture else {
             return None;
         };
-        (symbol_name(&capture.name) == symbol_name(name) && capture.domain == *domain)
+        (symbol_name(&capture.name) == symbol_name(name) && capture.domain.id == Some(domain))
             .then_some(capture.function)
     })
 }
@@ -168,7 +168,7 @@ impl Translation<'_> {
     }
 
     fn operand(&mut self, column: &Column, term: Term, function: DomainFunction) -> Term {
-        let domain = column.domain.as_ref().expect("a code-domain column");
+        let domain = column.key().expect("a recorded code-domain column");
         if domain_function(&term, domain, self.captures).is_some() {
             return term;
         }
@@ -367,7 +367,7 @@ impl Translation<'_> {
                                 continue;
                             }
                         }
-                        let Some(domain) = &column.domain else {
+                        let Some(domain) = column.key() else {
                             continue;
                         };
                         let term = Term::Closed(argument.clone());
@@ -432,16 +432,20 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
         .iter()
         .map(|d| (symbol_name(&d.name), d))
         .collect();
+    for declaration in &module.declarations {
+        for column in &declaration.columns {
+            if let Some(domain) = &column.domain {
+                if domain.id.is_none() {
+                    return Err(error(domain, "a declared code domain has no recorded identity"));
+                }
+            }
+        }
+    }
     let body = &module.query.body;
     let columns = variables(body, &declarations)?;
     let logical: BTreeSet<String> = super::blocks::bound(body).into_keys().collect();
     let captures = &module.query.captures;
     let key = |name: &Ident| columns.get(&symbol_name(name)).and_then(Column::key);
-    let domain = |name: &Ident| {
-        columns
-            .get(&symbol_name(name))
-            .and_then(|c| c.domain.clone())
-    };
     let operand = |variable: &Ident, comparison: Comparison, term: &Term| -> syn::Result<()> {
         if let Term::Variable(other) = term {
             if logical.contains(&symbol_name(other)) {
@@ -455,10 +459,10 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                 };
             }
         }
-        let Some(domain) = domain(variable) else {
+        let Some(domain) = key(variable) else {
             return Ok(());
         };
-        let function = domain_function(term, &domain, captures);
+        let function = domain_function(term, domain, captures);
         let allowed: &[DomainFunction] = match comparison {
             Comparison::Eq(_) | Comparison::Ne(_) => &[DomainFunction::Exact],
             Comparison::Lt(_) | Comparison::Ge(_) => {
@@ -479,7 +483,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
     };
     fn constraints(
         constraint: &Constraint,
-        domain: &dyn Fn(&Ident) -> Option<CodeDomain>,
+        domain: &dyn Fn(&Ident) -> Option<DomainId>,
         operand: &dyn Fn(&Ident, Comparison, &Term) -> syn::Result<()>,
     ) -> syn::Result<()> {
         match constraint {
@@ -537,7 +541,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                     if let Some(variable) =
                         rust::variable(argument).filter(|v| logical.contains(&symbol_name(v)))
                     {
-                        if key(variable) != column.domain.as_ref() {
+                        if key(variable) != column.domain.as_ref().and_then(|domain| domain.id) {
                             return Err(error(
                                 argument,
                                 format!("`{variable}` occupies columns of different code domains"),
@@ -545,7 +549,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                         }
                         continue;
                     }
-                    if let Some(domain) = &column.domain {
+                    if let Some(domain) = column.domain.as_ref().and_then(|domain| domain.id) {
                         if domain_function(&Term::Closed(argument.clone()), domain, captures)
                             != Some(DomainFunction::Exact)
                         {
@@ -560,7 +564,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                     }
                 }
             }
-            BodyItem::Constraint(constraint) => constraints(constraint, &domain, &operand)?,
+            BodyItem::Constraint(constraint) => constraints(constraint, &key, &operand)?,
             BodyItem::Equality(equality) => match &equality.right {
                 EqualityValue::Variable(right) => {
                     if key(&equality.left) != key(right) {
@@ -573,7 +577,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
                         ));
                     }
                 }
-                EqualityValue::Literal(_) if domain(&equality.left).is_some() => {
+                EqualityValue::Literal(_) if key(&equality.left).is_some() => {
                     return Err(error(
                         &equality.left,
                         "a literal equality on a code-domain variable is translated",
@@ -590,7 +594,7 @@ pub(super) fn check(module: &Program) -> syn::Result<()> {
             else {
                 continue;
             };
-            if key(variable).is_some_and(|key| key != declared) {
+            if key(variable).is_some_and(|key| Some(key) != declared.id) {
                 return Err(error(
                     argument,
                     format!(

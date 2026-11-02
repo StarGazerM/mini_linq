@@ -56,7 +56,7 @@ pub use host::{HostDecl, HostRead, HostSupport};
 /// One named, typed column in a declared input relation.
 ///
 /// ```text
-/// ColumnDecl ::= Ident ":" Type ["in" "(" Expr ")"]
+/// ColumnDecl ::= Ident ":" Type ["in" ["[" DomainId "]"] "(" Expr ")"]
 /// ```
 ///
 /// The optional `in (D)` is the column's authored code domain: a query-closed
@@ -72,10 +72,41 @@ pub struct ColumnDecl {
     pub domain: Option<CodeDomain>,
 }
 
-/// `in (D)`: the code domain of a declared column.
+/// Declaration-table identity of an opaque code-domain spelling.
+///
+/// The bracketed integer is an explicit IR fact, not Rust expression syntax.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DomainId(pub u32);
+
+impl syn::parse::Parse for DomainId {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let content;
+        syn::bracketed!(content in input);
+        let value: syn::LitInt = content.parse()?;
+        let id = Self(value.base10_parse()?);
+        if !content.is_empty() {
+            return Err(content.error("a domain identity is one integer"));
+        }
+        Ok(id)
+    }
+}
+
+impl quote::ToTokens for DomainId {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let value = syn::Index::from(self.0 as usize);
+        token::Bracket::default().surround(tokens, |tokens| {
+            quote::ToTokens::to_tokens(&value, tokens);
+        });
+    }
+}
+
+/// `in [id] (D)`: a column domain; source declarations may omit the id.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct CodeDomain {
     pub in_token: Token![in],
+    /// Assigned once at the declaration boundary; retained by every later IR.
+    #[syn(optional, peek = token::Bracket)]
+    pub id: Option<DomainId>,
     #[syn(parenthesized)]
     pub paren_token: token::Paren,
     #[syn(in = paren_token)]
@@ -132,6 +163,48 @@ impl RelationDecl {
             ));
         }
         Ok(())
+    }
+}
+
+/// Intern authored domain spellings once in this declaration table.
+///
+/// Rust payloads remain opaque: only their token spelling is used as an
+/// interning key, never their expression structure or meaning. Printed ids
+/// are already recorded facts and are preserved without reinterpreting Rust.
+pub fn intern_domains(declarations: &mut [RelationDecl]) {
+    if declarations
+        .iter()
+        .flat_map(|declaration| &declaration.columns)
+        .filter_map(|column| column.domain.as_ref())
+        .all(|domain| domain.id.is_some())
+    {
+        return;
+    }
+    let mut identities = BTreeMap::new();
+    let mut next = 0;
+    for domain in declarations
+        .iter()
+        .flat_map(|declaration| &declaration.columns)
+        .filter_map(|column| column.domain.as_ref())
+    {
+        if let Some(id) = domain.id {
+            identities.insert(quote::ToTokens::to_token_stream(&domain.expression).to_string(), id);
+            next = next.max(id.0 + 1);
+        }
+    }
+    for domain in declarations
+        .iter_mut()
+        .flat_map(|declaration| &mut declaration.columns)
+        .filter_map(|column| column.domain.as_mut())
+    {
+        if domain.id.is_none() {
+            let spelling = quote::ToTokens::to_token_stream(&domain.expression).to_string();
+            domain.id = Some(*identities.entry(spelling).or_insert_with(|| {
+                let id = DomainId(next);
+                next += 1;
+                id
+            }));
+        }
     }
 }
 

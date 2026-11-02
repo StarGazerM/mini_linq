@@ -8,7 +8,7 @@ token trees~\cite{host-synmacro}.
 \begin{lstlisting}
 Program ::= struct Name; Decl* Rule+
 Decl    ::= relation R(ColumnDecl, ...) [= (Expr)];
-ColumnDecl ::= c ":" Type ["in" "(" Expr ")"]
+ColumnDecl ::= c ":" Type ["in" ["[" DomainId "]"] "(" Expr ")"]
 Rule    ::= h(Expr, ...) :- Clause, ... ;
 Clause  ::= R(Arg, ...) | !R(NegArg, ...) | Guard | where P
           | let Pat [: Type] = Expr | for Pat in Expr | Block
@@ -24,8 +24,10 @@ opaque syntax receives lexical aliases rather than token substitution.
 A trailing \code{= (Expr)} supplies the host value. An optional column
 \code{in (D)} records the column's code domain: a query-closed host value
 implementing \code{cq\_storage::CodeDomain} whose codes the column stores.
-The type stays opaque; only the presence and token identity of $D$ is a fact.
-It rides in every IR that carries declarations.
+The type stays opaque. The declaration table interns the opaque spelling of
+$D$ once, sharing a domain id across input and output declarations.
+Recorded IR prints \code{in [id] (D)} and reparsing preserves that id.
+The id and untouched runtime payload ride in every IR carrying declarations.
 
 \paragraph{Lexical dependencies.}
 $\fv_S(e)=(F,o)$ returns visible value names and an opacity bit; with logical
@@ -193,11 +195,11 @@ closed host operands, including equalities resolved before hoisting. Such a
 predicate remains a relational restriction, not an opaque Rust guard; its
 capture value is evaluated once without recognizing or rewriting Rust.
 A-Domain records a distinct typed capture
-\code{domain k:T in (D) = f(t)}, with $f\in\{\mathsf{exact},\mathsf{lower},\mathsf{upper}\}$.
+\code{domain k:T in [id] (D) = f(t)}, with $f\in\{\mathsf{exact},\mathsf{lower},\mathsf{upper}\}$.
 Only its Rust realization prints \code{::cq\_storage::domain::f(\&(D), \&(t))}.
 An authored \code{let} containing that identical Rust call remains opaque.
-Normalization and WF-Domain inspect only the typed record and structurally
-equal declared domains, never the generated Rust call or a token-string key.
+Normalization and WF-Domain inspect only the typed record, allowed function
+and recorded domain id, never Rust expression equality or the generated call.
 This uniform rule applies at every closure nesting level and in every
 translator; direct reads use the original value. Rust requires \code{Clone}
 where a closure needs a copy. \code{Copy} values need no allocation;
@@ -230,10 +232,10 @@ names and have query-closed Rust operands; types are checked only by rustc.
  \text{no top-level or branch query-closed }\code{let}/\code{if}\text{ remains}}
  {\mathsf{WF}_{NF}(s)\Downarrow\ok}
 
-\Rule{WF-Domain}{\forall x.\ \text{all positive occurrences of }x\text{ sit at columns with one recorded domain }d_x\ (\text{or none})\\
- \text{every closed operand compared with }x,\ d_x\ne\bot,\text{ names a typed capture }\mathsf{Domain}(k,T,f,d_x,t)\\
+\Rule{WF-Domain}{\forall x.\ \text{all positive occurrences of }x\text{ sit at columns with one recorded domain id }d_x\ (\text{or none})\\
+ \text{every closed operand compared with }x,\ d_x\ne\bot,\text{ names a typed capture }\mathsf{Domain}(k,T,f,d_x,D,t)\\
  f=\mathsf{exact}\text{ for }=,\ne;\quad f\in\{\mathsf{lower},\mathsf{upper}\}\text{ for }<,\geq\quad
- \text{a declared answer domain equals its head variable's }d_x}
+ \text{a declared answer domain id equals its head variable's }d_x}
  {\mathsf{WF}_{Dom}(s)\Downarrow\ok}
 \end{mathpar}
 Representation admissibility and Rust totality remain semantic premises.

@@ -1008,6 +1008,9 @@ equality and order within one column domain, and no compiler pass has a
 string-specific branch, string literal form, string index or string scan.
 A declaration names a column's domain explicitly,
 `l_shipmode: StringCode in (data.dictionaries.domain("l_shipmode"))`.
+The CQ declaration table interns the opaque domain spelling once, sharing one
+`DomainId` across matching input and output declarations. Recorded IR prints
+`in [id] (D)`; parsing that IR preserves the id without inspecting `D` again.
 `Dictionaries::domain(column)` returns that column's `StringDictionary`
 (a static empty dictionary when the column is absent). The domain is any
 query-closed host value implementing `cq_storage::CodeDomain`
@@ -1019,15 +1022,16 @@ source text (so it matches no row), and `lower`/`upper` are the
 entries. Normalization rule A-Domain translates every closed operand
 compared with a domain column (in `where`, atom or negated-atom positions,
 membership items and range bounds) into a typed host-once capture
-`domain __cq_c_i: T in (D) = f(t)`. Its Rust realization is
+`domain __cq_c_i: T in [id] (D) = f(t)`. Its Rust realization is
 `let __cq_c_i: T = ::cq_storage::domain::f(&(D), &(t));`:
 `exact` for `==`, `!=`, positions and literal membership (an `Or` of
 equalities); `lower` for `<` and `>=`; `x <= t` becomes `x < upper(t)` and
 `x > t` becomes `x >= upper(t)`; `a..b` becomes `>= lower(a) && < lower(b)`
 and `a..=b` becomes `>= lower(a) && < upper(b)`. Columns without a domain
 keep their operands unchanged. WF-Domain checks the typed capture variant,
-function and structurally equal declared domain; an authored identical Rust
-call is opaque and never proves translation. Joins and comparisons across
+function and equal recorded domain ids, never structurally equal Rust
+expressions; an authored identical Rust call is opaque and never proves
+translation. Joins and comparisons across
 domains are rejected. Unordered domains (DOOP's first-sight `IStr`, GPU Datalog
 `Symbol` codecs) do not implement `OrderedCodeDomain`, so rustc rejects an
 ordered comparison on them. `Dictionaries::literal` no longer exists:

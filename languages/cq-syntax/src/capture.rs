@@ -110,6 +110,7 @@ pub struct DomainCapture {
     pub name: Ident,
     pub colon_token: Token![:],
     pub ty: syn::Type,
+    /// The declared domain's interned id and opaque runtime payload.
     pub domain: CodeDomain,
     pub eq_token: Token![=],
     pub function: DomainFunction,
