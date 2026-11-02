@@ -4894,7 +4894,7 @@ mod tests {
     }
 
     #[test]
-    fn host_read_of_a_device_only_provider_requires_a_checked_placement_change() {
+    fn host_read_of_a_device_provider_uses_a_checked_host_adapter() {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i64) = (&data.r);
@@ -4927,11 +4927,15 @@ mod tests {
         };
         let program = crate::runs::record_representation(&program).unwrap();
         let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let error = translate(&program, &analysis).unwrap_err().to_string();
-        assert!(
-            error.contains("host publication present reads device-only provider p"),
-            "{error}"
+        let adapters = &analysis.gpu_bindings.host_materializations;
+        assert_eq!(
+            adapters.get(&2),
+            Some(&cq_lang_structures::provider::base::declaration("sorted_run").instance()),
         );
+        assert!(translate(&program, &analysis).is_ok());
+        let mut invalid = analysis.gpu_bindings.clone();
+        invalid.host_materializations.clear();
+        assert!(crate::bindings::check(&program, &analysis, &invalid).is_err());
     }
 
     #[test]

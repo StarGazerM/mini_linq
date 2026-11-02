@@ -594,6 +594,22 @@ against `doop-mini`; it does not substitute a separate points-to program.
 The loader owns the global string dictionary and precomputes method descriptors.
 `DoopSymbols` implements `SymbolCodec<IStr>` using that dictionary's stable u32
 codes; no string operations run on the GPU.
+The storage declaration explicitly assigns `DoopSymbols` codec id 0. The
+pipeline's decomposition catalog supplies an ordered `CodecToken` for that id
+at `[host]`, `[host, device]`, `[host, device, block]` and
+`[host, device, block, lane]`; declaring a codec in storage alone does not
+authorize its use at machine levels.
+Closed symbolic answer expressions retain their answer-slot logical identity
+after capture hoisting. The GPU carrier recorder uses that identity's codec
+for arena metadata instead of requiring `IStr` itself to implement `Scalar`.
+
+The 2026-11-02 codec-admission repair built `doop-gpu` and `srd-doop-gpu`
+with materialized sm_89 cubins (Gate time **81.25 s**). Cassandra matched
+all **26/26 complete DOOP output tuple sets** (Gate time **251.97 s**,
+including shared-lock wait). The SRD xalan executable also completed
+(Gate time **256.53 s**, including lock wait); that invocation reports counts,
+not an external exact-tuple comparison. These are correctness/build gates,
+not controlled performance measurements.
 
 The benchmark selects the target-independent incremental advice
 `incremental = ::cq_datalog::passes::incremental(driver(delta_first););`.

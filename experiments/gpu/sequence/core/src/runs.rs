@@ -65,6 +65,26 @@ impl Codecs {
                     .map(|(column, id)| (column.clone(), *id)),
             );
         }
+        // Closed answer binders are not row columns. Their declared answer
+        // slots still supply the logical identity needed by carrier and codec
+        // records; a type spelling must never substitute for that identity.
+        let physical = &program.physical.program;
+        let captures: std::collections::BTreeSet<_> = physical.captures.items.iter()
+            .flat_map(cq_lang_structures::syntax::Capture::binding_types)
+            .map(|(name, _)| symbol_name(&name))
+            .collect();
+        if let Some(answer) = physical.declarations.iter()
+            .find(|declaration| declaration.name == physical.head.relation)
+        {
+            for (argument, column) in physical.head.args.iter().zip(&answer.columns) {
+                if let Some(name) = cq_lang_structures::syntax::rust::variable(argument)
+                    && captures.contains(&symbol_name(name))
+                    && let Some(id) = column.logical_type_id
+                {
+                    codecs.columns.insert(symbol_name(name), id);
+                }
+            }
+        }
         for entry in &program.structures.entries {
             let keyed = match &entry.structure {
                 Structure::Host { keyed, .. } | Structure::Built { keyed, .. } => keyed,

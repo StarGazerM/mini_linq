@@ -410,7 +410,25 @@ pub fn delegate(input: TokenStream) -> TokenStream {
     };
     parser
         .parse2(input)
-        .unwrap_or_else(syn::Error::into_compile_error)
+        .unwrap_or_else(error_expression)
+}
+
+// A checked pass is expanded in expression position. Combined checker/candidate
+// failures must remain one diagnostic expression, not adjacent macro invocations
+// that Rust would parse as malformed expression syntax.
+fn error_expression(errors: syn::Error) -> TokenStream {
+    use std::fmt::Write;
+
+    let span = errors.span();
+    let mut message = String::new();
+    for error in errors {
+        if !message.is_empty() {
+            message.push('\n');
+        }
+        write!(&mut message, "{error}").unwrap();
+    }
+    let diagnostic = syn::Error::new(span, message).into_compile_error();
+    quote!({ #diagnostic })
 }
 
 /// Formal rule ST-Observe: Invoke a diagnostic receiver only after checking the selected prefix's result.
@@ -487,7 +505,7 @@ fn run<In: Language, Out: Language>(
                 .start_with_context(target.to_token_stream(), target_context)
         }
     })();
-    result.unwrap_or_else(syn::Error::into_compile_error)
+    result.unwrap_or_else(error_expression)
 }
 
 /// Selectable outputs of the resolved facade queue.

@@ -34,8 +34,11 @@ pass paths, each with argument tokens read only by that pass.
 \end{mathpar}
 \code{cq_stage::pass} checks source and target contracts; \code{cq_stage::rewrite}
 also runs the language's \code{check_rewrite}. Correspondence checks belong to the
-pass. Failures emit \code{compile_error!}; rustc then checks types, ownership and
-trait obligations of the generated code.
+pass. Failures emit one Rust expression block containing one
+\code{compile_error!}; combined checker/candidate messages retain their order
+and use the first diagnostic's span. The rejection does not invoke a printer
+or leak adjacent diagnostic macros into expression syntax. On success, rustc
+checks types, ownership and trait obligations of the generated code.
 \begin{lstlisting}
 pipeline {
     surface = [Path(tokens), ...];

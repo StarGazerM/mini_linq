@@ -138,7 +138,11 @@ pub fn stage(input: TokenStream) -> TokenStream {
 /// Decompose a checked authored traversal without automatic relational replanning.
 #[proc_macro]
 pub fn decompose(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
+    expand_decompose(input.into()).into()
+}
+
+fn expand_decompose(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    cq_stage::rewrite::<cq_lang_sequence::Program>(input, |source, arguments| {
         let declarations = syn::parse2::<CodecDeclarations>(arguments)?;
         let mut catalog = cq_gpu_sequence_core::catalog();
         catalog.codecs.extend(declarations.0);
@@ -148,7 +152,6 @@ pub fn decompose(input: TokenStream) -> TokenStream {
                 .program,
         )
     })
-    .into()
 }
 
 /// Check the authored grades against the GPU machine without choosing grades.
@@ -239,6 +242,85 @@ mod tests {
     use super::*;
     use cq_lang_structures::provider::CodecId;
     use quote::quote;
+
+    #[test]
+    fn grouped_answer_gate_is_one_checked_diagnostic_expression() {
+        let mut program: cq_lang_sequence::Program = syn::parse_quote! {
+            physical {
+                relation R(k:u32) = (data);
+                r = let canon rename R@0 {k -> k};
+                grouped = let group r by [k] { n:usize=count(); };
+                return grouped as answer(k,n);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> {
+                        reads [], build typed, abi columns, bounds resident_columns
+                    };
+                    radix_set = ::gpu_datalog_runtime::RadixLayout<
+                        ::gpu_datalog_runtime::radix_run::EncodedRow, (),
+                        ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()
+                    > { reads [distinct, resident], build inferred };
+                    grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> {
+                        reads [exact, range, membership], build typed
+                    };
+                    group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> {
+                        reads [], build typed
+                    };
+                }
+                r host scan = @device_columns input { keys 0; columns [u32 => u32] }
+                    as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+                r rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<
+                    ::gpu_datalog_runtime::radix_run::EncodedRow, (),
+                    ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()
+                >;
+                r canon = rows;
+                grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
+                grouped group = @group_map as ::std::collections::HashMap<_, (usize,)>;
+            }
+            sequence {
+                source = store rows r;
+                feed = canon flatten tile 256 source;
+                valuations = store feed;
+                result = store group grouped valuations;
+                output count;
+            }
+            graded gpu {
+                source at host; feed at device.block; valuations at host; result at host;
+            }
+        };
+        program.structures = cq_gpu_sequence_core::bind_structures(&program.structures).unwrap();
+        program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+        let machine = cq_gpu_sequence_core::machine();
+        cq_lang_sequence::check_grading(&program, &machine).unwrap();
+
+        // The same grouped publication reaches its continuation without a gate.
+        let accepted = expand_decompose(quote!(pipeline { continuation }; #program));
+        let accepted: syn::ExprMacro = syn::parse2(accepted).unwrap();
+        assert!(accepted.mac.path.is_ident("continuation"));
+
+        program
+            .structures
+            .physical
+            .program
+            .captures
+            .items
+            .push(syn::parse_quote!(if (limit != 3)));
+        assert!(cq_lang_sequence::check_grading(&program, &machine).is_err());
+
+        // Exercise the actual decompose ABI adapter, not a printer or a copy of
+        // the checker. Candidate failures must not escape as adjacent macros.
+        let rejected = expand_decompose(quote!(pipeline { continuation }; #program));
+        let expression: syn::ExprBlock = syn::parse2(rejected.clone()).unwrap();
+        assert_eq!(expression.block.stmts.len(), 1);
+        let syn::Stmt::Macro(diagnostic) = &expression.block.stmts[0] else {
+            panic!("expected one checked diagnostic");
+        };
+        assert_eq!(diagnostic.mac.path.segments.last().unwrap().ident, "compile_error");
+        let message: syn::LitStr = syn::parse2(diagnostic.mac.tokens.clone()).unwrap();
+        assert!(!message.value().is_empty());
+        syn::parse2::<syn::Expr>(quote!(Some(#rejected))).unwrap();
+    }
 
     #[test]
     fn codec_declarations_require_explicit_identity() {

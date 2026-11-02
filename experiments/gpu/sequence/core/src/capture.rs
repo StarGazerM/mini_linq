@@ -297,6 +297,8 @@ pub(crate) fn check(
             }
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
                 let types = &rows[&symbol_name(&select.input)].types;
+                check_range_contexts(&select.condition, types, codecs, &records.captures)
+                    .map_err(|message| error(message))?;
                 let mut frozen = Captures::frozen(&records.captures, &records.query);
                 let rendered = frozen.relational(&select.condition, types, codecs)?;
                 // Uses are the device form's captures; the host form reads caches.
@@ -344,6 +346,75 @@ pub(crate) fn check(
         .any(|&index| index >= records.captures.len())
     {
         return Err(error("definition reads an unrecorded capture"));
+    }
+    Ok(())
+}
+
+/// Independently check the recorded representation of closed range operands.
+/// The subject need not be a column: either available bound supplies context.
+fn check_range_contexts(
+    theta: &Theta,
+    types: &BTreeMap<String, Type>,
+    codecs: &crate::runs::Codecs,
+    records: &[Capture],
+) -> Result<(), &'static str> {
+    fn check(
+        constraint: &Constraint,
+        types: &BTreeMap<String, Type>,
+        codecs: &crate::runs::Codecs,
+        records: &[Capture],
+    ) -> Result<(), &'static str> {
+        match constraint {
+            Constraint::Between { term, low, high } => {
+                let operands = [term, low, high];
+                let context = operands.iter().find_map(|operand| match operand {
+                    Term::Variable(name) => {
+                        let column = name.to_string();
+                        types.get(&column).map(|ty| (column, ty))
+                    }
+                    _ => None,
+                });
+                let Some((column, ty)) = context else {
+                    // Fully closed ranges have a single boolean capture.
+                    return Ok(());
+                };
+                let id = codecs.logical_type_id(&column);
+                for operand in operands {
+                    let expression = match operand {
+                        Term::Closed(expression) => expression,
+                        Term::Literal(expression) => expression.as_ref(),
+                        _ => continue,
+                    };
+                    let expected = value_key(expression, id, Some(&column));
+                    if !records.iter().any(|capture| match capture {
+                        Capture::Value {
+                            expression,
+                            logical,
+                            logical_type_id,
+                            logical_column,
+                            ..
+                        } => {
+                            value_key(expression, *logical_type_id, logical_column.as_deref())
+                                == expected
+                                && (id.is_some() || logical == ty)
+                        }
+                        _ => false,
+                    }) {
+                        return Err("range operand lacks its recorded column capture context");
+                    }
+                }
+            }
+            Constraint::Or(branches) => {
+                for constraint in branches.iter().flatten() {
+                    check(constraint, types, codecs, records)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    for constraint in &theta.constraints {
+        check(constraint, types, codecs, records)?;
     }
     Ok(())
 }
@@ -646,27 +717,29 @@ impl Captures {
                         codecs,
                     );
                 }
-                Constraint::Between {
-                    term: Term::Variable(name),
-                    low,
-                    high,
-                } => {
-                    term(
-                        captures,
-                        low,
-                        &types[&name.to_string()],
-                        codecs.logical_type_id(&name.to_string()),
-                        &name.to_string(),
-                        codecs,
-                    );
-                    term(
-                        captures,
-                        high,
-                        &types[&name.to_string()],
-                        codecs.logical_type_id(&name.to_string()),
-                        &name.to_string(),
-                        codecs,
-                    );
+                Constraint::Between { term: subject, low, high } => {
+                    // A closed subject still has a row representation when either
+                    // bound is a column. Record that column's capture context.
+                    let Some(column) = [&*subject, &*low, &*high].into_iter().find_map(|value| {
+                        match value {
+                            Term::Variable(name) if types.contains_key(&name.to_string()) => {
+                                Some(name.to_string())
+                            }
+                            _ => None,
+                        }
+                    }) else {
+                        return;
+                    };
+                    for value in [subject, low, high] {
+                        term(
+                            captures,
+                            value,
+                            &types[&column],
+                            codecs.logical_type_id(&column),
+                            &column,
+                            codecs,
+                        );
+                    }
                 }
                 Constraint::In {
                     term: Term::Variable(name),
@@ -874,9 +947,12 @@ impl Captures {
                 Ok(quote!(#left #op #right))
             }
             Constraint::Between { term, low, high } => {
-                let (ty, id, column) = context(term).ok_or_else(|| {
-                    syn::Error::new_spanned(term, "GPU-Capture: range requires a column")
-                })?;
+                let (ty, id, column) = context(term)
+                    .or_else(|| context(low))
+                    .or_else(|| context(high))
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(constraint, "GPU-Capture: range requires a column")
+                    })?;
                 let term = self.term(term, ty, id, &column, codecs);
                 let low = self.term(low, ty, id, &column, codecs);
                 let high = self.term(high, ty, id, &column, codecs);
@@ -1004,6 +1080,54 @@ mod tests {
                 frozen.missing,
                 "lookup-only checking must reject a changed proposition"
             );
+        }
+    }
+
+    #[test]
+    fn closed_range_subject_uses_available_bound_context() {
+        let query = syn::parse_quote!(capture { let y: i32 = (limit + 2); });
+        let codecs = crate::runs::Codecs::default();
+        let types = BTreeMap::from([
+            ("low".into(), syn::parse_quote!(i32)),
+            ("high".into(), syn::parse_quote!(i32)),
+        ]);
+        for (predicate, column) in [
+            (quote!(@(y) between -2 and high), "high"),
+            (quote!(@(y) between low and 2), "low"),
+            (quote!(@(y) between low and high), "low"),
+        ] {
+            let theta: Theta = syn::parse2(predicate).unwrap();
+            let mut captures = Captures::new(&query);
+            let device = captures.relational(&theta, &types, &codecs).unwrap();
+            let mut host = theta.clone();
+            captures.host_relational(&mut host, &types, &codecs);
+            assert!(captures.records.iter().all(|capture| matches!(
+                capture,
+                Capture::Value { logical_column: Some(recorded), .. } if recorded == column
+            )));
+            assert!(check_range_contexts(&theta, &types, &codecs, &captures.records).is_ok());
+            let mut frozen = Captures::frozen(&captures.records, &query);
+            assert_eq!(frozen.relational(&theta, &types, &codecs).unwrap(), device);
+            let mut checked_host = theta.clone();
+            frozen.host_relational(&mut checked_host, &types, &codecs);
+            assert_eq!(checked_host, host);
+            assert!(!frozen.missing);
+
+            for mutation in 0..4 {
+                let mut changed = captures.records.clone();
+                let Capture::Value {
+                    logical_column, logical, expression, ..
+                } = &mut changed[0] else {
+                    unreachable!()
+                };
+                match mutation {
+                    0 => *logical_column = Some("unavailable".into()),
+                    1 => *logical = syn::parse_quote!(u64),
+                    2 => *expression = syn::parse_quote!(different()),
+                    _ => { changed.remove(0); }
+                }
+                assert!(check_range_contexts(&theta, &types, &codecs, &changed).is_err());
+            }
         }
     }
 

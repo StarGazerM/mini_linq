@@ -137,6 +137,11 @@ Answer gates short-circuit to empty row/arena results before later bindings and
 inputs; host upload contexts reuse those bindings rather than repeating them.
 Closed constraints need no row column: their host Boolean result is recorded.
 Grouped outputs with an answer gate are checked unsupported before printing.
+For mixed ranges, GPU-Capture records row-column context from the subject or
+either bound, so a closed subject does not erase a row-valued bound's context.
+ST-Context reports checked failures as one diagnostic expression; grouped-gate
+rejection no longer leaks additional Rust syntax errors from concatenated
+diagnostics.
 
 
 ### Resolved: provider layout and native ABI identity
@@ -146,6 +151,11 @@ directory policy, native complete permutations and download adapters during
 GPU binding/grading, not in `Rows::new`. Its independent checker never reruns
 selection. Both resident and computed paths consume the same records, and
 unsupported constructors are rejected rather than replaced by RangeProvider.
+Host subplans use separately recorded host collection/index adapters at exact
+Structures entry positions. Coverage and the adapted host Structures contract
+are checked before printing; device-native range/run/radix rows become host
+vectors and keyed builds become host sorted runs only in this recorded host
+view. Device read/build records are unchanged.
 `RangeDescriptor.directory_entries` carries the checked allocation to the
 runtime; validation checks the sentinel instead of inventing allocation size.
 Sparse codes still use the recorded dense policy, with explicit resource demand.
@@ -174,6 +184,12 @@ it derives no capabilities from schema types. Builtin syntactic `Dense` codec
 tokens are removed: custom codecs, including `TestCodec` in the Datalog symbols
 fixture, require explicit tokens naming their declaration-local ids.
 PL-Catalog matches the recorded id, required ordering and all graded levels.
+The 26-output DOOP pipeline explicitly pairs storage codec id 0 with its
+ordered `DoopSymbols` catalog token at host/device/block/lane levels. SRD DOOP
+uses prepared integer IDs and needs no symbol codec authorization.
+Closed symbolic answer binders take their logical identity from the authored
+answer slot even though hoisting removes them from row layouts. Carrier and
+arena metadata therefore retain the declared codec's u32 representation.
 
 ### Resolved: task ownership, carrier publications and pull choice
 

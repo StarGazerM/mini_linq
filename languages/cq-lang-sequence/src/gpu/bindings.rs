@@ -143,6 +143,9 @@ pub struct Bindings {
     pub native: BTreeMap<String, NativeLookup>,
     /// Downloaded host scans read through these recorded declared providers.
     pub downloads: BTreeMap<String, cq_lang_structures::Provider>,
+    /// Host row subplans use these collection/index adapters instead of the
+    /// device-only provider at the recorded Structures entry position.
+    pub host_materializations: BTreeMap<usize, cq_lang_structures::Provider>,
     /// Device carrier of every Physical and capture answer column: its
     /// logical type, or the declared codec's u32 code.
     pub carriers: BTreeMap<String, syn::Type>,

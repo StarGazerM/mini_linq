@@ -1685,31 +1685,6 @@ fn host_rows(
     columnar: bool,
 ) -> syn::Result<TokenStream> {
     let dependencies = host_dependencies_from(name, definitions, bindings);
-    for result in &dependencies {
-        if bindings.contains_key(result) {
-            continue;
-        }
-        if let Operator::Probe(_, keyed)
-        | Operator::Merge(_, keyed)
-        | Operator::Semi(_, keyed)
-        | Operator::Anti(_, keyed) = &definitions[result].operator
-        {
-            let provider = symbol_name(&keyed.right);
-            let keys = keyed.columns.iter().map(symbol_name).collect::<Vec<_>>();
-            if analysis
-                .structures
-                .built_on(&provider, &keys)
-                .is_some_and(|(provider, _)| {
-                    analysis.structures.facts(provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Range)
-                })
-            {
-                return Err(error(format!(
-                    "T-Gpu: host publication {name} reads device-only provider {provider}; record a device grade or a host-capable provider"
-                )));
-            }
-        }
-    }
     let mut run_host_types = BTreeMap::new();
     for entry in &program.structures.structures.entries {
         if let cq_lang_structures::Structure::Host { keyed, .. } = &entry.structure
@@ -1732,31 +1707,10 @@ fn host_rows(
             );
         }
     }
-    let mut host_structures = program.structures.clone();
-    for entry in &mut host_structures.structures.entries {
-        if let Some(provider) = analysis
-            .gpu_bindings
-            .downloads
-            .get(&symbol_name(&entry.name))
-            && let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure
-        {
-            keyed.provider = provider.clone();
-            keyed.supports = None;
-        }
-    }
-    let downloaded: BTreeSet<_> = analysis
-        .gpu_bindings
-        .downloads
-        .values()
-        .map(|provider| provider.token.to_string())
-        .collect();
-    let declarations: Vec<_> = downloaded
-        .iter()
-        .map(|token| cq_lang_structures::provider::base::declaration(token))
-        .collect();
-    host_structures.structures.declare(&declarations)?;
-    cq_lang_structures::check_rewrite(&program.structures, &host_structures)?;
-    let host_analysis = cq_lang_structures::contract::check(&host_structures)?;
+    let host_structures = crate::bindings::host_structures(program, &analysis.gpu_bindings)
+        .expect("checked host materialization adapters");
+    let host_analysis = cq_lang_structures::contract::check(&host_structures)
+        .expect("checked host Structures contract");
     let inputs = host_structures
         .physical
         .inputs()
@@ -2566,6 +2520,14 @@ mod tests {
         let mut missing_download = analysis.clone();
         missing_download.gpu_bindings.downloads.clear();
         assert!(Rows::new(&program, &missing_download).is_err());
+        let mut missing_host_adapter = analysis.clone();
+        assert!(!missing_host_adapter.gpu_bindings.host_materializations.is_empty());
+        missing_host_adapter.gpu_bindings.host_materializations.clear();
+        assert!(Rows::new(&program, &missing_host_adapter).is_err());
+        let mut device_host_adapter = analysis.clone();
+        *device_host_adapter.gpu_bindings.host_materializations.values_mut().next().unwrap() =
+            crate::providers::declaration("range_provider").instance();
+        assert!(Rows::new(&program, &device_host_adapter).is_err());
         let mut incomplete_payload = analysis.clone();
         incomplete_payload
             .gpu_bindings

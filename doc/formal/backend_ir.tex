@@ -601,6 +601,14 @@ both fields as \code{None}); \code{ordered} is a Boolean; and \code{levels}
 lists explicit level paths. These tokens extend the target catalog; omitted
 arguments add no tokens. No codec capability is inferred from an input schema
 or a Rust type spelling.
+The 26-output DOOP pipeline records \code{DoopSymbols} as codec id 0 in its
+storage declaration and explicitly supplies that id's ordered catalog token
+at host, device, block and lane levels. The integer-only SRD DOOP pipeline
+uses the identity codec instead; a symbol type spelling grants no admission.
+Closed answer captures are absent from Physical row layouts, but their
+authored answer slots still supply logical identities. GPU codec lookup uses
+those ids when recording capture carriers and arena metadata; it never treats
+the logical symbol type as an identity scalar merely because no row binds it.
 GPU publication provider-build records also name the exact device-layout
 indices they construct. The checker requires every non-host layout exactly
 once in order; host-only layouts retain their host construction. Printers
@@ -1436,6 +1444,10 @@ constraint with no row operands is one closed Boolean capture; it does not
 need an artificial column or scalar-type guess. Grouped publication with a
 query answer gate currently has no empty-output adapter and is rejected by
 realization production and checking before printing.
+A mixed range may have a closed subject and row-valued bounds. Its closed
+operands record the available row-column codec context, selected from subject,
+lower bound, then upper bound; checking validates that recorded context against
+the source range rather than requiring the subject to be a column.
 
 \paragraph{GPU realization records.}
 Native ABI is a declared provider-token fact. Input instances record the ordered
@@ -1443,6 +1455,12 @@ logical/storage column schema and optional codec explicitly; every Rust type is
 opaque. Neither constructor paths nor generic arguments confer native residency,
 and neither do catalog read levels: placement treats a scanned Host provider as
 native exactly when its token declares an ABI.
+Host row subplans record separate collection adapters by Structures entry:
+device-native range/run/radix rows use a host vector, and their keyed builds
+use a host sorted run with the same key layout. The binding checker validates
+complete adapter coverage and the rewritten host Structures contract before
+printing. Device providers remain unchanged for device consumers; a host
+materialization never collects or iterates a device provider's Rust type.
 \begin{mathpar}
 \Rule{GPU-Representation}{\rho=\text{recorded provider/codec facts}\quad
  R=\mathrm{fv}(e)\cap\text{row columns}\quad R\subseteq\rho.\mathrm{identity}\quad

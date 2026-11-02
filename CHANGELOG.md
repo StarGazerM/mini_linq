@@ -13,6 +13,23 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU-7/8/9: GPU bindings record separate checked host collection/index
+  adapters instead of collecting a device `RangeProvider` in host subplans.
+  Closed range subjects obtain their capture context from row-valued bounds.
+  Checked macro rejections produce one diagnostic expression, including the
+  deliberately unsupported grouped-answer-gate case, without secondary Rust
+  syntax diagnostics. Each finding has a default-tier regression.
+
+- Restore the 26-output DOOP GPU pipeline after declaration-local codec IDs:
+  its storage schema explicitly records `DoopSymbols` as codec 0, and its
+  decomposition catalog explicitly authorizes that identity, ordering and
+  host/device/block/lane levels. No checker or implicit codec authorization
+  is relaxed; the integer-only SRD DOOP pipeline needs no symbol token.
+  Closed symbolic answer captures also retain their declared answer-slot
+  logical identity during GPU codec/carrier recording, so arena metadata uses
+  the recorded code carrier rather than requiring the logical symbol to
+  implement `Scalar`. The symbols oracle covers a closed symbolic head.
+
 - Fix (DriftWatch5 #1): a hoisted arm without a finite domain sees its free
   columns but no seed provides them. VO records `provided_before` per step
   (the scope's seed plus its earlier steps), so a nested domain-taking block's

@@ -18,7 +18,7 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
 
 doop_shared::doop_engine!(run, pipeline {
     incremental = ::cq_datalog::passes::incremental(driver(delta_first););
-    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(IStr => crate::DoopSymbols))];
+    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(IStr => [0] crate::DoopSymbols))];
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
@@ -28,7 +28,14 @@ doop_shared::doop_engine!(run, pipeline {
         // With relational heads (c1b75718) spread measured 0.953x [0.923, 0.960]
         // of no spread on Cassandra (P6b).
         decompose = [
-            ::cq_gpu_sequence::decompose,
+            ::cq_gpu_sequence::decompose(codecs [
+                CodecToken {
+                    codec_id: Some(0),
+                    codec: Some(crate::DoopSymbols),
+                    ordered: true,
+                    levels: [[host], [host, device], [host, device, block], [host, device, block, lane]],
+                }
+            ]),
             ::cq_sequence_rewrites::output(reserve_previous),
             ::cq_sequence_rewrites::roots(spread),
         ];

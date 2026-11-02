@@ -26,12 +26,13 @@ type Answers = (
     BTreeSet<(TestSymbol,)>,
     BTreeSet<(TestSymbol,)>,
     BTreeSet<(TestSymbol, TestSymbol, TestSymbol, TestSymbol, TestSymbol)>,
+    BTreeSet<(TestSymbol, TestSymbol)>,
 );
 
 macro_rules! engine {
     ($name:ident, {$($pipeline:tt)*}) => {
         fn $name(labels: Vec<(TestSymbol, TestSymbol)>, wide: Vec<(TestSymbol, TestSymbol, TestSymbol, TestSymbol, TestSymbol)>) -> Answers {
-            let (guarded, selected, copied) = cq_datalog::datalog! {
+            let (guarded, selected, copied, constant) = cq_datalog::datalog! {
                 pipeline { $($pipeline)* }
                 struct Symbols;
                 relation Label(t: TestSymbol, value: TestSymbol) = (labels);
@@ -39,12 +40,14 @@ macro_rules! engine {
                 relation Guarded(value: TestSymbol);
                 relation Selected(value: TestSymbol);
                 relation Copied(a: TestSymbol, b: TestSymbol, c: TestSymbol, d: TestSymbol, e: TestSymbol);
-                output Guarded, Selected, Copied;
+                relation Constant(t: TestSymbol, value: TestSymbol);
+                output Guarded, Selected, Copied, Constant;
                 Guarded(*value) :- Label(t, value), where t == sym("x");
                 Selected(*value) :- Label(sym("x"), value);
                 Copied(*a, *b, *c, *d, *e) :- Wide(a, b, c, d, e);
+                Constant(*t, sym("x")) :- Label(t, value);
             };
-            (guarded.collect(), selected.collect(), copied.collect())
+            (guarded.collect(), selected.collect(), copied.collect(), constant.collect())
         }
     };
 }

@@ -329,6 +329,22 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         }
         result.providers.insert(name.clone(), recorded);
     }
+    for (index, entry) in program.structures.structures.entries.iter().enumerate() {
+        let (provider, adapter) = match &entry.structure {
+            Structure::Rows { provider, .. } => (provider, "vec"),
+            Structure::Built { keyed, .. } => (&keyed.provider, "sorted_run"),
+            _ => continue,
+        };
+        if matches!(
+            analysis.structures.facts(provider).abi,
+            Some(NativeAbi::Range | NativeAbi::Runs | NativeAbi::Radix)
+        ) {
+            result.host_materializations.insert(
+                index,
+                cq_lang_structures::provider::base::declaration(adapter).instance(),
+            );
+        }
+    }
     let definitions: BTreeMap<_, _> = program
         .structures
         .physical
@@ -643,5 +659,70 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             "GPU-NativeAbi: download adapter records are incomplete",
         ));
     }
+    // GPU-HostMaterialization: each device-only collection/index has a
+    // separately recorded host adapter. Its collection protocol is determined
+    // by the Structures entry, never by inspecting its Rust type spelling.
+    let mut required = BTreeSet::new();
+    for (index, entry) in program.structures.structures.entries.iter().enumerate() {
+        let (provider, collection) = match &entry.structure {
+            Structure::Rows { provider, .. } => (provider, true),
+            Structure::Built { keyed, .. } => (&keyed.provider, false),
+            _ => continue,
+        };
+        if !matches!(
+            analysis.structures.facts(provider).abi,
+            Some(NativeAbi::Range | NativeAbi::Runs | NativeAbi::Radix)
+        ) {
+            continue;
+        }
+        required.insert(index);
+        let adapter = records.host_materializations.get(&index).ok_or_else(|| {
+            error("GPU-HostMaterialization: missing host collection adapter")
+        })?;
+        let declaration = cq_lang_structures::provider::base::declaration(
+            if collection { "vec" } else { "sorted_run" },
+        );
+        if *adapter != declaration.instance() {
+            return Err(error("GPU-HostMaterialization: invalid host collection adapter"));
+        }
+    }
+    if records.host_materializations.keys().any(|index| !required.contains(index)) {
+        return Err(error("GPU-HostMaterialization: adapter names no device collection"));
+    }
+    let host = host_structures(program, records)?;
+    cq_lang_structures::check_rewrite(&program.structures, &host)?;
+    cq_lang_structures::contract::check(&host)?;
     Ok(())
+}
+
+/// Apply recorded adapters without selecting a provider or inspecting Rust.
+pub(crate) fn host_structures(
+    program: &Program,
+    records: &Bindings,
+) -> syn::Result<cq_lang_structures::Program> {
+    let mut host = program.structures.clone();
+    for (index, entry) in host.structures.entries.iter_mut().enumerate() {
+        if let Some(provider) = records.host_materializations.get(&index) {
+            match &mut entry.structure {
+                Structure::Rows { provider: slot, .. } => *slot = provider.clone(),
+                Structure::Built { keyed, .. } => keyed.provider = provider.clone(),
+                _ => unreachable!("checked host materialization entry"),
+            }
+        }
+        if let Some(provider) = records.downloads.get(&symbol_name(&entry.name))
+            && let Structure::Host { keyed, .. } = &mut entry.structure
+        {
+            keyed.provider = provider.clone();
+            keyed.supports = None;
+        }
+    }
+    let tokens: BTreeSet<_> = records.downloads.values()
+        .chain(records.host_materializations.values())
+        .map(|provider| provider.token.to_string())
+        .collect();
+    let declarations: Vec<_> = tokens.iter()
+        .map(|token| cq_lang_structures::provider::base::declaration(token))
+        .collect();
+    host.structures.declare(&declarations)?;
+    Ok(host)
 }

@@ -13,6 +13,8 @@ cq-sequence-conformance	manifest-target-test	sequence_conformance	features/seque
 cq-sequence-tasks-macros	manifest-target-test	planning	features/sequence-tasks/macros/Cargo.toml
 mini-linq	test	physical_query	facade/mini-linq/tests/physical_query.rs
 mini-linq-macros	lib	macro_inputs	facade/mini-linq-macros/src/lib.rs
+cq-stage	test	protocol	facade/cq-stage/tests/protocol.rs
+cq-gpu-sequence-macros	manifest-test	diagnostics	experiments/gpu/sequence/macros/Cargo.toml
 cq-reduce	test	ya_schedule	passes/cq-reduce/tests/ya_schedule.rs
 cq-print	test	expressions	passes/cq-print/tests/expressions.rs
 cq-lang-cq	test	program	languages/cq-lang-cq/tests/program.rs

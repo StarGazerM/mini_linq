@@ -53,6 +53,49 @@ fn source_contract_precedes_the_transform() {
     });
     assert!(tokens.to_string().contains("zero is inadmissible"));
 }
+
+fn diagnostic_message(tokens: TokenStream) -> String {
+    let expression: syn::ExprBlock = syn::parse2(tokens.clone()).unwrap();
+    assert_eq!(expression.block.stmts.len(), 1);
+    let syn::Stmt::Macro(diagnostic) = &expression.block.stmts[0] else {
+        panic!("expected one diagnostic macro");
+    };
+    assert_eq!(
+        diagnostic.mac.path.segments.last().unwrap().ident,
+        "compile_error"
+    );
+    // Also require the entire rejection to compose as an ordinary expression,
+    // rather than merely accepting a standalone list of macro statements.
+    syn::parse2::<syn::Expr>(quote!(Some(#tokens))).unwrap();
+    syn::parse2::<syn::LitStr>(diagnostic.mac.tokens.clone())
+        .unwrap()
+        .value()
+}
+
+#[test]
+fn combined_pass_failures_form_one_diagnostic_expression() {
+    let first = syn::Error::new(proc_macro2::Span::call_site(), "first component");
+    let second = syn::Error::new(proc_macro2::Span::call_site(), "second component");
+    let expected = format!("{first}\n{second}");
+    let tokens = rewrite::<Number>(quote!(pipeline { consumer }; 1), |_, _| {
+        let mut errors = first;
+        errors.combine(second);
+        Err(errors)
+    });
+    assert_eq!(diagnostic_message(tokens), expected);
+}
+
+#[test]
+fn source_and_delegation_failures_form_diagnostic_expressions() {
+    let source = pass::<Number, Number>(quote!(pipeline { consumer }; 0), |_, _| {
+        panic!("invalid source reached the producer")
+    });
+    assert!(!diagnostic_message(source).is_empty());
+    let delegated = cq_stage::delegate(quote!(
+        arguments { first, second }; pipeline { consumer }; 1
+    ));
+    assert!(!diagnostic_message(delegated).is_empty());
+}
 #[test]
 fn opaque_arguments_and_remaining_pipeline_are_forwarded() {
     let tokens = rewrite::<Number>(
