@@ -209,15 +209,21 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
     let ordering = planner.ordering();
-    let ordered = if planner == Planner::Transfer {
-        connect_transfer_atoms(cq_order::compile(&normal, &Options::default())?)
-    } else {
-        cq_order::compile(&normal, &ordering)?
-    };
-    cq_order::check(&normal, &ordered, &ordering)?;
     let ordered = if planner == Planner::Le {
-        le::compile(&ordered)?
+        // LE reschedules the prefix with every predicate at its prefix
+        // position; restrictions are recorded on its schedule.
+        let unrestricted = cq_order::compile_unrestricted(&normal, &ordering)?;
+        cq_order::check(&normal, &unrestricted, &ordering)?;
+        let mut scheduled = le::compile(&unrestricted)?;
+        cq_order::restrict(&mut scheduled)?;
+        scheduled
     } else {
+        let ordered = if planner == Planner::Transfer {
+            connect_transfer_atoms(cq_order::compile(&normal, &Options::default())?)
+        } else {
+            cq_order::compile(&normal, &ordering)?
+        };
+        cq_order::check(&normal, &ordered, &ordering)?;
         ordered
     };
     let reductions = planner.reductions(&normal);
@@ -318,7 +324,7 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
         children.entry(parent).or_default().push(child);
     }
     let mut filtered: std::collections::BTreeSet<usize> =
-        cq::hypergraph::filter_ranks(body, &graph)
+        cq_reduce::filter_ranks(body, steps, &analysis, &graph)
             .into_iter()
             .filter(|&(_, rank)| rank < 3)
             .map(|(clause, _)| clause)
@@ -376,7 +382,8 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
 }
 
 /// CQ→RA′ through the public order, reduce and elaborate APIs. Relational
-/// pushdown is performed by elaboration; opaque Rust always stays in its chain.
+/// predicate placement is recorded by ordering (O-Restrict) and applied by
+/// elaboration; opaque Rust always stays in its chain.
 /// Hypergraph and Transfer share the facade's checked redundant-support absorption.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
     let valuation = compile_valuation(source, planner)?;

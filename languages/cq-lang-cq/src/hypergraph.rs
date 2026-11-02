@@ -56,11 +56,117 @@ pub struct Analysis {
     pub elimination_order: Vec<String>,
 }
 
+/// One relational predicate of a scope with the positive occurrences it
+/// restricts: a `where` constraint, one of its E-Domain implied domains, or a
+/// literal equality. Variable identities are never occurrence predicates.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalPredicate {
+    /// The written clause stating the predicate (or its implying constraint).
+    pub clause: usize,
+    /// The written predicate, a literal equality in constraint form, or an
+    /// implied domain.
+    pub predicate: cq_syntax::Constraint,
+    /// False for an implied domain, which is never a prefix step.
+    pub written: bool,
+    /// Clause indices of the positive atoms the predicate restricts.
+    pub targets: BTreeSet<usize>,
+}
+
+/// The local relational predicates of one scope and their target occurrences.
+/// `hoisted` lists the scope's block clauses recorded as Hoisted.
+///
+/// A target is a positive atom written before the predicate whose variables
+/// include every predicate variable, with no hoisted block needing a finite
+/// prefix domain between them (that domain is a separate proof of the written
+/// prefix). Predicates over let- or for-bound names have no target.
+/// Formal rule H-Local: Target each relational predicate and implied domain at the earlier covering positive atoms of its scope, excluding Rust-bound names and hoisted-domain cuts.
+pub fn local_predicates(
+    body: &super::CommaList<BodyItem>,
+    context: &BTreeSet<String>,
+    hoisted: &BTreeSet<usize>,
+) -> Vec<LocalPredicate> {
+    let mut let_bound = BTreeSet::new();
+    let mut domain_cuts = BTreeSet::new();
+    let mut prefix = context.clone();
+    for (clause, item) in body.iter().enumerate() {
+        match item {
+            BodyItem::Positive { atom } => prefix.extend(atom.variables().map(symbol_name)),
+            BodyItem::Let(binding) => {
+                let names = crate::rust::bindings(&binding.pattern);
+                let_bound.extend(names.iter().map(symbol_name));
+                prefix.extend(names.iter().map(symbol_name));
+            }
+            BodyItem::For(binding) => {
+                let names = crate::rust::bindings(&binding.pattern);
+                let_bound.extend(names.iter().map(symbol_name));
+                prefix.extend(names.iter().map(symbol_name));
+            }
+            BodyItem::Block(block) => {
+                let facts = block.analyze(&prefix);
+                if hoisted.contains(&clause) && block.needs_domain(&facts) {
+                    domain_cuts.insert(clause);
+                }
+                prefix.extend(facts.interface.into_keys());
+            }
+            _ => (),
+        }
+    }
+    let targets = |predicate: &cq_syntax::Constraint, before: usize| -> BTreeSet<usize> {
+        let variables: BTreeSet<String> = predicate.variables().map(symbol_name).collect();
+        if variables.is_empty() || !variables.is_disjoint(&let_bound) {
+            return BTreeSet::new();
+        }
+        body.iter()
+            .enumerate()
+            .take(before)
+            .filter(|(clause, item)| {
+                domain_cuts.range(clause + 1..before).next().is_none()
+                    && matches!(item, BodyItem::Positive { atom }
+                        if variables.is_subset(&atom.variables().map(symbol_name).collect()))
+            })
+            .map(|(clause, _)| clause)
+            .collect()
+    };
+    let mut result = Vec::new();
+    for (clause, item) in body.iter().enumerate() {
+        let written = match item {
+            BodyItem::Equality(e) if matches!(e.right, super::EqualityValue::Literal(_)) => {
+                cq_syntax::Constraint::from_equality(e)
+            }
+            BodyItem::Constraint(c) => match c.equality() {
+                Some(e) if matches!(e.right, super::EqualityValue::Variable(_)) => continue,
+                _ => c.clone(),
+            },
+            _ => continue,
+        };
+        let implied = if written.equality().is_none() {
+            written.implied_domains()
+        } else {
+            Vec::new()
+        };
+        for (predicate, is_written) in std::iter::once((written, true))
+            .chain(implied.into_iter().map(|domain| (domain, false)))
+        {
+            result.push(LocalPredicate {
+                clause,
+                targets: targets(&predicate, clause),
+                predicate,
+                written: is_written,
+            });
+        }
+    }
+    result
+}
+
 /// Static occurrence priorities, never estimates of data cardinality.
 /// Smaller ranks mean point, range, derived/total/block, then unfiltered.
 /// Opaque Rust filters are deliberately excluded.
-/// Formal rule H-FilterRank: Rank local total predicates through equality classes, without data statistics.
-pub fn filter_ranks(body: &super::CommaList<BodyItem>, graph: &Analysis) -> BTreeMap<usize, u8> {
+/// Formal rule H-FilterRank: Rank occurrences by the H-Local predicates that restrict them, without data statistics.
+pub fn filter_ranks(
+    body: &super::CommaList<BodyItem>,
+    graph: &Analysis,
+    local: &[LocalPredicate],
+) -> BTreeMap<usize, u8> {
     use cq_syntax::constraint::{Comparison, Constraint, Term};
     let mut ranks: BTreeMap<_, _> = graph
         .clauses
@@ -80,49 +186,28 @@ pub fn filter_ranks(body: &super::CommaList<BodyItem>, graph: &Analysis) -> BTre
             )
         })
         .collect();
-    let mut apply = |variables: Vec<String>, rank: u8| {
-        if variables.is_empty() {
-            return;
-        }
-        for (&clause, columns) in &graph.clauses {
-            if variables
-                .iter()
-                .all(|v| columns.iter().any(|c| graph.equivalent(c, v)))
-            {
-                ranks.entry(clause).and_modify(|r| *r = (*r).min(rank));
-            }
-        }
-    };
-    for item in body {
-        match item {
-            BodyItem::Equality(e) if !matches!(e.right, super::EqualityValue::Variable(_)) => {
-                apply(vec![symbol_name(&e.left)], 0);
-            }
-            BodyItem::Constraint(c) => {
-                let rank = match c {
-                    Constraint::Compare {
-                        left,
-                        comparison: Comparison::Eq(_),
-                        right,
-                    } if left.constant() || right.constant() => 0,
-                    Constraint::Compare {
-                        left,
-                        comparison,
-                        right,
-                    } if comparison.ordered() && (left.constant() || right.constant()) => 1,
-                    Constraint::Between {
-                        term: Term::Variable(_),
-                        low,
-                        high,
-                    } if low.constant() && high.constant() => 1,
-                    _ => 2,
-                };
-                apply(c.variables().map(symbol_name).collect(), rank);
-                for domain in c.implied_domains() {
-                    apply(domain.variables().map(symbol_name).collect(), 2);
-                }
-            }
-            _ => (),
+    for local in local {
+        let rank = match &local.predicate {
+            _ if !local.written => 2,
+            Constraint::Compare {
+                left,
+                comparison: Comparison::Eq(_),
+                right,
+            } if left.constant() || right.constant() => 0,
+            Constraint::Compare {
+                left,
+                comparison,
+                right,
+            } if comparison.ordered() && (left.constant() || right.constant()) => 1,
+            Constraint::Between {
+                term: Term::Variable(_),
+                low,
+                high,
+            } if low.constant() && high.constant() => 1,
+            _ => 2,
+        };
+        for target in &local.targets {
+            ranks.entry(*target).and_modify(|r| *r = (*r).min(rank));
         }
     }
     ranks

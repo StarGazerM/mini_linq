@@ -75,6 +75,6 @@ correspondence `check`.
 
 The manuscript describes source revision `3b21e5d`. Its exact written reference
 is desugared CQ-NF passed through `cq_order::compile_written` (Written/Coarse
-with recorded correlated blocks) and `cq_elaborate::compile_written`;
-the default `plan` uses optimizing elaboration. Core blocks and
+with recorded correlated blocks and no restrictions) and `cq_elaborate::compile`;
+the default `plan` records O-Restrict restrictions that the lowering applies. Core blocks and
 multi-rule union sugar require no surface union extension.

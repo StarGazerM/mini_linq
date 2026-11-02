@@ -25,8 +25,9 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
         .steps
         .push(vo.valuation.steps[1].clone());
     assert!(cq_lang_vo::contract::check(&duplicate).is_err());
+    // A restriction after the occurrence's read is not a restriction.
     let mut unbound = vo.clone();
-    unbound.valuation.steps.swap(0, 1);
+    unbound.valuation.steps.swap(1, 2);
     assert!(cq_lang_vo::contract::check(&unbound).is_err());
     let ra = cq_elaborate::compile(&vo).unwrap();
     cq_elaborate::check(&vo, &ra).unwrap();
@@ -374,7 +375,8 @@ fn hypergraph_reduced_prefix_tuple_survives_elaboration_checks() {
     let source: cq::Program = syn::parse_quote! {
         struct PrefixTuple;
         relation R(x:i32); relation Other(y:i32); relation T(x:i32,y:i32,z:i32);
-        answer(z) :- R(x), Other(y), where x > y, if 10 / (*x - *y).max(1) > 0, T(x,y,z);
+        answer(z) :- R(x), Other(y), where x > y, if 10 / (*x - *y).max(1) > 0, T(x,y,z),
+            where z < 9;
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let order = cq_order::Options {
@@ -571,4 +573,66 @@ fn output_schemas_cannot_silently_discard_leaf_values() {
             );
         }
     }
+}
+
+#[test]
+fn fine_tree_reduced_filtered_split_read_passes_its_own_elaboration_check() {
+    // Test-layer finding F1 (stage differential seeds 157/397/701/957).
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation r0(c0: i32, c1: i32); relation r2(c0: i32, c1: i32);
+        relation answer(c0: i32);
+        answer(v3) :- r2(v0, v1), r0(v3, v1), where v0 >= 3;
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let order = cq_order::Options {
+        heuristic: cq_order::Heuristic::Elimination,
+        split: cq_order::Split::Fine,
+    };
+    let ordered = cq_order::compile(&normal, &order).unwrap();
+    cq_order::check(&normal, &ordered, &order).unwrap();
+    let options = cq_reduce::Options {
+        semijoins: cq_reduce::Reductions::Tree,
+    };
+    let reduced = cq_reduce::compile(&ordered, &options).unwrap();
+    cq_reduce::check(&ordered, &reduced, &options).unwrap();
+    let target = cq_elaborate::compile(&reduced).unwrap();
+    cq_elaborate::check(&reduced, &target).unwrap();
+}
+
+#[test]
+fn masks_never_reduces_by_an_occurrence_its_filter_does_not_restrict() {
+    // `where x < 5` restricts B@1 (written before it), never C@3, so C@3 is
+    // not a filtered Masks support.
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation A(a: i32, b: i32); relation B(b: i32, x: i32);
+        relation C(x: i32, d: i32); relation answer(a: i32, d: i32);
+        answer(a, d) :- A(a, b), B(b, x), where x < 5, C(x, d);
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let ordered = cq_order::compile(&normal, &Default::default()).unwrap();
+    let options = cq_reduce::Options {
+        semijoins: cq_reduce::Reductions::Masks,
+    };
+    let reduced = cq_reduce::compile(&ordered, &options).unwrap();
+    cq_reduce::check(&ordered, &reduced, &options).unwrap();
+    let restricted: Vec<_> = reduced
+        .valuation
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            cq_lang_vo::Step::Restrict(restrict, _) => Some(restrict.clause()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(restricted, [1]);
+    assert!(
+        !reduced
+            .valuation
+            .steps
+            .iter()
+            .any(|step| matches!(step, cq_lang_vo::Step::Reduce(..))),
+        "no occurrence is a filtered support of another"
+    );
+    let target = cq_elaborate::compile(&reduced).unwrap();
+    cq_elaborate::check(&reduced, &target).unwrap();
 }

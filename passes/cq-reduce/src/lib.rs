@@ -117,22 +117,45 @@ pub fn rooted(tree: &[(usize, Option<usize>)], root: usize) -> BTreeMap<usize, u
     parents
 }
 
+/// H-FilterRank of one VO scope through its H-Local predicates, with the
+/// scope's recorded block placements.
+pub fn filter_ranks(
+    body: &cq::CommaList<valuation::cq::BodyItem>,
+    steps: &[Step],
+    analysis: &valuation::Analysis,
+    graph: &valuation::cq::hypergraph::Analysis,
+) -> BTreeMap<usize, u8> {
+    let context = analysis
+        .bound_before
+        .first()
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+    valuation::cq::hypergraph::filter_ranks(
+        body,
+        graph,
+        &valuation::restrict::local_predicates(body, &context, steps),
+    )
+}
+
 /// `(target, support)` mask edges, children first: each inner clause with each
 /// child whose subtree carries a relational filter or a block cut. Siblings run
 /// strongest first. Supports are always children and the outer (root) is
-/// neither a target nor a support.
+/// neither a target nor a support. `ranks` is the scope's [`filter_ranks`].
 /// Formal rule R-Masks: Reduce each inner clause by its filtered child subtrees of the outer-rooted reduction tree.
 pub fn mask_edges(
     graph: &valuation::cq::hypergraph::Analysis,
     body: &cq::CommaList<valuation::cq::BodyItem>,
     root: usize,
+    ranks: &BTreeMap<usize, u8>,
 ) -> Vec<(usize, usize)> {
     let parents = rooted(&graph.reduction_tree, root);
     let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (&child, &parent) in &parents {
         children.entry(parent).or_default().push(child);
     }
-    let mut local = valuation::cq::hypergraph::filter_ranks(body, graph);
+    let mut local = ranks.clone();
     for (atom, block) in block_cuts(graph, body) {
         if atom != root && block != root {
             local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
@@ -213,7 +236,8 @@ fn mask_steps(
         .into_iter()
         .filter(|&(atom, block)| atom != root && block != root)
         .collect();
-    for edge in mask_edges(graph, body, root) {
+    let ranks = filter_ranks(body, steps, analysis, graph);
+    for edge in mask_edges(graph, body, root, &ranks) {
         if body[edge.0].atom().is_some() && !edges.contains(&edge) {
             edges.push(edge);
         }
@@ -323,7 +347,7 @@ fn compile_steps(
         || options.semijoins == Reductions::Hypergraph && graph.acyclic
     {
         let reducer = if options.semijoins == Reductions::Hypergraph {
-            filtered_tree(graph, analysis, body)?
+            filtered_tree(graph, analysis, body, source_steps)?
         } else {
             tree(graph, analysis, body)?
         };
@@ -508,6 +532,7 @@ fn filtered_tree(
     graph: &valuation::cq::hypergraph::Analysis,
     analysis: &valuation::Analysis,
     body: &cq::CommaList<valuation::cq::BodyItem>,
+    steps: &[Step],
 ) -> syn::Result<Vec<Step>> {
     let tree = &graph.reduction_tree;
     let mut children: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
@@ -522,7 +547,7 @@ fn filtered_tree(
     let Some(root) = root else {
         return Ok(Vec::new());
     };
-    let local = valuation::cq::hypergraph::filter_ranks(body, graph);
+    let local = filter_ranks(body, steps, analysis, graph);
     let mut ranks = local.clone();
     fn summarize(
         node: usize,

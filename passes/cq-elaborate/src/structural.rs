@@ -108,6 +108,12 @@ pub(super) fn check(
                 relations.insert(reduce.clause(), reduced);
                 reductions.push((reduce.clause(), support.clause()));
             }
+            vo::Step::Restrict(restrict, _) => {
+                let mut theta = ra::Theta::default();
+                theta.push_constraint(restrict.predicate.clone());
+                let restricted = schedule.select(relations[&restrict.clause()], &theta);
+                relations.insert(restrict.clause(), restricted);
+            }
             vo::Step::Equality(equality, _) => {
                 let input = prefix.unwrap_or_else(|| schedule.unit());
                 prefix = Some(schedule.select(

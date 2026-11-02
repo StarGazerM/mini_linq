@@ -167,6 +167,24 @@ impl Block {
             .collect();
         result
     }
+
+    /// A hoisted arm without a generator for some free column (or with a
+    /// negation over one) takes its finite domain from the written prefix.
+    pub fn needs_domain(&self, facts: &Analysis) -> bool {
+        self.branches.iter().any(|branch| {
+            let generated: BTreeSet<_> = walk(&branch.body)
+                .into_iter()
+                .filter_map(BodyItem::atom)
+                .flat_map(cq_syntax::Atom::variables)
+                .map(symbol_name)
+                .collect();
+            facts.free.keys().any(|name| !generated.contains(name))
+                || walk(&branch.body).into_iter().any(|item| {
+                    matches!(item, BodyItem::Negation(n)
+                        if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
+                })
+        })
+    }
 }
 
 /// Visible binders at the end of a body, respecting nested block interfaces.

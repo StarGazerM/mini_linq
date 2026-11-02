@@ -378,6 +378,11 @@ fn execute(
                 .retain(|row| evaluate_predicate(&guard.condition, row)),
             vo::Step::Equality(eq, _) => result.rows.retain(|row| evaluate_equality(eq, row)),
             vo::Step::Constraint(c, _) => result.rows.retain(|row| evaluate_constraint(c, row)),
+            vo::Step::Restrict(restrict, _) => tables
+                .get_mut(&restrict.clause)
+                .expect("restricted positive occurrence")
+                .rows
+                .retain(|row| evaluate_constraint(&restrict.predicate, row)),
             vo::Step::Let(..) | vo::Step::For(..) => {
                 panic!("computed columns and generators use compiled written-order Rust")
             }

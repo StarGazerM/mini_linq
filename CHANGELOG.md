@@ -7,6 +7,24 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- Elaboration redesign slice 3a: relational predicate placement is recorded in
+  VO. `cq-order` emits `restrict R@i where P;` at the head of each scope
+  (O-Restrict) from one shared definition, `hypergraph::local_predicates`
+  (H-Local), which H-FilterRank, Masks/Hypergraph reductions and planner
+  transfer also rank through. A written predicate with a restriction target on
+  every written instance has no prefix step; E-Domain implied domains exist only
+  as restrictions. Every VO producer (ordering, advice, step advice, evidence,
+  LE and the transfer planner) records them; `compile_written` records none.
+  The LE planner schedules `cq_order::compile_unrestricted` and then calls
+  `cq_order::restrict`, so prefix predicates still drive its expansions.
+  WF-Restrict checks legality, CK-Order checks consistent step omission, and
+  CK-Elaborate checks each restriction selects its own occurrence. Lowering
+  applies only recorded restrictions: `scope_predicates`, `optimize_predicates`
+  and `cq_elaborate::compile_written` are removed (the written reference is
+  `cq_elaborate::compile` of `cq_order::compile_written`). The cq-testkit VO
+  evaluator executes restrictions. Masks no longer reduces by a support whose
+  filter elaboration never applied (`A(a,b), B(b,x), where x < 5, C(x,d)`).
+
 - Sequence Analysis now owns checked BE-PrefixBound row/key records and
   BE-GroupKey canon-free group facts. Retention replay consumes these records,
   with explicit tile/threshold parameters and checked root, first-bound and

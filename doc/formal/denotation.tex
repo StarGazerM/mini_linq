@@ -59,9 +59,10 @@ A Rust guard returns $\{\rho\}$ or $\emptyset$ by its unchanged Rust
 expression; a scalar Rust bind returns one extended valuation.
 Starting at $\{\langle\rangle\}$, compose the desugared body in written order, then the
 head. This is the reference meaning. The executable reference is Written/Coarse
-VO from \code{cq_order::compile_written}, with recorded correlated blocks,
-elaborated by \code{cq_elaborate::compile_written}, which forbids reductions,
-splitting, reordering, hoisted blocks, predicate pushdown and alias solving.
+VO from \code{cq_order::compile_written}, with recorded correlated blocks and
+no restrictions or reductions, lowered by \code{cq_elaborate::compile}: every
+predicate stays at its written position, with no splitting, reordering,
+hoisted blocks or alias solving.
 
 For a generator, evaluate $e$ in the incoming environment $\rho$, convert it
 with \code{IntoIterator::into_iter}, and exhaust its finite yielded sequence

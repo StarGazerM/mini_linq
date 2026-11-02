@@ -121,7 +121,7 @@ per-route siblings listed below.
 | `cq-syntax guard::term` (retired) | Rust recognition and field-path parameters | replaced by explicit `where` and query-closed `Term::Closed(syn::Expr)` (contract 7) |
 | `cq-order Written` | identity sequence, cross products kept | explicit reference retained; Connected/Coarse facade default done (contract 2) |
 | `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); full reduction is an optional P8 cost question |
-| `cq-elaborate` | predicate binder choice, branch join topology | open: record in VO; ElabFix in progress |
+| `cq-elaborate` | predicate binder choice (branch join topology deleted) | predicate placement recorded in VO as `restrict R@i where P;` by `cq-order` (O-Restrict, H-Local shared with H-FilterRank and the reducers); lowering applies only recorded restrictions. Open: order-independent H-Local (ElabFix 3b), hoisted-block written-order domain |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / Let vs Pipe | representation choices only; point/range supply and join keys are consumed from matched, checked IX requirements |
 | Sequence decomposition | preserves recorded relational construction | P3.3-lite removes automatic replanning; ordering belongs to VO |
@@ -775,12 +775,12 @@ Paths and lines refer to the reviewed `17a14b93` tree.
    AutoDense's dense/NoDense realization. Record/consume the appropriate
    provider facts rather than treating the current runtime selection as a
    completed direct-call cutover.
-3. **CQ → VO / elaboration owners — ElabFix in progress.** Predicate
-   attachment targets are still chosen in elaboration
-   (`passes/cq-elaborate/src/lib.rs:346-375`), and branch spanning trees are
-   built there (`passes/cq-elaborate/src/join_branches.rs:20-70`). Record
-   targets and topology before elaboration; contract 1 is the target, not
-   a claim that this redesign has landed.
+3. **CQ → VO / elaboration owners — ElabFix in progress.** Branch spanning
+   trees are deleted and predicate attachment targets are recorded in VO by
+   `cq-order` (`passes/cq-order/src/restrict.rs`, O-Restrict); lowering applies
+   only recorded restrictions. H-Local still keeps the written-before rule
+   (3b makes it order-independent), and a hoisted block's finite domain is
+   still joined in written order in elaboration.
 4. **GPU runtime owners — unrecorded runtime work.** Datalog run kernels
    still choose occupancy grids and 256-thread launches in the runtime
    (`experiments/gpu/datalog-runtime/src/runs.rs:377-379,411-413,480-489`).

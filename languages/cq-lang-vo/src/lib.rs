@@ -7,6 +7,7 @@
 //! Step ::= Subatom ";" | "!" Atom ";" | Constraint ";"
 //!        | "if" Expr ";" | "let" Pat [":" Type] "=" Expr ";"
 //!        | "reduce" Ident "@" Int "with" Subatom ";"
+//!        | "restrict" Ident "@" Int "where" Constraint ";"
 //! ```
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
@@ -36,9 +37,12 @@ pub mod blocks;
 pub use blocks::Placement;
 pub mod evidence;
 pub use evidence::Evidence;
+pub mod restrict;
+pub use restrict::Restrict;
 
 pub mod kw {
     syn::custom_keyword!(reduce);
+    syn::custom_keyword!(restrict);
     syn::custom_keyword!(valuation);
     syn::custom_keyword!(with);
     syn::custom_keyword!(block);
@@ -77,6 +81,7 @@ pub enum Step {
     Let(Box<cq_syntax::Let>, Token![;]),
     For(Box<cq_syntax::For>, Token![;]),
     Reduce(Reduce, Token![;]),
+    Restrict(Restrict, Token![;]),
     Atom(Subatom, Token![;]),
 }
 
@@ -91,6 +96,7 @@ impl quote::ToTokens for Step {
             Self::Let(value, semi) => quote::quote!(#value #semi),
             Self::For(value, semi) => quote::quote!(#value #semi),
             Self::Reduce(value, semi) => quote::quote!(#value #semi),
+            Self::Restrict(value, semi) => quote::quote!(#value #semi),
             Self::Atom(value, semi) => quote::quote!(#value #semi),
         });
     }
@@ -118,6 +124,8 @@ impl syn::parse::Parse for Step {
             Self::For(input.parse()?, input.parse()?)
         } else if input.peek(kw::reduce) {
             Self::Reduce(input.parse()?, input.parse()?)
+        } else if input.peek(kw::restrict) {
+            Self::Restrict(input.parse()?, input.parse()?)
         } else if input.peek(Ident) && input.peek2(Token![@]) {
             Self::Atom(input.parse()?, input.parse()?)
         } else {
@@ -252,6 +260,7 @@ fn analyze_steps(
     for step in steps {
         match step {
             Step::Atom(a, _) => a.clause.check()?,
+            Step::Restrict(r, _) => r.clause.check()?,
             Step::Block(b, _) => b.source.clause.check()?,
             Step::Reduce(r, _) => {
                 r.clause.check()?;
@@ -380,9 +389,22 @@ fn analyze_steps(
     let mut placed_equalities = BTreeSet::new();
     let mut placed_constraints = BTreeSet::new();
     let mut placed_negations = BTreeSet::new();
+    let mut restricted = BTreeSet::new();
+    let mut started = false;
     for step in steps {
         analysis.bound_before.push(bound.clone());
+        if let Step::Restrict(restriction, _) = step {
+            let expected_path = match &parent {
+                Some((path, branch)) => path.child(*branch, restriction.clause()),
+                None => Occurrence::new(restriction.clause()),
+            };
+            restricted.extend(restrict::check(body, restriction, &expected_path, started)?);
+            analysis.introduces.push(Vec::new());
+            continue;
+        }
+        started = true;
         match step {
+            Step::Restrict(..) => unreachable!("restrictions handled above"),
             Step::Block(block, _) => {
                 let clause = block.source.clause();
                 let Some(cq::BodyItem::Block(written)) = body.iter().nth(clause) else {
@@ -742,13 +764,13 @@ fn analyze_steps(
     }
     if let Some((_, missing)) = equalities
         .iter()
-        .find(|(clause, _)| !placed_equalities.contains(clause))
+        .find(|(clause, _)| !placed_equalities.contains(clause) && !restricted.contains(clause))
     {
         return error(*missing, "every relational equality must be placed");
     }
     if let Some((_, missing)) = constraints
         .iter()
-        .find(|(clause, _)| !placed_constraints.contains(clause))
+        .find(|(clause, _)| !placed_constraints.contains(clause) && !restricted.contains(clause))
     {
         return error(*missing, "every relational constraint must be placed");
     }

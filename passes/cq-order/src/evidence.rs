@@ -83,7 +83,12 @@ impl<'a> Scope<'a> {
         let graph = cq::hypergraph::Analysis::of(source);
         Some(Self {
             clauses: clauses(body, &BTreeSet::new()),
-            ranks: cq::hypergraph::filter_ranks(body, &graph),
+            // The scope is block-free, so no hoisted domain cuts a target.
+            ranks: cq::hypergraph::filter_ranks(
+                body,
+                &graph,
+                &cq::hypergraph::local_predicates(body, &BTreeSet::new(), &BTreeSet::new()),
+            ),
             keys,
             counts,
         })

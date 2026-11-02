@@ -31,6 +31,7 @@ use syn::LitInt;
 pub mod evidence;
 pub mod known;
 pub mod le;
+mod restrict;
 
 pub use known::Known;
 
@@ -591,9 +592,21 @@ fn written_fine(clauses: &[Clause<'_>], context: &BTreeSet<String>) -> Vec<valua
     steps
 }
 
-/// Order the normal-form query under `options`, then check the VO contract.
+/// Order the normal-form query under `options`, record its occurrence
+/// restrictions (O-Restrict), then check the VO contract.
 /// Formal rule S-Written: Written uses the complete normal-form body sequence.
 pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
+    let mut program = compile_unrestricted(source, options)?;
+    restrict(&mut program)?;
+    Ok(program)
+}
+
+/// The ordered schedule with every predicate at its prefix position. A
+/// planner that reschedules prefix steps does so here, then calls [`restrict`].
+pub fn compile_unrestricted(
+    source: &cq::Program,
+    options: &Options,
+) -> syn::Result<valuation::Program> {
     cq::normal::check(source)?;
     let steps = compile_body(source, options, &BTreeSet::new(), None)?;
     let program = valuation::Program {
@@ -609,7 +622,15 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
     Ok(program)
 }
 
+/// Record the occurrence restrictions (O-Restrict) of an unrestricted
+/// schedule, then check the VO contract.
+pub fn restrict(program: &mut valuation::Program) -> syn::Result<()> {
+    restrict::restrict(program);
+    valuation::contract::check(program).map(drop)
+}
+
 /// Record the exact Written/Coarse reference, including per-prefix block arms.
+/// It records no restriction: every predicate stays a prefix step.
 /// Formal rule O-WrittenBlocks: Written-reference construction records Correlated on every block recursively.
 pub fn compile_written(source: &cq::Program) -> syn::Result<valuation::Program> {
     fn correlate(steps: &mut [valuation::Step]) {
@@ -622,7 +643,7 @@ pub fn compile_written(source: &cq::Program) -> syn::Result<valuation::Program> 
             }
         }
     }
-    let mut program = compile(source, &Options::default())?;
+    let mut program = compile_unrestricted(source, &Options::default())?;
     correlate(&mut program.valuation.steps);
     valuation::contract::check(&program)?;
     Ok(program)
@@ -784,13 +805,14 @@ pub fn compile_explicit(
             "order advice conflicts with clause dependencies",
         ));
     }
-    let mut program = compile(source, &Options::default())?;
+    let mut program = compile_unrestricted(source, &Options::default())?;
     // Coarse emits exactly one step per source clause, including block steps.
     let mut steps: Vec<_> = program.valuation.steps.into_iter().map(Some).collect();
     program.valuation.steps = sequence
         .into_iter()
         .map(|i| steps[i].take().unwrap())
         .collect();
+    restrict::restrict(&mut program);
     check(
         source,
         &program,
@@ -806,7 +828,7 @@ pub fn compile_explicit(
 fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<valuation::Program> {
     let context = BTreeSet::new();
     let clauses = clauses(&source.query.body, &context);
-    let mut program = compile(source, &Options::default())?;
+    let mut program = compile_unrestricted(source, &Options::default())?;
     let mut ordinary: Vec<_> = program.valuation.steps.into_iter().map(Some).collect();
     let mut pending = Vec::new();
     let mut named = BTreeSet::new();
@@ -954,6 +976,7 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
         ));
     }
     program.valuation.steps = steps;
+    restrict::restrict(&mut program);
     le::check_advice(source, &program, &lookups)?;
     Ok(program)
 }
@@ -1011,7 +1034,14 @@ fn compile_body(
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
     let (sequence, mut variables) = match options.heuristic {
         Heuristic::Filtered => {
-            let filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph);
+            let hoisted = clauses
+                .iter()
+                .enumerate()
+                .filter(|(_, facts)| matches!(facts.item, BodyItem::Block(_)) && !facts.rust)
+                .map(|(clause, _)| clause)
+                .collect();
+            let local = cq::hypergraph::local_predicates(&query.body, context, &hoisted);
+            let filters = cq::hypergraph::filter_ranks(&query.body, &hypergraph, &local);
             let sequence = schedule(query, &clauses, context, filtered_rank(&clauses, &filters))?;
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
@@ -1252,16 +1282,25 @@ fn check_steps(
                     written.push(position);
                     previous_atom = None;
                 }
-                valuation::Step::Reduce(..) => {}
+                valuation::Step::Reduce(..) | valuation::Step::Restrict(..) => {}
             }
         }
-        if options.heuristic == Heuristic::Written && written != (0..body.len()).collect::<Vec<_>>()
-        {
+        // Predicates placed only by restrictions have no prefix position.
+        let placed: Vec<usize> = (0..body.len())
+            .filter(|clause| {
+                written.contains(clause)
+                    || !matches!(
+                        body[*clause],
+                        BodyItem::Equality(_) | BodyItem::Constraint(_)
+                    )
+            })
+            .collect();
+        if options.heuristic == Heuristic::Written && written != placed {
             let position = written
                 .iter()
-                .enumerate()
-                .find(|(i, clause)| **clause != *i)
-                .map(|(_, clause)| *clause)
+                .zip(&placed)
+                .find(|(clause, expected)| clause != expected)
+                .map(|(clause, _)| *clause)
                 .unwrap_or(body.len());
             return Err(syn::Error::new_spanned(
                 &quote::quote!(#(#steps)*),
@@ -1278,9 +1317,10 @@ fn check_steps(
                 .collect();
             let facts = clauses(body, &context);
             let graph = cq::hypergraph::Analysis::of_body(body, &context);
-            let filters = cq::hypergraph::filter_ranks(body, &graph);
+            let local = valuation::restrict::local_predicates(body, &context, steps);
+            let filters = cq::hypergraph::filter_ranks(body, &graph, &local);
             let mut bound = context;
-            let mut pending: Vec<_> = (0..body.len()).collect();
+            let mut pending = placed;
             for clause in written {
                 // Independently check the greedy choice, not compiler output equality.
                 let rank = filtered_rank(&facts, &filters);
@@ -1371,7 +1411,8 @@ fn check_steps(
             | valuation::Step::Negation(..)
             | valuation::Step::Guard(..)
             | valuation::Step::Let(..)
-            | valuation::Step::For(..) => {}
+            | valuation::Step::For(..)
+            | valuation::Step::Restrict(..) => {}
         }
     }
     // The VO variable-coverage check alone is vacuous for nullary atoms.
@@ -1383,6 +1424,32 @@ fn check_steps(
                     "clause #{clause} (`{}`): every atom requires a subatom",
                     atom.relation
                 ),
+            ));
+        }
+    }
+    check_restricted(body, steps)
+}
+
+/// Formal rule CK-Restrict: A written predicate keeps a prefix step for every written instance of its payload or for none; WF-Restrict places one without steps through its restrictions.
+fn check_restricted(body: &cq::CommaList<BodyItem>, steps: &[valuation::Step]) -> syn::Result<()> {
+    for item in body {
+        let predicate = match item {
+            BodyItem::Equality(equality) => cq::Constraint::from_equality(equality),
+            BodyItem::Constraint(constraint) => constraint.clone(),
+            _ => continue,
+        };
+        let written = body
+            .iter()
+            .filter(|other| valuation::restrict::states(other, &predicate))
+            .count();
+        let kept = steps
+            .iter()
+            .filter(|step| valuation::restrict::step_states(step, &predicate))
+            .count();
+        if kept != 0 && kept != written {
+            return Err(syn::Error::new_spanned(
+                item,
+                "a restricted predicate drops the prefix steps of all its written instances or none",
             ));
         }
     }

@@ -93,6 +93,7 @@ fn check_steps(
                         Step::Let(_, _) => "binding clause".into(),
                         Step::For(_, _) => "generator clause".into(),
                         Step::Reduce(r, _) => format!("reduction of clause #{}", r.clause()),
+                        Step::Restrict(r, _) => format!("restriction of clause #{}", r.clause()),
                     })
                     .unwrap_or_default()
             ),
@@ -107,7 +108,7 @@ fn check_steps(
         .flatten()
         .filter_map(|(child, parent)| parent.map(|p| (child, p)))
         .collect();
-    let local_ranks = vo::cq::hypergraph::filter_ranks(body, &graph);
+    let local_ranks = super::filter_ranks(body, source_steps, source_info, &graph);
     let mut subtree_ranks = local_ranks.clone();
     // Independent ancestor closure, rather than the constructor's DFS.
     for (&node, &rank) in &local_ranks {
@@ -415,7 +416,7 @@ fn check_masks(
                 .map(move |block| (atom, block))
         })
         .collect();
-    let mut local = vo::cq::hypergraph::filter_ranks(body, graph);
+    let mut local = super::filter_ranks(body, source, source_info, graph);
     for &(atom, _) in &cuts {
         local.entry(atom).and_modify(|rank| *rank = (*rank).min(2));
     }

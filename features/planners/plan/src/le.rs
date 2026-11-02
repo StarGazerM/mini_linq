@@ -217,6 +217,7 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                     state.started = true;
                 }
                 vo::Step::Reduce(..) => unreachable!("LE precedes reduction"),
+                vo::Step::Restrict(..) => unreachable!("LE precedes O-Restrict"),
             }
             state.steps.push(step);
             state.lookups();

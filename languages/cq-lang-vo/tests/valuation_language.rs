@@ -62,6 +62,45 @@ fn reductions_are_relational_and_never_consume_a_rust_guard() {
 }
 
 #[test]
+fn restrictions_place_predicates_on_their_occurrence_or_reject() {
+    let filtered = |steps: proc_macro2::TokenStream| -> syn::Result<valuation::Program> {
+        syn::parse2(quote! {
+            struct Q;
+            relation R(a: i32, b: i32);
+            relation S(b: i32, c: i32);
+            answer(a, c) :- R(a, b), where a < 5, where (b == 1 && a > 0) || b == 2, S(b, c);
+            valuation { #steps }
+        })
+    };
+    // The written predicate and the implied domain of `b` restrict R; the
+    // disjunction's own prefix step stays.
+    let restricted = filtered(quote! {
+        restrict R@0 where a < 5; restrict R@0 where (b = 1) or (b = 2);
+        R@0(a, b); where (b = 1 and a > 0) or (b = 2); S@3(b, c);
+    })
+    .unwrap();
+    valuation::contract::check(&restricted).unwrap();
+    assert_eq!(
+        syn::parse2::<valuation::Program>(restricted.to_token_stream()).unwrap(),
+        restricted
+    );
+    for steps in [
+        // Neither a step nor a restriction places `a < 5`.
+        quote! { R@0(a, b); where (b = 1 and a > 0) or (b = 2); S@3(b, c); },
+        // A restriction follows a read of its scope.
+        quote! { R@0(a, b); restrict R@0 where a < 5; where (b = 1 and a > 0) or (b = 2); S@3(b, c); },
+        // Not a column of the occurrence.
+        quote! { restrict S@3 where a < 5; R@0(a, b); where (b = 1 and a > 0) or (b = 2); S@3(b, c); },
+        // Not a written predicate or implied domain.
+        quote! { restrict R@0 where a < 6; R@0(a, b); where a < 5; where (b = 1 and a > 0) or (b = 2); S@3(b, c); },
+        // Wrong relation at the clause.
+        quote! { restrict S@0 where a < 5; R@0(a, b); where (b = 1 and a > 0) or (b = 2); S@3(b, c); },
+    ] {
+        assert!(valuation::contract::check(&filtered(steps).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn contract_rejects_late_misaligned_and_foreign_reductions() {
     let rejects = |steps, needle: &str| {
         let error = plan(steps)

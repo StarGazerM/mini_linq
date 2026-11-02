@@ -176,7 +176,7 @@ impl Body<'_, '_> {
                     .expect("VO block coverage");
                 let correlated = planned.placement == vo::blocks::Placement::Correlated;
                 let over = correlated.then(|| self.seed());
-                let domain = (!correlated && super::needs_domain(block, &facts)).then(|| {
+                let domain = (!correlated && block.needs_domain(&facts)).then(|| {
                     let saved = self.prefix;
                     if !facts.free.keys().all(|name| self.heading.contains(name)) {
                         let mut input = None;
@@ -400,6 +400,13 @@ impl Body<'_, '_> {
                     let mut theta = ra::Theta::default();
                     theta.push_constraint(c.clone());
                     self.prefix = Some(self.schedule.select(input, &theta));
+                }
+                vo::Step::Restrict(r, _) => {
+                    let occurrence = self.relation(r.clause());
+                    let mut theta = ra::Theta::default();
+                    theta.push_constraint(r.predicate.clone());
+                    let restricted = self.schedule.select(occurrence, &theta);
+                    self.relations.insert(r.clause(), restricted);
                 }
                 vo::Step::Negation(negation, _) => {
                     let clause = self

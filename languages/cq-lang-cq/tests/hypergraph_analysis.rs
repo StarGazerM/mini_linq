@@ -222,7 +222,7 @@ fn literal_columns_are_not_hypergraph_vertices() {
     assert_eq!(normal, module);
     assert_eq!(analysis.clauses[&0], ["x"]);
     assert_eq!(
-        cq::hypergraph::filter_ranks(&normal.query.body, &analysis)[&0],
+        cq::hypergraph::filter_ranks(&normal.query.body, &analysis, &[])[&0],
         0
     );
     assert!(analysis.acyclic);
@@ -256,7 +256,32 @@ fn constant_only_atoms_keep_their_occurrence_and_point_rank() {
     let graph = Analysis::of(&source);
     assert!(graph.clauses[&0].is_empty());
     assert_eq!(graph.clauses[&1], ["x"]);
-    let ranks = cq::hypergraph::filter_ranks(&source.query.body, &graph);
+    let ranks = cq::hypergraph::filter_ranks(&source.query.body, &graph, &[]);
     assert_eq!(ranks[&0], 0);
     assert_eq!(ranks[&1], 3);
+}
+
+#[test]
+fn local_predicates_target_earlier_covering_atoms_and_rank_through_them() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);
+        answer(x,y,z) :- R(x,y), where y < 5, S(z), where x == 3,
+            where (z == 1 && x > 0) || z == 2, T(x,z);
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let body = &normal.query.body;
+    let local = cq::hypergraph::local_predicates(body, &Default::default(), &Default::default());
+    // Only covering atoms written before a predicate are its targets.
+    assert!(
+        local
+            .iter()
+            .all(|entry| entry.targets.iter().all(|&target| target < entry.clause))
+    );
+    // The implied domain of `z` restricts `S`; the disjunction itself spans
+    // two atoms and restricts none.
+    let implied: Vec<_> = local.iter().filter(|entry| !entry.written).collect();
+    assert_eq!(implied.len(), 1);
+    assert_eq!(implied[0].targets.iter().copied().collect::<Vec<_>>(), [2]);
+    let ranks = cq::hypergraph::filter_ranks(body, &Analysis::of(&normal), &local);
+    assert_eq!((ranks[&0], ranks[&2], ranks[&5]), (0, 2, 3));
 }

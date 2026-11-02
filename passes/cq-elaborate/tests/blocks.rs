@@ -380,7 +380,7 @@ fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
             );
         }
         let written = cq_order::compile_written(&vo.cq).unwrap();
-        let reference = cq_elaborate::compile_written(&written).unwrap();
+        let reference = cq_elaborate::compile(&written).unwrap();
         check(&written, &reference).unwrap();
         for seed in 0..8 {
             let database = cq_testkit::databases::binary_database(&vo.cq, seed);
@@ -572,11 +572,10 @@ fn block_placement_round_trips_and_controls_both_elaboration_entry_points() {
         assert_eq!(*vo, reparsed);
         cq_lang_vo::contract::check(&reparsed).unwrap();
     }
-    let reference = cq_elaborate::compile_written(&written).unwrap();
+    let reference = cq_elaborate::compile(&written).unwrap();
     check(&written, &reference).unwrap();
     let correlated = compile(&written).unwrap();
     check(&written, &correlated).unwrap();
-    assert!(cq_elaborate::compile_written(&hoisted).is_err());
     assert!(check(&hoisted, &correlated).is_err());
     assert!(check(&written, &target).is_err());
     for (ra, correlated) in [(&target, false), (&reference, true), (&correlated, true)] {

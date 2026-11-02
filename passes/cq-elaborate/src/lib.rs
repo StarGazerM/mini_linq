@@ -35,85 +35,10 @@ use quote::format_ident;
 use syn::Ident;
 
 /// Elaborate a valuation plan into named RA, then check the RA contract.
+/// Recorded restrictions select their occurrence; every other predicate is a
+/// prefix step. A written reference is a VO without restrictions or reductions.
 /// Formal rule C-Guard: Append an opaque guard to the prefix, seeding Unit if absent.
 pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
-    compile_in(source, true)
-}
-
-/// Compile the exact written reference, with no predicate pushdown or alias
-/// solving. The valuation must contain one full atom per written generator and
-/// every equality/bind/guard at its written position; reductions are forbidden.
-/// Every block must already record Correlated placement.
-pub fn compile_written(source: &valuation::Program) -> syn::Result<ra::Program> {
-    valuation::contract::check(source)?;
-    use valuation::cq::BodyItem;
-    fn exact(
-        body: &cq::CommaList<BodyItem>,
-        steps: &[valuation::Step],
-        parent: Option<(&cq::Occurrence, usize)>,
-    ) -> bool {
-        body.len() == steps.len()
-            && body
-                .iter()
-                .zip(steps)
-                .enumerate()
-                .all(|(clause, (item, step))| {
-                    let path = parent.map_or_else(
-                        || cq::Occurrence::new(clause),
-                        |(path, j)| path.child(j, clause),
-                    );
-                    match (item, step) {
-                        (BodyItem::Block(block), valuation::Step::Block(planned, _)) => {
-                            block.kind == planned.kind
-                                && planned.placement == valuation::blocks::Placement::Correlated
-                                && planned.source.clause == path
-                                && planned.source.variables().count()
-                                    == planned.source.columns.len()
-                                && block
-                                    .branches
-                                    .iter()
-                                    .zip(&planned.branches)
-                                    .enumerate()
-                                    .all(|(j, (written, arm))| {
-                                        exact(&written.body, &arm.steps, Some((&path, j)))
-                                    })
-                        }
-                        (BodyItem::Positive { atom }, valuation::Step::Atom(subatom, _)) => {
-                            subatom.clause == path
-                                && subatom.relation == atom.relation
-                                && subatom.variables().count() == atom.variables().count()
-                                && subatom
-                                    .variables()
-                                    .map(|(_, v)| symbol_name(v))
-                                    .eq(atom.variables().map(symbol_name))
-                        }
-                        (BodyItem::Equality(a), valuation::Step::Equality(b, _)) => a == b,
-                        (BodyItem::Constraint(a), valuation::Step::Constraint(b, _)) => a == b,
-                        (BodyItem::Constraint(a), valuation::Step::Equality(b, _)) => {
-                            a.equality().as_ref() == Some(b)
-                        }
-                        (BodyItem::Equality(a), valuation::Step::Constraint(b, _)) => {
-                            b.equality().as_ref() == Some(a)
-                        }
-                        (BodyItem::Negation(a), valuation::Step::Negation(b, _)) => a == b,
-                        (BodyItem::Filter(a), valuation::Step::Guard(b, _)) => a == b,
-                        (BodyItem::Let(a), valuation::Step::Let(b, _)) => a == b,
-                        (BodyItem::For(a), valuation::Step::For(b, _)) => a == b,
-                        _ => false,
-                    }
-                })
-    }
-    let exact = exact(&source.cq.query.body, &source.valuation.steps, None);
-    if !exact {
-        return Err(syn::Error::new_spanned(
-            &source.valuation,
-            "written reference requires exactly the full written NF steps and correlated blocks, without splitting, reductions or reordering",
-        ));
-    }
-    compile_in(source, false)
-}
-
-fn compile_in(source: &valuation::Program, optimize_predicates: bool) -> syn::Result<ra::Program> {
     let analysis = valuation::contract::check(source)?;
     let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
         .iter()
@@ -143,11 +68,9 @@ fn compile_in(source: &valuation::Program, optimize_predicates: bool) -> syn::Re
         relations: BTreeMap::new(),
         prefix: None,
         heading: BTreeSet::new(),
-        optimize_predicates,
-        constraints: Vec::new(),
-        equalities: Vec::new(),
+        restrictions: Vec::new(),
     };
-    state.scope_predicates();
+    state.scope_restrictions();
     state.run_steps(&source.valuation.steps);
     let output = state.finish(&source.cq.query);
     let target = ra::Program {
@@ -213,7 +136,7 @@ pub fn simplify_expansions(source: &ra::Program) -> syn::Result<ra::Program> {
 /// Rust payloads and relational constraints.
 /// Pure targets may use checked inverse dead expansions under canonicalization
 /// to establish a primary witness, without recompiling or selecting a plan.
-/// Formal rule CK-Elaborate: Check contracts, clause occurrences, named reductions, constraints and unchanged Rust payloads with their free variables.
+/// Formal rule CK-Elaborate: Check contracts, clause occurrences, recorded restrictions, named reductions, constraints and unchanged Rust payloads with their free variables.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let analysis = valuation::contract::check(source)?;
     let target_schedule = ra::contract::Schedule::from_program(target)?;
@@ -251,6 +174,72 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
         )
     })?;
     block_contract::check_placement(&source.valuation.steps, target)?;
+    check_restrictions(&source.valuation.steps, target)?;
+    Ok(())
+}
+
+/// Formal rule CK-ElaborateRestrict: Every conjunct of a recorded restriction appears in the selection chain directly over its occurrence's rename.
+fn check_restrictions(steps: &[valuation::Step], target: &ra::Program) -> syn::Result<()> {
+    let definitions = &target.plan.definitions;
+    for step in steps {
+        match step {
+            valuation::Step::Restrict(restrict, _) => {
+                let fail = |message: &str| {
+                    Err(syn::Error::new_spanned(
+                        restrict,
+                        format!("restriction of `{}`: {message}", restrict.clause),
+                    ))
+                };
+                let Some(mut current) = definitions.iter().find_map(|d| match &d.operator {
+                    ra::Operator::Rename(rename)
+                        if rename.occurrence == restrict.clause
+                            && symbol_name(&rename.relation) == symbol_name(&restrict.relation) =>
+                    {
+                        Some(&d.result)
+                    }
+                    _ => None,
+                }) else {
+                    return fail("the occurrence is never read");
+                };
+                let mut applied = ra::Theta::default();
+                while let Some((result, select)) =
+                    definitions.iter().find_map(|d| match &d.operator {
+                        ra::Operator::Select(select) if select.input == *current => {
+                            Some((&d.result, select))
+                        }
+                        _ => None,
+                    })
+                {
+                    applied
+                        .equalities
+                        .extend(select.condition.equalities.iter().cloned());
+                    applied
+                        .constraints
+                        .extend(select.condition.constraints.iter().cloned());
+                    current = result;
+                }
+                let mut expected = ra::Theta::default();
+                expected.push_constraint(restrict.predicate.clone());
+                if !expected
+                    .equalities
+                    .iter()
+                    .all(|e| applied.equalities.iter().any(|a| a == e))
+                    || !expected
+                        .constraints
+                        .iter()
+                        .all(|c| applied.constraints.iter().any(|a| a == c))
+                {
+                    return fail("the predicate does not select the occurrence");
+                }
+            }
+            valuation::Step::Block(block, _) => {
+                for arm in &block.branches {
+                    check_restrictions(&arm.steps, target)?;
+                }
+            }
+            _ => (),
+        }
+    }
     Ok(())
 }
 
@@ -275,104 +264,22 @@ struct State<'a> {
     relations: BTreeMap<usize, Ident>,
     prefix: Option<Ident>,
     heading: BTreeSet<String>,
-    optimize_predicates: bool,
-    equalities: Vec<(ra::Equality, BTreeSet<usize>)>,
-    constraints: Vec<(cq::Constraint, BTreeSet<usize>)>,
+    /// The current scope's recorded restrictions `(clause, predicate)`, in VO order.
+    restrictions: Vec<(usize, cq::Constraint)>,
 }
 
 impl<'a> State<'a> {
-    // Predicate targets are local clause numbers: rebuild them on every scope
-    // entry so sibling branches and the outer body cannot share predicates.
-    fn scope_predicates(&mut self) {
-        let let_bound: BTreeSet<_> = self
-            .body
+    // Restriction targets are local clause numbers: rebuild them on every scope
+    // entry so sibling branches and the outer body cannot share them.
+    fn scope_restrictions(&mut self) {
+        self.restrictions = self
+            .steps
             .iter()
-            .filter_map(|item| match item {
-                valuation::cq::BodyItem::Let(binding) => Some(cq::rust::bindings(&binding.pattern)),
-                valuation::cq::BodyItem::For(binding) => Some(cq::rust::bindings(&binding.pattern)),
+            .filter_map(|step| match step {
+                valuation::Step::Restrict(restrict, _) => {
+                    Some((restrict.clause(), restrict.predicate.clone()))
+                }
                 _ => None,
-            })
-            .flatten()
-            .map(|v| symbol_name(&v))
-            .collect();
-        // A finite branch domain is a separate proof of the written prefix.
-        // Later predicates cannot restrict the atoms used to supply that domain.
-        let mut domain_cuts = BTreeSet::new();
-        let mut prefix = self.context.clone();
-        for (clause, item) in self.body.iter().enumerate() {
-            match item {
-                valuation::cq::BodyItem::Positive { atom } => {
-                    prefix.extend(atom.variables().map(symbol_name));
-                }
-                valuation::cq::BodyItem::Let(binding) => {
-                    prefix.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
-                }
-                valuation::cq::BodyItem::For(binding) => {
-                    prefix.extend(cq::rust::bindings(&binding.pattern).iter().map(symbol_name));
-                }
-                valuation::cq::BodyItem::Block(block) => {
-                    let facts = block.analyze(&prefix);
-                    if self.steps.iter().any(|step| {
-                        matches!(step, valuation::Step::Block(planned, _)
-                            if planned.source.clause() == clause
-                                && planned.placement == valuation::blocks::Placement::Hoisted)
-                    }) && needs_domain(block, &facts)
-                    {
-                        domain_cuts.insert(clause);
-                    }
-                    prefix.extend(facts.interface.into_keys());
-                }
-                _ => (),
-            }
-        }
-        let targets = |variables: BTreeSet<String>, before: usize| -> BTreeSet<usize> {
-            if variables.is_empty() || !variables.is_disjoint(&let_bound) {
-                return BTreeSet::new();
-            }
-            self.atoms
-                .iter()
-                .filter(|(clause, atom)| {
-                    **clause < before
-                        && domain_cuts.range(**clause + 1..before).next().is_none()
-                        && matches!(
-                            self.body[**clause],
-                            valuation::cq::BodyItem::Positive { .. }
-                        )
-                        && variables.is_subset(&atom.variables().map(symbol_name).collect())
-                })
-                .map(|(clause, _)| *clause)
-                .collect()
-        };
-        self.constraints = self
-            .body
-            .iter()
-            .enumerate()
-            .flat_map(|(clause, item)| match item {
-                valuation::cq::BodyItem::Constraint(c) if c.equality().is_none() => {
-                    std::iter::once(c.clone())
-                        .chain(c.implied_domains())
-                        .map(|predicate| {
-                            let binders =
-                                targets(predicate.variables().map(symbol_name).collect(), clause);
-                            (predicate, binders)
-                        })
-                        .collect::<Vec<_>>()
-                }
-                _ => Vec::new(),
-            })
-            .collect();
-        self.equalities = self
-            .body
-            .iter()
-            .enumerate()
-            .filter_map(|(clause, item)| {
-                let equality = match item {
-                    valuation::cq::BodyItem::Equality(equality) => equality.clone(),
-                    valuation::cq::BodyItem::Constraint(constraint) => constraint.equality()?,
-                    _ => return None,
-                };
-                let binders = targets(equality.variables().map(symbol_name).collect(), clause);
-                Some((equality, binders))
             })
             .collect();
     }
@@ -402,6 +309,7 @@ impl<'a> State<'a> {
                     self.read_clauses.insert(subatom.clause());
                 }
                 valuation::Step::Reduce(reduce, _) => self.reduce(reduce),
+                valuation::Step::Restrict(..) => {}
                 valuation::Step::Negation(negation, _) => self.negation(negation),
                 valuation::Step::Guard(filter, _) => {
                     let input = self.prefix_or_unit();
@@ -441,7 +349,7 @@ impl<'a> State<'a> {
             .collect();
         // If an arm has no generator for an F column, its finite domain is
         // supplied by the written prefix's projected context relation.
-        let needs_domain = hoisted && needs_domain(written, &facts);
+        let needs_domain = hoisted && written.needs_domain(&facts);
         let domain = needs_domain.then(|| {
             let saved_prefix = self.prefix.clone();
             let saved_heading = self.heading.clone();
@@ -468,8 +376,14 @@ impl<'a> State<'a> {
                             });
                             self.heading.extend(atom.variables().map(symbol_name));
                         }
-                        valuation::cq::BodyItem::Equality(eq) => self.equality(eq),
-                        valuation::cq::BodyItem::Constraint(c) => self.constraint(c),
+                        valuation::cq::BodyItem::Equality(eq)
+                            if self.prefix_step(&cq::Constraint::from_equality(eq)) =>
+                        {
+                            self.equality(eq)
+                        }
+                        valuation::cq::BodyItem::Constraint(c) if self.prefix_step(c) => {
+                            self.constraint(c)
+                        }
                         _ => (),
                     }
                 }
@@ -480,8 +394,7 @@ impl<'a> State<'a> {
             self.heading = saved_heading;
             domain
         });
-        let parent_constraints = std::mem::take(&mut self.constraints);
-        let parent_equalities = std::mem::take(&mut self.equalities);
+        let parent_restrictions = std::mem::take(&mut self.restrictions);
         let parent_atoms = self.atoms;
         let parent_analysis = self.analysis;
         let parent_body = self.body;
@@ -538,7 +451,7 @@ impl<'a> State<'a> {
                     ));
                 }
             }
-            self.scope_predicates();
+            self.scope_restrictions();
             self.run_steps(&branch.steps);
             let keep: BTreeSet<_> = if hoisted {
                 common.clone()
@@ -564,8 +477,7 @@ impl<'a> State<'a> {
             }
             operands.push(positive);
         }
-        self.constraints = parent_constraints;
-        self.equalities = parent_equalities;
+        self.restrictions = parent_restrictions;
         self.atoms = parent_atoms;
         self.analysis = parent_analysis;
         self.body = parent_body;
@@ -681,6 +593,7 @@ impl<'a> State<'a> {
     /// The clause's relation: its rename, emitted at first mention, as
     /// reduced so far.
     /// Formal rule E-Relation: Reuse a clause result or emit its complete positional rename at first use.
+    /// Formal rule E-Restrict: Select a new occurrence by its recorded literal-equality restrictions, then each same-column group of its other restrictions.
     fn relation(&mut self, clause: usize) -> Ident {
         if let Some(result) = self.relations.get(&clause) {
             return result.clone();
@@ -720,41 +633,32 @@ impl<'a> State<'a> {
             mapping,
             constants,
         })));
-        // A literal equality is a keyed relational read of this occurrence.
-        // It may move earlier across Rust because it only restricts its domain.
+        // E-Restrict: the recorded literal equalities are one keyed read of
+        // this occurrence; other restrictions group same-column conjuncts
+        // into one range selection each.
         let literals: Vec<_> = self
-            .equalities
+            .restrictions
             .iter()
-            .filter(|(e, targets)| {
-                self.optimize_predicates
-                    && targets.contains(&clause)
-                    && matches!(e.right, ra::EqualityValue::Literal(_))
-            })
-            .map(|(e, _)| e.clone())
+            .filter(|(target, _)| *target == clause)
+            .filter_map(|(_, predicate)| predicate.equality())
             .collect();
         if !literals.is_empty() {
             result = self.select(result, literals);
         }
-        // Ordinary relational pushdown: every used column belongs to this
-        // occurrence. Group same-column conjuncts into one range selection.
-        if self.optimize_predicates {
-            let mut groups: Vec<(BTreeSet<String>, Vec<cq::Constraint>)> = Vec::new();
-            for (c, targets) in &self.constraints {
-                let columns: BTreeSet<_> = c.variables().map(symbol_name).collect();
-                if targets.contains(&clause) {
-                    let predicate = c.clone();
-                    if let Some((_, constraints)) =
-                        groups.iter_mut().find(|(key, _)| *key == columns)
-                    {
-                        constraints.push(predicate);
-                    } else {
-                        groups.push((columns, vec![predicate]));
-                    }
-                }
+        let mut groups: Vec<(BTreeSet<String>, Vec<cq::Constraint>)> = Vec::new();
+        for (target, predicate) in &self.restrictions {
+            if *target != clause || predicate.equality().is_some() {
+                continue;
             }
-            for (_, constraints) in groups {
-                result = self.select_constraints(result, constraints);
+            let columns: BTreeSet<_> = predicate.variables().map(symbol_name).collect();
+            if let Some((_, constraints)) = groups.iter_mut().find(|(key, _)| *key == columns) {
+                constraints.push(predicate.clone());
+            } else {
+                groups.push((columns, vec![predicate.clone()]));
             }
+        }
+        for (_, constraints) in groups {
+            result = self.select_constraints(result, constraints);
         }
         self.relations.insert(clause, result.clone());
         result
@@ -888,19 +792,18 @@ impl<'a> State<'a> {
         })))
     }
 
-    /// Formal rule E-Constraint: Push a central constraint onto its complete binder or select the prefix.
+    /// Whether the scope keeps a prefix step for this written predicate; one
+    /// without a step is placed only by its restrictions.
+    fn prefix_step(&self, predicate: &cq::Constraint) -> bool {
+        self.steps
+            .iter()
+            .any(|step| valuation::restrict::step_states(step, predicate))
+    }
+
+    /// Formal rule E-Constraint: Select the prefix by a recorded prefix constraint.
     fn constraint(&mut self, constraint: &cq::Constraint) {
         if let Some(equality) = constraint.equality() {
             self.equality(&equality);
-            return;
-        }
-        if self.optimize_predicates
-            && self
-                .constraints
-                .iter()
-                .filter(|(c, _)| c == constraint)
-                .all(|(_, targets)| !targets.is_empty())
-        {
             return;
         }
         let c = constraint.clone();
@@ -909,16 +812,6 @@ impl<'a> State<'a> {
     }
 
     fn equality(&mut self, equality: &ra::Equality) {
-        if self.optimize_predicates
-            && matches!(equality.right, ra::EqualityValue::Literal(_))
-            && self
-                .equalities
-                .iter()
-                .filter(|(e, _)| e == equality)
-                .all(|(_, targets)| !targets.is_empty())
-        {
-            return;
-        }
         let left = equality.left.clone();
         let right = match &equality.right {
             ra::EqualityValue::Variable(variable) => {
@@ -1133,27 +1026,6 @@ impl<'a> State<'a> {
         });
         result
     }
-}
-
-fn needs_domain(
-    block: &valuation::cq::blocks::Block,
-    facts: &valuation::cq::blocks::Analysis,
-) -> bool {
-    block.branches.iter().any(|branch| {
-        let generated: BTreeSet<_> = valuation::cq::blocks::walk(&branch.body)
-            .into_iter()
-            .filter_map(valuation::cq::BodyItem::atom)
-            .flat_map(cq::Atom::variables)
-            .map(symbol_name)
-            .collect();
-        facts.free.keys().any(|name| !generated.contains(name))
-            || valuation::cq::blocks::walk(&branch.body)
-                .into_iter()
-                .any(|item| {
-                    matches!(item, valuation::cq::BodyItem::Negation(n)
-                    if n.atom.variables().any(|v| facts.free.contains_key(&symbol_name(v))))
-                })
-    })
 }
 
 fn occurrence_constants(

@@ -44,6 +44,10 @@ fn coarse(source: &cq::Program) -> valuation::Program {
         });
     vo(source, quote!(#(#steps)*))
 }
+/// The Written/Coarse order with its recorded O-Restrict restrictions.
+fn restricted(source: &cq::Program) -> valuation::Program {
+    cq_order::compile(source, &cq_order::Options::default()).unwrap()
+}
 
 // The VO contract admits equivalent equality nodes constructed through either IR variant.
 fn equality_forms(source: &valuation::Program) -> Vec<valuation::Program> {
@@ -322,7 +326,7 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
     }};
     check(&reduced, &source).unwrap();
     let target = cq_elaborate::simplify_reductions(&source).unwrap();
-    let reference = cq_elaborate::compile_written(&coarse(&query)).unwrap();
+    let reference = cq_elaborate::compile(&coarse(&query)).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     // Absorption is an RA rewrite, not permission to omit a named VO reduction.
@@ -370,7 +374,7 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
     // This is the final external-planner contract, not just the local
     // source-to-target absorption certificate.
     check(&written, &target).unwrap();
-    let reference = cq_elaborate::compile_written(&written).unwrap();
+    let reference = cq_elaborate::compile(&written).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     let full_input = |plan: &ra::Program| {
@@ -471,7 +475,7 @@ fn reduction_absorption_retains_support_for_an_uncontained_consumer() {
     }};
     let target = cq_elaborate::simplify_reductions(&source).unwrap();
     assert_eq!(target, source);
-    let reference = cq_elaborate::compile_written(&coarse(&query)).unwrap();
+    let reference = cq_elaborate::compile(&coarse(&query)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     let mut bypassed = source.clone();
     bypassed.plan.definitions[4].operator = syn::parse_quote!(natural_join u with r);
@@ -924,7 +928,7 @@ fn seed_997_reductions_match_equality_classes_before_rust() {
         },
     );
     let target = compile(&reduced).unwrap();
-    let reference = cq_elaborate::compile_written(&written).unwrap();
+    let reference = cq_elaborate::compile(&written).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     let first_rust = target
         .plan
@@ -990,7 +994,7 @@ fn reductions_match_every_protected_column_in_an_equality_class() {
     for form in equality_forms(&plan) {
         assert_eq!(compile(&form).unwrap(), target);
     }
-    let reference = cq_elaborate::compile_written(&coarse(&source)).unwrap();
+    let reference = cq_elaborate::compile(&coarse(&source)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
 }
 
@@ -1107,13 +1111,13 @@ fn differing_literal_spellings_are_not_assumed_unequal() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); answer(x) :- R(x), where x == 1, where x == 0x1;
     });
-    let target = compile(&coarse(&source)).unwrap();
+    let target = compile(&restricted(&source)).unwrap();
     let mut changed = target.clone();
     let ra::Operator::Select(select) = &mut changed.plan.definitions[1].operator else {
         panic!()
     };
     select.condition.equalities[1].right = ra::EqualityValue::Literal(syn::parse_quote!(2));
-    assert!(check(&coarse(&source), &changed).is_err());
+    assert!(check(&restricted(&source), &changed).is_err());
 }
 
 #[test]
@@ -1156,7 +1160,7 @@ fn written_reference_filters_literal_columns_before_dependent_expressions() {
     });
     let normal = cq::normal::normalize(&surface).unwrap();
     let source = coarse(&normal);
-    let written = cq_elaborate::compile_written(&source).unwrap();
+    let written = cq_elaborate::compile(&source).unwrap();
     check(&source, &written).unwrap();
     for target in [written, compile(&source).unwrap()] {
         let bind = target
@@ -1178,22 +1182,6 @@ fn written_reference_filters_literal_columns_before_dependent_expressions() {
 }
 
 #[test]
-fn written_reference_rejects_a_reordered_valuation() {
-    let source = cq(quote! {
-        struct Q; relation R(x:i32); relation S(y:i32);
-        answer(x,y) :- R(x), S(y);
-    });
-    let reordered = vo(&source, quote! { S@1(y); R@0(x); });
-    valuation::contract::check(&reordered).unwrap();
-    assert!(
-        cq_elaborate::compile_written(&reordered)
-            .unwrap_err()
-            .to_string()
-            .contains("written reference")
-    );
-}
-
-#[test]
 fn correspondence_accepts_independent_relational_placement() {
     let source = cq(quote! {
         struct Q; relation R(x:i32); relation S(w:i32);
@@ -1202,7 +1190,7 @@ fn correspondence_accepts_independent_relational_placement() {
     let written = coarse(&source);
     let hoisted = vo(&source, quote! { R@0(x); S@2(w); if 10 / *x > 1; });
     valuation::contract::check(&hoisted).unwrap();
-    let later = cq_elaborate::compile_written(&written).unwrap();
+    let later = cq_elaborate::compile(&written).unwrap();
     // Total Rust has no written relational predecessor obligations.
     check(&written, &later).unwrap();
     check(&hoisted, &later).unwrap();
@@ -1367,7 +1355,7 @@ fn literal_points_precede_membership_filters_without_type_classification() {
                 where (mode == "AIR" || mode == "AIR REG")
                     && instruction == "DELIVER IN PERSON";
         });
-        let vo = coarse(&source);
+        let vo = restricted(&source);
         let target = compile(&vo).unwrap();
         let selections: Vec<_> = target
             .plan
@@ -1403,7 +1391,7 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
         struct Q; relation R(a:i32); relation S(b:i32);
         answer(x,y) :- R(x), S(y), where (x == 1 && y >= 2) || (x == 3 && y <= 4);
     });
-    let vo = coarse(&source);
+    let vo = restricted(&source);
     let target = compile(&vo).unwrap();
     let selections: Vec<_> = target
         .plan
@@ -1580,7 +1568,7 @@ fn generator_elaboration_round_trips_and_certifies_set_valued_binding() {
         answer(b) :- R(a), for b in 0..a, let c = b;
     }));
     let target = compile(&source).unwrap();
-    cq_elaborate::compile_written(&source).unwrap();
+    cq_elaborate::compile(&source).unwrap();
     assert_eq!(
         syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
         target
@@ -1702,7 +1690,7 @@ fn negative_constants_repeats_and_wildcards_match_reference_semantics() {
         .unwrap();
         let written = coarse(&source);
         let target = compile(&written).unwrap();
-        let reference = cq_elaborate::compile_written(&written).unwrap();
+        let reference = cq_elaborate::compile(&written).unwrap();
         let anti = target
             .plan
             .definitions
@@ -1779,7 +1767,7 @@ fn raw_negation_names_match_reference_semantics() {
                 .unwrap();
                 let target = compile(&written).unwrap();
                 let reference_vo = cq_order::compile_written(&normal).unwrap();
-                let reference = cq_elaborate::compile_written(&reference_vo).unwrap();
+                let reference = cq_elaborate::compile(&reference_vo).unwrap();
                 check(&reference_vo, &reference).unwrap();
                 for seed in 0..32 {
                     let database = databases::binary_database(&source, seed);

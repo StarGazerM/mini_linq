@@ -364,7 +364,8 @@ fn expected(source: &cq::Program, steps: proc_macro2::TokenStream) -> valuation:
     syn::parse2(quote! { #program valuation { #steps } }).unwrap()
 }
 
-/// The clause each coarse step draws on.
+/// The clause each coarse step draws on; restrictions draw on none, and a
+/// predicate step draws on the first unused written clause stating it.
 fn sequence(plan: &valuation::Program) -> Vec<usize> {
     let body = &plan.cq.query.body;
     let nth = |n: usize, kind: fn(&BodyItem) -> bool| {
@@ -375,42 +376,54 @@ fn sequence(plan: &valuation::Program) -> Vec<usize> {
             .map(|(clause, _)| clause)
             .unwrap()
     };
-    let (mut guards, mut lets, mut equalities, mut constraints) = (0, 0, 0, 0);
+    let (mut guards, mut lets) = (0, 0);
     let mut generators = 0;
     let mut negations = 0;
+    let mut predicates = std::collections::BTreeSet::new();
+    let mut predicate = |step: &valuation::Step| {
+        let clause = (0..body.len())
+            .find(|clause| {
+                !predicates.contains(clause)
+                    && match &body[*clause] {
+                        BodyItem::Equality(e) => valuation::restrict::step_states(
+                            step,
+                            &cq::Constraint::from_equality(e),
+                        ),
+                        BodyItem::Constraint(c) => valuation::restrict::step_states(step, c),
+                        _ => false,
+                    }
+            })
+            .unwrap();
+        predicates.insert(clause);
+        clause
+    };
     plan.valuation
         .steps
         .iter()
-        .map(|step| match step {
-            valuation::Step::Atom(subatom, _) => subatom.clause(),
-            valuation::Step::Equality(..) => {
-                equalities += 1;
-                nth(equalities - 1, |item| matches!(item, BodyItem::Equality(_)))
-            }
-            valuation::Step::Constraint(..) => {
-                constraints += 1;
-                nth(constraints - 1, |item| {
-                    matches!(item, BodyItem::Constraint(_))
-                })
-            }
-            valuation::Step::Negation(..) => {
-                negations += 1;
-                nth(negations - 1, |item| matches!(item, BodyItem::Negation(_)))
-            }
-            valuation::Step::Guard(..) => {
-                guards += 1;
-                nth(guards - 1, |item| matches!(item, BodyItem::Filter(_)))
-            }
-            valuation::Step::Let(..) => {
-                lets += 1;
-                nth(lets - 1, |item| matches!(item, BodyItem::Let(_)))
-            }
-            valuation::Step::For(..) => {
-                generators += 1;
-                nth(generators - 1, |item| matches!(item, BodyItem::For(_)))
-            }
-            valuation::Step::Block(b, _) => b.source.clause(),
-            valuation::Step::Reduce(..) => unreachable!("order emits no reductions"),
+        .filter_map(|step| {
+            Some(match step {
+                valuation::Step::Atom(subatom, _) => subatom.clause(),
+                valuation::Step::Equality(..) | valuation::Step::Constraint(..) => predicate(step),
+                valuation::Step::Negation(..) => {
+                    negations += 1;
+                    nth(negations - 1, |item| matches!(item, BodyItem::Negation(_)))
+                }
+                valuation::Step::Guard(..) => {
+                    guards += 1;
+                    nth(guards - 1, |item| matches!(item, BodyItem::Filter(_)))
+                }
+                valuation::Step::Let(..) => {
+                    lets += 1;
+                    nth(lets - 1, |item| matches!(item, BodyItem::Let(_)))
+                }
+                valuation::Step::For(..) => {
+                    generators += 1;
+                    nth(generators - 1, |item| matches!(item, BodyItem::For(_)))
+                }
+                valuation::Step::Block(b, _) => b.source.clause(),
+                valuation::Step::Restrict(..) => return None,
+                valuation::Step::Reduce(..) => unreachable!("order emits no reductions"),
+            })
         })
         .collect()
 }
@@ -445,7 +458,7 @@ fn written_coarse_follows_the_normal_body() {
 }
 
 #[test]
-fn optimizing_orders_place_constraints_at_the_first_available_binding() {
+fn optimizing_orders_restrict_the_covering_occurrence_before_opaque_guards() {
     let source: cq::Program = syn::parse_quote! {
         struct Early; relation R(a:i32); relation S(b:i32);
         answer(x,y) :- R(x), if opaque(x), where x < cutoff, S(y);
@@ -458,26 +471,27 @@ fn optimizing_orders_place_constraints_at_the_first_available_binding() {
             let options = Options { heuristic, split };
             let plan = cq_order::compile(&source, &options).unwrap();
             cq_order::check(&source, &plan, &options).unwrap();
-            let binder = plan
-                .valuation
-                .steps
+            let steps = &plan.valuation.steps;
+            // O-Restrict: the constraint runs on its occurrence, so the
+            // prefix keeps no step for it.
+            assert!(
+                matches!(&steps[0], valuation::Step::Restrict(r, _) if r.clause() == 0),
+                "{heuristic:?}/{split:?}"
+            );
+            assert!(
+                !steps
+                    .iter()
+                    .any(|s| matches!(s, valuation::Step::Constraint(..)))
+            );
+            let binder = steps
                 .iter()
                 .position(|s| matches!(s, valuation::Step::Atom(a, _) if a.clause() == 0))
                 .unwrap();
-            let constraint = plan
-                .valuation
-                .steps
-                .iter()
-                .position(|s| matches!(s, valuation::Step::Constraint(..)))
-                .unwrap();
-            let guard = plan
-                .valuation
-                .steps
+            let guard = steps
                 .iter()
                 .position(|s| matches!(s, valuation::Step::Guard(..)))
                 .unwrap();
-            assert_eq!(constraint, binder + 1, "{heuristic:?}/{split:?}");
-            assert_eq!(guard, constraint + 1, "{heuristic:?}/{split:?}");
+            assert_eq!(guard, binder + 1, "{heuristic:?}/{split:?}");
         }
     }
 }
