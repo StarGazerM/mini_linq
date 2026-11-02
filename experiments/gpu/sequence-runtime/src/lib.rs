@@ -875,14 +875,13 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-/// Release this thread's idle canonicalization and range-sort device scratch.
+/// Release this thread's idle range-sort device scratch.
 ///
 /// Call after dropping stratum-local providers, before [`Pool::release_unused`].
 /// Published results and checked-out providers retain their own allocations.
 /// Frees follow prior uses on the matching pool's stream; this does not wait
 /// for completion. Native CUDA scratch is not included in pool memory stats.
 pub fn release_cached_scratch(pool: &Arc<Pool>) {
-    canon::release_cached_scratch(pool);
     let scratch = RANGE_RADIX_WORKSPACE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache

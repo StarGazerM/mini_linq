@@ -26,7 +26,7 @@ use crate::{
     Column, Packing, Result, Word,
 };
 use cuda_core::{DeviceCopy, LaunchConfig1D};
-use gpu_device_columns::{Buffer, Pool, SourceView};
+use gpu_device_columns::{Buffer, OutputCount, Pool, SourceView};
 use rccl_cub::{DeviceArithmeticRange, DeviceMap, DeviceSliceRead, DeviceSliceWrite};
 use std::{
     any::Any,
@@ -1275,28 +1275,59 @@ pub struct RadixLayoutView<W: Word, O: OffsetWord> {
 // SAFETY: this C-layout descriptor contains only device pointers and integers.
 unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixLayoutView<W, O> {}
 
-struct RadixPublication<W: Word, O: OffsetWord, C> {
+#[doc(hidden)]
+pub struct RadixPublication<W: Word, O: OffsetWord, C> {
     snapshot: Arc<RadixSnapshot<W, O, C>>,
     // Constant per packing: a republished layout shares its predecessor's.
     fields: Arc<Buffer<PackedField>>,
     packing: Packing,
 }
 
+/// Storage selected by the recorded key carrier, independently of its schema.
+/// Typed words keep the grouped snapshot ABI; runtime-sized rows have a
+/// resident full-row set publication with implicit unit items.
+pub trait LayoutCarrier<O: OffsetWord, C: DeviceItemColumns> {
+    type Publication;
+}
+
+impl<W: Word, O: OffsetWord, C: DeviceItemColumns> LayoutCarrier<O, C> for W {
+    type Publication = RadixPublication<W, O, C>;
+}
+
+/// An encoded heading whose field schema is supplied by the upstream record.
+/// Unlike `ScalarTuple`, its arity and width are not Rust type constants.
+pub struct EncodedRow;
+
+/// Runtime-sized row-major u64 storage, least-significant lane first.
+/// This is not a typed `Word` or its most-significant-first packing ABI.
+pub struct PackedRow;
+
+#[doc(hidden)]
+pub struct PackedRowPublication {
+    keys: Arc<Buffer<u64>>,
+    metadata: Arc<Buffer<OutputCount>>,
+    capacity: usize,
+    lanes: usize,
+    key_bits: u32,
+    params: RadixRunParams,
+}
+
+impl LayoutCarrier<u64, ()> for PackedRow {
+    type Publication = PackedRowPublication;
+}
+
 /// Formal rule GPU-RadixLayout:
-/// A typed relational view over one immutable radix publication: key tuple
-/// `K` packed by a checked most-significant-first packing into whole `W`
-/// keys, value tuple `V` stored one item column per field in `C` lanes that
-/// hold each field's domain, offsets in `O`. It owns the snapshot (runs,
-/// descriptors, resident count) and field descriptors; republication over
-/// unchanged runs is this layout, otherwise it shares the field descriptors.
-/// No host synchronization constructs it; key reads take no item pointers.
-pub struct RadixLayout<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumns>
-{
-    publication: Arc<RadixPublication<W, O, C>>,
+/// An immutable relational publication selected by its ordinary key carrier.
+/// Typed `Word` layouts retain the checked key/value schemas, grouped
+/// snapshot and field descriptors. `PackedRow` layouts retain runtime-sized
+/// encoded full-row keys with one implicit unit item per distinct key and
+/// a resident count; allocation capacity never claims a live row count.
+pub struct RadixLayout<K, V, W: LayoutCarrier<O, C>, O: OffsetWord, C: DeviceItemColumns> {
+    publication: Arc<W::Publication>,
     marker: PhantomData<fn() -> (K, V)>,
 }
 
-impl<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumns> Clone
+impl<K, V, W: LayoutCarrier<O, C>, O: OffsetWord, C: DeviceItemColumns> Clone
     for RadixLayout<K, V, W, O, C>
 {
     fn clone(&self) -> Self {
@@ -1304,6 +1335,252 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word, O: OffsetWord, C: DeviceItemColumn
             publication: self.publication.clone(),
             marker: PhantomData,
         }
+    }
+}
+
+impl RadixLayout<EncodedRow, (), PackedRow, u64, ()> {
+    pub fn key_lanes(bits: u32) -> Result<usize> {
+        Ok(usize::try_from(bits.div_ceil(64).max(1))?)
+    }
+
+    fn check_set(
+        pool: &Arc<Pool>,
+        input: &Buffer<u64>,
+        rows: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<usize> {
+        params.validate()?;
+        if params.radix_bits != 0 {
+            return Err("packed row sets require the recorded no-directory policy".into());
+        }
+        if rows > u32::MAX as usize {
+            return Err("packed row set exceeds the u32 build domain".into());
+        }
+        let lanes = Self::key_lanes(key_bits)?;
+        if !pool.shares_memory(input.pool()) || rows > input.len() / lanes {
+            return Err("packed row input uses incompatible memory or exceeds capacity".into());
+        }
+        Ok(lanes)
+    }
+
+    /// Sort and deduplicate complete encoded rows without downloading a count.
+    /// Items and offsets are implicit units: row `i` has item interval `[i,i+1)`.
+    ///
+    /// # Safety
+    /// The first `rows * key_lanes(key_bits)` words must be initialized and
+    /// ready on `pool`'s stream, with zero padding above `key_bits`. Low-first
+    /// lanes encode the entire heading injectively under one shared codec.
+    /// Empty headings use one zero lane. The input must not be mutated until
+    /// this stream finishes reading it.
+    pub unsafe fn build_set(
+        pool: &Arc<Pool>,
+        input: &Buffer<u64>,
+        rows: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<Self> {
+        let lanes = Self::check_set(pool, input, rows, key_bits, params)?;
+        // Empty headings need at most one physical key, regardless of multiplicity.
+        let capacity = if key_bits == 0 { rows.min(1) } else { rows };
+        let keys =
+            Arc::new(unsafe { Buffer::<u64>::uninitialized(pool.clone(), capacity * lanes)? });
+        let metadata = Arc::new(if key_bits == 0 {
+            Buffer::from_host_async(
+                pool.clone(),
+                &[OutputCount {
+                    rows: capacity as u64,
+                    error: 0,
+                    padding: 0,
+                }],
+            )?
+        } else {
+            Buffer::<OutputCount>::zeroed(pool.clone(), 1)?
+        });
+        if rows != 0 {
+            if key_bits == 0 {
+                // A valid empty heading has exactly one possible encoded row.
+                unsafe {
+                    cuda_core::simt::memory::memset_d8_async(
+                        keys.cu_deviceptr(),
+                        0,
+                        8,
+                        pool.stream().cu_stream(),
+                    )?;
+                }
+            } else {
+                let cub = rccl_cub::cuda::Program::load(pool.context())?;
+                let launch = cub.on(pool.stream())?;
+                let mut count = Native::<u64>::new(pool, 1)?;
+                let mut compact = rccl_cub::thrust_integration::compaction_workspace_in(
+                    pool.resource(),
+                    &launch,
+                    rows,
+                )?;
+                if lanes == 1 {
+                    let sorted = runs::stable_keys(pool, &launch, input.ptr(), rows, key_bits)?;
+                    rccl_cub::thrust_integration::device_unique_copy_by(
+                        &launch,
+                        DeviceSliceRead::new(sorted.get().cu_deviceptr() as *const u64),
+                        DeviceSliceWrite::new(keys.ptr()),
+                        count.get_mut(),
+                        |a: u64, b: u64| a == b,
+                        rows,
+                        &mut compact,
+                    )?;
+                } else {
+                    let module = unsafe { runs::run_kernels::load(pool.context())? };
+                    let order = runs::stable_row_order(
+                        pool,
+                        &module,
+                        &launch,
+                        input.ptr(),
+                        rows,
+                        key_bits,
+                        false,
+                        params.block_threads,
+                    )?;
+                    let source = input.ptr() as *const u64;
+                    let output = keys.ptr();
+                    rccl_cub::thrust_integration::device_unique_copy_by(
+                        &launch,
+                        DeviceSliceRead::new(order.get().cu_deviceptr() as *const u32),
+                        rccl_cub::DeviceIndexedWrite::new(move |index, row: u32| unsafe {
+                            for lane in 0..lanes {
+                                *output.add(index * lanes + lane) =
+                                    *source.add(row as usize * lanes + lane);
+                            }
+                        }),
+                        count.get_mut(),
+                        move |a: u32, b: u32| unsafe {
+                            (0..lanes).all(|lane| {
+                                *source.add(a as usize * lanes + lane)
+                                    == *source.add(b as usize * lanes + lane)
+                            })
+                        },
+                        rows,
+                        &mut compact,
+                    )?;
+                }
+                unsafe {
+                    // OutputCount's first word is length; errors/padding stay zero.
+                    cuda_core::simt::memory::memcpy_dtod_async(
+                        metadata.cu_deviceptr(),
+                        count.get().cu_deviceptr(),
+                        8,
+                        pool.stream().cu_stream(),
+                    )?;
+                }
+            }
+        }
+        Ok(Self {
+            publication: Arc::new(PackedRowPublication {
+                keys,
+                metadata,
+                capacity,
+                lanes,
+                key_bits,
+                params,
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    /// Adopt an owned, certified sorted unique prefix without sorting or copying.
+    ///
+    /// # Safety
+    /// The first `rows` keys must obey `build_set`'s encoding/readiness contract,
+    /// be strictly increasing in complete packed-key order, and remain immutable
+    /// until all publication clones and their stream readers have been released.
+    pub unsafe fn adopt_sorted_unique(
+        pool: &Arc<Pool>,
+        keys: Arc<Buffer<u64>>,
+        rows: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<Self> {
+        Self::check_set(pool, &keys, rows, key_bits, params)?;
+        if key_bits == 0 && rows > 1 {
+            return Err("an empty heading has at most one distinct row".into());
+        }
+        let metadata = Arc::new(Buffer::from_host_async(
+            pool.clone(),
+            &[OutputCount {
+                rows: rows as u64,
+                error: 0,
+                padding: 0,
+            }],
+        )?);
+        unsafe { Self::adopt_sorted_set(pool, keys, metadata, rows, key_bits, params) }
+    }
+
+    /// Adopt a resident-count certified set, retaining both immutable owners.
+    /// No host read is needed, including when the exact count is unknown here.
+    ///
+    /// # Safety
+    /// `metadata[0]` must be ready on `pool`'s stream, have no error and a length
+    /// at most `capacity`. Exactly that prefix of `keys` must satisfy
+    /// `adopt_sorted_unique`'s sortedness, uniqueness and lifetime contract.
+    /// Both allocations must remain immutable through every reader.
+    pub unsafe fn adopt_sorted_set(
+        pool: &Arc<Pool>,
+        keys: Arc<Buffer<u64>>,
+        metadata: Arc<Buffer<OutputCount>>,
+        capacity: usize,
+        key_bits: u32,
+        params: RadixRunParams,
+    ) -> Result<Self> {
+        let lanes = Self::check_set(pool, &keys, capacity, key_bits, params)?;
+        if metadata.len() != 1 || !pool.shares_memory(metadata.pool()) {
+            return Err("packed row metadata must be one compatible resident count".into());
+        }
+        Ok(Self {
+            publication: Arc::new(PackedRowPublication {
+                keys,
+                metadata,
+                capacity,
+                lanes,
+                key_bits,
+                params,
+            }),
+            marker: PhantomData,
+        })
+    }
+
+    pub fn keys(&self) -> &Arc<Buffer<u64>> {
+        &self.publication.keys
+    }
+    pub fn metadata(&self) -> &Arc<Buffer<OutputCount>> {
+        &self.publication.metadata
+    }
+    pub fn count_ptr(&self) -> *const u64 {
+        self.metadata().ptr().cast()
+    }
+    pub fn capacity(&self) -> usize {
+        self.publication.capacity
+    }
+    pub fn lanes(&self) -> usize {
+        self.publication.lanes
+    }
+    pub fn key_bits(&self) -> u32 {
+        self.publication.key_bits
+    }
+    pub fn params(&self) -> RadixRunParams {
+        self.publication.params
+    }
+    pub fn pool(&self) -> &Arc<Pool> {
+        self.keys().pool()
+    }
+    pub fn owner(&self) -> Arc<dyn Any + Send + Sync> {
+        self.publication.clone()
+    }
+    /// Explicit diagnostic synchronization, never part of construction/adoption.
+    pub fn logical_count(&self) -> Result<usize> {
+        let count = self.metadata().to_host()?[0];
+        if count.error != 0 || count.rows > self.capacity() as u64 {
+            return Err("invalid packed row resident count".into());
+        }
+        Ok(usize::try_from(count.rows)?)
     }
 }
 

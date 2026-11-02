@@ -83,6 +83,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   named logical/codec_id/codec records, and input schemas copy those ids;
   checkers compare recorded ids without re-interning.
 
+- P4-GPU slice C replaces the packed/wide canonical stores with ordinary
+  full-row/unit-item `RadixLayout` construction and the constrained `radix_set`
+  Distinct token. Complete-key uniqueness shares stable ordering with the
+  occurrence engine; device count publication and sorted owned-prefix
+  adoption avoid a synchronizing snapshot. Checked `SetBuild` records
+  declared-field versus runtime-sized FOR width provenance and explicit
+  parameters. Canonical grouping, union and chained callers use this one
+  protocol; h06's keyless fold and CPU provider selection are unchanged.
+
 - F5: task decomposition recognizes independent union arms beneath unary
   consumers (including the canonicalization of lowered set union), publishes
   each arm separately, and concatenates/canonicalizes at host. The dispatch

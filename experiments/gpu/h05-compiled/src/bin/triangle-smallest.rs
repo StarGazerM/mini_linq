@@ -9,13 +9,13 @@
 //! authored advice (u128 words for two i64 key fields, u32 offsets, ratio 4,
 //! 16 directory bits). Per edge, GPU-Smallest counts both sides' distinct `c`
 //! exactly, enumerates the first smaller one and keeps candidates the other
-//! side contains. The full-domain `(a,b,c)` heading (192 bits) exceeds the
-//! packed canonical capability, so canonical output uses WideCanon.
+//! side contains. The full-domain `(a,b,c)` heading (192 bits) retains all
+//! three lanes in the ordinary full-row set output.
 //! `--check` compares the compiled GPU tuples with the independent CPU reference.
 //!
 //! Supported scheduling advice is recorded below: 256 lanes × 4 items becomes
 //! `tile 1024 items 4`, and range enumeration is `flatten lookup`. Canonical
-//! publication flattens the remaining tile partition before using WideCanon.
+//! publication flattens the remaining tile partition before building its full-row set.
 //! The old frontier(8), directory(rank), and output(retry) choices have no corresponding
 //! Sequence advice; they are not silently reinterpreted as another policy.
 use cq_gpu_runtime::DeviceColumns;
@@ -57,7 +57,7 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_layout = ::gpu_datalog_runtime::RadixLayout<_, _, _, _, _> { reads [exact, range, membership, candidates], build typed, abi radix }; wide_canon = ::cq_gpu_sequence_runtime::canon::WideCanon { reads [distinct], build inferred }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_layout = ::gpu_datalog_runtime::RadixLayout<_, _, _, _, _> { reads [exact, range, membership, candidates], build typed, abi radix }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
             l host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
             r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
             s host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
@@ -65,7 +65,7 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             s = @radix_layout radix { word u128; offset u32; ratio 4; radix_bits 16; merge_tile 1024 } as ::gpu_datalog_runtime::RadixLayout<(i64,i64),(i64,i64),u128,u32,(::gpu_datalog_runtime::Buffer<i64>,::gpu_datalog_runtime::Buffer<i64>)> [a][c];
             r rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
             s rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
-            checked rows = @wide_canon as ::cq_gpu_sequence_runtime::canon::WideCanon;
+            checked rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
             checked canon = rows;
         }
         sequence {

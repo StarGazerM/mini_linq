@@ -1,40 +1,22 @@
-//! Exact canonicalization of packed keys. `PackedCanon` handles up to two
-//! lanes; `WideCanon` stably radix-sorts arbitrary-width rows lane by lane.
-//! Recorded codec bounds determine the lane count before dispatch.
+//! Device-column adapters for runtime-sized, low-lane-first packed rows.
 
 use crate::{Auxiliary, Geometry, Result};
 use cq_gpu_runtime::{Bounds, Buffer, DeviceColumns, Dictionary, EncodedColumn, Pool, RowCodec};
-use cuda_core::{CudaContext, DeviceBuffer, DeviceCopy};
+use cuda_core::{CudaContext, DeviceCopy};
+use gpu_datalog_runtime::{
+    radix_run::{EncodedRow, PackedRow},
+    RadixLayout,
+};
 use gpu_device_columns::{ColumnView, OutputCount, Table};
-use rccl_cub::{DeviceRadixSortBufferWorkspace, DoubleBuffer};
-use rccl_thrust::prelude::*;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 thread_local! {
-    static CACHED_SCRATCH: RefCell<Option<CanonScratch>> = const { RefCell::new(None) };
     static CACHED_KERNELS: RefCell<Option<(Arc<CudaContext>, Rc<canon_kernels::LoadedModule>)>> =
         const { RefCell::new(None) };
 }
 
 pub(crate) fn release_query_cache() {
-    CACHED_SCRATCH.with(|cache| cache.borrow_mut().take());
     CACHED_KERNELS.with(|cache| cache.borrow_mut().take());
-}
-
-pub(crate) fn release_cached_scratch(pool: &Arc<Pool>) {
-    let scratch = CACHED_SCRATCH.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache
-            .as_ref()
-            .is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool))
-        {
-            cache.take()
-        } else {
-            None
-        }
-    });
-    // CanonScratch frees all native buffers on the pool's owning stream.
-    drop(scratch);
 }
 
 fn module(pool: &Pool) -> Result<Rc<canon_kernels::LoadedModule>> {
@@ -48,78 +30,6 @@ fn module(pool: &Pool) -> Result<Rc<canon_kernels::LoadedModule>> {
         *cache.borrow_mut() = Some((pool.context().clone(), module.clone()));
         Ok(module)
     })
-}
-
-// Only owned resources cross invocations. Programs still borrow the caller's
-// pool, and each checked-out scratch set has exclusive access on its stream.
-struct CanonScratch {
-    pool: Arc<Pool>,
-    sort: DeviceRadixSortBufferWorkspace,
-    selected: Option<DeviceBuffer<u64>>,
-    first: Option<DeviceBuffer<u64>>,
-    alternate: Option<DeviceBuffer<u64>>,
-    wide: Option<DeviceBuffer<u128>>,
-    pair_sort: Option<DeviceRadixSortBufferWorkspace>,
-    indices: Option<DeviceBuffer<u32>>,
-    alternate_indices: Option<DeviceBuffer<u32>>,
-    capacity: usize,
-}
-
-impl CanonScratch {
-    fn prepare_keys(&mut self, rows: usize) -> Result<()> {
-        // DoubleBuffer uses each allocation's full length as the live sort
-        // domain. Keep exact extents rather than sorting spare capacity.
-        for buffer in [&mut self.first, &mut self.alternate] {
-            if buffer.as_ref().is_none_or(|buffer| buffer.len() != rows) {
-                let replacement =
-                    unsafe { DeviceBuffer::uninitialized_async(self.pool.stream(), rows)? };
-                if let Some(previous) = buffer.replace(replacement) {
-                    unsafe { previous.drop_async(self.pool.stream())? };
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Drop for CanonScratch {
-    fn drop(&mut self) {
-        // RCCL exposes mutable control buffers but not consuming decomposition.
-        // Empty replacements allocate nothing; all real frees follow their
-        // last use on the retained pool's stream, even after a context change.
-        fn release<T: DeviceCopy>(pool: &Pool, buffer: &mut DeviceBuffer<T>) {
-            let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }
-                .expect("zero-length device buffer needs no allocation");
-            let buffer = std::mem::replace(buffer, empty);
-            let _ = unsafe { buffer.drop_async(pool.stream()) };
-        }
-        let (bins, lookback, counters) = self.sort.__parts_mut();
-        release(&self.pool, bins);
-        release(&self.pool, lookback);
-        release(&self.pool, counters);
-        if let Some(sort) = self.pair_sort.as_mut() {
-            let (bins, lookback, counters) = sort.__parts_mut();
-            release(&self.pool, bins);
-            release(&self.pool, lookback);
-            release(&self.pool, counters);
-        }
-        for buffer in [&mut self.indices, &mut self.alternate_indices] {
-            if let Some(buffer) = buffer.take() {
-                let _ = unsafe { buffer.drop_async(self.pool.stream()) };
-            }
-        }
-        if let Some(selected) = self.selected.take() {
-            let _ = unsafe { selected.drop_async(self.pool.stream()) };
-        }
-        for buffer in [&mut self.first, &mut self.alternate] {
-            if let Some(buffer) = buffer.take() {
-                let _ = unsafe { buffer.drop_async(self.pool.stream()) };
-            }
-        }
-        if let Some(buffer) = self.wide.take() {
-            let _ = unsafe { buffer.drop_async(self.pool.stream()) };
-        }
-    }
 }
 
 /// One recorded field in a packed key. Its decoded value is
@@ -148,461 +58,11 @@ impl PackedField {
     }
 }
 
-/// Reusable RCCL programs, sort controls and count scratch on one runtime pool.
-/// The fixed capacity is supplied by generated host code, not chosen here.
-/// Sort/count and exact-live-size key scratch are cached per thread across
-/// providers sharing the same pool, until [`crate::release_cached_scratch`].
-/// Sort controls reuse a larger allocation when it fits; results own their
-/// allocations and survive provider reuse or cache release. The recorded
-/// `canon` family geometry travels with each result to its unpack launch.
-pub struct PackedCanon<'pool> {
-    pool: &'pool Arc<Pool>,
-    cub: rccl_cub::cuda::Program<'pool>,
-    thrust: rccl_thrust::cuda::Program<'pool>,
-    scratch: Option<CanonScratch>,
-    capacity: usize,
-    geometry: Geometry,
-}
-
-impl<'pool> PackedCanon<'pool> {
-    pub const MAX_PACKED_BITS: u32 = 128;
-
-    /// Select the physical width during setup, before allocating or packing keys.
-    pub fn key_lanes(key_bits: u32) -> Result<usize> {
-        if key_bits > Self::MAX_PACKED_BITS {
-            return Err("packed canon key exceeds its 128-bit capability".into());
-        }
-        Ok(if key_bits > 64 { 2 } else { 1 })
-    }
-
-    pub fn field_lanes(fields: &[PackedField]) -> Result<usize> {
-        let mut bits = 0;
-        for field in fields {
-            field.bounds()?;
-            bits = bits.max(field.shift + field.bits);
-        }
-        Self::key_lanes(bits)
-    }
-    pub fn new(pool: &'pool Arc<Pool>, capacity: usize, geometry: Geometry) -> Result<Self> {
-        geometry.check("canon", Auxiliary::SUPPORTED.canon)?;
-        if capacity > u32::MAX as usize {
-            return Err("packed canon capacity exceeds u32::MAX".into());
-        }
-        let scratch = CACHED_SCRATCH.with(|cache| cache.borrow_mut().take());
-        let scratch = scratch
-            .filter(|scratch| Arc::ptr_eq(&scratch.pool, pool) && scratch.capacity >= capacity);
-        // Disposing a cache from another context binds that context for its
-        // asynchronous frees. Restore the requested context before allocation.
-        pool.context().bind_to_thread()?;
-        let cub = rccl_cub::cuda::Program::load(pool.context())?;
-        let thrust = rccl_thrust::cuda::Program::load(pool.context())?;
-        let scratch = match scratch {
-            Some(scratch) => scratch,
-            None => {
-                let sort = rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(
-                    &cub.on(pool.stream())?,
-                    capacity,
-                )?;
-                let mut scratch = CanonScratch {
-                    pool: pool.clone(),
-                    sort,
-                    selected: None,
-                    first: None,
-                    alternate: None,
-                    wide: None,
-                    pair_sort: None,
-                    indices: None,
-                    alternate_indices: None,
-                    capacity,
-                };
-                scratch.selected =
-                    Some(unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 1)? });
-                scratch
-            }
-        };
-        Ok(Self {
-            pool,
-            cub,
-            thrust,
-            scratch: Some(scratch),
-            capacity,
-            geometry,
-        })
-    }
-
-    pub fn pool(&self) -> &Arc<Pool> {
-        self.pool
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    /// Sort the live prefix and retain each distinct complete packed key once.
-    /// The input is not modified. The returned count stays on the device;
-    /// `CanonicalKeys::logical_count` is an explicit optional host readback.
-    /// RCCL requires native scratch buffers; result storage and metadata use
-    /// the runtime pool, and all work is ordered on that pool's stream.
-    ///
-    /// # Safety
-    /// `input[0..rows * key_lanes(key_bits)]` must be initialized on the pool
-    /// stream and remain immutable until the submitted work completes. Each
-    /// row stores its low lane first, followed by its high lane for wide keys.
-    /// Every key must fit in `key_bits` low bits (zero bits means all keys are zero).
-    /// Packing must encode the entire equality key without collisions. Unused capacity is
-    /// never read. Input and provider must share the identical pool.
-    pub unsafe fn canonicalize(
-        &mut self,
-        input: &Buffer<u64>,
-        rows: usize,
-        key_bits: u32,
-    ) -> Result<CanonicalKeys> {
-        if !Arc::ptr_eq(&self.pool, input.pool()) {
-            return Err("packed canon input must share the provider pool and stream".into());
-        }
-        let lanes = Self::key_lanes(key_bits)?;
-        if rows > input.len() / lanes || rows > self.capacity {
-            return Err("packed canon live length exceeds input or provider capacity".into());
-        }
-        let keys = unsafe { Buffer::<u64>::uninitialized(self.pool.clone(), rows * lanes)? };
-        let metadata = Arc::new(Buffer::<OutputCount>::zeroed(self.pool.clone(), 1)?);
-        if rows != 0 && lanes == 2 {
-            let scratch = self.scratch.as_mut().expect("live packed canon scratch");
-            if scratch
-                .wide
-                .as_ref()
-                .is_none_or(|buffer| buffer.len() != rows)
-            {
-                let replacement =
-                    unsafe { DeviceBuffer::<u128>::uninitialized_async(self.pool.stream(), rows)? };
-                if let Some(previous) = scratch.wide.replace(replacement) {
-                    unsafe { previous.drop_async(self.pool.stream())? };
-                }
-            }
-            let wide = scratch.wide.as_mut().expect("wide canon scratch");
-            let selected = scratch
-                .selected
-                .as_mut()
-                .expect("packed canon count scratch");
-            unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(
-                    wide.cu_deviceptr(),
-                    input.cu_deviceptr(),
-                    rows * std::mem::size_of::<u128>(),
-                    self.pool.stream().cu_stream(),
-                )?;
-            }
-            let execution = self
-                .thrust
-                .par_in(self.pool.stream(), self.pool.resource())?;
-            wide.sort_unstable_by(&execution, |a: &u128, b: &u128| a.cmp(b))?;
-            let output = keys.ptr();
-            rccl_thrust::unique_copy_by(
-                &execution,
-                wide.view(),
-                rccl_thrust::indexed_output(rows, move |index, value: u128| unsafe {
-                    output.add(index * 2).write(value as u64);
-                    output.add(index * 2 + 1).write((value >> 64) as u64);
-                }),
-                selected,
-                |a: u128, b: u128| a == b,
-            )?;
-            unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(
-                    metadata.cu_deviceptr(),
-                    selected.cu_deviceptr(),
-                    std::mem::size_of::<u64>(),
-                    self.pool.stream().cu_stream(),
-                )?;
-            }
-        } else if rows != 0 {
-            let scratch = self.scratch.as_mut().expect("live packed canon scratch");
-            scratch.prepare_keys(rows)?;
-            let selected = scratch
-                .selected
-                .as_mut()
-                .expect("packed canon count scratch");
-            let stream = self.pool.stream();
-            let first = scratch.first.as_mut().expect("packed canon first scratch");
-            let alternate = scratch
-                .alternate
-                .as_mut()
-                .expect("packed canon alternate scratch");
-            unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(
-                    first.cu_deviceptr(),
-                    input.cu_deviceptr(),
-                    rows * std::mem::size_of::<u64>(),
-                    stream.cu_stream(),
-                )?;
-            }
-            let launch = self.cub.on(stream)?;
-            let execution = self.thrust.par_in(stream, self.pool.resource())?;
-            let mut buffers = DoubleBuffer::new(first, alternate)
-                .ok_or("packed canon radix buffer extents differ")?;
-            if key_bits != 0 {
-                rccl_cub::device_radix_sort_keys_buffer(
-                    &launch,
-                    &mut buffers,
-                    0..key_bits,
-                    &mut scratch.sort,
-                )?;
-            }
-            let output = keys.ptr();
-            rccl_thrust::unique_copy_by(
-                &execution,
-                buffers.current().view(),
-                rccl_thrust::indexed_output(rows, move |index, value: u64| unsafe {
-                    output.add(index).write(value);
-                }),
-                selected,
-                |a: u64, b: u64| a == b,
-            )?;
-            unsafe {
-                // OutputCount starts with the logical u64 row count. The
-                // zeroed error/padding words remain untouched.
-                cuda_core::simt::memory::memcpy_dtod_async(
-                    metadata.cu_deviceptr(),
-                    selected.cu_deviceptr(),
-                    std::mem::size_of::<u64>(),
-                    stream.cu_stream(),
-                )?;
-            }
-        }
-        Ok(CanonicalKeys {
-            keys: Arc::new(keys),
-            metadata,
-            lanes,
-            geometry: self.geometry,
-        })
-    }
-}
-
-impl Drop for PackedCanon<'_> {
-    fn drop(&mut self) {
-        let mut scratch = self.scratch.take();
-        // try_with also handles a provider dropped during TLS destruction.
-        // Leave any displaced resource outside the RefCell borrow for cleanup.
-        let _ = CACHED_SCRATCH.try_with(|cache| {
-            let mut cached = cache.borrow_mut();
-            let keep_cached = cached.as_ref().is_some_and(|cached| {
-                scratch.as_ref().is_some_and(|scratch| {
-                    Arc::ptr_eq(&cached.pool, &scratch.pool) && cached.capacity >= scratch.capacity
-                })
-            });
-            if !keep_cached {
-                std::mem::swap(&mut *cached, &mut scratch);
-            }
-        });
-        if let Some(scratch) = scratch {
-            drop(scratch);
-            // A displaced cache may have belonged to a different context.
-            let _ = self.pool.context().bind_to_thread();
-        }
-    }
-}
-
-/// Arbitrary-width instance of the canon law, using stable least-significant
-/// lane radix passes over row indices and full-row adjacent equality.
-/// Lane gathers launch with the recorded `canon` family geometry.
-pub struct WideCanon<'pool> {
-    inner: PackedCanon<'pool>,
-}
-
-impl<'pool> WideCanon<'pool> {
-    pub fn key_lanes(key_bits: u32) -> Result<usize> {
-        Ok((key_bits as usize).div_ceil(64).max(1))
-    }
-
-    pub fn field_lanes(fields: &[PackedField]) -> Result<usize> {
-        let mut bits = 0;
-        for field in fields {
-            field.bounds()?;
-            bits = bits.max(field.shift + field.bits);
-        }
-        Self::key_lanes(bits)
-    }
-
-    pub fn new(pool: &'pool Arc<Pool>, capacity: usize, geometry: Geometry) -> Result<Self> {
-        Ok(Self {
-            inner: PackedCanon::new(pool, capacity, geometry)?,
-        })
-    }
-
-    /// Sort complete rows into ascending packed-key order, retaining one copy.
-    ///
-    /// # Safety
-    /// The same initialized-prefix, encoding and stream requirements as
-    /// `PackedCanon::canonicalize` apply, with `WideCanon::key_lanes`.
-    // Formal rule GPU-WideCanon: Stable radix passes preserve complete packed-row equality, an instance of BE-Canon.
-    pub unsafe fn canonicalize(
-        &mut self,
-        input: &Buffer<u64>,
-        rows: usize,
-        key_bits: u32,
-    ) -> Result<CanonicalKeys> {
-        let pool = self.inner.pool;
-        let lanes = Self::key_lanes(key_bits)?;
-        if !Arc::ptr_eq(pool, input.pool()) {
-            return Err("wide canon input must share the provider pool and stream".into());
-        }
-        if rows > input.len() / lanes || rows > self.inner.capacity {
-            return Err("wide canon live length exceeds input or provider capacity".into());
-        }
-        let keys = Arc::new(unsafe { Buffer::<u64>::uninitialized(pool.clone(), rows * lanes)? });
-        let metadata = Arc::new(Buffer::<OutputCount>::zeroed(pool.clone(), 1)?);
-        if rows != 0 {
-            let scratch = self.inner.scratch.as_mut().expect("live canon scratch");
-            scratch.prepare_keys(rows)?;
-            for buffer in [&mut scratch.indices, &mut scratch.alternate_indices] {
-                if buffer.as_ref().is_none_or(|buffer| buffer.len() != rows) {
-                    let replacement =
-                        unsafe { DeviceBuffer::uninitialized_async(pool.stream(), rows)? };
-                    if let Some(previous) = buffer.replace(replacement) {
-                        unsafe { previous.drop_async(pool.stream())? };
-                    }
-                }
-            }
-            let launch = self.inner.cub.on(pool.stream())?;
-            if scratch.pair_sort.is_none() {
-                scratch.pair_sort = Some(rccl_cub::device_radix_sort_pairs_buffer_workspace::<
-                    u64,
-                    u32,
-                >(&launch, scratch.capacity)?);
-            }
-            let workspace = scratch.pair_sort.as_mut().expect("wide radix controls");
-            let first = scratch.first.as_mut().expect("first lane scratch");
-            let second = scratch.alternate.as_mut().expect("alternate lane scratch");
-            let indices = scratch.indices.as_mut().expect("first row scratch");
-            let alternate = scratch
-                .alternate_indices
-                .as_mut()
-                .expect("alternate row scratch");
-            let mut buffers = DoubleBuffer::paired((first, indices), (second, alternate))
-                .ok_or("wide canon radix buffer extents differ")?;
-            let geometry = self.inner.geometry;
-            let module = module(pool)?;
-            let shape = module.prepare_gather_lane(geometry.config(1))?;
-            let grid = geometry.grid(shape.function(), rows)?;
-            let prepared = module.prepare_gather_lane(geometry.config(grid))?;
-            for lane in 0..lanes {
-                let (values, order) = buffers.current_mut();
-                module.gather_lane(
-                    pool.stream(),
-                    &prepared,
-                    input.ptr(),
-                    values.cu_deviceptr() as *mut u64,
-                    order.cu_deviceptr() as *mut u32,
-                    rows as u32,
-                    lanes as u32,
-                    lane as u32,
-                )?;
-                rccl_cub::device_radix_sort_pairs_buffer(&launch, &mut buffers, 0..64, workspace)?;
-            }
-            let execution = self.inner.thrust.par_in(pool.stream(), pool.resource())?;
-            let selected = scratch.selected.as_mut().expect("canon count scratch");
-            let source = input.ptr();
-            let output = keys.ptr();
-            rccl_thrust::unique_copy_by(
-                &execution,
-                buffers.current().1.view(),
-                rccl_thrust::indexed_output(rows, move |index, row: u32| unsafe {
-                    for lane in 0..lanes {
-                        output
-                            .add(index * lanes + lane)
-                            .write(*source.add(row as usize * lanes + lane));
-                    }
-                }),
-                selected,
-                move |a: u32, b: u32| unsafe {
-                    (0..lanes).all(|lane| {
-                        *source.add(a as usize * lanes + lane)
-                            == *source.add(b as usize * lanes + lane)
-                    })
-                },
-            )?;
-            unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(
-                    metadata.cu_deviceptr(),
-                    selected.cu_deviceptr(),
-                    std::mem::size_of::<u64>(),
-                    pool.stream().cu_stream(),
-                )?;
-            }
-        }
-        Ok(CanonicalKeys {
-            keys,
-            metadata,
-            lanes,
-            geometry: self.inner.geometry,
-        })
-    }
-}
-
-/// Owning, ascending distinct packed keys in row-major, low-lane-first storage.
-/// Only the first `*count_ptr()` rows are live; capacity is an allocation bound.
-/// Retains its provider's recorded `canon` geometry for unpacking.
-pub struct CanonicalKeys {
-    keys: Arc<Buffer<u64>>,
-    metadata: Arc<Buffer<OutputCount>>,
-    lanes: usize,
-    geometry: Geometry,
-}
-
-impl CanonicalKeys {
-    /// Borrow storage for count-gated generated kernels. The tail is uninitialized.
-    pub fn keys(&self) -> &Arc<Buffer<u64>> {
-        &self.keys
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.keys.len() / self.lanes
-    }
-
-    pub fn lanes(&self) -> usize {
-        self.lanes
-    }
-    pub fn count_ptr(&self) -> *const u64 {
-        self.metadata.ptr().cast()
-    }
-
-    pub fn metadata(&self) -> &Arc<Buffer<OutputCount>> {
-        &self.metadata
-    }
-
-    /// Explicitly synchronize and download the logical count, never key data.
-    pub fn logical_count(&self) -> Result<usize> {
-        Ok(usize::try_from(self.metadata.to_host()?[0].rows)?)
-    }
-
-    /// Unpack the recorded fields into native i64 columns on the same stream.
-    /// The output retains its own device count, dictionary and ancestor status
-    /// owners, independently of the packed result and provider. No key data or
-    /// logical count is downloaded. Metadata and descriptor uploads are
-    /// stream ordered and do not synchronize the host.
-    ///
-    /// Field values must use the supplied dictionary's encoding for any
-    /// dictionary-valued columns. `statuses` must include all consumed ancestor
-    /// failures; they are preserved for DeviceColumns' normal host validation.
-    /// Unpacking launches with the producing provider's `canon` geometry.
-    // DECODE V: packed answers expand into resident columns usable by chained queries; P6 retain packed fields until an allowed read.
-    pub fn into_columns<'data, Row: RowCodec<'data>>(
-        self,
-        fields: &[PackedField],
-        dictionary: Arc<Dictionary<'data>>,
-        statuses: Vec<Arc<Buffer<OutputCount>>>,
-    ) -> Result<DeviceColumns<'data, Row>> {
-        PackedColumnsAdapter::new(self.keys.pool().clone(), fields.len(), self.geometry)?
-            // DECODE V: into_columns invokes device expansion before host publication; P6 preserve the packed view.
-            .unpack_columns(self, fields, dictionary, statuses)
-    }
-}
-
 /// Adapt a live prefix of packed rows without sorting or removing duplicates.
 /// Row order and multiplicity are preserved; this function makes no canonical
 /// or distinctness claim. The initialized prefix must be ready on the keys'
-/// pool stream. Field values and ancestor statuses follow the same contracts
-/// as `CanonicalKeys::into_columns`, including the recorded `canon` geometry.
+/// pool stream. Dictionary-valued fields must use the supplied dictionary's
+/// encoding, and statuses must retain all consumed ancestor failures.
 // DECODE V: packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields.
 pub fn packed_columns<'data, Row: RowCodec<'data>>(
     keys: Buffer<u64>,
@@ -615,6 +75,15 @@ pub fn packed_columns<'data, Row: RowCodec<'data>>(
     PackedColumnsAdapter::new(keys.pool().clone(), fields.len(), geometry)?
         // DECODE V: packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion.
         .packed_columns(keys, rows, fields, dictionary, statuses)
+}
+
+fn field_lanes(fields: &[PackedField]) -> Result<usize> {
+    let mut bits = 0;
+    for field in fields {
+        field.bounds()?;
+        bits = bits.max(field.shift + field.bits);
+    }
+    RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)
 }
 
 /// Setup-time unpacking resources for one output width and runtime pool.
@@ -655,7 +124,8 @@ impl PackedColumnsAdapter {
     }
 
     /// Adapt a live prefix without changing its order or multiplicity.
-    /// Fields and ancestor statuses follow `CanonicalKeys::into_columns`.
+    /// Dictionary-valued fields use the supplied dictionary's encoding;
+    /// statuses retain all consumed ancestor failures.
     // DECODE V: packed adapter expands the live prefix before possible chained relations; P6 keep its encoded view.
     pub fn packed_columns<'data, Row: RowCodec<'data>>(
         &mut self,
@@ -665,7 +135,7 @@ impl PackedColumnsAdapter {
         dictionary: Arc<Dictionary<'data>>,
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
-        let lanes = WideCanon::field_lanes(fields)?;
+        let lanes = field_lanes(fields)?;
         if rows > keys.len() / lanes {
             return Err("packed output live length exceeds key capacity".into());
         }
@@ -697,7 +167,7 @@ impl PackedColumnsAdapter {
     // DECODE V: canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields.
     pub fn unpack_columns<'data, Row: RowCodec<'data>>(
         &mut self,
-        keys: CanonicalKeys,
+        keys: RadixLayout<EncodedRow, (), PackedRow, u64, ()>,
         fields: &[PackedField],
         dictionary: Arc<Dictionary<'data>>,
         statuses: Vec<Arc<Buffer<OutputCount>>>,
@@ -705,9 +175,9 @@ impl PackedColumnsAdapter {
         let capacity = keys.capacity();
         // DECODE V: canonical unpack delegates eager device expansion; P6 publish a packed resident view.
         self.decode_columns(
-            &keys.keys,
-            keys.lanes,
-            keys.metadata,
+            keys.keys(),
+            keys.lanes(),
+            keys.metadata().clone(),
             capacity,
             fields,
             dictionary,
@@ -815,31 +285,6 @@ fn upload_unique<T: DeviceCopy>(slot: &mut Arc<Buffer<T>>, values: &[T]) -> Resu
 #[cuda_device::cuda_module]
 mod canon_kernels {
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn gather_lane(
-        input: *const u64,
-        values: *mut u64,
-        order: *mut u32,
-        rows: u32,
-        lanes: u32,
-        lane: u32,
-    ) {
-        let mut index = thread::index_1d().get() as usize;
-        let stride = thread::gridDim_x() as usize * 256;
-        while index < rows as usize {
-            unsafe {
-                if lane == 0 {
-                    *order.add(index) = index as u32;
-                }
-                *values.add(index) =
-                    *input.add(*order.add(index) as usize * lanes as usize + lane as usize);
-            }
-            index += stride;
-        }
-    }
 
     /// Unpack only initialized packed rows, leaving spare capacity unread.
     #[kernel]

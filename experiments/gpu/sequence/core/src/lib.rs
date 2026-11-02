@@ -148,8 +148,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
     );
     // Formal rule PL-Distinct: the device sort/unique build of a canonical
     // rows record. Its scan is the publication itself.
-    catalog.register(providers::declaration("packed_canon"), levels.clone());
-    catalog.register(providers::declaration("wide_canon"), levels.clone());
+    catalog.register(providers::declaration("radix_set"), levels.clone());
     // `None` is the identity representation of columns without a declared codec.
     catalog.codecs = vec![CodecToken {
         codec_id: None,

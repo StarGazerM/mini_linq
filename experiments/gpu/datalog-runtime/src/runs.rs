@@ -327,33 +327,11 @@ impl<W: Word> DeviceRuns<W> {
             ))
         };
         if W::BITS == 64 {
-            let mut first = Native::<u64>::new(&self.pool, rows)?;
-            let mut alternate = Native::<u64>::new(&self.pool, rows)?;
-            // SAFETY: input is initialized; the destination is disjoint and same-width.
-            unsafe {
-                cuda_core::simt::memory::memcpy_dtod_async(
-                    first.get().cu_deviceptr(),
-                    input.cu_deviceptr(),
-                    rows * 8,
-                    self.pool.stream().cu_stream(),
-                )?;
-            }
-            let mut controls = RadixScratch {
-                workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(&launch, rows)?,
-                pool: self.pool.clone(),
-            };
-            let mut buffers = rccl_cub::DoubleBuffer::new(first.get_mut(), alternate.get_mut())
-                .ok_or("unequal sort buffers")?;
-            rccl_cub::device_radix_sort_keys_buffer(
-                &launch,
-                &mut buffers,
-                0..64,
-                &mut controls.workspace,
-            )?;
+            let sorted = stable_keys(&self.pool, &launch, input.ptr().cast(), rows, 64)?;
             if let Some((count, compact)) = &mut compaction {
                 rccl_cub::thrust_integration::device_unique_copy_by(
                     &launch,
-                    DeviceSliceRead::new(buffers.current().cu_deviceptr() as *const u64),
+                    DeviceSliceRead::new(sorted.get().cu_deviceptr() as *const u64),
                     DeviceSliceWrite::new(output.ptr().cast::<u64>()),
                     count.get_mut(),
                     |a: u64, b: u64| a == b,
@@ -365,7 +343,7 @@ impl<W: Word> DeviceRuns<W> {
                 unsafe {
                     cuda_core::simt::memory::memcpy_dtod_async(
                         output.cu_deviceptr(),
-                        buffers.current().cu_deviceptr(),
+                        sorted.get().cu_deviceptr(),
                         rows * 8,
                         self.pool.stream().cu_stream(),
                     )?;
@@ -398,7 +376,7 @@ impl<W: Word> DeviceRuns<W> {
                     compact,
                 )?;
             } else {
-                let initial = self.module.prepare_gather_lane::<W>(LaunchConfig1D::new(
+                let initial = self.module.prepare_gather_sorted::<W>(LaunchConfig1D::new(
                     1,
                     self.params.block_threads,
                     0,
@@ -663,6 +641,34 @@ pub(crate) fn stable_order<W: Word>(
     rows: usize,
     block_threads: u32,
 ) -> Result<Native<u32>> {
+    stable_row_order(
+        pool,
+        module,
+        launch,
+        input.ptr().cast(),
+        rows,
+        W::BITS,
+        W::MS_FIRST,
+        block_threads,
+    )
+}
+
+/// Stable row ordering shared by typed words and runtime-sized encoded rows.
+/// `bits` records all significant bits; padding above it must be zero.
+pub(crate) fn stable_row_order(
+    pool: &Arc<Pool>,
+    module: &run_kernels::LoadedModule,
+    launch: &rccl_cub::cuda::Launch<'_, '_>,
+    input: *const u64,
+    rows: usize,
+    bits: u32,
+    ms_first: bool,
+    block_threads: u32,
+) -> Result<Native<u32>> {
+    if rows > u32::MAX as usize || bits == 0 || block_threads != 256 {
+        return Err("invalid stable row sort dimensions or launch width".into());
+    }
+    let lanes = bits.div_ceil(64);
     let mut first = Native::<u64>::new(pool, rows)?;
     let mut alternate = Native::<u64>::new(pool, rows)?;
     let mut indices = Native::<u32>::new(pool, rows)?;
@@ -677,31 +683,32 @@ pub(crate) fn stable_order<W: Word>(
             (alternate.get_mut(), alternate_indices.get_mut()),
         )
         .ok_or("unequal lane radix buffers")?;
-        let initial = module.prepare_gather_lane::<W>(LaunchConfig1D::new(1, block_threads, 0))?;
+        let initial = module.prepare_gather_lane(LaunchConfig1D::new(1, block_threads, 0))?;
         let grid = cq_gpu_runtime::launch_grid_for_kernel(
             initial.function(),
             rows.div_ceil(block_threads as usize),
             block_threads,
             0,
         )?;
-        let prepared =
-            module.prepare_gather_lane::<W>(LaunchConfig1D::new(grid, block_threads, 0))?;
+        let prepared = module.prepare_gather_lane(LaunchConfig1D::new(grid, block_threads, 0))?;
         // Stable least-significant-lane passes retain full-row order.
-        for lane in 0..W::BITS / 64 {
+        for lane in 0..lanes {
             let (values, order) = buffers.current_mut();
-            module.gather_lane::<W>(
+            module.gather_lane(
                 pool.stream(),
                 &prepared,
-                input.ptr(),
+                input,
                 rows as u32,
                 lane,
+                lanes,
+                ms_first,
                 values.cu_deviceptr() as *mut u64,
                 order.cu_deviceptr() as *mut u32,
             )?;
             rccl_cub::device_radix_sort_pairs_buffer(
                 launch,
                 &mut buffers,
-                0..64,
+                0..(bits - lane * 64).min(64),
                 &mut controls.workspace,
             )?;
         }
@@ -712,6 +719,46 @@ pub(crate) fn stable_order<W: Word>(
         indices
     } else {
         alternate_indices
+    })
+}
+
+/// Direct stable scalar sort: no row-index permutation or gather is needed.
+pub(crate) fn stable_keys(
+    pool: &Arc<Pool>,
+    launch: &rccl_cub::cuda::Launch<'_, '_>,
+    input: *const u64,
+    rows: usize,
+    bits: u32,
+) -> Result<Native<u64>> {
+    let mut first = Native::<u64>::new(pool, rows)?;
+    let mut alternate = Native::<u64>::new(pool, rows)?;
+    unsafe {
+        cuda_core::simt::memory::memcpy_dtod_async(
+            first.get().cu_deviceptr(),
+            input as u64,
+            rows * 8,
+            pool.stream().cu_stream(),
+        )?;
+    }
+    let mut controls = RadixScratch {
+        workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, rows)?,
+        pool: pool.clone(),
+    };
+    let current = {
+        let mut buffers = rccl_cub::DoubleBuffer::new(first.get_mut(), alternate.get_mut())
+            .ok_or("unequal scalar radix buffers")?;
+        rccl_cub::device_radix_sort_keys_buffer(
+            launch,
+            &mut buffers,
+            0..bits,
+            &mut controls.workspace,
+        )?;
+        buffers.current().cu_deviceptr()
+    };
+    Ok(if current == first.get().cu_deviceptr() {
+        first
+    } else {
+        alternate
     })
 }
 
@@ -814,17 +861,18 @@ pub(crate) mod run_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn gather_lane<W: Word>(
-        input: *const W,
+    pub fn gather_lane(
+        input: *const u64,
         rows: u32,
         lane: u32,
+        lanes: u32,
+        ms_first: bool,
         values: *mut u64,
         order: *mut u32,
     ) {
         let mut row = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
-        let lanes = W::BITS / 64;
-        let physical = if W::MS_FIRST { lanes - 1 - lane } else { lane };
+        let physical = if ms_first { lanes - 1 - lane } else { lane };
         while row < rows as usize {
             let source = if lane == 0 {
                 row as u32
@@ -833,9 +881,7 @@ pub(crate) mod run_kernels {
             };
             unsafe {
                 *order.add(row) = source;
-                *values.add(row) = *input
-                    .cast::<u64>()
-                    .add(source as usize * lanes as usize + physical as usize);
+                *values.add(row) = *input.add(source as usize * lanes as usize + physical as usize);
             }
             row += stride;
         }

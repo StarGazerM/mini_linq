@@ -35,9 +35,9 @@ fn translates_grouped_canonical_publication() {
             grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
             return grouped as answer(k,n,total,low,high);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
             r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-            r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            r rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
             r canon = rows;
             grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
             grouped group = @group_map as ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
@@ -60,7 +60,7 @@ fn translates_grouped_canonical_publication() {
     let segmented: syn::Type = syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup);
     assert_eq!(analysis.structures.groups["grouped"].ty, segmented);
     assert_eq!(fold_providers(&expression), vec![Some(segmented)], "{code}");
-    assert!(code.contains("canonicalize"));
+    assert!(code.contains("build_set"));
     assert!(code.contains("valid [3usize]"));
 }
 
@@ -84,9 +84,9 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
                 grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
                 return grouped as answer(k,n,total,low,high);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
                 r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-                r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 r canon = rows;
                 grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group = @group_map as ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
@@ -139,9 +139,9 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
                 };
                 return grouped as answer(k,n,total,low,high);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
                 r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,i64)> [];
-                f rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                f rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 f canon = rows;
                 grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group = @group_map as ::std::collections::HashMap<_, (usize, i64, Option<i64>, Option<i64>)>;
@@ -187,9 +187,9 @@ fn whole_input_fold_combines_block_partials_including_empty_identity() -> Result
                 r = let canon rename R@0 {a -> a};
                 return r as answer(a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                r rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                r rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 r canon = rows;
             }
             sequence {

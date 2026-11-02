@@ -735,3 +735,219 @@ fn layout_schemas_are_checked_against_their_carriers() -> Result {
     );
     Ok(())
 }
+
+type PackedSet = RadixLayout<
+    gpu_datalog_runtime::radix_run::EncodedRow,
+    (),
+    gpu_datalog_runtime::radix_run::PackedRow,
+    u64,
+    (),
+>;
+
+fn set_params() -> RadixRunParams {
+    RadixRunParams {
+        ratio: 4,
+        radix_bits: 0,
+        merge_tile_rows: 1024,
+        block_threads: 256,
+    }
+}
+
+/// GPU-RadixSet: full-key equality includes high and middle lanes, including
+/// widths above 128 bits and a partially populated most-significant lane.
+#[test]
+fn packed_row_sets_deduplicate_complete_runtime_sized_keys() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    for bits in [1, 64, 65, 128, 129, 192, 257] {
+        let lanes = PackedSet::key_lanes(bits)?;
+        let mut random = Random(0x99a1_534e_7652_1234);
+        let mut rows = Vec::new();
+        for index in 0..137 {
+            let mut row = vec![0_u64; lanes];
+            // Fix the low lane on wide inputs so only the other lanes
+            // distinguish keys; include all-zero and maximum legal keys.
+            for (lane, value) in row.iter_mut().enumerate() {
+                *value = if index == 0 {
+                    0
+                } else if index == 1 {
+                    u64::MAX
+                } else if lane == 0 && lanes > 1 {
+                    7
+                } else {
+                    random.next()
+                };
+            }
+            if bits % 64 != 0 {
+                row[lanes - 1] &= (1_u64 << (bits % 64)) - 1;
+            }
+            rows.push(row.clone());
+            rows.push(row);
+        }
+        if lanes >= 3 {
+            let high = vec![0; lanes];
+            let mut middle = high.clone();
+            let mut upper = high.clone();
+            middle[lanes / 2] = 1;
+            upper[lanes - 1] = 1;
+            rows.extend([high, middle, upper]);
+        }
+        rows.reverse();
+        let flat: Vec<u64> = rows.iter().flatten().copied().collect();
+        let input = Buffer::from_host(pool.clone(), &flat)?;
+        let before = readback_count();
+        let set = unsafe { PackedSet::build_set(&pool, &input, rows.len(), bits, set_params())? };
+        assert_eq!(
+            readback_count(),
+            before,
+            "set construction downloads no count"
+        );
+        assert_eq!(set.capacity(), rows.len());
+        assert_eq!(set.lanes(), lanes);
+        assert_eq!(set.key_bits(), bits);
+        assert_eq!(set.params(), set_params());
+        rows.sort_by(|a, b| a.iter().rev().cmp(b.iter().rev()));
+        rows.dedup();
+        let count = set.logical_count()?;
+        assert_eq!(count, rows.len(), "width {bits}");
+        assert_eq!(
+            set.keys().to_host_prefix(count * lanes)?,
+            rows.into_iter().flatten().collect::<Vec<_>>(),
+            "width {bits}",
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn packed_row_empty_heading_and_empty_input_are_sets() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    for bits in [0, 64, 257] {
+        let input = Buffer::<u64>::zeroed(pool.clone(), 0)?;
+        let set = unsafe { PackedSet::build_set(&pool, &input, 0, bits, set_params())? };
+        assert_eq!(set.logical_count()?, 0);
+        assert_eq!(set.capacity(), 0);
+    }
+    for rows in [1, 19] {
+        let input = Buffer::<u64>::zeroed(pool.clone(), rows)?;
+        let before = readback_count();
+        let set = unsafe { PackedSet::build_set(&pool, &input, rows, 0, set_params())? };
+        assert_eq!(readback_count(), before);
+        assert_eq!(set.logical_count()?, 1);
+        assert_eq!(set.capacity(), 1);
+        assert_eq!(set.lanes(), 1);
+        assert_eq!(set.keys().to_host_prefix(1)?, [0]);
+    }
+    Ok(())
+}
+
+#[test]
+fn packed_row_resident_count_and_adoption_retain_immutable_snapshots() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let input = Buffer::from_host(pool.clone(), &[7_u64, 2, 7, 9, 2])?;
+    let before = readback_count();
+    let set = unsafe { PackedSet::build_set(&pool, &input, 5, 64, set_params())? };
+    // A device consumer reads the resident count without a host barrier.
+    let copied_count = unsafe { Buffer::<u64>::uninitialized(pool.clone(), 1)? };
+    unsafe {
+        cuda_core::simt::memory::memcpy_dtod_async(
+            copied_count.cu_deviceptr(),
+            set.count_ptr() as u64,
+            8,
+            pool.stream().cu_stream(),
+        )?;
+    }
+    let keys = Arc::downgrade(set.keys());
+    let metadata = Arc::downgrade(set.metadata());
+    let adopted = unsafe {
+        PackedSet::adopt_sorted_set(
+            &pool,
+            set.keys().clone(),
+            set.metadata().clone(),
+            set.capacity(),
+            64,
+            set_params(),
+        )?
+    };
+    assert_eq!(readback_count(), before);
+    assert!(Arc::ptr_eq(set.keys(), adopted.keys()));
+    assert!(Arc::ptr_eq(set.metadata(), adopted.metadata()));
+    drop(set);
+    drop(input);
+    let retained = adopted.clone();
+    drop(adopted);
+    // A separate publication never overwrites a retained predecessor.
+    let next_input = Buffer::from_host(pool.clone(), &[11_u64, 11])?;
+    let next = unsafe { PackedSet::build_set(&pool, &next_input, 2, 64, set_params())? };
+    assert_eq!(next.logical_count()?, 1);
+    assert_eq!(copied_count.to_host()?, [3]);
+    assert_eq!(retained.logical_count()?, 3);
+    assert_eq!(retained.keys().to_host_prefix(3)?, [2, 7, 9]);
+    assert_eq!(retained.metadata().to_host()?[0].error, 0);
+    assert!(keys.upgrade().is_some());
+    assert!(metadata.upgrade().is_some());
+    let owner = retained.owner();
+    drop(retained);
+    assert!(keys.upgrade().is_some());
+    drop(owner);
+    assert!(keys.upgrade().is_none());
+    assert!(metadata.upgrade().is_none());
+    Ok(())
+}
+
+#[test]
+fn packed_row_sorted_unique_adoption_keeps_the_owned_prefix() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    // Only the first two rows are certified; the spare allocation is not live.
+    let keys = Arc::new(Buffer::from_host(
+        pool.clone(),
+        &[9_u64, 0, 0, 1, 1, 0, 77, 88, 99],
+    )?);
+    let before = readback_count();
+    let set = unsafe { PackedSet::adopt_sorted_unique(&pool, keys.clone(), 2, 192, set_params())? };
+    assert_eq!(readback_count(), before);
+    assert!(Arc::ptr_eq(&keys, set.keys()));
+    assert_eq!(set.capacity(), 2);
+    assert_eq!(set.logical_count()?, 2);
+    drop(keys);
+    assert_eq!(set.keys().to_host_prefix(6)?, [9, 0, 0, 1, 1, 0]);
+    let empty = Arc::new(Buffer::<u64>::zeroed(pool.clone(), 0)?);
+    let set = unsafe { PackedSet::adopt_sorted_unique(&pool, empty, 0, 0, set_params())? };
+    assert_eq!(set.logical_count()?, 0);
+    Ok(())
+}
+
+#[test]
+fn packed_row_build_checks_recorded_policy_and_row_bounds() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let input = Buffer::<u64>::zeroed(pool.clone(), 3)?;
+    for invalid in [
+        RadixRunParams {
+            ratio: 1,
+            ..set_params()
+        },
+        RadixRunParams {
+            radix_bits: 1,
+            ..set_params()
+        },
+        RadixRunParams {
+            merge_tile_rows: 0,
+            ..set_params()
+        },
+        RadixRunParams {
+            block_threads: 128,
+            ..set_params()
+        },
+    ] {
+        assert!(unsafe { PackedSet::build_set(&pool, &input, 1, 192, invalid) }.is_err());
+    }
+    assert!(unsafe { PackedSet::build_set(&pool, &input, 2, 192, set_params()) }.is_err());
+    assert!(unsafe {
+        PackedSet::build_set(&pool, &input, u32::MAX as usize + 1, 64, set_params())
+    }
+    .is_err());
+    assert!(
+        unsafe { PackedSet::adopt_sorted_unique(&pool, Arc::new(input), 2, 0, set_params()) }
+            .is_err()
+    );
+    Ok(())
+}

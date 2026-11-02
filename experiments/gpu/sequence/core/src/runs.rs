@@ -269,9 +269,9 @@ mod tests {
                 result = let canon project bound keep {value};
                 return result as answer(value);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
-                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }
             sequence {
@@ -335,9 +335,9 @@ mod tests {
                 result = let canon project selected keep {x,y};
                 return result as answer(x,y);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }
             sequence {
@@ -388,14 +388,14 @@ mod tests {
                     native = AnyDefaultSpelling { reads [exact, range, membership, resident], abi runs };
                     index = OtherDefaultSpelling { reads [exact] };
                     host_scan = Host { reads [] };
-                    packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon {
-                        reads [distinct], build inferred, packed_bits 128
+                    radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> {
+                        reads [distinct], build inferred
                     };
                 }
                 r host scan = @native input { keys 1; columns [i64 => StoredScalar] } as Alias [];
                 r = @index as Index [x];
                 d host scan = @host_scan as Host [];
-                result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }
         };

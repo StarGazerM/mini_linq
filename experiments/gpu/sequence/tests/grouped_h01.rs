@@ -113,9 +113,9 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
                 grouped=let group filtered by [returnflag,linestatus] {sum_quantity:i64=sum(quantity);sum_price:i64=sum(price);count_order:usize=count();};
                 return grouped as answer(returnflag,linestatus,sum_quantity,sum_price,count_order);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
                 l host scan=@device_columns input { keys 0; columns [u32 => u32, u32 => u32, u32 => u32, u32 => u32, i64 => i64, i64 => i64, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32,u32,i64,i64,i32)> [];
-                filtered rows=@packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                filtered rows=@radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 filtered canon=rows;
                 grouped rows=@grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
                 grouped group=@group_map as ::std::collections::HashMap<_, (i64, i64, usize)>;

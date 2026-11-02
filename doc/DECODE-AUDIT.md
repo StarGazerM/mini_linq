@@ -129,7 +129,6 @@ Every V marker is listed below, sorted by those tiers and then path; ties are no
 | 1 | `runtime/cq-load/src/csv_source.rs:160` | V | Row-mode CSV decoding precedes hash/btree grouping; columnar scans bypass this decoder. | P4 / Index |
 | 1 | `runtime/cq-load/src/loader.rs:44` | V | CSV row decoding precedes hash grouping; P4 owns retained index keys. | P4 / Index |
 | 1 | `runtime/cq-load/src/loader.rs:57` | V | CSV row decoding precedes ordered grouping; P4 owns retained index keys. | P4 / Index |
-| 2 | `experiments/gpu/sequence-runtime/src/canon.rs:565` | V | into_columns invokes device expansion before host publication; P6 preserve the packed view. | P6 / Carrier+Read |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:584` | V | packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion. | P6 / Carrier+Read |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:661` | V | canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields. | P6 / Carrier+Read |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:682` | V | output adapter materializes full i64 columns before their consumers; P6 keep packed values resident. | P6 / Carrier+Read |
@@ -180,7 +179,6 @@ Every V marker is listed below, sorted by those tiers and then path; ties are no
 | 4 | `experiments/gpu/datalog-runtime/src/layout.rs:453` | V | upper-bound comparison invokes field inversion before ordering; P6 retain packed prefix comparisons. | P6 / Carrier+Read; P4 / Index law |
 | 4 | `experiments/gpu/datalog-runtime/src/layout.rs:462` | V | tuple prefix comparison reconstructs each numeric field; P6 compare encoded field order directly. | P6 / Carrier+Read; P4 / Index law |
 | 4 | `experiments/gpu/datalog-runtime/src/layout.rs:468` | V | prefix search decodes each compared field; P6 compare encoded prefixes directly. | P6 / Carrier+Read; P4 / Index law |
-| 4 | `experiments/gpu/sequence-runtime/src/canon.rs:557` | V | packed answers expand into resident columns usable by chained queries; P6 retain packed fields until an allowed read. | P6 / Carrier+Read |
 | 4 | `experiments/gpu/sequence-runtime/src/canon.rs:575` | V | packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields. | P6 / Carrier+Read |
 | 4 | `experiments/gpu/sequence-runtime/src/canon.rs:623` | V | packed adapter expands the live prefix before possible chained relations; P6 keep its encoded view. | P6 / Carrier+Read |
 | 4 | `experiments/gpu/sequence-runtime/src/canon.rs:647` | V | packed_columns expands every field into device buffers; P6 defer inversion until logical reads. | P6 / Carrier+Read |
@@ -438,8 +436,6 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `experiments/gpu/h05-reference/src/main.rs:596` | P | diagnostic final H05 answer unpacks order bits and inverts the order domain for exact comparison. |
 | `experiments/gpu/h05-reference/src/main.rs:598` | P | diagnostic final H05 answer unpacks supplier bits and inverts the supplier domain. |
 | `experiments/gpu/h05-reference/src/main.rs:600` | P | diagnostic final H05 answer unpacks nation bits and inverts the nation domain. |
-| `experiments/gpu/sequence-runtime/src/canon.rs:557` | V | packed answers expand into resident columns usable by chained queries; P6 retain packed fields until an allowed read. |
-| `experiments/gpu/sequence-runtime/src/canon.rs:565` | V | into_columns invokes device expansion before host publication; P6 preserve the packed view. |
 | `experiments/gpu/sequence-runtime/src/canon.rs:575` | V | packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields. |
 | `experiments/gpu/sequence-runtime/src/canon.rs:584` | V | packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion. |
 | `experiments/gpu/sequence-runtime/src/canon.rs:623` | V | packed adapter expands the live prefix before possible chained relations; P6 keep its encoded view. |

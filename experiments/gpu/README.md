@@ -1391,7 +1391,7 @@ grades or provider choices from generated temporary names.
 | Retained prefix/build | Explicit `store` at its authored level |
 | Sorted/prefix lookup representation | `RangeProvider` with the same recorded key levels |
 | Expansion batch and `tile(256,4)` | Explicit `tile 1024 items 4` and flatten boundaries |
-| Device deduplication | `canon` with `PackedCanon` |
+| Device deduplication | `canon` with the constrained `radix_set` full-row `RadixLayout` token |
 | Output allocation | Explicit `output(count)` for exact count publication; bounded/reserved protocols must be authored separately |
 | Execution placement | `grade(gpu, ...)`, checked by `machine_grade` |
 
@@ -1440,14 +1440,14 @@ per-call and median GPU build/kernel/dedup/total timings and query wall time.
 Input loading/upload, answer download, and reference checks are excluded from
 the query samples.
 The recorded directory still requires dense nonnegative u32-range keys.
-`PackedCanon` advertises a 128-bit packed-key capability. At setup, the sum
-of the recorded codec-bound widths selects one u64 lane (up to 64 bits) or
-two lanes (up to 128 bits); larger headings return a setup error before
-packing or dispatch. Narrow keys retain radix sorting, while wide keys use
-exact row sorting and adjacent deduplication. Cross-lane fields remain
-zero-copy projections for later providers. This is provider-internal storage
-selection, not a translator or planner choice; no schema narrowing, ID
-remapping, or alternate query plan is substituted.
+Canonical publication uses ordinary full-row/unit-item `RadixLayout` sets.
+The constrained `radix_set` token promises Distinct, unlike the generic
+occurrence-preserving family. Shared stable radix ordering compares every
+lane, including headings beyond 128 bits. `SetBuild` records declared scalar
+widths or explicitly runtime-sized FOR rows, whose resident codec domains
+determine the lane extent at setup. No schema narrowing, type-syntax
+recognition, ID remapping or alternate query plan is substituted. Counts stay
+resident; sorted unique owned prefixes can be adopted without a sort/copy.
 
 ## Historical device-store and i64 acceptance
 
@@ -1476,9 +1476,9 @@ base-build timing boundary. Upload and answer download are excluded.
 | H05 R SF10 | 72,983 | 10.323200 | 9.899072 | 10.388337 | 9.909329 |
 
 `triangle-compiled` (default) runs `probe first [b]` over Range providers
-(`r [b]`, `s [a][c]`, PackedCanon). `triangle-smallest` is an authored
+(`r [b]`, `s [a][c]`, full-row set output). `triangle-smallest` is an authored
 configuration that runs `probe smallest [b]` over two radix layouts
-(`r [b][c]`, `s [a][c]`, GPU-Smallest) with WideCanon output. With `--check`
+(`r [b][c]`, `s [a][c]`, GPU-Smallest), with the same set output. Historically, with `--check`
 on `/data/dataset/graph/com-dblp.ungraph.txt` (1,049,866 distinct native-i64
 edges) both produce exactly 2,224,385 tuples, equal to the independent CPU
 reference on every call; `triangle-smallest` is also exact on the same graph
@@ -1648,7 +1648,7 @@ the byte demand and live parameter count. It does not move parameters into
 device memory or change the recorded plan.
 
 Catalog `levels` describe provider reads, not construction. Resident
-`RangeProvider` and `PackedCanon` tokens are device/block/lane tokens;
+`RangeProvider` and `radix_set` tokens are device/block/lane tokens;
 host-only row providers remain host-only even when their inputs are built there.
 
 The TPC-H build script parses its generated module as a `syn::File` and writes

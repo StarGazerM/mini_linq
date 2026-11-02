@@ -40,7 +40,7 @@ pub fn program_with_capacity(capacity: usize) -> Program {
             answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
             region_base host scan = @device_columns input { keys 0; columns [u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
             nation_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
             customer_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
@@ -54,7 +54,7 @@ pub fn program_with_capacity(capacity: usize) -> Program {
             lineitem_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
             supplier_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
             rnc rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
-            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
             answer canon = rows;
         }
         sequence {

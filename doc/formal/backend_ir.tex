@@ -1284,25 +1284,31 @@ Scan modules and workspaces may be retained per pool identity across invocations
 their context, stream and allocator owner outlive every borrowed resource.
 Reuse changes neither the recorded scan step nor its failure/readback contract.
 
-\paragraph{Arbitrary-width canonical provider.}
+\paragraph{Ordinary full-row device sets.}
 Let an injective recorded codec pack a row into $N=\max(1,\lceil b/64\rceil)$
-little-endian lanes, where $b$ is computed from its checked setup bounds.
+low-first lanes, where $b$ is the sum of recorded field widths.
 \begin{mathpar}
-\Rule{GPU-WideCanon}{\mathsf{pack}\text{ injective}\quad
+\Rule{GPU-RadixSet}{\mathsf{pack}\text{ injective on the complete heading}\quad
   P=\mathsf{stableRadix}_{N-1}\circ\cdots\circ\mathsf{stableRadix}_{0}}
  {\mathsf{decode}(\mathsf{unique}_{=\,\text{all lanes}}(P(\mathsf{pack}(B))))
-   =\iota(\mathrm{supp}\,B)}
+   =\iota(\mathrm{supp}\,B)\quad O_i=i}
 \end{mathpar}
-This is an instance of BE-Canon: successive stable least-significant-lane
-passes establish a total complete-key order, and adjacent equality compares
-every lane. The target's \code{PackedCanon} (at most 128 bits) and
-\code{WideCanon} (no fixed width limit) are device implementations of
-sort/unique, recorded as \code{Distinct} canonical rows providers (\textsc{PL-Distinct}), not interchangeable hash-set
-canonicalizers.
-Complete declared domains, never statistical evidence, supply conservative
-width obligations; actual lane counts use codec bounds at setup. Both
-implementations publish the same device-resident count, failure ancestors,
-and decoded column protocol.
+This instance of BE-Canon is the ordinary full-key/unit-item form of
+\code{RadixLayout}, not a separate canonical store. Only its constrained
+\code{radix\_set} token promises \code{Distinct}; the occurrence-preserving
+five-hole family does not. Shared stable radix passes order every lane,
+including middle and high lanes beyond 128 bits. Empty headings retain
+one zero lane and at most one live key.
+Publication records distinguish \code{DeclaredFields}, whose widths follow
+recorded scalar trait domains, from \code{RuntimeSizedPackedRow}: resident
+FOR domains determine the exact lane extent only at setup. The checker
+checks this provenance and explicit construction parameters independently.
+The printer emits these facts without type inspection. Unique counts remain
+resident and gate initialized prefixes; constructing a set introduces no
+host count download. Certified sorted unique owned prefixes can be adopted
+without sorting or copying, with their owners retained through stream users.
+CQ's low-first equality codec is not reinterpreted as the typed layout's
+most-significant-first lexicographic embedding.
 
 The CUDA machine bounds block shared storage by 101,376 bytes. Its single
 layout implementation starts with 48 bytes, records each materialized lookup's

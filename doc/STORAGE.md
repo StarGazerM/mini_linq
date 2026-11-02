@@ -372,8 +372,26 @@ merge-path boundaries against a stable occurrence oracle.
 GPU-RadixPublish, GPU-RadixItemColumns), plus its typed view `RadixLayout`
 (GPU-RadixLayout, GPU-RadixCursor, GPU-RadixLaneRead). GPU CQ built indices
 select `RadixLayout` only through the authored `radix_layout` provider token
-(P4-GPU slice B, below); Datalog layouts and canonical indices do not use it
-yet. Provider choices are recorded upstream, never by type name.
+(P4-GPU slice B, below); canonical references select the constrained full-row
+set token (slice C). Datalog layouts remain on their existing protocol.
+Provider choices are recorded upstream, never by type name.
+
+- **Full-row sets (P4-GPU slice C, GPU-RadixSet).** The constrained
+  `RadixLayout<EncodedRow, (), PackedRow, u64, ()>` token builds ordinary
+  complete-key sets, with implicit unit occurrence offsets and a resident
+  live count. It shares stable row ordering with the occurrence engine;
+  equality compares every lane, including middle/high lanes beyond 128 bits.
+  The generic occurrence family does not claim Distinct. `SetBuild` owns
+  ratio, directory resolution and merge tile; the existing auxiliary launch
+  record owns the block width. A checked `DeclaredFields` width uses scalar
+  trait domains. `RuntimeSizedPackedRow` explicitly means the immutable
+  resident FOR domains determine the exact lane count at setup, not a hidden
+  runtime provider choice. Fields and lanes retain CQ's low-first equality
+  encoding; it is not the typed layout's lexicographic encoding. Count-gated
+  consumers do not download a host count to construct the publication.
+  Certified sorted unique owned prefixes are adopted without a sort/copy;
+  owners survive later publication and query-cache release. An empty heading
+  stores one zero lane and yields zero or one distinct key.
 
 - **Key law.** `W: Word` (`u64`, `u128`, `[u64; L]`) is the DL-DevicePacking
   word: most-significant-first lanes are the one `OrderKey` embedding. Keys are
@@ -965,8 +983,8 @@ constant-folded bounds on the Vec side. No compiler default changes in S1.
    column has an `OrderKey`, rows are `Copy`) is the author's, checked by
    rustc; selection does not choose `Packed` on its own until a recorded
    column-representation fact or evidence-driven grading (P3.3) exists.
-   On device, catalog selection retypes the rows record to a `Distinct`
-   provider (`PackedCanon` up to 128 packed bits, `WideCanon` otherwise),
+   On device, catalog selection retypes the rows record to the ordinary
+   full-row `RadixLayout` set form (`radix_set`, GPU-RadixSet),
    but never turns a `host` reference into `rows`. This
    does not restore the obsolete `retype(dedup => Type)` hash-set interface.
    No Rust type spelling selects a comparison, codec, or uniqueness fact;

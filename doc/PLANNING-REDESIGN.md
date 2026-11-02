@@ -659,8 +659,14 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   read (e.g. dense or cached candidate directories, measured) before any
   default use, Retain/Expand (retained L&E witnesses need the GPU target's
   witness support), encoded FOR key packing (two P4 DECODE V sites), GPU
-  Datalog layouts (replacing plain-word `DeviceRuns`), and GPU canonical
-  indices.
+  Datalog layouts (replacing plain-word `DeviceRuns`).
+  **Slice C implementation:** canonical references use the constrained
+  full-row/unit-item `radix_set` token and ordinary resident `RadixLayout`.
+  Complete-key uniqueness shares stable ordering with occurrence builds;
+  resident count and sorted-prefix adoption avoid a synchronizing snapshot.
+  `SetBuild` records declared-field versus runtime-sized FOR width provenance
+  and construction parameters (GPU-RadixSet); the old packed/wide canonical
+  implementations are removed. The h06 keyless fold is unchanged.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with

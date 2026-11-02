@@ -14,10 +14,10 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
                 answer = let canon union r,s;
                 return answer as answer(a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
                 s host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
-                answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 answer canon = rows;
             }
             sequence {
@@ -77,28 +77,22 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
         impl<'a> syn::visit::Visit<'a> for PublicationCalls {
             fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
                 if let syn::Expr::Path(path) = call.func.as_ref()
-                    && path
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|segment| segment.ident == "memcpy_dtod_async")
+                    && let Some(segment) = path.path.segments.last()
                 {
-                    self.0.push("copy");
+                    if segment.ident == "memcpy_dtod_async" {
+                        self.0.push("copy");
+                    } else if segment.ident == "build_set" {
+                        self.0.push("set");
+                    }
                 }
                 syn::visit::visit_expr_call(self, call);
-            }
-            fn visit_expr_method_call(&mut self, call: &'a syn::ExprMethodCall) {
-                if call.method == "canonicalize" {
-                    self.0.push("canonicalize");
-                }
-                syn::visit::visit_expr_method_call(self, call);
             }
         }
         let mut calls = PublicationCalls(Vec::new());
         syn::visit::Visit::visit_expr(&mut calls, &expression);
         let mut expected = vec!["copy", "copy"];
         if canonical {
-            expected.push("canonicalize");
+            expected.push("set");
         }
         assert_eq!(calls.0, expected);
         // A canonical union may not drop its recorded Canon boundary.

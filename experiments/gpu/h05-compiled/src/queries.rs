@@ -18,7 +18,7 @@ pub type QueryResult<'a> = Result<DeviceColumns<'a, Answer>, Box<dyn std::error:
 // Orders(order,customer,date), 8766 <= date < 9131, Lineitem(order,supplier),
 // Supplier(supplier,nation).
 // Advice mapping: sorted_runs/prefix_runs/retain_lookups -> recorded RangeProvider
-// stores; r1/r2 membership remains explicit; dedup DeviceSet<For> -> PackedCanon.
+// stores; r1/r2 membership remains explicit; dedup builds an ordinary full-row set.
 // B's Supplier prefix [supplier] then exact nation lookup remains two levels;
 // expand_lookups(256, depth 3) -> store_level at that flatten + tile(256,items 4).
 // capacity(Lineitem) -> recorded store capacity + output(bounded), not an inferred
@@ -88,7 +88,7 @@ macro_rules! compiled_le {
                 answer = let canon project matched keep {order,supplier,nation};
                 return answer as answer(order,supplier,nation);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
                 region_base host scan = @device_columns input { keys 0; columns [u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
                 nation_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
                 customer host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
@@ -97,7 +97,7 @@ macro_rules! compiled_le {
                 supplier host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
                 r1 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [region];
                 r2 = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation];
-                answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 answer canon = rows;
                 $($structures)*
             }
@@ -179,8 +179,8 @@ macro_rules! le_b {
 /// The reference R-N-C-O-L-S traversal, retaining the ASIA customer prefix.
 /// sorted_indexes/prefix_runs become explicit RangeProvider key levels;
 /// retain_streams(r4) becomes the C store. Expansion is the three written tile
-/// boundaries, with 4 items at the Orders/Lineitem boundaries. PackedCanon
-/// replaces DeviceSet<For>; count publication replaces the unbounded old output.
+/// boundaries, with 4 items at the Orders/Lineitem boundaries. Full-row sets
+/// replace DeviceSet<For>; count publication replaces the unbounded old output.
 /// No dynamic choose is recorded: this plan had no size-guarded alternative.
 /// frontier(8)/directory(rank) are unsupported old implementation advice, not
 /// fabricated scheduling facts in this Sequence plan.
@@ -217,7 +217,7 @@ macro_rules! reference {
             answer = let canon project matched keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
             region_base host scan = @device_columns input { keys 0; columns [u32 => u32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,i32),::cq_gpu_runtime::For> [];
             nation_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
             customer_index host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32),::cq_gpu_runtime::For> [];
@@ -231,7 +231,7 @@ macro_rules! reference {
             lineitem_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
             supplier_index = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [nation][supplier];
             rnc rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
-            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
             answer canon = rows;
         }
         sequence {
@@ -296,9 +296,9 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer>) -> DeviceColumns<'a, Answ
             answer = let canon project source keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
             source host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32,u32)> [];
-            answer rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
             answer canon = rows;
         }
         sequence {

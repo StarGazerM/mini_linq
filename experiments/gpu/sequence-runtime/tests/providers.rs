@@ -2,15 +2,24 @@ mod support;
 
 use std::sync::Arc;
 
-use cq_gpu_sequence_runtime::canon::{
-    packed_columns, PackedCanon, PackedColumnsAdapter, PackedField, WideCanon,
-};
+use cq_gpu_sequence_runtime::canon::{packed_columns, PackedColumnsAdapter, PackedField};
 use cq_gpu_sequence_runtime::{
     Bounds, Buffer, Codec, ColumnDescriptor, EncodedColumn, Geometry, KeyDescriptor,
     PayloadDescriptor, PayloadKind, Pool, RangeBuilder, RangeDescriptor, RangeSelection,
     RangeWorkspace, Result, UploadBounds, UploadCodec, UploadColumn,
 };
+use gpu_datalog_runtime::{
+    radix_run::{EncodedRow, PackedRow},
+    RadixLayout, RadixRunParams,
+};
 use support::AUX;
+
+const SET_PARAMS: RadixRunParams = RadixRunParams {
+    ratio: 4,
+    radix_bits: 0,
+    merge_tile_rows: 1024,
+    block_threads: 256,
+};
 
 const MEASURE: UploadColumn = UploadColumn {
     codec: UploadCodec::For,
@@ -170,27 +179,24 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
 
 #[test]
 fn packed_canon_selects_lanes_from_recorded_heading() -> Result<()> {
-    assert_eq!(PackedCanon::MAX_PACKED_BITS, 128);
     for bits in [0, 1, 63, 64] {
-        assert_eq!(PackedCanon::key_lanes(bits)?, 1);
+        assert_eq!(
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)?,
+            1
+        );
     }
     for bits in [65, 80, 127, 128] {
-        assert_eq!(PackedCanon::key_lanes(bits)?, 2);
+        assert_eq!(
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)?,
+            2
+        );
     }
-    assert!(PackedCanon::key_lanes(129).is_err());
-    let heading = [
-        PackedField {
-            shift: 0,
-            bits: 40,
-            base: 0,
-        },
-        PackedField {
-            shift: 40,
-            bits: 40,
-            base: 0,
-        },
-    ];
-    assert_eq!(PackedCanon::field_lanes(&heading)?, 2);
+    for bits in [129, 160, 192] {
+        assert_eq!(
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)?,
+            3
+        );
+    }
     Ok(())
 }
 
@@ -218,8 +224,16 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
             base: 0,
         },
     ];
-    let mut canon = PackedCanon::new(&pool, rows.len(), AUX.canon)?;
-    let keys = unsafe { canon.canonicalize(&input, rows.len(), 80)? };
+    let mut adapter = PackedColumnsAdapter::new(pool.clone(), fields.len(), AUX.canon)?;
+    let keys = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool,
+            &input,
+            rows.len(),
+            80,
+            SET_PARAMS,
+        )?
+    };
     assert_eq!(keys.lanes(), 2);
     assert_eq!(keys.capacity(), rows.len());
     assert_eq!(keys.logical_count()?, 3);
@@ -264,7 +278,7 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
     assert_eq!(gathered.payload()[0].to_host()?, [3, 3, 1i64 << 35]);
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
     // DECODE P: diagnostic canonical tuple adapter reconstructs packed fields solely for the following host oracle.
-    let output = keys.into_columns::<(i64, i64)>(&fields, dictionary.clone(), vec![])?;
+    let output = adapter.unpack_columns::<(i64, i64)>(keys, &fields, dictionary.clone(), vec![])?;
     // DECODE P: diagnostic canonical packed tuples publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(7, 3), (9, 3), (7, 1 << 35)]);
     // DECODE P: diagnostic noncanonical tuple adapter reconstructs packed fields solely for the following host oracle.
@@ -284,7 +298,11 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
         pool.clone(),
         &[0u64, 0, 0, 1u64 << 63, 0, 0, u64::MAX, u64::MAX],
     )?;
-    let keys = unsafe { canon.canonicalize(&input, 4, 128)? };
+    let keys = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool, &input, 4, 128, SET_PARAMS,
+        )?
+    };
     let fields = [
         PackedField {
             shift: 0,
@@ -298,7 +316,7 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
         },
     ];
     // DECODE P: diagnostic signed-boundary adapter reconstructs packed fields solely for the following host oracle.
-    let output = keys.into_columns::<(i64, i64)>(&fields, dictionary, vec![])?;
+    let output = adapter.unpack_columns::<(i64, i64)>(keys, &fields, dictionary, vec![])?;
     // DECODE P: diagnostic full-width signed tuple boundaries publishes logical host values for exact assertions.
     assert_eq!(
         output.to_host()?,
@@ -336,14 +354,22 @@ fn wide_canon_deduplicates_three_lane_keys_with_stable_order() -> Result<()> {
             base: i64::MIN,
         },
     ];
-    assert_eq!(WideCanon::field_lanes(&fields)?, 3);
-    let mut canon = WideCanon::new(&pool, rows.len(), AUX.canon)?;
+    let mut adapter = PackedColumnsAdapter::new(pool.clone(), fields.len(), AUX.canon)?;
     for _ in 0..2 {
-        let keys = unsafe { canon.canonicalize(&input, rows.len(), 192)? };
+        let keys = unsafe {
+            RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+                &pool,
+                &input,
+                rows.len(),
+                192,
+                SET_PARAMS,
+            )?
+        };
         assert_eq!(keys.logical_count()?, 4);
         assert_eq!(keys.lanes(), 3);
         // DECODE P: diagnostic three-lane adapter reconstructs packed fields solely for the following host oracle.
-        let output = keys.into_columns::<(i64, i64, i64)>(
+        let output = adapter.unpack_columns::<(i64, i64, i64)>(
+            keys,
             &fields,
             Arc::new(cq_gpu_runtime::Dictionary::default()),
             vec![],
@@ -354,7 +380,11 @@ fn wide_canon_deduplicates_three_lane_keys_with_stable_order() -> Result<()> {
         // DECODE P: diagnostic three-lane packed tuples publishes logical host values for exact assertions.
         assert_eq!(output.to_host()?, expected);
     }
-    let empty = unsafe { canon.canonicalize(&input, 0, 192)? };
+    let empty = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool, &input, 0, 192, SET_PARAMS,
+        )?
+    };
     assert_eq!(empty.logical_count()?, 0);
     Ok(())
 }
@@ -417,10 +447,13 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     assert!(empty.payload()[0].to_host()?.is_empty());
 
     let keys = Buffer::from_host(pool.clone(), &[7u64, 2, 7, 1, 2])?;
-    let mut canon = PackedCanon::new(&pool, 5, AUX.canon)
-        .map_err(|error| format!("canon program load: {error}"))?;
+    let mut adapter = PackedColumnsAdapter::new(pool.clone(), 1, AUX.canon)?;
     // Keys are initialized, in the advertised three-bit range, on this stream.
-    let unique = unsafe { canon.canonicalize(&keys, 5, 3)? };
+    let unique = unsafe {
+        RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::build_set(
+            &pool, &keys, 5, 3, SET_PARAMS,
+        )?
+    };
     assert_eq!(unique.logical_count()?, 3);
     let fields = [PackedField {
         shift: 0,
@@ -429,7 +462,7 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     }];
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
     // DECODE P: diagnostic canonical scalar adapter reconstructs packed fields solely for the following host oracle.
-    let output = unique.into_columns::<(u32,)>(&fields, dictionary.clone(), vec![])?;
+    let output = adapter.unpack_columns::<(u32,)>(unique, &fields, dictionary.clone(), vec![])?;
     // DECODE P: diagnostic canonical scalar keys publishes logical host values for exact assertions.
     assert_eq!(output.to_host()?, [(1,), (2,), (7,)]);
     // DECODE P: diagnostic noncanonical scalar adapter reconstructs packed fields solely for the following host oracle.

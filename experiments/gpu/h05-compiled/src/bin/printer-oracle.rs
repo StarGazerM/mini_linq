@@ -27,9 +27,9 @@ fn canonical_projection() {
                     output = let canon project scan keep {x};
                     return output as answer(x);
                 }
-                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+                structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
                     scan host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'_, (i64,i64)> [];
-                    output rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    output rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                     output canon = rows;
                 }
                 sequence {
@@ -98,9 +98,9 @@ fn repeated_head_projection() {
             output = let canon project scan keep {x};
             return output as answer(x,x);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
             scan host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'_, (i64,i64)> [];
-            output rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            output rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
             output canon = rows;
         }
         sequence {
@@ -120,7 +120,7 @@ fn repeated_head_projection() {
 // and witness/join-filter expansion oracles have not migrated to authored
 // Sequence coverage. Native i64 range payloads are supported, but the legacy
 // Fused/Compacting/resume/provider-specific assertions are not assertions about
-// PackedCanon or RangeProvider and must not be reported as such.
+// full-row sets or RangeProvider and must not be reported as such.
 //
 // TODO(Sequence GPU): restore the original two-column typed range filter:
 // "T-Gpu: recorded range build selection must be a half-open interval on one source column".

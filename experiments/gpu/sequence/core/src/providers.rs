@@ -19,11 +19,8 @@ pub fn declarations() -> Vec<Declaration> {
         device_columns = ::cq_gpu_runtime::DeviceColumns<_> {
             reads [], build typed, abi columns, bounds resident_columns
         };
-        packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon {
-            reads [distinct], build inferred, packed_bits 128
-        };
-        wide_canon = ::cq_gpu_sequence_runtime::canon::WideCanon {
-            reads [distinct], build inferred
+        radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> {
+            reads [distinct, resident], build inferred
         };
     });
     providers.declarations

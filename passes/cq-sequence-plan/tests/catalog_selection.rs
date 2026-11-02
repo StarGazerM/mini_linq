@@ -14,10 +14,9 @@ fn gpu_catalog() -> Catalog {
         range_provider = ::cq_gpu_sequence_runtime::RangeProvider {
             reads [exact, range, membership], build inferred
         };
-        packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon {
-            reads [distinct], build inferred, packed_bits 128
+        radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> {
+            reads [distinct], build inferred
         };
-        wide_canon = ::cq_gpu_sequence_runtime::canon::WideCanon { reads [distinct], build inferred };
     });
     let mut catalog = Catalog::default();
     for declaration in declared.declarations {
@@ -54,8 +53,8 @@ fn provider(structure: &Structure) -> Option<&Provider> {
 fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
     let authored = h05();
     let defaults = cq_structure_selection::compile(&authored.physical).unwrap();
-    // No codec bounds accompany this Structures fixture: scalar type syntax
-    // cannot justify PackedCanon, so the authored fixture records WideCanon.
+    // No type-width guessing: the full-row set token accepts the recorded
+    // packed row codec regardless of its eventual lane count.
     let selected = select_from_catalog(&defaults, &gpu_catalog()).unwrap();
     structures::check_rewrite(&defaults, &selected).unwrap();
     assert_eq!(selected.physical, defaults.physical);
@@ -108,7 +107,7 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
     catalog.providers[0].levels.clear();
     let later: Declaration =
         syn::parse_quote!(later = Later { reads [exact, range, membership], build inferred };);
-    insert(&mut catalog, 5, later);
+    insert(&mut catalog, 4, later);
     let selected = select_from_catalog(&source, &catalog).unwrap();
     assert_eq!(selected, select_from_catalog(&source, &catalog).unwrap());
     assert_eq!(selected, select_from_catalog(&selected, &catalog).unwrap());
@@ -186,7 +185,7 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
         vec![Capability::Exact, Capability::Range];
     insert(
         &mut catalog,
-        3,
+        2,
         syn::parse_quote!(membership = Membership { reads [membership], build inferred };),
     );
     let error = select_from_catalog(&source, &catalog)
@@ -318,7 +317,7 @@ fn unused_code_payload_is_projected_from_renamed_provider() {
 
 #[test]
 fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
-    for (third, expected) in [(false, "wide_canon"), (true, "wide_canon")] {
+    for (third, expected) in [(false, "radix_set"), (true, "radix_set")] {
         let mut source: structures::Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64,c:i64);
