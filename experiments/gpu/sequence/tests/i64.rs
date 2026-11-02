@@ -68,7 +68,8 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
                 )
         })
         .unwrap();
-    *provider = syn::parse_quote!(r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b][c];);
+    *provider =
+        syn::parse_quote!(r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b][c];);
     smallest
         .structures
         .structures
@@ -76,4 +77,59 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
     let analysis = check_grading(&smallest, &cq_gpu_sequence::machine()).unwrap();
     let error = cq_gpu_sequence::translate(&smallest, &analysis).unwrap_err();
     assert!(error.to_string().contains("probe smallest is not realized"));
+}
+
+#[test]
+fn two_key_membership_preserves_full_width_last_key() -> cq_gpu_sequence_runtime::Result<()> {
+    use cq_gpu_runtime::{Codec, DeviceColumns, Dictionary, Pool};
+    let pool = Pool::new(0, 0, 0)?;
+    let raw = vec![
+        (0i64, 7i64),
+        (0, (1i64 << 32) + 7),
+        (0, -(1i64 << 32) + 7),
+        (0, 8),
+        (1, 7),
+    ];
+    let edges = DeviceColumns::from_rows(
+        pool.clone(),
+        &raw,
+        &mut Dictionary::default(),
+        &[Codec::For, Codec::For],
+    )?;
+    let stored = DeviceColumns::from_rows(
+        pool.clone(),
+        &[(0i64, 7i64)],
+        &mut Dictionary::default(),
+        &[Codec::For, Codec::For],
+    )?;
+    let output = cq_gpu_sequence_test_macros::sequence! {
+        physical {
+            relation R(a:i64,c:i64) = (&edges);
+            relation S(a:i64,c:i64) = (&stored);
+            l = pipe rename R@0 {a -> a,c -> c};
+            s = let rename S@0 {a -> a,c -> c};
+            checked = let canon semi eager [a,c] l,s;
+            return checked as answer(a,c);
+        }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 }; }
+            l host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            s host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            s = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a][c];
+            s rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+            checked rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+            checked canon = rows;
+        }
+        sequence {
+            Edges = store rows l;
+            ByA = store rows s;
+            result = store canon compact checked lookup s [a,c]
+                flatten tile 1024 items 4 Edges;
+            output count;
+        }
+        graded gpu { Edges at host; ByA at host; result at device; }
+    };
+    let mut actual: Vec<(i64, i64)> = output.to_host()?;
+    actual.sort_unstable();
+    assert_eq!(actual, vec![(0, 7)]);
+    Ok(())
 }

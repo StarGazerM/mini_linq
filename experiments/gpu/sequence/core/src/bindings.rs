@@ -3,8 +3,8 @@ use cq_lang_sequence::gpu::bindings::{
     Bindings, DirectoryPolicy, NativeLookup, ProviderAbi, ProviderLayout,
 };
 use cq_lang_sequence::{Analysis, Program};
-use cq_lang_structures::{ReaderRef, Structure, physical::symbol_name};
 use cq_lang_structures::provider::NativeAbi;
+use cq_lang_structures::{ReaderRef, Structure, physical::symbol_name};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn error(message: &str) -> syn::Error {
@@ -107,9 +107,9 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
     }
     for name in definitions.keys() {
         let native_lookup = analysis.structures.built.get(name).is_some_and(|layouts| {
-            layouts
-                .iter()
-                .any(|(_, provider)| analysis.structures.facts(provider).abi == Some(NativeAbi::Runs))
+            layouts.iter().any(|(_, provider)| {
+                analysis.structures.facts(provider).abi == Some(NativeAbi::Runs)
+            })
         }) || analysis.structures.fallbacks.iter().any(
             |((owner, reader, _), provider)| {
                 owner == name
@@ -177,8 +177,10 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             Ok(())
         };
         if let Some(layouts) = analysis.structures.built.get(name) {
-            if layouts.len() == 1 && layouts[0].1.input.is_some()
-                && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::Runs) {
+            if layouts.len() == 1
+                && layouts[0].1.input.is_some()
+                && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::Runs)
+            {
                 record(name.clone(), layouts[0].0.concat())?;
             }
         } else {
@@ -269,7 +271,10 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 ProviderAbi::Runs => {
                     analysis.structures.facts(provider).abi == Some(NativeAbi::Runs)
                         && provider.input.is_some()
-                        && catalog.providers.iter().any(|token| token.provider.same_token(provider))
+                        && catalog
+                            .providers
+                            .iter()
+                            .any(|token| token.provider.same_token(provider))
                         && layout.directory.is_none()
                 }
                 ProviderAbi::Host => {

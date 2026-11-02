@@ -7,6 +7,15 @@ kernels exact against DuckDB at SF 0.1 and SF 1.
 
 ## Unreleased
 
+- GPU correctness: preserve full-width secondary membership keys, intersect
+  folded equality bounds with preceding constraints, and reject unmapped live
+  row reads instead of substituting zero. Flat publications now write only
+  recorded resident columns; deferred payloads are read at expansion. GPU launch
+  legality checks offset/synchronization records and positive tile sizes.
+  Removed the unused dense-row carrier path and narrowing membership helper.
+  Regressions reproduce the failures before repair; Sequence/core and SRD
+  exactness pass, and TPC-H SF1 advised/automatic are each 26/26 exact.
+
 - Sequence rewrites now reject non-retention Structures/Physical changes with
   `BE-PhysicalPreserved`, including support-equivalent join reordering.
   Removed the unused join-reexpression certificate; result-support equality

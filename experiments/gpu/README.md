@@ -888,6 +888,12 @@ D19/D85 (`n_name`), and D27 (`p_brand`, `n_name`); D72-inner has no string colum
 Catalog provider tokens declare their native ABI, contiguous-range promise and
 bounds source. Loader-authored input instances record their logical/storage
 columns and codecs; no ABI or scalar support is inferred from Rust spelling.
+Non-run membership probes compare every key in the full-width row carrier;
+secondary keys are not narrowed to u32. Contiguous selection bounds intersect,
+including equality constraints, so contradictory selections remain empty.
+An unmapped live generated row read is a compilation error rather than a
+zero-valued fallback. GPU launch checking independently validates recorded
+offset and synchronization obligations and requires positive tile sizes.
 The explicit `tpch_dictionary` profile also stores String columns as codes when
 their uses are literal equality predicates, including relational `Or` arms and
 `In` sets. Each literal uses its own column's dictionary; H07's country-pair

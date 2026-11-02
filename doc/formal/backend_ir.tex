@@ -1153,6 +1153,9 @@ Host row consumers exclude this representation. The producer writes parent
 rows, range beginnings and lengths on all scheduled blocks; a separate
 device-wide scan completes offsets before consumers run. Wrapping offsets
 are detected by adjacent-prefix decreases and abort publication.
+The launch checker validates the recorded offset and synchronization
+obligations directly, without replaying their producer, and rejects a
+zero-sized tile partition.
 Whole folds retain one scalar per block and combine on the producing stream;
 the empty domain still produces the monoid identity. Checked arithmetic and
 the existing monoid-law premises remain in force.
@@ -1359,10 +1362,11 @@ candidate is printed: planner candidates are graded, not printed.
 (resident columns, packed runs with their native lookups, or a host
 evaluation uploaded during the build), its column map, its access (scan, an
 interval's materialized positions, or the recorded Range provider restricted
-to an optional interval) and its construction phase. Intervals fold explicit
-relational selections on one column; the checker re-derives that uniquely
-determined interval from the selection syntax and requires equality, as in
-\textsc{PH-ConstantGuard}. Runs never take an interval. \emph{Steps} record,
+to an optional interval) and its construction phase. Intervals intersect all
+explicit relational selection bounds on one column, including equality;
+contradictory bounds therefore retain an empty interval. The checker re-derives
+that uniquely determined interval from the selection syntax and requires
+equality, as in \textsc{PH-ConstantGuard}. Runs never take an interval. \emph{Steps} record,
 per Sequence definition in order, whether it is a terminal-group alias, the
 terminal group, a dispatch, a host union, a host upload, or host-only.
 Host evaluations record the completed publications bound to their results and

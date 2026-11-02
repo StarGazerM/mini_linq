@@ -138,11 +138,13 @@ impl<'a> Facts<'a> {
                         continue;
                     }
                     if analysis.structures.facts(&keyed.provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Runs) {
+                        == Some(cq_lang_structures::provider::NativeAbi::Runs)
+                    {
                         runs.insert(name.clone());
                         resident.insert(name.clone());
                     } else if analysis.structures.facts(&keyed.provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Columns) {
+                        == Some(cq_lang_structures::provider::NativeAbi::Columns)
+                    {
                         resident.insert(name.clone());
                     }
                 }
@@ -399,8 +401,10 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 }
                 let mut providers = Vec::new();
                 if let Some(layouts) = analysis.structures.built.get(name) {
-                    if layouts.len() != 1 || analysis.structures.facts(&layouts[0].1).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Runs) {
+                    if layouts.len() != 1
+                        || analysis.structures.facts(&layouts[0].1).abi
+                            == Some(cq_lang_structures::provider::NativeAbi::Runs)
+                    {
                         providers.push(name.clone());
                     }
                 } else {
@@ -414,7 +418,8 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                             continue;
                         }
                         if analysis.structures.facts(ty).abi
-                            != Some(cq_lang_structures::provider::NativeAbi::Runs) {
+                            != Some(cq_lang_structures::provider::NativeAbi::Runs)
+                        {
                             return Err(error(
                                 "GPU-Runs: native lookup requires a declared run layout",
                             ));

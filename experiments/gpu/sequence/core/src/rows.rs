@@ -144,7 +144,7 @@ fn upload_expression(adapter: &UploadAdapter) -> TokenStream {
 }
 
 /// Device bindings are scalar codes or direct reads through a parent's owner
-/// index. Missing bindings are dead columns, never a second physical row.
+/// index. Every live read and write must have a recorded binding.
 #[derive(Clone, Default)]
 pub struct DeviceRow(pub BTreeMap<usize, TokenStream>);
 
@@ -182,32 +182,71 @@ impl DeviceRow {
         Ok(uses.0)
     }
     pub fn rewrite(&self, tokens: TokenStream) -> syn::Result<TokenStream> {
-        struct Rewrite<'a>(&'a DeviceRow);
+        self.rewrite_with_dead(tokens, &BTreeSet::new())
+    }
+
+    /// Only writes explicitly proven dead by the caller's liveness facts may
+    /// be discarded. An absent binding alone never proves that a column is dead.
+    pub fn rewrite_with_dead(
+        &self,
+        tokens: TokenStream,
+        dead: &BTreeSet<usize>,
+    ) -> syn::Result<TokenStream> {
+        struct Rewrite<'a> {
+            row: &'a DeviceRow,
+            dead: &'a BTreeSet<usize>,
+            error: Option<syn::Error>,
+        }
+        impl Rewrite<'_> {
+            fn missing(&mut self, expression: &syn::Expr, slot: usize, access: &str) {
+                let error = syn::Error::new_spanned(
+                    expression,
+                    format!("T-Gpu: unmapped live __row[{slot}] {access}"),
+                );
+                if let Some(previous) = &mut self.error {
+                    previous.combine(error);
+                } else {
+                    self.error = Some(error);
+                }
+            }
+        }
         impl VisitMut for Rewrite<'_> {
             fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
                 if let syn::Expr::Assign(assign) = expression
                     && let Some(slot) = row_slot(&assign.left)
                 {
-                    if let Some(value) = self.0.0.get(&slot) {
+                    if let Some(value) = self.row.0.get(&slot) {
+                        self.visit_expr_mut(&mut assign.right);
                         let right = &assign.right;
                         *expression = syn::parse_quote!(#value = (#right) as _);
-                    } else {
+                    } else if self.dead.contains(&slot) {
                         *expression = syn::parse_quote!(());
+                    } else {
+                        self.missing(expression, slot, "write");
                     }
                     return;
                 }
                 if let Some(slot) = row_slot(expression) {
-                    *expression = self.0.0.get(&slot).map_or_else(
-                        || syn::parse_quote!(0i64),
-                        |value| syn::parse_quote!(#value),
-                    );
+                    if let Some(value) = self.row.0.get(&slot) {
+                        *expression = syn::parse_quote!(#value);
+                    } else {
+                        self.missing(expression, slot, "read");
+                    }
                     return;
                 }
                 syn::visit_mut::visit_expr_mut(self, expression);
             }
         }
         let mut block: syn::Block = syn::parse2(quote!({#tokens}))?;
-        Rewrite(self).visit_block_mut(&mut block);
+        let mut rewrite = Rewrite {
+            row: self,
+            dead,
+            error: None,
+        };
+        rewrite.visit_block_mut(&mut block);
+        if let Some(error) = rewrite.error {
+            return Err(error);
+        }
         let statements = block.stmts;
         Ok(quote!(#(#statements)*))
     }
@@ -257,7 +296,6 @@ pub struct Rows {
     pub query_captures: cq_lang_structures::syntax::Captures,
     /// Carrier types of capture answer columns, published as kernel scalars.
     capture_types: BTreeMap<String, Type>,
-    pub dense: BTreeSet<usize>,
     sources: BTreeMap<String, Source>,
     providers: BTreeMap<String, Provider>,
     definitions: BTreeMap<String, Definition>,
@@ -447,14 +485,23 @@ impl Rows {
                         continue;
                     }
                     if analysis.structures.facts(&keyed.provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Runs) {
-                        let input = keyed.provider.input.as_ref().ok_or_else(||
-                            error("GPU-Runs: input schema is not recorded"))?;
-                        let types = input.columns.iter().map(|column| column.storage.clone()).collect::<Vec<_>>();
+                        == Some(cq_lang_structures::provider::NativeAbi::Runs)
+                    {
+                        let input = keyed
+                            .provider
+                            .input
+                            .as_ref()
+                            .ok_or_else(|| error("GPU-Runs: input schema is not recorded"))?;
+                        let types = input
+                            .columns
+                            .iter()
+                            .map(|column| column.storage.clone())
+                            .collect::<Vec<_>>();
                         run_binding = Some((types, input.key_count));
                         resident = true;
                     } else if analysis.structures.facts(&keyed.provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Columns) {
+                        == Some(cq_lang_structures::provider::NativeAbi::Columns)
+                    {
                         resident = true;
                     }
                 }
@@ -917,9 +964,6 @@ impl Rows {
                     Some(::cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?)
             } else { None };
         });
-        // Parent carriers are the recorded i64 row ABI, regardless of the
-        // logical Rust type or the source column's compressed storage width.
-        let dense = BTreeSet::new();
         let rust_reads = definitions
             .iter()
             .filter_map(|(name, definition)| {
@@ -941,7 +985,6 @@ impl Rows {
             output_columns,
             query_captures: physical.program.captures.clone(),
             capture_types,
-            dense,
             sources,
             providers,
             definitions,
@@ -1050,9 +1093,8 @@ impl Rows {
         };
         // DECODE V: P6 source scans reconstruct FOR values into i64 even for code-only joins and predicates.
         let reads = source.reads.iter().map(|(slot, view)| {
-            let decode = if self.dense.contains(slot) { format_ident!("decode_u32") } else { format_ident!("decode") };
             quote! {
-                #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::#decode(#view, #position) } as i64;
+                #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::decode(#view, #position) } as i64;
             }
         });
         Ok(quote!(#(#reads)*))
@@ -1422,8 +1464,10 @@ pub(crate) fn device_source_results(analysis: &Analysis) -> BTreeSet<String> {
             .filter_map(|(name, layouts)| {
                 layouts
                     .iter()
-                    .any(|(_, provider)| analysis.structures.facts(provider).abi
-                        == Some(cq_lang_structures::provider::NativeAbi::Range))
+                    .any(|(_, provider)| {
+                        analysis.structures.facts(provider).abi
+                            == Some(cq_lang_structures::provider::NativeAbi::Range)
+                    })
                     .then(|| name.clone())
             }),
     );
@@ -1483,8 +1527,10 @@ fn host_rows(
             if analysis
                 .structures
                 .built_on(&provider, &keys)
-                .is_some_and(|(provider, _)| analysis.structures.facts(provider).abi
-                    == Some(cq_lang_structures::provider::NativeAbi::Range))
+                .is_some_and(|(provider, _)| {
+                    analysis.structures.facts(provider).abi
+                        == Some(cq_lang_structures::provider::NativeAbi::Range)
+                })
             {
                 return Err(error(format!(
                     "T-Gpu: host publication {name} reads device-only provider {provider}; record a device grade or a host-capable provider"
@@ -1504,8 +1550,14 @@ fn host_rows(
                 .hosts
                 .get(&symbol_name(&entry.name))
         {
-            run_host_types.insert(host.clone(), input.columns.iter()
-                .map(|column| column.storage.clone()).collect::<Vec<_>>());
+            run_host_types.insert(
+                host.clone(),
+                input
+                    .columns
+                    .iter()
+                    .map(|column| column.storage.clone())
+                    .collect::<Vec<_>>(),
+            );
         }
     }
     let mut host_structures = program.structures.clone();
@@ -1516,7 +1568,8 @@ fn host_rows(
             .get(&symbol_name(&entry.name))
             && let cq_lang_structures::Structure::Host { keyed, .. } = &mut entry.structure
         {
-            keyed.provider = cq_lang_structures::provider::base::instance("host_scan", provider.clone());
+            keyed.provider =
+                cq_lang_structures::provider::base::instance("host_scan", provider.clone());
             keyed.supports = None;
         }
     }
@@ -1790,8 +1843,10 @@ fn interval(
     let next = quote!((#value).checked_add(1).ok_or("T-Gpu: selection bound overflow")?);
     match op {
         "eq" => {
-            selection.start = value;
-            selection.end = next;
+            let start = &selection.start;
+            let end = &selection.end;
+            selection.start = quote!((#start).max(#value));
+            selection.end = quote!((#end).min(#next));
         }
         "ge" | "gt" => {
             let prior = &selection.start;
@@ -1940,6 +1995,103 @@ pub(crate) fn lookup_demands(program: &Program) -> BTreeSet<(String, Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_regression_equality_intersects_existing_interval() {
+        let mut selection = None;
+        interval(&mut selection, "x".into(), quote!(2i64), "lt").unwrap();
+        interval(&mut selection, "x".into(), quote!(3i64), "eq").unwrap();
+        let selection = selection.unwrap();
+        assert_eq!(
+            selection.end.to_string(),
+            quote!(
+                ((i64::MAX).min(2i64)).min(
+                    (3i64)
+                        .checked_add(1)
+                        .ok_or("T-Gpu: selection bound overflow")?
+                )
+            )
+            .to_string(),
+        );
+    }
+
+    #[test]
+    fn row_regression_missing_read_is_a_named_error() {
+        let error = DeviceRow::default()
+            .rewrite(quote!(consume(__row[7]);))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("T-Gpu: unmapped live __row[7] read"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn row_regression_missing_write_is_a_named_error() {
+        let error = DeviceRow::default()
+            .rewrite(quote!(__row[7] = 3i64;))
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("T-Gpu: unmapped live __row[7] write"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn row_regression_assignment_rewrites_its_live_inputs() {
+        let row = DeviceRow(BTreeMap::from([(0, quote!(target)), (1, quote!(source))]));
+        let rewritten = row.rewrite(quote!(__row[0] = __row[1] + 1;)).unwrap();
+        assert_eq!(
+            rewritten.to_string(),
+            quote!(target = (source + 1) as _;).to_string()
+        );
+    }
+
+    #[test]
+    fn row_regression_assignment_reports_missing_live_input() {
+        let row = DeviceRow(BTreeMap::from([(0, quote!(target))]));
+        let error = row.rewrite(quote!(__row[0] = __row[7];)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("T-Gpu: unmapped live __row[7] read"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn row_regression_only_explicitly_dead_writes_are_discarded() {
+        let row = DeviceRow::default();
+        let dead = BTreeSet::from([7]);
+        assert_eq!(
+            row.rewrite_with_dead(quote!(__row[7] = 3i64;), &dead)
+                .unwrap()
+                .to_string(),
+            quote!(() ;).to_string(),
+        );
+        let error = row
+            .rewrite_with_dead(quote!(consume(__row[7]);), &dead)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("T-Gpu: unmapped live __row[7] read"),
+            "{error}"
+        );
+        let error = row
+            .rewrite_with_dead(quote!(__row[8] = 3i64;), &dead)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("T-Gpu: unmapped live __row[8] write"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn host_store_without_device_consumers_does_not_upload_nullable_values() {

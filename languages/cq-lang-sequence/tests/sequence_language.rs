@@ -744,6 +744,167 @@ fn reject_grade(program: &Program, machine: &Machine, rule: &str) {
     assert!(error.contains(rule), "expected {rule}, got {error}");
 }
 
+fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
+    let mut p = lookup_program(quote! {
+        a = store flatten lookup r [a] rows l;
+        output count;
+    });
+    grade(&mut p, quote!(a at device;));
+    let mut analysis = check_grading(&p, &gpu()).unwrap();
+    assert_eq!(analysis.dispatches.len(), 1);
+    let source = gpu::Strip {
+        rows: None,
+        items: 3,
+        nested: vec![],
+        fold: None,
+    };
+    let mut strips = vec![source];
+    if !deferred {
+        strips.push(gpu::Strip {
+            rows: Some(17),
+            items: 2,
+            nested: vec![],
+            fold: None,
+        });
+    }
+    // Supply launch facts directly: checking must not reproduce the producer's
+    // chosen defaults (these positive implicit sizes deliberately differ).
+    analysis.dispatches[0].gpu = Some(gpu::Execution {
+        partition: gpu::Partition::Tiles { rows: 19 },
+        grid: gpu::Grid::KernelOccupancy,
+        block_threads: 256,
+        publication: if deferred {
+            gpu::Publication::DeferredRange {
+                provider: "r".into(),
+                keys: vec!["a".into()],
+            }
+        } else {
+            gpu::Publication::Rows
+        },
+        offsets: if deferred {
+            gpu::OffsetScan::DeviceExclusive
+        } else {
+            gpu::OffsetScan::None
+        },
+        fold: gpu::FoldCompletion::Local,
+        synchronization: if deferred {
+            vec![
+                gpu::Synchronization::CountAndFailure,
+                gpu::Synchronization::RangeOffsets,
+            ]
+        } else {
+            vec![gpu::Synchronization::CountAndFailure]
+        },
+        capacity: gpu::InitialCapacity::Zero,
+        reservation: gpu::Reservation::StripeBatch,
+        chains: vec![gpu::ChainExecution { strips }],
+        share: gpu::Share::None,
+        meta: gpu::Meta::Fresh,
+    });
+    gpu::check(&p, &analysis).unwrap();
+    (p, analysis)
+}
+
+fn reject_gpu_launch(p: &Program, analysis: &Analysis, message: &str) {
+    let error = gpu::check(p, analysis).unwrap_err().to_string();
+    assert!(error.contains("GPU-Launch:"), "{error}");
+    assert!(error.contains(message), "{error}");
+}
+
+#[test]
+fn gpu_launch_checker_accepts_recorded_positive_implicit_sizes() {
+    for deferred in [false, true] {
+        let (p, mut analysis) = gpu_launch_fixture(deferred);
+        for rows in [1, 37, 1024] {
+            analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Tiles { rows };
+            gpu::check(&p, &analysis).unwrap();
+        }
+        analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One;
+        gpu::check(&p, &analysis).unwrap();
+    }
+}
+
+#[test]
+fn gpu_launch_checker_rejects_deferred_range_without_offsets() {
+    let (p, mut analysis) = gpu_launch_fixture(true);
+    analysis.dispatches[0].gpu.as_mut().unwrap().offsets = gpu::OffsetScan::None;
+    reject_gpu_launch(&p, &analysis, "offset scan");
+}
+
+#[test]
+fn gpu_launch_checker_rejects_row_publication_with_offsets() {
+    let (p, mut analysis) = gpu_launch_fixture(false);
+    analysis.dispatches[0].gpu.as_mut().unwrap().offsets = gpu::OffsetScan::DeviceExclusive;
+    reject_gpu_launch(&p, &analysis, "offset scan");
+}
+
+#[test]
+fn gpu_launch_checker_rejects_missing_count_synchronization() {
+    for deferred in [false, true] {
+        let (p, mut analysis) = gpu_launch_fixture(deferred);
+        analysis.dispatches[0]
+            .gpu
+            .as_mut()
+            .unwrap()
+            .synchronization
+            .remove(0);
+        reject_gpu_launch(&p, &analysis, "synchronization");
+    }
+}
+
+#[test]
+fn gpu_launch_checker_rejects_missing_range_synchronization() {
+    let (p, mut analysis) = gpu_launch_fixture(true);
+    analysis.dispatches[0]
+        .gpu
+        .as_mut()
+        .unwrap()
+        .synchronization
+        .pop();
+    reject_gpu_launch(&p, &analysis, "synchronization");
+}
+
+#[test]
+fn gpu_launch_checker_rejects_row_range_synchronization() {
+    let (p, mut analysis) = gpu_launch_fixture(false);
+    analysis.dispatches[0]
+        .gpu
+        .as_mut()
+        .unwrap()
+        .synchronization
+        .push(gpu::Synchronization::RangeOffsets);
+    reject_gpu_launch(&p, &analysis, "synchronization");
+}
+
+#[test]
+fn gpu_launch_checker_rejects_reordered_synchronization() {
+    let (p, mut analysis) = gpu_launch_fixture(true);
+    analysis.dispatches[0]
+        .gpu
+        .as_mut()
+        .unwrap()
+        .synchronization
+        .reverse();
+    reject_gpu_launch(&p, &analysis, "synchronization");
+}
+
+#[test]
+fn gpu_launch_checker_rejects_duplicate_synchronization() {
+    for deferred in [false, true] {
+        let (p, mut analysis) = gpu_launch_fixture(deferred);
+        let points = &mut analysis.dispatches[0].gpu.as_mut().unwrap().synchronization;
+        points.push(points.last().unwrap().clone());
+        reject_gpu_launch(&p, &analysis, "synchronization");
+    }
+}
+
+#[test]
+fn gpu_launch_checker_rejects_zero_partition_rows() {
+    let (p, mut analysis) = gpu_launch_fixture(false);
+    analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Tiles { rows: 0 };
+    reject_gpu_launch(&p, &analysis, "zero partition rows");
+}
+
 #[test]
 fn every_grammar_form_round_trips() {
     let mut p = program(quote! {

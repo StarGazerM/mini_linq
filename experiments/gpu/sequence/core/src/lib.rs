@@ -13,10 +13,10 @@ mod domains;
 mod emit;
 mod grouping;
 pub mod layout;
+pub mod providers;
 mod realize;
 mod reduce;
 mod rows;
-pub mod providers;
 pub mod runs;
 
 pub use arena::translate_arena;

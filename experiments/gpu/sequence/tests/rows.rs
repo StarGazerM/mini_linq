@@ -167,7 +167,11 @@ fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() 
         })
         .unwrap();
         let generated = translate(&program);
-        assert!(generated.contains("device :: contains_u32"), "{generated}");
+        assert!(
+            generated.contains("device :: decode (__column"),
+            "{generated}"
+        );
+        assert!(!generated.contains("contains_u32"), "{generated}");
         assert!(
             generated.contains(&format!("__member_found != {negated}")),
             "{generated}"
@@ -295,4 +299,72 @@ fn segmented_arithmetic_bindings_are_lane_local() {
             );
         }
     }
+}
+
+#[cfg(feature = "cuda-oracle")]
+#[test]
+fn row_regression_contradictory_provider_intervals_are_empty() -> cq_gpu_sequence_runtime::Result<()>
+{
+    use cq_gpu_runtime::{Codec, DeviceColumns, Dictionary, Pool};
+    let pool = Pool::new(0, 0, 0)?;
+    let data = DeviceColumns::from_rows(
+        pool,
+        &[(0i32,), (1,), (2,), (3,), (4,)],
+        &mut Dictionary::default(),
+        &[Codec::For],
+    )?;
+    macro_rules! selected_count {
+        ([$($producer:tt)*] $($selection:tt)*) => {{
+            let output = cq_gpu_sequence_test_macros::sequence! {
+                physical {
+                    relation R(x:i32) = (&data);
+                    driver = pipe rename R@0 {x -> x};
+                    provider = pipe rename R@1 {x -> x};
+                    $($selection)*
+                    present = pipe semi eager [x] driver,selected;
+                    result = let canon project present keep {x};
+                    return result as answer(x);
+                }
+                structures {
+                    providers {
+                        device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns };
+                        range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range };
+                        packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 };
+                    }
+                    driver host scan = @device_columns input { keys 0; columns [i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(i32,)> [];
+                    provider host scan = @device_columns input { keys 0; columns [i32 => i32] } as ::cq_gpu_runtime::DeviceColumns<'static,(i32,)> [];
+                    selected = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [x];
+                    result rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                    result canon = rows;
+                }
+                sequence {
+                    input = store rows driver;
+                    index = store $($producer)*;
+                    present_rows = compact present lookup selected [x] flatten tile 256 input;
+                    output_rows = store canon map result present_rows;
+                    output count;
+                }
+                graded gpu {
+                    input at host;
+                    index at host;
+                    present_rows at host.device.block;
+                    output_rows at host.device;
+                }
+            };
+            let actual: Vec<(i32,)> = output.to_host()?;
+            actual
+        }};
+    }
+    let chained = selected_count!([compact selected compact bounded rows provider]
+        bounded = pipe select provider if (x < 2i32);
+        selected = let select bounded if (x = 3i32);
+    );
+    let combined = selected_count!([compact selected rows provider]
+        selected = let select provider if (x < 2i32, x = 3i32);
+    );
+    assert!(
+        chained.is_empty() && combined.is_empty(),
+        "chained selects returned {chained:?}; same-select intersection returned {combined:?}",
+    );
+    Ok(())
 }

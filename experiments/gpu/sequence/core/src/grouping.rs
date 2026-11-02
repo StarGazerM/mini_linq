@@ -19,7 +19,10 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
     cq_lang_structures::contract::check(source)?;
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
-        if let Structure::Group { provider: recorded, .. } = &mut entry.structure {
+        if let Structure::Group {
+            provider: recorded, ..
+        } = &mut entry.structure
+        {
             *recorded = provider();
         }
     }
@@ -137,7 +140,10 @@ mod tests {
         for ty in providers {
             let mut target = bind(&source(true)).unwrap();
             for entry in &mut target.structures.entries {
-                if let Structure::Group { provider: recorded, .. } = &mut entry.structure {
+                if let Structure::Group {
+                    provider: recorded, ..
+                } = &mut entry.structure
+                {
                     recorded.ty = ty.clone();
                 }
             }

@@ -1,9 +1,9 @@
 //! Checked bindings for declared packed-run inputs.
+use cq_lang_structures::provider::NativeAbi;
 use cq_lang_structures::{Program, Structure, physical::symbol_name};
 use quote::quote;
 use std::collections::BTreeMap;
 use syn::Type;
-use cq_lang_structures::provider::NativeAbi;
 
 /// Compared columns share one checked encoding for each logical Rust type.
 #[derive(Default)]

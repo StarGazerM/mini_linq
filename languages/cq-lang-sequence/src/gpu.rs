@@ -565,6 +565,7 @@ fn strip(operations: &[Step], source: bool, block: usize) -> Strip {
 /// GPU-Launch checker: validate supplied launch records against the
 /// checked dispatches without selecting defaults. Any positive implicit strip
 /// is sound; explicit tiles, fold scopes and the output protocol are facts.
+/// Offset scans and synchronization follow the recorded publication kind.
 pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     let error = |message: &str| {
         syn::Error::new(
@@ -579,6 +580,30 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         };
         if execution.block_threads == 0 {
             return Err(error("zero block width"));
+        }
+        if matches!(execution.partition, Partition::Tiles { rows: 0 }) {
+            return Err(error("zero partition rows"));
+        }
+        // GPU-OffsetScan: deferred lengths need an exclusive scan and its
+        // total/failure readback after the producer's count/failure readback.
+        // Rows have neither range offsets nor a range readback.
+        let (offsets, synchronization): (_, &[Synchronization]) = match &execution.publication {
+            Publication::Rows => (OffsetScan::None, &[Synchronization::CountAndFailure]),
+            Publication::DeferredRange { .. } => (
+                OffsetScan::DeviceExclusive,
+                &[
+                    Synchronization::CountAndFailure,
+                    Synchronization::RangeOffsets,
+                ],
+            ),
+        };
+        if execution.offsets != offsets {
+            return Err(error("offset scan contradicts the recorded publication"));
+        }
+        if execution.synchronization.as_slice() != synchronization {
+            return Err(error(
+                "synchronization contradicts the recorded publication",
+            ));
         }
         // GPU-RootSpread: the recorded partition follows the program's root
         // policy exactly; a fold-bearing dispatch never spreads.

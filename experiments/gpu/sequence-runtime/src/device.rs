@@ -64,25 +64,3 @@ pub unsafe fn range(offsets: ColumnView, key: u32) -> (u32, u32) {
     }
 }
 
-/// Exact membership in an ascending resident u32 column over `[begin, end)`.
-/// Empty ranges return false without reading a value.
-///
-/// # Safety
-/// The column and its owners must be live. `begin <= end` must delimit an
-/// initialized logical range sorted by decoded u32 value.
-#[device]
-#[inline(always)]
-pub unsafe fn contains_u32(column: ColumnView, begin: u32, end: u32, value: u32) -> bool {
-    let (mut low, mut high) = (begin, end);
-    while low < high {
-        let middle = low + (high - low) / 2;
-        // DECODE V: binary membership probe reconstructs each midpoint; P6 compare code-domain keys or use plain indexes.
-        if unsafe { decode_u32(column, middle as u64) } < value {
-            low = middle + 1;
-        } else {
-            high = middle;
-        }
-    }
-    // DECODE V: final membership comparison reconstructs the candidate; P6 retain encoded comparison operands.
-    low < end && unsafe { decode_u32(column, low as u64) } == value
-}

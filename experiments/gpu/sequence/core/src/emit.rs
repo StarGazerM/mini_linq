@@ -690,8 +690,20 @@ impl<'a> Compiler<'a> {
             let slot = self.slot(key)?;
             if membership && depth + 1 == keys.len() {
                 membership_checks.extend(quote! {
-                    __member_found = ::cq_gpu_sequence_runtime::device::contains_u32(
-                        *#view.payload.add(#index),__begin,__end,__row[#slot] as u32);
+                    let __key = __row[#slot];
+                    let __column = *#view.payload.add(#index);
+                    let (mut __low, mut __high) = (__begin, __end);
+                    while __low < __high {
+                        let __middle = __low + (__high - __low) / 2;
+                        // DECODE V: P4 membership reconstructs FOR values for full-width comparison, never truncated codes.
+                        if ::cq_gpu_sequence_runtime::device::decode(__column, __middle as u64) < __key {
+                            __low = __middle + 1;
+                        } else {
+                            __high = __middle;
+                        }
+                    }
+                    __member_found = __low < __end
+                        && ::cq_gpu_sequence_runtime::device::decode(__column, __low as u64) == __key;
                 });
             } else {
                 membership_checks.extend(quote! {
@@ -750,8 +762,7 @@ impl<'a> Compiler<'a> {
         // DECODE V: P6 provider payload reconstructs FOR values without restricting decode to rust_reads columns.
         let assignments = payload.iter().enumerate().map(|(index,column)| {
             let slot=self.slot(column)?;
-            let decode = if self.rows.dense.contains(&slot) { format_ident!("decode_u32") } else { format_ident!("decode") };
-            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::#decode(*#view.payload.add(#index), (#position) as u64) as i64;))
+            Ok(quote!(__row[#slot] = ::cq_gpu_sequence_runtime::device::decode(*#view.payload.add(#index), (#position) as u64);))
         }).collect::<syn::Result<Vec<_>>>()?;
         Ok(quote!(#(#assignments)*))
     }
@@ -799,7 +810,15 @@ impl Kernel<'_, '_> {
                 .map(|column| self.compiler.slot(column))
                 .collect()
         } else {
-            Ok(self.publication_columns.clone())
+            let mut slots = self.publication_columns.clone();
+            if let Some(provider) = &self.virtual_range {
+                // A deferred publication owns the parent and range offsets.
+                // Provider payloads become live only when that range is read.
+                for column in self.compiler.rows.provider(provider)?.1 {
+                    slots.remove(&self.compiler.slot(&column)?);
+                }
+            }
+            Ok(slots)
         }
     }
 
@@ -851,12 +870,8 @@ impl Kernel<'_, '_> {
         Ok(live)
     }
 
-    fn code_type(&self, slot: usize) -> TokenStream {
-        if self.compiler.rows.dense.contains(&slot) {
-            quote!(u32)
-        } else {
-            quote!(i64)
-        }
+    fn code_type(&self, _slot: usize) -> TokenStream {
+        quote!(i64)
     }
 
     fn scalar_stripes(
@@ -877,7 +892,11 @@ impl Kernel<'_, '_> {
                 entry.insert(quote!(#id));
             }
         }
-        let load = row.rewrite(load)?;
+        let dead = DeviceRow::writes(load.clone())?
+            .difference(&row.0.keys().copied().collect())
+            .copied()
+            .collect();
+        let load = row.rewrite_with_dead(load, &dead)?;
         let terminal = self.sink.is_none()
             && operations.iter().enumerate().all(|(at, operation)| {
                 if let Operation::Lookup {
@@ -1060,12 +1079,7 @@ impl Kernel<'_, '_> {
                 let mut child = DeviceRow::default();
                 for slot in self.live_columns(rest)?.difference(&payload_columns) {
                     let ty = self.code_type(*slot);
-                    let bytes = if self.compiler.rows.dense.contains(slot) {
-                        4
-                    } else {
-                        8
-                    };
-                    let at = self.shared.parent(bytes)?;
+                    let at = self.shared.parent(8)?;
                     let id = format_ident!("__parent_{at}");
                     let value = row
                         .0
@@ -1368,7 +1382,8 @@ impl Kernel<'_, '_> {
             } else {
                 TokenStream::new()
             };
-            let columns = (0..width).map(|slot| quote! {
+            let slots = self.output_slots()?;
+            let columns = slots.iter().map(|slot| quote! {
                 *__output_rows.add(__destination as usize * #width + #slot) = __row[#slot] as i64;
             });
             quote! {
@@ -1862,7 +1877,11 @@ fn translate_observed(
                     declarations.extend(quote!(let mut #id = 0i64;));
                     row.0.insert(slot, quote!(#id));
                 }
-                let load = row.rewrite(load)?;
+                let dead = DeviceRow::writes(load.clone())?
+                    .difference(&row.0.keys().copied().collect())
+                    .copied()
+                    .collect();
+                let load = row.rewrite_with_dead(load, &dead)?;
                 let mut parameters: Vec<_> = compiler
                     .rows
                     .parameters
@@ -1914,7 +1933,11 @@ fn translate_observed(
                     };
                     crate::reduce::group(
                         group,
-                        analysis.structures.groups.get(&result).map(|provider| &provider.ty),
+                        analysis
+                            .structures
+                            .groups
+                            .get(&result)
+                            .map(|provider| &provider.ty),
                         columns,
                         &compiler.rows.output_columns,
                         &analysis.structures.physical.rows[&result].types,
@@ -2523,11 +2546,18 @@ fn translate_observed(
                     }
                 } else if let Some(provider) = &compiler.stored[prior].range {
                     let payload = compiler.payload(provider, quote!(__source_position))?;
-                    let copy = (0..width).map(|slot| {
-                        quote! {
-                            __row[#slot] = *#rows.add(__parent * #width + #slot);
-                        }
-                    });
+                    let payload_columns = compiler.rows.provider(provider)?.1;
+                    let copy = analysis.structures.physical.headings
+                        [&compiler.stored[prior].result]
+                        .iter()
+                        .filter(|column| !payload_columns.contains(column))
+                        .map(|column| {
+                            let slot = compiler.slot(column)?;
+                            Ok(quote! {
+                                __row[#slot] = *#rows.add(__parent * #width + #slot);
+                            })
+                        })
+                        .collect::<syn::Result<Vec<_>>>()?;
                     quote! {
                         let __parent=::cq_gpu_sequence_runtime::device::owner(#offsets,*#meta,__position as u32) as usize;
                         #(#copy)*
@@ -3146,7 +3176,11 @@ fn translate_observed(
                 declarations.extend(quote!(let mut #code = 0i64;));
                 row.0.insert(slot, quote!(#code));
             }
-            let load = row.rewrite(load)?;
+            let dead = DeviceRow::writes(load.clone())?
+                .difference(&row.0.keys().copied().collect())
+                .copied()
+                .collect();
+            let load = row.rewrite_with_dead(load, &dead)?;
             let mut parameters = Vec::new();
             let mut arguments = compiler.rows.capture_arguments(&[]);
             for (name, ty, _) in &compiler.rows.parameters {
@@ -3392,6 +3426,73 @@ mod tests {
     use super::*;
     use cq_lang_sequence::gpu::publication::{Granularity, PackedKeys};
     use quote::ToTokens;
+
+    #[test]
+    fn flat_publication_reads_only_its_recorded_columns() {
+        let program: Program = syn::parse_quote! {
+            physical {
+                relation R(a:i64,b:i64) = (&data);
+                r = let rename R@0 {a -> a,b -> b};
+                driver = pipe rename R@1 {a -> a,b -> c};
+                joined = let canon probe first [a] driver,r;
+                return joined as answer(a,b,c);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build macro, abi columns, bounds resident_columns };
+                    packed_canon = ::cq_gpu_sequence_runtime::canon::PackedCanon { reads [distinct], build inferred, packed_bits 128 };
+                    range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range };
+                }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64,i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                driver host scan = @device_columns input { keys 0; columns [i64 => i64,i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a];
+                joined rows = @packed_canon as ::cq_gpu_sequence_runtime::canon::PackedCanon;
+                joined canon = rows;
+            }
+            sequence {
+                index = store rows r;
+                input = store rows driver;
+                output_rows = store canon map joined flatten lookup r [a] flatten tile 256 input;
+                output count;
+            }
+            graded gpu { index at host; input at host; output_rows at device; }
+        };
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let compiler = Compiler {
+            program: &program,
+            analysis: &analysis,
+            rows: Rows::new(&program, &analysis).unwrap(),
+            stored: Vec::new(),
+            definitions: BTreeMap::new(),
+        };
+        let slot = compiler.slot("b").unwrap();
+        let mut kernel = Kernel {
+            compiler: &compiler,
+            shared: crate::layout::SharedLayout::new(),
+            virtual_range: None,
+            packed_columns: None,
+            arena_packing: None,
+            publication_columns: BTreeSet::from([slot]),
+            sink: None,
+            combine: None,
+            expansion_counters: false,
+            expansion_stages: 0,
+            strips: Default::default(),
+            share: None,
+        };
+        let write = kernel.output_write().unwrap();
+        assert_eq!(
+            DeviceRow::uses(write.clone()).unwrap(),
+            BTreeSet::from([slot])
+        );
+        DeviceRow(BTreeMap::from([(slot, quote!(value))]))
+            .rewrite(write)
+            .unwrap();
+        kernel.virtual_range = Some(compiler.rows.provider_name("r", &["a".into()]).unwrap());
+        let write = kernel.output_write().unwrap();
+        assert!(DeviceRow::uses(write.clone()).unwrap().is_empty());
+        DeviceRow::default().rewrite(write).unwrap();
+    }
 
     /// Identifiers of generated code; independent of token spacing.
     fn idents(tokens: TokenStream) -> BTreeSet<String> {
@@ -4231,7 +4332,9 @@ mod tests {
             } else {
                 (
                     quote!(filtered rows = @vec as ::std::vec::Vec<_>;),
-                    Some(quote!(vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows };)),
+                    Some(
+                        quote!(vec = ::std::vec::Vec<_> { reads [], build macro, accounting rows };),
+                    ),
                 )
             };
             let program: Program = syn::parse2(quote! {
@@ -4436,12 +4539,7 @@ mod tests {
                     assert!(!generated.contains("__row"));
                     assert!(!generated.contains("__fold_result as u32"));
                     if matches!(monoid, Monoid::Sum(_)) {
-                        let input_type = if compiler.rows.dense.contains(&0) {
-                            "u32"
-                        } else {
-                            "i64"
-                        };
-                        assert!(generated.contains(&format!("let mut __code_0 : {input_type}")));
+                        assert!(generated.contains("let mut __code_0 : i64"));
                     }
                 }
             }
