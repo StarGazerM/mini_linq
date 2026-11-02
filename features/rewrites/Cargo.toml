@@ -33,7 +33,7 @@ cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
 cq-lang-ix = { version = "0.1.0", path = "../../languages/cq-lang-ix" }
 cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
 cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
-cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
+cq-relational-lowering = { version = "0.1.0", path = "../../passes/cq-relational-lowering" }
 cq-index-policy = { version = "0.1.0", path = "../../passes/cq-index-policy" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 proc-macro2 = "1"

@@ -493,62 +493,62 @@ survives every semijoin.\end{proof}
 \emph{Refinement:} semijoins are relational and only remove tuples absent from
 the join, so meanings are equal; Rust steps are untouched.
 
-\subsection{Elaboration: VO $\to$ RA prime}
+\subsection{Relational lowering: VO $\to$ RA prime}
 State $(D,M,p,B)$: emitted definitions, latest result per clause, optional
 prefix, its heading. Relations are emitted lazily at first mention with their
 fixed occurrence paths.
 \begin{mathpar}
-\Rule{E-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
+\Rule{RL-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
  {\emit(D,o)=(D\concat[r=o],r)}
 
-\Rule{E-Relation}{i\notin\dom M\quad C_i=\{c_j=a_j\mid a_j\text{ is literal}\}\\
+\Rule{RL-Occurrence}{i\notin\dom M\quad C_i=\{c_j=a_j\mid a_j\text{ is literal}\}\\
  m_i:\operatorname{cols}(R_i)\setminus\dom C_i\cong\bar X_i\quad
  (D',r)=\emit(D,\delta_{m_i}(\pi_{\dom m_i}\sigma_{C_i}(R_i@i)))}
  {\mathsf{relation}(i;D,M)=(D',M[i\mapsto r],r)}
 
-\Rule{E-Check}{K\subsetneq X_i\quad\mathsf{introduces}=\emptyset\quad p\ne\bot}
+\Rule{RL-Check}{K\subsetneq X_i\quad\mathsf{introduces}=\emptyset\quad p\ne\bot}
  {(D,M,p,B)\xrightarrow{i,K}(D',M,s,B)\quad[(D',s)=\emit(D,p\ltimes r)]}
 
-\Rule{E-Project}{K\subsetneq X_i\quad\neg(\mathsf{introduces}=\emptyset\land p\ne\bot)\\
+\Rule{RL-Project}{K\subsetneq X_i\quad\neg(\mathsf{introduces}=\emptyset\land p\ne\bot)\\
  (D',s)=\emit(D,\pi_Kr)}
  {\mathsf{subatomRight}(i,K)=(D',s)}
 
-\Rule{B-Root}{p=\bot\quad s=\mathsf{subatomRight}(i,K)}
+\Rule{RL-Root}{p=\bot\quad s=\mathsf{subatomRight}(i,K)}
  {(D,M,p,B)\xrightarrow{i,K}(D,M,s,B\cup K)}
 
-\Rule{B-Join}{p\ne\bot\quad\text{E-Check inapplicable}\quad s=\mathsf{subatomRight}(i,K)\\
+\Rule{RL-Join}{p\ne\bot\quad\text{RL-Check inapplicable}\quad s=\mathsf{subatomRight}(i,K)\\
  (D',t)=\emit(D,p\bowtie s)}
  {(D,M,p,B)\xrightarrow{i,K}(D',M,t,B\cup K)}
 
-\Rule{C-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
+\Rule{RL-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
  (D',s)=\emit(D,\operatorname{guard}_e p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B)}
 
-\Rule{C-Bind}{\mathsf{step}=\mathsf{Let}(pat[:\tau]=e)\quad\bar N=\binds(pat)\\
+\Rule{RL-Bind}{\mathsf{step}=\mathsf{Let}(pat[:\tau]=e)\quad\bar N=\binds(pat)\\
  p_0=\mathsf{unitize}(p)\quad(D',s)=\emit(D,\operatorname{bind}_{pat[:\tau],e}p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))}
 
-\Rule{C-For}{\mathsf{step}=\mathsf{For}(pat\ \mathsf{in}\ e)\quad\bar N=\binds(pat)\\
+\Rule{RL-For}{\mathsf{step}=\mathsf{For}(pat\ \mathsf{in}\ e)\quad\bar N=\binds(pat)\\
  p_0=\mathsf{unitize}(p)\quad(D',s)=\emit(D,\operatorname{for}_{pat,e}p_0)}
  {(D,M,p,B)\longrightarrow(D',M,s,B\cup\set(\bar N))}
 
-\Rule{E-ReduceWith}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{with}\ j\\
+\Rule{RL-Reduce}{\mathsf{step}=\mathsf{reduce}\ i\ \mathsf{with}\ j\\
  (D',s)=\emit(D,M(i)\ltimes_{\equiv}M(j))}
  {(D,M,p,B)\longrightarrow(D',M[i\mapsto s],p,B)}
 
-\Rule{C-Finish}{\text{all VO steps consumed}\\
+\Rule{RL-Finish}{\text{all VO steps consumed}\\
  p_0=\mathsf{unitize}(p)\quad(D',r)=\emit(D,\pi_Wp_0)}
  {(D,M,p,B)\Downarrow(D',\mathsf{output}\ r\ \mathsf{as}\ h(\bar e))}
 
-\Rule{E-Constraint}{\mathsf{step}=\mathsf{Constraint}(P)\quad
+\Rule{RL-Constraint}{\mathsf{step}=\mathsf{Constraint}(P)\quad
  \vars(P)\subseteq B\quad p_0=\mathsf{unitize}(p)}
  {\mathsf{elaborate}(P,p)=\sigma_Pp_0\text{ at its recorded VO placement}}
 
-\Rule{E-Restrict}{\mathsf{restrict}\ R@i\ \mathsf{where}\ P_1,\ldots,P_n\text{ recorded in the scope}\\
+\Rule{RL-Restrict}{\mathsf{restrict}\ R@i\ \mathsf{where}\ P_1,\ldots,P_n\text{ recorded in the scope}\\
  E=\{P_k\text{ literal equalities}\}\quad G_1,\ldots,G_m=\text{the others grouped by }\vars}
  {\mathsf{relation}(i)=\sigma_{G_m}\cdots\sigma_{G_1}\sigma_E(\delta_{m_i}(R@i))}
 
-\Rule{CK-ElaborateRestrict}{\mathsf{restrict}\ R@i\ \mathsf{where}\ P\in s\\
+\Rule{CK-RelationalLoweringRestrict}{\mathsf{restrict}\ R@i\ \mathsf{where}\ P\in s\\
  \text{every conjunct of }P\text{ selects the selection chain over }\mathsf{rename}\ R@i\text{ in }t}
  {\mathsf{restrictionPlaced}(s,t,P)}
 
@@ -567,7 +567,7 @@ fixed occurrence paths.
  \theta\text{ central and Eq/Ord-admissible}}
  {\sigma_\theta:\operatorname{Set}(V)\longrightarrow\operatorname{Set}(V)}
 
-\Rule{E-BlockPlacement}{b.placement=\mathsf{hoisted}\quad H=F_b\cup I_b
+\Rule{RL-Block}{b.placement=\mathsf{hoisted}\quad H=F_b\cup I_b
  \quad\text{or}\quad b.placement=\mathsf{correlated}\quad H=B\cup F_b\cup I_b}
  {\mathsf{elaborateBlock}(b,p)=
  \mathsf{arms}(b,H,\mathsf{over}=
@@ -581,24 +581,24 @@ fixed occurrence paths.
 \end{mathpar}
 A full subatom always joins; a partial check uses the whole clause relation.
 $\mathsf{unitize}$ emits Unit when no prefix exists; binds copy pattern,
-annotation and expression. In E-ReduceWith, $\ltimes_\equiv$ matches every
+annotation and expression. In RL-Reduce, $\ltimes_\equiv$ matches every
 support column with the target's class; when A-Alias left two names of one
 class unsolved (protected Rust or head names, or a repeated atom argument) it
 is realized as join/select/project over the support projected to its recorded
-subatom columns, the same wiring CK-Elaborate states. Elaboration consumes recorded predicate placement: a
-recorded restriction selects its occurrence (E-Restrict) and every other
-predicate is a prefix step (E-Constraint). It computes no predicate targets,
+subatom columns, the same wiring CK-RelationalLowering states. Lowering consumes recorded predicate placement: a
+recorded restriction selects its occurrence (RL-Restrict) and every other
+predicate is a prefix step (RL-Constraint). It computes no predicate targets,
 pushes nothing that VO does not record, and chooses no joins.
-CK-ElaborateRestrict checks that each restriction selects its own occurrence.
+CK-RelationalLoweringRestrict checks that each restriction selects its own occurrence.
 It never renames variables: aliases are solved in CQ$_{\rm NF}$.
 Recorded hoisted blocks form a derived relation over $F\cup I$, using the
 current prefix projected to $F$ as the finite domain for missing generators
 (VO binds $F$ before the block and before every reduction reading it; there
 is no written-order domain); recorded correlated blocks run
-per row over the prefix. Elaboration never chooses this alternative. The
+per row over the prefix. Lowering never chooses this alternative. The
 written-reference ordering entry \code{cq_order::compile_written} records
 correlated placement recursively and no restriction, so
-\code{cq_elaborate::compile} lowers it with every predicate at its written
+\code{cq_relational_lowering::compile} lowers it with every predicate at its written
 position.
 Structural block views replace every recorded origin of a prefix variable by
 the same context column, including equal origins contributed by different
@@ -616,13 +616,13 @@ Rust expression identity is required. Domain derivation uses only equalities,
 comparisons, inclusive ranges and membership over literal or CQ-Closed operands,
 never database statistics or foreign-key assumptions.
 \[
-\Rule{CK-Elaborate}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
+\Rule{CK-RelationalLowering}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
  t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
  \mathsf{FixedFacts}(s,t)\quad\mathsf{RustPayloadsAndBindings}(s,t)\quad
  \mathsf{BlockPlacements}(s,t)\Downarrow\ok\quad
  \mathsf{RecordedPlacement}(s,t)\\
  \mathsf{OutputBindings}(s)=\mathsf{OutputBindings}(t)}
- {\mathsf{check}_{elaborate}(s,t,())\Downarrow\ok}
+ {\mathsf{check}_{lowering}(s,t,())\Downarrow\ok}
 \]
 The checker builds a schedule from the supplied VO and compares fixed occurrence
 paths and column bindings, equality closure, predicate shapes, named reduction
@@ -632,7 +632,7 @@ original branch. \emph{Refinement:} occurrences, constraints, Rust expressions
 and their recorded placements are those of the source; totality and the
 representation laws establish equal answers.
 For pure positive targets produced by \code{cq_ra_rewrites::simplify_expansions},
-CK-Elaborate also permits an inverse dead-expansion certificate. Starting
+CK-RelationalLowering also permits an inverse dead-expansion certificate. Starting
 only from the supplied RA target, it tentatively replaces a semijoin by a
 natural join. Independent demand analysis of that \emph{expanded source}
 must prove all added columns unobservable, including newly created implicit

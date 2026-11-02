@@ -548,7 +548,7 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
     let valuation = compile_valuation(&source, Planner::Le).unwrap();
     let target = compile(&source, Planner::Le).unwrap();
     check_valuation(&source, &valuation, Planner::Le).unwrap();
-    cq_elaborate::check(&valuation, &target).unwrap();
+    cq_relational_lowering::check(&valuation, &target).unwrap();
     check(&source, &target).unwrap();
     let analysis = ra::contract::check(&target).unwrap();
     assert!(!target.plan.definitions.iter().any(|definition| {
@@ -849,7 +849,7 @@ fn checks_admit_free_relational_rankings() {
         #normal valuation { S@1(y,z); R@0(x,y); }
     })
     .unwrap();
-    let target = cq_elaborate::compile(&alternative).unwrap();
+    let target = cq_relational_lowering::compile(&alternative).unwrap();
     check(&simple, &target).unwrap();
     for planner in [
         Planner::PrefixConnectedCoarse,

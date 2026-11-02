@@ -20,7 +20,7 @@ cq-lang-vo = { version = "0.1.0", path = "../../languages/cq-lang-vo" }
 cq-lang-ra = { version = "0.1.0", path = "../../languages/cq-lang-ra" }
 cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
 cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
-cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
+cq-relational-lowering = { version = "0.1.0", path = "../../passes/cq-relational-lowering" }
 cq-ra-rewrites = { version = "0.1.0", path = "../../passes/cq-ra-rewrites" }
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 cq-planning = { version = "0.1.0", path = "../../facade/cq-planning" }
@@ -35,7 +35,7 @@ cq-planners-macros = { version = "0.1.0", path = "macros" }
 [dev-dependencies]
 cq-testkit.workspace = true
 cq-stage.workspace = true
-cq-elaborate.workspace = true
+cq-relational-lowering.workspace = true
 mini-linq.workspace = true
 cq-storage.workspace = true
 quote.workspace = true

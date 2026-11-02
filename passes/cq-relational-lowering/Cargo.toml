@@ -1,5 +1,5 @@
 [package]
-name = "cq-elaborate"
+name = "cq-relational-lowering"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -24,4 +24,4 @@ source = "cq-lang-vo"
 target = "cq-lang-ra"
 
 [[test]]
-name = "elaborate"
+name = "lowering"

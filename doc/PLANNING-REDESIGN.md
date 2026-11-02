@@ -16,7 +16,7 @@ removed autoref tiers, `build!` dispatch and `AutoDense`. Host read declarations
 and per-reader Structures facts now select direct calls. Capture ownership is
 plain value cloning per consuming move closure (`434b2d14`, 2026-11-02), not
 `Arc` handles. `cq_order::compile_written` owns the written reference;
-`cq_elaborate::compile` lowers it. Datalog negative provider/hash choices live
+`cq_relational_lowering::compile` lowers it. Datalog negative provider/hash choices live
 in Storage (`f7511375`, 2026-11-02), not a `hasher_round` rewrite.
 `DeviceRuns` still implements Datalog state: `fresh` plus `append_sorted`
 replaces fused `admit`; replacing this state with grouped radix sets remains
@@ -145,7 +145,7 @@ planned in this baseline.
 | `cq-syntax guard::term` (retired) | Rust recognition and field-path parameters | replaced by explicit `where` and query-closed `Term::Closed(syn::Expr)` (contract 7) |
 | `cq-order Written` | identity sequence, cross products kept | explicit reference retained; Connected/Coarse facade default done (contract 2) |
 | `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); full reduction is an optional P8 cost question |
-| `cq-elaborate` | predicate binder choice (branch join topology deleted) | predicate placement recorded in VO as `restrict R@i where P;` by `cq-order` (O-Restrict, order-independent H-Local shared with H-FilterRank and the reducers); lowering applies only recorded restrictions; a hoisted block's finite domain is the VO prefix binding its free columns; RA rewrites live in `cq-ra-rewrites`. Open: rename to `cq-relational-lowering` (ElabFix 5) |
+| `cq-relational-lowering` (was `cq-elaborate`) | predicate binder choice (branch join topology deleted) | done: predicate placement recorded in VO as `restrict R@i where P;` by `cq-order` (O-Restrict, order-independent H-Local shared with H-FilterRank); reducers rank by recorded restrictions; lowering (RL-*) applies only recorded decisions; a hoisted block's finite domain is the VO prefix binding its free columns; RA rewrites live in `cq-ra-rewrites` |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / Let vs Pipe | representation choices only; point/range supply and join keys are consumed from matched, checked IX requirements |
 | Sequence decomposition | preserves recorded relational construction | P3.3-lite removes automatic replanning; ordering belongs to VO |
@@ -321,8 +321,8 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   reading Birler/Kemper/Neumann PVLDB'24 in full). The paper's result laws
   reduce to flat RA (`e(R→S) ≡ R⋈S`, `head(R→S) ≡ R⋉S`, lookup reordering is
   semijoin reordering), so VO/RA already express L&E's meaning: a lookup is a
-  subatom that binds nothing (E-Check, `⋉`), an expand is the full subatom
-  (B-Join, `⋈`); Plan-Le/CK-Le check it. What the paper adds is operational
+  subatom that binds nothing (RL-Check, `⋉`), an expand is the full subatom
+  (RL-Join, `⋈`); Plan-Le/CK-Le check it. What the paper adds is operational
   and lives where match sets are values: reuse of the lookup's match set for
   the expand (Structures ST-Share/STR-Witness; Sequence buckets, BE-Bind),
   iterators stored in builds (Fig. 4), and per-tuple smallest-side
@@ -449,7 +449,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     L3 `δ(X⊎Y) = δ(δX⊎δY)` (partial/per-task distinct); L4 in a rule,
     `¬O(x̄)` is an ordinary negated subatom at the VO level where the last
     head variable binds (predicate transfer to the deepest join layer). Levels
-    below it become E-Check witnesses. It reads the committed version, like a
+    below it become RL-Check witnesses. It reads the committed version, like a
     delta occurrence: not recursion through negation, and
     `A_r ∪ (Q▷A_r) = A_r ∪ Q`. L5 as above.
   - **Canonical is an ordinary index, chosen by index selection.** O's
@@ -481,7 +481,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   - **Ownership** (multi-stage, each boundary checked, never by rerunning a
     producer): Incremental/CQ = obligation; RA planning = placement of the
     anti-join per rule (in-plan at level k, or at `admit`) and the
-    existential E-Check levels; Round/Sequence = `admit` granularity (row,
+    existential RL-Check levels; Round/Sequence = `admit` granularity (row,
     `batch(n)`, whole/round) and the residual δ, checked so every producer of
     O discharges ▷O exactly once; index selection = O's indices like any
     relation's; publication = ⊕ per index. Printers print recorded facts only.
@@ -828,14 +828,13 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
    tiers and AutoDense. The DirectCalls cutover removed both; current
    `runtime/cq-storage/src/dispatch.rs` exposes direct functions, and selection
    records native or fallback reads. See `STORAGE.md` §13.3.
-3. **CQ → VO / elaboration owners — ElabFix in progress.** Branch spanning
+3. **CQ → VO / relational lowering owners — ElabFix done.** Branch spanning
    trees are deleted and predicate attachment targets are recorded in VO by
    `cq-order` (`passes/cq-order/src/restrict.rs`, O-Restrict) under the
-   order-independent H-Local rule; lowering applies only recorded
-   restrictions. A hoisted block's finite domain is the VO prefix that binds
-   its free columns (WF-BlockPlacement), not a written-order join, and the
-   checked RA rewrites moved to `cq-ra-rewrites`. Remaining: the
-   `cq-relational-lowering` rename.
+   order-independent H-Local rule; `cq-relational-lowering` (RL-* rules)
+   applies only recorded restrictions. A hoisted block's finite domain is the
+   VO prefix that binds its free columns (WF-BlockPlacement), not a
+   written-order join, and the checked RA rewrites live in `cq-ra-rewrites`.
 4. **GPU runtime owners — historical unrecorded runtime work.** The reviewed
    tree chose run geometry inside the runtime. Current `DeviceState` records
    merge tile, block and permutation threads, consumed by `RunParams`

@@ -243,10 +243,16 @@ pub fn compile_source(
         name: "vo:reduce".into(),
         outcome: judge(&|db| cq_testkit::valuation_semantics::evaluate(&reduced, db)),
     });
-    let ra = pass("ra:elaborate", cq_elaborate::compile(&reduced))?;
-    pass("ra:elaborate", cq_elaborate::check(&reduced, &ra))?;
+    let ra = pass(
+        "ra:relational_lowering",
+        cq_relational_lowering::compile(&reduced),
+    )?;
+    pass(
+        "ra:relational_lowering",
+        cq_relational_lowering::check(&reduced, &ra),
+    )?;
     stages.push(Stage {
-        name: "ra:elaborate".into(),
+        name: "ra:relational_lowering".into(),
         outcome: judge(&|db| cq_testkit::semantics::evaluate_ra(&ra, db).output),
     });
     let ix = pass("ix:index_policy", cq_index_policy::compile(&ra))?;

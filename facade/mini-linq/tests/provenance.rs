@@ -27,11 +27,11 @@ fn elaborate_expression(
     .unwrap();
     cq_order::check(&source, &vo, &options).unwrap();
     let ra = if written {
-        cq_elaborate::compile(&vo).unwrap()
+        cq_relational_lowering::compile(&vo).unwrap()
     } else {
-        cq_elaborate::compile(&vo).unwrap()
+        cq_relational_lowering::compile(&vo).unwrap()
     };
-    cq_elaborate::check(&vo, &ra).unwrap();
+    cq_relational_lowering::check(&vo, &ra).unwrap();
     realize(&ra, decisions)
 }
 
@@ -153,7 +153,7 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
         g = guard j if (observe(x,visits)); b = bind g with y:i32 = (10 / (*x).max(1));
         p = project b keep {y}; output p as answer(y);
     });
-    cq_elaborate::check(&vo, &ra).unwrap();
+    cq_relational_lowering::check(&vo, &ra).unwrap();
     let optimized = realize(&ra, "decisions {project=canon;}");
     let written = written_expression(source, "decisions {}");
     run_cases(&[quote!({
@@ -209,15 +209,15 @@ fn hypergraph_programs(
     let written_vo = cq_order::compile(normal, &ordering).unwrap();
     cq_order::check(normal, &written_vo, &ordering).unwrap();
     let reference_vo = cq_order::compile_written(normal).unwrap();
-    let reference = cq_elaborate::compile(&reference_vo).unwrap();
-    cq_elaborate::check(&reference_vo, &reference).unwrap();
+    let reference = cq_relational_lowering::compile(&reference_vo).unwrap();
+    cq_relational_lowering::check(&reference_vo, &reference).unwrap();
     let reductions = cq_reduce::Options {
         semijoins: cq_reduce::Reductions::Tree,
     };
     let reduced = cq_reduce::compile(&written_vo, &reductions).unwrap();
     cq_reduce::check(&written_vo, &reduced, &reductions).unwrap();
-    let target = cq_elaborate::compile(&reduced).unwrap();
-    cq_elaborate::check(&reduced, &target).unwrap();
+    let target = cq_relational_lowering::compile(&reduced).unwrap();
+    cq_relational_lowering::check(&reduced, &target).unwrap();
     cq_lang_ra::check_rewrite(&reference, &target).unwrap();
     (written_vo, reference, target)
 }
@@ -225,7 +225,7 @@ fn hypergraph_programs(
 fn seed_997_normal() -> cq_lang_cq::Program {
     cq_lang_cq::normal::normalize(
         &syn::parse_str(include_str!(
-            "../../../passes/cq-elaborate/tests/fixtures/fuzz_997.cq"
+            "../../../passes/cq-relational-lowering/tests/fixtures/fuzz_997.cq"
         ))
         .unwrap(),
     )
@@ -323,7 +323,7 @@ fn seed_997_literal_occurrences_are_preserved_before_rust() {
         .unwrap();
     constants.equalities[0].right = cq_lang_ra::EqualityValue::Literal(syn::parse_quote!(99));
     cq_lang_ra::contract::check(&changed).unwrap();
-    assert!(cq_elaborate::check(&written_vo, &changed).is_err());
+    assert!(cq_relational_lowering::check(&written_vo, &changed).is_err());
     assert!(cq_lang_ra::check_rewrite(&reference, &changed).is_err());
     let written = realize(&reference, "");
     let hypergraph = realize(&target, "");

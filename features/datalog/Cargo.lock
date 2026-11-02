@@ -330,17 +330,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-elaborate"
-version = "0.1.0"
-dependencies = [
- "cq-lang-ra",
- "cq-lang-vo",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-index-policy"
 version = "0.1.0"
 dependencies = [
@@ -553,12 +542,12 @@ dependencies = [
 name = "cq-planning"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "cq-relational-lowering",
  "syn 2.0.119",
 ]
 
@@ -578,6 +567,17 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-vo",
  "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relational-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

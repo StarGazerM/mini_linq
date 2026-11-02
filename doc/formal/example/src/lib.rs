@@ -5,7 +5,7 @@
 //! `cq_order::compile` (NF → VO, clauses as written, one subatom per atom),
 //! optionally `cq_reduce::compile` (VO → VO, retaining opaque guards and
 //! inserting the Yannakakis reducer when the query is acyclic),
-//! `cq_elaborate::compile` (VO → RA), `cq_index_policy::compile` (RA → IX).
+//! `cq_relational_lowering::compile` (VO → RA), `cq_index_policy::compile` (RA → IX).
 use cq_lang_cq as cq;
 use cq_lang_ix as index_requirements;
 use cq_lang_ra as ra;
@@ -62,9 +62,9 @@ pub fn boundaries(
     };
     valuation::contract::check(&valuation).unwrap();
     assert_eq!(valuation.cq, normal);
-    let relational = cq_elaborate::compile(&valuation).unwrap();
+    let relational = cq_relational_lowering::compile(&valuation).unwrap();
     ra::contract::check(&relational).unwrap();
-    cq_elaborate::check(&valuation, &relational).unwrap();
+    cq_relational_lowering::check(&valuation, &relational).unwrap();
     let indexes = cq_index_policy::compile(&relational).unwrap();
     index_requirements::contract::check(&indexes).unwrap();
     cq_index_policy::check(&relational, &indexes).unwrap();

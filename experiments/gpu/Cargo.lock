@@ -295,17 +295,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cq-elaborate"
-version = "0.1.0"
-dependencies = [
- "cq-lang-ra",
- "cq-lang-vo",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-gpu-datalog"
 version = "0.1.0"
 dependencies = [
@@ -468,7 +457,6 @@ dependencies = [
 name = "cq-gpu-tpch"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-gpu-runtime",
  "cq-gpu-sequence",
  "cq-gpu-sequence-runtime",
@@ -481,6 +469,7 @@ dependencies = [
  "cq-load",
  "cq-physical-lowering",
  "cq-planning",
+ "cq-relational-lowering",
  "cq-rewrite-passes",
  "cq-sequence-lowering",
  "cq-sequence-plan",
@@ -735,7 +724,6 @@ dependencies = [
 name = "cq-planners-plan"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
@@ -743,6 +731,7 @@ dependencies = [
  "cq-planning",
  "cq-ra-rewrites",
  "cq-reduce",
+ "cq-relational-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -752,12 +741,12 @@ dependencies = [
 name = "cq-planning"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "cq-relational-lowering",
  "syn 2.0.119",
 ]
 
@@ -785,6 +774,17 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-vo",
  "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relational-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

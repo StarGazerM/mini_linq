@@ -12,7 +12,7 @@ cq-lang-vo.workspace = true
 cq-lang-ra.workspace = true
 cq-order.workspace = true
 cq-reduce.workspace = true
-cq-elaborate.workspace = true
+cq-relational-lowering.workspace = true
 syn.workspace = true
 
 [dev-dependencies]

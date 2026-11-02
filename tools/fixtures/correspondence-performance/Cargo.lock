@@ -25,22 +25,11 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "correspondence-performance-fixture"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-ra",
  "cq-planners-plan",
+ "cq-relational-lowering",
  "cq-testkit",
  "cq-workload-authored",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-elaborate"
-version = "0.1.0"
-dependencies = [
- "cq-lang-ra",
- "cq-lang-vo",
- "proc-macro2",
- "quote",
  "syn 2.0.119",
 ]
 
@@ -146,13 +135,14 @@ dependencies = [
 name = "cq-planners-plan"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-planning",
+ "cq-ra-rewrites",
  "cq-reduce",
+ "cq-relational-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -162,12 +152,20 @@ dependencies = [
 name = "cq-planning"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "cq-relational-lowering",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-ra-rewrites"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
  "syn 2.0.119",
 ]
 
@@ -177,6 +175,17 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-vo",
  "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relational-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

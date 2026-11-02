@@ -75,7 +75,7 @@ are historical, not a replacement for that plan.
   mismatches are rustc errors; undeclared reads use recorded lazy fallbacks.
   Captures are plain owned values cloned per consuming move closure, not
   compiler-generated `Arc` handles. The written reference belongs to
-  `cq_order::compile_written`, not `cq-elaborate`.
+  `cq_order::compile_written`, not `cq-relational-lowering`.
 - Mac: standalone Metal build/merge experiments are integrated with the optimized
   native RadixRun tree. The [Mac implementation plan](MAC-IMPLEMENTATION.md)
   includes flat and LSM-like maintenance, snapshot/publication obligations and

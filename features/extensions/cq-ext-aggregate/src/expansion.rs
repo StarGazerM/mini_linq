@@ -530,7 +530,7 @@ mod tests {
         check(&source, &context).unwrap();
         let normal = cq_lang_cq::normal::normalize(&context.hole).unwrap();
         let vo = cq_order::compile(&normal, &cq_order::Options::default()).unwrap();
-        let ra = cq_elaborate::compile(&vo).unwrap();
+        let ra = cq_relational_lowering::compile(&vo).unwrap();
         let ix = cq_index_policy::compile(&ra).unwrap();
         let physical = cq_physical_lowering::compile_with(&ix, arguments).unwrap();
         (ix, physical)

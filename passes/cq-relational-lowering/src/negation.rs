@@ -1,4 +1,4 @@
-//! E-Neg's positional relation, shared by lowering and structural obligations.
+//! RL-Neg's positional relation, shared by lowering and structural obligations.
 //! Raw and ordinary identifier spellings share relation and uniqueness-key identities.
 use std::collections::BTreeSet;
 

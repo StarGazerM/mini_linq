@@ -388,8 +388,8 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
 /// and LE the dead-expansion elimination of `cq-ra-rewrites`.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
     let valuation = compile_valuation(source, planner)?;
-    let target = cq_elaborate::compile(&valuation)?;
-    cq_elaborate::check(&valuation, &target)?;
+    let target = cq_relational_lowering::compile(&valuation)?;
+    cq_relational_lowering::check(&valuation, &target)?;
     let target = match planner {
         Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&target)?,
         Planner::Le => cq_ra_rewrites::simplify_expansions(&target)?,
@@ -448,7 +448,7 @@ pub fn check_valuation(
 pub fn check(source: &cq::Program, target: &ra::Program) -> syn::Result<()> {
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
-    cq_elaborate::check(&written_valuation(&normal)?, target)
+    cq_relational_lowering::check(&written_valuation(&normal)?, target)
 }
 
 /// Construct the source meaning directly, with one full generator per written
@@ -596,7 +596,7 @@ mod prefix_tests {
             let options = syn::parse2::<PlanOptions>(tokens).unwrap();
             let valuation = prefix_valuation(&source, &options).unwrap();
             let target = compile_prefix(&source, &options).unwrap();
-            cq_elaborate::check(&valuation, &target).unwrap();
+            cq_relational_lowering::check(&valuation, &target).unwrap();
         }
         let invalid = syn::parse2(quote!(no_reduce, skip(R with S))).unwrap();
         assert!(compile_prefix(&source, &invalid).is_err());

@@ -664,7 +664,7 @@ impl Runner {
             "cq-lang-ra",
             "cq-order",
             "cq-reduce",
-            "cq-elaborate",
+            "cq-relational-lowering",
             "cq-planners-plan",
         ])?);
         std::fs::write(directory.join("planner/Cargo.toml"), manifest)?;

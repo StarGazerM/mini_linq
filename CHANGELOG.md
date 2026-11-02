@@ -13,6 +13,18 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Elaboration redesign slice 5 (pure rename): `cq-elaborate` is now
+  `cq-relational-lowering` (`cq_relational_lowering::{compile, check}`), and
+  its rules use the `RL-` prefix: E-Emit→RL-Emit, E-Relation→RL-Occurrence,
+  E-Check→RL-Check, E-Project→RL-Project, B-Root→RL-Root, B-Join→RL-Join,
+  C-Guard→RL-Guard, C-Bind→RL-Bind, C-For→RL-For, E-ReduceWith→RL-Reduce,
+  C-Finish→RL-Finish, E-Constraint→RL-Constraint, E-Restrict→RL-Restrict,
+  E-Neg→RL-Neg, E-BlockPlacement→RL-Block, CK-Elaborate→CK-RelationalLowering
+  and CK-ElaborateRestrict→CK-RelationalLoweringRestrict (C-Ready in
+  `cq-order` no longer shares a prefix). The formal subsection is "Relational
+  lowering: VO → RA′"; stage-differential labels read `ra:relational_lowering`.
+  Generated code is unchanged.
+
 - Documentation audit: distinguish current compiler/runtime contracts from
   historical mechanisms and benchmark snapshots; add report provenance and
   same-workload supersession links without changing measured data. The GPU

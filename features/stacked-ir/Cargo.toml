@@ -18,7 +18,7 @@ cq-lang-physical = { version = "0.1.0", path = "../../languages/cq-lang-physical
 cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
 cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
 cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
-cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
+cq-relational-lowering = { version = "0.1.0", path = "../../passes/cq-relational-lowering" }
 cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
 cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
 cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }

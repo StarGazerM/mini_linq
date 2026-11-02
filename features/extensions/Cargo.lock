@@ -22,21 +22,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "cq-elaborate"
-version = "0.1.0"
-dependencies = [
- "cq-lang-ra",
- "cq-lang-vo",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-ext-aggregate"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-ext-support",
  "cq-index-policy",
  "cq-lang-cq",
@@ -44,6 +32,7 @@ dependencies = [
  "cq-lang-physical",
  "cq-order",
  "cq-physical-lowering",
+ "cq-relational-lowering",
  "cq-stage",
  "cq-syntax",
  "cq-testkit",
@@ -252,12 +241,12 @@ dependencies = [
 name = "cq-planning"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "cq-relational-lowering",
  "syn 2.0.119",
 ]
 
@@ -277,6 +266,17 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-vo",
  "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relational-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 

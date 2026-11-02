@@ -78,6 +78,6 @@ The documentation audit baseline is `7e187597` (2026-11-02); rule status and
 semantic premises are distinguished in [CONFORMANCE.md](CONFORMANCE.md).
 The current exact written reference
 is desugared CQ-NF passed through `cq_order::compile_written` (Written/Coarse
-with recorded correlated blocks and no restrictions) and `cq_elaborate::compile`;
+with recorded correlated blocks and no restrictions) and `cq_relational_lowering::compile`;
 the default `plan` records O-Restrict restrictions that the lowering applies. Core blocks and
 multi-rule union sugar require no surface union extension.

@@ -28,7 +28,7 @@ mod reductions;
 /// payloads, result names and block dependencies are retained. Only definitions
 /// made unreachable by these identities are pruned. The result is checked with
 /// [`ra::check_rewrite`]; the VO-to-RA named-reduction obligation of
-/// `cq_elaborate::check` applies to the lowered program, not to this rewrite.
+/// `cq_relational_lowering::check` applies to the lowered program, not to this rewrite.
 pub fn simplify_reductions(source: &ra::Program) -> syn::Result<ra::Program> {
     reductions::simplify(source)
 }

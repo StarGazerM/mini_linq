@@ -64,7 +64,7 @@ changing RA′. Physical records operators, modes, intersection choices, semijoi
 eagerness, and canonical boundaries. Structures adds concrete build, host
 fallback, retained-row, and dedup types. Later passes consume those decisions.
 The written reference is `cq_order::compile_written`, followed by
-`cq_elaborate::compile`; elaboration does not own reference scheduling.
+`cq_relational_lowering::compile`; relational lowering does not own reference scheduling.
 Host builds print direct `Build::build` calls. Neither a `build!` dispatch macro
 nor `AutoDense` capability selection remains. Closed capture values are owned
 plainly; `cq_print::own_captures` clones only the values read by each move

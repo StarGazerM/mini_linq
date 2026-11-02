@@ -11,7 +11,7 @@ cq-lang-ra = { workspace = true, default-features = false }
 syn.workspace = true
 
 [dev-dependencies]
-cq-elaborate.workspace = true
+cq-relational-lowering.workspace = true
 cq-lang-vo.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true

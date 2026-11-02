@@ -886,7 +886,7 @@ omits the scalar average-balance subquery and grouped balance totals.
 
 `LateLineitem` and `BadSupplier` are filtered input relations, constructed
 once per CPU invocation before the CQ rule. Negation uses the existing
-CQ-Neg/E-Neg semantics, including anonymous existential arguments in
+CQ-Neg/RL-Neg semantics, including anonymous existential arguments in
 `!Orders(_, custkey)`; it does not encode membership as a Rust guard.
 The real-data kernels retain their independent embedded DuckDB SQL.
 Synthetic prefiltered peers live in the extended fixture catalog because
@@ -948,7 +948,7 @@ DuckDB DISTINCT-valuation oracle inside the test; no precomputed golden is used.
 
 The pending GPU item above is implemented: the retained Physical Anti node
 supplies negative polarity to `compact(lookup)`, and GPU translation uses the
-same provider membership probe with an inverted keep bit (E-Neg/RA-Anti).
+same provider membership probe with an inverted keep bit (RL-Neg/RA-Anti).
 Inspection of all four suite lowering artifacts found the required polarity;
 default lowering is unchanged. H04 is the positive membership control, while
 H04-not-exists, H16 and H22 retain `anti eager`.

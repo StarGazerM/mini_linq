@@ -195,7 +195,6 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "core-pass-fixtures"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ix",
  "cq-lang-physical",
@@ -205,24 +204,11 @@ dependencies = [
  "cq-order",
  "cq-physical-lowering",
  "cq-reduce",
+ "cq-relational-lowering",
  "cq-sequence-plan",
  "cq-sequence-pull",
  "cq-stage",
  "cq-structure-selection",
- "cq-testkit",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "cq-elaborate"
-version = "0.1.0"
-dependencies = [
- "cq-lang-ra",
- "cq-lang-vo",
- "cq-order",
- "cq-syntax",
  "cq-testkit",
  "proc-macro2",
  "quote",
@@ -415,12 +401,12 @@ dependencies = [
 name = "cq-planning"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "cq-relational-lowering",
  "quote",
  "syn 2.0.119",
 ]
@@ -440,9 +426,9 @@ dependencies = [
 name = "cq-ra-rewrites"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-ra",
  "cq-lang-vo",
+ "cq-relational-lowering",
  "cq-testkit",
  "proc-macro2",
  "quote",
@@ -453,6 +439,20 @@ dependencies = [
 name = "cq-reduce"
 version = "0.1.0"
 dependencies = [
+ "cq-lang-vo",
+ "cq-order",
+ "cq-syntax",
+ "cq-testkit",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relational-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-syntax",
@@ -500,7 +500,6 @@ dependencies = [
 name = "cq-sequence-pull"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-sequence",
@@ -509,6 +508,7 @@ dependencies = [
  "cq-physical-lowering",
  "cq-physical-realization",
  "cq-print",
+ "cq-relational-lowering",
  "cq-sequence-lowering",
  "cq-storage",
  "cq-structure-selection",
@@ -845,7 +845,6 @@ name = "mini-linq"
 version = "0.1.0"
 dependencies = [
  "core-pass-fixtures",
- "cq-elaborate",
  "cq-gpu-sequence-macros",
  "cq-index-policy",
  "cq-lang-cq",
@@ -861,6 +860,7 @@ dependencies = [
  "cq-planning",
  "cq-ra-rewrites",
  "cq-reduce",
+ "cq-relational-lowering",
  "cq-represent",
  "cq-sequence-lowering",
  "cq-sequence-pull",

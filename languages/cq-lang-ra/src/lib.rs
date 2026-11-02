@@ -22,7 +22,7 @@
 //! data; each independent traversal needs its own cursor state.
 //!
 //! `contract::check` derives headings, types and source identifier bindings
-//! entirely from this program. VO correspondence belongs to cq-elaborate.
+//! entirely from this program. VO correspondence belongs to cq-relational-lowering.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical

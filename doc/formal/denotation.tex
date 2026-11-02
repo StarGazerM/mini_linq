@@ -60,7 +60,7 @@ expression; a scalar Rust bind returns one extended valuation.
 Starting at $\{\langle\rangle\}$, compose the desugared body in written order, then the
 head. This is the reference meaning. The executable reference is Written/Coarse
 VO from \code{cq_order::compile_written}, with recorded correlated blocks and
-no restrictions or reductions, lowered by \code{cq_elaborate::compile}: every
+no restrictions or reductions, lowered by \code{cq_relational_lowering::compile}: every
 predicate stays at its written position, with no splitting, reordering,
 hoisted blocks or alias solving.
 

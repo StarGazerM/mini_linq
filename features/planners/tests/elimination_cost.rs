@@ -18,7 +18,7 @@ fn leaf_first_product_576_becomes_24_when_shared_keys_bind_first() {
     })
     .unwrap();
     vo::contract::check(&leaf_first).unwrap();
-    let baseline = cq_elaborate::compile(&leaf_first).unwrap();
+    let baseline = cq_relational_lowering::compile(&leaf_first).unwrap();
     let fixed = compile(&source, Planner::EliminationFine).unwrap();
     check(&source, &baseline).unwrap();
     check(&source, &fixed).unwrap();

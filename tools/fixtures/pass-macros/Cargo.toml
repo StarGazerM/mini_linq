@@ -22,7 +22,7 @@ cq-sequence-plan = { path = "../../../passes/cq-sequence-plan" }
 cq-sequence-pull = { path = "../../../passes/cq-sequence-pull" }
 cq-order = { path = "../../../passes/cq-order" }
 cq-reduce = { path = "../../../passes/cq-reduce" }
-cq-elaborate = { path = "../../../passes/cq-elaborate" }
+cq-relational-lowering = { path = "../../../passes/cq-relational-lowering" }
 cq-physical-lowering = { path = "../../../passes/cq-physical-lowering" }
 cq-structure-selection = { path = "../../../passes/cq-structure-selection" }
 proc-macro2 = "1"

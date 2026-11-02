@@ -192,17 +192,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "cq-elaborate"
-version = "0.1.0"
-dependencies = [
- "cq-lang-ra",
- "cq-lang-vo",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "cq-ext-aggregate"
 version = "0.1.0"
 dependencies = [
@@ -424,7 +413,6 @@ dependencies = [
 name = "cq-planners-plan"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
@@ -432,6 +420,7 @@ dependencies = [
  "cq-planning",
  "cq-ra-rewrites",
  "cq-reduce",
+ "cq-relational-lowering",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -441,12 +430,12 @@ dependencies = [
 name = "cq-planning"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-lang-vo",
  "cq-order",
  "cq-reduce",
+ "cq-relational-lowering",
  "syn 2.0.119",
 ]
 
@@ -474,6 +463,17 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-vo",
  "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-relational-lowering"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-ra",
+ "cq-lang-vo",
+ "proc-macro2",
+ "quote",
  "syn 2.0.119",
 ]
 
@@ -756,10 +756,10 @@ dependencies = [
 name = "cq-xtask"
 version = "0.1.0"
 dependencies = [
- "cq-elaborate",
  "cq-lang-cq",
  "cq-lang-ra",
  "cq-order",
+ "cq-relational-lowering",
  "cq-testkit",
  "cq-workloads",
  "quote",

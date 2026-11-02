@@ -58,7 +58,7 @@
 //! ```
 //!
 //! Every invocation normalizes CQ, calls `cq-order`, calls `cq-reduce`, then
-//! elaborates the recorded valuation with `cq-elaborate`. Public correspondence
+//! elaborates the recorded valuation with `cq-relational-lowering`. Public correspondence
 //! checks validate each boundary. The emitted RA′ contains the chosen operator
 //! graph and opaque Rust chain. Later passes consume that written graph.
 //!

@@ -2,15 +2,15 @@
 //! elimination preserve the lowered program's answers under canon.
 use cq_testkit::{corpus as scenarios, cq_semantics as cq_oracle, databases, semantics as oracle};
 
-use cq_elaborate::check;
 use cq_lang_ra as ra;
 use cq_lang_vo as valuation;
 use cq_lang_vo::cq;
+use cq_relational_lowering::check;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
-    let target = cq_elaborate::compile(source)?;
+    let target = cq_relational_lowering::compile(source)?;
     check(source, &target)?;
     Ok(target)
 }
@@ -69,7 +69,7 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
     }};
     check(&reduced, &source).unwrap();
     let target = cq_ra_rewrites::simplify_reductions(&source).unwrap();
-    let reference = cq_elaborate::compile(&coarse(&query)).unwrap();
+    let reference = cq_relational_lowering::compile(&coarse(&query)).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     // Absorption is an RA rewrite, not permission to omit a named VO reduction.
@@ -117,7 +117,7 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
     // This is the final external-planner contract, not just the local
     // source-to-target absorption certificate.
     check(&written, &target).unwrap();
-    let reference = cq_elaborate::compile(&written).unwrap();
+    let reference = cq_relational_lowering::compile(&written).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     let full_input = |plan: &ra::Program| {
@@ -218,7 +218,7 @@ fn reduction_absorption_retains_support_for_an_uncontained_consumer() {
     }};
     let target = cq_ra_rewrites::simplify_reductions(&source).unwrap();
     assert_eq!(target, source);
-    let reference = cq_elaborate::compile(&coarse(&query)).unwrap();
+    let reference = cq_relational_lowering::compile(&coarse(&query)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     let mut bypassed = source.clone();
     bypassed.plan.definitions[4].operator = syn::parse_quote!(natural_join u with r);

@@ -1,4 +1,5 @@
-//! VO to RA prime, preserving recorded relational decisions and Rust payloads.
+//! Relational lowering, VO to RA prime: a mechanical translation that applies
+//! every recorded relational decision and preserves Rust payloads.
 //!
 //! Every Rust expression is opaque, pure and total by premise. Its only placement
 //! requirements are its free variables. [`check`] compares fixed VO clause
@@ -11,7 +12,7 @@
 //! projection whenever free variables remain; see the premises in
 //! `cq-syntax`.
 
-//! Elaboration projects arms to their common heading, emits explicit union/anti equations and names negative originals.
+//! Lowering projects arms to their common heading, emits explicit union/anti equations and names negative originals.
 //! Recorded hoisted blocks use free/interface columns and a finite prefix domain for missing branch generators.
 //! Recorded correlated arms retain their free prefix and relational anti dependencies.
 //! Rust occurrence scopes record only free-variable dependencies, not the written prefix.
@@ -34,10 +35,10 @@ use cq_lang_vo::syntax::symbol_name;
 use quote::format_ident;
 use syn::Ident;
 
-/// Elaborate a valuation plan into named RA, then check the RA contract.
+/// Lower a valuation plan into named RA, then check the RA contract.
 /// Recorded restrictions select their occurrence; every other predicate is a
 /// prefix step. A written reference is a VO without restrictions or reductions.
-/// Formal rule C-Guard: Append an opaque guard to the prefix, seeding Unit if absent.
+/// Formal rule RL-Guard: Append an opaque guard to the prefix, seeding Unit if absent.
 pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
     let analysis = valuation::contract::check(source)?;
     let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
@@ -95,7 +96,7 @@ mod structural;
 /// Rust payloads and relational constraints.
 /// Pure targets may use checked inverse dead expansions under canonicalization
 /// to establish a primary witness, without recompiling or selecting a plan.
-/// Formal rule CK-Elaborate: Check contracts, clause occurrences, recorded restrictions, named reductions, constraints and unchanged Rust payloads with their free variables.
+/// Formal rule CK-RelationalLowering: Check contracts, clause occurrences, recorded restrictions, named reductions, constraints and unchanged Rust payloads with their free variables.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let analysis = valuation::contract::check(source)?;
     let target_schedule = ra::contract::Schedule::from_program(target)?;
@@ -137,7 +138,7 @@ pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<(
     Ok(())
 }
 
-/// Formal rule CK-ElaborateRestrict: Every conjunct of a recorded restriction appears in the selection chain directly over its occurrence's rename.
+/// Formal rule CK-RelationalLoweringRestrict: Every conjunct of a recorded restriction appears in the selection chain directly over its occurrence's rename.
 fn check_restrictions(steps: &[valuation::Step], target: &ra::Program) -> syn::Result<()> {
     let definitions = &target.plan.definitions;
     for step in steps {
@@ -283,7 +284,7 @@ impl<'a> State<'a> {
         }
     }
 
-    /// Formal rule E-BlockPlacement: Elaborate the recorded Hoisted or Correlated alternative, never a compiler-mode choice.
+    /// Formal rule RL-Block: Elaborate the recorded Hoisted or Correlated alternative, never a compiler-mode choice.
     fn block_relation(&mut self, clause: usize) -> Ident {
         let valuation::cq::BodyItem::Block(written) = &self.body[clause] else {
             unreachable!("block clause")
@@ -442,7 +443,7 @@ impl<'a> State<'a> {
         result
     }
 
-    /// E-Neg: constants and repeated columns select the negative relation;
+    /// RL-Neg: constants and repeated columns select the negative relation;
     /// existential columns are projected away before the anti join.
     fn negation(&mut self, negation: &valuation::cq::Negation) {
         let clause = self
@@ -511,8 +512,8 @@ impl<'a> State<'a> {
 
     /// The clause's relation: its rename, emitted at first mention, as
     /// reduced so far.
-    /// Formal rule E-Relation: Reuse a clause result or emit its complete positional rename at first use.
-    /// Formal rule E-Restrict: Select a new occurrence by its recorded literal-equality restrictions, then each same-column group of its other restrictions.
+    /// Formal rule RL-Occurrence: Reuse a clause result or emit its complete positional rename at first use.
+    /// Formal rule RL-Restrict: Select a new occurrence by its recorded literal-equality restrictions, then each same-column group of its other restrictions.
     fn relation(&mut self, clause: usize) -> Ident {
         if let Some(result) = self.relations.get(&clause) {
             return result.clone();
@@ -552,7 +553,7 @@ impl<'a> State<'a> {
             mapping,
             constants,
         })));
-        // E-Restrict: the recorded literal equalities are one keyed read of
+        // RL-Restrict: the recorded literal equalities are one keyed read of
         // this occurrence; other restrictions group same-column conjuncts
         // into one range selection each.
         let literals: Vec<_> = self
@@ -583,10 +584,10 @@ impl<'a> State<'a> {
         result
     }
 
-    /// Formal rule E-Check: A partial subatom with no new names semijoins an existing prefix.
-    /// Formal rule E-Project: Project a partial subatom unless it is an existing-prefix check.
-    /// Formal rule B-Root: Install the first full or projected subatom as the prefix.
-    /// Formal rule B-Join: Join a non-check subatom with the current prefix.
+    /// Formal rule RL-Check: A partial subatom with no new names semijoins an existing prefix.
+    /// Formal rule RL-Project: Project a partial subatom unless it is an existing-prefix check.
+    /// Formal rule RL-Root: Install the first full or projected subatom as the prefix.
+    /// Formal rule RL-Join: Join a non-check subatom with the current prefix.
     fn subatom(&mut self, subatom: &valuation::Subatom, check: bool) {
         let clause = subatom.clause();
         let mut right = self.relation(clause);
@@ -621,7 +622,7 @@ impl<'a> State<'a> {
         });
     }
 
-    /// Formal rule E-ReduceWith: Match every listed support column to its target equality class and retain only the target heading.
+    /// Formal rule RL-Reduce: Match every listed support column to its target equality class and retain only the target heading.
     fn reduce(&mut self, reduce: &valuation::Reduce) {
         let clause = reduce.clause();
         let left = self.relation(clause);
@@ -718,7 +719,7 @@ impl<'a> State<'a> {
         })))
     }
 
-    /// Formal rule E-Constraint: Select the prefix by a recorded prefix constraint.
+    /// Formal rule RL-Constraint: Select the prefix by a recorded prefix constraint.
     fn constraint(&mut self, constraint: &cq::Constraint) {
         if let Some(equality) = constraint.equality() {
             self.equality(&equality);
@@ -830,7 +831,7 @@ impl<'a> State<'a> {
         })))
     }
 
-    /// Formal rule C-Bind: Append an opaque pattern binding to the prefix.
+    /// Formal rule RL-Bind: Append an opaque pattern binding to the prefix.
     fn bind(&mut self, binding: &cq::Let) {
         let environment = self.environment(None, Some(binding), None);
         let input = self.prefix_or_unit();
@@ -849,7 +850,7 @@ impl<'a> State<'a> {
         }))));
     }
 
-    /// Formal rule C-For: Append an opaque finite set-valued generator to the prefix.
+    /// Formal rule RL-For: Append an opaque finite set-valued generator to the prefix.
     fn for_bind(&mut self, binding: &cq::For) {
         let environment = self.environment(None, None, Some(binding));
         let input = self.prefix_or_unit();
@@ -869,7 +870,7 @@ impl<'a> State<'a> {
     }
 
     /// Retain the normalized head variables and name the output.
-    /// Formal rule C-Finish: Project the head variables after the complete schedule.
+    /// Formal rule RL-Finish: Project the head variables after the complete schedule.
     fn finish(&mut self, query: &valuation::cq::Query) -> ra::Output {
         let head = &query.head;
         let retained: BTreeSet<String> = query.valuation_variables().map(symbol_name).collect();
@@ -927,7 +928,7 @@ impl<'a> State<'a> {
         unit
     }
 
-    /// Formal rule E-Emit: Append the operator under a fresh rN in emission order.
+    /// Formal rule RL-Emit: Append the operator under a fresh rN in emission order.
     fn emit(&mut self, operator: ra::Operator) -> Ident {
         let result = loop {
             let name = format!("r{}", self.next_result);

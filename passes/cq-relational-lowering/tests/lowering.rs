@@ -2,15 +2,15 @@
 //! with unchanged opaque, total Rust expressions and free-variable dependencies.
 use cq_testkit::{corpus as scenarios, cq_semantics as cq_oracle, databases, semantics as oracle};
 
-use cq_elaborate::check;
 use cq_lang_ra as ra;
 use cq_lang_vo as valuation;
 use cq_lang_vo::cq;
+use cq_relational_lowering::check;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
-    let target = cq_elaborate::compile(source)?;
+    let target = cq_relational_lowering::compile(source)?;
     check(source, &target)?;
     Ok(target)
 }
@@ -361,7 +361,7 @@ fn seed_997_reductions_match_equality_classes_before_rust() {
         },
     );
     let target = compile(&reduced).unwrap();
-    let reference = cq_elaborate::compile(&written).unwrap();
+    let reference = cq_relational_lowering::compile(&written).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     let first_rust = target
         .plan
@@ -427,7 +427,7 @@ fn reductions_match_every_protected_column_in_an_equality_class() {
     for form in equality_forms(&plan) {
         assert_eq!(compile(&form).unwrap(), target);
     }
-    let reference = cq_elaborate::compile(&coarse(&source)).unwrap();
+    let reference = cq_relational_lowering::compile(&coarse(&source)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
 }
 
@@ -593,7 +593,7 @@ fn written_reference_filters_literal_columns_before_dependent_expressions() {
     });
     let normal = cq::normal::normalize(&surface).unwrap();
     let source = coarse(&normal);
-    let written = cq_elaborate::compile(&source).unwrap();
+    let written = cq_relational_lowering::compile(&source).unwrap();
     check(&source, &written).unwrap();
     for target in [written, compile(&source).unwrap()] {
         let bind = target
@@ -623,7 +623,7 @@ fn correspondence_accepts_independent_relational_placement() {
     let written = coarse(&source);
     let hoisted = vo(&source, quote! { R@0(x); S@2(w); if 10 / *x > 1; });
     valuation::contract::check(&hoisted).unwrap();
-    let later = cq_elaborate::compile(&written).unwrap();
+    let later = cq_relational_lowering::compile(&written).unwrap();
     // Total Rust has no written relational predecessor obligations.
     check(&written, &later).unwrap();
     check(&hoisted, &later).unwrap();
@@ -1001,7 +1001,7 @@ fn generator_elaboration_round_trips_and_certifies_set_valued_binding() {
         answer(b) :- R(a), for b in 0..a, let c = b;
     }));
     let target = compile(&source).unwrap();
-    cq_elaborate::compile(&source).unwrap();
+    cq_relational_lowering::compile(&source).unwrap();
     assert_eq!(
         syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
         target
@@ -1123,7 +1123,7 @@ fn negative_constants_repeats_and_wildcards_match_reference_semantics() {
         .unwrap();
         let written = coarse(&source);
         let target = compile(&written).unwrap();
-        let reference = cq_elaborate::compile(&written).unwrap();
+        let reference = cq_relational_lowering::compile(&written).unwrap();
         let anti = target
             .plan
             .definitions
@@ -1200,7 +1200,7 @@ fn raw_negation_names_match_reference_semantics() {
                 .unwrap();
                 let target = compile(&written).unwrap();
                 let reference_vo = cq_order::compile_written(&normal).unwrap();
-                let reference = cq_elaborate::compile(&reference_vo).unwrap();
+                let reference = cq_relational_lowering::compile(&reference_vo).unwrap();
                 check(&reference_vo, &reference).unwrap();
                 for seed in 0..32 {
                     let database = databases::binary_database(&source, seed);

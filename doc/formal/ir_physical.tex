@@ -114,7 +114,7 @@ every provider; native execution counts each set once and enumerates the minimum
 (written-order ties) without allocating a candidate collection per valuation.
 In an advised VO intersection, the first Fine subatom introduces $v$ and
 subsequent adjacent subatoms check it; they do not independently bind $v$.
-E-Check correctly emits semijoins against their full occurrence relations.
+RL-Check correctly emits semijoins against their full occurrence relations.
 PH-KeyProjection supplies candidate-only views for these semijoin sides
 without losing payload correlation at later full expansions.
 

@@ -7,8 +7,8 @@ fn elaborate(source: &str) -> (cq_lang_vo::Program, ra::Program) {
     let source: cq::Program = syn::parse_str(source).unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
     let ordered = cq_order::compile(&normal, &Default::default()).unwrap();
-    let target = cq_elaborate::compile(&ordered).unwrap();
-    cq_elaborate::check(&ordered, &target).unwrap();
+    let target = cq_relational_lowering::compile(&ordered).unwrap();
+    cq_relational_lowering::check(&ordered, &target).unwrap();
     (ordered, target)
 }
 
@@ -101,7 +101,7 @@ fn aggregate_kind_and_valuation_domain_changes_fail_correspondence() {
         panic!("group")
     };
     group.aggregates[1].expression = Some(syn::parse_quote!(id));
-    assert!(cq_elaborate::check(&source, &changed).is_err());
+    assert!(cq_relational_lowering::check(&source, &changed).is_err());
 
     let mut changed = target.clone();
     let projection = changed
@@ -124,6 +124,6 @@ fn aggregate_kind_and_valuation_domain_changes_fail_correspondence() {
         .cloned()
         .collect();
     ra::contract::check(&changed).unwrap();
-    assert!(cq_elaborate::check(&source, &changed).is_err());
+    assert!(cq_relational_lowering::check(&source, &changed).is_err());
     assert!(ra::check_rewrite(&target, &changed).is_err());
 }

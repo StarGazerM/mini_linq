@@ -16,7 +16,7 @@ cq-storage.workspace = true
 [build-dependencies]
 cq-planners-plan = { version = "0.1.0", path = "../plan" }
 cq-order.workspace = true
-cq-elaborate.workspace = true
+cq-relational-lowering.workspace = true
 cq-testkit.workspace = true
 quote.workspace = true
 syn.workspace = true

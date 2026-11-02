@@ -69,10 +69,10 @@ O-EvidenceLe	implementation	passes/cq-order/src/evidence.rs	/// Formal rule O-Ev
 CK-EvidenceLe	implementation	passes/cq-order/src/evidence.rs	/// Formal rule CK-EvidenceLe:	Check the recorded root is a largest-count functional root dominating the written root, every other first read is keyed, lookups carry filters, plus WF-VO and selected CK-Le; scopes without a dominating functional root pass CK-Order.
 O-KnownAt	implementation	passes/cq-order/src/known.rs	/// Formal rule O-KnownAt:	Pin a selected top-level negation immediately after the k-th positive read; WF-VO checks its variables are bound there, and the placement is re-checked after reduction.
 CK-Reduce	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-Reduce:	Check erasure, filtered support versions, tree obligations and exact block cuts.
-CK-Elaborate	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-Elaborate:	Check VO occurrences, reductions, relational constraints, unchanged Rust payloads and free-variable bindings.
-CK-ElaborateRestrict	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule CK-ElaborateRestrict:	Each recorded restriction's conjuncts select the selection chain directly over its occurrence's rename.
-E-BlockPlacement	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-BlockPlacement:	Consume recorded Hoisted or Correlated placement, never a compiler-mode choice.
-CK-BlockPlacement	implementation	passes/cq-elaborate/src/block_contract.rs	/// Formal rule CK-BlockPlacement:	Check matching RA block provenance and exact recorded correlation alternative.
+CK-RelationalLowering	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule CK-RelationalLowering:	Check VO occurrences, reductions, relational constraints, unchanged Rust payloads and free-variable bindings.
+CK-RelationalLoweringRestrict	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule CK-RelationalLoweringRestrict:	Each recorded restriction's conjuncts select the selection chain directly over its occurrence's rename.
+RL-Block	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Block:	Consume recorded Hoisted or Correlated placement, never a compiler-mode choice.
+CK-BlockPlacement	implementation	passes/cq-relational-lowering/src/block_contract.rs	/// Formal rule CK-BlockPlacement:	Check matching RA block provenance and exact recorded correlation alternative.
 CK-Index	implementation	passes/cq-index-policy/src/correspondence.rs	/// Formal rule CK-Index:	Check unchanged RA, read coverage, no extras, and iN names in first-use order without replaying the producer.
 CK-Demands	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule CK-Demands:	Require each stream/const/range keyed-read descriptor in source IX, independently of lowering's recorded-requirement mapping.
 CK-Physical	implementation	passes/cq-physical-lowering/src/correspondence.rs	/// Formal rule CK-Physical:	Check contracts, RA erasure, IX demands and admissibility of recorded choices.
@@ -113,18 +113,18 @@ R-Guard	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Guard:	Reta
 Y-Up	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Up:	Produce upward parent-with-child VO steps in reverse BFS order.
 Y-Down	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Down:	Produce downward child-with-parent VO steps in BFS order.
 R-Tree	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Tree:	Insert only relational tree semijoins before atom reads.
-E-Emit	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Emit:	Append the operator under rN in definition emission order.
-E-Relation	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Relation:	Reuse a clause result or emit its positional rename with literal source-column bindings and only variable columns in its heading.
-E-Check	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Check:	A partial subatom with no new names semijoins an existing prefix.
-E-Project	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Project:	Project a partial subatom unless it is an existing-prefix check.
-B-Root	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Root:	Install the first full or projected subatom as the prefix.
-B-Join	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule B-Join:	Join a non-check subatom with the current prefix.
-C-Guard	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Guard:	Append an opaque guard to the prefix, seeding Unit if absent.
-C-Bind	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Bind:	Append an opaque pattern binding to the prefix without applying RA laws to it.
-C-For	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-For:	Append a generator-tagged Bind to the current prefix, seeding Unit if absent.
+RL-Emit	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Emit:	Append the operator under rN in definition emission order.
+RL-Occurrence	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Occurrence:	Reuse a clause result or emit its positional rename with literal source-column bindings and only variable columns in its heading.
+RL-Check	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Check:	A partial subatom with no new names semijoins an existing prefix.
+RL-Project	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Project:	Project a partial subatom unless it is an existing-prefix check.
+RL-Root	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Root:	Install the first full or projected subatom as the prefix.
+RL-Join	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Join:	Join a non-check subatom with the current prefix.
+RL-Guard	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Guard:	Append an opaque guard to the prefix, seeding Unit if absent.
+RL-Bind	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Bind:	Append an opaque pattern binding to the prefix without applying RA laws to it.
+RL-For	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-For:	Append a generator-tagged Bind to the current prefix, seeding Unit if absent.
 P-For	implementation	passes/cq-physical-realization/src/operators.rs	/// Formal rule P-For:	Realize unchanged generator Bind as flat_map or nested loop with the same free-variable bindings.
-E-ReduceWith	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-ReduceWith:	Semijoin current clause relations and replace only the target entry.
-C-Finish	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule C-Finish:	Project head dependencies or the full heading under a computed head.
+RL-Reduce	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Reduce:	Semijoin current clause relations and replace only the target entry.
+RL-Finish	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Finish:	Project head dependencies or the full heading under a computed head.
 O-Leaf	abstract	-	-	Ghost full-atom binary-tree leaf; no stored order witness.
 O-Join	abstract	-	-	Ghost binary-tree composition on disjoint full-atom coverages.
 L-Retention	abstract	-	-	Leibniz identity and functional extensionality permit canonical projection before an opaque Rust node whenever its free variables are retained.
@@ -154,8 +154,8 @@ IF-Fallback	implementation	runtime/cq-storage/src/dispatch.rs	/// Formal rule IF
 ORD-Admissible	abstract	-	-	Representation order is total and consistent with identity; rustc checks bounds, never host type spelling.
 CQ-Comparison	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Comparison:	Relational comparison terms use bound query variables, literals or query-closed Rust expressions; at code-domain columns closed operands are A-Domain captures and compare as codes, with no string-specific form.
 D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constraint:	A central step waits only for its query variables.
-E-Constraint	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Constraint:	Select the prefix by a recorded prefix constraint step; restrictions are E-Restrict.
-E-Restrict	implementation	passes/cq-elaborate/src/lib.rs	/// Formal rule E-Restrict:	Select a new occurrence by its recorded literal-equality restrictions, then each same-column group of its other restrictions.
+RL-Constraint	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Constraint:	Select the prefix by a recorded prefix constraint step; restrictions are RL-Restrict.
+RL-Restrict	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Restrict:	Select a new occurrence by its recorded literal-equality restrictions, then each same-column group of its other restrictions.
 CT-Constraint	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-Constraint:	Preserve exact predicate shape and fixed columns, recomputing implied unary domains on both sides.
 RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
 IX-Const	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Const:	Column constant equalities and literal membership produce const supply; a captured domain code is a constant like any closed operand.
@@ -167,7 +167,7 @@ IF-Range	implementation	passes/cq-print/src/range.rs	/// Formal rule IF-Range:	A
 CQ-Closed	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Closed:	Closed host operands have no query free variables and retain their original expression.
 CQ-Where	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule CQ-Where:	Only explicit where syntax introduces relational predicates; check bound variables and closed operands.
 CQ-Neg	implementation	languages/cq-lang-cq/src/lib.rs	fn check_body(	Declared input and arity; bound variables, constants and wildcards; binds nothing and requires Leibniz columns.
-E-Neg	implementation	passes/cq-elaborate/src/lib.rs	/// E-Neg:	Lower negation to the existing anti operator, restricting constants and repeated names and projecting away wildcards; GPU compact inverts the same provider membership probe using retained Anti provenance.
+RL-Neg	implementation	passes/cq-relational-lowering/src/lib.rs	/// RL-Neg:	Lower negation to the existing anti operator, restricting constants and repeated names and projecting away wildcards; GPU compact inverts the same provider membership probe using retained Anti provenance.
 E-Domain	implementation	languages/cq-syntax/src/constraint.rs	/// Formal rule E-Domain:	Project every disjunct's literal or query-closed restrictions onto each commonly constrained variable and retain the exact predicate.
 Block-Union	abstract	-	-	Finite-set union; permutation and answer-determined witness short circuit preserve answers.
 Block-Else	abstract	-	-	Ordered first nonempty branch with lazy later Rust.

@@ -14,7 +14,7 @@ cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
 cq-lang-ix = { path = "../../../languages/cq-lang-ix" }
 cq-lang-ra = { path = "../../../languages/cq-lang-ra" }
 cq-lang-vo = { path = "../../../languages/cq-lang-vo" }
-cq-elaborate = { path = "../../../passes/cq-elaborate" }
+cq-relational-lowering = { path = "../../../passes/cq-relational-lowering" }
 cq-index-policy = { path = "../../../passes/cq-index-policy" }
 cq-order = { path = "../../../passes/cq-order" }
 cq-reduce = { path = "../../../passes/cq-reduce" }

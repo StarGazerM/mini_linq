@@ -1433,7 +1433,7 @@ impl Kernel<'_, '_> {
                 let lookup = row.rewrite(lookup)?;
                 if *membership {
                     let rest = self.scalar_operations(rest, row)?;
-                    // Formal rule E-Neg: anti membership keeps precisely the rows
+                    // Formal rule RL-Neg: anti membership keeps precisely the rows
                     // whose provider probe finds no witness; dead lanes stay dead.
                     return Ok(
                         quote!(#lookup __live = __live && (__member_found != #negated); #rest),

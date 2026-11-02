@@ -1,5 +1,5 @@
-use cq_elaborate::{check, compile};
 use cq_lang_vo::cq;
+use cq_relational_lowering::{check, compile};
 use quote::ToTokens;
 
 fn plan(text: &str) -> (cq_lang_vo::Program, cq_lang_ra::Program) {
@@ -380,7 +380,7 @@ fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
             );
         }
         let written = cq_order::compile_written(&vo.cq).unwrap();
-        let reference = cq_elaborate::compile(&written).unwrap();
+        let reference = cq_relational_lowering::compile(&written).unwrap();
         check(&written, &reference).unwrap();
         for seed in 0..8 {
             let database = cq_testkit::databases::binary_database(&vo.cq, seed);
@@ -572,7 +572,7 @@ fn block_placement_round_trips_and_controls_both_elaboration_entry_points() {
         assert_eq!(*vo, reparsed);
         cq_lang_vo::contract::check(&reparsed).unwrap();
     }
-    let reference = cq_elaborate::compile(&written).unwrap();
+    let reference = cq_relational_lowering::compile(&written).unwrap();
     check(&written, &reference).unwrap();
     let correlated = compile(&written).unwrap();
     check(&written, &correlated).unwrap();

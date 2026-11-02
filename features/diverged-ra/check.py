@@ -24,7 +24,7 @@ EXPECTED = {
 TEST_ONLY = {"cq-testkit": "testkit", "cq-lang-cq": "languages", "cq-lang-vo": "languages"}
 LOCAL = {"ra-theta": HERE / "ra-theta", "theta-passes": HERE / "theta-passes", "diverged-ra": HERE}
 FORBIDDEN = {
-    "cq-lang-cq", "cq-lang-vo", "cq-order", "cq-reduce", "cq-elaborate",
+    "cq-lang-cq", "cq-lang-vo", "cq-order", "cq-reduce", "cq-relational-lowering",
     "cq-index-policy", "mini-linq", "mini-linq-macros", "cq-testkit",
 }
 

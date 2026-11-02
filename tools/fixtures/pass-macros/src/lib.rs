@@ -26,7 +26,7 @@ fn planned(input: TokenStream, options: cq_order::Options, reductions: bool) -> 
             cq_reduce::check(&plan, &reduced, &options)?;
             plan = reduced;
         }
-        cq_elaborate::compile(&plan)
+        cq_relational_lowering::compile(&plan)
     })
     .into()
 }

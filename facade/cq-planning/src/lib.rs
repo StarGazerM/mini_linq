@@ -304,8 +304,8 @@ fn advise_prefix(reduced: &mut vo::Program, args: &PlanOptions) -> syn::Result<(
 /// Formal rule Plan-Prefix: Normalize, order Prefix(Connected)/Coarse or explicit order, reduce by Masks unless disabled, apply advice, and elaborate.
 pub fn compile_prefix(source: &cq::Program, options: &PlanOptions) -> syn::Result<ra::Program> {
     let reduced = prefix_valuation(source, options)?;
-    let target = cq_elaborate::compile(&reduced)?;
-    cq_elaborate::check(&reduced, &target)?;
+    let target = cq_relational_lowering::compile(&reduced)?;
+    cq_relational_lowering::check(&reduced, &target)?;
     Ok(target)
 }
 
@@ -332,7 +332,7 @@ mod tests {
                 ra::Operator::Semijoin(join) => Some((i, join)),
                 _ => None,
             })
-            .expect("lookup is E-Check semijoin");
+            .expect("lookup is RL-Check semijoin");
         let (expand_index, expand) = plan
             .plan
             .definitions

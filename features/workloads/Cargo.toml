@@ -31,7 +31,7 @@ cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
 mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
 cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
 cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
-cq-elaborate = { version = "0.1.0", path = "../../passes/cq-elaborate" }
+cq-relational-lowering = { version = "0.1.0", path = "../../passes/cq-relational-lowering" }
 cq-index-policy = { version = "0.1.0", path = "../../passes/cq-index-policy" }
 cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-lowering" }
 cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
