@@ -1,9 +1,15 @@
 #![cfg(feature = "parquet")]
 use arrow_array::{ArrayRef, Date32Array, Decimal128Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use cq_load::{Batch, ColumnarField, ColumnarLoader, ColumnarRelation, Date, Decimal, Dictionaries, ParquetOptions, StringCode};
+use cq_load::{
+    Batch, ColumnarField, ColumnarLoader, ColumnarRelation, Date, Decimal, Dictionaries,
+    ParquetOptions, StringCode,
+};
 use cq_storage::OrderKey;
-use cq_storage::scan::{BlockRows, Bytes, Family, OrdinalDecode, Predicate, ScanColumn, ScanColumnBuilder, ScanTable, VECTOR_ROWS};
+use cq_storage::scan::{
+    BlockRows, Bytes, Family, OrdinalDecode, Predicate, ScanColumn, ScanColumnBuilder, ScanTable,
+    VECTOR_ROWS,
+};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
@@ -11,11 +17,25 @@ use std::sync::Arc;
 struct Typed;
 impl ColumnarRelation for Typed {
     const COLUMNS: &'static [&'static str] = &["id", "day", "price", "text"];
-    type Table = ScanTable<(ScanColumn<i64, Bytes>, ScanColumn<Date, Bytes>, ScanColumn<Decimal, Bytes>, ScanColumn<StringCode, Bytes>)>;
-    type Builders = (ScanColumnBuilder<i64, Bytes>, ScanColumnBuilder<Date, Bytes>, ScanColumnBuilder<Decimal, Bytes>, <StringCode as ColumnarField<Bytes>>::Builder);
+    type Table = ScanTable<(
+        ScanColumn<i64, Bytes>,
+        ScanColumn<Date, Bytes>,
+        ScanColumn<Decimal, Bytes>,
+        ScanColumn<StringCode, Bytes>,
+    )>;
+    type Builders = (
+        ScanColumnBuilder<i64, Bytes>,
+        ScanColumnBuilder<Date, Bytes>,
+        ScanColumnBuilder<Decimal, Bytes>,
+        <StringCode as ColumnarField<Bytes>>::Builder,
+    );
     fn builders(rows: BlockRows, summaries: bool) -> Self::Builders {
-        (ScanColumnBuilder::new(rows, summaries), ScanColumnBuilder::new(rows, summaries),
-            ScanColumnBuilder::new(rows, summaries), <StringCode as ColumnarField<Bytes>>::builder(rows, summaries))
+        (
+            ScanColumnBuilder::new(rows, summaries),
+            ScanColumnBuilder::new(rows, summaries),
+            ScanColumnBuilder::new(rows, summaries),
+            <StringCode as ColumnarField<Bytes>>::builder(rows, summaries),
+        )
     }
     fn append(batch: &Batch<'_>, builders: &mut Self::Builders) -> cq_load::Result<()> {
         batch.append_column(0, &mut builders.0)?;
@@ -24,13 +44,18 @@ impl ColumnarRelation for Typed {
         <StringCode as ColumnarField<Bytes>>::append(batch, 3, &mut builders.3)
     }
     fn finish(builders: Self::Builders, dictionaries: &mut Dictionaries) -> Self::Table {
-        ScanTable::new((builders.0.finish(), builders.1.finish(), builders.2.finish(),
-            <StringCode as ColumnarField<Bytes>>::finish("text", dictionaries, builders.3)))
+        ScanTable::new((
+            builders.0.finish(),
+            builders.1.finish(),
+            builders.2.finish(),
+            <StringCode as ColumnarField<Bytes>>::finish("text", dictionaries, builders.3),
+        ))
     }
 }
 
 fn check_column<T: OrdinalDecode + std::fmt::Debug, F: Family>(
-    column: &ScanColumn<T, F>, expected: &[T],
+    column: &ScanColumn<T, F>,
+    expected: &[T],
 ) {
     let mut actual = Vec::new();
     let mut buffer = [expected[0]; VECTOR_ROWS];
@@ -103,23 +128,43 @@ fn encoded_statistics_work_without_parquet_stats_and_across_row_groups() {
         for batch_size in [1, 2, 5, 100] {
             let mut dictionaries = Dictionaries::default();
             let host = ColumnarLoader::<Typed>::parquet_interned(
-                &path, ParquetOptions { batch_size }, BlockRows::new(1024).unwrap(),
-                true, &mut dictionaries,
-            ).unwrap();
+                &path,
+                ParquetOptions { batch_size },
+                BlockRows::new(1024).unwrap(),
+                true,
+                &mut dictionaries,
+            )
+            .unwrap();
             assert_eq!(host.len(), 7);
             let columns = host.columns();
             check_column(&columns.0, &[9, -1, 7, 0, 0, 42, 5]);
-            let dates: Vec<Date> = ["1970-01-01", "1969-12-31", "2000-02-29", "1970-01-01", "1970-01-01", "1970-04-10", "1970-04-09"]
-                .into_iter().map(|s| s.parse().unwrap()).collect();
+            let dates: Vec<Date> = [
+                "1970-01-01",
+                "1969-12-31",
+                "2000-02-29",
+                "1970-01-01",
+                "1970-01-01",
+                "1970-04-10",
+                "1970-04-09",
+            ]
+            .into_iter()
+            .map(|s| s.parse().unwrap())
+            .collect();
             check_column(&columns.1, &dates);
             let prices: Vec<Decimal> = ["12.30", "-0.01", "1.00", "0", "0", "20.00", "99.99"]
-                .into_iter().map(|s| s.parse().unwrap()).collect();
+                .into_iter()
+                .map(|s| s.parse().unwrap())
+                .collect();
             check_column(&columns.2, &prices);
             let text: Vec<StringCode> = ["é", "a", "e\u{301}", "", "", "a long text", "中"]
-                .into_iter().map(|s| StringCode(dictionaries.get("text").unwrap().lookup(s).unwrap())).collect();
+                .into_iter()
+                .map(|s| StringCode(dictionaries.get("text").unwrap().lookup(s).unwrap()))
+                .collect();
             check_column(&columns.3, &text);
             let mut selected = Vec::new();
-            columns.0.filter(&Predicate::Point(0_i64.ordinal()), |row| selected.push(row));
+            columns
+                .0
+                .filter(&Predicate::Point(0_i64.ordinal()), |row| selected.push(row));
             assert_eq!(selected, [3, 4]);
         }
         std::fs::remove_file(path).unwrap();

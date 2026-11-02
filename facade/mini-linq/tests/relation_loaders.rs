@@ -316,7 +316,9 @@ mod dispatch {
 
 mod columnar {
     use super::{CsvOptions, File};
-    use cq_storage::scan::{BlockRows, Bytes, Family, OrdinalDecode, Plain, ScanColumn, VECTOR_ROWS};
+    use cq_storage::scan::{
+        BlockRows, Bytes, Family, OrdinalDecode, Plain, ScanColumn, VECTOR_ROWS,
+    };
 
     type Integer = i64;
 
@@ -361,7 +363,8 @@ mod columnar {
             ..CsvOptions::default()
         };
         let block_rows = BlockRows::new(VECTOR_ROWS as u32).unwrap();
-        let table = <relation_loader!(Reading)>::csv(file.path(), options, block_rows, true).unwrap();
+        let table =
+            <relation_loader!(Reading)>::csv(file.path(), options, block_rows, true).unwrap();
         let expected = ordinary::ReadingLoader::csv(file.path(), options).unwrap();
         let (ids, amounts) = table.columns();
         cq_storage::scan::family::<Bytes, _>(ids);
@@ -373,7 +376,10 @@ mod columnar {
         assert_eq!(ids.summaries().unwrap().len(), 3);
         assert_eq!(amounts.summaries().unwrap().len(), 3);
         assert_eq!(
-            decode(ids, 0).into_iter().zip(decode(amounts, 0)).collect::<Vec<_>>(),
+            decode(ids, 0)
+                .into_iter()
+                .zip(decode(amounts, 0))
+                .collect::<Vec<_>>(),
             expected,
         );
     }
@@ -382,17 +388,22 @@ mod columnar {
     fn empty_and_raw_named_columns_keep_authored_layout_without_summaries() {
         let block_rows = BlockRows::new(VECTOR_ROWS as u32).unwrap();
         let empty = File::new("");
-        let table = ReadingLoader::csv(empty.path(), CsvOptions::default(), block_rows, false).unwrap();
+        let table =
+            ReadingLoader::csv(empty.path(), CsvOptions::default(), block_rows, false).unwrap();
         assert_eq!(table.len(), 0);
         assert!(table.columns().0.headers().is_empty());
         assert!(table.columns().0.summaries().is_none());
         let file = File::new("match\n-7\n-7\n");
         let table = <relation_loader!(r#type)>::csv(
             file.path(),
-            CsvOptions { headers: true, ..CsvOptions::default() },
+            CsvOptions {
+                headers: true,
+                ..CsvOptions::default()
+            },
             block_rows,
             false,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(decode(&table.columns().0, 0), [-7, -7]);
         assert!(table.columns().0.summaries().is_none());
     }
@@ -402,10 +413,16 @@ mod columnar {
         let file = File::new("amount,id\n10,1\nwrong,2\n");
         let error = ReadingLoader::csv(
             file.path(),
-            CsvOptions { headers: true, batch_size: 1, ..CsvOptions::default() },
+            CsvOptions {
+                headers: true,
+                batch_size: 1,
+                ..CsvOptions::default()
+            },
             BlockRows::new(VECTOR_ROWS as u32).unwrap(),
             true,
-        ).err().unwrap();
+        )
+        .err()
+        .unwrap();
         let message = error.to_string();
         assert!(message.contains(file.path().to_str().unwrap()), "{message}");
         assert!(message.contains('3'), "{message}");
@@ -450,15 +467,21 @@ mod columnar_interned {
         let mut dictionaries = cq_load::Dictionaries::default();
         let table = <relation_loader!(Encoded)>::csv_interned(
             file.path(),
-            CsvOptions { headers: true, batch_size: 137, ..CsvOptions::default() },
+            CsvOptions {
+                headers: true,
+                batch_size: 137,
+                ..CsvOptions::default()
+            },
             BlockRows::new(VECTOR_ROWS as u32).unwrap(),
             true,
             &mut dictionaries,
-        ).unwrap();
+        )
+        .unwrap();
         let (ids, labels, others) = table.columns();
         cq_storage::scan::family::<Bytes, _>(labels);
         cq_storage::scan::family::<Plain, _>(others);
-        let actual = decode(ids, 0).into_iter()
+        let actual = decode(ids, 0)
+            .into_iter()
             .zip(decode(labels, Code::MAX))
             .zip(decode(others, Code::MAX))
             .map(|((id, label), other)| (id, label, other))
@@ -483,14 +506,21 @@ mod columnar_interned {
         let file = File::new("");
         let mut dictionaries = cq_load::Dictionaries::default();
         let table = EncodedLoader::csv_interned(
-            file.path(), CsvOptions::default(),
-            BlockRows::new(VECTOR_ROWS as u32).unwrap(), false, &mut dictionaries,
-        ).unwrap();
+            file.path(),
+            CsvOptions::default(),
+            BlockRows::new(VECTOR_ROWS as u32).unwrap(),
+            false,
+            &mut dictionaries,
+        )
+        .unwrap();
         assert_eq!(table.len(), 0);
         assert!(table.columns().1.headers().is_empty());
         assert!(table.columns().1.summaries().is_none());
         assert!(dictionaries.get("label").is_some());
         assert!(dictionaries.get("other").is_some());
-        assert_eq!(cq_storage::domain::exact(dictionaries.domain("label"), ""), Code::MAX);
+        assert_eq!(
+            cq_storage::domain::exact(dictionaries.domain("label"), ""),
+            Code::MAX
+        );
     }
 }

@@ -4,16 +4,30 @@
 //! not compiler integration or survivor-only Parquet I/O.
 use cq_load::{Batch, ColumnarLoader, ColumnarRelation, Dictionaries, ParquetOptions};
 use cq_storage::OrderKey;
-use cq_storage::scan::{BlockRows, Bytes, Predicate, ScanColumn, ScanColumnBuilder, ScanTable, VECTOR_ROWS};
+use cq_storage::scan::{
+    BlockRows, Bytes, Predicate, ScanColumn, ScanColumnBuilder, ScanTable, VECTOR_ROWS,
+};
 use std::time::Instant;
 
 struct Lineitem;
 impl ColumnarRelation for Lineitem {
     const COLUMNS: &'static [&'static str] = &["l_orderkey", "l_partkey", "l_suppkey"];
-    type Table = ScanTable<(ScanColumn<i64, Bytes>, ScanColumn<i64, Bytes>, ScanColumn<i64, Bytes>)>;
-    type Builders = (ScanColumnBuilder<i64, Bytes>, ScanColumnBuilder<i64, Bytes>, ScanColumnBuilder<i64, Bytes>);
+    type Table = ScanTable<(
+        ScanColumn<i64, Bytes>,
+        ScanColumn<i64, Bytes>,
+        ScanColumn<i64, Bytes>,
+    )>;
+    type Builders = (
+        ScanColumnBuilder<i64, Bytes>,
+        ScanColumnBuilder<i64, Bytes>,
+        ScanColumnBuilder<i64, Bytes>,
+    );
     fn builders(rows: BlockRows, summaries: bool) -> Self::Builders {
-        (ScanColumnBuilder::new(rows, summaries), ScanColumnBuilder::new(rows, summaries), ScanColumnBuilder::new(rows, summaries))
+        (
+            ScanColumnBuilder::new(rows, summaries),
+            ScanColumnBuilder::new(rows, summaries),
+            ScanColumnBuilder::new(rows, summaries),
+        )
     }
     fn append(batch: &Batch<'_>, builders: &mut Self::Builders) -> cq_load::Result<()> {
         batch.append_column(0, &mut builders.0)?;
@@ -21,7 +35,11 @@ impl ColumnarRelation for Lineitem {
         batch.append_column(2, &mut builders.2)
     }
     fn finish(builders: Self::Builders, _: &mut Dictionaries) -> Self::Table {
-        ScanTable::new((builders.0.finish(), builders.1.finish(), builders.2.finish()))
+        ScanTable::new((
+            builders.0.finish(),
+            builders.1.finish(),
+            builders.2.finish(),
+        ))
     }
 }
 
@@ -42,8 +60,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (size, expected_visited) in [(2048, 1571), (122880, 49)] {
         let start = Instant::now();
         let host = ColumnarLoader::<Lineitem>::parquet(
-            &args[1], ParquetOptions { batch_size: 3000 },
-            BlockRows::new(size).unwrap(), true,
+            &args[1],
+            ParquetOptions { batch_size: 3000 },
+            BlockRows::new(size).unwrap(),
+            true,
         )?;
         let load = start.elapsed();
         assert_eq!(host.len(), 6_001_215);
@@ -68,17 +88,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let considered = column.headers().len();
-        let visited = column.summaries().unwrap().iter().filter(|summary| {
-            keys.iter().any(|key| summary.lo <= key.ordinal() && key.ordinal() <= summary.hi)
-        }).count();
+        let visited = column
+            .summaries()
+            .unwrap()
+            .iter()
+            .filter(|summary| {
+                keys.iter()
+                    .any(|key| summary.lo <= key.ordinal() && key.ordinal() <= summary.hi)
+            })
+            .count();
         let mut selected = Vec::new();
         column.filter(&predicate, |row| selected.push(row));
         assert_eq!(selected, scalar);
         assert_eq!(visited, expected_visited);
         println!(
             "block_rows={size} rows={} considered={considered} visited={visited} skipped={} matched={} load_ms={:.3} predicate_payload_bytes={}",
-            host.len(), considered - visited, selected.len(),
-            load.as_secs_f64() * 1000., column.payload().len(),
+            host.len(),
+            considered - visited,
+            selected.len(),
+            load.as_secs_f64() * 1000.,
+            column.payload().len(),
         );
     }
     Ok(())

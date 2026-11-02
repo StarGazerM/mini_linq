@@ -28,7 +28,13 @@ impl<S: ColumnarRelation> ColumnarLoader<S> {
         block_rows: BlockRows,
         summaries: bool,
     ) -> Result<S::Table> {
-        Self::csv_interned(path, options, block_rows, summaries, &mut Dictionaries::default())
+        Self::csv_interned(
+            path,
+            options,
+            block_rows,
+            summaries,
+            &mut Dictionaries::default(),
+        )
     }
 
     pub fn csv_interned(
@@ -53,7 +59,13 @@ impl<S: ColumnarRelation> ColumnarLoader<S> {
         block_rows: BlockRows,
         summaries: bool,
     ) -> Result<S::Table> {
-        Self::parquet_interned(path, options, block_rows, summaries, &mut Dictionaries::default())
+        Self::parquet_interned(
+            path,
+            options,
+            block_rows,
+            summaries,
+            &mut Dictionaries::default(),
+        )
     }
 
     #[cfg(feature = "parquet")]
@@ -99,8 +111,11 @@ impl<S: ColumnarRelation> ColumnarLoader<S> {
             let batch = batch?;
             let batch_schema = batch.schema();
             if schema.as_ref() != Some(&batch_schema) {
-                let names = batch_schema.fields().iter()
-                    .map(|field| field.name().as_str()).collect::<Vec<_>>();
+                let names = batch_schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().as_str())
+                    .collect::<Vec<_>>();
                 mapping = crate::column_mapping(file, &names, S::COLUMNS)?;
                 schema = Some(batch_schema);
             }
@@ -132,8 +147,11 @@ pub trait ColumnarField<F: Family>: crate::InternedField + OrdinalDecode {
 
     fn builder(block_rows: BlockRows, summaries: bool) -> Self::Builder;
     fn append(batch: &Batch<'_>, index: usize, builder: &mut Self::Builder) -> Result<()>;
-    fn finish(column: &str, dictionaries: &mut Dictionaries, builder: Self::Builder)
-        -> ScanColumn<Self, F>;
+    fn finish(
+        column: &str,
+        dictionaries: &mut Dictionaries,
+        builder: Self::Builder,
+    ) -> ScanColumn<Self, F>;
 }
 
 impl<T: Load + OrdinalDecode, F: Family> ColumnarField<F> for T {

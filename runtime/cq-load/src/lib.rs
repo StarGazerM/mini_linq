@@ -175,7 +175,8 @@ pub trait Load: Sized {
                 value: "<batch>".into(),
                 message: format!(
                     "Load::load_arrow returned {} values for {} source rows",
-                    values.len(), column.len()
+                    values.len(),
+                    column.len()
                 ),
             });
         }
@@ -235,16 +236,27 @@ impl Batch<'_> {
         F: cq_storage::scan::Family,
     {
         let Some((&column, &source)) = self.columns.get(index).zip(self.mapping.get(index)) else {
-            return Err(Error::new(self.file, 0, "<schema>", index.to_string(), "column index outside schema"));
+            return Err(Error::new(
+                self.file,
+                0,
+                "<schema>",
+                index.to_string(),
+                "column index outside schema",
+            ));
         };
         match self.data {
             BatchData::Csv(records) => {
                 for record in records {
                     let value = &record[source];
-                    let value = T::load(value).map_err(|message| Error::new(
-                        self.file, record.position().map_or(1, csv::Position::line),
-                        column, value, message,
-                    ))?;
+                    let value = T::load(value).map_err(|message| {
+                        Error::new(
+                            self.file,
+                            record.position().map_or(1, csv::Position::line),
+                            column,
+                            value,
+                            message,
+                        )
+                    })?;
                     builder.push(value);
                 }
                 Ok(())
@@ -252,17 +264,28 @@ impl Batch<'_> {
             #[cfg(feature = "parquet")]
             BatchData::Parquet(batch, first_row) => {
                 T::load_arrow_into(batch.column(source).as_ref(), |value| builder.push(value))
-                    .map_err(|error| Error::new(
-                        self.file, first_row + error.row as u64, column,
-                        error.value, error.message,
-                    ))
+                    .map_err(|error| {
+                        Error::new(
+                            self.file,
+                            first_row + error.row as u64,
+                            column,
+                            error.value,
+                            error.message,
+                        )
+                    })
             }
         }
     }
 
     fn visit_strings(&self, index: usize, mut visit: impl FnMut(&str)) -> Result<()> {
         let Some((&_column, &source)) = self.columns.get(index).zip(self.mapping.get(index)) else {
-            return Err(Error::new(self.file, 0, "<schema>", index.to_string(), "column index outside schema"));
+            return Err(Error::new(
+                self.file,
+                0,
+                "<schema>",
+                index.to_string(),
+                "column index outside schema",
+            ));
         };
         match self.data {
             BatchData::Csv(records) => {
@@ -272,14 +295,23 @@ impl Batch<'_> {
                 Ok(())
             }
             #[cfg(feature = "parquet")]
-            BatchData::Parquet(batch, first_row) => {
-                parquet_source::parse_arrow_into(
-                    batch.column(source).as_ref(), |value| { visit(value); Ok(()) }, |_| {},
-                ).map_err(|error| Error::new(
-                    self.file, first_row + error.row as u64, _column,
-                    error.value, error.message,
-                ))
-            }
+            BatchData::Parquet(batch, first_row) => parquet_source::parse_arrow_into(
+                batch.column(source).as_ref(),
+                |value| {
+                    visit(value);
+                    Ok(())
+                },
+                |_| {},
+            )
+            .map_err(|error| {
+                Error::new(
+                    self.file,
+                    first_row + error.row as u64,
+                    _column,
+                    error.value,
+                    error.message,
+                )
+            }),
         }
     }
 

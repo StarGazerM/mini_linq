@@ -184,7 +184,10 @@ impl<T: OrdinalDecode, F: Family> ScanColumnBuilder<T, F> {
                 marker: PhantomData,
             },
             tail: Vec::with_capacity(block_rows.get()),
-            extrema: MinMax { lo: u64::MAX, hi: 0 },
+            extrema: MinMax {
+                lo: u64::MAX,
+                hi: 0,
+            },
         }
     }
 
@@ -244,7 +247,10 @@ impl<T: OrdinalDecode, F: Family> ScanColumnBuilder<T, F> {
             summary.push(self.extrema);
         }
         self.tail.clear();
-        self.extrema = MinMax { lo: u64::MAX, hi: 0 };
+        self.extrema = MinMax {
+            lo: u64::MAX,
+            hi: 0,
+        };
     }
 }
 
@@ -564,7 +570,11 @@ pub struct ScanTable<C> {
 impl<C: ScanColumns> ScanTable<C> {
     pub fn new(columns: C) -> Self {
         let (rows, block_rows) = columns.layout();
-        Self { columns, rows, block_rows }
+        Self {
+            columns,
+            rows,
+            block_rows,
+        }
     }
 
     pub fn len(&self) -> usize {

@@ -396,7 +396,8 @@ pub fn columnar_relation_loaders(input: TokenStream) -> TokenStream {
 /// change query syntax or inspect Rust field type spellings.
 #[proc_macro]
 pub fn interned_relation_loaders(input: TokenStream) -> TokenStream {
-    if matches!(input.clone().into_iter().next(), Some(proc_macro::TokenTree::Ident(ident)) if ident.to_string() == "columnar") {
+    if matches!(input.clone().into_iter().next(), Some(proc_macro::TokenTree::Ident(ident)) if ident.to_string() == "columnar")
+    {
         columnar_load::expand(input, true)
     } else {
         load::expand(input, true)

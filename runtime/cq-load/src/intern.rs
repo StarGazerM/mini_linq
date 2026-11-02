@@ -138,9 +138,16 @@ impl Dictionaries {
     /// before any dictionary is inserted, so existing encoded hosts stay valid.
     pub(crate) fn commit(&mut self, pending: Self) -> Result<()> {
         for (column, dictionary) in &pending.columns {
-            if self.columns.get(column).is_some_and(|existing| existing != dictionary) {
+            if self
+                .columns
+                .get(column)
+                .is_some_and(|existing| existing != dictionary)
+            {
                 return Err(crate::Error::new(
-                    std::path::Path::new("<dictionaries>"), 0, column, "<domain>",
+                    std::path::Path::new("<dictionaries>"),
+                    0,
+                    column,
+                    "<domain>",
                     "dictionary column changed",
                 ));
             }
@@ -339,7 +346,9 @@ impl<F: cq_storage::scan::Family> crate::ColumnarField<F> for StringCode {
     }
 
     fn append(batch: &Batch<'_>, index: usize, builder: &mut Self::Builder) -> Result<()> {
-        batch.visit_strings(index, |value| builder.codes.push(builder.state.encode(value)))
+        batch.visit_strings(index, |value| {
+            builder.codes.push(builder.state.encode(value))
+        })
     }
 
     fn finish(
@@ -349,9 +358,12 @@ impl<F: cq_storage::scan::Family> crate::ColumnarField<F> for StringCode {
     ) -> cq_storage::scan::ScanColumn<Self, F> {
         dictionaries.register(column, builder.state.finish());
         // Remapping is the final encode pass, not a rewrite of a decoded host.
-        builder.output.extend(builder.codes.into_iter().map(|code| {
-            StringCode(builder.state.remap[code.0 as usize])
-        }));
+        builder.output.extend(
+            builder
+                .codes
+                .into_iter()
+                .map(|code| StringCode(builder.state.remap[code.0 as usize])),
+        );
         builder.output.finish()
     }
 }

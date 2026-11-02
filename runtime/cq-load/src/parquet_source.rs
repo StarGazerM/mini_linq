@@ -248,20 +248,18 @@ fn parse_arrow_nonstring<T>(
         Float64Array
     );
     if let Some(array) = column.as_any().downcast_ref::<arrow_array::Date32Array>() {
-        return array
-            .iter()
-            .enumerate()
-            .try_for_each(|(row, value)| {
-                // DECODE ?: Arrow epoch days become Date for fallback rendering, with no opaque-read or answer fact.
-                let value =
-                    Date::from_days(value.ok_or_else(|| ColumnError::null(row))?).to_string();
-                // DECODE ?: the rendered Date is parsed into arbitrary T whose subsequent consumer is unrecorded.
-                parse(&value).map_err(|message| ColumnError {
+        return array.iter().enumerate().try_for_each(|(row, value)| {
+            // DECODE ?: Arrow epoch days become Date for fallback rendering, with no opaque-read or answer fact.
+            let value = Date::from_days(value.ok_or_else(|| ColumnError::null(row))?).to_string();
+            // DECODE ?: the rendered Date is parsed into arbitrary T whose subsequent consumer is unrecorded.
+            parse(&value)
+                .map_err(|message| ColumnError {
                     row,
                     value,
                     message,
-                }).map(&mut emit)
-            });
+                })
+                .map(&mut emit)
+        });
     }
     if let (Some(array), arrow_schema::DataType::Decimal128(_, scale)) = (
         column
@@ -269,19 +267,18 @@ fn parse_arrow_nonstring<T>(
             .downcast_ref::<arrow_array::Decimal128Array>(),
         column.data_type(),
     ) {
-        return array
-            .iter()
-            .enumerate()
-            .try_for_each(|(row, value)| {
-                // DECODE ?: Decimal128 coefficient and scale become logical decimal text for generic fallback loading.
-                let value = decimal_text(value.ok_or_else(|| ColumnError::null(row))?, *scale);
-                // DECODE ?: decimal text is reconstructed as caller T with no recorded final consumer.
-                parse(&value).map_err(|message| ColumnError {
+        return array.iter().enumerate().try_for_each(|(row, value)| {
+            // DECODE ?: Decimal128 coefficient and scale become logical decimal text for generic fallback loading.
+            let value = decimal_text(value.ok_or_else(|| ColumnError::null(row))?, *scale);
+            // DECODE ?: decimal text is reconstructed as caller T with no recorded final consumer.
+            parse(&value)
+                .map_err(|message| ColumnError {
                     row,
                     value,
                     message,
-                }).map(&mut emit)
-            });
+                })
+                .map(&mut emit)
+        });
     }
     Err(ColumnError {
         row: 0,

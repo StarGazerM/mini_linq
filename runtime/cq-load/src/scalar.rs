@@ -214,16 +214,20 @@ impl<const SCALE: u32> Load for Decimal<SCALE> {
         mut emit: impl FnMut(Self),
     ) -> Result<(), crate::ColumnError> {
         if let (Some(array), arrow_schema::DataType::Decimal128(_, scale)) = (
-            column.as_any().downcast_ref::<arrow_array::Decimal128Array>(),
+            column
+                .as_any()
+                .downcast_ref::<arrow_array::Decimal128Array>(),
             column.data_type(),
         ) {
             for (row, value) in array.iter().enumerate() {
                 let value = value.ok_or_else(|| crate::ColumnError::null(row))?;
-                emit(Self::rescale(value, *scale).map_err(|message| crate::ColumnError {
-                    row,
-                    value: crate::parquet_source::decimal_text(value, *scale),
-                    message,
-                })?);
+                emit(
+                    Self::rescale(value, *scale).map_err(|message| crate::ColumnError {
+                        row,
+                        value: crate::parquet_source::decimal_text(value, *scale),
+                        message,
+                    })?,
+                );
             }
             Ok(())
         } else {

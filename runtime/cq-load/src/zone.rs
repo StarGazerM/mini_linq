@@ -197,7 +197,6 @@ impl<T, M: ZoneMetadata> ZoneRows<T, M> {
         }
     }
 
-
     pub fn block_rows(&self) -> NonZeroUsize {
         self.block_rows
     }

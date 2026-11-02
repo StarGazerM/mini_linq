@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ext::IdentExt, parse::Parse, punctuated::Punctuated, Token};
+use syn::{Token, ext::IdentExt, parse::Parse, punctuated::Punctuated};
 
 mod kw {
     syn::custom_keyword!(columnar);
@@ -65,7 +65,10 @@ impl Parse for Declarations {
         while !input.is_empty() {
             relations.push(input.parse()?);
         }
-        Ok(Self { interned, relations })
+        Ok(Self {
+            interned,
+            relations,
+        })
     }
 }
 
@@ -114,16 +117,25 @@ fn generate(declarations: Declarations) -> syn::Result<proc_macro2::TokenStream>
         let loader = format_ident!("{}Loader", name);
         selectors.push(quote!((#relation) => { #loader };));
         let types: Vec<_> = declaration.fields.iter().map(|field| &field.ty).collect();
-        let names: Vec<_> = declaration.fields.iter()
-            .map(|field| field.name.unraw().to_string()).collect();
-        let families: Vec<_> = declaration.fields.iter().map(|field| {
-            if field.family == "bytes" {
-                quote!(::cq_storage::scan::Bytes)
-            } else {
-                quote!(::cq_storage::scan::Plain)
-            }
-        }).collect();
-        let parameters: Vec<_> = (0..types.len()).map(|i| format_ident!("Column{i}")).collect();
+        let names: Vec<_> = declaration
+            .fields
+            .iter()
+            .map(|field| field.name.unraw().to_string())
+            .collect();
+        let families: Vec<_> = declaration
+            .fields
+            .iter()
+            .map(|field| {
+                if field.family == "bytes" {
+                    quote!(::cq_storage::scan::Bytes)
+                } else {
+                    quote!(::cq_storage::scan::Plain)
+                }
+            })
+            .collect();
+        let parameters: Vec<_> = (0..types.len())
+            .map(|i| format_ident!("Column{i}"))
+            .collect();
         let indices: Vec<_> = (0..types.len()).collect();
         let tuple_indices: Vec<_> = indices.iter().map(|&i| syn::Index::from(i)).collect();
         let (bounds, builders, initialize, append, finish) = if declarations.interned {
@@ -193,17 +205,23 @@ mod tests {
     #[test]
     fn columnar_schemas_require_known_explicit_families() {
         for source in [
-            "", "relation R(x: i64);", "relation R(x: i64 @ packed);",
+            "",
+            "relation R(x: i64);",
+            "relation R(x: i64 @ packed);",
             "relation R(x: i64 @ unknown);",
         ] {
             assert!(syn::parse_str::<Declarations>(source).is_err(), "{source}");
         }
         for source in [
-            "relation R();", "relation R(x: i64 @ bytes, x: i32 @ plain);",
+            "relation R();",
+            "relation R(x: i64 @ bytes, x: i32 @ plain);",
             "relation R(x: i64 @ bytes); relation R(x: i64 @ plain);",
             "relation R(a:i64 @ bytes,b:i64 @ bytes,c:i64 @ bytes,d:i64 @ bytes,e:i64 @ bytes,f:i64 @ bytes,g:i64 @ bytes,h:i64 @ bytes,i:i64 @ bytes,j:i64 @ bytes,k:i64 @ bytes,l:i64 @ bytes,m:i64 @ bytes);",
         ] {
-            assert!(generate(syn::parse_str(source).unwrap()).is_err(), "{source}");
+            assert!(
+                generate(syn::parse_str(source).unwrap()).is_err(),
+                "{source}"
+            );
         }
     }
 

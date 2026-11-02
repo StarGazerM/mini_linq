@@ -23,8 +23,7 @@ fn incremental_encoding_is_batch_independent() {
             }
         }
     }
-    let empty = ScanColumnBuilder::<i64, Plain>::new(BlockRows::new(1024).unwrap(), true)
-        .finish();
+    let empty = ScanColumnBuilder::<i64, Plain>::new(BlockRows::new(1024).unwrap(), true).finish();
     assert!(empty.is_empty());
     assert!(empty.headers().is_empty());
     assert_eq!(empty.summaries(), Some([].as_slice()));
