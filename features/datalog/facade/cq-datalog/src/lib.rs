@@ -77,7 +77,7 @@
 //! Frozen-key holes are excluded. The task-local collector uses `HashTable<usize>`
 //! indices into an owned `Vec`, shares the admission hasher, preserves first
 //! occurrence order, and returns that vector without row cloning or CQ
-//! `__cq_seen` state. The collector alone does not eliminate retained pull
+//! result canonicalization. The collector alone does not eliminate retained pull
 //! result materialization; checked push selection streams into it directly.
 //! These checked realization records erase without changing the CQ or context
 //! facts. The optimization is never the canonical owner: cross-task duplicates
@@ -292,7 +292,7 @@
 //! with a timing run.
 //! Rule holes retain their projected heads; widening them is unnecessary.
 //! Checked `consumer canonical` facts assign the returned set boundary to
-//! admission, eliminating the per-hole `__cq_seen` set and unnecessary
+//! admission, eliminating unnecessary per-hole result canonicalization and
 //! `return canon`. Discharged host facts also let CQ infer uniqueness from
 //! canonical inputs. Internal canonicalization needed by intermediate operators
 //! remains; this is not an instruction to erase every deduplication operation.

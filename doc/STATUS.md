@@ -11,10 +11,10 @@
   updated conformance rows are explicitly unverified pending integration.
 - Semantics, IRs, checks and the pass protocol are complete. Every decision is
   recorded in IR text, and all features build outside the repository.
-- Default pipeline (`mini_linq::passes::plan`): left-deep in written order
-  (Written/Coarse); the first clause of each scope streams, later clauses are
-  indexed and probed, and no pass commutes operands. `plan(no_reduce)` keeps
-  the order but emits no semijoins.
+- Default pipeline (`mini_linq::passes::plan`): left-deep connected growth
+  (Connected/Coarse), not written-order scheduling. The first scheduled clause
+  of each scope streams; later clauses are indexed and probed.
+  `plan(no_reduce)` keeps that scheduling policy but emits no semijoins.
 - Sequence is the shipped CPU target: `sequence` → `sequential` →
   `translate_pull`, including profile counters. Explicit Structures push
   terminals remain selectable without Sequence phases. The former direct
@@ -30,16 +30,17 @@
   branch is its own scope.
 - Predicates: relational disjunctions derive implied per-occurrence domains
   (H07 `n_name ∈ {FRANCE, GERMANY}`) while keeping the exact predicate.
-  Comparisons and `&& || !` over query variables are relational and move like
-  filters; every other Rust guard is ordinary Rust, type-checked by rustc and
-  kept where written (`#[total]` and the allowlist were removed). `!R(args)`
-  is core negation, elaborated to an anti-join (`doc/formal/guards.tex`).
+  Explicit `where` comparisons and `&& || !` are relational filters.
+  Opaque Rust guards are type-checked by rustc and placed by free-variable
+  dependencies, not kept where written (`#[total]` and the allowlist were removed).
+  `!R(args)` is core negation, elaborated to an anti-join (`doc/formal/guards.tex`).
 - Aggregates: one required set dedup; constant-group folds use `SingleGroup`;
   grouped containers use the recorded fast hasher.
-- Join filters (SQL Server bitmaps): every probe or semijoin into a filtered
-  build pushes an exact key set per `i64` key column to the scan its spine
-  reaches, through intermediate probes; builds keeping over 35% of their source
-  rows construct none. Recorded in Structures; the exact probe still runs.
+- Join filters (SQL Server bitmaps): eligible probes or semijoins into filtered
+  builds push exact key sets to scans reached through their probe spines.
+  Structures records the filter candidates; the printer/runtime still decides
+  abandonment: retained distinct keys must be at most 35% of source occurrences.
+  Unknown source populations never abandon. The exact probe still runs.
 - Probes: Swiss-table `HashIndex`; batched (128) prefetched probes on scan
   spines, scalar elsewhere; no per-row `Rc`.
 - Back end (`doc/formal/backend.tex`): three recorded layers over one
@@ -69,7 +70,8 @@
 `cargo xtask bench --tpch --sf 1 --runs 5 --reduction-comparison` from
 `features/workloads`, release, one warm-up, median of five. MiniLinq excludes
 load; DuckDB includes prepare. All configurations exact vs DuckDB at SF 1.
-Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json}`.
+The raw artifacts for this historical table are not present in this
+checkout, so it is not independently reproducible from checked-in evidence.
 Measured on a different, slower machine than the previous table (whose
 DuckDB 1T H05 was 18.1 ms; here 39.5 ms), so compare ratios, not times.
 
@@ -89,7 +91,7 @@ DuckDB 1T H05 was 18.1 ms; here 39.5 ms), so compare ratios, not times.
 | tpch_q06 | 28.0 | 28.9 | 18.9 | 1.48 |
 | retail_d72_inner | 205.7 | 157.3 | 107.7 | 1.91 |
 
-no-reduce keeps written (fact-first) order, so without reductions the stream
+In this historical comparison, no-reduce kept written (fact-first) order, so without reductions the stream
 probes unreduced builds. D72's one reduction (Lineitem ⋉ PartSupp on a
 non-selective `ps_availqty > 0`) costs 32 ms of composite probes into the
 800k-row PartSupp index and filters nothing.
@@ -99,8 +101,11 @@ non-selective `ps_availqty > 0`) costs 32 ms of composite probes into the
 Exact-semijoin adaptation of RPT (SIGMOD'25), through the same public pipeline:
 connected growth within written atom runs, Masks forward pass plus the stream's
 reductions, then the backward pass from filtered sides, before the join phase.
-Predicate, binding and block boundaries stay fixed. This is not the paper's
-vectorized Bloom pipeline or RPT+'s adaptive execution.
+Predicate, binding and block boundaries stay fixed. A top-level VO `Guard`,
+`Let` or `For` makes `transfer` return the Masks plan unchanged because the RA
+correspondence checker rejects some otherwise sound transfer schedules; inner
+block scopes also retain Masks reductions. This is not the paper's vectorized
+Bloom pipeline or RPT+'s adaptive execution.
 
 The implementation now applies checked reduction absorption after elaboration,
 retains positional snapshots only at recorded retained boundaries, enumerates
@@ -173,9 +178,11 @@ partial read is Fine and may bind one variable. For example
 Named partial occurrences require an explicit complete read; unnamed
 occurrences retain written priority. The existing CK-Le checker now lives in
 `cq-order`, shared by both entry points: selected lookup occurrences require
-one lookup before one full expansion, written column ownership, and the written
-outer stream. WF-VO checks every read and dependency. No advice keeps the
-existing default path unchanged; advice does not infer Rust types or expressions.
+one lookup before one full expansion. Only automatic LE requires written column
+ownership and the written outer stream; advised schedules choose their first
+read as the stream, with column introductions checked by WF-VO. WF-VO checks
+every read and dependency. Without advice the default path is unchanged;
+advice does not infer Rust types or expressions.
 
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`
@@ -183,12 +190,12 @@ as planner axes (538 new accepted configurations; the two D85 `merge_joins`
 pinned as negative UI fixtures); the corpus gate passes (3,440 tests).
 
 `le_runs` explicitly applies `sorted_runs`; core default selection is
-unchanged. Sorted-run retyping is limited to one-level HashIndex payload
-builds with a single stored borrowed i32/i64 key, selecting the integral
-codec eligible for the rank directory. Multi-column, non-integral and
-computed/owned keys stay hashed; the rewrite never selects NoDense
-binary-search runs. An integral key with an over-budget span can still fall
-back to binary search at runtime.
+unchanged. Sorted-run retyping selects `SortedRun<_, _, AutoDense>` for eligible
+one-level HashIndex payload builds with one stored key, without inspecting
+Rust key types or requiring borrowed keys. Concrete build dispatch selects
+the borrowed integral codec when supported, otherwise `NoDense` binary-search
+storage (subject to the provider's Rust trait bounds). An integral codec with
+an over-budget span can also fall back to binary search at runtime.
 
 The Mac experiment also exposes checked `cq_rewrites::radix_runs`, selecting
 native `cq_storage::RadixRun<_,_>` for eligible singleton i32/i64/u32/u64 payload
@@ -361,30 +368,23 @@ work is lower on H09 and D72.
 ## Left work
 
 1. **D72.** Its decisive choice is data-dependent: `ps_availqty > 0` keeps
-   every PartSupp row. No written order avoids an unreduced large build
-   (PartSupp-first indexes all 1.5M Orders: 229–238 ms). The kernel's advice
-   `skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)` gives
-   141–145 ms (`advised` configuration) vs 191–195 default and DuckDB 107.7.
-   Choosing this automatically needs statistics or a runtime check.
-2. **Scans.** Q6 `default` 28.0 ms vs DuckDB 1T 19.1 (execute) on this
-   machine. Measured (perf, plain release worker, query-only by 5/45-run
-   delta; `/data/codex/q06-perf`): 191 M instructions and 127 M cycles per
-   run, IPC 1.50, 31.8 instructions per scanned row, 5.3 M L1d misses
-   (≈ the 4.5 M cache lines of the 288 MB row array). Attribution:
-   `BlockRead::read_owned` over the shipdate column 61.5% (17.2 ms);
-   discount/quantity filters, binds and project 16.1% (4.5 ms); the `canon`
-   dedup `HashSet<(i128,i32,&i64,&i64)>` 17.2% (4.8 ms, of which
-   `reserve_rehash` growth 12.7%). A plain `for` loop over the same 48-byte
-   rows evaluating the whole predicate and sum takes 12.5–13.7 ms, and the
-   shipdate filter alone 9.8 ms (29 GB/s), so the row layout is not the
-   gap: the iterator-driven read costs 1.3–2× the plain loop (its inner
-   loop re-tests the `Bound` discriminants and stores the position per row,
-   and returns through `next()` per survivor), and the dedup set is pure
-   overhead on a key-unique relation. Staging alone (`staged`
-   configuration, one fused selection pass per chunk) does not change this:
-   29.8 vs 29.8 ms. Columnar storage would cut the shipdate pass from
-   9.8 to ~1.2 ms (measured on a 4-byte column) but is the smaller of the
-   three effects.
+   every PartSupp row. The current `advised` recipe in
+   `features/workloads/src/queries/retail/tpch/retail_d72_inner.rs` is
+   `plan(no_reduce, order(Nation, Supplier, Lineitem, Orders, Customer, PartSupp, Part))`.
+   The historical 141–145 ms result used the former
+   `skip(Lineitem with PartSupp), reduce(PartSupp with Lineitem)` recipe,
+   not this current order. Choosing such advice automatically needs statistics
+   or a runtime check.
+2. **Scans.** Historical Q6 profiling measured 28.0 ms versus DuckDB 1T
+   19.1 ms, with costs attributed to the old `from_fn` positional scan and a
+   canon `HashSet`. These are not measurements of the current implementation.
+   `BlockRead::read_owned` now constructs the named `BlockScan` iterator
+   (`runtime/cq-storage/src/positional.rs`), with offset state and a dedicated
+   `fold` loop. Sequence `Emitter::canon`
+   (`passes/cq-sequence-pull/src/lib.rs`) realizes the recorded canonical
+   provider rather than prescribing that historical HashSet. The remaining
+   scan/canonicalization gap needs fresh measurements; the old attribution
+   does not establish current bottlenecks or the benefit of columnar storage.
 3. **Positional default.** Selections need the caller's `positional(..)` advice.
 4. **Zone maps.** Block min/max exists only in the `hypergraph_zone`
    configuration; scan key sets skip blocks only there.
@@ -447,8 +447,8 @@ approval.
 - Parallel extension: partition Round rewrite + Rayon printer, sharded
   admission, per-layout exclusive publication, `self_dedup per_task` through
   the checked push-terminal rewrite (Structures `print_push`, because the
-  Sequence back end has no supplied-consumer entry, `cq-sequence-pull`
-  `lib.rs:654-711`). DOOP at 15 threads ≈ 0.8 s (cassandra), 2.3 s (xalan);
+  Sequence back end has no supplied-consumer entry; see `translate` and
+  `Emitter::finish` in `passes/cq-sequence-pull/src/lib.rs`). DOOP at 15 threads ≈ 0.8 s (cassandra), 2.3 s (xalan);
   all six apps exact vs Ascent sequentially and at 15 threads.
 - Schedule: Round records per-hole read sets, wave partitions, per-hole
   policy, derived publication placement and a progress mode
@@ -465,9 +465,10 @@ approval.
   readers. Sharded native layouts (`shard_storage(layouts(sharded))`,
   `DL-ShardedLayout`) cut publication from 42% to 20% of step time: DOOP
   cassandra 15 threads 1.28 s compute, exact; evaluation (65%) now dominates.
-  Sorted-run providers (`layouts(runs)`, `seen(runs)`; `DL-RunLayout`,
-  `DL-RunAdmission`) are the exact CPU reference for GPU Datalog storage
-  (3.11 s on cassandra; not a CPU default).
+  Sorted-run layouts (`layouts(runs)`; `DL-RunLayout`) provide the CPU run-layout
+  reference for GPU Datalog storage; `seen(runs)` is rejected and there is no
+  separate `DL-RunAdmission` rule. The historical cassandra run measured 3.11 s
+  (not a CPU default).
 - GPU Datalog (`experiments/gpu/datalog`, `cq-gpu-datalog`): `device_storage`
   (`CK-DL-DeviceStorage`) + `batch` hole terminal `translate_arena` over
   packed-run inputs (`GPU-Runs`, `GPU-Arena`) + `print_rounds` (`P-DL-Gpu`) on
@@ -510,8 +511,9 @@ approval.
   reaches Rayon only through non-generic `cq_storage::parallel` helpers. A full
   rebuild after a compiler change takes 143 s wall (1,355 s CPU, 3.7 GB peak
   RSS); running all 31 takes seconds.
-- Archived: abandoned v1-design branches are tags `archive/<name>`; the parked
-  pre-redesign refactor is `../mini_linq-archive/datalog-par-factor.patch`.
+- Archived: abandoned v1-design branches were recorded as tags `archive/<name>`.
+  No checked-in evidence artifact for the abandoned parallel-factor patch
+  is available in this checkout.
 
 Approved core integration decisions:
 
@@ -525,14 +527,15 @@ Approved core integration decisions:
    median-of-three default runs: D85 15.725 ms without vs 16.159 ms with;
    all 13 queries exact in both runs, with identical operator counters across
    all 26 query/configuration pairs. The changed branch chooser is used only
-   by Filtered/Coarse, not the new Written/Coarse default, so it cannot improve
-   that plan. Raw paired results are
+   by Filtered/Coarse, not the current Connected/Coarse default, so it cannot
+   improve that plan. Raw paired results were reported as
    `features/workloads/target/bench/tpch-1-{before,with}-d85.{tsv,json}`.
 
-Final integration SF1 comparison: release, one warm-up and median of five;
-all 13 queries exact against DuckDB in both default and no-reduce configurations,
-also checked at SF0.1. Times exclude MiniLinq loading. DuckDB 1T includes prepare.
-Raw data: `features/workloads/target/bench/tpch-1-reduction-comparison.{tsv,json}`.
+Historical final integration SF1 comparison: release, one warm-up and median
+of five; reported all 13 queries exact against DuckDB in both default and
+no-reduce configurations, also checked at SF0.1. Times exclude MiniLinq loading.
+DuckDB 1T includes prepare. Raw data for this historical comparison is
+absent from this checkout; these numbers do not measure the current planner.
 
 | Query | Rows | Default ms | No-reduce ms | DuckDB 1T ms |
 |---|---:|---:|---:|---:|

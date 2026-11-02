@@ -178,9 +178,9 @@ or snapshot publication.
 | Today | Contract 8 |
 |---|---|
 | `cq-load::ZoneRows` owns decoded row tuples with per-block min/max (`zone.rs:9-15`) | columnar blocks; summaries over the stored payload |
-| GPU catalog fixes FOR for every column (`compress/src/lib.rs:186-193`); `detect_integer_codec` unused | per-block codec choice by size; codec set recorded |
+| GPU catalog fixes FOR for every column (`experiments/gpu/compress/src/lib.rs`, `Catalog::compress`); it does not call `detect_integer_codec` | per-block codec choice by size; codec set recorded |
 | GPU vector headers compute min/max then drop max (`device-columns/src/kernels.rs:33-79`) | keep per-vector summary; use it to skip |
-| per-row `decode(view,row)` into an `i64` carrier (`sequence/core/src/rows.rs:1030-1055`) | tile-cooperative decode fused with predicates; narrow carriers |
+| per-row device-column `decode`/`decode_u32` into an `i64` carrier (`experiments/gpu/sequence/core/src/rows.rs`, input reads) | tile-cooperative decode fused with predicates; narrow carriers |
 | `AdaptiveKeySet` copies keys (`Vec<K>` staging, `Arc<K>` fallback) | read-in-place builds over blocks; inline keys when a copy is required |
 | zones only under `hypergraph_zone` advice (`STATUS.md:350-352`) | summaries are part of every blocked column; pruning is the default scan step |
 | run merges on plain words | index runs: merge-path over plain arrays + directory rebuild (§8); scan columns: tile-streamed re-encoding (§5) |
@@ -276,11 +276,14 @@ structure:
 The role is a representation fact chosen by selection from the plan (scan
 vs lookup/expand demand), not by the loader. The same relation may hold both
 (base scan column + index run built from it, reading it in place).
-When an index run already exists, its exact key membership uses the run's
-own directory and lazy bounded bitmap: no `AdaptiveKeySet` staging or `Arc`
-copy is introduced. Existing standalone adaptive interval/hash providers
-remain available for their non-Clone and unordered-key callers; replacing
-those provider selections is not a runtime-only decision.
+The runtime index run's own exact membership uses its directory and lazy
+bounded bitmap, without `AdaptiveKeySet` staging or `Arc` copies. This is
+not a guarantee about compiler-selected supplementary indexes: positional
+selection still records a separate adaptive scalar keyset for eligible
+non-lazy semijoins even when a payload index serves the same key
+(`passes/cq-structure-selection/src/positional.rs`). Existing standalone
+adaptive interval/hash providers also remain available for non-Clone and
+unordered-key callers; replacing those selections is not a runtime-only decision.
 
 ### 8.1 Ordinary index publication
 
@@ -289,7 +292,7 @@ A relation's canonical index is an ordinary member of its index set, chosen
 by index selection (SRDatalog `select_indices`/`canonical_index`); its Rust
 type never records that it is canonical. CQ builds the canonical index once
 from the whole stream through a provider with the `Distinct` capability
-(PL-Distinct; default `dedup::Sort`, see §13.5). Ordinary providers keep
+(PL-Distinct; default `dedup::Sort`, see §13, rule 5). Ordinary providers keep
 their own construction and read traits (`Rows`, `IndexRead`, `PointLookup`,
 `Candidates`, `ExactMembership`); `ExactMembership<K>` on grouped providers
 means key existence, never a present complete row.
@@ -516,9 +519,14 @@ must keep valid:
 3. Partition routing (key-partition shards, sharded membership, GPU hash
    partitions, MCCL partitions) routes by code. Stable codes keep partitions
    stable across rounds.
-4. Dense structures (bitmaps, `OrderKey`, RadixRun dense membership)
-   need **dense codes** in `[0, n)`. Sharded or gapped code spaces break
-   density.
+4. Dense bitmap storage benefits from a small ordinal span, not necessarily
+   dense codes in `[0, n)`. `OrderKey` requires only a total, injective,
+   order-preserving encoding (`runtime/cq-storage/src/key.rs`). RadixRun
+   admits its optional bitmap only when the span and bytes per distinct key
+   fit its bounds; otherwise membership uses the directory
+   (`runtime/cq-storage/src/radix_run.rs`, `DenseMembership::candidate` and
+   `Segment::contains`). Gapped codes can reduce density, but do not
+   invalidate `OrderKey` or RadixRun.
 5. `where` order predicates need order-preserving codes, or they decode
    (§1). `IStr`'s `Ord` is code order, so its order is assignment order: a
    representation order, which is legal under contract 7 but is not string
@@ -691,8 +699,12 @@ variants, 6,968 checks, no foreign tenants. CPU: 476 measurements.
 | M5 group on codes vs `String` | **0.061** | **0.084** | — |
 
 **What the evidence decides (supersedes §2's "codec by measured size"):**
-1. **Default is plain** on every target. A non-plain choice needs a
-   (target, role, access, parallelism) row above that supports it.
+1. **The evidence-free policy default is plain** on every target. A non-plain
+   choice needs a (target, role, access, parallelism) row above that supports
+   it. This is not yet the GPU catalog's implementation default:
+   `experiments/gpu/compress/src/lib.rs`, `Catalog::compress`, still selects
+   `Codec::For` for every column; the controlled end-to-end comparison E1
+   remains required.
 2. **Index runs and merges stay plain** on CPU and GPU. This confirms §8
    without the directory confound in the Mac comparison.
 3. **CPU scan columns: byte-aligned truncation, not bit-packing.** Bit-
@@ -813,6 +825,12 @@ constant-folded bounds on the Vec side. No compiler default changes in S1.
    the result's only storage (its build need not be duplicate-free).
    `ret head = ::cq_storage::dedup::Sort` types the answer's identity index,
    including computed heads.
+   This is the adopted rule, not yet universal implementation: the aggregate
+   extension still emits an `aggregate_seen` HashSet unless its terminal is
+   exactly the argument-free `mini_linq::passes::translate_pull`
+   (`features/extensions/cq-ext-aggregate/src/expansion.rs`,
+   `canonical_stream` and `render`). That syntax-based exception remains
+   outside the canonical-index rule.
    On CPU, `dedup::Sort` collects the whole boundary stream, uses `sort_unstable_by` with
    Rust `Ord` comparisons of the fields, then removes adjacent equal rows.
    Tasks uses `par_sort_unstable_by`; its adjacent-unique pass is sequential.
@@ -948,7 +966,7 @@ No build, test, or performance result is claimed for this migration here.
    per-row lookup; h13 load 188 → 2248 ms) and is a later P3c item: hash pass
    over Arrow string buffers, no per-row allocation, parallel.
 
-### 13.2 GPU provider ownership (P3d C1)
+### 13.2 GPU provider ownership (P3d C1/C2)
 
 GPU binding/grading records the selected built-provider catalog ABI, key and
 payload layout, dense-directory policy, native lookup permutation, upload and
@@ -960,13 +978,26 @@ recipe. A non-range provider is never silently realized as `RangeProvider`.
 Native materialization is an explicit complete permutation; the provider owns
 its sorting implementation.
 
-Keyed groups record `group::SegmentedGroup` in `Structure::Group.ty` during
-GPU refinement and print that provider's fold. Keyless folds have no keyed
-accumulator record. Terminal-group execution and input realization are
+Keyed groups record the `group_map` provider instance for `group::SegmentedGroup`
+in `Structure::Group.provider` during GPU refinement and print that provider's fold.
+Keyless folds have no keyed accumulator record. Terminal-group execution and input realization are
 recorded by GPU-TerminalGroup (P3e); keyless groups fold through recorded
 occupancy-grid partials (GPU-GroupGridFold).
 
-Datalog provider/initializer and admission changes are deferred to C2, on top
-of the ordinary canonical-layout records from track B. C1 adds no parallel
-GPU-only relation-view, candidate-buffer or layout-state ownership records.
-The existing fused device admission is unchanged in this CQ-only milestone.
+Datalog C2 is implemented on top of track B's ordinary canonical layouts.
+`DeviceStorage` records provider declarations keyed by Storage provider tokens,
+relation-order input/candidate storage, full and delta layout states, negative
+key sets, initializers and scratch lifetimes
+(`features/datalog/languages/dl-storage/src/lib.rs`, `DeviceStorage`,
+`DeviceRelation`, `DeviceState`, `DeviceScratch`). Device refinement supplies
+these facts in `experiments/gpu/datalog/src/storage.rs`; translation consumes
+them in `experiments/gpu/datalog/src/print.rs`.
+
+Admission and publication are separate: `DeviceRuns::fresh` sorts/uniques
+candidates and subtracts committed canonical rows without changing accepted
+state. The printer publishes that fresh run, reordered where necessary, with
+`append_sorted` into every full layout, including the canonical layout.
+The runtime contract requires each appended run to be sorted, unique and
+disjoint from accepted rows (`experiments/gpu/datalog-runtime/src/runs.rs`,
+`DeviceRuns::fresh` and `DeviceRuns::append_sorted`). This is no longer the
+old fused device admission path.

@@ -1,10 +1,12 @@
 \section{Passes}
 \label{sec:passes}\label{sec:planning}\label{sec:pass-contracts}
 Each subsection gives the pass's signature, its construction rules on the
-checked domain, its independent check, and the refinement it supports. Every
+checked domain, its check, and the refinement it supports. Every
 constructor checks its target contract. A check $\mathsf{check}_f(s,t,\chi)$
-requires both local contracts, compares the ASTs the code compares, and never
-calls the constructor. Checks are sufficient structural conditions under the
+requires both local contracts and compares the ASTs the code compares.
+Independent checking is the target; CK-Transfer and the functional-root test
+in CK-EvidenceLe currently reuse producer logic, as qualified below.
+Checks are sufficient structural conditions under the
 premises of Section~\ref{sec:premises}: they reject some equal plans and decide
 no equivalence.
 
@@ -191,6 +193,12 @@ filters reject before payload is read. Without a count for every occurrence,
 with top-level blocks, or without a dominating functional root, $\mathsf{order}^{\mathcal{E}}$
 is $O_{Prefix(Connected),Coarse}$ and CK-EvidenceLe reduces to CK-Order; when the
 keyed order equals that order without lookups, the default plan is kept.
+The current CK-EvidenceLe implementation computes functional roots by calling
+the producer's ranked $\mathsf{keyedReads}$ planner for each candidate root
+and testing whether it succeeds. It then checks the recorded root, keyed
+first reads and filtered lookups directly; it does not require equality with
+the producer's complete read schedule. Thus this root-feasibility check is
+producer replay, not an independent proof of functional reachability.
 Evidence chooses only: every result is a plan WF-VO and CK-Le accept on their own,
 so a false count or key changes speed, never answers. O-KnownAt pins the
 admission anti-join of ADM-InPlan when advice asks for a later level than the
@@ -352,8 +360,9 @@ cut component independently and checks actual support-version provenance.
 Cyclic block-free scopes have no reductions. Missing cuts, unsupported
 reductions, and non-tree atom-to-atom reductions are rejected.
 
-The default plan is left-deep in written order: the left natural-join operand
-streams and the right builds, and no pass commutes operands. Its reductions
+The default plan is left-deep in Prefix(Connected)/Coarse order: the left
+natural-join operand streams and the right builds. Elaboration preserves that
+recorded operand order. Its reductions
 (Masks) follow a reduction tree. H-SpanningCore defines it on every scope: the
 GYO join tree when acyclic; otherwise the GYO ears plus a spanning tree of the
 residual cyclic core whose edges join clauses sharing a variable (most shared
@@ -363,7 +372,7 @@ first scheduled clause, the outer stream, and reduces each inner clause by its
 child subtrees that carry a relational filter or a block cut, children first and
 strongest siblings first, before the stream starts; exact atom-to-block cuts
 reduce inner atoms. The outer is never a target or a support: its probes filter
-it in written order, so no reduced stream is stored. This is the bottom-up pass
+it in scheduled order, so no reduced stream is stored. This is the bottom-up pass
 of the Yannakakis reducer rooted at the stream, restricted to filter-carrying
 subtrees: an unfiltered child subtree has no syntactic evidence that it removes
 rows (a key/foreign-key join), so its semijoin is omitted as likely pure
@@ -892,6 +901,7 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 
 \Rule{CK-Transfer}{\mathsf{erase}(t)=v\quad t=\mathsf{transfer}(R_{None,Masks}(v))}
  {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
+% CK-Transfer currently specifies producer replay, not independent checking.
 
 \Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
  \text{for each inner occurrence }R\text{ in GYO ear order:}\\
@@ -939,6 +949,10 @@ exact semijoins, not Bloom filters. Checked absorption removes redundant support
 versions before Physical chooses which remaining results to retain. Scopes containing
 opaque Rust keep only their Masks reductions: there the structural RA
 correspondence check rejects some sound transfer schedules.
+CK-Transfer currently erases the recorded reductions, checks the remaining
+ordering, reruns Masks construction and the transfer producer, and requires
+exact equality with the target. The rule above describes that implementation;
+it is not an independent check of the transfer premises.
 
 \code{order(le)} is the Lookup \& Expand decomposition of Birler, Kemper and
 Neumann (VLDB'24) as a VO construction: a lookup is a partial subatom that
@@ -959,7 +973,8 @@ is the schedule's first read (not necessarily the written one). The phase check
 runs before Masks and before optional reduction advice; checked expansion
 simplification follows elaboration.
 
-\code{plan} is left-deep in written order and defaults to checked Masks
+\code{plan} is left-deep in Prefix(Connected)/Coarse order by default, with
+explicit or evidence-based order available, and defaults to checked Masks
 reduction: every scope, acyclic or cyclic, reduces its inner clauses along the
 outer-rooted reduction tree (R-Masks) and by exact atom-to-block cuts; every
 branch is its own scope. Reduction compilation is independently checked before

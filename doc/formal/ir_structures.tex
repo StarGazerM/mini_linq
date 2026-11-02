@@ -555,7 +555,9 @@ construction without choosing the resulting Rust implementation; retyping to
 Counter builds retain their deterministic measurement collections and fixed
 seeds; their hash-finish counts cover runtime internal collections and host
 hash operations, not sort canonicalization. CPU Datalog's
-\textsc{DL-InsertNew} hash-seen admission is outside this strategy cutover.
+\textsc{DL-InsertNew} uses the recorded canonical provider's membership and
+insertion operations on the committed and round-local NEW layouts, not a
+separate hash-seen store.
 
 \code{HashIndex} stores exact keys and arena slots in a hashbrown Swiss table
 using the recorded keyed hash state, plus a contiguous arena of first payloads.

@@ -15,22 +15,24 @@ per-route siblings listed below.
    lowering, structure selection, Sequence lowering and every printer are
    refinements: they may choose representations (index kind, probe/merge,
    tile, store) but never reorder, delete or insert joins or move predicates.
-2. **Acyclic scopes are output-bounded by default.** The default plan for an
-   acyclic body is connected (no join of two operands sharing no column while
-   a connected atom is ready), reduced on every join-tree edge (Yannakakis
-   bottom-up pass, not filter-gated), and places every recognized predicate at
-   the first point its variables are bound. Written order remains available
-   as the explicit reference (`Heuristic::Written`) and through `plan(order(..))`.
+2. **Connected ordering with Masks reduction by default.** An acyclic body
+   uses connected ordering (no join of two operands sharing no column while
+   a connected atom is ready). Masks reduces non-root edges whose child
+   subtree carries a filter (`node != root && ranks[&child] < 3`); it is
+   not a full Yannakakis reduction or a general output-bound guarantee.
+   Predicate placement follows bound-variable dependencies. Written order
+   remains the explicit reference (`Heuristic::Written`) and `plan(order(..))`.
 3. **Superseded by contract 7.** (Was: a closed Rust expression takes part
-   in constraint recognition. There is no recognition any more.)
+   in constraint recognition. Contract 7 forbids that recognition; remaining
+   implementation violations are tracked below, not claimed eliminated.)
 4. **Superseded by contract 7.** (Was: opacity is a recorded property. Every
    Rust expression is opaque and total; there is no other kind.)
 5. **Datalog hands its order to CQ.** The incremental occurrence permutation
    that storage layouts follow is passed to each hole's CQ `plan` as explicit
    order advice, so layouts and the hole plan agree by construction.
-6. **Docs match code.** `R-Masks` either reduces every inner edge on acyclic
-   scopes or stops claiming to be the Yannakakis pass; Plan-Le's composition
-   matches the implementation.
+6. **Docs match code.** `R-Masks` is the filter-gated, non-root reduction
+   policy, not the full Yannakakis pass; Plan-Le's composition matches the
+   implementation.
 7. **One Rust expression; relational predicates have their own syntax**
    (decided 2026-10-28).
    - `if e`, `let p [: T] = e`, `for p in e`: `e` is a Rust expression with
@@ -112,15 +114,15 @@ per-route siblings listed below.
 | Layer | Decision made there today | Disposition |
 |---|---|---|
 | `cq-syntax guard::term` (retired) | Rust recognition and field-path parameters | replaced by explicit `where` and query-closed `Term::Closed(syn::Expr)` (contract 7) |
-| `cq-order Written` | identity sequence, cross products kept | keep as explicit reference; new default (contract 2) |
-| `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | fix on acyclic scopes (contract 2/6) |
-| `cq-elaborate` | predicate binder choice, branch join topology | record in VO or keep as pure refinement |
+| `cq-order Written` | identity sequence, cross products kept | explicit reference retained; Connected/Coarse facade default done (contract 2) |
+| `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); full reduction is an optional P8 cost question |
+| `cq-elaborate` | predicate binder choice, branch join topology | open: record in VO; ElabFix in progress |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / point-range / Let vs Pipe | representation only; allowed |
 | Sequence decomposition | preserves recorded relational construction | P3.3-lite removes automatic replanning; ordering belongs to VO |
 | `cq_planners::order(le)` | Lookup = dropped-column subatom, phase not recorded | fold into the default planner with recorded phases |
 | GPU emitter | tile defaults, virtual-range publication, retry protocol | representation; document |
-| Datalog `fork` | independent CQ plan after incremental permutation | pass order advice (contract 5) |
+| Datalog `fork` | authored incremental permutation reaches CQ as explicit order advice | done for authored order (contract 5); argument correspondence remains an open issue below |
 
 ## Architecture (replanned 2026-10-28)
 
@@ -131,11 +133,11 @@ sit where a representation is introduced.**
 | Layer | Owns (decisions) | Semantics / laws | Contracts | State |
 |---|---|---|---|---|
 | CQ surface | atoms, `where` relational predicates, opaque total Rust `if/let/for` | set denotation; `where` = selection by representation Eq/Ord; Rust placed by free variables | 7 | implemented; expanded-Rust audit in progress |
-| CQ → VO → RA (planning) | join order, reductions, **Lookup/Expand order and Expand placement** (L&E §4), block placement | VO/RA refinement of the written order | 1, 2, 5 | order + Datalog advice done; Sequence replanning removed (P3.3-lite); evidence-driven L&E (O-EvidenceLe) on the GPU TPC-H automatic route; CPU evidence is the P3.3e follow-up |
+| CQ → VO → RA (planning) | join order, reductions, **Lookup/Expand order and Expand placement** (L&E §4), block placement | VO/RA refinement of the written order | 1, 2, 5 | order + Datalog advice done; Sequence replanning removed (P3.3-lite); GPU TPC-H and CPU TPC-H evidence done (P3.3e); per-round DOOP counts and CPU retained-prefix grading open |
 | Structures (representation) | provider role (scan column vs index run), codec, summaries, grouped runs, copy vs read, join filters (exact / min-max / Bloom), positions | α abstraction laws: decode, enclosure, factorization, bounded-error directory, preserved ops | 8 (`doc/STORAGE.md`) | designed; type-blind provider dispatch partly implemented |
 | Sequence + grading (execution shape) | tiles aligned to vectors/blocks, deferred ranges from stored offsets, launch/scan/fold/sync facts, adaptive choose from evidence | positions and sizes; BE-* rules | translator-decides-nothing, 7 (representation facts) | launch facts done; storage-aware shape open |
-| Translators (pull, Rayon, CUDA, Metal) | nothing | per-construct correctness | T-Pull/T-Tasks/T-Gpu | audit violations fixed; anchors pending |
-| Runtime (cq-storage, cq-load, device-columns, MCCL) | implements recorded representations | storage laws, tested | 8 | AdaptiveKeySet/ZoneRows off-design; RadixRun on remote |
+| Translators (pull, Rayon, CUDA, Metal) | nothing (target contract) | per-construct correctness | T-Pull/T-Tasks/T-Gpu | anchors registered in `DESIGN-ANCHORS.tsv`; recorded launch/realization cutover done, remaining recognition and runtime-policy violations open |
+| Runtime (cq-storage, cq-load, device-columns, MCCL) | implements recorded representations | storage laws, tested | 8 | AdaptiveKeySet/ZoneRows off-design; RadixRun implemented and exported locally |
 | Datalog maintenance | runs, tail/frozen blocks, merges, ratio, dictionary policy | STR-Run*, DL-DeviceRatio | 5, 8 §5 | runs exist (plain words); compressed/grouped open |
 
 Evidence/advice (counts, keys, selectivities, ratios) never carries
@@ -395,11 +397,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     catalog ABI and construction type, complete native lookup permutations,
     download adapters, directory policy, key codec and publication storage.
     Independent checkers validate these facts; printers consume them.
-    Keyed grouping records its segmented accumulator in `Structure::Group.ty`.
+    Keyed grouping records its segmented accumulator in `Structure::Group.provider`.
     Upload adapters and immutable bounds provenance are also recorded. C1 is
-    CQ-only: Datalog provider/initializer fixes are deferred to C2 on top of
-    track B's ordinary canonical-layout records, without parallel GPU-only
-    ownership fields. RC (P3d) completed that cutover: device Storage records
+    CQ-only; C2 has now implemented Datalog provider identity on top of
+    Track B's ordinary canonical-layout records, without parallel GPU-only
+    ownership fields. RC (P3d) completed the device cutover: device Storage records
     every layout's state and initializers, NEW (`fresh_run`), key sets, candidate
     containers, arenas and scratch policy; admission is read-only
     `DeviceRuns::fresh` against the canonical layout, publication appends to
@@ -418,13 +420,16 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     occupancy-grid partials plus one combine (GPU-GroupGridFold, the one
     intended work change). TPC-H grouped answers record slots and key bounds
     sources (DR-GroupedPublication). GPU Datalog printing is not covered.
-  - **Removes** CQ `CanonStrategy`/`dedup::sort` canon (done by track A),
-    `__cq_seen` and
-    callback barriers; CPU Datalog `seen`/`all` (hash, `ShardedSeen`, `RunSeen`
-    seeds) and the separate DL-InsertNew/DL-ShardedAdmission stores; GPU fused
-    admission. Verified by laziness tests (the first answer after the first
-    batch), expansion counters (candidates before/after ▷O), exact
-    oracle/TPC-H/DOOP, and paired timing.
+  - **Removal scope.** CQ `CanonStrategy`/`dedup::sort` canon and
+    `__cq_seen` are replaced by Track A's ordinary canonical index; CPU
+    Datalog `seen`/`all` (hash, `ShardedSeen`, `RunSeen` seeds) and separate
+    DL-InsertNew/DL-ShardedAdmission stores are removed, as is GPU fused
+    admission. This does **not** remove every callback/materialization
+    barrier: Track A's sorted rows collect before yielding, and the two
+    row-streaming dispatch tests remain ignored. Expansion counters,
+    exact oracle/TPC-H/DOOP and paired timings cover the implemented
+    cutovers; first-answer-after-first-batch is not a completed acceptance
+    claim for row-granular CQ streaming.
   - **Track B (CPU Datalog) as implemented.** Storage `Providers.canonical`
     indexes one full layout of the relation keyed by every column
     (DL-Canonical): the first such read layout, else an appended identity
@@ -538,8 +543,8 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   host sync, republish reuse, narrow item columns, run-local match cursors
   with retained witnesses, execution-pool-qualified reads under
   fork/join readiness; GPU-RadixLayout/Cursor/LaneRead law tests). Remaining:
-  slice A compiler records/checkers (after C7Provider G1 defines the
-  provider declaration format; no catalog token yet), then index selection
+  slice A compiler records/checkers (using the provider declaration format
+  now implemented by C7Provider G1; no RadixRun catalog token yet), then index selection
   records it as a provider for GPU CQ built indices (range reads unblock
   `probe smallest`, `triangle-compiled`, L&E match-set reuse), GPU Datalog
   layouts (replacing plain-word `DeviceRuns`), and GPU canonical indices.
@@ -660,6 +665,57 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   the copies for owned storage, including `String` and aliases; no Rust/type
   recognition or new Datalog printer decision is involved.
 
+### Review open issues by owner (2026-11-01)
+
+These are implementation gaps against the contracts, not completed gates.
+Paths and lines refer to the reviewed `17a14b93` tree.
+
+1. **Checker owners — checker reruns producer for plan decisions.**
+   Staging compares recorded additions with `decisions(source, ...)`
+   (`passes/cq-staging/src/lib.rs:177-181`); CK-Transfer recompiles reductions
+   and transfers them (`features/planners/plan/src/lib.rs:425-435`);
+   CK-EvidenceLe calls `dominating`, which calls the ranked read planner
+   (`passes/cq-order/src/evidence.rs:285,199,130-167`); GPU Datalog
+   `check_device` compares with `realize(restore(...))`
+   (`experiments/gpu/datalog/src/storage.rs:347`). Replace producer replay
+   with checks of recorded facts in the owning tracks. The formal text
+   describes today's replay rather than claiming independence.
+2. **Runtime/provider owners — autoref tiers (DirectCalls in progress).**
+   Membership/build dispatch still chooses capabilities through reference
+   tiers (`runtime/cq-storage/src/dispatch.rs:1-4,27-79`), including
+   AutoDense's dense/NoDense realization. Record/consume the appropriate
+   provider facts rather than treating the current runtime selection as a
+   completed direct-call cutover.
+3. **CQ → VO / elaboration owners — ElabFix in progress.** Predicate
+   attachment targets are still chosen in elaboration
+   (`passes/cq-elaborate/src/lib.rs:346-375`), and branch spanning trees are
+   built there (`passes/cq-elaborate/src/join_branches.rs:20-70`). Record
+   targets and topology before elaboration; contract 1 is the target, not
+   a claim that this redesign has landed.
+4. **GPU runtime owners — unrecorded runtime work.** Datalog run kernels
+   still choose occupancy grids and 256-thread launches in the runtime
+   (`experiments/gpu/datalog-runtime/src/runs.rs:377-379,411-413,480-489`).
+   The lane job carries a closure and hole identity, not explicit
+   rule/variant/round counter context
+   (`experiments/gpu/datalog-runtime/src/lanes.rs:55-60`).
+   Record the remaining work/attribution facts; C2 provider records and G1
+   ABI records do not by themselves close these runtime gaps.
+5. **Datalog fork/round owners — plan-argument correspondence.** Authored
+   order forwarding is implemented, but fork synthesizes `no_reduce`,
+   `order`, `smallest` and `known` argument tokens
+   (`features/datalog/passes/fork/src/lib.rs:643-671,779-795`). The pipeline
+   and planning ordinal are stored in each hole (`:797-805`); the missing
+   item is independently checked structured correspondence for those
+   arguments, not absence of the emitted token stream. Fork's top-level
+   checker delegates to the Round contract (`:95-108`).
+6. **Test owners — wording/implementation pinning.** Provider tests compare
+   token-string type spellings
+   (`features/rewrites/tests/sorted_indexes.rs:21-36`), so representation
+   refactors can churn tests without changing semantics. Audit such
+   assertions separately from intentional public API, expanded-Rust and
+   Round fixture goldens; retain semantic assertions where spelling is not
+   itself the contract.
+
 ## Progress
 
 - P2 remote inventory: reviewed the messages and `git show --stat` for all
@@ -730,8 +786,10 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   The final core/workload/regression/fuzz/API/dependency/formal/format gate pass
   succeeded. New provider configurations passed 92 SF1 DuckDB exactness checks
   across all 29 CPU targets (29 radix, 29 radix-retained, 17 built-hash and
-  17 built-radix), in addition to 29 default checks. Formal inventory is
-  314 rules, 368 conformance records, 22 anchors and 519 decode-site markers.
+  17 built-radix), in addition to 29 default checks. Current formal inventory
+  (checked 2026-11-01 at `17a14b93`): 386 rules, 413 conformance records,
+  30 anchors and 520 decode-site markers. This inventory check validates
+  registered locations, not compiler conformance.
 
 - Contract 7 documentation cutover: finite-set pure-total denotation, explicit
   `where`, free-variable Rust placement and recorded device representations.

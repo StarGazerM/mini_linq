@@ -14,8 +14,8 @@
 //! use [`Context::bind_columns`], [`Context::carrier`] and [`Context::forward`].
 //! Legacy `pattern`, `row`, and `borrowed_pattern` names remain equivalent
 //! carrier helpers for external printers; [`Context::heading`] is logical metadata.
-//! Explicit provider builds use `cq_storage::build!` so Rust selects capabilities
-//! at the concrete callsite; bare generic provider paths keep associated builds.
+//! Provider tokens record the build protocol: explicit builds use `cq_storage::build!`
+//! for concrete capability dispatch; `Build::Inferred` uses associated builds.
 //!
 //! Relational equality is Leibniz identity, decided by admissible column `==`.
 //! Functional extensionality of shared-reference Rust inputs permits canonical
@@ -813,9 +813,9 @@ impl<'a> Context<'a> {
                 ::core::iter::Iterator::map(#source, |#pattern| #nested)
             };
             let pairs = self.profile_inserting(&build_name, pairs);
-            // A bare path lets Rust infer the type's generics from the pairs;
-            // explicit providers dispatch Rust capabilities at this concrete site.
-            // The token declares which construction it uses.
+            // The recorded Build::Inferred fact selects associated construction,
+            // letting Rust infer generics from the pairs; other providers dispatch
+            // capabilities at this concrete site, not by recognizing path spelling.
             let bare = facts.build == structures::provider::Build::Inferred;
             let routed = parts
                 .as_ref()

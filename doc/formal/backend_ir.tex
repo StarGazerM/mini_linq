@@ -196,8 +196,9 @@ projection, predicate, join or computed head propagates that witness.
 It proves order, never uniqueness; every equal-prefix run still requires
 complete-row sort and unique. A borrowed realization may collect row
 references without copying owned rows. Consumer membership indexes remain
-separate, and CPU Datalog's \textsc{DL-InsertNew} hash-seen admission is
-outside this cutover.
+separate. CPU Datalog's \textsc{DL-InsertNew} instead admits through the
+committed canonical layout and its round-local NEW version, using the
+recorded provider's own membership and insertion operations.
 Push consumers obey the same whole-stream provider-build barrier: publication
 callbacks begin only after its input is collected and canonicalized. A push
 printer may not substitute per-element hash insertion to preserve earlier
@@ -552,7 +553,9 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
 \Rule{PL-Select}{s'=\mathsf{retainUnsupportedHostReads}(s,K)\quad
  e\in\mathsf{Structures}(s')\quad K_e=\mathsf{stablePartition}(K,\mathsf{tokens}(k)=\mathsf{tokens}(e))\quad
  k=\mathsf{first}\{k\in K_e\mid \mathsf{needs}(e)\subseteq\mathsf{facts}(k).\mathsf{reads},
- \ \mathsf{levels}(k)\ne\varnothing\}}
+ \ \mathsf{suppliesLiveSupport}(k,e),\
+ (\mathsf{canon}(e)\Rightarrow\mathsf{facts}(k).\mathsf{packedBits}=\bot),\
+ \mathsf{levels}(k)\ne\varnothing\}}
  {\mathsf{select}(s,K):\
  e.\mathsf{provider}\gets k\ (\text{recorded spelling kept iff }\mathsf{tokens}(k)=\mathsf{tokens}(e))\quad\text{by checked retention, index construction and retype}}
 
@@ -729,7 +732,14 @@ and row buffers in recorded entry order. Provider catalog order is explicitly
 stable-partitioned per entry: tokens matching its recorded representation
 precede all other tokens, retaining catalog order within both classes.
 The first eligible token wins. This preserves admitted native keyed ABIs
-instead of replacing them with generic row providers. Sort may record an
+instead of replacing them with generic row providers.
+Eligibility includes the live support obligations of built indexes, not just
+read capabilities: declared Expand may discharge required Retain. Unused
+support may change, but selected witnesses and filters must remain supported.
+Canonical row selection requires Distinct and skips providers declaring
+\code{packed\_bits}; packed bounds are runtime codec facts, not facts inferred
+from Rust types. Provider and support records are replaced together.
+Sort may record an
 explicit \code{using Type} device sort/unique implementation selected by the
 catalog; this refinement preserves Sort and never replaces Ordered with Sort.
 The old dedup-provider retype selector is removed. Host scan adapters are unchanged.
