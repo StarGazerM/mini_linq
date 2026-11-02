@@ -104,6 +104,35 @@ class SchedulerTests(unittest.TestCase):
     def test_empty_selection(self):
         self.assertEqual(runner.run([], 2, Path("logs")), [])
 
+    def test_quick_tier_lists_only_declared_targets(self):
+        output = io.StringIO()
+        with patch("sys.argv", ["test_regressions.py", "--tier", "quick", "--list"]), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(runner.main(), 0)
+        selected = {line.split(":", 1)[0].removeprefix("SELECT ")
+                    for line in output.getvalue().splitlines() if line.startswith("SELECT ")}
+        self.assertEqual(selected, runner.QUICK_TARGETS)
+        self.assertEqual(len(selected), 12)
+
+    def test_fuzz_requires_tier_or_explicit_selector(self):
+        import regression_impact
+        for arguments, expected_count, expected_fuzz in (
+                ([], 118, False), (["--tier", "quick"], 12, False),
+                (["--changed-since", "HEAD"], 118, False),
+                (["--tier", "fuzz"], 1, True), (["cq-xtask/fuzz"], 1, True)):
+            with self.subTest(arguments=arguments):
+                output = io.StringIO()
+                fake = unittest.mock.Mock(changed_files=["source.rs"])
+                fake.reasons.return_value = ["changed"]
+                with patch("sys.argv", ["test_regressions.py", "--list", *arguments]), \
+                        patch.object(regression_impact, "Impact", return_value=fake), \
+                        contextlib.redirect_stdout(output):
+                    self.assertEqual(runner.main(), 0)
+                selected = [line for line in output.getvalue().splitlines() if line.startswith("SELECT ")]
+                self.assertEqual(len(selected), expected_count)
+                self.assertEqual(any(line.startswith("SELECT cq-xtask/fuzz:") for line in selected),
+                                 expected_fuzz)
+
 
 if __name__ == "__main__":
     unittest.main()

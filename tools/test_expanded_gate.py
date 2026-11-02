@@ -110,6 +110,30 @@ fn kernel() {
             source.write_text("pub fn f() { work(); }")
             self.assertNotEqual(gate.crate_digest(path), before)
 
+    def test_runtime_and_source_keys_exclude_documentation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text("pub fn f() {}")
+            names = ["src/lib.rs"]
+            def listing(*args):
+                return ("\0".join(names) + "\0").encode()
+            with patch.object(gate, "run", side_effect=listing):
+                runtime = gate.crate_digest(root)
+                snapshot = gate.source_snapshot(root, root / "target", "query", {})
+                for name in ("doc/example.rs", "nested/DoC/input.txt", "README.MD",
+                             "nested/guide.mD", "CHANGELOG", "changelog.txt",
+                             "ChangeLog-2026", "src/CHANGELOG.old"):
+                    file = root / name
+                    file.parent.mkdir(parents=True, exist_ok=True)
+                    file.write_text("documentation")
+                    names.append(name)
+                self.assertEqual(runtime, gate.crate_digest(root))
+                self.assertEqual(snapshot, gate.source_snapshot(root, root / "target", "query", {}))
+                (root / "src/lib.rs").write_text("pub fn changed() {}")
+                self.assertNotEqual(runtime, gate.crate_digest(root))
+                self.assertNotEqual(snapshot, gate.source_snapshot(root, root / "target", "query", {}))
+
     def test_each_identity_input_invalidates_key(self):
         values = {"expansion": "a", "runtimes": {"cq-storage": "b"}, "rustc": "v",
                   "flags": ["-Zunpretty=expanded"], "data_oracle": "c"}

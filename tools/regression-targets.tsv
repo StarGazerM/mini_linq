@@ -1,4 +1,4 @@
-# package	kind	target	source
+# package	kind	target	source	optional-tier
 cq-storage	test	access_laws	runtime/cq-storage/tests/access_laws.rs
 cq-storage	test	representation_laws	runtime/cq-storage/tests/representation_laws.rs
 cq-storage	test	counters	runtime/cq-storage/tests/counters.rs
@@ -91,7 +91,7 @@ cq-workloads	scenario	growth	features/workloads/check_growth.py
 cq-xtask	manifest-test	restored	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle-test	oracle-unit	features/workloads/xtask/Cargo.toml
 cq-xtask	oracle	golden	features/workloads/xtask/Cargo.toml
-cq-xtask	oracle	fuzz	features/workloads/xtask/Cargo.toml
+cq-xtask	oracle	fuzz	features/workloads/xtask/Cargo.toml	fuzz
 cq-workload-e2e	scenario	typed	features/workloads/check_typed.py
 cq-workload-corpus	manifest-target-test	classic	features/workloads/e2e/corpus/Cargo.toml
 cq-workload-corpus	manifest-target-test	retail	features/workloads/e2e/corpus/Cargo.toml

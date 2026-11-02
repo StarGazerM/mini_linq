@@ -35,7 +35,8 @@ requires its exact hash, reason and source citation. Unexplained hunks always fa
 Each key hashes normalized expansion, linked runtime sources (cq-storage,
 cq-load, cq-sequence-tasks, and reachable GPU runtime packages), rustc -vV, expansion
 flags/environment, resolved dependency versions/features, and data/oracle
-manifests. Runtime sources include all crate files except target/.git/__pycache__.
+manifests. Runtime sources exclude target/.git/__pycache__, doc directories,
+Markdown files (case-insensitively), and CHANGELOG variants.
 TPC-H manifests/oracles are shared execution inputs from the working tree's
 benchmark cache; library inputs/goldens/SQL and host support are target-specific. Missing inputs
 are recorded, never silently treated as verified. --data-manifest adds inputs.
@@ -284,12 +285,22 @@ def manifest_digest(files):
     return sha(canonical(sorted(files)))
 
 
+def documentation_path(path):
+    """Documentation is not a runtime/source input to this expansion gate."""
+    path = Path(path)
+    name = path.name.casefold()
+    return ("doc" in (part.casefold() for part in path.parts[:-1])
+            or name.endswith(".md") or name.startswith("changelog"))
+
+
 def crate_digest(path):
     files = []
     for directory, dirs, names in os.walk(path):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDED)
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDED and d.casefold() != "doc")
         for name in sorted(names):
             file = Path(directory) / name
+            if documentation_path(file.relative_to(path)):
+                continue
             files.append((file.relative_to(path).as_posix(), sha(file.read_bytes())))
     return manifest_digest(files)
 
@@ -507,7 +518,8 @@ def source_snapshot(tree, output, target, paths):
     files = {}
     for name in sorted(set(names) - {""}):
         file = tree / name
-        if name in unrelated or file.is_relative_to(output) or not file.is_file():
+        if (name in unrelated or documentation_path(name)
+                or file.is_relative_to(output) or not file.is_file()):
             continue
         files[name] = sha(file.read_bytes())
     return files

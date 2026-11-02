@@ -116,11 +116,10 @@ build requires `latexmk` and the TeX packages in `doc/formal/common.tex`.
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
-cargo test --manifest-path features/datalog/Cargo.toml --workspace --locked
-cargo test --manifest-path features/datalog-parallel/Cargo.toml --workspace --locked
-cargo test --manifest-path features/workloads/Cargo.toml --workspace --locked
-bash tools/test_regressions.sh
+# Final behavioral gate; omit --changed-since for all 118 deterministic targets.
+bash tools/test_regressions.sh --changed-since BASE_REV
+# Random/generated checks are opt-in, never part of default or quick tiers.
+bash tools/test_regressions.sh --tier fuzz
 python3 tools/check_dependencies.py --isolate --frontends --consumers
 python3 tools/check_external.py
 python3 tools/check_public_api.py
@@ -133,9 +132,18 @@ cargo xtask bench --tpch --sf 0.1
 cargo xtask bench --tpch --sf 1
 ```
 
-Regression logs live in `target/regression-logs/`; isolation, external, and API
-gates keep their diagnostics under `target/`. Reviewed API snapshots change
-only through an explicit `tools/check_public_api.py --update` review.
+Use `--tier quick` or a focused package/target selector while iterating, then the
+impact-selected regression suite once for the final behavioral gate. Do not also
+sweep every feature workspace with `cargo test --workspace`: those sweeps duplicate
+the inventory. Root `cargo test` remains a separate gate; a feature-workspace sweep
+is appropriate only for changed-workspace coverage absent from the inventory.
+See [the gate protocol and measurements](tools/README.md) for timing, selection,
+opt-in fuzzing and explicit passing-evidence reuse.
+
+Regression logs and immutable evidence live in `target/regression-logs/RUN-ID/`;
+isolation, external, and API gates keep their diagnostics under `target/`.
+Reviewed API snapshots change only through an explicit
+`tools/check_public_api.py --update` review.
 
 `tools/test_regressions.sh --jobs N` bounds concurrent independent targets
 (default 2; `--jobs 1` preserves sequential execution). Cargo metadata groups
@@ -145,7 +153,9 @@ Cargo contexts are recorded in `tools/test_regressions.py`; unknown scenarios
 or unavailable metadata conservatively run without overlapping Cargo targets.
 `CARGO_BUILD_JOBS` still controls each Cargo process, so budget for up to
 `N * CARGO_BUILD_JOBS` compiler jobs. Exact `package/target` selectors work with
-either mode. Every selected target runs despite failures; per-target log names,
-numeric exit statuses and the `results.tsv` schema are unchanged. Final status
-lines and TSV rows retain inventory order, while live RUN lines reflect dispatch
-order. The runner prints total wall time (including grouping) for comparisons.
+either mode. Every selected target runs despite failures; per-target logs and
+numeric exit statuses are retained. `results.tsv` also records build, test and
+total wall seconds and whether execution reused a recorded passing run.
+Final status lines and TSV rows retain inventory order, while live RUN lines
+reflect dispatch order. The runner prints build/test totals and elapsed wall
+time (including grouping); a proven-empty impact selection succeeds.
