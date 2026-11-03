@@ -116,12 +116,7 @@ fn raw_membership_proof_rejects_unbound_payload_columns() {
             result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
         }
     };
-    assert!(
-        contract(&source)
-            .unwrap_err()
-            .to_string()
-            .contains("complete row key")
-    );
+    assert!(contract(&source).is_err());
     source.structures.entries[0] = syn::parse_quote!(
         r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [x];
     );
@@ -163,31 +158,16 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
         .unwrap();
     let mut missing = target.clone();
     missing.structures.entries.remove(group_entry);
-    assert!(
-        contract(&missing)
-            .unwrap_err()
-            .to_string()
-            .contains("missing group accumulator")
-    );
+    assert!(contract(&missing).is_err());
     let mut duplicate = target.clone();
     duplicate
         .structures
         .entries
         .push(target.structures.entries[group_entry].clone());
-    assert!(
-        contract(&duplicate)
-            .unwrap_err()
-            .to_string()
-            .contains("duplicate group accumulator")
-    );
+    assert!(contract(&duplicate).is_err());
     let mut misplaced = target.clone();
     misplaced.structures.entries[group_entry].name = syn::parse_quote!(valuations);
-    assert!(
-        contract(&misplaced)
-            .unwrap_err()
-            .to_string()
-            .contains("requires a keyed Group")
-    );
+    assert!(contract(&misplaced).is_err());
     assert_eq!(facts.layouts["valuations"], ["id", "k", "v"]);
     assert_eq!(
         facts.physical.rows["grouped"]
@@ -205,12 +185,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
 
     let mut noncanonical = source;
     noncanonical.program.definitions[1].canon = None;
-    assert!(
-        compile(&noncanonical)
-            .unwrap_err()
-            .to_string()
-            .contains("canonical complete input")
-    );
+    assert!(compile(&noncanonical).is_err());
 }
 
 #[test]
@@ -238,12 +213,7 @@ fn global_group_is_unique_by_the_empty_key() {
         .structures
         .declare(&[cq_lang_structures::provider::base::declaration("group_map")])
         .unwrap();
-    assert!(
-        contract(&extra)
-            .unwrap_err()
-            .to_string()
-            .contains("requires a keyed Group")
-    );
+    assert!(contract(&extra).is_err());
 }
 
 #[test]
@@ -941,8 +911,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             .unwrap();
         let mut missing = target.clone();
         missing.structures.entries.remove(entry);
-        let diagnostic = contract(&missing).unwrap_err().to_string();
-        assert!(diagnostic.contains("two-level candidate"), "{diagnostic}");
+        assert!(contract(&missing).is_err());
         assert!(check(&source, &missing).is_err());
         for replacement in [
             format!("{retained} = @hash_index as ::cq_storage::HashIndex<'_, _, _> [{prefix},c];"),

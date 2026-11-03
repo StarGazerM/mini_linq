@@ -61,8 +61,7 @@ fn hoisting_refuses_an_opaque_dependency() {
         projected = let canon project guarded keep {x};
         return projected as answer(x);
     }};
-    let error = cq_rewrite_passes::hoist(&source, quote!(projected)).unwrap_err();
-    assert!(error.to_string().contains("opaque Rust dependency"));
+    assert!(cq_rewrite_passes::hoist(&source, quote!(projected)).is_err());
 }
 
 #[test]

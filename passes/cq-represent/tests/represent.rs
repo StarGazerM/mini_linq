@@ -63,12 +63,7 @@ fn joins_and_opaque_binds_end_the_positional_chain() {
         quote!(positions(b)),
         quote!(positions(missing)),
     ] {
-        assert!(
-            cq_represent::compile_with(&source, arguments)
-                .unwrap_err()
-                .to_string()
-                .contains("cannot be carried as positions")
-        );
+        assert!(cq_represent::compile_with(&source, arguments).is_err());
     }
 }
 

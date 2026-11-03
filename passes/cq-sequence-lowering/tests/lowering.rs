@@ -303,11 +303,6 @@ fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
             }
         }
         cq_lang_structures::contract::check(&uncertified.structures).unwrap();
-        assert!(
-            cq_lang_sequence::contract::check(&uncertified)
-                .unwrap_err()
-                .to_string()
-                .contains("membership compact needs a membership operator")
-        );
+        assert!(cq_lang_sequence::contract::check(&uncertified).is_err());
     }
 }

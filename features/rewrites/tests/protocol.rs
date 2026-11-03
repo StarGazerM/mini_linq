@@ -64,7 +64,6 @@ fn language_correspondence_is_enforced_before_continuation() {
         },
     );
     assert!(result.to_string().contains("compile_error"));
-    assert!(result.to_string().contains("RA erasure"));
     assert!(!result.to_string().contains("next !"));
 }
 

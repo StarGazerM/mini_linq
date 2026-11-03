@@ -30,12 +30,7 @@ fn models_are_explicit_complete_and_set_only() {
 #[test]
 fn source_rejects_sugar_and_later_stage_text() {
     let p: Program = syn::parse_quote!(struct P; relation E(o:Option<i32>) = (e); relation A(x:i32); output A; A(x) :- E(o), if let Some(x) = *o;);
-    assert!(
-        contract::check(&p)
-            .unwrap_err()
-            .to_string()
-            .contains("surface expansion")
-    );
+    assert!(contract::check(&p).is_err());
     for suffix in ["strata {}", "incremental {}", "storage {}"] {
         assert!(
             syn::parse_str::<Program>(&format!(

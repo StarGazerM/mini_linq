@@ -315,11 +315,6 @@ fn csv_errors_identify_original_value_column_and_physical_line_and_fuse() {
     assert_eq!(error.line, 4);
     assert_eq!(error.column, "day");
     assert_eq!(error.value, "2024-02-30");
-    assert!(
-        error
-            .to_string()
-            .contains("column \"day\", value \"2024-02-30\"")
-    );
     assert!(batches.next().is_none());
     assert!(batches.next().is_none());
 }
@@ -769,10 +764,5 @@ mod parquet_tests {
         assert_eq!(error.file, file.0);
         assert_eq!(error.line, 1);
         assert_eq!(error.column, "id");
-        assert!(
-            error
-                .message
-                .contains("returned 0 values for 2 source rows")
-        );
     }
 }

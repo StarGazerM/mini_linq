@@ -489,8 +489,7 @@ fn partition_requires_sharded_canonical_vector_deltas_and_admissible_layouts() {
         mutate(&mut target.round);
         round::contract::check(&source).unwrap();
         round::contract::check(&target.round).unwrap();
-        let error = check_sharded(&source, &target).unwrap_err();
-        assert!(error.to_string().contains("sharded Round requires"));
+        assert!(check_sharded(&source, &target).is_err());
         assert!(compile_sharded(&source).is_err());
     }
 }

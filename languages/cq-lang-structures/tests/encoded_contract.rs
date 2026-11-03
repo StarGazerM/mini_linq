@@ -189,12 +189,7 @@ fn unrelated_declared_provider_cannot_supply_representation_guarantees() {
         .get_mut(&DeclarationId(1))
         .unwrap()
         .provider = "sort".into();
-    assert!(
-        check(&program)
-            .unwrap_err()
-            .to_string()
-            .contains("declaration provider does not serve this representation")
-    );
+    assert!(check(&program).is_err());
 }
 
 #[test]

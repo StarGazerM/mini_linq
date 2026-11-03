@@ -22,35 +22,19 @@ fn complete_program_preserves_declarations_and_attributes() {
     );
 }
 #[test]
-fn declaration_arity_scope_and_output_violations_are_diagnostic() {
-    for (text, construct) in [
-        ("struct Q; relation R(); answer(x) :- R(x);", "R"),
-        (
-            "struct Q; relation R(a:i32); relation R(a:i32); answer(x) :- R(x);",
-            "R",
-        ),
-        (
-            "struct Q; relation R(a:i32,a:i32); answer(x) :- R(x,y);",
-            "a",
-        ),
-        (
-            "struct Q; relation R(a:i32); answer(x) :- Missing(x);",
-            "Missing",
-        ),
-        ("struct Q; relation R(a:i32,b:i32); answer(x) :- R(x);", "R"),
-        ("struct Q; relation R(a:i32); answer(y) :- R(x);", "y"),
-        (
-            "struct Q; relation R(a:i32); answer(x) :- if x > 0, R(x);",
-            "x",
-        ),
-        (
-            "struct Q; relation R(a:i32); answer(x) :- R(x), let x = 1;",
-            "x",
-        ),
+fn declaration_arity_scope_and_output_violations_are_rejected() {
+    for text in [
+        "struct Q; relation R(); answer(x) :- R(x);",
+        "struct Q; relation R(a:i32); relation R(a:i32); answer(x) :- R(x);",
+        "struct Q; relation R(a:i32,a:i32); answer(x) :- R(x,y);",
+        "struct Q; relation R(a:i32); answer(x) :- Missing(x);",
+        "struct Q; relation R(a:i32,b:i32); answer(x) :- R(x);",
+        "struct Q; relation R(a:i32); answer(y) :- R(x);",
+        "struct Q; relation R(a:i32); answer(x) :- if x > 0, R(x);",
+        "struct Q; relation R(a:i32); answer(x) :- R(x), let x = 1;",
     ] {
         let source = syn::parse_str(text).unwrap();
-        let error = cq::contract::check(&source).unwrap_err().to_string();
-        assert!(error.contains(construct), "{construct}: {error}");
+        assert!(cq::contract::check(&source).is_err(), "{text}");
     }
 }
 
@@ -70,10 +54,7 @@ fn raw_identifiers_preserve_names_but_do_not_bypass_relation_collisions() {
         "struct Q; relation R(a: i32); relation r#R(a: i32); answer(x) :- R(x);",
         "struct Q; relation R(a: i32); r#R(x) :- R(x);",
     ] {
-        let error = cq::contract::check(&syn::parse_str(text).unwrap())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains('R'), "{error}");
+        assert!(cq::contract::check(&syn::parse_str(text).unwrap()).is_err());
     }
 }
 
@@ -137,10 +118,7 @@ fn extension_clauses_preserve_opaque_tokens_and_cannot_enter_the_core() {
         syn::parse2::<cq::Program>(source.to_token_stream()).unwrap(),
         source
     );
-    assert_eq!(
-        cq::contract::check(&source).unwrap_err().to_string(),
-        "extension `neg!` was not expanded"
-    );
+    assert!(cq::contract::check(&source).is_err());
     let stacked: cq::Program = syn::parse_str(
         &source
             .to_token_stream()
@@ -148,10 +126,7 @@ fn extension_clauses_preserve_opaque_tokens_and_cannot_enter_the_core() {
             .replace("neg !", "agg !"),
     )
     .unwrap();
-    assert_eq!(
-        cq::contract::check(&stacked).unwrap_err().to_string(),
-        "extension `agg!` was not expanded"
-    );
+    assert!(cq::contract::check(&stacked).is_err());
     source.query.body.pop();
     cq::contract::check(&source).unwrap();
 }

@@ -81,7 +81,6 @@ class SchedulerTests(unittest.TestCase):
             result = runner.execute(row, Path(directory))
             self.assertEqual(result[3], 1)
             self.assertEqual(Path(result[4]).name, "p-shard_all.log")
-            self.assertEqual(Path(result[4]).read_text(), "Missing regression source: missing-regression-source\n")
 
     def test_commands_preserve_original_flags(self):
         cases = {

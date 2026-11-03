@@ -193,9 +193,6 @@ mod tests {
             (vec![0, 1], 2)
         );
         assert!(ensure(true, &atom, "valid").is_ok());
-        assert_eq!(
-            ensure(false, &atom, "invalid").unwrap_err().to_string(),
-            "invalid"
-        );
+        assert!(ensure(false, &atom, "invalid").is_err());
     }
 }

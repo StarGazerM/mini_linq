@@ -1,5 +1,5 @@
 //! Handpicked negative programs: one visible fixture per rejection obligation.
-//! The runner pins construct/trait diagnostics rather than generated source spans.
+//! The runner checks compiler rejection without pinning diagnostic wording.
 //! Native-read failures require explicit host contracts, not inferred Rust types.
 #[test]
 fn rejected_configurations_and_invalid_constructs() {

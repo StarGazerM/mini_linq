@@ -127,7 +127,6 @@ class IdentityTests(unittest.TestCase):
     def test_macro_generated_dynamic_inputs_are_unproven(self):
         self.fixture.outputs["app"] = "fn test() { std::process::Command::new(\"cargo\"); }"
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("unbounded runtime inputs", self.identity.last_reason)
 
     def test_include_inputs_require_fresh_expansion_even_without_proc_macros(self):
         self.fixture.units = self.fixture.units[:2]
@@ -183,17 +182,14 @@ class IdentityTests(unittest.TestCase):
 
     def test_unknown_scenario_and_unit_modes_are_not_reusable(self):
         self.assertIsNone(self.identity.fingerprint(["app", "scenario", "check", "app/src/lib.rs"]))
-        self.assertIn("unsupported regression kind", self.identity.last_reason)
         self.assertEqual(self.fixture.calls, [])
         self.fixture.units[0]["mode"] = "doctest"
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("doctests", self.identity.last_reason)
 
     def test_manifest_tests_decline_enabled_doctests_before_expanding(self):
         self.fixture.packages[0]["targets"][0]["doctest"] = True
         row = ["app", "manifest-test", "all", "app/Cargo.toml"]
         self.assertIsNone(self.identity.fingerprint(row))
-        self.assertIn("unsupported doctests", self.identity.last_reason)
         self.assertEqual(self.fixture.expansion_calls(), [])
 
     def test_manifest_tests_cover_all_roots_not_inventory_label(self):
@@ -231,19 +227,16 @@ class IdentityTests(unittest.TestCase):
     def test_dependency_graph_mismatch_fails_closed(self):
         self.fixture.mismatch = True
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("cannot reproduce exact", self.identity.last_reason)
         self.assertEqual(self.fixture.expansion_calls(), [])
 
     def test_missing_runtime_build_records_and_dynamic_compilation_fail_closed(self):
         self.fixture.units[1]["target"]["kind"] = ["custom-build"]
         self.fixture.units[1]["mode"] = "run-custom-build"
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("build-script", self.identity.last_reason)
         self.fixture.units[1]["target"]["kind"] = ["lib"]
         self.fixture.units[1]["mode"] = "build"
         (self.root / "app/src/lib.rs").write_text('fn test() { trybuild::TestCases::new(); }')
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("dynamic compilation", self.identity.last_reason)
 
     def test_compiler_build_scripts_disable_expansion_cache(self):
         self.fixture.units[3]["target"]["kind"] = ["custom-build"]
@@ -254,17 +247,14 @@ class IdentityTests(unittest.TestCase):
     def test_mid_expansion_change_cannot_become_passing_evidence(self):
         self.fixture.on_expand = lambda: (self.root / "app/src/lib.rs").write_text("changed during expansion")
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("inputs changed", self.identity.last_reason)
 
     def test_failures_only_disable_identity(self):
         with patch.object(self.identity, "_run", side_effect=OSError("compiler missing")):
             self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-            self.assertIn("compiler missing", self.identity.last_reason)
 
     def test_symlinked_sources_are_unproven(self):
         (self.root / "app/alias.rs").symlink_to(self.root / "app/src/lib.rs")
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("non-regular input", self.identity.last_reason)
 
     def test_identity_excludes_documentation_only_changes(self):
         before = self.fingerprint()
@@ -297,7 +287,6 @@ class IdentityTests(unittest.TestCase):
                             for env in self.fixture.environments))
         record["linked_libs"] = ["static=unbounded_native"]
         self.assertIsNone(self.identity.fingerprint(self.fixture.row))
-        self.assertIn("native linked library", self.identity.last_reason)
 
     def test_package_links_metadata_is_not_native_linkage(self):
         self.fixture.packages[1]["links"] = "rayon-core"

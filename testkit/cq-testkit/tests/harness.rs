@@ -59,10 +59,10 @@ fn wrong_answers_fail_even_with_a_matching_fixture_and_valid_check() {
 fn compilation_fixture_and_check_failures_are_distinguishable() {
     let mut pass = correct_pass();
     pass.compile = Box::new(|_| Err("compile error"));
-    assert_eq!(
+    assert!(matches!(
         pass.run(Some(authored_case())),
-        Err(PassFailure::Compile("compile error"))
-    );
+        Err(PassFailure::Compile(_))
+    ));
 
     let mut pass = correct_pass();
     pass.expected_next = Some(Rows::new());
@@ -73,10 +73,10 @@ fn compilation_fixture_and_check_failures_are_distinguishable() {
 
     let mut pass = correct_pass();
     pass.check = Box::new(|_, _| Err("check error"));
-    assert_eq!(
+    assert!(matches!(
         pass.run(Some(authored_case())),
-        Err(PassFailure::Check("check error"))
-    );
+        Err(PassFailure::Check(_))
+    ));
 }
 
 #[test]

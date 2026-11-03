@@ -67,16 +67,10 @@ fn move_definition(source: &physical::Program, from: usize, to: usize) -> physic
     target
 }
 
-fn reject_valid_target(source: &physical::Program, target: &physical::Program) -> String {
+fn reject_changed_graph(source: &physical::Program, target: &physical::Program) {
     physical::contract::check(source).unwrap();
     physical::contract::check(target).unwrap();
-    physical::check_rewrite(source, target)
-        .unwrap_err()
-        .to_string()
-}
-
-fn reject_changed_graph(source: &physical::Program, target: &physical::Program) {
-    assert!(reject_valid_target(source, target).contains("RA erasure"));
+    assert!(physical::check_rewrite(source, target).is_err());
 }
 
 #[test]

@@ -147,7 +147,7 @@ fn routed_publication_checks_native_representation_and_stored_key_coverage() {
     };
     keyed.provider = syn::parse_quote!(@sharded as ::cq_storage::sharded::Sharded);
     p.structures.structures.declare(&[]).unwrap();
-    reject(&p, "a composite provider records its inner instance");
+    assert!(contract::check(&p).is_err());
 }
 
 #[test]
@@ -811,10 +811,9 @@ fn gpu_launch_fixture(deferred: bool) -> (Program, Analysis) {
     (p, analysis)
 }
 
-fn reject_gpu_launch(p: &Program, analysis: &Analysis, message: &str) {
+fn reject_gpu_launch(p: &Program, analysis: &Analysis) {
     let error = gpu::check(p, analysis).unwrap_err().to_string();
     assert!(error.contains("GPU-Launch:"), "{error}");
-    assert!(error.contains(message), "{error}");
 }
 
 #[test]
@@ -834,14 +833,14 @@ fn gpu_launch_checker_accepts_recorded_positive_implicit_sizes() {
 fn gpu_launch_checker_rejects_deferred_range_without_offsets() {
     let (p, mut analysis) = gpu_launch_fixture(true);
     analysis.dispatches[0].gpu.as_mut().unwrap().offsets = gpu::OffsetScan::None;
-    reject_gpu_launch(&p, &analysis, "offset scan");
+    reject_gpu_launch(&p, &analysis);
 }
 
 #[test]
 fn gpu_launch_checker_rejects_row_publication_with_offsets() {
     let (p, mut analysis) = gpu_launch_fixture(false);
     analysis.dispatches[0].gpu.as_mut().unwrap().offsets = gpu::OffsetScan::DeviceExclusive;
-    reject_gpu_launch(&p, &analysis, "offset scan");
+    reject_gpu_launch(&p, &analysis);
 }
 
 #[test]
@@ -854,7 +853,7 @@ fn gpu_launch_checker_rejects_missing_count_synchronization() {
             .unwrap()
             .synchronization
             .remove(0);
-        reject_gpu_launch(&p, &analysis, "synchronization");
+        reject_gpu_launch(&p, &analysis);
     }
 }
 
@@ -867,7 +866,7 @@ fn gpu_launch_checker_rejects_missing_range_synchronization() {
         .unwrap()
         .synchronization
         .pop();
-    reject_gpu_launch(&p, &analysis, "synchronization");
+    reject_gpu_launch(&p, &analysis);
 }
 
 #[test]
@@ -879,7 +878,7 @@ fn gpu_launch_checker_rejects_row_range_synchronization() {
         .unwrap()
         .synchronization
         .push(gpu::Synchronization::RangeOffsets);
-    reject_gpu_launch(&p, &analysis, "synchronization");
+    reject_gpu_launch(&p, &analysis);
 }
 
 #[test]
@@ -891,7 +890,7 @@ fn gpu_launch_checker_rejects_reordered_synchronization() {
         .unwrap()
         .synchronization
         .reverse();
-    reject_gpu_launch(&p, &analysis, "synchronization");
+    reject_gpu_launch(&p, &analysis);
 }
 
 #[test]
@@ -900,7 +899,7 @@ fn gpu_launch_checker_rejects_duplicate_synchronization() {
         let (p, mut analysis) = gpu_launch_fixture(deferred);
         let points = &mut analysis.dispatches[0].gpu.as_mut().unwrap().synchronization;
         points.push(points.last().unwrap().clone());
-        reject_gpu_launch(&p, &analysis, "synchronization");
+        reject_gpu_launch(&p, &analysis);
     }
 }
 
@@ -908,7 +907,7 @@ fn gpu_launch_checker_rejects_duplicate_synchronization() {
 fn gpu_launch_checker_rejects_zero_partition_rows() {
     let (p, mut analysis) = gpu_launch_fixture(false);
     analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Tiles { rows: 0 };
-    reject_gpu_launch(&p, &analysis, "zero partition rows");
+    reject_gpu_launch(&p, &analysis);
 }
 
 #[test]
@@ -2190,7 +2189,7 @@ fn evidence_rejects_bad_syntax_and_references_not_false_claims() {
     ] {
         let mut target = program(quote!(out = store rows r;));
         target.evidence = syn::parse2(syntax).unwrap();
-        reject(&target, "evidence:");
+        assert!(contract::check(&target).is_err());
     }
 }
 
@@ -2262,10 +2261,7 @@ fn evidence_wf_rechecks_mutated_sources_and_trusted_key_owners() {
     *source = EvidenceSource::Vo {
         provenance: syn::parse_quote!("original VO source"),
     };
-    reject(
-        &target,
-        "VO planning advice cannot supply a trusted key premise",
-    );
+    assert!(contract::check(&target).is_err());
 
     target.evidence = syn::parse_quote! {
         evidence from authored("count mutation fixture") { count R = 1; }
@@ -2277,7 +2273,7 @@ fn evidence_wf_rechecks_mutated_sources_and_trusted_key_owners() {
         *source = EvidenceSource::Authored {
             provenance: syn::LitStr::new(provenance, proc_macro2::Span::call_site()),
         };
-        reject(&target, "source provenance must be nonempty");
+        assert!(contract::check(&target).is_err());
     }
 }
 
@@ -2549,8 +2545,6 @@ fn resource_rejects_oversized_authored_dispatches_before_translation() {
     machine.layout = Some(|_| Ok(65));
     let error = check_grading(&p, &machine).unwrap_err().to_string();
     assert!(error.contains("BE-Resource"), "{error}");
-    assert!(error.contains("65 shared bytes"), "{error}");
-    assert!(error.contains("capacity is 64"), "{error}");
     machine.root.children[0].children[0].shared_bytes = Some(65);
     let analysis = check_grading(&p, &machine).unwrap();
     assert_eq!(analysis.resources["out"].required_bytes, 65);

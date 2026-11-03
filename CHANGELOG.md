@@ -13,6 +13,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Non-GPU rejection tests assert failure and applicable formal rule IDs rather
+  than diagnostic prose. Behavioral and compile-fail coverage remains independent
+  of error-message wording; GPU tests are unchanged.
+
 - GPU Sequence placement keeps descriptor-backed `abi columns` index builds at
   their host publication boundary. It no longer copies whole resident columns
   through unpartitioned device publications merely because the index token

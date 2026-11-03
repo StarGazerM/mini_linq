@@ -34,12 +34,7 @@ fn codec_identity_exhaustion_is_a_parse_error() {
         keys 0;
         columns [u32 => u32 codec [4294967295] Existing, u32 => u32 codec Fresh]
     });
-    assert!(
-        intern_codecs(&mut input.columns)
-            .unwrap_err()
-            .to_string()
-            .contains("codec identity space exhausted")
-    );
+    assert!(intern_codecs(&mut input.columns).is_err());
     input.columns[1].codec = Some(syn::parse_quote!(Existing));
     intern_codecs(&mut input.columns).unwrap();
     assert_eq!(input.columns[1].codec_id, Some(CodecId(u32::MAX)));
@@ -59,12 +54,7 @@ fn codec_identity_exhaustion_is_a_parse_error() {
             ] } as Input [];
         }",
     );
-    assert!(
-        parsed
-            .unwrap_err()
-            .to_string()
-            .contains("codec identity space exhausted")
-    );
+    assert!(parsed.is_err());
 }
 
 #[test]
@@ -351,8 +341,7 @@ fn expansion_rejects_missing_support_and_wrong_exact_keys() {
     ] {
         let mut program = resident_expand_program();
         program.structures.entries[2] = provider;
-        let error = check(&program).unwrap_err().to_string();
-        assert!(error.contains("declared expand support"), "{error}");
+        assert!(check(&program).is_err());
     }
     let mut hashed = resident_expand_program();
     hashed.physical.program.definitions[1] =
@@ -362,8 +351,7 @@ fn expansion_rejects_missing_support_and_wrong_exact_keys() {
         .structures
         .entries
         .push(syn::parse_quote!(r rows = @vec as ::std::vec::Vec<_>;));
-    let error = check(&hashed).unwrap_err().to_string();
-    assert!(error.contains("declared expand support"), "{error}");
+    assert!(check(&hashed).is_err());
     hashed
         .structures
         .entries
@@ -428,8 +416,7 @@ fn stages_cross_certified_bitmap_membership_with_recorded_constants() {
         .structures
         .entries
         .push(syn::parse_quote!(member stage = batch 256 expand;));
-    let error = check(&program).unwrap_err().to_string();
-    assert!(error.contains("declared expand support"), "{error}");
+    assert!(check(&program).is_err());
 }
 
 #[test]
@@ -443,8 +430,7 @@ fn stages_reject_uncertified_payload_probe_bridges() {
         syn::parse_quote!(first stage = batch 256 expand;),
         syn::parse_quote!(after stage = batch 256 expand;),
     ]);
-    let error = check(&program).unwrap_err().to_string();
-    assert!(error.contains("cursor"), "{error}");
+    assert!(check(&program).is_err());
 }
 
 #[test]
@@ -509,7 +495,7 @@ fn smallest_prefix_witness_requires_preserving_chain_and_no_escape() {
         syn::parse_quote!(pre_s rows = @sort as ::cq_storage::dedup::Sort;),
         syn::parse_quote!(pre_s canon = rows;),
     ]);
-    assert!(check(&escaped).unwrap_err().to_string().contains("escapes"));
+    assert!(check(&escaped).is_err());
 
     let mut changed = smallest_shared_prefixes();
     changed.physical.program.definitions[4] = syn::parse_quote!(pre_s = pipe semi eager [a] l,s;);
@@ -542,11 +528,7 @@ fn smallest_expansion_requires_support_on_both_selected_candidates() {
     ] {
         let mut missing = source.clone();
         missing.structures.entries[index] = entry;
-        let error = check(&missing).unwrap_err().to_string();
-        assert!(
-            error.contains("expand support on every selected two-level candidate build"),
-            "{error}"
-        );
+        assert!(check(&missing).is_err());
         missing.structures.entries.pop();
         check(&missing).unwrap();
     }
@@ -587,20 +569,14 @@ fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
         .structures
         .entries
         .push(syn::parse_quote!(checked stage = batch 256 expand;));
-    assert!(
-        check(&force)
-            .unwrap_err()
-            .to_string()
-            .contains("introducing Smallest probe, not its forcing read")
-    );
+    assert!(check(&force).is_err());
     let mut second = smallest_expand_program();
     second.structures.entries.pop();
     second
         .structures
         .entries
         .push(syn::parse_quote!(checked stage = batch 256 expand;));
-    let error = check(&second).unwrap_err().to_string();
-    assert!(error.contains("expand requires a probe"), "{error}");
+    assert!(check(&second).is_err());
 }
 
 fn program() -> structures::Program {
@@ -737,12 +713,7 @@ fn complete_read_structures_take_precedence_over_candidate_prefixes() {
     }
     let mut missing = source.clone();
     missing.structures.entries.remove(2);
-    assert!(
-        check(&missing)
-            .unwrap_err()
-            .to_string()
-            .contains("payload probe must read all built levels")
-    );
+    assert!(check(&missing).is_err());
     let mut duplicate = source.clone();
     duplicate
         .structures
@@ -765,8 +736,7 @@ fn a_const_only_read_cannot_justify_a_built_entry() {
         .structures
         .entries
         .push(syn::parse_quote!(r = @user_index as UserIndex [x];));
-    let error = check(&invalid).unwrap_err().to_string();
-    assert!(error.contains("const-only"), "{error}");
+    assert!(check(&invalid).is_err());
 }
 
 #[test]
@@ -792,11 +762,7 @@ fn payload_probes_must_cover_every_built_key_level() {
         out = let canon project j keep {x};
         return out as answer(x);
     } structures { providers { user_trie = UserTrie { reads [exact, range, membership], build inferred }; } r = @user_trie as UserTrie [x][y]; } };
-    let error = check(&p).unwrap_err().to_string();
-    assert!(
-        error.contains("payload probe must read all built levels"),
-        "{error}"
-    );
+    assert!(check(&p).is_err());
 }
 
 #[test]
@@ -855,35 +821,19 @@ fn representation_and_staging_are_checked_additive_rewrites() {
 
 #[test]
 fn representation_rejects_uncovered_noncomputed_and_forged_columns() {
-    for (entry, expected) in [
-        (
-            "out repr = positions { R lineage { x -> a } } owned [z];",
-            "uncovered",
-        ),
-        (
-            "out repr = positions { R lineage { x -> a, y -> b } } owned [x,z];",
-            "computed",
-        ),
-        (
-            "out repr = positions { R lineage { x -> a, y -> a } } owned [z];",
-            "injective",
-        ),
-        (
-            "out repr = positions { R lineage { x -> b, y -> a } } owned [z];",
-            "declared host",
-        ),
-        (
-            "out repr = positions { Missing lineage { x -> a, y -> b } } owned [z];",
-            "declared host",
-        ),
+    for entry in [
+        "out repr = positions { R lineage { x -> a } } owned [z];",
+        "out repr = positions { R lineage { x -> a, y -> b } } owned [x,z];",
+        "out repr = positions { R lineage { x -> a, y -> a } } owned [z];",
+        "out repr = positions { R lineage { x -> b, y -> a } } owned [z];",
+        "out repr = positions { Missing lineage { x -> a, y -> b } } owned [z];",
     ] {
         let mut program = represented_program();
         program
             .structures
             .entries
             .push(syn::parse_str(entry).unwrap());
-        let error = check(&program).unwrap_err().to_string();
-        assert!(error.contains(expected), "{entry}: {error}");
+        assert!(check(&program).is_err(), "{entry}");
     }
 }
 
@@ -896,19 +846,14 @@ fn stages_reject_unsupported_adapters_cursor_producers_and_zero_batches() {
     ] {
         let mut program = represented_program();
         program.structures.entries.push(entry);
-        let error = check(&program).unwrap_err().to_string();
-        assert!(
-            error.contains("unsupported") || error.contains("positive"),
-            "{error}"
-        );
+        assert!(check(&program).is_err());
     }
     let mut cursor = program();
     cursor
         .structures
         .entries
         .push(syn::parse_quote!(j stage = batch 16;));
-    let error = check(&cursor).unwrap_err().to_string();
-    assert!(error.contains("cursor"), "{error}");
+    assert!(check(&cursor).is_err());
 
     let mut guard = represented_program();
     guard.physical.program.definitions[1] = syn::parse_quote!(s = pipe guard r if (*x >= 0););
@@ -916,8 +861,7 @@ fn stages_reject_unsupported_adapters_cursor_producers_and_zero_batches() {
         .structures
         .entries
         .push(syn::parse_quote!(s stage = batch 16;));
-    let error = check(&guard).unwrap_err().to_string();
-    assert!(error.contains("unsupported"), "{error}");
+    assert!(check(&guard).is_err());
 }
 
 #[test]
@@ -934,8 +878,7 @@ fn representation_and_stage_decisions_are_unique_per_result() {
     ] {
         let mut program = represented_program();
         program.structures.entries.extend(entries);
-        let error = check(&program).unwrap_err().to_string();
-        assert!(error.contains("duplicate"), "{error}");
+        assert!(check(&program).is_err());
     }
 }
 
@@ -1077,12 +1020,7 @@ fn sharing_rejects_probe_before_semi() {
 fn witness_requires_matching_share() {
     let mut p = shared_program();
     p.structures.entries.remove(6);
-    assert!(
-        check(&p)
-            .unwrap_err()
-            .to_string()
-            .contains("requires share")
-    );
+    assert!(check(&p).is_err());
 }
 
 #[test]
@@ -1094,8 +1032,7 @@ fn witness_cannot_escape_into_canon() {
         syn::parse_quote!(s rows = @sort as ::cq_storage::dedup::Sort;),
         syn::parse_quote!(s canon = rows;),
     ]);
-    let error = check(&p).unwrap_err().to_string();
-    assert!(error.contains("witness s for b escapes at s"), "{error}");
+    assert!(check(&p).is_err());
 }
 
 #[test]
@@ -1117,8 +1054,7 @@ fn witness_cannot_escape_into_retained_let() {
     p.structures
         .entries
         .push(syn::parse_quote!(s rows = @vec as ::std::vec::Vec<_>;));
-    let error = check(&p).unwrap_err().to_string();
-    assert!(error.contains("witness s for b escapes at s"), "{error}");
+    assert!(check(&p).is_err());
 }
 
 #[test]
@@ -1129,12 +1065,7 @@ fn retain_does_not_imply_expand() {
     p.structures
         .entries
         .push(syn::parse_quote!(p stage = batch 16 expand;));
-    assert!(
-        check(&p)
-            .unwrap_err()
-            .to_string()
-            .contains("declared expand support")
-    );
+    assert!(check(&p).is_err());
 }
 
 #[test]
@@ -1150,7 +1081,7 @@ fn expand_cannot_stage_across_bind() {
         syn::parse_quote!(p stage = batch 16 expand;),
         syn::parse_quote!(q stage = batch 16;),
     ]);
-    assert!(check(&p).unwrap_err().to_string().contains("unsupported"));
+    assert!(check(&p).is_err());
 }
 
 #[test]
@@ -1180,8 +1111,7 @@ fn witness_cannot_escape_into_fused_prefix() {
     p.physical.program.head = syn::parse_quote!(answer(x, y));
     p.structures.entries[4] = syn::parse_quote!(u rows = @sort as ::cq_storage::dedup::Sort;);
     p.structures.entries[5] = syn::parse_quote!(u canon = rows;);
-    let error = check(&p).unwrap_err().to_string();
-    assert!(error.contains("witness s for b escapes at s"), "{error}");
+    assert!(check(&p).is_err());
 }
 
 #[test]
@@ -1266,12 +1196,7 @@ fn support_validation_rejects_duplicates_empty_keys_and_membership_cursors() {
     ] {
         let mut invalid = program();
         invalid.structures.entries[0] = packet;
-        assert!(
-            check(&invalid)
-                .unwrap_err()
-                .to_string()
-                .contains("duplicate provider capability")
-        );
+        assert!(check(&invalid).is_err());
     }
     let mut empty = program();
     empty.structures.entries[2] =
@@ -1285,12 +1210,7 @@ fn support_validation_rejects_duplicates_empty_keys_and_membership_cursors() {
     ] {
         let mut invalid = membership_bridge_program();
         invalid.structures.entries[0] = packet;
-        assert!(
-            check(&invalid)
-                .unwrap_err()
-                .to_string()
-                .contains("membership-only storage")
-        );
+        assert!(check(&invalid).is_err());
     }
 }
 
@@ -1326,12 +1246,7 @@ fn abstract_sharing_does_not_require_a_retained_cursor_but_witnesses_do() {
     for ty in types {
         let mut source = shared_program();
         source.structures.entries[3] = syn::parse_quote!(b = #ty [x];);
-        assert!(
-            check(&source)
-                .unwrap_err()
-                .to_string()
-                .contains("witness requires declared retain support")
-        );
+        assert!(check(&source).is_err());
         source.structures.entries.pop();
         assert!(check(&source).unwrap().shares.contains_key("s"));
     }
@@ -1366,12 +1281,7 @@ fn host_support_is_exact_to_reader_key_and_snapshot_layout() {
         syn::parse_quote!(r host result(p) = @snapshot as ::custom::Snapshot<_> [y,x] supports [expand];),
     ] {
         source.structures.entries[2] = provider;
-        assert!(
-            check(&source)
-                .unwrap_err()
-                .to_string()
-                .contains("matching retained snapshot hosts")
-        );
+        assert!(check(&source).is_err());
     }
 }
 
@@ -1403,12 +1313,7 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
     ] {
         let mut missing = source.clone();
         missing.structures.entries[2] = packet;
-        assert!(
-            check(&missing)
-                .unwrap_err()
-                .to_string()
-                .contains("join filter requires")
-        );
+        assert!(check(&missing).is_err());
     }
     let mut alias = source.clone();
     alias.structures.entries[2] =
@@ -1437,12 +1342,7 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
         }
     };
     partial.structures.entries[1] = syn::parse_quote!(raw host scan = @scan as Scan [];);
-    assert!(
-        check(&partial)
-            .unwrap_err()
-            .to_string()
-            .contains("join filter requires")
-    );
+    assert!(check(&partial).is_err());
     let mut lazy = source.clone();
     lazy.physical.program.definitions[2] = syn::parse_quote!(p = let canon probe lazy [x] l,r;);
     assert!(check(&lazy).is_err());
@@ -1523,12 +1423,7 @@ fn ordered_canon_requires_complete_direct_source() {
             p canon = host;
         }
     };
-    assert!(
-        check(&projected)
-            .unwrap_err()
-            .to_string()
-            .contains("complete direct load-verified host scan")
-    );
+    assert!(check(&projected).is_err());
 }
 
 fn provider_program(structures: proc_macro2::TokenStream) -> structures::Program {
@@ -1555,7 +1450,6 @@ fn provider_entries() -> proc_macro2::TokenStream {
 fn reject_providers(
     table: proc_macro2::TokenStream,
     built: proc_macro2::TokenStream,
-    message: &str,
 ) {
     let entries = provider_entries();
     let program = provider_program(quote::quote!(structures {
@@ -1568,10 +1462,7 @@ fn reject_providers(
         #built
         #entries
     }));
-    let error = structures::contract::check(&program)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains(message), "expected {message}, got {error}");
+    assert!(structures::contract::check(&program).is_err());
 }
 
 #[test]
@@ -1629,16 +1520,14 @@ fn providers_table_round_trips_every_fact() {
 fn str_provider_rejects_undeclared_unreferenced_and_duplicate_tokens() {
     let index = quote::quote!(index = Index { reads [exact, membership], supports [keys], build inferred };);
     let built = quote::quote!(r = @index as Index [x];);
-    reject_providers(quote!(), built.clone(), "undeclared provider token");
+    reject_providers(quote!(), built.clone());
     reject_providers(
         quote!(#index),
         quote!(),
-        "provider declaration is not referenced",
     );
     reject_providers(
         quote!(#index #index),
         built,
-        "duplicate provider declaration",
     );
 }
 
@@ -1650,23 +1539,19 @@ fn str_provider_rejects_misshaped_instances_and_undeclared_support() {
     reject_providers(
         quote!(#trie),
         quote!(r = @trie as ::cq_storage::Trie<'_, _, _> [x][y];),
-        "a composite provider records its inner instance",
     );
     reject_providers(
         quote!(#index),
         quote!(r = @index(@index as Index) as Index [x];),
-        "a simple provider has no inner instance",
     );
     reject_providers(
         quote!(#sharded #index),
         quote!(r = @sharded(@sharded(@index as Index) as ::cq_storage::sharded::Sharded<Index>)
             as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Sharded<Index>> [x];),
-        "a routed provider is not routed again",
     );
     reject_providers(
         quote!(#index),
         quote!(r = @index as Index [x] supports [expand];),
-        "support is not declared by the provider token",
     );
 }
 
@@ -1746,7 +1631,6 @@ fn native_declaration_mutations_reject_inconsistent_facts() {
         reject_providers(
             table,
             quote!(r = @index as Alias [x];),
-            "contiguous_range requires range ABI and range reads",
         );
     }
     for table in [
@@ -1756,13 +1640,11 @@ fn native_declaration_mutations_reject_inconsistent_facts() {
         reject_providers(
             table,
             quote!(r = @index as Alias [x];),
-            "resident column bounds require columns ABI",
         );
     }
     reject_providers(
         quote!(index = Alias<_> { reads [], abi radix_relation, nested 0 };),
         quote!(r = @index as Alias<_> [x];),
-        "native ABI requires a simple provider",
     );
 }
 
@@ -1812,17 +1694,7 @@ fn native_host_schema_mutations_are_checked_without_type_recognition() {
                     }
                 }
             }
-            let error = structures::contract::check(&mutated)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains(if missing {
-                    "native radix relations and columns scans require an input schema"
-                } else {
-                    "input key count exceeds column count"
-                }),
-                "{error}"
-            );
+            assert!(structures::contract::check(&mutated).is_err());
         }
         for wrong_identity in [false, true] {
             let mut mutated = program.clone();

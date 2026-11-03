@@ -215,11 +215,10 @@ fn schema_column_names_survive_parse_errors_and_header_reordering() {
         },
     )
     .unwrap_err();
-    let message = error.to_string();
-    assert!(message.contains(file.path().to_str().unwrap()), "{message}");
-    assert!(message.contains('3'), "{message}");
-    assert!(message.contains("amount"), "{message}");
-    assert!(message.contains("wrong"), "{message}");
+    assert_eq!(error.file, file.path());
+    assert_eq!(error.line, 3);
+    assert_eq!(error.column, "amount");
+    assert_eq!(error.value, "wrong");
 }
 
 mod names {
@@ -423,11 +422,10 @@ mod columnar {
         )
         .err()
         .unwrap();
-        let message = error.to_string();
-        assert!(message.contains(file.path().to_str().unwrap()), "{message}");
-        assert!(message.contains('3'), "{message}");
-        assert!(message.contains("amount"), "{message}");
-        assert!(message.contains("wrong"), "{message}");
+        assert_eq!(error.file, file.path());
+        assert_eq!(error.line, 3);
+        assert_eq!(error.column, "amount");
+        assert_eq!(error.value, "wrong");
     }
 }
 

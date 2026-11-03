@@ -168,12 +168,12 @@ mod tests {
         });
         assert!(output.to_string().starts_with("theta_passes :: select !"));
         let missing = lower_stage(quote!(pipeline {}; #source)).to_string();
-        assert!(missing.contains("pipeline ended before its Rust printer"));
+        assert!(missing.contains("compile_error"));
         let arguments = lower_stage(quote! {
             arguments { unexpected }; pipeline { theta_passes::select }; #source
         })
         .to_string();
-        assert!(arguments.contains("this example pass accepts no arguments"));
+        assert!(arguments.contains("compile_error"));
     }
 
     #[test]

@@ -52,7 +52,7 @@ fn discharged_host_fact_survives_the_default_pipeline() {
 }
 
 #[test]
-#[should_panic(expected = "host_set")]
+#[should_panic]
 fn certified_host_fact_still_checks_duplicate_rows() {
     let rows = [(1,), (1,)];
     let _: Vec<_> = mini_linq::passes::select! {

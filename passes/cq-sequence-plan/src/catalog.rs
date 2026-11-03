@@ -519,10 +519,7 @@ mod tests {
                 ..
             }
         )));
-        let error = check(&program, &analysis, &catalog)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("unmet catalog obligation Canon"), "{error}");
+        assert!(check(&program, &analysis, &catalog).is_err());
         let mut record = |recorded: &[&str]| {
             for obligation in &mut analysis.obligations {
                 if let Obligation::Canon { level, .. } = obligation {

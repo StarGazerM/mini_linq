@@ -94,9 +94,5 @@ fn checked_stage_emits_only_recorded_ra_and_forwards_the_remaining_queue() {
         quote! { pipeline {}; #source },
         |source, arguments| cq_planners::compile(source, syn::parse2(arguments)?),
     );
-    assert!(
-        ended
-            .to_string()
-            .contains("pipeline ended before its Rust printer")
-    );
+    assert!(ended.to_string().contains("compile_error"));
 }

@@ -91,15 +91,10 @@ fn declared_types_and_aggregate_arity_are_required() {
 }
 
 #[test]
-fn grouped_multi_rule_heads_have_an_explicit_scope_diagnostic() {
-    let error = syn::parse_str::<cq::Program>(
+fn grouped_multi_rule_heads_are_rejected() {
+    syn::parse_str::<cq::Program>(
         "struct P; relation R(x:i32); relation answer(n:usize); answer(count()) :- R(x); answer(count()) :- R(x);"
     ).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("grouped heads require a single rule")
-    );
 }
 
 #[test]

@@ -89,7 +89,7 @@ fn authored_block_programs_check_at_every_stage_and_match_all_oracles() {
 }
 
 #[test]
-#[should_panic(expected = "generators use compiled written-order Rust")]
+#[should_panic]
 fn integer_oracle_does_not_interpret_rust_generators() {
     let program = syn::parse_str(
         "struct Q; relation Seed(x: i32); relation answer(x: i32); answer(x) :- Seed(x), for y in 0i32..2;"

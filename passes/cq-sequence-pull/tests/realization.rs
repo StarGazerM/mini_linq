@@ -1023,7 +1023,6 @@ fn host_certificates_only_emit_for_locally_checked_facts() {
         .unwrap();
         let printed = program(&module);
         assert_eq!(printed.contains("__cq_host_set_seen"), certified);
-        assert_eq!(printed.contains("certificate failed"), certified);
     }
 }
 

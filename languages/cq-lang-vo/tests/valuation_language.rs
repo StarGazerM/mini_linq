@@ -102,32 +102,25 @@ fn restrictions_place_predicates_on_their_occurrence_or_reject() {
 
 #[test]
 fn contract_rejects_late_misaligned_and_foreign_reductions() {
-    let rejects = |steps, needle: &str| {
-        let error = plan(steps)
+    let rejects = |steps| {
+        assert!(plan(steps)
             .and_then(|m| valuation::contract::check(&m))
-            .expect_err("rejected")
-            .to_string();
-        assert!(error.contains(needle), "{error}");
+            .is_err());
     };
     rejects(
         quote! { R@0(a, b); reduce R@0 with T@2(a, _); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
-        "R",
     );
     rejects(
         quote! { reduce R@0 with T@2(a, c); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
-        "T",
     );
     rejects(
         quote! { reduce R@0 with T@2(_, _); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
-        "T",
     );
     rejects(
         quote! { reduce R@0 with R@0(a, b); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
-        "R",
     );
     rejects(
         quote! { reduce S@0 with T@2(a, _); R@0(a, b); if { a > 0 }; S@1(b, c); let d: i32 = a + c; T@2(a, c); },
-        "R",
     );
 }
 

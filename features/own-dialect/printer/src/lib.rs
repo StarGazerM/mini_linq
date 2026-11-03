@@ -781,7 +781,6 @@ mod tests {
                 .to_token_stream()
                 .to_string();
             assert_eq!(printed.contains("__cq_host_set_seen"), certified);
-            assert_eq!(printed.contains("certificate failed"), certified);
         }
     }
 

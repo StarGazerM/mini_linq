@@ -557,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dictionary column")]
+    #[should_panic]
     fn registration_cannot_invalidate_existing_codes() {
         let mut dictionaries = Dictionaries::default();
         dictionaries.insert("name", ["z"]);

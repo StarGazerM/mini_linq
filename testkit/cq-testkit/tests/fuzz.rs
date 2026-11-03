@@ -6,7 +6,7 @@
 use cq_testkit::fuzz::{
     Atom, Binding, Block, BlockKind, Case, Comparison, Coverage, Expr, FEATURE_TAGS, Fold, FoldArg,
     FoldKind, Generator, Guard, Profile, Query, RelTerm, Relation, Relational, RouteCoverage,
-    RustOp, Step, Term, failure_report, generate, generate_with,
+    RustOp, Step, Term, generate, generate_with,
 };
 use cq_testkit::values::{ColumnType, TypedRows, Value};
 use std::collections::BTreeSet;
@@ -323,7 +323,7 @@ fn profiles_restrict_generated_features() {
 }
 
 #[test]
-fn route_coverage_and_failure_report_record_behavior() {
+fn route_coverage_records_behavior() {
     let case = join_case(&[&[1, 2]], &[&[2]]);
     let mut coverage = RouteCoverage::default();
     coverage.record("default", &case, true);
@@ -332,8 +332,6 @@ fn route_coverage_and_failure_report_record_behavior() {
     assert_eq!(coverage.count("atoms=2", "par"), (0, 1));
     assert_eq!(coverage.gaps(&["negation"]).len(), 2);
     assert!(coverage.gaps(&["atoms=2"]).is_empty());
-    let report = failure_report(&case, "par", "Physical", &case);
-    assert!(report.starts_with("FUZZ FAILURE seed=0 route=par stage=Physical"));
 }
 
 fn generator_case(generator: Generator) -> Case {

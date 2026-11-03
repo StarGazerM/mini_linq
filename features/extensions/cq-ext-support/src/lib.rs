@@ -366,7 +366,7 @@ mod tests {
         );
         assert!(quotation(&quote!(owned!{opaque} extra), "owned").is_err());
         let result = surface(quote!(pipeline {}; struct Q;), |_, _| Ok(None));
-        assert!(result.to_string().contains("requires a remaining pipeline"));
+        assert!(result.to_string().contains("compile_error"));
     }
     #[test]
     fn source_capture_and_aliases_are_rejected() {

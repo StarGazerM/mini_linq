@@ -177,12 +177,7 @@ fn const_demand_and_point_modifier_are_independent_obligations() {
     check(&source, &changed).unwrap();
     let mut missing = source.clone();
     missing.indexes.clear();
-    assert!(
-        check(&missing, &target)
-            .unwrap_err()
-            .to_string()
-            .contains("demand")
-    );
+    assert!(check(&missing, &target).is_err());
     let mut retained = target;
     retained.program.definitions[0].mode = syn::parse_quote!(let);
     check(&source, &retained).unwrap();

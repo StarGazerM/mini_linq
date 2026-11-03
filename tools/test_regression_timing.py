@@ -107,7 +107,7 @@ class EvidenceTests(unittest.TestCase):
             ]
             for directory, revision in cases:
                 with self.subTest(directory=directory, revision=revision):
-                    with self.assertRaisesRegex(ValueError, "outside the run log directory"):
+                    with self.assertRaises(ValueError):
                         runner.save_baseline(source, directory, revision, [{"status": 0}])
                     self.assertEqual(list(source.iterdir()), [source / "case.log"])
             self.assertFalse((root / "outside").exists())
@@ -120,7 +120,7 @@ class EvidenceTests(unittest.TestCase):
             directory = root / "baselines"
             directory.mkdir()
             (directory / "abc").symlink_to(source, target_is_directory=True)
-            with self.assertRaisesRegex(ValueError, "outside the run log directory"):
+            with self.assertRaises(ValueError):
                 runner.save_baseline(source, directory, "abc", [{"status": 0}])
             self.assertEqual(list(source.iterdir()), [])
 

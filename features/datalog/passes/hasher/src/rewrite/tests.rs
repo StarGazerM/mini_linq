@@ -270,7 +270,6 @@ fn stage_protocol_forwards_checked_provider_selections() {
     )
     .to_string();
     assert!(error.contains("compile_error"));
-    assert!(error.contains("expected hasher choice"));
 }
 
 #[test]

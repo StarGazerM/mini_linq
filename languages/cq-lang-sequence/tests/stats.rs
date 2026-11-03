@@ -133,7 +133,6 @@ fn statistic_missing_value_cannot_fall_through_to_another_guard() {
         arms.insert(1, (intervening, arms[0].1.clone()));
         let error = sequence::contract::check(&changed).unwrap_err().to_string();
         assert!(error.contains("BE-StatsRead"), "{error}");
-        assert!(error.contains("immediately followed by else"), "{error}");
     }
     let mut changed = program();
     let Term::Choose(arms) = &mut changed.sequence.definitions[1].term else {

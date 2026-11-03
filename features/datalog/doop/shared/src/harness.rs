@@ -213,22 +213,10 @@ mod tests {
     fn check_requires_every_comparison_engine_before_loading() {
         let mut harness = harness(&[]);
         harness.checked = &["custom", "missing"];
-        assert!(
-            harness
-                .parse(args(&["--check"]))
-                .unwrap_err()
-                .to_string()
-                .contains("feature `missing`")
-        );
+        assert!(harness.parse(args(&["--check"])).is_err());
         harness.checked = &["custom"];
         harness.reference = "missing";
-        assert!(
-            harness
-                .parse(args(&["--check"]))
-                .unwrap_err()
-                .to_string()
-                .contains("feature `missing`")
-        );
+        assert!(harness.parse(args(&["--check"])).is_err());
         assert!(harness.parse(args(&["--engine", "custom"])).is_ok());
     }
 

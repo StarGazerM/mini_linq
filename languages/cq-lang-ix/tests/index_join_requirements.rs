@@ -46,32 +46,20 @@ fn same_exact_descriptor_is_shared_by_multiple_operations() {
 }
 
 #[test]
-fn invalid_descriptor_is_rejected_with_a_specific_diagnostic() {
+fn invalid_descriptor_is_rejected() {
     let cases = [
-        (quote! { i0 = @reduced[1,2] stream; }, "i0"),
-        (quote! { i0 = @s[0,1] stream; }, "i0"),
-        (quote! { spare = @s[0] stream; }, "spare"),
-        (
-            quote! { i0 = @reduced[0,1] stream; extra = @reduced[0,1] stream; },
-            "reduced",
-        ),
-        (
-            quote! { i0 = @r[0,1] stream; i0 = @reduced[0,1] stream; },
-            "i0",
-        ),
-        (quote! { i0 = @reduced[1,0] stream; }, "reduced"),
-        (quote! { i0 = @reduced[0,0] stream; }, "reduced"),
-        (quote! { i0 = @reduced[0,3] stream; }, "reduced"),
-        (quote! { i0 = @R[0,1] stream; }, "R"),
+        quote! { i0 = @reduced[1,2] stream; },
+        quote! { i0 = @s[0,1] stream; },
+        quote! { spare = @s[0] stream; },
+        quote! { i0 = @reduced[0,1] stream; extra = @reduced[0,1] stream; },
+        quote! { i0 = @r[0,1] stream; i0 = @reduced[0,1] stream; },
+        quote! { i0 = @reduced[1,0] stream; },
+        quote! { i0 = @reduced[0,0] stream; },
+        quote! { i0 = @reduced[0,3] stream; },
+        quote! { i0 = @R[0,1] stream; },
     ];
-    for (indexes, diagnostic) in cases {
-        let error = ix::contract::check(&source(indexes))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains(diagnostic),
-            "expected {diagnostic:?}; got {error:?}"
-        );
+    for indexes in cases {
+        assert!(ix::contract::check(&source(indexes)).is_err());
     }
 }
 
@@ -118,12 +106,7 @@ fn invalid_relational_sources_report_errors_instead_of_panicking() {
 fn each_definition_requires_its_terminating_semicolon() {
     let mut malformed = valid();
     malformed.indexes.pop_punct();
-    assert!(
-        ix::contract::check(&malformed)
-            .unwrap_err()
-            .to_string()
-            .contains("i2")
-    );
+    assert!(ix::contract::check(&malformed).is_err());
 }
 
 #[test]
@@ -208,12 +191,7 @@ fn stream_and_const_supply_are_distinct_demand_identities() {
     ix::contract::check(&source).unwrap();
     let mut duplicate = source;
     duplicate.indexes[1].requirement.supply = syn::parse_quote!(const);
-    assert!(
-        ix::contract::check(&duplicate)
-            .unwrap_err()
-            .to_string()
-            .contains("duplicate")
-    );
+    assert!(ix::contract::check(&duplicate).is_err());
 }
 
 #[test]

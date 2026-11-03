@@ -145,8 +145,9 @@ fn cli_preserves_exact_csv_values_and_session_state() {
 #[test]
 fn cli_reports_sql_errors_instead_of_accepting_partial_output() {
     let connection = duckdb::Connection::open_in_memory().unwrap();
-    let error = connection
-        .execute_batch("SELECT 1; SELECT * FROM missing_cq_table")
-        .unwrap_err();
-    assert!(error.to_string().contains("missing_cq_table"), "{error}");
+    assert!(
+        connection
+            .execute_batch("SELECT 1; SELECT * FROM missing_cq_table")
+            .is_err()
+    );
 }
