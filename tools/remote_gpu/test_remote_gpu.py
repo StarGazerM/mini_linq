@@ -73,6 +73,12 @@ class MirrorTests(unittest.TestCase):
 
 class BundleTests(unittest.TestCase):
     def test_no_tests_builds_only_binaries_and_emits_no_gate(self):
+        self.exercise_bundle(no_tests=True)
+
+    def test_full_gate_separates_counter_harnesses_from_defaults(self):
+        self.exercise_bundle(no_tests=False)
+
+    def exercise_bundle(self, no_tests):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = root / 'experiments/gpu'
@@ -81,11 +87,11 @@ class BundleTests(unittest.TestCase):
             (root / 'fixture.txt').write_text('runtime source')
             names = ['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu']
             (target / 'bench-check').write_bytes(b'host checker fixture')
-            for name in names:
+            for name in set(names + bundle_builder.PACKAGES):
                 (target / name).write_bytes(b'executable fixture')
             metadata = dict(target_directory=str(target), packages=[
                 dict(id=name, name=name, manifest_path=str(workspace / name / 'Cargo.toml'), targets=[])
-                for name in names])
+                for name in sorted(set(names + bundle_builder.PACKAGES))])
             archive_manifest = {}
             oxide_commands = []
             host_commands = []
@@ -102,10 +108,19 @@ class BundleTests(unittest.TestCase):
             def run(argv, **kwargs):
                 if 'oxide' in argv:
                     oxide_commands.append(argv)
-                    self.assertEqual(argv[argv.index('oxide') + 1], 'build')
-                    for name in names:
+                    testing = argv[argv.index('oxide') + 1] == 'test'
+                    selected = [argv[i + 1] for i, arg in enumerate(argv) if arg == '-p'] if testing else names
+                    counters = '--features' in argv
+                    if counters:
+                        self.assertEqual(selected, ['gpu-datalog-runtime'])
+                        self.assertEqual(argv[argv.index('--features') + 1],
+                                         'gpu-datalog-runtime/radix-counters')
+                    for name in selected:
+                        executable = target / (name + ('-counters' if counters else ''))
+                        executable.write_bytes(b'counter harness' if counters else b'default executable')
                         kwargs['stdout'].write(json.dumps(dict(reason='compiler-artifact',
-                            executable=str(target / name), target=dict(name=name))) + '\n')
+                            package_id=name, profile=dict(test=testing),
+                            executable=str(executable), target=dict(name=name))) + '\n')
                 elif 'cargo' in argv and 'build' in argv:
                     host_commands.append(argv)
                     self.assertEqual(kwargs['cwd'], root)
@@ -120,23 +135,37 @@ class BundleTests(unittest.TestCase):
                     stage = Path(argv[argv.index('-C') + 1])
                     archive_manifest.update(json.loads((stage / 'manifest.json').read_text()))
                     self.assertEqual((stage / 'source/fixture.txt').read_text(), 'runtime source')
+                    if not no_tests:
+                        steps = {step['name']: step for step in archive_manifest['steps']}
+                        defaults = steps['crates']['commands']
+                        counters = steps['radix-counters']['commands']
+                        self.assertIn('cq-gpu-runtime', {command['package'] for command in defaults})
+                        self.assertEqual([command['package'] for command in counters], ['gpu-datalog-runtime'])
+                        for command in defaults:
+                            self.assertEqual((stage / command['argv'][0]).read_bytes(), b'default executable')
+                        self.assertEqual((stage / counters[0]['argv'][0]).read_bytes(), b'counter harness')
                     Path(argv[argv.index('-cf') + 1]).write_bytes(b'archive fixture')
                 elif argv[0] not in ('flock', 'python3'):
                     raise AssertionError(argv)
                 return subprocess.CompletedProcess(argv, 0)
 
-            with patch.object(sys, 'argv', ['bundle', str(root), str(root / 'bundle.tar.zst'), '--no-tests']), \
+            options = ['--no-tests'] if no_tests else []
+            with patch.object(sys, 'argv', ['bundle', str(root), str(root / 'bundle.tar.zst'), *options]), \
                  patch.object(subprocess, 'check_output', side_effect=check_output), \
                  patch.object(subprocess, 'run', side_effect=run), \
                  contextlib.redirect_stdout(io.StringIO()):
                 bundle_builder.main()
-            self.assertEqual(len(oxide_commands), 1)
+            self.assertEqual(len(oxide_commands), 1 if no_tests else 3)
             self.assertEqual(len(host_commands), 1)
-            self.assertEqual(archive_manifest['tests'], [])
-            self.assertEqual(archive_manifest['steps'], [])
+            if no_tests:
+                self.assertEqual(archive_manifest['tests'], [])
+                self.assertEqual(archive_manifest['steps'], [])
+            else:
+                self.assertEqual(len(archive_manifest['tests']), len(bundle_builder.PACKAGES))
             self.assertEqual(set(archive_manifest['binaries']), set(names + ['bench-check']))
             self.assertEqual([build['name'] for build in archive_manifest['builds']],
-                             ['binaries-build', 'bench-check-build'])
+                ['binaries-build', 'bench-check-build'] if no_tests else
+                ['crates-build', 'radix-counters-build', 'binaries-build', 'bench-check-build'])
 
     def test_doop_samples_require_tuple_check_and_isolate_warmup(self):
         class Bundle:

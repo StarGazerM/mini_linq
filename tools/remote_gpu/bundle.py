@@ -13,7 +13,8 @@ import tempfile
 import time
 
 PACKAGES = ['gpu-datalog-runtime', 'cq-gpu-datalog-core', 'cq-gpu-datalog',
-            'cq-gpu-sequence-core', 'cq-gpu-sequence', 'cq-gpu-tpch']
+            'cq-gpu-sequence-core', 'cq-gpu-sequence', 'cq-gpu-tpch', 'cq-gpu-runtime',
+            'gpu-device-columns']
 HPC = '/opt/nvidia/hpc_sdk/Linux_x86_64/25.9'
 
 
@@ -100,6 +101,9 @@ def main():
         tests = [] if args.no_tests else build(
             'crates-build', oxide + ['test'] + common + ['--no-run'] +
             [arg for package in PACKAGES for arg in ['-p', package]])
+        counter_tests = [] if args.no_tests else build(
+            'radix-counters-build', oxide + ['test'] + common + ['--no-run',
+                '-p', 'gpu-datalog-runtime', '--features', 'gpu-datalog-runtime/radix-counters'])
         binaries = sorted(set(['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu'] + args.bench))
         built = build('binaries-build', oxide + ['build'] + common +
                       [arg for binary in binaries for arg in ['--bin', binary]])
@@ -111,17 +115,24 @@ def main():
                        cwd=root, build_env=cpu_env)
         binaries.append('bench-check')
         executables = []
-        for index, artifact in enumerate(tests):
+        counter_commands = []
+        for index, artifact in enumerate(tests + counter_tests):
             if not artifact['profile']['test']:
                 continue
             package = packages[artifact['package_id']]
             destination = 'bin/test-' + str(index) + '-' + artifact['target']['name']
             shutil.copy2(artifact['executable'], stage / destination)
-            manifest['tests'].append(dict(argv=[destination],
-                cwd=str(Path(package['manifest_path']).parent), package=package['name']))
+            command = dict(argv=[destination],
+                cwd=str(Path(package['manifest_path']).parent), package=package['name'])
+            if index < len(tests):
+                manifest['tests'].append(command)
+            else:
+                counter_commands.append(command)
             executables.append(Path(artifact['executable']))
         if not args.no_tests and not manifest['tests']:
             raise RuntimeError('No test harnesses were enumerated')
+        if not args.no_tests and not counter_commands:
+            raise RuntimeError('No radix-counters test harnesses were enumerated')
         for artifact in built:
             name = artifact['target']['name']
             if name not in binaries:
@@ -220,6 +231,7 @@ def main():
                         'huggingface_hub==1.1.5', 'click'], check=True)
         manifest['steps'] = [] if args.no_tests else [
             dict(name='crates', commands=manifest['tests']),
+            dict(name='radix-counters', commands=counter_commands),
             dict(name='tpch-h05-sf10-ceiling', argv=['bin/cq-gpu-tpch', '{results}/gpu-gate-h05-sf10.json',
                  '--query', 'h05', '--scale', 'sf10', '--mode', 'advised']),
             dict(name='doop-cassandra-exact', argv=['bin/doop-gpu', '/data/doop-bench/doop-data/cassandra'])]

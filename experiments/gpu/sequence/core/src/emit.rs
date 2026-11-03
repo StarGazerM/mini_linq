@@ -23,6 +23,20 @@ fn error(message: impl std::fmt::Display) -> syn::Error {
     syn::Error::new(Span::call_site(), message)
 }
 
+/// ABI declarations and arguments carry the same producer-assigned identity.
+/// These constructors never recover structure from printed Rust.
+fn abi_parameter(name: syn::Ident, ty: syn::Type) -> (syn::Ident, syn::Type) {
+    (name, ty)
+}
+
+fn abi_argument(name: syn::Ident, value: TokenStream) -> (syn::Ident, TokenStream) {
+    (name, value)
+}
+
+fn parameter_uses(parameters: &[(syn::Ident, syn::Type)]) -> BTreeSet<String> {
+    parameters.iter().map(|(name, _)| name.to_string()).collect()
+}
+
 // GPU-ResidentMeta word layout of the arena's resident words: the last block
 // copies the first `RESIDENT_RESULT` dispatch words (count, -, failure, -) to
 // the header, `RESIDENT_FINISHED` counts finished blocks, and the dispatch's
@@ -154,7 +168,8 @@ struct KernelAbi {
     body: TokenStream,
     uses: BTreeSet<String>,
     parameters: Vec<AbiParameter>,
-    witnesses: Vec<(syn::Ident, TokenStream, syn::Ident)>,
+    witnesses: Vec<std::sync::Arc<(syn::Ident, TokenStream, syn::Ident)>>,
+    witness_ids: Vec<usize>,
     preparation: syn::Ident,
     launch: Launch,
     shared: u32,
@@ -166,23 +181,36 @@ pub(crate) struct CheckedKernel(KernelAbi);
 
 impl KernelAbi {
     fn check(self, rows: &Rows) -> syn::Result<CheckedKernel> {
+        if self.witness_ids.len() != self.witnesses.len() {
+            return Err(error("GPU-KernelAbi: witness identity coverage differs"));
+        }
+        for (id, witness) in self.witness_ids.iter().zip(&self.witnesses) {
+            let Some(canonical) = rows.type_witnesses.get(*id) else {
+                return Err(error("GPU-KernelAbi: unknown canonical witness"));
+            };
+            // Identity covers the bound as well as the generic and host value:
+            // no copied or substituted payload can become a printable witness.
+            if !std::sync::Arc::ptr_eq(witness, canonical) {
+                return Err(error("GPU-KernelAbi: witness differs from its canonical bound"));
+            }
+        }
         let mut names = BTreeSet::new();
         let mut witnesses = BTreeSet::new();
         for parameter in &self.parameters {
-            if !names.insert(parameter.name.to_string())
-                || (!parameter.live && self.uses.contains(&parameter.name.to_string()))
-            {
+            let name = parameter.name.to_string();
+            if let Some((_, expected, _)) = rows.parameters.iter().find(|(id, _, _)| id == &parameter.name) {
+                let actual = &parameter.ty;
+                if quote!(#actual).to_string() != quote!(#expected).to_string() {
+                    return Err(error("GPU-KernelAbi: row parameter type differs from its canonical declaration"));
+                }
+            }
+            if !names.insert(name.clone()) || parameter.live != self.uses.contains(&name) {
                 return Err(error("GPU-KernelAbi: duplicate or omitted live parameter"));
             }
-            let expected = parameter.live.then(|| rows.parameter_witnesses.get(&parameter.name.to_string())).flatten();
-            let actual = parameter.witness.and_then(|index| self.witnesses.get(index));
+            let expected = parameter.live.then(|| rows.parameter_witnesses.get(&name)).flatten();
+            let actual = parameter.witness.and_then(|index| self.witnesses.get(index)).map(|witness| witness.as_ref());
             if expected != actual.map(|(generic, _, _)| generic) {
                 return Err(error("GPU-KernelAbi: parameter has another preparation witness"));
-            }
-            if let Some((generic, _, argument)) = actual {
-                if !rows.type_witnesses.iter().any(|(ty, _, host)| ty == generic && host == argument) {
-                    return Err(error("GPU-KernelAbi: preparation has another host witness"));
-                }
             }
             if let Some(witness) = parameter.witness {
                 if witness >= self.witnesses.len() || !parameter.live {
@@ -191,8 +219,12 @@ impl KernelAbi {
                 witnesses.insert(witness);
             }
         }
-        if witnesses.len() != self.witnesses.len() {
-            return Err(error("GPU-KernelAbi: unreferenced preparation witness"));
+        if !self.uses.is_subset(&names) {
+            return Err(error("GPU-KernelAbi: use has no declared parameter"));
+        }
+        let generic_names: BTreeSet<_> = self.witnesses.iter().map(|witness| witness.as_ref()).map(|(name, _, _)| name.to_string()).collect();
+        if witnesses.len() != self.witnesses.len() || generic_names.len() != self.witnesses.len() {
+            return Err(error("GPU-KernelAbi: duplicate or unreferenced preparation witness"));
         }
         let expected = if self.witnesses.is_empty() {
             format_ident!("prepare_{}", self.name)
@@ -207,49 +239,40 @@ impl KernelAbi {
 }
 
 impl CheckedKernel {
-    /// Lower declarations and a body separately, before printing any kernel.
-    /// This scans generated value identifiers for liveness, never Rust types,
-    /// generic syntax, generated kernels or host method-call names.
+    /// Consume parameter identities and semantic use facts recorded by the
+    /// template and row planners. Rust payloads are never inspected for ABI facts.
     pub(crate) fn lower(
         name: &syn::Ident,
         attributes: TokenStream,
-        declarations: TokenStream,
+        declarations: Vec<(syn::Ident, syn::Type)>,
+        uses: BTreeSet<String>,
         body: TokenStream,
         rows: &Rows,
         launch: Launch,
         shared: u32,
     ) -> syn::Result<Self> {
-        use syn::parse::Parser;
-        let declarations = syn::punctuated::Punctuated::<syn::FnArg, syn::Token![,]>
-            ::parse_terminated.parse2(declarations)?;
-        let mut uses = BTreeSet::new();
-        identifiers(body.clone(), &mut uses);
         let mut parameters = Vec::new();
         let mut witnesses = Vec::new();
-        for declaration in declarations {
-            let syn::FnArg::Typed(parameter) = declaration else {
-                return Err(error("GPU-KernelAbi: scalar parameter required"));
-            };
-            let syn::Pat::Ident(name) = *parameter.pat else {
-                return Err(error("GPU-KernelAbi: named scalar parameter required"));
-            };
-            let live = uses.contains(&name.ident.to_string());
+        let mut witness_ids = Vec::new();
+        for (name, ty) in declarations {
+            let live = uses.contains(&name.to_string());
             let witness = if live {
-                rows.parameter_witnesses.get(&name.ident.to_string()).map(|generic| -> syn::Result<usize> {
+                rows.parameter_witnesses.get(&name.to_string()).map(|generic| -> syn::Result<usize> {
                     if let Some(index) = witnesses.iter().position(
-                        |(ty, _, _): &(syn::Ident, TokenStream, syn::Ident)| ty == generic,
+                        |witness: &std::sync::Arc<(syn::Ident, TokenStream, syn::Ident)>| &witness.0 == generic,
                     ) {
                         return Ok(index);
                     }
-                    let record = rows.type_witnesses.iter().find(|(ty, _, _)| ty == generic)
+                    let (id, record) = rows.type_witnesses.iter().enumerate().find(|(_, witness)| &witness.0 == generic)
                         .ok_or_else(|| error("GPU-KernelAbi: missing recorded witness"))?;
                     witnesses.push(record.clone());
+                    witness_ids.push(id);
                     Ok(witnesses.len() - 1)
                 }).transpose()?
             } else {
                 None
             };
-            parameters.push(AbiParameter { name: name.ident, ty: *parameter.ty, live, witness });
+            parameters.push(AbiParameter { name, ty, live, witness });
         }
         let preparation = if witnesses.is_empty() {
             format_ident!("prepare_{name}")
@@ -257,13 +280,13 @@ impl CheckedKernel {
             format_ident!("prepare_{name}_for")
         };
         KernelAbi {
-            name: name.clone(), attributes, body, uses, parameters, witnesses,
+            name: name.clone(), attributes, body, uses, parameters, witnesses, witness_ids,
             preparation, launch, shared,
         }.check(rows)
     }
 
     fn generics(&self) -> TokenStream {
-        let parameters = self.0.witnesses.iter().map(|(ty, bound, _)| quote!(#ty: Copy + #bound));
+        let parameters = self.0.witnesses.iter().map(|witness| witness.as_ref()).map(|(ty, bound, _)| quote!(#ty: Copy + #bound));
         if self.0.witnesses.is_empty() { quote!() } else { quote!(<#(#parameters),*>) }
     }
 
@@ -291,13 +314,13 @@ impl CheckedKernel {
 
     pub(crate) fn prepare(&self, config: TokenStream) -> TokenStream {
         let method = &self.0.preparation;
-        let witnesses = self.0.witnesses.iter().map(|(_, _, witness)| witness);
+        let witnesses = self.0.witnesses.iter().map(|witness| witness.as_ref()).map(|(_, _, witness)| witness);
         quote!(__cq_module.#method(#(&#witnesses,)* #config))
     }
 
     fn cached(&self, cache: &syn::Ident) -> TokenStream {
         let helper = format_ident!("__cq_prepare_program_{}", self.0.name);
-        let witnesses = self.0.witnesses.iter().map(|(_, _, witness)| witness);
+        let witnesses = self.0.witnesses.iter().map(|witness| witness.as_ref()).map(|(_, _, witness)| witness);
         quote!(#helper(__cq_module, &mut *#cache, #(&#witnesses),*))
     }
 
@@ -308,16 +331,15 @@ impl CheckedKernel {
         stream: TokenStream,
         prepared: TokenStream,
         blocks: TokenStream,
-        arguments: TokenStream,
+        arguments: Vec<(syn::Ident, TokenStream)>,
     ) -> syn::Result<TokenStream> {
-        use syn::parse::Parser;
-        let arguments = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>
-            ::parse_terminated.parse2(arguments)?;
-        if arguments.len() != self.0.parameters.len() {
-            return Err(error("GPU-KernelAbi: launch argument count differs from its record"));
+        if arguments.len() != self.0.parameters.len()
+            || arguments.iter().zip(&self.0.parameters).any(|((id, _), parameter)| id != &parameter.name)
+        {
+            return Err(error("GPU-KernelAbi: launch argument identities differ from its record"));
         }
         let arguments = arguments.iter().zip(&self.0.parameters)
-            .filter_map(|(argument, parameter)| parameter.live.then_some(argument));
+            .filter_map(|((_, argument), parameter)| parameter.live.then_some(argument));
         let name = &self.0.name;
         Ok(match self.0.launch {
             Launch::InvocationOccupancy => quote!(__cq_module.#name(#stream, #prepared, #(#arguments),*)),
@@ -333,9 +355,9 @@ impl CheckedKernel {
         let prepare = format_ident!("__cq_prepare_program_{name}");
         let launcher = format_ident!("__cq_launch_program_{name}");
         let generics = self.generics();
-        let bounds = self.0.witnesses.iter().map(|(ty, bound, _)| quote!(#ty: Copy + #bound));
-        let witness_parameters = self.0.witnesses.iter().map(|(ty, _, witness)| quote!(#witness: &#ty));
-        let witness_names: Vec<_> = self.0.witnesses.iter().map(|(_, _, witness)| witness).collect();
+        let bounds = self.0.witnesses.iter().map(|witness| witness.as_ref()).map(|(ty, bound, _)| quote!(#ty: Copy + #bound));
+        let witness_parameters = self.0.witnesses.iter().map(|witness| witness.as_ref()).map(|(ty, _, witness)| quote!(#witness: &#ty));
+        let witness_names: Vec<_> = self.0.witnesses.iter().map(|witness| witness.as_ref()).map(|(_, _, witness)| witness).collect();
         let resident = match launch {
             Launch::ProgramOne => quote! {
                 let prepared = module.#preparation(#(#witness_names,)* ::cuda_core::LaunchConfig1D::new(1,256,#shared))?;
@@ -993,6 +1015,31 @@ impl<'a> Compiler<'a> {
         Ok(self.rows.provider(provider)?.1)
     }
 
+    fn use_stored(&self, prior: usize) {
+        let stored = &self.stored[prior];
+        if let Some(columns) = &stored.packed {
+            self.rows.use_parameter(&format_ident!("__cq_store_packed_{prior}"));
+            self.rows.use_parameter(&format_ident!("__cq_stored_lanes_{prior}"));
+            for field in 0..columns.len() {
+                self.rows.use_parameter(&format_ident!("__cq_stored_base_{prior}_{field}"));
+                self.rows.use_parameter(&format_ident!("__cq_stored_shift_{prior}_{field}"));
+                self.rows.use_parameter(&format_ident!("__cq_stored_bits_{prior}_{field}"));
+            }
+        } else if stored.range.is_some() {
+            // Deferred range rows are recorded used only by loads that copy
+            // non-payload fields from them (`use_store_rows`).
+            self.rows.use_parameter(&format_ident!("__cq_store_begin_{prior}"));
+            self.rows.use_parameter(&format_ident!("__cq_store_offsets_{prior}"));
+            self.rows.use_parameter(&format_ident!("__cq_store_meta_{prior}"));
+        } else {
+            self.use_store_rows(prior);
+        }
+    }
+
+    fn use_store_rows(&self, prior: usize) {
+        self.rows.use_parameter(&format_ident!("__cq_store_rows_{prior}"));
+    }
+
     fn whole_load(&self, source: &str, position: TokenStream) -> syn::Result<TokenStream> {
         let Some((prior, stored)) = self
             .stored
@@ -1003,6 +1050,7 @@ impl<'a> Compiler<'a> {
         else {
             return self.rows.source(source, position, quote!(__row));
         };
+        self.use_stored(prior);
         let rows = format_ident!("__cq_store_rows_{prior}");
         if let Some(columns) = &stored.packed {
             let keys = format_ident!("__cq_store_packed_{prior}");
@@ -1039,6 +1087,9 @@ impl<'a> Compiler<'a> {
                     Ok(quote!(__row[#slot] = *#rows.add(__whole_parent * #width + #slot);))
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
+            if !copy.is_empty() {
+                self.use_store_rows(prior);
+            }
             let payload = self.payload(provider, &[], quote!(__whole_position))?;
             return Ok(quote! {
                 let __whole_parent = ::cq_gpu_sequence_runtime::device::owner(
@@ -1074,6 +1125,7 @@ impl<'a> Compiler<'a> {
                 .find(|(_, stored)| stored.result == *source || stored.name == *source)
             {
                 let length = format_ident!("__cq_store_length_{prior}");
+                self.rows.use_parameter(&length);
                 quote!(#length)
             } else {
                 let length = format_ident!("{provider}_length");
@@ -1361,15 +1413,7 @@ impl Kernel<'_, '_> {
         for operation in operations.iter().rev() {
             match operation {
                 Operation::Map(name, input) => {
-                    // Backward liveness: a slot the map writes is not live
-                    // before it; only the map's other reads are.
-                    let map = self
-                        .compiler
-                        .rows
-                        .map(name, input, quote!(__row), quote!(__live))?;
-                    let writes = DeviceRow::writes(map.clone())?;
-                    live.retain(|slot| !writes.contains(slot));
-                    live.extend(DeviceRow::uses(map)?.difference(&writes));
+                    self.compiler.rows.map_live_columns(name, input, &mut live)?;
                 }
                 Operation::Lookup {
                     provider,
@@ -2363,6 +2407,25 @@ fn translate_observed(
                 }
             };
             let direct = if canonical.is_none() {
+                compiler.rows.begin_abi_uses();
+                let mut used = BTreeSet::new();
+                for key in &group.keys {
+                    used.insert(compiler.slot(&symbol_name(key))?);
+                }
+                for aggregate in &group.aggregates {
+                    if let Some(expression) = &aggregate.expression
+                        && let Some(name) = cq_lang_structures::syntax::rust::variable(expression)
+                        && !compiler.rows.query_captures.contains(&symbol_name(name))
+                    {
+                        used.insert(compiler.slot(&symbol_name(name))?);
+                    }
+                }
+                let mut source_live = used.clone();
+                for operation in chain.operations.iter().rev() {
+                    if let Operation::Map(name, input) = operation {
+                        compiler.rows.map_live_columns(name, input, &mut source_live)?;
+                    }
+                }
                 let mut load = TokenStream::new();
                 let length = if let Some(index) = chain.stored {
                     let stored = &compiler.stored[index];
@@ -2380,25 +2443,14 @@ fn translate_observed(
                     let length = format_ident!("__cq_store_length_{index}");
                     quote!(#length)
                 } else {
-                    load.extend(compiler.rows.source(
+                    load.extend(compiler.rows.source_columns(
                         &chain.source,
                         quote!(position),
                         quote!(__row),
+                        Some(&source_live),
                     )?);
                     compiler.rows.source_len(&chain.source)?
                 };
-                let mut used = BTreeSet::new();
-                for key in &group.keys {
-                    used.insert(compiler.slot(&symbol_name(key))?);
-                }
-                for aggregate in &group.aggregates {
-                    if let Some(expression) = &aggregate.expression
-                        && let Some(name) = cq_lang_structures::syntax::rust::variable(expression)
-                        && !compiler.rows.query_captures.contains(&symbol_name(name))
-                    {
-                        used.insert(compiler.slot(&symbol_name(name))?);
-                    }
-                }
                 for operation in &chain.operations {
                     match operation {
                         Operation::Map(name, input) => {
@@ -2433,7 +2485,7 @@ fn translate_observed(
                     .rows
                     .parameters
                     .iter()
-                    .map(|(name, ty, _)| quote!(#name: #ty))
+                    .map(|(name, ty, _)| abi_parameter(name.clone(), ty.clone()))
                     .collect();
                 let mut capture_definitions = Vec::new();
                 for operation in &chain.operations {
@@ -2446,10 +2498,15 @@ fn translate_observed(
                     .capture_arguments(&[(capture_definitions, quote!((#length) != 0))]);
                 if let Some(index) = chain.stored {
                     let rows = format_ident!("__cq_store_rows_{index}");
-                    parameters.push(quote!(#rows: *const i64));
-                    arguments.push(quote!(#rows.ptr()));
+                    parameters.push(abi_parameter(rows.clone(), syn::parse_quote!(*const i64)));
+                    arguments.push(abi_argument(rows.clone(), quote!(#rows.ptr())));
+                }
+                let mut uses = compiler.rows.abi_uses();
+                if let Some(index) = chain.stored {
+                    uses.insert(format!("__cq_store_rows_{index}"));
                 }
                 Some(crate::reduce::GroupInput {
+                    uses,
                     parameters,
                     arguments,
                     length,
@@ -2602,14 +2659,14 @@ fn translate_observed(
                                 let shift = format_ident!("shift_{field}");
                                 let bits = format_ident!("bits_{field}");
                                 params.extend([
-                                    quote!(#base:i64),
-                                    quote!(#shift:u32),
-                                    quote!(#bits:u32),
+                                    abi_parameter(base.clone(), syn::parse_quote!(i64)),
+                                    abi_parameter(shift.clone(), syn::parse_quote!(u32)),
+                                    abi_parameter(bits.clone(), syn::parse_quote!(u32)),
                                 ]);
                                 args.extend([
-                                    quote!(#fields[#field].base),
-                                    quote!(#fields[#field].shift),
-                                    quote!(#fields[#field].bits),
+                                    abi_argument(base.clone(), quote!(#fields[#field].base)),
+                                    abi_argument(shift.clone(), quote!(#fields[#field].shift)),
+                                    abi_argument(bits.clone(), quote!(#fields[#field].bits)),
                                 ]);
                                 let offset = packed_offset(
                                     quote!(keys),
@@ -2624,11 +2681,17 @@ fn translate_observed(
                                     *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
                                 });
                             }
+                            let uses = parameter_uses(&params);
                             let abi = CheckedKernel::lower(&kernel, quote! {
                                 #[kernel]
                                 #[launch_bounds(256)]
                                 #[launch_contract(domain=1,block=(256,1,1))]
-                            }, quote!(keys:*const u64, rows:*mut i64, length:usize, lanes:usize, #(#params),*), quote! {
+                            }, [vec![
+                                abi_parameter(format_ident!("keys"), syn::parse_quote!(*const u64)),
+                                abi_parameter(format_ident!("rows"), syn::parse_quote!(*mut i64)),
+                                abi_parameter(format_ident!("length"), syn::parse_quote!(usize)),
+                                abi_parameter(format_ident!("lanes"), syn::parse_quote!(usize)),
+                            ], params].concat(), uses.into_iter().chain(["keys", "rows", "length", "lanes"].map(str::to_owned)).collect(), quote! {
                                     unsafe {
                                         let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                         while position < length {
@@ -2640,8 +2703,12 @@ fn translate_observed(
                             kernels.push(abi.definition());
                             let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new((#length.div_ceil(#block)) as u32,#block,0)));
                             let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(1u32),
-                                quote!(#owner.keys().ptr(), unsafe { #store_rows.ptr().add(__cq_union_offset * #width) },
-                                    #length, #owner.lanes(), #(#args),*))?;
+                                [vec![
+                                    abi_argument(format_ident!("keys"), quote!(#owner.keys().ptr())),
+                                    abi_argument(format_ident!("rows"), quote!(unsafe { #store_rows.ptr().add(__cq_union_offset * #width) })),
+                                    abi_argument(format_ident!("length"), quote!(#length)),
+                                    abi_argument(format_ident!("lanes"), quote!(#owner.lanes())),
+                                ], args].concat())?;
                             copies.push(quote! {
                                 if #length != 0 {
                                     let prepared = #prepare?;
@@ -2692,8 +2759,8 @@ fn translate_observed(
                         let shift = format_ident!("shift_{field}");
                         let slot = compiler.slot(&recipe.column)?;
                         fields.push(packing_field(recipe, &base, &shift));
-                        params.extend([quote!(#base:i64), quote!(#shift:u32)]);
-                        args.extend([quote!(#base), quote!(#shift)]);
+                        params.extend([abi_parameter(base.clone(), syn::parse_quote!(i64)), abi_parameter(shift.clone(), syn::parse_quote!(u32))]);
+                        args.extend([abi_argument(base.clone(), quote!(#base)), abi_argument(shift.clone(), quote!(#shift))]);
                         parts.push(quote! {
                             let value = (*rows.add(position * #width + #slot)).wrapping_sub(#base) as u64;
                             let lane = (#shift / 64) as usize;
@@ -2712,7 +2779,12 @@ fn translate_observed(
                         #[kernel]
                         #[launch_bounds(256)]
                         #[launch_contract(domain=1,block=(256,1,1))]
-                    }, quote!(rows:*const i64,keys:*mut u64,length:usize,lanes:usize,#(#params),*), quote! {
+                    }, [vec![
+                        abi_parameter(format_ident!("rows"), syn::parse_quote!(*const i64)),
+                        abi_parameter(format_ident!("keys"), syn::parse_quote!(*mut u64)),
+                        abi_parameter(format_ident!("length"), syn::parse_quote!(usize)),
+                        abi_parameter(format_ident!("lanes"), syn::parse_quote!(usize)),
+                    ], params.clone()].concat(), parameter_uses(&params).into_iter().chain(["rows", "keys", "length", "lanes"].map(str::to_owned)).collect(), quote! {
                             unsafe {
                                 let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                 while position < length {
@@ -2726,7 +2798,12 @@ fn translate_observed(
                     kernels.push(abi.definition());
                     let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(#block) as u32,#block,0)));
                     let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(1u32),
-                        quote!(#store_rows.ptr(),#keys.ptr(),#store_length,__cq_key_lanes,#(#args),*))?;
+                        [vec![
+                            abi_argument(format_ident!("rows"), quote!(#store_rows.ptr())),
+                            abi_argument(format_ident!("keys"), quote!(#keys.ptr())),
+                            abi_argument(format_ident!("length"), quote!(#store_length)),
+                            abi_argument(format_ident!("lanes"), quote!(__cq_key_lanes)),
+                        ], args].concat())?;
                     let lanes = key_lanes(codec);
                     launches.push(quote! {
                         let mut __cq_key_bits = 0u32;
@@ -2942,6 +3019,7 @@ fn translate_observed(
             .map(packing_fields)
             .unwrap_or_default();
         let kernel_name = format_ident!("__cq_sequence_dispatch_{index}_{module_name}");
+        compiler.rows.begin_abi_uses();
         let mut parameters = Vec::new();
         let mut capture_domains = Vec::new();
         for (chain_index, chain) in chains.iter().enumerate() {
@@ -2957,7 +3035,7 @@ fn translate_observed(
         }
         let mut arguments = compiler.rows.capture_arguments(&capture_domains);
         for (name, ty, _) in &compiler.rows.parameters {
-            parameters.push(quote!(#name:#ty));
+            parameters.push(abi_parameter(name.clone(), ty.clone()));
         }
         for prior in 0..compiler.stored.len() {
             let rows = format_ident!("__cq_store_rows_{prior}");
@@ -2965,42 +3043,43 @@ fn translate_observed(
             let offsets = format_ident!("__cq_store_offsets_{prior}");
             let meta = format_ident!("__cq_store_meta_{prior}");
             let length = format_ident!("__cq_store_length_{prior}");
-            parameters.push(quote!(#length:usize));
-            arguments.push(quote!(#length));
+            parameters.push(abi_parameter(length.clone(), syn::parse_quote!(usize)));
+            arguments.push(abi_argument(length.clone(), quote!(#length)));
             parameters.extend([
-                quote!(#rows:*const i64),
-                quote!(#begin:*const u32),
-                quote!(#offsets:*const u32),
-                quote!(#meta:*const u32),
+                abi_parameter(rows.clone(), syn::parse_quote!(*const i64)),
+                abi_parameter(begin.clone(), syn::parse_quote!(*const u32)),
+                abi_parameter(offsets.clone(), syn::parse_quote!(*const u32)),
+                abi_parameter(meta.clone(), syn::parse_quote!(*const u32)),
             ]);
             arguments.extend([
-                quote!(#rows.ptr()),
-                quote!(#begin.ptr()),
-                quote!(#offsets.ptr()),
-                quote!(#meta.ptr()),
+                abi_argument(rows.clone(), quote!(#rows.ptr())),
+                abi_argument(begin.clone(), quote!(#begin.ptr())),
+                abi_argument(offsets.clone(), quote!(#offsets.ptr())),
+                abi_argument(meta.clone(), quote!(#meta.ptr())),
             ]);
             if let Some(columns) = &compiler.stored[prior].packed {
                 let keys = format_ident!("__cq_store_packed_{prior}");
                 let owner = format_ident!("__cq_canonical_{prior}");
                 let fields = format_ident!("__cq_fields_{prior}");
                 let lanes = format_ident!("__cq_stored_lanes_{prior}");
-                parameters.push(quote!(#lanes:usize));
-                arguments.push(quote!(#owner.lanes()));
-                parameters.push(quote!(#keys:*const u64));
-                arguments.push(quote!(#owner.keys().ptr()));
+                parameters.push(abi_parameter(lanes.clone(), syn::parse_quote!(usize)));
+                arguments.push(abi_argument(lanes.clone(), quote!(#owner.lanes())));
+                parameters.push(abi_parameter(keys.clone(), syn::parse_quote!(*const u64)));
+                arguments.push(abi_argument(keys.clone(), quote!(#owner.keys().ptr())));
                 for field in 0..columns.len() {
                     let base = format_ident!("__cq_stored_base_{prior}_{field}");
                     let shift = format_ident!("__cq_stored_shift_{prior}_{field}");
                     let bits = format_ident!("__cq_stored_bits_{prior}_{field}");
-                    parameters.extend([quote!(#base:i64), quote!(#shift:u32), quote!(#bits:u32)]);
+                    parameters.extend([abi_parameter(base.clone(), syn::parse_quote!(i64)), abi_parameter(shift.clone(), syn::parse_quote!(u32)), abi_parameter(bits.clone(), syn::parse_quote!(u32))]);
                     arguments.extend([
-                        quote!(#fields[#field].base),
-                        quote!(#fields[#field].shift),
-                        quote!(#fields[#field].bits),
+                        abi_argument(base.clone(), quote!(#fields[#field].base)),
+                        abi_argument(shift.clone(), quote!(#fields[#field].shift)),
+                        abi_argument(bits.clone(), quote!(#fields[#field].bits)),
                     ]);
                 }
             }
         }
+        let local_parameters_begin = parameters.len();
         let mut whole_lengths = BTreeSet::new();
         for operation in chains.iter().flat_map(|chain| &chain.operations) {
             if let Operation::Lookup { provider, .. } = operation
@@ -3013,21 +3092,21 @@ fn translate_observed(
             {
                 let length = format_ident!("{provider}_length");
                 let value = compiler.rows.source_len(source)?;
-                parameters.push(quote!(#length:usize));
-                arguments.push(quote!(#value));
+                parameters.push(abi_parameter(length.clone(), syn::parse_quote!(usize)));
+                arguments.push(abi_argument(length.clone(), quote!(#value)));
             }
         }
         for i in 0..packed_columns.as_ref().map_or(0, Vec::len) {
             let base = format_ident!("__cq_pack_base_{i}");
             let shift = format_ident!("__cq_pack_shift_{i}");
-            parameters.extend([quote!(#base:i64), quote!(#shift:u32)]);
-            arguments.extend([quote!(#base), quote!(#shift)]);
+            parameters.extend([abi_parameter(base.clone(), syn::parse_quote!(i64)), abi_parameter(shift.clone(), syn::parse_quote!(u32))]);
+            arguments.extend([abi_argument(base.clone(), quote!(#base)), abi_argument(shift.clone(), quote!(#shift))]);
         }
-        parameters.push(quote!(__cq_key_lanes:usize));
-        arguments.push(quote!(__cq_key_lanes));
+        parameters.push(abi_parameter(format_ident!("__cq_key_lanes"), syn::parse_quote!(usize)));
+        arguments.push(abi_argument(format_ident!("__cq_key_lanes"), quote!(__cq_key_lanes)));
         if expansion_counters {
-            parameters.push(quote!(__cq_expansions: *mut u64));
-            arguments.push(quote!(__cq_expansions.ptr()));
+            parameters.push(abi_parameter(format_ident!("__cq_expansions"), syn::parse_quote!(*mut u64)));
+            arguments.push(abi_argument(format_ident!("__cq_expansions"), quote!(__cq_expansions.ptr())));
         }
         let mut generator = Kernel {
             compiler: &compiler,
@@ -3084,13 +3163,14 @@ fn translate_observed(
                     .unwrap_or(&dispatch.outer_store);
                 compiler.rows.source_len(source)?
             };
-            parameters.extend([quote!(#domain:u32), quote!(#enabled:bool)]);
-            arguments.extend([quote!(#domain), quote!(#enabled)]);
+            parameters.extend([abi_parameter(domain.clone(), syn::parse_quote!(u32)), abi_parameter(enabled.clone(), syn::parse_quote!(bool))]);
+            arguments.extend([abi_argument(domain.clone(), quote!(#domain)), abi_argument(enabled.clone(), quote!(#enabled))]);
             host_domains.push(quote! {
                 let #domain=u32::try_from(#source_length).map_err(|_|"Sequence source exceeds u32 positions")?;
                 let #enabled=#condition;
             });
             let source = if let Some(prior) = chain.stored {
+                compiler.use_stored(prior);
                 let rows = format_ident!("__cq_store_rows_{prior}");
                 let begin = format_ident!("__cq_store_begin_{prior}");
                 let offsets = format_ident!("__cq_store_offsets_{prior}");
@@ -3128,17 +3208,22 @@ fn translate_observed(
                     }
                     let payload = compiler.payload(provider, &[], quote!(__source_position))?;
                     let payload_columns = compiler.rows.provider(provider)?.1;
-                    let copy = analysis.structures.physical.headings
-                        [&compiler.stored[prior].result]
-                        .iter()
-                        .filter(|column| !payload_columns.contains(column))
-                        .map(|column| {
-                            let slot = compiler.slot(column)?;
-                            Ok(quote! {
+                    let live = generator.live_columns(&chain.operations)?;
+                    let mut copy = Vec::new();
+                    for column in &analysis.structures.physical.headings[&compiler.stored[prior].result] {
+                        if payload_columns.contains(column) {
+                            continue;
+                        }
+                        let slot = compiler.slot(column)?;
+                        if live.contains(&slot) {
+                            copy.push(quote! {
                                 __row[#slot] = *#rows.add(__parent * #width + #slot);
-                            })
-                        })
-                        .collect::<syn::Result<Vec<_>>>()?;
+                            });
+                        }
+                    }
+                    if !copy.is_empty() {
+                        compiler.use_store_rows(prior);
+                    }
                     quote! {
                         let __parent=::cq_gpu_sequence_runtime::device::owner(#offsets,*#meta,__position as u32) as usize;
                         #(#copy)*
@@ -3154,9 +3239,10 @@ fn translate_observed(
                     quote!(#(#copy)*)
                 }
             } else {
+                let live = generator.live_columns(&chain.operations)?;
                 compiler
                     .rows
-                    .source(&chain.source, quote!(__position), quote!(__row))?
+                    .source_columns(&chain.source, quote!(__position), quote!(__row), Some(&live))?
             };
             generator.strips = execution.chains[chain_index]
                 .strips
@@ -3188,8 +3274,8 @@ fn translate_observed(
                 // GPU-RootSpread: the launch passes the tile sized from occupancy.
                 cq_lang_sequence::gpu::Partition::Spread { .. } => {
                     let tile = format_ident!("__cq_tile_{chain_index}");
-                    parameters.push(quote!(#tile:u32));
-                    arguments.push(quote!(#tile));
+                    parameters.push(abi_parameter(tile.clone(), syn::parse_quote!(u32)));
+                    arguments.push(abi_argument(tile.clone(), quote!(#tile)));
                     quote!(#tile)
                 }
             };
@@ -3199,8 +3285,8 @@ fn translate_observed(
                 cq_lang_sequence::gpu::Share::FirstExpansion { .. }
             );
             if share {
-                parameters.push(quote!(__cq_share_tiles:u32));
-                arguments.push(quote!(__cq_share_tiles));
+                parameters.push(abi_parameter(format_ident!("__cq_share_tiles"), syn::parse_quote!(u32)));
+                arguments.push(abi_argument(format_ident!("__cq_share_tiles"), quote!(__cq_share_tiles)));
                 generator.share = Some(share_word);
             }
             let (outside_declare, partition, outside_finish, whole) = generator.partition_rows(
@@ -3349,7 +3435,7 @@ fn translate_observed(
             let finished = RESIDENT_FINISHED;
             let result_words = RESIDENT_RESULT;
             (
-                quote!(__meta_result:*mut u32,),
+                Some(abi_parameter(format_ident!("__meta_result"), syn::parse_quote!(*mut u32))),
                 quote! {
                     ::cuda_device::threadfence();
                     ::cuda_device::thread::sync_threads();
@@ -3380,15 +3466,62 @@ fn translate_observed(
                 },
             )
         } else {
-            (quote!(), quote!())
+            (None, quote!())
         };
+        let mut uses = compiler.rows.abi_uses();
+        uses.extend(parameter_uses(&parameters[local_parameters_begin..]));
+        // Arena packing embeds its schema; it has no per-invocation FOR scalars.
+        if generator.arena_packing.is_some() || packed_columns.is_none() {
+            uses.remove("__cq_key_lanes");
+            for i in 0..packed_columns.as_ref().map_or(0, Vec::len) {
+                uses.remove(&format!("__cq_pack_base_{i}"));
+                uses.remove(&format!("__cq_pack_shift_{i}"));
+            }
+        }
+        let outputs = vec![
+            abi_parameter(format_ident!("__output_rows"), syn::parse_quote!(*mut i64)),
+            abi_parameter(format_ident!("__output_begin"), syn::parse_quote!(*mut u32)),
+            abi_parameter(format_ident!("__output_offsets"), syn::parse_quote!(*mut u32)),
+            abi_parameter(format_ident!("__output_keys"), syn::parse_quote!(*mut u64)),
+            abi_parameter(format_ident!("__capacity"), syn::parse_quote!(u32)),
+            abi_parameter(format_ident!("__meta"), syn::parse_quote!(*mut u32)),
+        ];
+        let mut output_uses: BTreeSet<String> = ["__capacity", "__meta"].map(str::to_owned).into();
+        if generator.arena_packing.is_some() || packed_columns.is_some() {
+            output_uses.insert("__output_keys".into());
+        } else {
+            if !generator.output_slots()?.is_empty() {
+                output_uses.insert("__output_rows".into());
+            }
+            if virtual_range.is_some() {
+                output_uses.extend(["__output_begin", "__output_offsets"].map(str::to_owned));
+            }
+        }
+        uses.extend(output_uses.iter().cloned());
+        let tail = vec![
+            abi_parameter(format_ident!("__partials"), syn::parse_quote!(*mut i64)),
+            abi_parameter(format_ident!("__blocks"), syn::parse_quote!(u32)),
+        ];
+        uses.insert("__blocks".into());
+        let whole_reduction = matches!(
+            execution.fold,
+            cq_lang_sequence::gpu::FoldCompletion::BlockPartials { .. }
+        );
+        if whole_reduction {
+            uses.insert("__partials".into());
+        }
+        let mut dispatch_parameters = parameters.clone();
+        dispatch_parameters.extend(outputs.clone());
+        if let Some(parameter) = resident_parameter {
+            uses.insert(parameter.0.to_string());
+            dispatch_parameters.push(parameter);
+        }
+        dispatch_parameters.extend(tail.clone());
         let dispatch_abi = CheckedKernel::lower(&kernel_name, quote! {
             #[kernel]
             #[launch_bounds(256)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
-        }, quote!(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
-            __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
-            #resident_parameter __partials:*mut i64,__blocks:u32), quote! {
+        }, dispatch_parameters, uses, quote! {
                 unsafe {
                     let __tid=::cuda_device::thread::threadIdx_x() as usize;
                     let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
@@ -3402,18 +3535,31 @@ fn translate_observed(
         }, &compiler.rows, launch, shared_u32)?;
         kernels.push(dispatch_abi.definition());
         let combine_kernel = format_ident!("__cq_sequence_combine_{index}_{module_name}");
-        let whole_reduction = matches!(
-            execution.fold,
-            cq_lang_sequence::gpu::FoldCompletion::BlockPartials { .. }
-        );
         let combine_abi = if whole_reduction {
+            let mut combine_uses = output_uses;
+            combine_uses.extend(parameter_uses(&tail));
+            for chain_index in 0..chains.len() {
+                combine_uses.insert(format!("__cq_enabled_{chain_index}"));
+            }
+            if generator.arena_packing.is_none() && packed_columns.is_some() {
+                for (index, _) in packed_columns.iter().flatten().enumerate() {
+                    combine_uses.insert(format!("__cq_pack_base_{index}"));
+                    combine_uses.insert(format!("__cq_pack_shift_{index}"));
+                }
+                combine_uses.insert("__cq_key_lanes".into());
+            }
+            for column in &compiler.rows.output_columns {
+                if compiler.rows.is_capture_output(column) {
+                    compiler.rows.begin_abi_uses();
+                    compiler.rows.output_value(column)?;
+                    combine_uses.extend(compiler.rows.abi_uses());
+                }
+            }
             let abi = CheckedKernel::lower(&combine_kernel, quote! {
                 #[kernel]
                 #[launch_bounds(256)]
                 #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
-            }, quote!(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
-                __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
-                __partials:*mut i64,__blocks:u32), quote! {
+            }, [parameters.clone(), outputs, tail].concat(), combine_uses, quote! {
                     unsafe {
                         let __tid=::cuda_device::thread::threadIdx_x() as usize;
                         let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
@@ -3571,11 +3717,11 @@ fn translate_observed(
             (
                 quote!(),
                 quote!(),
-                quote!(
-                    ::core::ptr::null_mut::<i64>(),
-                    ::core::ptr::null_mut::<u32>(),
-                    ::core::ptr::null_mut::<u32>(),
-                ),
+                vec![
+                    abi_argument(format_ident!("__output_rows"), quote!(::core::ptr::null_mut::<i64>())),
+                    abi_argument(format_ident!("__output_begin"), quote!(::core::ptr::null_mut::<u32>())),
+                    abi_argument(format_ident!("__output_offsets"), quote!(::core::ptr::null_mut::<u32>())),
+                ],
             )
         } else {
             (
@@ -3587,7 +3733,11 @@ fn translate_observed(
                     let #store_offsets=unsafe {::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),
                         __cq_capacity.checked_add(1).ok_or("Sequence offset allocation overflow")?*#range_width)?};
                 },
-                quote!(#store_rows.ptr(),#store_begin.ptr(),#store_offsets.ptr(),),
+                vec![
+                    abi_argument(format_ident!("__output_rows"), quote!(#store_rows.ptr())),
+                    abi_argument(format_ident!("__output_begin"), quote!(#store_begin.ptr())),
+                    abi_argument(format_ident!("__output_offsets"), quote!(#store_offsets.ptr())),
+                ],
             )
         };
         let partial_count = if whole_reduction { chains.len() } else { 0 };
@@ -3625,8 +3775,13 @@ fn translate_observed(
                 abi.cached(&cache)
             };
             let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(1u32),
-                quote!(#(#arguments,)* #pointers #key_pointer, __cq_capacity as u32, #store_meta.ptr(),
-                    __cq_partials.ptr(), __cq_grid))?;
+                [arguments.clone(), pointers.clone(), vec![
+                    abi_argument(format_ident!("__output_keys"), key_pointer.clone()),
+                    abi_argument(format_ident!("__capacity"), quote!(__cq_capacity as u32)),
+                    abi_argument(format_ident!("__meta"), quote!(#store_meta.ptr())),
+                    abi_argument(format_ident!("__partials"), quote!(__cq_partials.ptr())),
+                    abi_argument(format_ident!("__blocks"), quote!(__cq_grid)),
+                ]].concat())?;
             quote! {
                 let prepared = #preparation?;
                 #call?;
@@ -3665,7 +3820,10 @@ fn translate_observed(
                 quote!(::core::ptr::null_mut::<i64>()),
                 quote!(let __cq_resident=__cq_arena.resident_words(#RESIDENT_HEADER + #meta_words #share_words)?;),
                 quote!(),
-                quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER),__cq_resident.ptr(),),
+                vec![
+                    abi_argument(format_ident!("__meta"), quote!(__cq_resident.ptr().wrapping_add(#RESIDENT_HEADER))),
+                    abi_argument(format_ident!("__meta_result"), quote!(__cq_resident.ptr())),
+                ],
                 quote!(()),
             )
         } else {
@@ -3677,7 +3835,7 @@ fn translate_observed(
                 quote!(__cq_partials.ptr()),
                 quote!(),
                 quote!(let #store_meta=::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(),#meta_words #share_words)?;),
-                quote!(#store_meta.ptr(),),
+                vec![abi_argument(format_ident!("__meta"), quote!(#store_meta.ptr()))],
                 quote!(#store_meta),
             )
         };
@@ -3696,8 +3854,13 @@ fn translate_observed(
             }
         });
         let dispatch_call = dispatch_abi.call(quote!(__cq_pool.stream()), quote!(&__cq_prepared),
-            quote!(__cq_grid), quote!(#(#arguments,)* #pointers #key_pointer,
-                __cq_capacity as u32, #meta_pointers #partials_pointer, __cq_grid))?;
+            quote!(__cq_grid), [arguments, pointers, vec![
+                abi_argument(format_ident!("__output_keys"), key_pointer),
+                abi_argument(format_ident!("__capacity"), quote!(__cq_capacity as u32)),
+            ], meta_pointers, vec![
+                abi_argument(format_ident!("__partials"), partials_pointer),
+                abi_argument(format_ident!("__blocks"), quote!(__cq_grid)),
+            ]].concat())?;
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -3784,11 +3947,16 @@ fn translate_observed(
         // to the device is a storage adapter, not an additional row dispatch.
         let source = realization.output.as_ref();
         if let Some(HostOutput { source, pack }) = source {
+            compiler.rows.begin_abi_uses();
             let block = element_block(pack)?;
             let length = compiler.rows.source_len(source)?;
+            let live = compiler.rows.output_columns.iter()
+                .filter(|column| !compiler.rows.is_capture_output(column))
+                .map(|column| compiler.slot(column))
+                .collect::<syn::Result<BTreeSet<_>>>()?;
             let load = compiler
                 .rows
-                .source(source, quote!(__position), quote!(__row))?;
+                .source_columns(source, quote!(__position), quote!(__row), Some(&live))?;
             let mut row = DeviceRow::default();
             let mut declarations = TokenStream::new();
             for column in &compiler.rows.output_columns {
@@ -3808,7 +3976,7 @@ fn translate_observed(
             let mut parameters = Vec::new();
             let mut arguments = compiler.rows.capture_arguments(&[]);
             for (name, ty, _) in &compiler.rows.parameters {
-                parameters.push(quote!(#name:#ty));
+                parameters.push(abi_parameter(name.clone(), ty.clone()));
             }
             let codec = terminal_record
                 .storage
@@ -3818,8 +3986,8 @@ fn translate_observed(
             for i in 0..codec.fields().len() {
                 let base = format_ident!("__cq_pack_base_{i}");
                 let shift = format_ident!("__cq_pack_shift_{i}");
-                parameters.extend([quote!(#base:i64), quote!(#shift:u32)]);
-                arguments.extend([quote!(#base), quote!(#shift)]);
+                parameters.extend([abi_parameter(base.clone(), syn::parse_quote!(i64)), abi_parameter(shift.clone(), syn::parse_quote!(u32))]);
+                arguments.extend([abi_argument(base.clone(), quote!(#base)), abi_argument(shift.clone(), quote!(#shift))]);
             }
             let generator = Kernel {
                 compiler: &compiler,
@@ -3838,12 +4006,18 @@ fn translate_observed(
             };
             let write = row.rewrite(generator.output_write()?)?;
             let kernel = format_ident!("__cq_host_output_{module_name}");
+            parameters.extend([
+                abi_parameter(format_ident!("__output_keys"), syn::parse_quote!(*mut u64)),
+                abi_parameter(format_ident!("__length"), syn::parse_quote!(usize)),
+                abi_parameter(format_ident!("__cq_key_lanes"), syn::parse_quote!(usize)),
+            ]);
+            let mut uses = compiler.rows.abi_uses();
+            uses.extend(parameter_uses(&parameters[compiler.rows.parameters.len()..]));
             let abi = CheckedKernel::lower(&kernel, quote! {
                 #[kernel]
                 #[launch_bounds(256)]
                 #[launch_contract(domain=1,block=(256,1,1))]
-            }, quote!(#(#parameters,)* __output_keys:*mut u64,
-                __length:usize,__cq_key_lanes:usize), quote! {
+            }, parameters, uses, quote! {
                     unsafe {
                         let __position = ::cuda_device::thread::index_1d().get() as usize;
                         if __position < __length {
@@ -3857,7 +4031,11 @@ fn translate_observed(
             kernels.push(abi.definition());
             let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(grid,#block,0)));
             let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid),
-                quote!(#(#arguments,)* __cq_host_output_keys.ptr(),__cq_host_output_length,__cq_key_lanes))?;
+                [arguments, vec![
+                    abi_argument(format_ident!("__output_keys"), quote!(__cq_host_output_keys.ptr())),
+                    abi_argument(format_ident!("__length"), quote!(__cq_host_output_length)),
+                    abi_argument(format_ident!("__cq_key_lanes"), quote!(__cq_key_lanes)),
+                ]].concat())?;
             let lanes = key_lanes(codec);
             launches.push(quote! {
                 let __cq_host_output_length = #length;
@@ -4197,6 +4375,7 @@ mod tests {
         assert!(printed.find("let prepared =").unwrap() < printed.find("let __cq_timing_enabled").unwrap());
         assert!(!printed.contains("let __cq_probe"));
         assert!(printed.contains("let __cq_counts"));
+        assert!(!printed.contains("__partials :"), "fold-free dispatch has no partials ABI");
 
         let mut alternate = analysis.clone();
         alternate.gpu_bindings.realization.launches[0] = Launch::InvocationOccupancy;
@@ -4205,6 +4384,7 @@ mod tests {
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("let __cq_probe"));
         assert!(!printed.contains("__cq_prepare_program_"));
+        assert!(!printed.contains("__partials :"), "invocation ABI also omits dead partials");
 
         let mut missing = analysis.clone();
         missing.gpu_bindings.realization.launches.clear();
@@ -4409,7 +4589,9 @@ mod tests {
     fn parameter_budget_is_checked_by_rustc_layout() {
         let names: Vec<_> = (0..513).map(|index| format_ident!("p{index}")).collect();
         let abi = CheckedKernel::lower(&format_ident!("oversized"), quote!(),
-            quote!(#(#names: *const u64),*), quote!(#(let _ = #names;)*),
+            names.iter().map(|name| (name.clone(), syn::parse_quote!(*const u64))).collect(),
+            names.iter().map(ToString::to_string).collect(),
+            quote!(#(let _ = #names;)*),
             &abi_rows(), Launch::InvocationOccupancy, 0).unwrap();
         let emitted = abi.definition().to_string();
         assert!(emitted.contains("size_of"));
@@ -4418,18 +4600,88 @@ mod tests {
     }
 
     #[test]
+    fn kernel_abi_checker_rejects_changed_canonical_row_parameter_type() {
+        let rows = abi_rows();
+        let (name, ty, _) = rows.parameters.first().unwrap();
+        let abi = CheckedKernel::lower(
+            &format_ident!("kernel"),
+            quote!(),
+            vec![(name.clone(), ty.clone())],
+            [name.to_string()].into(),
+            quote!(let _ = #name;),
+            &rows,
+            Launch::InvocationOccupancy,
+            0,
+        ).unwrap();
+        let mut wrong = abi.0;
+        wrong.parameters[0].ty = syn::parse_quote!([#ty; 2]);
+        assert!(wrong.check(&rows).is_err());
+    }
+
+    #[test]
+    fn row_source_records_semantic_abi_uses_between_resets() {
+        let rows = abi_rows();
+        rows.begin_abi_uses();
+        assert!(rows.abi_uses().is_empty());
+        let _ = rows.source_len("driver").unwrap();
+        assert!(rows.abi_uses().is_empty());
+        let _ = rows.source("driver", quote!(position), quote!(__row)).unwrap();
+        let recorded = rows.abi_uses();
+        assert!(!recorded.is_empty());
+        let declared = rows.parameters.iter().map(|(name, _, _)| name.to_string()).collect();
+        assert!(recorded.is_subset(&declared));
+        rows.begin_abi_uses();
+        assert!(rows.abi_uses().is_empty());
+        let _ = rows.source("driver", quote!(other_position), quote!(__other_row)).unwrap();
+        assert_eq!(rows.abi_uses(), recorded);
+    }
+
+    #[test]
+    fn source_abi_records_only_demanded_columns() {
+        let rows = abi_rows();
+        rows.begin_abi_uses();
+        let _ = rows.source("driver", quote!(position), quote!(__row)).unwrap();
+        let all = rows.abi_uses();
+        assert_eq!(all.len(), 2);
+        rows.begin_abi_uses();
+        let live = [rows.columns["a"]].into();
+        let _ = rows.source_columns("driver", quote!(position), quote!(__row), Some(&live)).unwrap();
+        let demanded = rows.abi_uses();
+        assert_eq!(demanded.len(), 1);
+        assert!(demanded.is_subset(&all));
+        rows.begin_abi_uses();
+        let empty = BTreeSet::new();
+        let load = rows.source_columns("driver", quote!(position), quote!(__row), Some(&empty)).unwrap();
+        assert!(load.is_empty());
+        assert!(rows.abi_uses().is_empty());
+    }
+
+    #[test]
     fn recorded_pruning_preserves_signature_and_launch_order() {
         let abi = CheckedKernel::lower(&format_ident!("kernel"), quote!(),
-            quote!(unused: u32, a: u32, b: *const i64), quote!(let _ = (b, a);),
+            vec![
+                (format_ident!("unused"), syn::parse_quote!(u32)),
+                (format_ident!("a"), syn::parse_quote!(u32)),
+                (format_ident!("b"), syn::parse_quote!(*const i64)),
+            ],
+            ["a".into(), "b".into()].into(),
+            quote!(let unused = 0u32; let _ = (b, a, unused);),
             &abi_rows(), Launch::InvocationOccupancy, 0).unwrap();
-        let function: syn::ItemFn = syn::parse2(abi.definition()).unwrap();
-        assert_eq!(function.sig.inputs.to_token_stream().to_string(),
-            quote!(a: u32, b: *const i64).to_string());
+        assert_eq!(
+            abi.0.parameters.iter().map(|parameter| (parameter.name.to_string(), parameter.live))
+                .collect::<Vec<_>>(),
+            vec![("unused".into(), false), ("a".into(), true), ("b".into(), true)],
+        );
         let call = abi.call(quote!(stream), quote!(prepared), quote!(grid),
-            quote!(unused(), first(), second())).unwrap();
+            vec![
+                (format_ident!("unused"), quote!(unused())),
+                (format_ident!("a"), quote!(first())),
+                (format_ident!("b"), quote!(second())),
+            ]).unwrap();
         assert_eq!(call.to_string(),
             quote!(__cq_module.kernel(stream, prepared, first(), second())).to_string());
-        assert!(abi.call(quote!(stream), quote!(prepared), quote!(grid), quote!(first())).is_err());
+        assert!(abi.call(quote!(stream), quote!(prepared), quote!(grid),
+            vec![(format_ident!("a"), quote!(first()))]).is_err());
     }
 
     fn callable_abi(launch: Launch) -> (Rows, CheckedKernel) {
@@ -4437,13 +4689,18 @@ mod tests {
         rows.type_witnesses = vec![
             (format_ident!("Unused"), quote!(Fn() -> bool), format_ident!("unused")),
             (format_ident!("Evaluate"), quote!(Fn(&i64) -> bool), format_ident!("evaluate")),
-        ];
+        ].into_iter().map(std::sync::Arc::new).collect();
         rows.parameter_witnesses = [
             ("unused".into(), format_ident!("Unused")),
             ("evaluate".into(), format_ident!("Evaluate")),
         ].into();
         let abi = CheckedKernel::lower(&format_ident!("kernel"), quote!(),
-            quote!(unused: Unused, evaluate: Evaluate, x: i64),
+            vec![
+                (format_ident!("unused"), syn::parse_quote!(Unused)),
+                (format_ident!("evaluate"), syn::parse_quote!(Evaluate)),
+                (format_ident!("x"), syn::parse_quote!(i64)),
+            ],
+            ["evaluate".into(), "x".into()].into(),
             quote!(let _ = evaluate(&x);), &rows, launch, 64).unwrap();
         (rows, abi)
     }
@@ -4463,14 +4720,19 @@ mod tests {
         rows.type_witnesses = vec![
             (format_ident!("Word0"), quote!(::gpu_datalog_runtime::Word), format_ident!("word0")),
             (format_ident!("Word1"), quote!(::gpu_datalog_runtime::Word), format_ident!("word1")),
-        ];
+        ].into_iter().map(std::sync::Arc::new).collect();
         rows.parameter_witnesses = [
             ("view".into(), format_ident!("Word0")),
             ("unused".into(), format_ident!("Word1")),
         ].into();
         let abi = CheckedKernel::lower(&format_ident!("kernel"), quote!(),
-            quote!(view: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word0, u64>,
-                unused: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word1, u64>),
+            vec![
+                (format_ident!("view"),
+                    syn::parse_quote!(::gpu_datalog_runtime::radix_run::RadixLayoutView<Word0, u64>)),
+                (format_ident!("unused"),
+                    syn::parse_quote!(::gpu_datalog_runtime::radix_run::RadixLayoutView<Word1, u64>)),
+            ],
+            ["view".into()].into(),
             quote!(let _ = view.keys.run_count;), &rows, Launch::ProgramOccupancy, 64).unwrap();
         assert_eq!(abi.generics().to_string(),
             quote!(<Word0: Copy + ::gpu_datalog_runtime::Word>).to_string());
@@ -4481,7 +4743,10 @@ mod tests {
         assert_eq!(abi.cached(&format_ident!("cache")).to_string(),
             quote!(__cq_prepare_program_kernel(__cq_module, &mut *cache, &word0)).to_string());
         let call = abi.call(quote!(stream), quote!(&prepared), quote!(__cq_grid),
-            quote!(view, unused)).unwrap();
+            vec![
+                (format_ident!("view"), quote!(view)),
+                (format_ident!("unused"), quote!(unused)),
+            ]).unwrap();
         assert_eq!(call.to_string(),
             quote!(unsafe { __cq_launch_program_kernel(stream, &prepared, __cq_grid, view) }).to_string());
     }
@@ -4497,14 +4762,37 @@ mod tests {
         assert!(helpers.contains("KernelArgs :: < 2usize >"));
         assert!(!helpers.contains("Unused"));
         let call = abi.call(quote!(stream), quote!(&prepared), quote!(__cq_grid),
-            quote!(unused, evaluate, x)).unwrap();
+            vec![
+                (format_ident!("unused"), quote!(unused)),
+                (format_ident!("evaluate"), quote!(evaluate)),
+                (format_ident!("x"), quote!(x)),
+            ]).unwrap();
         assert_eq!(call.to_string(),
             quote!(unsafe { __cq_launch_program_kernel(stream, &prepared, __cq_grid, evaluate, x) }).to_string());
     }
 
     #[test]
+    fn kernel_abi_call_rejects_reordered_and_duplicate_argument_ids() {
+        let (_, abi) = callable_abi(Launch::InvocationOccupancy);
+        let arguments = vec![
+            (format_ident!("unused"), quote!(unused)),
+            (format_ident!("evaluate"), quote!(evaluate)),
+            (format_ident!("x"), quote!(x)),
+        ];
+        let mut reordered = arguments.clone();
+        reordered.swap(0, 1);
+        assert!(abi.call(quote!(stream), quote!(prepared), quote!(grid), reordered).is_err());
+        let mut duplicate = arguments;
+        duplicate[0].0 = duplicate[1].0.clone();
+        assert!(abi.call(quote!(stream), quote!(prepared), quote!(grid), duplicate).is_err());
+    }
+
+    #[test]
     fn kernel_abi_checker_rejects_missing_live_parameters_and_witnesses() {
         let (rows, abi) = callable_abi(Launch::ProgramOccupancy);
+        let mut missing = abi.0.clone();
+        missing.parameters.remove(2);
+        assert!(missing.check(&rows).is_err());
         let mut missing = abi.0.clone();
         missing.parameters[1].live = false;
         assert!(missing.check(&rows).is_err());
@@ -4515,14 +4803,37 @@ mod tests {
         wrong.preparation = format_ident!("prepare_other");
         assert!(wrong.check(&rows).is_err());
         let mut extra = abi.0.clone();
-        extra.witnesses.push((format_ident!("Extra"), quote!(Copy), format_ident!("extra")));
+        extra.witnesses.push(std::sync::Arc::new(
+            (format_ident!("Extra"), quote!(Copy), format_ident!("extra")),
+        ));
         assert!(extra.check(&rows).is_err());
         let mut wrong = abi.0.clone();
-        wrong.witnesses[0].2 = format_ident!("unused");
+        std::sync::Arc::make_mut(&mut wrong.witnesses[0]).2 = format_ident!("unused");
+        assert!(wrong.check(&rows).is_err());
+        let mut wrong = abi.0.clone();
+        std::sync::Arc::make_mut(&mut wrong.witnesses[0]).0 = format_ident!("Unused");
+        assert!(wrong.check(&rows).is_err());
+        let mut wrong = abi.0.clone();
+        std::sync::Arc::make_mut(&mut wrong.witnesses[0]).1 = quote!(Fn(&i64) -> i64);
+        assert!(wrong.check(&rows).is_err());
+        let mut wrong = abi.0.clone();
+        wrong.witness_ids[0] = 0;
+        assert!(wrong.check(&rows).is_err());
+        let mut wrong = abi.0.clone();
+        wrong.witness_ids[0] = rows.type_witnesses.len();
+        assert!(wrong.check(&rows).is_err());
+        let mut missing = abi.0.clone();
+        missing.witness_ids.clear();
+        assert!(missing.check(&rows).is_err());
+        let mut wrong = abi.0.clone();
+        wrong.parameters[1].witness = Some(abi.0.witnesses.len());
         assert!(wrong.check(&rows).is_err());
         let mut missing = abi.0.clone();
         missing.parameters[1].witness = None;
         assert!(missing.check(&rows).is_err());
+        let mut unknown = abi.0.clone();
+        unknown.uses.insert("undeclared".into());
+        assert!(unknown.check(&rows).is_err());
     }
 
     #[test]

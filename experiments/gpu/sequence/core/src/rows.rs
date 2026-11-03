@@ -34,6 +34,8 @@ struct Source {
     reads: Vec<(usize, TokenStream)>,
     length: TokenStream,
     positions: Option<Ident>,
+    /// Parameter identities supplying these reads, recorded with the adapter.
+    uses: BTreeMap<usize, String>,
 }
 struct RunSource {
     view: Ident,
@@ -306,8 +308,8 @@ pub struct Rows {
     /// references the identifier; unused adapters would load device modules.
     pub support: Vec<(Ident, TokenStream, TokenStream)>,
     pub parameters: Vec<(Ident, Type, TokenStream)>,
-    /// Generated generic bounds and host preparation witnesses (callables/words).
-    pub type_witnesses: Vec<(Ident, TokenStream, Ident)>,
+    /// Canonical bounds and host witnesses shared by checked kernel records.
+    pub type_witnesses: Vec<std::sync::Arc<(Ident, TokenStream, Ident)>>,
     /// Parameter identity → generic identity, recorded at ABI construction.
     /// Nested native view types are opaque to the kernel ABI printer.
     pub parameter_witnesses: BTreeMap<String, Ident>,
@@ -329,18 +331,31 @@ pub struct Rows {
     provider_layouts: BTreeMap<String, Vec<ProviderLayout>>,
     /// Checked Physical Rust-read facts of each Bind/Guard definition.
     rust_reads: BTreeMap<String, BTreeSet<String>>,
+    abi_uses: std::cell::RefCell<BTreeSet<String>>,
 }
 
 impl Rows {
+    pub(crate) fn begin_abi_uses(&self) {
+        self.abi_uses.borrow_mut().clear();
+    }
+
+    pub(crate) fn abi_uses(&self) -> BTreeSet<String> {
+        self.abi_uses.borrow().clone()
+    }
+
+    pub(crate) fn use_parameter(&self, parameter: &Ident) {
+        self.abi_uses.borrow_mut().insert(parameter.to_string());
+    }
+
     /// Consume recorded expression dependencies and explicit launch domains.
     /// Parameter indices refer to this argument vector, never a launch ABI.
-    pub fn capture_arguments(&self, domains: &[(Vec<String>, TokenStream)]) -> Vec<TokenStream> {
+    pub fn capture_arguments(&self, domains: &[(Vec<String>, TokenStream)]) -> Vec<(Ident, TokenStream)> {
         self.parameters
             .iter()
             .enumerate()
-            .map(|(index, (_, _, value))| {
+            .map(|(index, (name, _, value))| {
                 if index >= self.capture_count {
-                    return value.clone();
+                    return (name.clone(), value.clone());
                 }
                 let conditions = domains.iter().filter_map(|(definitions, condition)| {
                     definitions
@@ -357,7 +372,7 @@ impl Rows {
                     .get(&index)
                     .cloned()
                     .unwrap_or_else(|| quote!(::core::default::Default::default()));
-                quote!(if false #(|| (#conditions))* { #value } else { #disabled })
+                (name.clone(), quote!(if false #(|| (#conditions))* { #value } else { #disabled }))
             })
             .collect()
     }
@@ -969,6 +984,9 @@ impl Rows {
                             reads,
                             length,
                             positions,
+                            uses: realization.columns.iter()
+                                .filter_map(|(column, source)| columns.get(column)
+                                    .map(|slot| (*slot, fields[source].1.to_string()))).collect(),
                         },
                     );
                     providers.insert(
@@ -1082,6 +1100,7 @@ impl Rows {
                         reads,
                         length: quote!(#owner.len()),
                         positions: None,
+                        uses: payload.iter().map(|column| (columns[column], view.to_string())).collect(),
                     },
                 );
                 providers.insert(
@@ -1128,6 +1147,9 @@ impl Rows {
                         reads,
                         length,
                         positions,
+                        uses: realization.columns.iter()
+                            .filter_map(|(column, source)| columns.get(column)
+                                .map(|slot| (*slot, fields[source].1.to_string()))).collect(),
                     },
                 );
             }
@@ -1169,7 +1191,7 @@ impl Rows {
             build,
             support,
             parameters,
-            type_witnesses,
+            type_witnesses: type_witnesses.into_iter().map(std::sync::Arc::new).collect(),
             parameter_witnesses,
             output_columns,
             query_captures: physical.program.captures.clone(),
@@ -1186,6 +1208,7 @@ impl Rows {
             capture_uses,
             provider_layouts,
             rust_reads,
+            abi_uses: Default::default(),
         })
     }
 
@@ -1237,6 +1260,9 @@ impl Rows {
                 reads,
                 length: quote!(#length),
                 positions: None,
+                uses: layout.iter().enumerate()
+                    .map(|(index, column)| (self.columns[column], format!("__cq_sequence_uploaded_column_{name}_{index}")))
+                    .collect(),
             },
         );
         Ok(quote! {
@@ -1255,10 +1281,22 @@ impl Rows {
         position: TokenStream,
         row: TokenStream,
     ) -> syn::Result<TokenStream> {
+        self.source_columns(name, position, row, None)
+    }
+
+    /// Demand comes from checked row operations, never from printed identifiers.
+    pub(crate) fn source_columns(
+        &self,
+        name: &str,
+        position: TokenStream,
+        row: TokenStream,
+        live: Option<&BTreeSet<usize>>,
+    ) -> syn::Result<TokenStream> {
         if let Some(source) = self.run_sources.get(name) {
             let view = &source.view;
+            self.use_parameter(view);
             // DECODE V: P6 run scans unpack every demanded field before relational consumers; retain narrow codes unless rust_reads requires identity.
-            let reads = source.reads.iter().map(|(slot, column)| {
+            let reads = source.reads.iter().filter(|(slot, _)| live.is_none_or(|live| live.contains(slot))).map(|(slot, column)| {
                 quote! {
                     #row[#slot] = unsafe { ::gpu_datalog_runtime::radix_run::device::decode_key(
                         #view, __run_index, __run_position, #column as u32) };
@@ -1276,12 +1314,21 @@ impl Rows {
                 "T-Gpu: {name} has no resident source; materialize its Sequence producer"
             ))
         })?;
+        let mut uses = source.uses.iter()
+            .filter(|(slot, _)| live.is_none_or(|live| live.contains(slot)))
+            .map(|(_, parameter)| parameter.clone()).peekable();
+        if uses.peek().is_some() {
+            self.abi_uses.borrow_mut().extend(uses);
+            if let Some(positions) = &source.positions {
+                self.use_parameter(positions);
+            }
+        }
         let position = match &source.positions {
             Some(positions) => quote!(unsafe { *#positions.add((#position) as usize) } as u64),
             None => quote!((#position) as u64),
         };
         // DECODE V: P6 source scans reconstruct FOR values into i64 even for code-only joins and predicates.
-        let reads = source.reads.iter().map(|(slot, view)| {
+        let reads = source.reads.iter().filter(|(slot, _)| live.is_none_or(|live| live.contains(slot))).map(|(slot, view)| {
             quote! {
                 #row[#slot] = unsafe { ::cq_gpu_sequence_runtime::device::decode(#view, #position) } as i64;
             }
@@ -1318,7 +1365,10 @@ impl Rows {
     pub fn provider(&self, name: &str) -> syn::Result<(Ident, Vec<String>, Vec<String>)> {
         self.providers
             .get(name)
-            .map(|p| (p.view.clone(), p.payload.clone(), p.keys.clone()))
+            .map(|p| {
+                self.use_parameter(&p.view);
+                (p.view.clone(), p.payload.clone(), p.keys.clone())
+            })
             .ok_or_else(|| {
                 error(format!(
                     "T-Gpu: {name} has no recorded resident range layout"
@@ -1333,12 +1383,14 @@ impl Rows {
         self.providers
             .get(name)
             .and_then(|provider| provider.radix.as_ref())
+            .inspect(|radix| self.use_parameter(&radix.items))
     }
     /// The device value of an answer column: its row slot, or the kernel
     /// scalar of a capture answer column (IF-Capture).
     pub fn output_value(&self, column: &str) -> syn::Result<TokenStream> {
         if self.capture_types.contains_key(column) {
             let parameter = head_capture(column);
+            self.use_parameter(&parameter);
             return Ok(quote!(#parameter));
         }
         let slot = self
@@ -1516,6 +1568,45 @@ impl Rows {
             .collect())
     }
 
+    /// Backward demand over the checked Physical operators. Bind/Guard reads
+    /// are the recorded Rust dependencies; relational reads are structured
+    /// Theta columns. Renames/projects do not execute a row assignment.
+    pub(crate) fn map_live_columns(
+        &self,
+        name: &str,
+        input_result: &str,
+        live: &mut BTreeSet<usize>,
+    ) -> syn::Result<()> {
+        for definition in self.map_definitions(name, input_result)? {
+            match &definition.operator {
+                Operator::Bind(bind) => {
+                    for binding in cq_syntax::rust::bindings(&bind.pattern) {
+                        if let Some(slot) = self.columns.get(&symbol_name(&binding)) {
+                            live.remove(slot);
+                        }
+                    }
+                    live.extend(analysis_reads(&self.rust_reads, definition)?.iter()
+                        .filter_map(|column| self.columns.get(column)).copied());
+                }
+                Operator::Guard(_) => {
+                    live.extend(analysis_reads(&self.rust_reads, definition)?.iter()
+                        .filter_map(|column| self.columns.get(column)).copied());
+                }
+                Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+                    live.extend(select.condition.columns().iter()
+                        .filter_map(|column| self.columns.get(column)).copied());
+                }
+                Operator::Rename(_) | Operator::Project(_) | Operator::Unit(_)
+                | Operator::Semi(_, _) | Operator::Anti(_, _) | Operator::Probe(_, _)
+                | Operator::Merge(_, _) => {}
+                Operator::Group(_) | Operator::Union(_) => {
+                    return Err(error("GPU-KernelAbi: row demand requires a flat checked map"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn map(
         &self,
         name: &str,
@@ -1525,6 +1616,11 @@ impl Rows {
     ) -> syn::Result<TokenStream> {
         let mut output = TokenStream::new();
         for definition in self.map_definitions(name, input_result)?.into_iter().rev() {
+            if let Some(uses) = self.capture_uses.get(&symbol_name(&definition.name)) {
+                for &index in uses {
+                    self.use_parameter(&self.parameters[index].0);
+                }
+            }
             match &definition.operator {
                 Operator::Rename(_) | Operator::Project(_) | Operator::Unit(_) => {}
                 Operator::Select(select)

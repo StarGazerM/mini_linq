@@ -7,6 +7,8 @@
 //! Consume the recorded partition boundary and completion/partial-combine facts.
 //! DO NOT fold once per implementation stripe, invent extra reductions, or pick a grouping strategy.
 
+use std::collections::BTreeSet;
+
 use cq_lang_sequence::Monoid;
 use cq_lang_sequence::gpu::realization::{Auxiliary, BlockGeometry};
 use proc_macro2::TokenStream;
@@ -81,8 +83,9 @@ pub fn build(
 }
 
 pub struct GroupInput {
-    pub parameters: Vec<TokenStream>,
-    pub arguments: Vec<TokenStream>,
+    pub parameters: Vec<(Ident, syn::Type)>,
+    pub arguments: Vec<(Ident, TokenStream)>,
+    pub uses: BTreeSet<String>,
     pub load: TokenStream,
     pub columns: std::collections::BTreeMap<String, TokenStream>,
     pub length: TokenStream,
@@ -178,21 +181,31 @@ pub fn group(
         });
     }
     let width = columns.len();
-    let mut params = direct
-        .as_ref()
-        .map(|input| input.parameters.clone())
-        .unwrap_or_default();
-    let mut args = direct
-        .as_ref()
-        .map(|input| input.arguments.clone())
-        .unwrap_or_default();
+    let mut params = vec![
+        (format_ident!("values"), syn::parse_quote!(*mut i64)),
+        (format_ident!("length"), syn::parse_quote!(usize)),
+    ];
+    let mut args = vec![
+        (format_ident!("values"), quote!(__cq_group_values.ptr())),
+        (format_ident!("length"), length.clone()),
+    ];
+    let mut uses = BTreeSet::from(["length".to_owned()]);
+    if let Some(input) = &direct {
+        params.extend(input.parameters.iter().cloned());
+        args.extend(input.arguments.iter().cloned());
+        uses.extend(input.uses.iter().cloned());
+    }
+    if width != 0 {
+        uses.insert("values".to_owned());
+    }
     let mut writes = Vec::new();
     for (column, argument) in arguments.iter().enumerate() {
         if let Some(argument) = argument {
             // IF-Capture: a capture argument is one host value, passed as a kernel scalar.
             if let Some((parameter, value)) = capture_argument(captures, argument, column) {
-                params.push(quote!(#parameter:i64));
-                args.push(value);
+                params.push((parameter.clone(), syn::parse_quote!(i64)));
+                args.push((parameter.clone(), value));
+                uses.insert(parameter.to_string());
                 writes.push(quote!(*values.add(position*#width+#column)=#parameter;));
                 continue;
             }
@@ -215,11 +228,22 @@ pub fn group(
             let base = format_ident!("base_{column}");
             let shift = format_ident!("shift_{column}");
             let bits = format_ident!("bits_{column}");
-            params.extend([quote!(#base:i64), quote!(#shift:u32), quote!(#bits:u32)]);
+            params.extend([
+                (base.clone(), syn::parse_quote!(i64)),
+                (shift.clone(), syn::parse_quote!(u32)),
+                (bits.clone(), syn::parse_quote!(u32)),
+            ]);
             args.extend([
-                quote!(#fields[#field].base),
-                quote!(#fields[#field].shift),
-                quote!(#fields[#field].bits),
+                (base.clone(), quote!(#fields[#field].base)),
+                (shift.clone(), quote!(#fields[#field].shift)),
+                (bits.clone(), quote!(#fields[#field].bits)),
+            ]);
+            uses.extend([
+                base.to_string(),
+                shift.to_string(),
+                bits.to_string(),
+                "packed".to_owned(),
+                "lanes".to_owned(),
             ]);
             let offset = crate::emit::packed_offset(
                 quote!(packed),
@@ -239,24 +263,29 @@ pub fn group(
     }
     let decoded = decoders(group, &columns, output_columns, output_types, codecs)?;
     let filtered = direct.is_some();
-    let (load, input_parameters, input_arguments, status, live_argument) =
-        if let Some(input) = direct {
-            (
-                input.load,
-                quote!(live:*mut u32,),
-                quote!(__cq_group_live.cu_deviceptr() as *mut u32,),
-                quote!(),
-                quote!(Some(&__cq_group_live)),
-            )
-        } else {
-            (
-                quote!(),
-                quote!(packed:*const u64,lanes:usize,),
-                quote!(#owner.keys().ptr(),#owner.lanes(),),
-                quote!(__cq_statuses.push(#owner.metadata().clone());),
-                quote!(None),
-            )
-        };
+    let (load, status, live_argument) = if let Some(input) = direct {
+        params.push((format_ident!("live"), syn::parse_quote!(*mut u32)));
+        args.push((
+            format_ident!("live"),
+            quote!(__cq_group_live.cu_deviceptr() as *mut u32),
+        ));
+        uses.insert("live".to_owned());
+        (input.load, quote!(), quote!(Some(&__cq_group_live)))
+    } else {
+        params.extend([
+            (format_ident!("packed"), syn::parse_quote!(*const u64)),
+            (format_ident!("lanes"), syn::parse_quote!(usize)),
+        ]);
+        args.extend([
+            (format_ident!("packed"), quote!(#owner.keys().ptr())),
+            (format_ident!("lanes"), quote!(#owner.lanes())),
+        ]);
+        (
+            quote!(),
+            quote!(__cq_statuses.push(#owner.metadata().clone());),
+            quote!(None),
+        )
+    };
     let live_write = filtered.then(|| quote!(*live.add(position)=__live as u32;));
     let live_buffer = filtered.then(|| quote! {
         let __cq_group_live=unsafe {::cuda_core::DeviceBuffer::<u32>::uninitialized_async(__cq_pool.stream(),#length)?};
@@ -270,7 +299,7 @@ pub fn group(
         #[kernel]
         #[launch_bounds(#threads)]
         #[launch_contract(domain=1,block=(#threads,1,1))]
-    }, quote!(values:*mut i64,length:usize,#input_parameters #(#params),*), quote! {
+    }, params, uses, quote! {
                 unsafe {
                     let mut position=::cuda_device::thread::index_1d().get() as usize;
                     while position<length {
@@ -285,7 +314,7 @@ pub fn group(
     let shape = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,#threads,#shared)));
     let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared)));
     let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid),
-        quote!(__cq_group_values.ptr(),#length,#input_arguments #(#args),*))?;
+        args)?;
     Ok((
         abi.definition(),
         quote! {
@@ -401,14 +430,24 @@ pub fn global(
             let id = format_ident!("__cq_store_length_{input_index}");
             quote!(#id)
         });
-    let mut params = direct
-        .as_ref()
-        .map(|input| input.parameters.clone())
-        .unwrap_or_default();
-    let mut args = direct
-        .as_ref()
-        .map(|input| input.arguments.clone())
-        .unwrap_or_default();
+    let mut params = vec![
+        (format_ident!("partials"), syn::parse_quote!(*mut i64)),
+        (format_ident!("partial_present"), syn::parse_quote!(*mut u32)),
+        (format_ident!("error"), syn::parse_quote!(*mut u32)),
+        (format_ident!("length"), syn::parse_quote!(usize)),
+    ];
+    let mut args = vec![
+        (format_ident!("partials"), quote!(__cq_global.partials())),
+        (format_ident!("partial_present"), quote!(__cq_global.present())),
+        (format_ident!("error"), quote!(__cq_global.error())),
+        (format_ident!("length"), length.clone()),
+    ];
+    let mut uses = BTreeSet::from(["length".to_owned()]);
+    if let Some(input) = &direct {
+        params.extend(input.parameters.iter().cloned());
+        args.extend(input.arguments.iter().cloned());
+        uses.extend(input.uses.iter().cloned());
+    }
     let mut columns = Vec::new();
     let mut descriptors = Vec::new();
     let mut declare = Vec::new();
@@ -422,6 +461,10 @@ pub fn global(
             AggregateKind::Min => (2, quote!(i64::MAX)),
             AggregateKind::Max => (3, quote!(i64::MIN)),
         };
+        uses.extend(["partials".to_owned(), "partial_present".to_owned()]);
+        if kind < 2 {
+            uses.insert("error".to_owned());
+        }
         let ty = &aggregate.ty;
         let optional = kind >= 2;
         descriptors
@@ -446,8 +489,9 @@ pub fn global(
                 })?,
             );
             if let Some((parameter, value)) = capture_argument(captures, &name, column) {
-                params.push(quote!(#parameter:i64));
-                args.push(value);
+                params.push((parameter.clone(), syn::parse_quote!(i64)));
+                args.push((parameter.clone(), value));
+                uses.insert(parameter.to_string());
                 quote!(#parameter)
             } else if let Some(input) = &direct {
                 let value = input.columns.get(&name).ok_or_else(|| {
@@ -467,11 +511,22 @@ pub fn global(
                 let base = format_ident!("base_{column}");
                 let shift = format_ident!("shift_{column}");
                 let bits = format_ident!("bits_{column}");
-                params.extend([quote!(#base:i64), quote!(#shift:u32), quote!(#bits:u32)]);
+                params.extend([
+                    (base.clone(), syn::parse_quote!(i64)),
+                    (shift.clone(), syn::parse_quote!(u32)),
+                    (bits.clone(), syn::parse_quote!(u32)),
+                ]);
                 args.extend([
-                    quote!(#fields[#field].base),
-                    quote!(#fields[#field].shift),
-                    quote!(#fields[#field].bits),
+                    (base.clone(), quote!(#fields[#field].base)),
+                    (shift.clone(), quote!(#fields[#field].shift)),
+                    (bits.clone(), quote!(#fields[#field].bits)),
+                ]);
+                uses.extend([
+                    base.to_string(),
+                    shift.to_string(),
+                    bits.to_string(),
+                    "packed".to_owned(),
+                    "lanes".to_owned(),
                 ]);
                 let offset = crate::emit::packed_offset(
                     quote!(packed),
@@ -537,13 +592,19 @@ pub fn global(
         });
     }
     let decoded = decoders(group, &columns, output_columns, output_types, codecs)?;
-    let (load, input_parameters, input_arguments, status) = if let Some(input) = direct {
-        (input.load, quote!(), quote!(), quote!())
+    let (load, status) = if let Some(input) = direct {
+        (input.load, quote!())
     } else {
+        params.extend([
+            (format_ident!("packed"), syn::parse_quote!(*const u64)),
+            (format_ident!("lanes"), syn::parse_quote!(usize)),
+        ]);
+        args.extend([
+            (format_ident!("packed"), quote!(#owner.keys().ptr())),
+            (format_ident!("lanes"), quote!(#owner.lanes())),
+        ]);
         (
             quote!(),
-            quote!(packed:*const u64,lanes:usize,),
-            quote!(#owner.keys().ptr(),#owner.lanes(),),
             quote!(__cq_statuses.push(#owner.metadata().clone());),
         )
     };
@@ -551,7 +612,7 @@ pub fn global(
         #[kernel]
         #[launch_bounds(#threads)]
         #[launch_contract(domain=1,block=(#threads,1,1),dynamic_shared_range=(#shared,#shared))]
-    }, quote!(partials:*mut i64,partial_present:*mut u32,error:*mut u32,length:usize,#input_parameters #(#params),*), quote! {
+    }, params, uses, quote! {
                 unsafe {
                     let __tid = ::cuda_device::thread::threadIdx_x() as usize;
                     #(#declare)*
@@ -571,7 +632,7 @@ pub fn global(
     let shape = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,#threads,#shared)));
     let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared)));
     let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid),
-        quote!(__cq_global.partials(),__cq_global.present(),__cq_global.error(),#length,#input_arguments #(#args),*))?;
+        args)?;
     Ok((
         abi.definition(),
         quote! {

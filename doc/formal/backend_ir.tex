@@ -1368,10 +1368,17 @@ preparation requires the one-part partition. Each kernel owns one optional
 preparation for its fixed compiled specialization, without a symbol-keyed
 collection. Only a cache miss resolves the symbol and validates function/device
 attributes and the ordinary one-dimensional envelope. The cache retains the
-function and configuration, not a Rust type tag. The checked final kernel ABI
-records live scalar positions, explicit parameter-to-witness dependencies and
-the preparation entry. Definitions, preparations and calls print that record
-directly, without inspecting types or reparsing generated kernels or calls.
+function and configuration, not a Rust type tag. Kernel planning records
+structured scalar parameter identities and types, argument identities, and
+semantic uses from demanded source slots and provider/map/output read facts;
+fold-completion facts determine partial-buffer uses. It never derives liveness
+from identifiers in a printed body. The final ABI records live scalar
+positions, parameter-to-witness identities and the preparation entry.
+Its independent checker verifies parameter and argument identity coverage,
+live-use coverage and witness dependencies against the canonical row ABI;
+witness bounds belong to that canonical record, not unchecked copies in a
+kernel. Definitions, preparations and calls print the checked records directly,
+without inspecting types or reparsing generated declarations, kernels or calls.
 A launch checks its context and positive grid against the envelope without
 symbol lookup, allocation or CUDA queries;
 the recorded part cap and spread/share policy determine that grid as before.

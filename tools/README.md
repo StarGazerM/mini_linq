@@ -47,9 +47,13 @@ GPU device execution. The constant-capture test lives with the GPU compiler;
 core has no GPU dev-dependency. When a merge batch can affect
 GPU code (any shared compiler crate, `experiments/gpu`, or the Datalog
 pipelines), Main also runs `bash tools/gpu_gate.sh` once for the batch: the GPU
-Datalog, Sequence and TPC-H crate suites, the advised H05 SF10 benchmark (including
-its existing 10.35 ms ceiling), the `doop-gpu`/`srd-doop-gpu` builds, and `doop-gpu`
-on Cassandra, which compares all 26 complete output tuple sets against `doop-mini`.
+Datalog, Sequence, TPC-H, `cq-gpu-runtime` and `gpu-device-columns` crate suites, a separate untimed
+`gpu-datalog-runtime` suite with `--features gpu-datalog-runtime/radix-counters`,
+the advised H05 SF10 benchmark (including its existing 10.35 ms ceiling), the
+`doop-gpu`/`srd-doop-gpu` builds, and `doop-gpu` on Cassandra, which compares all
+26 complete output tuple sets against `doop-mini`. The remote bundle preserves
+the same default-feature and counter-enabled test steps as distinct harnesses;
+counter instrumentation is not enabled for benchmark binaries.
 It holds `/tmp/mini_linq-gpu.lock` for the whole run. H05 timing and exactness
 evidence is written to `target/gpu-gate-h05-sf10.json`; a ceiling failure fails
 the batch even when every answer is exact.

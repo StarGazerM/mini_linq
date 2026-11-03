@@ -32,7 +32,9 @@ exec 9>/tmp/mini_linq-gpu.lock
 flock 9
 step crates nice -n 10 cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release \
 	-p gpu-datalog-runtime -p cq-gpu-datalog-core -p cq-gpu-datalog \
-	-p cq-gpu-sequence-core -p cq-gpu-sequence -p cq-gpu-tpch
+	-p cq-gpu-sequence-core -p cq-gpu-sequence -p cq-gpu-tpch -p cq-gpu-runtime -p gpu-device-columns
+step radix-counters nice -n 10 cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release \
+	-p gpu-datalog-runtime --features gpu-datalog-runtime/radix-counters
 # Exactness-only crate tests do not enforce the benchmark's recorded ceiling.
 step tpch-h05-sf10-ceiling nice -n 10 cargo +1.99.1 oxide run --arch sm_89 --materialize-cubin \
 	--bin cq-gpu-tpch -- "$root/target/gpu-gate-h05-sf10.json" \
