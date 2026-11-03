@@ -13,6 +13,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P8 measures Masks against the unconditional Tree reducer on all 29 CPU TPC-H
+  SF1 default kernels and the 30-scenario planners corpus. Masks stays default:
+  Tree's supported-kernel geometric mean is 1.03541x, versus 1.26056x on the
+  supported corpus. H09 and H12 improve substantially; the planning entry
+  records exact paired evidence, cyclic/advice exclusions, intermediate-size
+  counters, and an unimplemented count/filter-rank selection proposal whose
+  census selects those two strong winners. No compiler, checker or printer
+  behavior changes.
+
 - Tasks key partitioning preserves native positional Selection publications:
   automatic advice retains their selected carrier, and Sequence rejects a
   partitioned store pretending to publish that carrier. Sharded providers now

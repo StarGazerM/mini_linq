@@ -150,7 +150,7 @@ the dated acceptance below records exact gates and matched paired measurements.
 |---|---|---|
 | `cq-syntax guard::term` (retired) | Rust recognition and field-path parameters | replaced by explicit `where` and query-closed `Term::Closed(syn::Expr)` (contract 7) |
 | `cq-order Written` | identity sequence, cross products kept | explicit reference retained; Connected/Coarse facade default done (contract 2) |
-| `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); full reduction is an optional P8 cost question |
+| `cq-reduce Masks` | reduce only filter-ranked subtrees, never the root | retained default policy (contract 2/6); P8 measured the full-reducer cost below: unconditional Tree loses overall; an evidence-only selective proposal remains unimplemented |
 | `cq-relational-lowering` (was `cq-elaborate`) | predicate binder choice (branch join topology deleted) | done: predicate placement recorded in VO as `restrict R@i where P;` by `cq-order` (O-Restrict, order-independent H-Local shared with H-FilterRank); reducers rank by recorded restrictions; lowering (RL-*) applies only recorded decisions; a hoisted block's finite domain is the VO prefix binding its free columns; RA rewrites live in `cq-ra-rewrites` |
 | CQ `normalize` | computed head becomes `Bind` | retain original Rust; placement uses free variables, not expression classification (contract 7) |
 | `cq-physical-lowering` | probe first / eager / Let vs Pipe | representation choices only; point/range supply and join keys are consumed from matched, checked IX requirements |
@@ -928,7 +928,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   statistics, filter activation policy, runtime population, device transfer or
   committed-round publication is selected by this slice.
 - **P8 Remaining items.** Placement spine (only when a branching machine
-  appears), Masks as full reducer (a cost question), delta=k SRDatalog plans.
+  appears), delta=k SRDatalog plans. Masks as full reducer: measured below.
   **Key-partition routing projection: no target in the measured CPU suite**
   (2026-11-03, 57216a5c). The preimplementation census covered 28 Tasks/par
   kernels at SF1 with six workers; all complete answers matched DuckDB.
@@ -946,6 +946,223 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   exchange counters and per-command gate ledger:
   `/data/mini_linq-wt/p8-keypart/target/p8-census/`.
   Census Gate time **583.02 s**, with **1,666.13 s** separate lock wait.
+- **P8 Masks as full reducer — measured; default unchanged (2026-11-03).**
+  The comparison starts at `57216a5c` and preserves the authored default
+  P3.3e/Prefix ordering, advice, downstream passes and sequential machine.
+  The experimental planner change is `Masks` → `Tree`, in an isolated source
+  copy; it does not relax positional advice, change predicates, assume an FK,
+  or substitute a spanning-tree fallback for an unsupported full reducer.
+  Nondefault `par` consumers were omitted where their compilation prevented
+  building the requested default worker, including the baseline H07-block
+  worker. This is **default-route evidence, not a Tasks/par acceptance result**.
+
+  All **29 Masks kernels** and all **19 supported Tree kernels** matched the
+  cached DuckDB-CLI SF1 tuple-set oracle on every warm and measured execution.
+  There are five interleaved pairs per supported kernel, alternating execution
+  order, with one warm execution before each timed execution; the ten
+  unsupported Tree kernels retain five exact Masks samples. Loading,
+  serialization and exact comparison are outside the query timer.
+  Ratios below are geometric means of the five paired **Tree/Masks** ratios,
+  not ratios of the displayed time medians. Intervals are percentile bootstrap
+  95% CIs (10,000 paired resamples, seed 2119); the aggregate resamples pairs
+  within each supported kernel. No result is inferred for excluded kernels.
+
+  The supported-kernel geomean is **1.03541 [1.02493, 1.04551]**: unconditional
+  Tree is slower overall, despite substantial H09 and H12 improvements.
+  A five-pair **same-source, separately built source-layout control** on H01
+  is **1.00020 [0.98309, 1.01702]**, all exact. H18's small apparent improvement
+  overlaps that control band and is not claimed as a controlled small win.
+  Minor-fault columns are medians during the timed query; all 240 primary
+  timed executions recorded **zero major faults**.
+
+  | Kernel | Masks ms | Tree ms | Tree/Masks [95% CI] | Minor faults Masks/Tree |
+  |---|---:|---:|---|---:|
+  | `retail_d19` | 15.730 | — | positional advice | 470/— |
+  | `retail_d27` | 16.768 | — | positional advice | 0/— |
+  | `retail_d72_inner` | 158.509 | — | cyclic | 7976/— |
+  | `retail_d85` | 20.720 | — | positional advice | 412/— |
+  | `retail_h01` | 949.116 | 958.780 | 1.05451 [0.99383, 1.12224] | 138671/138671 |
+  | `retail_h02` | 55.728 | 69.739 | 1.23878 [1.21188, 1.26245] | 784/6386 |
+  | `retail_h03` | 36.467 | — | positional advice | 2629/— |
+  | `retail_h04` | 23.610 | 38.563 | 1.62039 [1.57918, 1.66268] | 467/1208 |
+  | `retail_h04_not_exists` | 162.166 | 161.436 | 0.99131 [0.96862, 1.01485] | 25842/25842 |
+  | `retail_h05` | 37.536 | — | cyclic | 1117/— |
+  | `retail_h06` | 34.103 | 34.483 | 1.00537 [0.96954, 1.04253] | 0/0 |
+  | `retail_h07` | 37.265 | — | positional advice | 1769/— |
+  | `retail_h07_block` | 40.530 | — | cyclic | 2235/— |
+  | `retail_h08` | 32.403 | — | positional advice | 1300/— |
+  | `retail_h09` | 1070.091 | 657.670 | 0.60296 [0.57759, 0.62608] | 46846/16506 |
+  | `retail_h10` | 241.590 | 246.488 | 1.01951 [1.00646, 1.03266] | 18410/24604 |
+  | `retail_h11` | 15.496 | 21.937 | 1.42052 [1.35052, 1.49201] | 659/2026 |
+  | `retail_h12` | 110.081 | 39.014 | 0.35447 [0.35141, 0.35756] | 14267/0 |
+  | `retail_h13` | 192.648 | 232.703 | 1.20939 [1.20427, 1.21572] | 18903/19477 |
+  | `retail_h14` | 47.457 | 50.377 | 1.01274 [0.93052, 1.08000] | 3174/2470 |
+  | `retail_h15` | 62.685 | 59.939 | 0.96589 [0.92522, 1.02834] | 2634/2634 |
+  | `retail_h16` | 51.884 | 51.177 | 1.08338 [0.95729, 1.19083] | 5867/6006 |
+  | `retail_h18` | 1042.303 | 1024.869 | 0.98180 [0.97875, 0.98485] | 82486/63750 |
+  | `retail_h19` | 16.815 | 28.439 | 1.70967 [1.69395, 1.72554] | 0/1450 |
+  | `retail_h20` | 320.862 | 312.690 | 0.98499 [0.96747, 1.00345] | 21299/21900 |
+  | `retail_h21_positive` | 83.398 | — | positional advice | 1773/— |
+  | `retail_h22` | 29.884 | 31.644 | 1.05746 [1.04216, 1.07400] | 4607/5183 |
+  | `tpch_q06` | 23.368 | 23.142 | 0.99271 [0.98823, 1.00021] | 0/0 |
+  | `tpch_q19` | 16.893 | 22.763 | 1.33344 [1.28083, 1.37425] | 0/996 |
+
+  The three cyclic exclusions are the existing Tree domain restriction.
+  The seven positional exclusions are **unsupported combinations of advice
+  authored for the Masks plan with a different reduced source**, not reported
+  compiler bugs. Neither category is silently counted as an exact Tree run.
+
+  **Planners corpus.** All 30 authored scenarios were compiled through the same
+  default ordering and downstream sequential stages. Five interleaved batches
+  of 1,000 native executions per variant check every result against the
+  independently authored exact answer, outside timing. All 30 Masks and 24
+  acyclic Tree cases are exact; the other six reject Tree. The supported
+  geomean is **1.26056 [1.25447, 1.26566]**. Across the timed batches there were
+  two minor faults and zero major faults. These are small authored fixtures,
+  not a substitute for the SF1 measurements. The small `cartesian` estimate
+  concerns two zero-key existence semijoins, not key/FK pruning; no controlled
+  small-improvement claim is made for it. `projection` and `scan` have unchanged
+  valuations.
+
+  | Corpus scenario | Masks ns | Tree ns | Tree/Masks [95% CI] |
+  |---|---:|---:|---|
+  | `barbell` | 684.0 | — | cyclic |
+  | `bushy` | 433.0 | 596.4 | 1.30971 [1.19312, 1.38013] |
+  | `cartesian` | 196.2 | 190.6 | 0.97326 [0.95632, 0.99050] |
+  | `cartesian_first` | 368.6 | 434.4 | 1.17405 [1.16613, 1.18186] |
+  | `chain_projection` | 342.5 | 476.4 | 1.39024 [1.37022, 1.40928] |
+  | `claw` | 359.3 | 447.4 | 1.25067 [1.23255, 1.27456] |
+  | `composite` | 218.4 | 276.9 | 1.27230 [1.26335, 1.28222] |
+  | `cycle4` | 406.7 | — | cyclic |
+  | `existential` | 150.0 | 152.5 | 1.00793 [0.98042, 1.03091] |
+  | `fact_star` | 404.5 | 623.1 | 1.54812 [1.52968, 1.57586] |
+  | `fine_triangle` | 250.8 | — | cyclic |
+  | `intersection` | 140.0 | 214.2 | 1.53711 [1.52049, 1.55390] |
+  | `loomis_whitney_4` | 459.4 | — | cyclic |
+  | `oriented_chain` | 402.0 | 498.1 | 1.23592 [1.22223, 1.24759] |
+  | `projection` | 103.0 | 101.2 | 0.99150 [0.97632, 1.01026] |
+  | `return_trip` | 178.8 | 260.3 | 1.45725 [1.45120, 1.46441] |
+  | `scan` | 99.2 | 99.2 | 0.99966 [0.99077, 1.00710] |
+  | `self_chain` | 308.8 | 364.6 | 1.17579 [1.16406, 1.18761] |
+  | `spade` | 479.4 | — | cyclic |
+  | `ternary_guard` | 527.8 | 1112.4 | 2.10602 [2.10270, 2.10935] |
+  | `triangle` | 246.5 | — | cyclic |
+  | `unary_guard` | 153.3 | 214.7 | 1.40420 [1.39474, 1.41343] |
+  | `ya_composite` | 526.1 | 593.6 | 1.13607 [1.12518, 1.14995] |
+  | `ya_composite_reduced` | 529.9 | 586.6 | 1.11175 [1.10140, 1.12487] |
+  | `ya_deep` | 464.0 | 612.7 | 1.31414 [1.28404, 1.34033] |
+  | `ya_deep_reduced` | 470.8 | 605.2 | 1.28736 [1.28390, 1.29133] |
+  | `ya_delivery` | 523.8 | 574.2 | 1.12983 [1.10903, 1.15313] |
+  | `ya_delivery_reduced` | 490.5 | 578.5 | 1.16784 [1.15414, 1.18140] |
+  | `ya_disconnected` | 105.0 | 148.1 | 1.41661 [1.39824, 1.43260] |
+  | `ya_disconnected_reduced` | 104.2 | 137.5 | 1.31630 [1.27767, 1.34828] |
+
+  **Where the large wins come from.** Separate counter-enabled workers, not
+  the timed binaries, matched the same exact oracle. Counts below describe
+  observed intermediate rows, not assumed keys or referential integrity.
+
+  - **H09:** all seven occurrences have recorded local filter rank 3; Masks
+    emits no reductions. Tree's `Part ← GreenNames` removes **189,336** rows
+    (200,000 → 10,664). Its subsequent `Lineitem ← Part` removes **5,681,811**
+    rows (6,001,215 → 319,404) **before the payload index keyed by `part_key`**:
+    that index receives 319,404 rows instead of Masks' 6,001,215.
+    `Supplier ← Lineitem` removes 135 (10,000 → 9,865),
+    `PartSupp ← Lineitem` removes 757,376 (800,000 → 42,624), and
+    `Orders ← Lineitem` removes 1,212,510 (1,500,000 → 287,490), shrinking their
+    final providers too. The other seven Tree edges remove **zero** rows:
+    `Lineitem ← Orders` (6,001,215), `Lineitem ← PartSupp` (6,001,215),
+    `Nation ← Supplier` (25), `Supplier ← Nation` (9,865),
+    `Lineitem ← Supplier` (319,404), `Part ← Lineitem` (10,664), and
+    `GreenNames ← Part` (10,664). These are all unfiltered in the recorded
+    rank sense; `GreenNames`' actual selectivity is not a recorded count or
+    filter rank. Total copied rows fall **6,011,215 → 989,405**, while index
+    builds rise **6 → 18** and enumerated rows **9,160,712 → 9,990,996**.
+  - **H12:** the `Matches` scope has filtered outer `Lineitem` (rank 1, count
+    unknown) and unfiltered inner `Orders` (rank 3, recorded count 1,500,000).
+    Local predicates leave 30,988 lines. `Orders ← Lineitem` removes
+    **1,470,901** orders (1,500,000 → 29,099) **before the order-key payload
+    index**; Masks builds that index from all 1,500,000 rows. The reverse
+    `Lineitem ← Orders` removes **zero** of the 30,988 lines. Thus the large
+    benefit is propagation from the filtered outer into the build, not
+    evidence that the reverse unfiltered support is useful. In later
+    unfiltered scopes, `HighPriorities ← MatchingLines` keeps 2 rows,
+    `MatchingLines ← HighPriorities` takes 30,988 → 12,402 before the
+    high-priority group, and `HighCounts ← Totals` / `Totals ← HighCounts`
+    each keep 2 rows. Total copied rows fall **1,500,002 → 60,089**; builds
+    rise **4 → 7**, enumerated rows **7,594,191 → 7,625,181**.
+  - **Contrasts:** H04 already builds only a 57,218-key membership set and
+    copies zero payload rows. Tree reduces 3,793,296 filtered lines to
+    144,869 and 57,218 orders to 52,523, but adds **197,392 copied rows** and
+    raises builds **1 → 3**, losing 62%. H19 reduces filtered Part
+    7,296 → 3,416 and filtered Lineitem 128,371 → 4,694, yet materializing
+    those 128,371 lines raises copied rows **7,296 → 131,787**, builds
+    **1 → 2**, and loses 71%. Shrinking an intermediate alone is not a cost
+    justification. H18 reduces Orders 1,500,000 → 57 and Customer
+    150,000 → 57; its two reverse edges remove nothing. Copied rows fall
+    1,650,000 → 228, but its whole-query small timing estimate is not a
+    controlled win.
+
+  **Docs-only selective proposal and census.** A simple empirical predicate
+  over facts already recorded does separate the two large winners in this
+  census. Consider an acyclic scope for which the measured Masks valuation
+  contains no reductions, then select Tree if either:
+
+  1. **A:** every positive occurrence has rank 3, the outer has a declared
+     count, and some nonouter occurrence has a declared count larger than the
+     outer's; or
+  2. **B:** there are exactly two positive occurrences, outer rank is at most
+     1, inner rank is 3, and the inner has a declared count of at least
+     **1,000,000** rows.
+
+  Otherwise retain Masks. Unknown counts stay unknown, never zero or an
+  inferred TPC-H cardinality. No relation names, Rust syntax, type inspection,
+  inclusion dependencies or FK assumptions occur in this predicate.
+  A selects **H09 / Query** (outer Part 200,000, inner Lineitem 6,001,215,
+  all ranks 3); B selects **H12 / Matches** (inner Orders 1,500,000,
+  outer rank 1). It selects **zero of the other 27 TPC-H kernels**, including
+  every measured loser and every excluded combination, and **zero of the 30
+  corpus scenarios**, whose inputs supply no count evidence. H04 fails the
+  rank conditions, H19 has no applicable recorded count, H14's inner count is
+  200,000, and H18 has three positive occurrences, not two.
+
+  This is a **proposal, not an implemented or validated default**. The
+  one-million cutoff is an empirical SF1 discriminator, not an established
+  scale-independent cost boundary. Counts/ranks do not record filter
+  selectivity or whether lowering will build payload versus membership;
+  A does not prove that an unfiltered smaller relation removes any rows.
+  The measured H12 whole-kernel Tree binary also reduces later stages,
+  whereas this scope-local proposal selects only `Matches`; its exact
+  mixed-policy performance has not been measured. A future producer would
+  have to record its reduce/skip selection and evidence in VO; legality
+  checkers would validate those facts and semijoin obligations, not replay
+  the producer, and printers would only consume the recorded decisions.
+  **Masks stays default.** No per-edge implementation is introduced here.
+  Proving an unfiltered key/FK edge non-reducing would require a declared
+  inclusion-dependency fact: that language addition is outside this slice.
+  Existing `R-Masks`, `CK-Masks` and `Plan-Prefix` in `passes.tex`/`rules.tsv`
+  remain unchanged and continue to describe the code.
+
+  **Gates and retained evidence.** At the assigned snapshot/layout, root,
+  planners and rewrites workspace tests passed; quick was **15/15**, formal
+  inventory passed, API was **29 unchanged**, and all **46 CPU expansions
+  versus `57216a5c` were identical**, zero unexplained hunks. These gates
+  describe the retained compiler, not a claim that unsupported Tree
+  combinations passed. Gate time / lock wait (seconds): root **219.511 /
+  <0.001**; planners **441.578 / 431.351**; rewrites **88.350 / 38.317**;
+  quick **264.226 / 380.536**; expanded, seven bounded commands, **915.546 /
+  1111.089**; formal **0.566 / <0.001**; API **70.773 / <0.001**.
+  Primary SF1 workers took **237.374 / 18188.408** across 240 commands;
+  control **27.088 / 1237.741**, counters **12.167 / 75.965**, corpus timing
+  **0.164 / 423.620**. Including experiment builds, unsuccessful preliminary
+  worker builds, corpus harness corrections and census commands, the
+  per-command ledger sums to **3779.689 seconds of gate time** and
+  **26131.028 seconds of lock waits**; these overlapping-command sums are
+  not elapsed session time. Shared build locks and exclusive timing leases
+  prevent build/measurement overlap.
+  Raw local evidence is in the `p8-masks` worktree's `target/p8/`:
+  `summary.json`, `samples/`, `control/`, `corpus.json`, `counts/`, `plans/`,
+  `census.json`, `proposal-census.json`, `expanded/*/report.json`, and
+  `gates.jsonl` (exact commands, statuses, gate time and wait per command).
 - **Open issues (2026-10-31).** (1) `doop-gpu` (26-output DOOP) fails at base
   67d76822 with 220 P-Decompose unmet catalog obligations (DeviceLayout
   membership at host level). (2) **Resolved by closed capture (see
@@ -1156,11 +1373,12 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
 - Historical phase 2 used field-path parameters under superseded contract 3.
   Contract 7 instead stores arbitrary query-closed Rust expressions; default
   order remains `Prefix(Connected)/Coarse`.
-- Phase 3 done for ordering; Masks decided docs-side (contract 6): Masks is
-  the bottom-up Yannakakis pass restricted to filter-carrying subtrees, not a
-  full reducer; `passes.tex`, `STATUS.md` and `cq-reduce` now say so, and
-  `Tree` remains the unconditional full reducer. Reducing unfiltered
-  key/foreign-key edges is a separate cost question, not a correctness fix.
+- Phase 3 done for ordering; Masks remains the bottom-up Yannakakis pass
+  restricted to filter-carrying inner subtrees, not a full reducer;
+  `passes.tex`, `STATUS.md` and `cq-reduce` say so, and `Tree` remains the
+  unconditional full reducer on acyclic scopes. P8 above records the measured
+  default-route cost answer and the unimplemented evidence-only proposal;
+  this remains a cost question, not a correctness fix.
 - Contract 5 done: `plan(Label, ..)` marks its incremental variant
   `authored`; Fork passes that order to the hole's recorded planning owner as
   `order(..)` over normalized clause positions. `Hole.plan` records the named
