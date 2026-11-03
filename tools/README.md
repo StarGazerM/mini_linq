@@ -310,3 +310,158 @@ cutover allows the affected gates. Unsupported doctest/dynamic-compiler/native
 inputs still execute normally rather than claiming expansion proof. Final tooling
 checks passed: 68 regression-runner/impact/identity/timing tests and 14
 expanded-gate tests.
+
+## Execution-only remote GPU gates
+
+`remote_gpu/` separates workstation builds from rented GPU execution. Nothing in
+`bundle.sh`, `make_data_manifest.sh`, or local verification provisions a pod.
+Only `session.sh` creates a billable resource; invoke it explicitly after the
+private dataset upload and bundle builds have finished.
+
+```sh
+wt=/data/mini_linq-wt/remote-gpu
+bash "$wt/tools/remote_gpu/bundle.sh" "$wt" "$wt/target/remote-gpu/gate.tar.zst" \
+  --bench cq-gpu-tpch doop-gpu srd-doop-gpu
+# Once, before uploading the dataset (or reuse an already generated SHA256SUMS):
+bash "$wt/tools/remote_gpu/make_data_manifest.sh" "$wt/target/remote-gpu/SHA256SUMS" /data
+```
+
+The builder pins `cargo +1.99.1`, `sm_89`, release mode, build jobs 6 and the
+documented HPC SDK environment. It takes the timing gate/shared timing locks and
+uses `nice -n 10`; it never takes the GPU lock or runs a built executable.
+`oxide test --no-run --message-format=json` enumerates exact test harnesses;
+`oxide build --message-format=json` enumerates the gate binaries and additional
+`--bench` binary names. Rustdoc's separate `--no-run --persist-doctests` path
+compiles doctests without execution. Compile-fail checks happen locally.
+
+The archive contains `manifest.json` (commit, commands, working directories,
+timings, per-file SHA256), `bin/`, `lib/`, the complete nonignored source/fixture
+snapshot in `source/`, local build logs, downloader dependencies, and the pod
+scripts. Dirty working-tree inputs are copied, not replaced with `git show HEAD`.
+Cargo caches and the CUDA compiler are not shipped. Selected packages' exact
+`build-script-executed` OUT_DIRs contribute generated source/data fixtures at
+their original paths, including TPC-H's `string-guard-fixture`; compiler objects
+and libraries in those directories are excluded. `ldd` resolves
+transitive non-system shared libraries; these are copied by SONAME. System glibc,
+the loader, and `libcuda` remain supplied by the pod OS/driver.
+
+**Cubin mechanism:** the pinned cuda-oxide materializer embeds native target
+cubins inside the final ELF `.oxart` section; generic kernels use an ahead-of-time
+cross-crate linked cubin. The loader reads the executable / original mapped ELF
+(Linux `/proc/self/maps` and `/proc/self/map_files`) and submits the cubin to the
+CUDA driver. No sidecar `.cubin`, `CUDA_OXIDE_PTX_DIR`, libNVVM, nvJitLink, `nsys`
+or `ncu` is needed for these materialized kernels. Keep the bundled ELF readable
+and do not strip its artifact sections.
+
+### Dataset and path mirrors
+
+The private HF dataset has `SHA256SUMS` at its root, with ordinary sha256sum
+lines whose filenames are relative to the dataset root:
+
+* `tpch-gpu/{sf1,sf10,synthetic}/...`
+* `doop-bench/doop-data/{cassandra,xalan,batik}/...`
+
+The initial private dataset is `ysun67/mini-linq-gpu-data`, pinned at
+`c2e07f9a10a37fe0c6984c66e9eec6080a82110e` (829 repository files including
+SHA256SUMS). Supply that commit to `seed_volume.sh`; use a new immutable revision
+and regenerate the trusted manifest when dataset contents change.
+
+`seed_volume.sh REPO REVISION TRUSTED_SHA256SUMS [DATA_ROOT]` uses `hf download
+--repo-type dataset --revision REVISION --local-dir /workspace/data`. The revision
+must be an immutable 40-character commit. It checks that downloaded SHA256SUMS
+matches the locally produced trusted copy, checks every file and the complete
+six-root inventory, then atomically writes `.seeded-REVISION`. Interrupted seeds
+are resumed and never marked successful. A marker is reused only for the same
+repo, revision and manifest digest. The downloader's Python dependencies are
+prepared locally in the bundle; there is no pod-side pip install.
+
+On a fresh pod `pod_gate.sh --results DIR` links the embedded worktree path to
+the unpacked `source/`, `/data/tpch-gpu` to `/workspace/data/tpch-gpu`, and
+`/data/doop-bench/doop-data` to `/workspace/data/doop-bench/doop-data`. Existing
+unrelated directories/links are never overwritten. A previous bundle's worktree
+symlink can be switched to the next bundle. Test harnesses run from their
+original package directories, preserving runtime source/fixture reads.
+
+The pod runner validates bundle hashes, an sm_89 device reported by `nvidia-smi`,
+and driver CUDA >= 13.0, then executes `crates`, `tpch-h05-sf10-ceiling` and
+`doop-cassandra-exact`. The DOOP build is already complete locally. It prints the
+same `gpu-gate PASS|FAIL NAME Ns` lines as `gpu_gate.sh`; per-step logs,
+`gpu-gate-h05-sf10.json`, device information and `status.json` survive in DIR.
+Failures exit nonzero. `--bench NAME ARGS...` instead executes one packaged
+binary with literal arguments (no shell evaluation).
+
+### One bounded rental session
+
+```sh
+wt=/data/mini_linq-wt/remote-gpu
+bash "$wt/tools/remote_gpu/session.sh" \
+  --volume dp2a7xuy9t --data-center US-WA-1 \
+  --gpu-ids 'NVIDIA RTX 6000 Ada Generation' \
+  --revision c2e07f9a10a37fe0c6984c66e9eec6080a82110e \
+  --data-manifest /data/hf-stage/mini-linq-gpu-data/SHA256SUMS \
+  --ssh-key "$HOME/.ssh/id_ed25519" \
+  --bench 'cq-gpu-tpch {results}/h06-sf10.json --query h06 --scale sf10 --mode advised' \
+  "$wt/target/remote-gpu/gate.tar.zst"
+```
+
+Pass additional bundle paths for paired revisions, and repeat `--bench` for
+additional commands. The GPU id list is comma-separated and tried in priority
+order; the volume's DC must offer those devices (US-WA-1 currently has RTX 6000
+Ada, not L40). The dataset repo defaults to `<hf auth whoami>/mini-linq-gpu-data`.
+The token is read from `HF_TOKEN_PATH`, or the standard `HF_HOME/token` /
+`XDG_CACHE_HOME/huggingface/token`, and passed as pod environment without logging
+it. The SSH key must exist locally; its `.pub` is injected as `PUBLIC_KEY`.
+All local prerequisites are checked before provisioning.
+
+The image is digest-pinned `runpod/base:1.6.0-ubuntu2204`, whose startup implements
+RunPod's PUBLIC_KEY/sshd convention and includes Python, tar/zstd and rsync. Its
+653 MB compressed amd64 manifest was checked on Docker Hub; CUDA 13 runtime
+libraries come from the bundle. There is no published
+`runpod/base:*cuda1300-ubuntu2204` tag; the available CUDA 13 RunPod images use
+Ubuntu 24.04 and include multi-GB development toolkits. The plain
+`nvidia/cuda:13.0.0-runtime-ubuntu22.04` tag exists but does not include sshd.
+Using the smaller Ubuntu 22.04 RunPod base plus bundled runtime avoids installing
+or compiling anything on paid GPU time. Registry evidence:
+[RunPod base tag](https://hub.docker.com/v2/repositories/runpod/base/tags/1.6.0-ubuntu2204),
+[NVIDIA runtime tag](https://hub.docker.com/v2/repositories/nvidia/cuda/tags/13.0.0-runtime-ubuntu22.04),
+[RunPod SSH startup](https://github.com/runpod/containers/blob/main/container-template/start.sh).
+
+`session.sh` uses the runpodctl 2.12.0 help-confirmed `pod create --wait
+--wait-timeout 10m`, `ssh info`, `pod list --name`, and `pod delete` commands.
+It copies archives over public SSH, seeds once, executes each gate and requested
+benchmarks, and retrieves results under `target/remote-gpu/TIMESTAMP/`. The
+`finally` cleanup and SIGINT/SIGTERM handlers delete the pod on success, failure
+or Ctrl-C. An independent 60-minute watchdog deletes it even while SSH is blocked
+in a running GPU step. No stop-only operation is used and the volume is retained.
+The final summary reports uncompleted steps and create-to-delete billed-minute
+upper bound (wall clock, not a claim about invoice rounding). A control-plane
+outage can prevent any client from deleting a pod; deletion is retried and a
+critical manual-delete message includes the pod id if all attempts fail.
+Completed results are copied after each step; at the hard cap any remaining
+partial logs stay on the volume at the printed remote results path.
+
+For local bundle verification, unpack under `/tmp`, use a private mount
+namespace to bind `source/` over the original worktree, and pass
+`--existing-mirrors --data /data`. Hide/move the original build target directories
+before running, restore them afterward, and take `/tmp/mini_linq-gpu.lock` before
+the exclusive timing locks. On a VRAM-constrained shared workstation,
+`RUST_TEST_THREADS=1` serializes the same tests without filtering any out; leave
+the pod's default unchanged. `--allow-sf10-oom` is only for this workstation:
+it first attempts SF10, records an explicit `SKIP-OOM` only for a CUDA
+out-of-memory failure, and never records that step as PASS. Do not pass it to a
+rented pod. A ceiling failure, crash, or any other failure still fails the gate.
+
+The crate suites also include an unignored `h01_gpu_matches_duckdb_sf10` test.
+It can OOM even with serialized tests when a foreign GPU process occupies most
+VRAM; the runner does not skip or suppress that failure. Likewise a runnable H05
+on a shared GPU may exceed its performance ceiling. Such local evidence proves
+bundle execution/isolation, not a passing isolated GPU gate.
+
+Offline lifecycle tests (including success/failure/Ctrl-C/cap deletion and secret
+redaction) use test doubles and never invoke RunPod:
+
+```sh
+flock /tmp/mini_linq-timing-gate.lock true &&
+  flock -s /tmp/mini_linq-timing.lock \
+  python3 tools/remote_gpu/test_remote_gpu.py
+```
