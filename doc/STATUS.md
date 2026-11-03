@@ -21,7 +21,9 @@ above 1: `default` `retail_h06` 1.026 [1.017, 1.043] and `retail_h20` 1.024
 Ada, every query exact): SF1 **1.085 [1.033, 1.120]**; SF10 **1.023 [1.000, 1.054]**
 (4 pairs). Regressions with CIs above 1 include h09 2.52/2.34, h21_positive
 2.07/2.09, h10 1.55/1.61 and h03 1.26/1.22; best h12 0.456/0.423 and h11
-SF10 0.416. DOOP GPU awaits a second pod session. No live SRDatalog
+SF10 0.416. DOOP GPU `doop-gpu` fixpoint (pod, 26/26 exact): xalan 0.239
+[0.150, 0.599], batik 0.724 [0.482, 0.836]. These are low confidence:
+fresh-process spread reached 10x, cause not established. No live SRDatalog
 comparison is possible on the pod.
 
 ## Where we are

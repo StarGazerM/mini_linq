@@ -1744,7 +1744,10 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
   h10 1.553 and h03 1.264. At SF10 they cover 11, led by h09 2.340,
   h21_positive 2.088, h10 1.609 and h03 1.221. Not investigated here; the
   h09, h21_positive and h10 growth is in build. An earlier pod gives SF1 1.169
-  [1.116, 1.217] with the same outliers. `doop-gpu` xalan/batik awaits a
-  second pod session. Live SRDatalog and `srd-doop-gpu` are not part of the
+  [1.116, 1.217] with the same outliers. `doop-gpu` xalan/batik (second
+  pod, 5 pairs, 26/26 exact) gives fixpoint xalan 0.239 [0.150, 0.599] and
+  batik 0.724 [0.482, 0.836], with no CI above 1. These are low confidence:
+  fresh-process spread was up to 10x on the same binary, cause not
+  established. Live SRDatalog and `srd-doop-gpu` are not part of the
   pod run (no SRD toolchain or prepared corpus there), so the Oct 26 SRD
   fullclock ranges remain the only, historical, SRD reference.

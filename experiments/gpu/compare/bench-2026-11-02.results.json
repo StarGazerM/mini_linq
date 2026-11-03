@@ -1015,6 +1015,88 @@
    "regressions_ci_above_1": [],
    "worst": "retail_h22"
   },
+  "doop_gpu:cur_vs_ref": {
+   "best": "xalan",
+   "geomean": {
+    "ci95": [
+     0.2685322911088301,
+     0.65872048335754
+    ],
+    "geomean_ratio": 0.41620530557400903,
+    "n": 2,
+    "resamples": 20000
+   },
+   "improvements_ci_below_1": [
+    "xalan",
+    "batik"
+   ],
+   "note": "Within-binary spread is up to 10x (same input, fresh processes); cause not established. Ratios are low-confidence despite CIs excluding 1.",
+   "pairs": 5,
+   "per_item": {
+    "batik": {
+     "ci95": [
+      0.48160479067810374,
+      0.8361711893837075
+     ],
+     "evaluation_ratio": {
+      "ci95": [
+       0.6593597872718303,
+       1.0499584018823547
+      ],
+      "ratio": 0.9463506629897095,
+      "resamples": 3125
+     },
+     "median_base": 25.992899,
+     "median_new": 18.818576,
+     "metric": "doop-gpu --gpu-only GPU_DATALOG_PHASES fixpoint seconds",
+     "ratio": 0.723989117181581,
+     "resamples": 3125,
+     "spread_seconds": {
+      "cur": [
+       12.106816,
+       39.444895
+      ],
+      "ref": [
+       19.947648,
+       47.173229
+      ]
+     },
+     "unit": "s"
+    },
+    "xalan": {
+     "ci95": [
+      0.14972772855233968,
+      0.5993359083683065
+     ],
+     "evaluation_ratio": {
+      "ci95": [
+       0.17882043338926437,
+       0.739662981323765
+      ],
+      "ratio": 0.2714042333701548,
+      "resamples": 3125
+     },
+     "median_base": 24.66656,
+     "median_new": 5.901899,
+     "metric": "doop-gpu --gpu-only GPU_DATALOG_PHASES fixpoint seconds",
+     "ratio": 0.2392672103446934,
+     "resamples": 3125,
+     "spread_seconds": {
+      "cur": [
+       2.295212,
+       9.233534
+      ],
+      "ref": [
+       3.829592,
+       31.394643
+      ]
+     },
+     "unit": "s"
+    }
+   },
+   "regressions_ci_above_1": [],
+   "worst": "batik"
+  },
   "gpu_tpch_advised:sf1": {
    "best": "h12",
    "geomean": {
@@ -2074,6 +2156,8 @@
  "gate_seconds": {
   "cpu_doop": 466.8,
   "cpu_tpch": 3079.4900280940346,
+  "pod_doop_batik": 760.4953327430412,
+  "pod_doop_xalan": 393.80417756177485,
   "pod_gpu_tpch_sf1": 374.11218828707933,
   "pod_gpu_tpch_sf10": 1518.800890299026
  },
@@ -2081,7 +2165,7 @@
   "cpu_doop": "measured by the enclosing shell wall time (466.79 s) incl. lock wait; driver bookkeeping crashed after the suite saved"
  },
  "pending": {
-  "doop_gpu": "doop-gpu xalan/batik not reached (pod budget); second RunPod session pending. Live SRDatalog/srd-doop-gpu not runnable on the pod (no SRD toolchain / prepared corpus)."
+  "srdatalog": "Live SRDatalog and srd-doop-gpu not runnable on the pod (no SRD toolchain / prepared corpus); the Oct 26 SRD fullclock ranges remain historical."
  },
  "protocol": {
   "ci": "paired bootstrap of median(current)/median(reference), all 5^5 resamples, percentile 95%",
@@ -51806,6 +51890,1238 @@
        "user_seconds": 1.168575
       }
      ]
+    }
+   }
+  },
+  "doop_gpu_pod": {
+   "budget_seconds": 1800.0,
+   "bundles": {
+    "44bf82bc": {
+     "commit": "44bf82bc22bd05bda188e68bf4e06747fb89876e",
+     "dir": "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1",
+     "worktree": "/data/mini_linq-wt/bench"
+    },
+    "c1b75718": {
+     "commit": "c1b75718742b1d80f8922f8b6ab9cd48343331bc",
+     "dir": "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0",
+     "worktree": "/tmp/bench-c1b75718"
+    }
+   },
+   "finished_utc": "2026-11-03T18:20:04.351524+00:00",
+   "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2745 MHz, 10001 MHz, 3105 MHz, 45, 81.78 W, 0 %, 2 MiB, 0x0000000000000000",
+   "gpu_state_before": "NVIDIA RTX 6000 Ada Generation, 210 MHz, 405 MHz, 3105 MHz, 38, 33.32 W, 0 %, 2 MiB, 0x0000000000000001",
+   "incomplete": [],
+   "nvidia_smi": "Tue Nov  3 18:00:49 2026       \n+-----------------------------------------------------------------------------------------+\n| NVIDIA-SMI 595.91.07              Driver Version: 595.91.07      CUDA Version: 13.2     |\n+-----------------------------------------+------------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n|                                         |                        |               MIG M. |\n|=========================================+========================+======================|\n|   0  NVIDIA RTX 6000 Ada Gene...    On  |   00000000:01:00.0 Off |                  Off |\n| 30%   38C    P5             33W /  300W |       2MiB /  49140MiB |      0%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|  No running processes found                                                             |\n+-----------------------------------------------------------------------------------------+\n",
+   "order": "one warmup round, then rounds alternating AB / BA (A = first bundle)",
+   "pairs": 5,
+   "source": "/data/mini_linq/target/remote-gpu/20261103T175818.295848Z/pod-results/1-bench-0/pod-bench.json",
+   "started_utc": "2026-11-03T18:00:49.785857+00:00",
+   "suites": {
+    "doop-batik": {
+     "exact": {
+      "44bf82bc": {
+       "argv": [
+        "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+        "/data/doop-bench/doop-data/batik"
+       ],
+       "evaluation_seconds": 57.19938,
+       "exit_code": 0,
+       "fixpoint_seconds": 41.787029,
+       "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 45, 108.23 W, 0 %, 2 MiB, 0x0000000000000000",
+       "phases": {
+        "fixpoint": 41.787029,
+        "output": 13.574624,
+        "setup": 1.760245
+       },
+       "process_seconds": 110.01152918487787,
+       "relation_counts": {
+        "ArrayIndexPointsTo": 326574,
+        "Assign": 154146,
+        "CallGraphEdge": 84434,
+        "ClassInitializer": 2311,
+        "DirectSubclass": 10480,
+        "InitializedClass": 3434,
+        "InstanceFieldPointsTo": 13996740,
+        "MainClass": 1,
+        "MainMethodDeclaration": 1,
+        "MethodImplemented": 95538,
+        "MethodLookup": 483985,
+        "Method_DeclaringType": 104824,
+        "Method_Descriptor": 104824,
+        "Method_Modifier": 134380,
+        "Method_ParamTypes": 104824,
+        "Method_ReturnType": 104824,
+        "Method_SimpleName": 104824,
+        "Reachable": 16620,
+        "StaticFieldPointsTo": 61218,
+        "Subclass": 21447,
+        "SubtypeOf": 61177,
+        "SubtypeOfDifferent": 48357,
+        "Superclass": 21447,
+        "Superinterface": 21288,
+        "SupertypeOf": 61177,
+        "VarPointsTo": 37237353
+       },
+       "tenants_after": "",
+       "utc": "2026-11-03T18:10:59.550191+00:00"
+      },
+      "c1b75718": {
+       "argv": [
+        "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+        "/data/doop-bench/doop-data/batik"
+       ],
+       "evaluation_seconds": 47.473006,
+       "exit_code": 0,
+       "fixpoint_seconds": 32.482163,
+       "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2505 MHz, 9501 MHz, 3105 MHz, 43, 77.19 W, 10 %, 2 MiB, 0x0000000000000000",
+       "phases": {
+        "fixpoint": 32.482163,
+        "output": 12.102932,
+        "setup": 2.886543
+       },
+       "process_seconds": 105.51472814381123,
+       "relation_counts": {
+        "ArrayIndexPointsTo": 326574,
+        "Assign": 154146,
+        "CallGraphEdge": 84434,
+        "ClassInitializer": 2311,
+        "DirectSubclass": 10480,
+        "InitializedClass": 3434,
+        "InstanceFieldPointsTo": 13996740,
+        "MainClass": 1,
+        "MainMethodDeclaration": 1,
+        "MethodImplemented": 95538,
+        "MethodLookup": 483985,
+        "Method_DeclaringType": 104824,
+        "Method_Descriptor": 104824,
+        "Method_Modifier": 134380,
+        "Method_ParamTypes": 104824,
+        "Method_ReturnType": 104824,
+        "Method_SimpleName": 104824,
+        "Reachable": 16620,
+        "StaticFieldPointsTo": 61218,
+        "Subclass": 21447,
+        "SubtypeOf": 61177,
+        "SubtypeOfDifferent": 48357,
+        "Superclass": 21447,
+        "Superinterface": 21288,
+        "SupertypeOf": 61177,
+        "VarPointsTo": 37237353
+       },
+       "tenants_after": "",
+       "utc": "2026-11-03T18:09:09.392461+00:00"
+      }
+     },
+     "gate_seconds": 760.4953327430412,
+     "samples": {
+      "44bf82bc": [
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 30.252003,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 18.818576,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 45, 108.68 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 0,
+        "phases": {
+         "fixpoint": 18.818576,
+         "output": 8.271168,
+         "setup": 3.149631
+        },
+        "process_seconds": 43.731094820424914,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:13:51.506348+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 39.770331,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 29.868144,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 44, 107.58 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 1,
+        "phases": {
+         "fixpoint": 29.868144,
+         "output": 7.044336,
+         "setup": 2.847584
+        },
+        "process_seconds": 52.905963802710176,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:14:45.401419+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 57.403268,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 39.444895,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 47, 110.26 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 2,
+        "phases": {
+         "fixpoint": 39.444895,
+         "output": 14.653214,
+         "setup": 3.294563
+        },
+        "process_seconds": 70.94909437093884,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:17:53.790943+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 22.746026,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 12.106816,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 47, 109.21 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 3,
+        "phases": {
+         "fixpoint": 12.106816,
+         "output": 10.112699,
+         "setup": 0.499452
+        },
+        "process_seconds": 31.123595720157027,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:18:26.117894+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 20.942486,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 12.428993,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2745 MHz, 10001 MHz, 3105 MHz, 45, 81.78 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 4,
+        "phases": {
+         "fixpoint": 12.428993,
+         "output": 6.500085,
+         "setup": 2.001017
+        },
+        "process_seconds": 26.473666180856526,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:20:04.255091+00:00",
+        "warmup": false
+       }
+      ],
+      "c1b75718": [
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 31.967012,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 25.992899,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 45, 108.23 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 0,
+        "phases": {
+         "fixpoint": 25.992899,
+         "output": 5.501139,
+         "setup": 0.471104
+        },
+        "process_seconds": 39.8111231951043,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:13:07.662538+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 45.330923,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 37.757353,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 46, 108.78 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 1,
+        "phases": {
+         "fixpoint": 37.757353,
+         "output": 5.013751,
+         "setup": 2.557978
+        },
+        "process_seconds": 55.30152862891555,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:15:41.851417+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 54.671945,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 47.173229,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 46, 109.64 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 2,
+        "phases": {
+         "fixpoint": 47.173229,
+         "output": 7.176879,
+         "setup": 0.320067
+        },
+        "process_seconds": 60.72945186588913,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:16:42.727167+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 25.692022,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 19.947648,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 47, 105.28 W, 53 %, 2 MiB, 0x0000000000000000",
+        "pair": 3,
+        "phases": {
+         "fixpoint": 19.947648,
+         "output": 5.392778,
+         "setup": 0.34968
+        },
+        "process_seconds": 32.469735209830105,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:18:58.709830+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/batik",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 31.761849,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 25.807453,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 46, 98.42 W, 6 %, 2 MiB, 0x0000000000000000",
+        "pair": 4,
+        "phases": {
+         "fixpoint": 25.807453,
+         "output": 5.056789,
+         "setup": 0.895779
+        },
+        "process_seconds": 38.82441064529121,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 326574,
+         "Assign": 154146,
+         "CallGraphEdge": 84434,
+         "ClassInitializer": 2311,
+         "DirectSubclass": 10480,
+         "InitializedClass": 3434,
+         "InstanceFieldPointsTo": 13996740,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 95538,
+         "MethodLookup": 483985,
+         "Method_DeclaringType": 104824,
+         "Method_Descriptor": 104824,
+         "Method_Modifier": 134380,
+         "Method_ParamTypes": 104824,
+         "Method_ReturnType": 104824,
+         "Method_SimpleName": 104824,
+         "Reachable": 16620,
+         "StaticFieldPointsTo": 61218,
+         "Subclass": 21447,
+         "SubtypeOf": 61177,
+         "SubtypeOfDifferent": 48357,
+         "Superclass": 21447,
+         "Superinterface": 21288,
+         "SupertypeOf": 61177,
+         "VarPointsTo": 37237353
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:19:37.669032+00:00",
+        "warmup": false
+       }
+      ]
+     }
+    },
+    "doop-xalan": {
+     "exact": {
+      "44bf82bc": {
+       "argv": [
+        "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+        "/data/doop-bench/doop-data/xalan"
+       ],
+       "evaluation_seconds": 20.184979,
+       "exit_code": 0,
+       "fixpoint_seconds": 17.269673,
+       "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2820 MHz, 10001 MHz, 3105 MHz, 44, 107.33 W, 0 %, 2 MiB, 0x0000000000000000",
+       "phases": {
+        "fixpoint": 17.269673,
+        "output": 2.546366,
+        "setup": 0.212136
+       },
+       "process_seconds": 44.92400310840458,
+       "relation_counts": {
+        "ArrayIndexPointsTo": 24852,
+        "Assign": 44536,
+        "CallGraphEdge": 20370,
+        "ClassInitializer": 2101,
+        "DirectSubclass": 9693,
+        "InitializedClass": 974,
+        "InstanceFieldPointsTo": 1435800,
+        "MainClass": 1,
+        "MainMethodDeclaration": 1,
+        "MethodImplemented": 93196,
+        "MethodLookup": 433153,
+        "Method_DeclaringType": 101877,
+        "Method_Descriptor": 101877,
+        "Method_Modifier": 131778,
+        "Method_ParamTypes": 101877,
+        "Method_ReturnType": 101877,
+        "Method_SimpleName": 101877,
+        "Reachable": 4425,
+        "StaticFieldPointsTo": 2296,
+        "Subclass": 19732,
+        "SubtypeOf": 53066,
+        "SubtypeOfDifferent": 41419,
+        "Superclass": 19732,
+        "Superinterface": 16524,
+        "SupertypeOf": 53066,
+        "VarPointsTo": 2741586
+       },
+       "tenants_after": "",
+       "utc": "2026-11-03T18:02:41.191217+00:00"
+      },
+      "c1b75718": {
+       "argv": [
+        "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+        "/data/doop-bench/doop-data/xalan"
+       ],
+       "evaluation_seconds": 38.326563,
+       "exit_code": 0,
+       "fixpoint_seconds": 33.690818,
+       "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2820 MHz, 10001 MHz, 3105 MHz, 43, 108.17 W, 0 %, 2 MiB, 0x0000000000000000",
+       "phases": {
+        "fixpoint": 33.690818,
+        "output": 1.835403,
+        "setup": 2.798502
+       },
+       "process_seconds": 64.94242537487298,
+       "relation_counts": {
+        "ArrayIndexPointsTo": 24852,
+        "Assign": 44536,
+        "CallGraphEdge": 20370,
+        "ClassInitializer": 2101,
+        "DirectSubclass": 9693,
+        "InitializedClass": 974,
+        "InstanceFieldPointsTo": 1435800,
+        "MainClass": 1,
+        "MainMethodDeclaration": 1,
+        "MethodImplemented": 93196,
+        "MethodLookup": 433153,
+        "Method_DeclaringType": 101877,
+        "Method_Descriptor": 101877,
+        "Method_Modifier": 131778,
+        "Method_ParamTypes": 101877,
+        "Method_ReturnType": 101877,
+        "Method_SimpleName": 101877,
+        "Reachable": 4425,
+        "StaticFieldPointsTo": 2296,
+        "Subclass": 19732,
+        "SubtypeOf": 53066,
+        "SubtypeOfDifferent": 41419,
+        "Superclass": 19732,
+        "Superinterface": 16524,
+        "SupertypeOf": 53066,
+        "VarPointsTo": 2741586
+       },
+       "tenants_after": "",
+       "utc": "2026-11-03T18:01:55.010323+00:00"
+      }
+     },
+     "gate_seconds": 393.80417756177485,
+     "samples": {
+      "44bf82bc": [
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 11.540776,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 9.233534,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 43, 106.96 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 0,
+        "phases": {
+         "fixpoint": 9.233534,
+         "output": 1.825507,
+         "setup": 0.329717
+        },
+        "process_seconds": 17.599870414473116,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:04:27.089932+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 8.950311,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 6.234661,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 43, 106.08 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 1,
+        "phases": {
+         "fixpoint": 6.234661,
+         "output": 2.21283,
+         "setup": 0.491094
+        },
+        "process_seconds": 14.962169666774571,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:04:42.613214+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 7.572779,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 5.901899,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 44, 106.14 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 2,
+        "phases": {
+         "fixpoint": 5.901899,
+         "output": 0.79893,
+         "setup": 0.72057
+        },
+        "process_seconds": 13.042778552509844,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:06:14.101393+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 4.989486,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 3.693268,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 44, 107.43 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 3,
+        "phases": {
+         "fixpoint": 3.693268,
+         "output": 0.705974,
+         "setup": 0.581487
+        },
+        "process_seconds": 12.317138753831387,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:06:26.521911+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-1/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 3.385274,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 2.295212,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 9501 MHz, 3105 MHz, 45, 104.88 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 4,
+        "phases": {
+         "fixpoint": 2.295212,
+         "output": 0.587535,
+         "setup": 0.490121
+        },
+        "process_seconds": 8.655187608674169,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:07:23.761397+00:00",
+        "warmup": false
+       }
+      ],
+      "c1b75718": [
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 29.750796,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 27.495809,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 44, 106.81 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 0,
+        "phases": {
+         "fixpoint": 27.495809,
+         "output": 1.179679,
+         "setup": 1.073546
+        },
+        "process_seconds": 39.580797160975635,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:04:08.537064+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 34.385422,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 31.394643,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 44, 107.22 W, 51 %, 2 MiB, 0x0000000000000000",
+        "pair": 1,
+        "phases": {
+         "fixpoint": 31.394643,
+         "output": 1.673797,
+         "setup": 1.315218
+        },
+        "process_seconds": 42.58055076096207,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:05:25.304438+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 22.268097,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 20.038385,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 44, 106.68 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 2,
+        "phases": {
+         "fixpoint": 20.038385,
+         "output": 0.918733,
+         "setup": 1.309151
+        },
+        "process_seconds": 35.49019447341561,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:06:00.948773+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 27.902214,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 24.66656,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 45, 107.45 W, 0 %, 2 MiB, 0x0000000000000000",
+        "pair": 3,
+        "phases": {
+         "fixpoint": 24.66656,
+         "output": 1.957074,
+         "setup": 1.276808
+        },
+        "process_seconds": 37.361472616903484,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:07:04.941892+00:00",
+        "warmup": false
+       },
+       {
+        "argv": [
+         "/workspace/remote-gpu/20261103T175818.295848Z/bundle-0/bin/doop-gpu",
+         "/data/doop-bench/doop-data/xalan",
+         "--gpu-only"
+        ],
+        "evaluation_seconds": 4.576779,
+        "exact_counts_match": true,
+        "exit_code": 0,
+        "fixpoint_seconds": 3.829592,
+        "gpu_state_after": "NVIDIA RTX 6000 Ada Generation, 2805 MHz, 10001 MHz, 3105 MHz, 45, 104.42 W, 6 %, 2 MiB, 0x0000000000000000",
+        "pair": 4,
+        "phases": {
+         "fixpoint": 3.829592,
+         "output": 0.400147,
+         "setup": 0.345342
+        },
+        "process_seconds": 9.867717741057277,
+        "relation_counts": {
+         "ArrayIndexPointsTo": 24852,
+         "Assign": 44536,
+         "CallGraphEdge": 20370,
+         "ClassInitializer": 2101,
+         "DirectSubclass": 9693,
+         "InitializedClass": 974,
+         "InstanceFieldPointsTo": 1435800,
+         "MainClass": 1,
+         "MainMethodDeclaration": 1,
+         "MethodImplemented": 93196,
+         "MethodLookup": 433153,
+         "Method_DeclaringType": 101877,
+         "Method_Descriptor": 101877,
+         "Method_Modifier": 131778,
+         "Method_ParamTypes": 101877,
+         "Method_ReturnType": 101877,
+         "Method_SimpleName": 101877,
+         "Reachable": 4425,
+         "StaticFieldPointsTo": 2296,
+         "Subclass": 19732,
+         "SubtypeOf": 53066,
+         "SubtypeOfDifferent": 41419,
+         "Superclass": 19732,
+         "Superinterface": 16524,
+         "SupertypeOf": 53066,
+         "VarPointsTo": 2741586
+        },
+        "tenants_after": "",
+        "utc": "2026-11-03T18:07:14.952200+00:00",
+        "warmup": false
+       }
+      ]
+     }
     }
    }
   },
