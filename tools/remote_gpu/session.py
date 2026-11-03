@@ -233,6 +233,15 @@ def main():
     def ssh(argv, name, **kwargs):
         return command([*connection, shlex.join(argv)], name, **kwargs)
 
+    def pull(name, **kwargs):
+        # Stream the results tree; scp -r rejects a trailing '/.' source.
+        local = results / 'pod-results'
+        local.mkdir(exist_ok=True)
+        remote_tar = shlex.join(['tar', '-C', remote + '/results', '-cf', '-', '.'])
+        script = (shlex.join([*connection, remote_tar]) + ' | '
+                  + shlex.join(['tar', '-xf', '-', '-C', str(local)]))
+        return command(['bash', '-o', 'pipefail', '-c', script], name, **kwargs)
+
     signal.signal(signal.SIGINT, interrupt)
     signal.signal(signal.SIGTERM, interrupt)
     timer = threading.Timer(CAP_SECONDS, cap)
@@ -321,8 +330,7 @@ def main():
                 state['running'] = None
                 save()
                 # Pull each finished step immediately; a hard cap need not lose it.
-                command(['scp', *options, '-P', port, '-r', host + ':' + remote + '/results/.',
-                         str(results / 'pod-results')], 'pull-' + label.replace('/', '-'))
+                pull('pull-' + label.replace('/', '-'))
     except Exception as error:
         state['errors'].append(str(error))
         print(str(error), file=sys.stderr)
@@ -332,8 +340,7 @@ def main():
         # deletion wins; partial logs remain on the persistent network volume.
         if connection and not state['capped'] and not cancelled:
             try:
-                command(['scp', *options, '-P', port, '-r', host + ':' + remote + '/results/.',
-                         str(results / 'pod-results')], 'pull-final', check=False, timeout=30)
+                pull('pull-final', check=False, timeout=30)
             except Exception as error:
                 state['errors'].append(str(error))
         delete()
