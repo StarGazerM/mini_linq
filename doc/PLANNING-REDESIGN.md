@@ -1073,6 +1073,58 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Masks versus Tree is closed with Masks retained; the selective proposal is
   not implemented. `delta=k` SRDatalog plans are in progress. Placement spine
   remains conditional on a branching machine.
+  **delta=k coarse-order revisit (2026-11-03): census and CPU experiment.**
+  `k` is the zero-based original body occurrence, not an IDB ordinal or
+  reordered position. Default / field-flow source queries have 82 / 85 rules
+  (88 / 91 single-head expansions); 20 / 22 rules contain at least two
+  positive IDB atoms, but only 14 / 15 contain at least two **changing**
+  same-SCC positions. There are 37 / 38 changing positions in those rules
+  (47 / 48 after head expansion), and 9 / 7 authored delta entries
+  (12 / 10 expanded), versus zero imports in the committed default.
+  Eight of nine / six of seven imported greedy atom orders already equal
+  the GPU delta-first occurrence certificate; the exceptions are
+  `VPT_LoadField delta=2` / `FieldFlow_rule delta=2`, imported `210` versus
+  driver `201`. Equal certificates do not establish equal executable plans.
+  SRDatalog's variable order binds individual variables; the importer greedily
+  binds whole atoms and is **not a faithful WCOJ plan import**.
+  The checked CPU census independently admits every resulting VO: for both
+  mini and mini-par, pinning the current written orders (B) leaves all 65 / 67
+  recursive-hole VOs byte-identical to default A; imported delta-only C
+  changes all 9 / 7 authored entries (12 / 10 split-head holes).
+  Therefore CPU timings compare A/C, not redundant A/B; C excludes all six
+  base entries and does not import execution pragmas. This is a complete-set
+  comparison, not per-position attribution. DL-Incremental already records
+  delta identity and occurrence advice; CQ/VO remains executable-plan owner.
+  Contract **4 is superseded by 7**: preserve opaque Rust and contracts 1, 5,
+  and 7; do not restore expression classification or Sequence replanning.
+  The historical imported-order batik GPU observation was 9.1→21.3 s.
+  It is distinct from the reverted opacity-classification experiment
+  (xalan 2.20→9.35 s, batik OOM); neither establishes per-node causality.
+  Full census, checked VO correspondence, source provenance, and reproduction
+  protocol: `/data/design-notes/delta-k-design.md`; raw artifacts:
+  `/data/mini_linq-wt/delta-k/target/delta-k-census/`.
+  **Measurement stopped on user direction:** retained CPU samples are
+  exploratory only, not a default/planning decision; no ratios are promoted
+  here. Imported occurrence orders were measured before reviewing their
+  interaction with evidence roots, L&E phases, Masks, join filters, blocked
+  scans, provider selection and admission/canon. A legal checked permutation
+  alone does not justify that experiment. Remaining exports had been moved
+  to `/dev/shm`; interrupted samples are discarded. No GPU benchmarks ran.
+  The new **Plan review** in the design note compares A/C recorded plans and
+  expanded Rust before any further measurement. Delta-specific planning must
+  use the same evidence and downstream capabilities as the rest of cq-order,
+  not an isolated imported greedy permutation. Defaults remain unchanged.
+  The completed review finds **four source entries / eight emitted C cases**
+  delaying an already-bound array-kind membership until after RSI expansion.
+  P3.3e's DL-Fanout reaches every variant but only informs admission; CQ
+  `Planning` transports neither that evidence nor per-round counts. A therefore
+  uses ordinary Prefix/Coarse, not evidence-driven root selection. Masks is
+  enabled but these holes have no qualifying Restrict; no optional L&E split,
+  P7 filter or P5 blocked-scan decision was active. Complete CPU expansions,
+  Structures, serial Sequence (parallel prints Structures directly), and the
+  selected GPU delta-2 realization review support the joint Datalog planner
+  handoff. Do not resume isolated-order timing; delta=k belongs in cq-order's
+  per-delta planning after the evidence/readiness integration.
   **Key-partition routing projection: no target in the measured CPU suite**
   (2026-11-03, 57216a5c). The preimplementation census covered 28 Tasks/par
   kernels at SF1 with six workers; all complete answers matched DuckDB.
@@ -1596,8 +1648,10 @@ P6 slice C, P7.3 design and P8 `delta=k`; these are not additional merged result
   catalog matching accepts wildcard native tokens and preserves concrete
   native keyed layouts (`cq-sequence-plan/src/catalog.rs`).
 - P3.3-lite removes automatic Sequence replanning rather than demoting its
-  ordering authority. Open: revisit contract 4 and the `delta=k` SRDatalog
-  plan translation that regressed batik.
+  ordering authority. Contract 4 is superseded by contract 7; expression
+  classification and Sequence join replanning must not return. Open: remeasure
+  the `delta=k` SRDatalog coarse-plan translation that regressed batik GPU,
+  under the current CQ/VO ordering authority (see P8).
 - M0 baseline (P3.3-lite + transitional P3c sort canon), 2026-10-30.
   Expanded gate vs `0072f5fb`: every target differs, 518 hunks, all in the
   canon realization (`__cq_seen` HashSet → `dedup::sort`); P3.3-lite adds no
