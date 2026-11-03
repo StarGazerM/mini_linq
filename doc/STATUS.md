@@ -582,15 +582,19 @@ approval.
   Before AOT: cold first run after a rebuild ~25 s (driver PTX JIT cache empty). The GPU
   workspace pins pushed forks (cuda-oxide and RCCL `mini-linq/main`), Rust
   1.99.1, CUDA 13.0.
-  Latest recorded `srd-doop-gpu` P6b checkpoint (2026-10-31):
-  xalan **0.905 s**, batik **1.580 s**, with `lanes(streams = 4)`;
-  [P6b](PLANNING-REDESIGN.md) records paired predecessor comparisons and
-  exact output evidence. The historical SRD fullclock references are
-  **1.01–1.02 s / 1.82–2.10 s** in
-  [`p3b-profile/01-doop-report.md`](../experiments/gpu/compare/p3b-profile/01-doop-report.md).
-  Different clock/configuration boundaries prevent treating that cross-source
-  comparison as a new paired benchmark. These timings do not describe the
-  distinct 26-output `doop-gpu` Cassandra workload above.
+  Fresh local SRD comparison (2026-11-03, unmodified `dbe4c2cb`):
+  xalan's same 43-IDB field-flow fixpoint is **0.880 s** in `srd-doop-gpu`
+  versus **1.187 s** in live SRDatalog `fab849f`, paired ratio
+  **0.741 [0.598, 0.943]** (five rotating rounds, exact outputs).
+  Batik has only one completed observation (**1.929 / 1.844 s**): the user
+  stopped further runs, so no Batik ratio/CI is claimed. These replace the
+  historical Oct 26 default-query ranges as the latest live observations,
+  not as a five-pair Batik result. End-to-end boundaries differ; the report
+  shows phases separately and does not claim an end-to-end speedup.
+  The distinct 26-output `doop-gpu` workload is reported without any SRD ratio.
+  See [local SRD report](../experiments/gpu/compare/srd-local-2026-11-03.md)
+  for raw evidence, load/lock accounting and the late root-bound membership
+  finding in the default planner's array-store delta variants.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; surface sugar
   (disjunction, facts, rule macros). Pure-total Rust remains a semantic premise.

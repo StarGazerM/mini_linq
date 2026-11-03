@@ -1059,22 +1059,29 @@ geomean was **1.085 [1.033, 1.120]** (5 pairs) and SF10 **1.023 [1.000, 1.054]**
 0.599] and batik 0.724 [0.482, 0.836]. Treat both as low confidence: the same
 binary varied up to 10x between fresh processes (xalan reference 3.8–31.4 s),
 cause not established. Live SRDatalog and `srd-doop-gpu` were not part of the pod
-runs (no SRD toolchain or prepared corpus there). The `srd-doop-gpu` numbers above
-and the SRD ranges below remain the latest records for that workload.
+runs (no SRD toolchain or prepared corpus there). A later local comparison is
+recorded below; do not mix its field-flow program with the historical SRD
+default-query references.
 
 These historical ratios use mismatched boundaries: current includes terminal
 host downloads in build/total, while the reference excludes them. They are
 biased against current and do not establish execution regressions. Current
 reports separate final `download_ms` and expose executed stage accounting.
-For context only, the older SRDatalog fullclock reference ranges are
-**1.008194–1.021628 s xalan / 1.818340–2.101104 s batik**, retained in
-[`srd_query_xalan_batik.results.json`](compare/srd_query_xalan_batik.results.json)
-(`external_default_reference`, 2026-10-26) and the
-[2026-10-31 profile report](compare/p3b-profile/01-doop-report.md).
-Those are the SRD **default-query** references, not the factored field-flow
-query, and are not interleaved P6b comparisons. The artifact flags a different
-process deadline, cardinality-only validation, and no under-load clock sample
-for xalan. Do not infer a controlled cross-engine speedup from these ranges.
+**Fresh local SRD comparison (2026-11-03):**
+[`compare/srd-local-2026-11-03.md`](compare/srd-local-2026-11-03.md) measures
+unmodified `dbe4c2cb` against live SRDatalog `fab849f` on the same RTX 6000 Ada
+and the same 43-IDB field-flow corpus. Xalan fixpoint medians are **0.880 s**
+(`srd-doop-gpu`) and **1.187 s** (SRD), ours/SRD **0.741 [0.598, 0.943]**,
+five rotating paired rounds. First samples matched all 43 complete IDB sets;
+later samples checked exact counts and seeded actual tuples. Batik completed
+one exact observation (**1.929 / 1.844 s**) before the user stopped further
+runs: no Batik ratio or CI is claimed. End-to-end figures are explicitly
+boundary-confounded and shown phase-by-phase, without a speedup ratio.
+The separate 26-output `doop-gpu` workload has no ratio against SRD.
+These are the latest live observations; the Oct 26 **default-query** ranges
+remain historical, not paired field-flow evidence. The report also records
+the default planner's late root-bound eligibility test in two array-store
+delta variants; no planner or production code changed in this measurement.
 
 `compare/srd_query_benchmark.py` retains provenance, per-process logs, uptime,
 and in-run `nvidia-smi` SM-clock samples in the results JSON. From this directory:
