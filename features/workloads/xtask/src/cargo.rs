@@ -52,11 +52,9 @@ fn remove_package_identity(
     }
 }
 
-/// Resolve generated consumers against the same public packages as this workspace.
-/// Local core dependencies keep version + path; packaged core remains registry-only.
-pub(super) fn dependencies(names: &[&str]) -> crate::Result<String> {
-    static PACKAGES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
-    if PACKAGES.get().is_none() {
+fn metadata() -> crate::Result<&'static serde_json::Value> {
+    static METADATA: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    if METADATA.get().is_none() {
         let output = command()
             .args([
                 "metadata",
@@ -70,9 +68,22 @@ pub(super) fn dependencies(names: &[&str]) -> crate::Result<String> {
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());
         }
-        let _ = PACKAGES.set(serde_json::from_slice(&output.stdout)?);
+        let _ = METADATA.set(serde_json::from_slice(&output.stdout)?);
     }
-    let packages = PACKAGES.get().expect("resolved packages")["packages"]
+    Ok(METADATA.get().expect("resolved workspace metadata"))
+}
+
+pub(super) fn lockfile() -> crate::Result<std::path::PathBuf> {
+    let root = metadata()?["workspace_root"]
+        .as_str()
+        .ok_or("missing workspace root")?;
+    Ok(std::path::Path::new(root).join("Cargo.lock"))
+}
+
+/// Resolve generated consumers against the same public packages as this workspace.
+/// Local core dependencies keep version + path; packaged core remains registry-only.
+pub(super) fn dependencies(names: &[&str]) -> crate::Result<String> {
+    let packages = metadata()?["packages"]
         .as_array()
         .ok_or("invalid cargo metadata")?;
     let mut manifest = String::new();

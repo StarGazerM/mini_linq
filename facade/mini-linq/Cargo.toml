@@ -36,4 +36,3 @@ cq-sequence-pull.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true
 core-pass-fixtures = { path = "../../tools/fixtures/pass-macros", version = "0.1.0" }
-cq-gpu-sequence-macros = { path = "../../experiments/gpu/sequence/macros" }

@@ -7,12 +7,19 @@ import shutil
 import subprocess
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[2]
+PACKAGE = Path(__file__).resolve().parents[1]
 CARGO = os.environ.get("CARGO", "cargo")
-LOGS = ROOT / "target/extension-ui"
+env = dict(os.environ, CARGO_TERM_COLOR="never")
+metadata = json.loads(subprocess.check_output(
+    [CARGO, "metadata", "--offline", "--format-version=1", "--manifest-path", str(PACKAGE / "Cargo.toml")],
+    env=env,
+))
+# Generated Cargo invocations must inherit the workspace's source configuration,
+# including packaged sources when the build directory is overridden externally.
+LOGS = Path(metadata["workspace_root"]) / "target/extension-ui"
 LOGS.mkdir(parents=True, exist_ok=True)
 DIRECTORY = Path(tempfile.mkdtemp(prefix="consumer-", dir=LOGS))
-env = dict(os.environ, CARGO_TARGET_DIR=str(LOGS / "build"), CARGO_TERM_COLOR="never")
+env["CARGO_TARGET_DIR"] = str(LOGS / "build")
 
 
 def compile_expression(extension, source):
@@ -44,9 +51,6 @@ expressions += [
 # Resolve public package identities from the running workspace. A packaged core
 # dependency stays a registry dependency; a local core dependency retains its
 # public path. No source files or private test modules are imported.
-metadata = json.loads(subprocess.check_output(
-    [CARGO, "metadata", "--offline", "--format-version=1"], cwd=ROOT, env=env
-))
 packages = {package["name"]: package for package in metadata["packages"]}
 manifest = '[package]\nname = "extension-ui"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
 for name in ["cq-ext-aggregate", "cq-ext-recursion", "cq-ext-correlated", "mini-linq", "cq-storage"]:
@@ -62,7 +66,7 @@ smoke = compile_expression("union", "struct U; relation A(x:i32); answer(x) :- A
 (DIRECTORY / "smoke.rs").write_text(f"fn main() {{ let A = [(1_i32,)]; let _: Vec<_> = ({smoke}).collect(); }}\n")
 manifest += '[[bin]]\nname = "smoke"\npath = "smoke.rs"\n'
 (DIRECTORY / "Cargo.toml").write_text(manifest)
-shutil.copy2(ROOT / "Cargo.lock", DIRECTORY / "Cargo.lock")
+shutil.copy2(Path(metadata["workspace_root"]) / "Cargo.lock", DIRECTORY / "Cargo.lock")
 subprocess.run([CARGO, "metadata", "--offline", "--format-version=1"], cwd=DIRECTORY, env=env, check=True, capture_output=True)
 smoke = subprocess.run([CARGO, "check", "--offline", "--locked", "--bin", "smoke"], cwd=DIRECTORY, env=env, capture_output=True, text=True)
 if smoke.returncode:

@@ -11,12 +11,16 @@ import shutil
 import subprocess
 import tempfile
 
-from consumer import WORKSPACE as ROOT, dependencies
-UI_ROOT = ROOT / "target/workload-ui"
+from consumer import dependencies, workspace_metadata
+
+CARGO = os.environ.get("CARGO", "cargo")
+metadata = workspace_metadata(CARGO, os.environ)
+# Keep generated sources under Cargo's workspace configuration even when its
+# build directory is external (as in the packaged-consumer gate).
+UI_ROOT = Path(metadata["workspace_root"]) / "target/workload-ui"
 UI_ROOT.mkdir(parents=True, exist_ok=True)
 # Keep manifests and diagnostics private to each invocation.
 DIRECTORY = Path(tempfile.mkdtemp(prefix="fixtures-", dir=UI_ROOT))
-CARGO = os.environ.get("CARGO", "cargo")
 # Resolve relative overrides in the caller's cwd, before Cargo runs in DIRECTORY.
 target = Path(os.environ.get("CARGO_TARGET_DIR", UI_ROOT / "target"))
 if not target.is_absolute():
@@ -24,7 +28,7 @@ if not target.is_absolute():
 target = target / "ui"
 env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO_TERM_COLOR="never")
 manifest = '[package]\nname = "workload-ui"\nversion = "0.0.0"\nedition = "2024"\n[workspace]\n[dependencies]\n'
-manifest += dependencies(CARGO, ["mini-linq", "cq-storage", "cq-load", "cq-workloads", "cq-planners", "cq-rewrites", "cq-workload-passes", "own-push"], env)
+manifest += dependencies(metadata, ["mini-linq", "cq-storage", "cq-load", "cq-workloads", "cq-planners", "cq-rewrites", "cq-workload-passes", "own-push"])
 fixtures = [(name, Path(__file__).parent / f"{name}.rs", executes)
             for name, executes in [
                 ("ordered", False),
@@ -42,7 +46,7 @@ fixtures = [(name, Path(__file__).parent / f"{name}.rs", executes)
 for name, path, _ in fixtures:
     manifest += f'[[bin]]\nname = "{name}"\npath = {json.dumps(str(path))}\n'
 (DIRECTORY / "Cargo.toml").write_text(manifest)
-shutil.copy2(ROOT / "Cargo.lock", DIRECTORY / "Cargo.lock")
+shutil.copy2(Path(metadata["workspace_root"]) / "Cargo.lock", DIRECTORY / "Cargo.lock")
 subprocess.run([CARGO, "metadata", "--offline", "--format-version=1"], cwd=DIRECTORY, env=env, check=True,
                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 

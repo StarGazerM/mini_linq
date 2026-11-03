@@ -122,12 +122,12 @@ def command_for(package, kind, target, source):
         cargo = ["cargo", "run", "--locked"]
     elif kind not in ("manifest-test", "oracle-test", "manifest-target-test", "manifest-feature-test"):
         raise ValueError(f"Unknown regression kind: {kind}")
-    cargo += ["--manifest-path", source]
+    cargo += ["--manifest-path", source, "-p", package]
     if kind == "manifest-target-test":
         cargo += ["--test", target]
     elif kind == "manifest-feature-test":
         test, feature = target.rsplit("@", 1)
-        cargo += ["-p", package, "--test", test]
+        cargo += ["--test", test]
         cargo += ["--all-features"] if feature == "all-features" else ["--features", feature]
     elif kind in ("oracle", "oracle-test"):
         cargo += ["--features", "oracle"]
@@ -162,12 +162,7 @@ def resources_for(row):
         contexts = SCENARIO_CARGO.get(source)
         if contexts is None:
             return frozenset({"*"})
-        resources = frozenset().union(*(cargo_resources(*context) for context in contexts))
-        if source == "features/stacked-ir/check_expansions.py":
-            # This scenario overrides Cargo's configured target directory.
-            directory = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
-            resources |= {str((ROOT / "features/stacked-ir" / directory).resolve())}
-        return resources
+        return frozenset().union(*(cargo_resources(*context) for context in contexts))
     manifest = "Cargo.toml" if kind in ("test", "example", "lib") else source
     return cargo_resources(manifest, ".")
 

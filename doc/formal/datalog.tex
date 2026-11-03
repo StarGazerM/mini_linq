@@ -1819,6 +1819,7 @@ Pass libraries depend on their endpoint languages and required public support.
 The facade owns defaults, configuration and macro re-exports.
 The configuration library imports the CQ default-queue helper from the fork
 producer; the generic CQ configuration and stage protocol remain unchanged.
-The separate \code{features/datalog-parallel} workspace owns all
-parallel-specific execution and printing code. There are no compatibility
+The \code{features/datalog-parallel} packages own all parallel-specific execution
+and printing code while sharing the root development workspace for build reuse.
+There are no compatibility
 aliases for the replaced monolithic language or hard-coded resume macros.

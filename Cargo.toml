@@ -1,5 +1,5 @@
 [package]
-# External consumers under features/ have their own completion gates.
+# Optional consumers share artifacts, not the core dependency boundary.
 autoexamples = false
 name = "mini-linq-course"
 version.workspace = true
@@ -39,8 +39,212 @@ members = [
     "facade/cq-planning",
     "facade/mini-linq",
     "facade/mini-linq-macros",
+    "doc/formal/example",
+    "experiments/mac/index-bench/native",
+    "experiments/storage-bench/cpu",
+    "features/composition",
+    "features/datalog-parallel",
+    "features/datalog-parallel/doop",
+    "features/datalog-parallel/doop/engines/ascent-par",
+    "features/datalog-parallel/doop/engines/mini-par",
+    "features/datalog-parallel/doop/engines/mini-par-keyed",
+    "features/datalog-parallel/oracle",
+    "features/datalog-parallel/oracle/engines/ascent-par",
+    "features/datalog-parallel/oracle/engines/mini-par",
+    "features/datalog-parallel/partition",
+    "features/datalog-parallel/print",
+    "features/datalog-parallel/runtime",
+    "features/datalog-parallel/test-passes",
+    "features/datalog/ddisasm",
+    "features/datalog/doop",
+    "features/datalog/doop/engines/ascent",
+    "features/datalog/doop/engines/mini",
+    "features/datalog/doop/engines/mini-keyed",
+    "features/datalog/doop/shared",
+    "features/datalog/doop/srd",
+    "features/datalog/doop/srd-engines/harness",
+    "features/datalog/doop/srd-engines/mini",
+    "features/datalog/doop/srd-engines/mini-par",
+    "features/datalog/facade/configuration",
+    "features/datalog/facade/cq-datalog",
+    "features/datalog/facade/macros",
+    "features/datalog/languages/dl-incremental",
+    "features/datalog/languages/dl-round",
+    "features/datalog/languages/dl-source",
+    "features/datalog/languages/dl-storage",
+    "features/datalog/languages/dl-strata",
+    "features/datalog/oracle",
+    "features/datalog/oracle/engines/ascent",
+    "features/datalog/oracle/engines/mini",
+    "features/datalog/oracle/engines/mini-keyed",
+    "features/datalog/oracle/shared",
+    "features/datalog/passes/fork",
+    "features/datalog/passes/hasher",
+    "features/datalog/passes/incremental",
+    "features/datalog/passes/print-rounds",
+    "features/datalog/passes/schedule",
+    "features/datalog/passes/storage",
+    "features/datalog/passes/stratify",
+    "features/datalog/passes/surface-if-let",
+    "features/datalog/print",
+    "features/datalog/support",
+    "features/datalog/test-passes",
+    "features/datalog/testkit",
+    "features/diverged-ra",
+    "features/diverged-ra/ra-theta",
+    "features/diverged-ra/theta-passes",
+    "features/extensions/conformance",
+    "features/extensions/cq-ext-aggregate",
+    "features/extensions/cq-ext-correlated",
+    "features/extensions/cq-ext-recursion",
+    "features/extensions/cq-ext-support",
+    "features/extensions/test-passes",
+    "features/inspection",
+    "features/join-filters",
+    "features/own-dialect",
+    "features/own-dialect/printer",
+    "features/planners",
+    "features/planners/macros",
+    "features/planners/plan",
+    "features/planners/test-driver",
+    "features/rewrites",
+    "features/rewrites/passes",
+    "features/rewrites/test-driver",
+    "features/sequence-conformance",
+    "features/sequence-rewrites",
+    "features/sequence-tasks",
+    "features/sequence-tasks/macros",
+    "features/stacked-ir",
+    "features/stacked-ir/bridge",
+    "features/stacked-ir/physical-to-trace",
+    "features/stacked-ir/test-passes",
+    "features/stacked-ir/trace",
+    "features/stacked-ir/trace-to-physical",
+    "features/workloads",
+    "features/workloads/authored",
+    "features/workloads/e2e",
+    "features/workloads/e2e/corpus",
+    "features/workloads/pipeline-passes",
+    "features/workloads/xtask",
+    "tools/fixtures/correspondence-performance",
 ]
-exclude = ["features", "tools/fixtures"]
+# Keep dev-dependency instrumentation opt-in through explicit package gates.
+default-members = [
+    ".",
+    "languages/cq-syntax",
+    "languages/cq-lang-cq",
+    "languages/cq-lang-vo",
+    "languages/cq-lang-ra",
+    "languages/cq-lang-ix",
+    "languages/cq-lang-physical",
+    "languages/cq-lang-structures",
+    "languages/cq-lang-sequence",
+    "passes/cq-order",
+    "passes/cq-reduce",
+    "passes/cq-relational-lowering",
+    "passes/cq-ra-rewrites",
+    "passes/cq-index-policy",
+    "passes/cq-physical-lowering",
+    "passes/cq-structure-selection",
+    "passes/cq-sequence-lowering",
+    "passes/cq-sequence-plan",
+    "passes/cq-represent",
+    "passes/cq-staging",
+    "passes/cq-print",
+    "passes/cq-physical-realization",
+    "passes/cq-sequence-pull",
+    "runtime/cq-storage",
+    "testkit/cq-testkit",
+    "facade/cq-stage",
+    "facade/cq-planning",
+    "facade/mini-linq-macros",
+    "doc/formal/example",
+    "experiments/mac/index-bench/native",
+    "experiments/storage-bench/cpu",
+    "features/composition",
+    "features/datalog-parallel",
+    "features/datalog-parallel/doop",
+    "features/datalog-parallel/doop/engines/ascent-par",
+    "features/datalog-parallel/doop/engines/mini-par",
+    "features/datalog-parallel/doop/engines/mini-par-keyed",
+    "features/datalog-parallel/oracle",
+    "features/datalog-parallel/oracle/engines/ascent-par",
+    "features/datalog-parallel/oracle/engines/mini-par",
+    "features/datalog-parallel/partition",
+    "features/datalog-parallel/print",
+    "features/datalog-parallel/runtime",
+    "features/datalog-parallel/test-passes",
+    "features/datalog/ddisasm",
+    "features/datalog/doop",
+    "features/datalog/doop/engines/ascent",
+    "features/datalog/doop/engines/mini",
+    "features/datalog/doop/engines/mini-keyed",
+    "features/datalog/doop/shared",
+    "features/datalog/doop/srd",
+    "features/datalog/doop/srd-engines/harness",
+    "features/datalog/doop/srd-engines/mini",
+    "features/datalog/doop/srd-engines/mini-par",
+    "features/datalog/facade/configuration",
+    "features/datalog/facade/cq-datalog",
+    "features/datalog/facade/macros",
+    "features/datalog/languages/dl-incremental",
+    "features/datalog/languages/dl-round",
+    "features/datalog/languages/dl-source",
+    "features/datalog/languages/dl-storage",
+    "features/datalog/languages/dl-strata",
+    "features/datalog/oracle",
+    "features/datalog/oracle/engines/ascent",
+    "features/datalog/oracle/engines/mini",
+    "features/datalog/oracle/engines/mini-keyed",
+    "features/datalog/oracle/shared",
+    "features/datalog/passes/fork",
+    "features/datalog/passes/hasher",
+    "features/datalog/passes/incremental",
+    "features/datalog/passes/print-rounds",
+    "features/datalog/passes/schedule",
+    "features/datalog/passes/storage",
+    "features/datalog/passes/stratify",
+    "features/datalog/passes/surface-if-let",
+    "features/datalog/print",
+    "features/datalog/support",
+    "features/datalog/test-passes",
+    "features/datalog/testkit",
+    "features/diverged-ra",
+    "features/diverged-ra/ra-theta",
+    "features/diverged-ra/theta-passes",
+    "features/extensions/conformance",
+    "features/extensions/cq-ext-aggregate",
+    "features/extensions/cq-ext-correlated",
+    "features/extensions/cq-ext-recursion",
+    "features/extensions/cq-ext-support",
+    "features/extensions/test-passes",
+    "features/inspection",
+    "features/join-filters",
+    "features/own-dialect/printer",
+    "features/planners",
+    "features/planners/macros",
+    "features/planners/plan",
+    "features/planners/test-driver",
+    "features/rewrites/passes",
+    "features/rewrites/test-driver",
+    "features/sequence-conformance",
+    "features/sequence-rewrites",
+    "features/sequence-tasks/macros",
+    "features/stacked-ir",
+    "features/stacked-ir/bridge",
+    "features/stacked-ir/physical-to-trace",
+    "features/stacked-ir/test-passes",
+    "features/stacked-ir/trace",
+    "features/stacked-ir/trace-to-physical",
+    "features/workloads",
+    "features/workloads/authored",
+    "features/workloads/e2e",
+    "features/workloads/e2e/corpus",
+    "features/workloads/pipeline-passes",
+    "features/workloads/xtask",
+    "tools/fixtures/correspondence-performance",
+]
+exclude = ["experiments/gpu", "experiments/mac", "tools/fixtures/external", "tools/fixtures/external-siblings", "tools/fixtures/in-tree-only", "tools/fixtures/pass-macros"]
 resolver = "3"
 
 [workspace.package]
@@ -82,6 +286,44 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn_derive = { version = "0.2.0", git = "https://github.com/StarGazerM/syn_derive", rev = "97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562" }
+cq-datalog = { version = "0.0.0", path = "features/datalog/facade/cq-datalog" }
+cq-datalog-configuration = { version = "0.0.0", path = "features/datalog/facade/configuration" }
+cq-datalog-fork = { version = "0.0.0", path = "features/datalog/passes/fork" }
+cq-datalog-hasher = { version = "0.0.0", path = "features/datalog/passes/hasher" }
+cq-datalog-incremental = { version = "0.0.0", path = "features/datalog/passes/incremental" }
+cq-datalog-macros = { version = "0.0.0", path = "features/datalog/facade/macros" }
+cq-datalog-print = { version = "0.0.0", path = "features/datalog/print" }
+cq-datalog-print-rounds = { version = "0.0.0", path = "features/datalog/passes/print-rounds" }
+cq-datalog-schedule = { version = "0.0.0", path = "features/datalog/passes/schedule" }
+cq-datalog-storage = { version = "0.0.0", path = "features/datalog/passes/storage" }
+cq-datalog-stratify = { version = "0.0.0", path = "features/datalog/passes/stratify" }
+cq-datalog-support = { version = "0.0.0", path = "features/datalog/support" }
+cq-datalog-surface-if-let = { version = "0.0.0", path = "features/datalog/passes/surface-if-let" }
+cq-ext-aggregate = { path = "features/extensions/cq-ext-aggregate" }
+cq-ext-correlated = { path = "features/extensions/cq-ext-correlated" }
+cq-ext-recursion = { path = "features/extensions/cq-ext-recursion" }
+cq-ext-support = { path = "features/extensions/cq-ext-support" }
+cq-join-filters = { path = "features/join-filters" }
+cq-lang-datalog-incremental = { version = "0.0.0", path = "features/datalog/languages/dl-incremental" }
+cq-lang-datalog-round = { version = "0.0.0", path = "features/datalog/languages/dl-round" }
+cq-lang-datalog-source = { version = "0.0.0", path = "features/datalog/languages/dl-source" }
+cq-lang-datalog-storage = { version = "0.0.0", path = "features/datalog/languages/dl-storage" }
+cq-lang-datalog-strata = { version = "0.0.0", path = "features/datalog/languages/dl-strata" }
+cq-lang-trace = { version = "0.0.0", path = "features/stacked-ir/trace" }
+cq-planners = { path = "features/planners" }
+cq-planners-plan = { path = "features/planners/plan" }
+cq-rewrite-passes = { path = "features/rewrites/passes" }
+cq-rewrites = { path = "features/rewrites" }
+cq-sequence-tasks = { path = "features/sequence-tasks" }
+cq-sequence-tasks-macros = { path = "features/sequence-tasks/macros" }
+cq-workload-passes = { path = "features/workloads/pipeline-passes" }
+own-push = { version = "0.0.0", path = "features/own-dialect/printer" }
+physical-to-trace = { version = "0.0.0", path = "features/stacked-ir/physical-to-trace" }
+prettyplease = "0.2"
+rustc-hash = "=2.1.3"
+stacked-ir-test-passes = { version = "0.0.0", path = "features/stacked-ir/test-passes" }
+trace-bridge = { version = "0.0.0", path = "features/stacked-ir/bridge" }
+trace-to-physical = { version = "0.0.0", path = "features/stacked-ir/trace-to-physical" }
 
 [dependencies]
 cq-lang-cq.workspace = true
@@ -98,3 +340,29 @@ hw4 = []
 [[test]]
 name = "hw4_optional"
 required-features = ["hw4"]
+
+# Shared compiler/proc-macro execution keeps the existing consumer optimization.
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release.build-override]
+opt-level = 3
+
+# Preserve the workload matrix's existing binary debug settings.
+[profile.dev.package.cq-workload-corpus]
+debug = 0
+
+[profile.test.package.cq-workload-corpus]
+debug = 0
+
+[profile.dev.package.cq-workload-e2e]
+debug = 0
+
+[profile.test.package.cq-workload-e2e]
+debug = 0
+
+# Native storage benchmarks previously used isolated thin-LTO release profiles.
+[profile.cpu-bench]
+inherits = "release"
+codegen-units = 1
+lto = "thin"

@@ -312,26 +312,31 @@ class Impact:
             starts = {identifier for identifier in context["members"]
                       if identifier in packages and packages[identifier][0] == row[0]}
         elif row[1] in MANIFEST_KINDS:
-            starts = set(context["defaults"])
+            starts = {identifier for identifier in context["members"]
+                      if identifier in packages and packages[identifier][0] == row[0]}
             if row[1] == "manifest-target-test":
                 starts = self._target_owners(context, starts, "test", row[2])
             elif row[1] == "manifest-feature-test":
-                starts = {identifier for identifier in context["members"]
-                          if identifier in packages and packages[identifier][0] == row[0]}
                 starts = self._target_owners(context, starts, "test", row[2].rsplit("@", 1)[0])
             elif row[1] in {"manifest-run", "oracle"}:
                 starts = self._target_owners(context, starts, "bin", None)
                 if starts is None or len(starts) != 1:
                     return None
         elif row[3] == "features/diverged-ra/check.py":
-            # This script actually invokes cargo test --workspace.
-            starts = set(context["members"])
+            # The scenario tests only its three consumer packages, not all root members.
+            starts = {identifier for identifier in context["members"]
+                      if identifier in packages and packages[identifier][0] in {
+                          "diverged-ra", "ra-theta", "theta-passes"}}
         elif row[3] in {"features/inspection/cq-inspection/check.py",
                        "features/inspection/free-variables/check.py"}:
             target = PurePosixPath(row[3]).parent.name
-            starts = self._target_owners(context, context["defaults"], "example", target)
+            candidates = {identifier for identifier in context["members"]
+                          if identifier in packages and packages[identifier][0] == row[0]}
+            starts = self._target_owners(context, candidates, "example", target)
         elif row[3] == "features/workloads/check_typed.py":
-            starts = self._target_owners(context, context["defaults"], "test", "typed")
+            candidates = {identifier for identifier in context["members"]
+                          if identifier in packages and packages[identifier][0] == row[0]}
+            starts = self._target_owners(context, candidates, "test", "typed")
         else:
             # The other documented scripts explicitly pass -p.
             starts = {identifier for identifier in context["members"]

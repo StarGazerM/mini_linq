@@ -102,8 +102,8 @@ the runtime PTX bridge to other architectures; rebuild with the appropriate
 
 Formatting needs no CUDA toolchain: run `cargo fmt --all --check` from this
 directory. `--all` also checks local path dependencies outside this workspace
-(the DOOP crates under `features/datalog/doop`); `doop/srd` declares its own
-empty `[workspace]` so their metadata resolves.
+(the DOOP crates under `features/datalog/doop`), which belong to the root
+portable workspace, including `doop/srd` and its CPU engines.
 To exercise formatting without changing files or failing on existing style
 differences, use `cargo fmt --all -- --emit stdout`; `--check` additionally
 requires every included source to already match rustfmt.
@@ -988,10 +988,10 @@ root with `python3 features/datalog/doop/srd/translate.py --srd-repo PATH --fiel
 The CPU engines use that same generated macro and loader:
 
 ```sh
-cargo test --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
-cargo build --release --manifest-path ../../features/datalog/doop/srd-engines/Cargo.toml --workspace --features phase-timing
-../../features/target/release/srd-doop-mini PREPARED --export OUTPUT
-../../features/target/release/srd-doop-mini-par PREPARED --threads 15
+cargo test --release --manifest-path ../../Cargo.toml -p srd-doop-harness -p srd-doop-mini -p srd-doop-mini-par --features phase-timing
+cargo build --release --manifest-path ../../Cargo.toml -p srd-doop-harness -p srd-doop-mini -p srd-doop-mini-par --features phase-timing
+../../target/release/srd-doop-mini PREPARED --export OUTPUT
+../../target/release/srd-doop-mini-par PREPARED --threads 15
 ```
 
 The CPU fixture checks all 43 IDBs, including recursive field flow, split

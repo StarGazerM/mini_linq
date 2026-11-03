@@ -35,7 +35,7 @@ stopping, retention, and Rust environments. Rust `||` keeps its guard rules.
 | `facade/` | `cq-stage` pass protocol and `mini-linq` macro entry points |
 | `testkit/` | Public corpus, semantic oracles, mutation and refinement helpers |
 | `tests/` | Optional homework acceptance tests for the root course package (`hw4` feature) |
-| `features/` | Standalone external consumers of the packaged public API |
+| `features/` | External consumers of the packaged public API, sharing the root development workspace |
 | `tools/` | Dependency, external-consumer, public-API, and regression gates |
 | `experiments/mac/` | Git-managed MCCL/Metal runtime, GPU-built RadixRun provider, and matched CPU/GPU experiments |
 | `doc/` | Short design notes and the formal specification |
@@ -44,11 +44,15 @@ Grammars and extension APIs live in crate `//!` documentation. See
 [the design](doc/DESIGN.md) and [the formal specification](doc/formal/README.md).
 `passes/cq-reduce/tests/ya_schedule.rs` supplies the reduction pass's teaching acceptance tests.
 
-The primary checkout contains all active Mac work. Its standalone workspaces are
-`experiments/mac/mccl`, `experiments/mac/cq-mac`, `experiments/mac/gpu-index`, and
-`experiments/mac/query-expansion`; none requires a sibling development checkout.
+The root workspace shares one lockfile and Cargo target directory across portable
+core, all features (including Datalog SRD engines), formal examples and fixtures,
+the CPU storage benchmark, and the Mac native CPU benchmark. Its default member
+remains the root package (`cargo test` does not select every workspace member).
+`experiments/gpu` retains its separate oxide toolchain/workspace; Metal-dependent
+packages share `experiments/mac`. Intentional standalone external-packaging
+fixtures remain isolated because their topology is test input.
+All active Mac sources live in this checkout; no sibling checkout is required.
 See [Mac implementation and build commands](doc/MAC-IMPLEMENTATION.md).
-Metal remains outside the portable core workspace.
 
 ## Compose a pipeline
 
@@ -92,8 +96,10 @@ assert_eq!(answers, vec![1, 2]);
 
 ## Features
 
-Every feature is a standalone Cargo workspace and must build and test outside
-the repository against Cargo-packaged core crates.
+Features share the root workspace for build reuse, not for API privilege. Core
+must not depend on features; dependency-boundary checks enforce that direction
+independently of workspace membership. Every feature must still build and test
+outside the repository against Cargo-packaged core crates.
 
 - `composition`: explicit pass composition over heterogeneous borrowed hosts.
 - `datalog`: checked recursive Datalog compilation and execution.
@@ -131,8 +137,9 @@ build requires `latexmk` and the TeX packages in `doc/formal/common.tex`.
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-# Final behavioral gate; omit --changed-since for all 118 deterministic targets.
+cargo test --locked
+cargo clippy --all-targets --locked -- -D warnings
+# Final behavioral gate; omit --changed-since for all 136 deterministic targets.
 bash tools/test_regressions.sh --changed-since BASE_REV
 # Random/generated checks are opt-in, never part of default or quick tiers.
 bash tools/test_regressions.sh --tier fuzz
@@ -150,9 +157,11 @@ cargo xtask bench --tpch --sf 1
 
 Use `--tier quick` or a focused package/target selector while iterating, then the
 impact-selected regression suite once for the final behavioral gate. Do not also
-sweep every feature workspace with `cargo test --workspace`: those sweeps duplicate
-the inventory. Root `cargo test` remains a separate gate; a feature-workspace sweep
-is appropriate only for changed-workspace coverage absent from the inventory.
+sweep the whole root with `cargo test --workspace`: it unifies instrumentation
+features across otherwise uninstrumented packages and is **not a gate**. Root
+`cargo test` uses the non-instrumented default members; explicit package regression
+rows cover `mini-linq`, `cq-load`, `own-dialect`, `cq-rewrites`, and
+`cq-sequence-tasks`, whose dev-dependencies request counters.
 See [the gate protocol and measurements](tools/README.md) for timing, selection,
 opt-in fuzzing and explicit passing-evidence reuse.
 

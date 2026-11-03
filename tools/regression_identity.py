@@ -68,12 +68,12 @@ def _command(row):
     if kind not in {"manifest-target-test", "manifest-feature-test", "manifest-test", "manifest-run", "oracle", "oracle-test"}:
         raise Unproven(f"unsupported regression kind: {kind}")
     command = ["cargo", "run" if kind in {"manifest-run", "oracle"} else "test",
-               "--locked", "--manifest-path", source]
+               "--locked", "--manifest-path", source, "-p", package]
     if kind == "manifest-target-test":
         command += ["--test", target]
     if kind == "manifest-feature-test":
         test, feature = target.rsplit("@", 1)
-        command += ["-p", package, "--test", test]
+        command += ["--test", test]
         command += ["--all-features"] if feature == "all-features" else ["--features", feature]
     if kind in {"oracle", "oracle-test"}:
         command += ["--features", "oracle"]
@@ -241,7 +241,7 @@ class Identity:
         if row[1] in {"test", "example"}:
             command += ["--all-features"]
         elif row[1] in {"oracle", "oracle-test"}:
-            command += ["--features", "oracle"]
+            command += ["--features", f"{row[0]}/oracle"]
         elif row[1] == "manifest-feature-test":
             feature = row[2].rsplit("@", 1)[1]
             command += (["--all-features"] if feature == "all-features" else
@@ -251,11 +251,10 @@ class Identity:
         if target_directory:
             self._target_directory = str(Path(target_directory) / "regression-identity")
         if row[1] in {"manifest-test", "oracle-test"}:
-            selected = metadata.get("workspace_default_members")
-            if selected is None:
-                selected = [metadata.get("resolve", {}).get("root")]
-            if not selected or None in selected:
-                raise Unproven("unknown default workspace test selection")
+            selected = [package["id"] for package in metadata["packages"]
+                        if package["name"] == row[0]]
+            if not selected:
+                raise Unproven("unknown explicit package test selection")
             for package in metadata["packages"]:
                 if package["id"] in selected and any(target.get("doctest", False)
                                                      for target in package["targets"]):

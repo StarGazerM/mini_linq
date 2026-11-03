@@ -181,7 +181,7 @@ impl Observer {
                 "[package]\nname = \"mini-linq-explain-observer\"\nversion = \"0.0.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\n{dependencies}"
             ),
         )?;
-        fs::copy(root.join("Cargo.lock"), directory.join("Cargo.lock"))?;
+        fs::copy(crate::cargo::lockfile()?, directory.join("Cargo.lock"))?;
         let target = std::env::var_os("CARGO_TARGET_DIR")
             .map(|path| PathBuf::from(path).join("explain-observers"))
             .unwrap_or_else(|| root.join("target/explain-observers"));

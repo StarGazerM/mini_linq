@@ -3,11 +3,15 @@ import json
 import subprocess
 from pathlib import Path
 
-WORKSPACE = Path(__file__).resolve().parents[3]
+PACKAGE = Path(__file__).resolve().parents[3]
 
-def dependencies(cargo, names, env):
-    result = subprocess.run([cargo, "metadata", "--locked", "--offline", "--format-version=1", "--manifest-path", str(WORKSPACE / "Cargo.toml")], check=True, capture_output=True, env=env)
-    packages = {p["name"]: p for p in json.loads(result.stdout)["packages"]}
+def workspace_metadata(cargo, env):
+    result = subprocess.run([cargo, "metadata", "--locked", "--offline", "--format-version=1", "--manifest-path", str(PACKAGE / "Cargo.toml")], check=True, capture_output=True, env=env)
+    return json.loads(result.stdout)
+
+
+def dependencies(metadata, names):
+    packages = {p["name"]: p for p in metadata["packages"]}
     text = ""
     for name in names:
         package = packages[name]

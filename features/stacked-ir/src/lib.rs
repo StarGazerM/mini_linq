@@ -1,6 +1,6 @@
 //! # Stacked Trace IR
 //!
-//! This standalone Cargo workspace consumes the public core crates. Trace is an
+//! This feature group consumes the public core crates. Trace is an
 //! external, nonterminal language with this complete program syntax:
 //!
 //! ```text
@@ -114,8 +114,8 @@
 //! checks both scenario/test inventories and source agreement apart from the
 //! Trace insertion and formatting, executes both suites against the same authored
 //! answers, and compares all ten expanded `run` functions as raw bytes. It reads
-//! only this workspace and captures expansions and SHA256 sums under
-//! `target/expansions/{reference,stacked}/`. It requires `cargo-expand`.
+//! only this feature's fixtures and captures expansions and SHA256 sums under the
+//! repository root's `target/expansions/{reference,stacked}/`. It requires `cargo-expand`.
 //!
 //! The public `cq-testkit` supplies all 30 Physical corpus fixtures, independent
 //! integer Set oracles and the pass mutation harness. Tests compare total answer
@@ -126,17 +126,17 @@
 //! Fixture evidence is finite; it does not establish arbitrary Rust effect or
 //! evaluation-count equivalence.
 //!
-//! Run these commands from this directory; all six packages are default members:
+//! Run these commands from this directory, explicitly selecting all six packages:
 //!
 //! ```sh
 //! cargo fmt --check
-//! cargo clippy --all-targets -- -D warnings
-//! cargo test
+//! cargo clippy --all-targets -p stacked-ir -p trace-bridge -p physical-to-trace -p stacked-ir-test-passes -p trace-to-physical -p cq-lang-trace -- -D warnings
+//! cargo test -p stacked-ir -p trace-bridge -p physical-to-trace -p stacked-ir-test-passes -p trace-to-physical -p cq-lang-trace
 //! python3 check_expansions.py
 //! ```
 //!
 //! Core dependencies declare both a version and a development path in
-//! `workspace.dependencies`. The repository gate `python3 tools/check_external.py`
+//! the root's `workspace.dependencies`. The repository gate `python3 tools/check_external.py`
 //! substitutes packaged public crates and builds/tests a copy outside the checkout.
 //! Its package inventory must include `cq-testkit`, including the embedded corpus.
 

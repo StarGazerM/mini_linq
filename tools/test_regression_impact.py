@@ -323,11 +323,13 @@ class ImpactTests(unittest.TestCase):
         self.assertTrue(impact.reasons(datalog))
         self.assertEqual(impact.reasons(tpch), [])
 
-    def test_manifest_test_preserves_actual_multiple_default_members(self):
+    def test_manifest_test_selects_package_not_workspace_defaults(self):
         self.gpu_workspace()
         row = ["gpu-tpch", "manifest-test", "all", "features/gpu/Cargo.toml"]
         self.rows.append(row)
         impact = self.impact(["features/one/src/lib.rs"])
+        self.assertEqual(impact.reasons(row), [])
+        impact = self.impact(["runtime/shared/src/lib.rs"])
         self.assertTrue(impact.reasons(row))
 
     def test_manifest_run_uses_binary_owner_not_library_only_sibling(self):

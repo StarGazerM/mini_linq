@@ -1,6 +1,3 @@
-[workspace]
-members = ["partition", "print", "runtime", "oracle", "oracle/engines/*", "doop", "doop/engines/*", "test-passes"]
-resolver = "3"
 
 [package]
 name = "cq-datalog-parallel"
@@ -42,10 +39,3 @@ cq-datalog-parallel-test-passes = { path = "test-passes" }
 [[test]]
 name = "counters"
 required-features = ["counters"]
-
-# Proc macros execute compiler passes even in otherwise unoptimized builds.
-[profile.release.build-override]
-opt-level = 3
-
-[profile.dev.build-override]
-opt-level = 3

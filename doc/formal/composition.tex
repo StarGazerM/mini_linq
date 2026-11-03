@@ -200,13 +200,17 @@ not introduce them; only the lower/select packet boundary authorizes
 introduction. Missing or inexact envelopes and unauthorized introductions
 are rejected as \textsc{CTX-Entry} failures.
 
-Optional features are standalone workspaces under \code{features/} that depend
-on the packaged core only: planners, rewrites, surface extensions (aggregation,
+Optional features under \code{features/} share the root development workspace
+for build reuse while depending only on public core APIs: planners, rewrites,
+surface extensions (aggregation,
 correlated subqueries, recursion as Rust contexts around checked
 core invocations), a push printer, a stacked IR, a diverged RA surface,
-composition, inspection and workloads. \code{tools/check_external.py} packages
-the core and builds and tests each feature outside the repository, and rejects a
-fixture that only builds in-tree.
+composition, inspection and workloads. Workspace membership does not permit
+core-to-feature dependencies; the dependency gate checks that direction
+independently. \code{tools/check_external.py} packages the core and builds and
+tests each feature outside the repository, and rejects a fixture that only
+builds in-tree. Packaging fixtures retain intentional standalone workspaces;
+GPU/oxide and Metal packages use separate experimental workspaces.
 
 \begin{theorem}[Conditional composition]
 \label{thm:composition}

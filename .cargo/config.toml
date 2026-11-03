@@ -1,2 +1,2 @@
 [alias]
-xtask = "run --manifest-path features/workloads/Cargo.toml -p cq-xtask --features oracle --"
+xtask = "run -p cq-xtask --features oracle --"

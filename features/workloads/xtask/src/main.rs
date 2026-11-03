@@ -524,7 +524,7 @@ fn generation_config(case: &QueryCase, scenario: Scenario, scale: Scale) -> Gene
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask lives inside the workload workspace")
+        .expect("xtask lives inside the workload feature")
         .to_path_buf()
 }
 

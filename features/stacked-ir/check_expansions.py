@@ -29,13 +29,12 @@ def inventory():
 def main():
     modules = inventory()
     env = os.environ.copy()
-    env.setdefault("CARGO_TARGET_DIR", str(BASE / "target"))
     env["CARGO_TERM_COLOR"] = "never"
     subprocess.run(
         ["cargo", "test", "--locked", "--offline", "-p", "stacked-ir", "--test", "reference", "--test", "stacked"],
         cwd=BASE, env=env, check=True,
     )
-    captures = BASE / "target/expansions"
+    captures = BASE.parents[1] / "target/expansions"
     hashes = {target: [] for target in ("reference", "stacked")}
     for name in modules:
         outputs = []

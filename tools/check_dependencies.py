@@ -6,9 +6,8 @@ Production isolation, macro resolution and semantic consumers are separate
 gates. Package counts and test-only dependencies are not proofs of compiler
 architecture.
 
-Feature locks must reuse root-fetched third-party versions. CI additionally
-fetches feature locks for feature-only dependencies (including Ascent's older
-hashbrown requirement); this check prevents accidental shared-version drift.
+Features share the root workspace and lockfile, but remain consumers outside
+the closed compiler dependency layers. Workspace membership grants no edges.
 """
 from __future__ import annotations
 
@@ -30,34 +29,35 @@ except ModuleNotFoundError:
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def check_feature_locks():
-    def third_party(path):
-        return [package for package in tomllib.loads(path.read_text())["package"]
-                if "source" in package]
-
-    root_versions = {}
-    for package in third_party(ROOT / "Cargo.lock"):
-        root_versions.setdefault(package["name"], set()).add(
-            (package["version"], package["source"]))
-    # Ascent 0.8 requires hashbrown ^0.14; no root dependency can provide it.
-    feature_only = {("datalog", "hashbrown", "0.14.5"),
-                    ("datalog-parallel", "hashbrown", "0.14.5")}
+def check_feature_ownership(data):
+    """Features share root membership and resolution, not a compiler layer."""
+    members = {Path(package["manifest_path"]).resolve()
+               for package in data["packages"]
+               if package["id"] in data["workspace_members"]}
     errors = []
-    locks = sorted((ROOT / "features").glob("*/Cargo.lock"))
-    for lock in locks:
-        for package in third_party(lock):
-            name, version, source = (package[key] for key in ("name", "version", "source"))
-            if name not in root_versions:
-                continue
-            if (version, source) in root_versions[name]:
-                continue
-            if (lock.parent.name, name, version) in feature_only:
-                continue
-            errors.append(f"{lock.relative_to(ROOT)}: {name} {version} ({source}) "
-                          "is absent from root Cargo.lock")
+    count = 0
+    if Path(data["workspace_root"]).resolve() != ROOT.resolve():
+        errors.append("feature ownership metadata did not resolve the root workspace")
+    for manifest in feature_files("Cargo.toml", {"target", ".git", "vendor"}):
+        spec = tomllib.loads(manifest.read_text())
+        if "workspace" in spec:
+            errors.append(f"{manifest.relative_to(ROOT)}: nested feature workspace")
+        if "package" in spec:
+            count += 1
+            if manifest.resolve() not in members:
+                errors.append(f"{manifest.relative_to(ROOT)}: feature is not a root workspace member")
+            explicit = spec["package"].get("workspace")
+            if explicit and (manifest.parent / explicit).resolve() != ROOT.resolve():
+                errors.append(f"{manifest.relative_to(ROOT)}: feature names another workspace")
+    for lock in feature_files("Cargo.lock", {"target", ".git", "vendor"}):
+        errors.append(f"{lock.relative_to(ROOT)}: feature must use root Cargo.lock")
+    for config in feature_files("config*", {"target", ".git", "vendor"}):
+        if config.parent.name == ".cargo" and config.name in {"config", "config.toml"}:
+            if "target-dir" in tomllib.loads(config.read_text()).get("build", {}):
+                errors.append(f"{config.relative_to(ROOT)}: feature overrides root target directory")
     if errors:
-        raise SystemExit("\n".join(errors))
-    print(f"Feature lock alignment: {len(locks)} passed")
+        raise ValueError("\n".join(errors))
+    print(f"PASS: {count} features share root workspace and lock ownership", flush=True)
 
 
 def inventory(folder):
@@ -87,7 +87,7 @@ def feature_files(pattern, excluded):
                 yield Path(directory) / name
 
 
-# External consumer crates are identified from their standalone manifests.
+# Consumer identity comes from package manifests, never workspace membership.
 FEATURE_NAMES = {tomllib.loads(p.read_text())["package"]["name"]
     for p in feature_files("Cargo.toml", {"target", ".git", "vendor"})
     if "package" in tomllib.loads(p.read_text())}
@@ -199,7 +199,7 @@ def check(data, announce=True):
         elif name in TESTKIT:
             allowed = set(LANGUAGES) | set(RUNTIME)
         else:
-            allowed = set(packages) - set(TESTKIT)
+            allowed = set(CORE)
         for dep in package["dependencies"]:
             target = dep["name"]
             if target in FEATURE_NAMES or (dep.get("path") and Path(dep["path"]).resolve().is_relative_to(ROOT / "features")):
@@ -292,8 +292,10 @@ def write_workspace(destination, selected):
     lines = ["[workspace]", 'resolver = "3"', 'exclude = ["tools/fixtures"]', "members = " + toml([str(PATHS[p]) for p in sorted(selected)]), "", "[workspace.package]"]
     lines += [f"{k} = {toml(v)}" for k, v in original["package"].items()]
     lines += ["", "[workspace.dependencies]"]
+    selected_paths = {(ROOT / PATHS[name]).resolve() for name in selected}
     lines += [f"{k} = {toml(v)}" for k, v in original["dependencies"].items()
-              if not isinstance(v, dict) or "path" not in v or k in selected]
+              if not isinstance(v, dict) or "path" not in v
+              or (ROOT / v["path"]).resolve() in selected_paths]
     (destination / "Cargo.toml").write_text("\n".join(lines) + "\n")
     shutil.copy2(ROOT / "rust-toolchain.toml", destination / "rust-toolchain.toml")
     # Resolve third-party crates at the root's locked versions; a fresh offline
@@ -373,8 +375,9 @@ def main():
     parser.add_argument("--consumers", action="store_true")
     parser.add_argument("--only", action="append", default=[])
     args = parser.parse_args()
-    check_feature_locks()
-    data = metadata(); packages = check(data)
+    data = metadata()
+    check_feature_ownership(data)
+    packages = check(data)
     negative_dependency_checks(data); check_independent_relations(); check_feature_sources()
     if args.isolate: isolate(packages, args.only)
     if args.frontends: frontends()

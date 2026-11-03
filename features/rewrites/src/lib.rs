@@ -1,6 +1,6 @@
 //! # cq-rewrites
 //!
-//! External checked rewrite passes for MiniLinq. This standalone workspace uses
+//! External checked rewrite passes for MiniLinq. This feature group uses
 //! only the public core API. `cq-rewrites` exports the proc macros;
 //! `cq-rewrite-passes` exports the corresponding functions for tools and tests.
 //! Every macro runs `cq_stage::rewrite`, including the language's source, target,
@@ -286,8 +286,10 @@
 //! each scale, versus two for binary. These finite measurements validate the
 //! specified growth regression; they do not establish a general complexity bound.
 //!
-//! Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
-//! `cargo test` here. The workspace defaults include both support crates.
+//! Run `cargo fmt --check`, then `cargo clippy --all-targets -p cq-rewrites
+//! -p cq-rewrite-passes -p cq-rewrite-test-driver -- -D warnings` and
+//! `cargo test -p cq-rewrites -p cq-rewrite-passes -p cq-rewrite-test-driver`.
+//! Explicit package selection includes both support crates in the root workspace.
 //! From the repository root, `python3 tools/check_external.py` exercises packaged
 //! public dependencies outside the checkout.
 

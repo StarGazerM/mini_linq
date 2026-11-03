@@ -16,25 +16,35 @@ nice -n 10 bash tools/test_regressions.sh mini-linq/physical_query
 python3 tools/test_regressions.py --changed-since BASE_REV --list
 # Final behavioral gate: every potentially affected inventory target.
 nice -n 10 bash tools/test_regressions.sh --changed-since BASE --reuse-latest target/baseline-gate
+# Main also gates packaged consumers outside the checkout once per merge batch.
+nice -n 10 python3 tools/check_external.py
 # Full inventory remains the default.
 nice -n 10 bash tools/test_regressions.sh
 ```
 
-Do not run every feature workspace's `cargo test --workspace` and then repeat
-those same tests through the regression inventory. The behavioral gate is the
-regression suite plus root `cargo test`; run a feature-workspace sweep only when
-the track changed that workspace and it covers tests absent from the inventory.
-A track's gate is the tests of the crates it changed, the tests covering its fix,
-root `cargo test --workspace` when core, testkit or facade code changed, the quick
-tier, and any named downstream target it knows it affects. Tracks do not run the
-impact-selected suite: a change to any compiler crate selects every target. Main
-runs it once per merge batch with `--changed-since BASE --reuse-latest target/baseline-gate`. Run
-separate structural, API, formatting or documentation gates only where the change
+The root workspace shares build artifacts between the portable compiler, feature
+consumers, documentation driver and CPU benchmarks. The behavioral gate is the
+regression suite plus root `cargo test`; do not additionally sweep every consumer
+package and repeat the same tests through the inventory. Use `cargo test -p NAME`
+for changed-package coverage absent from the inventory. `cargo test --workspace`
+unifies instrumentation features across consumers and is **not a gate**.
+Use root `cargo test` (the non-instrumented default members), plus the explicit
+package regression rows for counter-enabled packages. CI follows that selection;
+its separate Clippy step retains the original core/course scope.
+A track's gate is its changed crates, the tests covering its fix, the quick tier,
+and any named downstream target it affects. Main runs the impact-selected suite
+once per merge batch with `--changed-since BASE --reuse-latest target/baseline-gate`.
+Main additionally runs `python3 tools/check_external.py` once per merge batch:
+in-tree success must not hide broken packaged API consumers or stale external
+acceptance fixtures.
+Run separate structural, API, formatting or documentation gates only where the change
 requires them. Do not rerun behavioral gates for a docs-only rebase.
 An explicitly named selector narrows even an impact-selected run; omit selectors
 for the final gate. Unknown selectors are errors, not successful empty gates.
 
-The regression inventory contains no GPU targets. When a merge batch can affect
+The regression inventory includes GPU compiler host-only tests, but performs no
+GPU device execution. The constant-capture test lives with the GPU compiler;
+core has no GPU dev-dependency. When a merge batch can affect
 GPU code (any shared compiler crate, `experiments/gpu`, or the Datalog
 pipelines), Main also runs `bash tools/gpu_gate.sh` once for the batch: the GPU
 Datalog, Sequence and TPC-H crate suites, the advised H05 SF10 benchmark (including
@@ -140,9 +150,13 @@ itself is never proof that a test passed. `--record-identities` is optional beca
 recording identities has a real expansion cost. Markdown/changelogs and `doc/**`
 are excluded from expansion source/runtime keys, not from executable Rust bodies.
 
-Named feature-specific manifest tests use the `manifest-feature-test` inventory
-kind and `TEST@FEATURE` target spelling (`@all-features` selects `--all-features`).
-Both execution and identity expansion use the same package, test and feature flags.
+Every manifest inventory command explicitly selects its package with `-p`; moving
+a package into the root workspace never implicitly expands a row to unrelated
+workspace members. Rows formerly testing several default members now enumerate
+those packages separately, preserving their tests. Named feature-specific tests
+use `manifest-feature-test` and `TEST@FEATURE` (`@all-features` selects
+`--all-features`). Execution, impact selection and identity expansion use the same
+package, test and feature flags.
 
 ## Performance comparison protocol
 
@@ -151,12 +165,154 @@ same source snapshot, preserving the same target set, job limit and environment.
 Record start/end load averages on shared hosts, and do not claim a cold cache is
 warm. Change the runner's default only after an observed wall-time improvement.
 
-The preexisting `features/.cargo/config.toml` already shares a feature build
-directory for commands whose working directory discovers that configuration;
-workload commands have their own configuration. The corpus and workload e2e
-packages already set `debug=0`. These settings belong to the baseline and must
-not be credited to this change. Package-specific codegen/debuginfo changes likewise
-require measured compile-time improvement and passing tests before adoption.
+Before consolidation, feature-local Cargo configuration shared `features/target`
+only for commands whose working directory discovered it; most inventory commands
+used distinct workspace targets. The root now owns the portable build directory
+regardless of which member manifest selects the package. Nested feature target
+overrides and lockfiles are removed. Workload semantic benchmark/data caches are
+still independent of Cargo's build directory. The preexisting workload corpus/e2e
+`debug=0` settings are retained, not credited as a new optimization.
+
+## Workspace ownership
+
+- **Root:** core, all portable `features/` packages, the formal example, the
+  correspondence-performance fixture and native CPU benchmarks. One lockfile
+  resolves their compatible dependency constraints; workspace membership is not
+  an architectural dependency edge. `check_dependencies.py` still rejects every
+  core-to-feature dependency, including build, dev, optional and renamed edges.
+- **`experiments/gpu`:** the independent pinned Rust/oxide/CUDA toolchain,
+  dependency setup and GPU build profiles remain unchanged.
+- **`experiments/mac`:** Metal/framework-dependent consumers share one workspace.
+  They cannot build on the Linux CPU gate host. The portable native index
+  benchmark is a root member even though its source remains under `mac/`.
+- **External packaging fixtures:** standalone positive, negative and sibling
+  workspaces are deliberate input to the relocation/isolation tests, not
+  production build groups. The external gate reconstructs consumer-only
+  workspaces outside the checkout and substitutes Cargo-packaged core crates.
+
+Root `default-members` contains 113 of the 118 packages, excluding these five whose
+**dev-dependencies** explicitly enable `cq-storage/counters`:
+`mini-linq`, `cq-load`, `own-dialect`, `cq-rewrites`, and `cq-sequence-tasks`.
+No normal dependency or default feature enables another instrumentation feature.
+Their package-wide regression rows use `-p`, preserving instrumented coverage
+without changing the feature sets of unrelated generated query tests. Do not
+replace this split with `--workspace`, a larger global thread stack, or altered
+query optimization profiles.
+
+For `cq-workload-corpus`, `cargo tree -e features -i cq-storage` with explicit
+package/member selection is identical before and after consolidation after
+normalizing only the checkout path. Neither tree enables counters, and the
+current root default-member tree also contains no counters feature.
+Evidence: `/tmp/ws-consolidate-feature-trees/comparison.json` (normalized tree
+SHA-256 `7adf78f8af1d1c2c2bf880d933f422e1d47568e0d1982fb04dc0ee9d061ba95f`).
+
+Root build-time compiler/proc-macro dependencies use the existing optimized
+consumer build setting (`opt-level=3`). Workload binary debug overrides are kept.
+CPU storage/native-index benchmarks retain thin LTO and one codegen unit through
+`--profile cpu-bench`, without changing other root release binaries' LTO settings.
+Package versions, editions and MSRVs are retained when inherited settings differ.
+GPU and Metal runs remain separate; a shared target directory is not a substitute
+for their toolchain and platform boundaries.
+
+## Consolidation measurements (2026-11-03)
+
+Measured in `/data/mini_linq-wt/ws-consolidate` using the environment above.
+Each cold quick run starts with empty worktree build directories; its warm run
+immediately repeats the same 15 targets. Both final before/after pairs passed
+15/15. These short measurements held the exclusive timing lock; lock wait is
+excluded from gate wall time. Disk is allocated bytes summed across worktree
+`target/` trees, with no preexisting benchmark data in this worktree.
+
+| Layout / cache | Gate wall (s) | Summed build (s) | Target bytes |
+| --- | ---: | ---: | ---: |
+| Before / cold | 101.389 | 117.755 | 1,500,934,144 |
+| Before / warm | 6.157 | 0.725 | 1,500,934,144 |
+| Consolidated / cold | 106.269 | 105.302 | 1,066,496,000 |
+| Consolidated / warm | 8.330 | 1.074 | 1,066,496,000 |
+
+Quick-tier wall time did **not** improve: cold was 4.8% slower and warm 35.3%
+slower. Cold summed build time fell 10.6%, and disk fell 28.9%. These results
+must not be described as a quick-tier speedup. Before/after lock waits were
+1,150.573 s and 295.130 s respectively; `--list` took 0.039 s in each layout.
+Evidence: `/tmp/ws-consolidate-before/` and
+`/tmp/ws-consolidate-after-final/` (`measurements.json`, per-run `results.tsv`).
+
+The separate cold full-baseline attempt was interrupted by the coordinator to
+avoid monopolizing the timing lock; it has no completed suite totals. The
+approved existing full reference is the integration run at `44bf82bc`:
+2,189 s wall (`--jobs 3`), 3,588.020 summed build seconds and 385.451 summed
+test seconds, 123/124 passing. Its planner fixture failure predates this change.
+Evidence: `/data/mini_linq-wt/integ/target/regression-logs/20261103T042755Z-1cdb584b/results.tsv`.
+This different-revision reference is not a controlled cold/warm comparison.
+
+The pre-rebase consolidation inventory (`--jobs 3`) passed **132/132**, with no reuse:
+**1,706.434 s gate wall**, **1,498.500 s summed build**, and **351.001 s summed
+test** (runner wall 1,706.378 s; lock wait 303.484 s). It followed the other
+verification gates and used the shared build/test lock, so this is not a cold
+measurement or an isolated performance comparison with the historical reference.
+Evidence: `/tmp/ws-consolidate-full-after/{results.tsv,evidence.json}`.
+
+Final worktree build trees used **24,736,546,816 bytes**: root `target/`
+23,680,925,696 bytes plus GPU host-test artifacts 1,055,621,120 bytes. This total
+includes preceding core, API, isolation and external-consumer caches. No matching
+completed full-baseline disk measurement exists; only the quick disk pair above
+is a controlled before/after comparison.
+
+| Additional gate | Gate time (s) | Lock wait (s) |
+| --- | ---: | ---: |
+| Tooling unit tests | 0.916 | 96.700 |
+| Original root core/course package test set | 59.173 | 74.194 |
+| Dependency checks + isolated `mini-linq` tests | 42.740 | 71.139 |
+| Formal correspondence inventory | 0.315 | 130.180 |
+| Public API snapshots | 117.569 | 123.511 |
+| GPU compiler host tests, Rust 1.99.1 release | 112.377 | 50.300 |
+| Packaged sequence-rewrites + mandatory positive/negative fixtures | 53.107 | 191.870 |
+
+All listed gates passed. The packaged check is a selected consumer gate, not a
+claim that every external feature group was executed. Full command records,
+including superseded failed attempts and H01 compilation steps, are retained in
+`/tmp/ws-consolidate-results.json`; per-command logs are in
+`/tmp/ws-consolidate-gates/`. No GPU device execution was performed.
+
+The actual retail H01 release worker was built before and after applying the
+manifest/lock/config cutover to a same-path archive of the original source.
+Its benchmark-owned release profile (`build-override.opt-level=3`) was retained.
+The generated consumer lock, expanded Rust, LLVM IR and linked executable were
+all **byte-identical**, without normalizing symbols, paths or instructions:
+
+| H01 artifact | Bytes | SHA-256 (both sides) |
+| --- | ---: | --- |
+| Expanded Rust | 170,754 | `cc2de4dcd4b5d8c71e4c8484d6367eda4920a05741bcdc4aa0088fff09039865` |
+| LLVM IR | 11,529,975 | `3cf1adcc532be7911bf26855caf453b8d414202e6b04aa9cdd057371519d36a5` |
+| Release executable | 9,178,464 | `7179c30b5581d9aa657695a1899849cf066ad908045598b7bedf36ee4639cca6` |
+
+This comparison caught an unwanted `serde_json` update from 1.0.151 to 1.0.154;
+the portable lock retains 1.0.151. Evidence:
+`/tmp/ws-consolidate-h01/comparison.json`. This is compiled-output preservation,
+not a new runtime-performance or query-execution measurement.
+
+## Post-rebase default-member gates
+
+After rebasing onto the newer rejection tests and key-partition fix, the accepted
+gate is root `cargo test` plus explicit instrumented-package rows, not
+`cargo test --workspace`. The temporary recursion-limit adjustments were removed;
+no global stack setting or per-test stack wrapper was added.
+
+| Final gate | Result | Gate time (s) | Lock wait (s) |
+| --- | --- | ---: | ---: |
+| Tooling unit tests | 124 passed | 2.169 | 68.246 |
+| Dependency checks | passed | 21.255 | 249.931 |
+| Root `cargo test --locked`, 113 default members | passed | 1,054.913 | 432.384 |
+| Five explicit instrumented-package regression rows | 5/5 passed | 177.072 | 295.095 |
+| Quick tier | 15/15 passed | 25.010 | 1,237.104 |
+| Full packaged external-consumer gate | all 15 groups and mandatory fixtures passed | 1,323.516 | 787.169 |
+
+The root-selected KP-1/KP-2 regression also passed (11.434 s gate, 100.270 s
+lock wait). Feature-tree comparison passed in 8.236 s, excluding 857.417 s lock
+wait. These shared-lock completion gates are not cold/warm timing experiments.
+Final requested gates total 2,603.935 s, with 3,069.930 s summed lock waits.
+Complete command records and superseded failures:
+`/tmp/ws-consolidate-rebase-results.json`.
 
 ## Measured quick tier
 
@@ -230,9 +386,12 @@ fixed-seed cases × 4 CPU routes) and `cq-xtask/fuzz-full` (2,000 cases, rotatin
 logged seed, every CPU route), both in this opt-in tier. `cq-rewrites/rewrite_stages`
 runs the generated stage differential and checker mutants through the six Physical
 rewrites; its Cargo target is `test = false`, so only an explicit `--test` runs
-it. The default is therefore **118 deterministic targets** and the inventory
-contains 121 rows. The impact/quick measurements above predate this intentional
-tier migration. Test-layer additions must keep randomly generated consumers out
+it. The consolidated default inventory has **136 deterministic targets**, and
+139 rows including fuzz. Seven explicit helper-package rows preserve tests
+previously selected through nested workspace default members; one host-only GPU
+compiler row preserves the constant-capture test relocated from the core. The historical
+impact/quick measurements above predate these inventory additions and tier
+migrations. Test-layer additions must keep randomly generated consumers out
 of ordinary `cargo test` and the quick/default suites.
 
 The runner's kinds cannot pass `--ignored`, so the core-pipeline generated

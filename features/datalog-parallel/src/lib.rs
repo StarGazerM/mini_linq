@@ -27,11 +27,15 @@
 //!
 //! # Validation commands
 //!
-//! Run from `features/datalog-parallel`, one command at a time:
+//! Run from the repository root, one command at a time, selecting this feature group:
 //!
-//! ```text
-//! cargo test --workspace --locked
-//! cargo test --workspace --all-features --locked
+//! ```sh
+//! packages="-p cq-datalog-parallel -p cq-datalog-partition -p cq-datalog-rayon-print
+//! -p cq-datalog-parallel-runtime -p cq-datalog-parallel-test-passes
+//! -p datalog-parallel-oracle -p oracle-ascent-par -p oracle-mini-par
+//! -p datalog-parallel-doop -p doop-ascent-par -p doop-mini-par -p doop-mini-par-keyed"
+//! cargo test $packages --locked
+//! cargo test $packages --all-features --locked
 //! cargo test --locked -p cq-datalog-parallel --features counters --test counters -- --nocapture
 //! cargo run --release --locked -p datalog-parallel-oracle -- golden
 //! cargo run --release --locked -p datalog-parallel-oracle --no-default-features --features mini-par,counters -- counters
@@ -54,7 +58,7 @@
 //! Parallel implementations live in `doop/engines/{mini-par,mini-par-keyed,ascent-par}`
 //! as `doop-mini-par`, `doop-mini-par-keyed`, and `doop-ascent-par`. Optional
 //! sequential features depend directly on `doop-mini`, `doop-mini-keyed`, and
-//! `doop-ascent` from the base Datalog workspace, never on its CLI package.
+//! `doop-ascent` from the base Datalog feature group, never on its CLI package.
 //! Both CLIs share facts, interning, loading, engine-source macros, and the
 //! common harness through `doop-shared` in `features/datalog/doop/shared`.
 //! `phase-timing` forwards instrumentation only to enabled engines, without

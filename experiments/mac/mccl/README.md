@@ -37,18 +37,23 @@ profiling reports are not substitutes for retained logs or a fresh run.
 
 Requires Apple silicon, Xcode with the Metal Toolchain component, CMake >= 3.27,
 and Rust. The first CMake configure downloads dependencies. Run these commands
-from this repository's `experiments/mac/mccl` directory. MCCL remains outside
-the portable core workspace. Historical notes also refer to a standalone MCCL
+from this repository's `experiments/mac/mccl` directory. MCCL shares the
+`experiments/mac` Metal workspace, outside the portable root workspace.
+Historical notes also refer to a standalone MCCL
 repository; publication or source parity with that external repository is not
 established by this checkout.
 
 ```sh
 cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
 cmake --build build/native --parallel 8
-cargo test --release
-cargo run --release -- check
-cargo run --release -- bench --sizes 1K,64K,1M,4M,16M,32M --reps 50 --warmup 10
+cargo test --profile mccl-release
+cargo run --profile mccl-release -- check
+cargo run --profile mccl-release -- bench --sizes 1K,64K,1M,4M,16M,32M --reps 50 --warmup 10
 ```
+
+The shared Metal workspace's `mccl-release` profile inherits release with thin
+LTO and one codegen unit, preserving MCCL's benchmark code generation without
+imposing those settings on the other Metal packages.
 
 `MCCL_NATIVE_DIR` overrides the native library directory when building Rust.
 It defaults to `build/native` relative to the MCCL manifest directory; relative
@@ -72,15 +77,15 @@ all contain debugging information while retaining release optimization:
 cmake -S . -B build/profile -DCMAKE_BUILD_TYPE=Release -DMCCL_PROFILE=ON
 cmake --build build/profile --parallel 8
 MCCL_NATIVE_DIR=build/profile cargo build --profile profiling
-xcrun dsymutil target/profiling/mccl
+xcrun dsymutil ../target/profiling/mccl
 xcrun dsymutil build/profile/libmccl_native.dylib
-./target/profiling/mccl check
+../target/profiling/mccl check
 ```
 
 `MCCL_PROFILE` enables C/C++ `-g` and Metal
 `-O3 -gline-tables-only -frecord-sources`. Cargo's `profiling` profile inherits
-release optimization, retains full debug info, and disables stripping. Do not
-accidentally profile `target/release/mccl` linked to the normal native build.
+`mccl-release` optimization, retains full debug info, and disables stripping. Do not
+accidentally profile `../target/mccl-release/mccl` linked to the normal native build.
 
 The historical profiling note reported all 456 GPU correctness cases passing and
 loader diagnostics selecting `build/profile`. It also reported a Metal System
@@ -154,7 +159,7 @@ and stable Metal scatter. Empty inputs are handled explicitly. This implementati
 is a correct multi-stage baseline, not a claimed optimal tiled set algorithm.
 
 ```sh
-cargo run --release -- difference-bench --sizes 64K,1M --reps 20 --warmup 5
+cargo run --profile mccl-release -- difference-bench --sizes 64K,1M --reps 20 --warmup 5
 ```
 
 Sizes denote combined A+B length. CSV reports each input length, survivor count,
@@ -203,8 +208,8 @@ The C ABI exposes `mccl_bloom_create/free/clear/add/contains/read_words`; see
 MLX's stream encoder and its commit/wait/error-check synchronization path.
 
 ```sh
-cargo run --release -- bloom-check
-cargo run --release -- bloom-bench --keys 1M --queries 2M \
+cargo run --profile mccl-release -- bloom-check
+cargo run --profile mccl-release -- bloom-bench --keys 1M --queries 2M \
   --blocks 65536 --seed 0 --reps 30 --warmup 5
 ```
 
@@ -275,8 +280,8 @@ entries and rejects capacity below live size. GPU mutation failure is
 nontransactional: discard the map afterward. Handles remain thread-affine.
 
 ```sh
-cargo run --release -- hashmap-check
-cargo run --release -- hashmap-bench --keys 64K --queries 64K \
+cargo run --profile mccl-release -- hashmap-check
+cargo run --profile mccl-release -- hashmap-bench --keys 64K --queries 64K \
   --capacity 128K --reps 30 --warmup 5
 ```
 
@@ -301,7 +306,7 @@ provably absent misses, and shuffled 50/50 mixtures. Reports and final entries
 are checked against the CPU oracle outside timing.
 
 ```sh
-cargo run --release -- hashmap-bench --scenario update \
+cargo run --profile mccl-release -- hashmap-bench --scenario update \
   --capacity 16M --keys 1M --batch 1K --queries 64K --reps 40 --warmup 10
 ```
 
@@ -572,11 +577,11 @@ M5 Pro CSV retains the previous timing boundary and is not rewritten.
 Unlike the crate-relative commands above, run these from the mini_linq repository root:
 
 ```sh
-cargo run --release --manifest-path experiments/mac/mccl/Cargo.toml -- lifecycle --sizes 64K,1M,16M,64M --reps 9 --warmup 2 \
+cargo run --profile mccl-release --manifest-path experiments/mac/mccl/Cargo.toml -- lifecycle --sizes 64K,1M,16M,64M --reps 9 --warmup 2 \
   --wired 0 --out experiments/mac/mccl/benchmarks/lifecycle-rerun.json
-cargo run --release --manifest-path experiments/mac/mccl/Cargo.toml -- lifecycle --sizes 1M,16M --reps 9 --warmup 2 \
+cargo run --profile mccl-release --manifest-path experiments/mac/mccl/Cargo.toml -- lifecycle --sizes 1M,16M --reps 9 --warmup 2 \
   --wired 1G --out experiments/mac/mccl/benchmarks/lifecycle-wired-rerun.json
-cargo run --release --manifest-path experiments/mac/mccl/Cargo.toml -- lifecycle --sizes 1M --reps 5 --warmup 2 --sync \
+cargo run --profile mccl-release --manifest-path experiments/mac/mccl/Cargo.toml -- lifecycle --sizes 1M --reps 5 --warmup 2 --sync \
   --out experiments/mac/mccl/benchmarks/lifecycle-sync-rerun.json
 ```
 

@@ -567,8 +567,8 @@ def main():
         setattr(args, name, getattr(args, name).resolve())
     args.python = args.python or args.source / '.venv/bin/python'
     args.results = args.results or args.repo / 'experiments/gpu/compare/srd_query_xalan_batik.results.json'
-    args.mini = args.mini or args.repo / 'features/target/release/srd-doop-mini'
-    args.mini_par = args.mini_par or args.repo / 'features/target/release/srd-doop-mini-par'
+    args.mini = args.mini or args.repo / 'target/release/srd-doop-mini'
+    args.mini_par = args.mini_par or args.repo / 'target/release/srd-doop-mini-par'
     args.mini_gpu = args.mini_gpu or args.repo / 'experiments/gpu/target/release/srd-doop-gpu'
     args.original_gpu = args.original_gpu or args.repo / 'experiments/gpu/target/release/doop-gpu'
     for name in ('python', 'results', 'mini', 'mini_par', 'mini_gpu', 'original_gpu'):

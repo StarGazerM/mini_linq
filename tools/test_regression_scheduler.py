@@ -82,17 +82,17 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(result[3], 1)
             self.assertEqual(Path(result[4]).name, "p-shard_all.log")
 
-    def test_commands_preserve_original_flags(self):
+    def test_commands_select_explicit_packages_and_preserve_flags(self):
         cases = {
             "test": ["cargo", "test", "--locked", "-p", "p", "--all-features", "--test", "t"],
             "example": ["cargo", "test", "--locked", "-p", "p", "--all-features", "--example", "t"],
             "lib": ["cargo", "test", "--locked", "-p", "p", "--lib"],
-            "manifest-test": ["cargo", "test", "--locked", "--manifest-path", "source"],
-            "oracle-test": ["cargo", "test", "--locked", "--manifest-path", "source", "--features", "oracle"],
-            "manifest-target-test": ["cargo", "test", "--locked", "--manifest-path", "source", "--test", "t"],
+            "manifest-test": ["cargo", "test", "--locked", "--manifest-path", "source", "-p", "p"],
+            "oracle-test": ["cargo", "test", "--locked", "--manifest-path", "source", "-p", "p", "--features", "oracle"],
+            "manifest-target-test": ["cargo", "test", "--locked", "--manifest-path", "source", "-p", "p", "--test", "t"],
             "scenario": ["python3", "source"],
-            "manifest-run": ["cargo", "run", "--locked", "--manifest-path", "source"],
-            "oracle": ["cargo", "run", "--locked", "--manifest-path", "source", "--features", "oracle", "--", "t"],
+            "manifest-run": ["cargo", "run", "--locked", "--manifest-path", "source", "-p", "p"],
+            "oracle": ["cargo", "run", "--locked", "--manifest-path", "source", "-p", "p", "--features", "oracle", "--", "t"],
         }
         for kind, expected in cases.items():
             with self.subTest(kind=kind):
@@ -105,7 +105,7 @@ class SchedulerTests(unittest.TestCase):
         from regression_identity import _command
         for target, flags in (("execution@all-features", ["--all-features"]),
                               ("counters@counters", ["--features", "counters"])):
-            row = ["cq-datalog", "manifest-feature-test", target, "features/datalog/Cargo.toml"]
+            row = ["cq-datalog", "manifest-feature-test", target, "Cargo.toml"]
             expected = ["cargo", "test", "--locked", "--manifest-path", row[3],
                         "-p", row[0], "--test", target.split("@")[0], *flags]
             self.assertEqual(runner.command_for(*row), expected)
@@ -118,7 +118,7 @@ class SchedulerTests(unittest.TestCase):
             engine = Identity(runner.ROOT)
             with patch.object(engine, "_run", return_value='{"packages": []}') as command:
                 engine._metadata(["cq-datalog", "manifest-feature-test", target,
-                                  "features/datalog/Cargo.toml"], {})
+                                  "Cargo.toml"], {})
             self.assertEqual(command.call_args.args[0][-len(flags):], flags)
 
     def test_empty_selection(self):
@@ -136,9 +136,15 @@ class SchedulerTests(unittest.TestCase):
 
     def test_fuzz_requires_tier_or_explicit_selector(self):
         import regression_impact
+        with (runner.ROOT / "tools/regression-targets.tsv").open() as source:
+            full_count = sum(
+                1 for row in runner.csv.reader(source, delimiter="\t")
+                if row and row[0] and not row[0].startswith("#")
+                and (len(row) == 4 or row[4] != "fuzz")
+            )
         for arguments, expected_count, expected_fuzz in (
-                ([], 122, False), (["--tier", "quick"], 15, False),
-                (["--changed-since", "HEAD"], 122, False),
+                ([], full_count, False), (["--tier", "quick"], 15, False),
+                (["--changed-since", "HEAD"], full_count, False),
                 (["--tier", "fuzz"], 3, True), (["cq-xtask/fuzz-quick"], 1, True)):
             with self.subTest(arguments=arguments):
                 output = io.StringIO()

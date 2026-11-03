@@ -360,8 +360,9 @@ only maintenance work and run counts may change, not represented rows.
 \end{mathpar}
 
 \subsection{Datalog and the fixpoint boundary}
-The external \texttt{features/datalog} workspace implements this boundary above
-the unmodified compiler. Its five language crates record and check source
+The external \texttt{features/datalog} consumer packages implement this boundary
+above the unmodified compiler, sharing its workspace only for build reuse.
+Their five language crates record and check source
 rules, dependency SCCs, delta relations, semi-naive variants, storage choices
 and explicit round programs. Separate stratify, incremental, storage and fork
 passes connect these languages through the stage protocol; a terminal printer

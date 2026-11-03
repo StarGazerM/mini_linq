@@ -2,7 +2,7 @@
 name = "datalog-ddisasm"
 version = "0.1.0"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.85.1"
 license.workspace = true
 publish = false
 

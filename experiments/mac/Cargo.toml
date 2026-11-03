@@ -1,0 +1,21 @@
+# Metal/framework consumers stay separate from the portable Linux workspace.
+[workspace]
+members = ["calib", "cq-mac", "gpu-index", "mccl", "query-expansion"]
+exclude = ["index-bench/native"]
+resolver = "3"
+
+# The Metal clients previously enabled limited debug data for all dependencies.
+[profile.release]
+debug = 1
+
+# Preserve MCCL's thin-LTO profile without imposing it on other Metal binaries.
+[profile.mccl-release]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+debug = 0
+
+[profile.profiling]
+inherits = "mccl-release"
+debug = 2
+strip = "none"

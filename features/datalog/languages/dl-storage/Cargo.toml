@@ -1,8 +1,8 @@
 [package]
 name = "cq-lang-datalog-storage"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.85.1"
 license.workspace = true
 publish = false
 

@@ -152,7 +152,7 @@ def build():
         main += f'#[path = "{WORK / "xtask/src/tpch/comparison.rs"}"] mod comparison;\n'
         main += f'include!("{CACHE_ROOT / "adaptive-worker.rs"}");\n'
         (crate / 'src/main.rs').write_text(main)
-        shutil.copy(WORK / 'Cargo.lock', crate / 'Cargo.lock')
+        shutil.copy(ROOT / 'Cargo.lock', crate / 'Cargo.lock')
         invoke(['cargo', 'metadata', '--offline', '--format-version', '1', '--manifest-path', crate / 'Cargo.toml'], log)
         for feature, binary in workers:
             args = ['cargo', 'build', '--release', '--locked', '--offline', '--manifest-path', crate / 'Cargo.toml']

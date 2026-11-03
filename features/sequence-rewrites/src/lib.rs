@@ -29,7 +29,7 @@
 //!
 //! The macro protocol is `arguments { advice }; pipeline { next, ... };` followed
 //! by a complete Sequence program. Core dependencies are public packaged APIs;
-//! this workspace does not depend on storage, target translations or test hooks.
+//! this package does not depend on storage, target translations or test hooks.
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;

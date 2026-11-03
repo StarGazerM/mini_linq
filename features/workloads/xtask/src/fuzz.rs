@@ -668,7 +668,7 @@ impl Runner {
             "cq-planners-plan",
         ])?);
         std::fs::write(directory.join("planner/Cargo.toml"), manifest)?;
-        std::fs::copy(root.join("Cargo.lock"), directory.join("Cargo.lock"))?;
+        std::fs::copy(crate::cargo::lockfile()?, directory.join("Cargo.lock"))?;
         std::fs::write(
             directory.join("planner/src/compiler.rs"),
             include_str!("fuzz/compiler.rs"),

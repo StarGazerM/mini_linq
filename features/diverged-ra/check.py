@@ -29,24 +29,34 @@ FORBIDDEN = {
 }
 
 
+def dependency_closure(nodes, roots, production_only):
+    reached = set()
+    queue = list(roots)
+    while queue:
+        package_id = queue.pop()
+        if package_id in reached:
+            continue
+        reached.add(package_id)
+        for dependency in nodes[package_id]["deps"]:
+            # Dependencies' own tests are not part of these consumer targets.
+            if (not production_only and package_id in roots) or any(
+                kind["kind"] in (None, "build") for kind in dependency["dep_kinds"]
+            ):
+                queue.append(dependency["pkg"])
+    return reached
+
+
 def main():
-    subprocess.run(["cargo", "test", "--workspace", "--locked", "--offline"], cwd=HERE, check=True)
+    subprocess.run(["cargo", "test", "-p", "diverged-ra", "-p", "ra-theta", "-p", "theta-passes", "--locked", "--offline"], cwd=HERE, check=True)
     subprocess.run(["cargo", "run", "--locked", "--offline"], cwd=HERE, check=True)
     data = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--format-version=1", "--locked", "--offline"], cwd=HERE, text=True))
     packages = {p["id"]: p for p in data["packages"]}
     nodes = {n["id"]: n for n in data["resolve"]["nodes"]}
-    production = set()
-    queue = list(data["workspace_members"])
-    while queue:
-        package_id = queue.pop()
-        if package_id in production:
-            continue
-        production.add(package_id)
-        for dependency in nodes[package_id]["deps"]:
-            if any(kind["kind"] in (None, "build") for kind in dependency["dep_kinds"]):
-                queue.append(dependency["pkg"])
-    for package in data["packages"]:
+    consumers = [p["id"] for p in data["packages"] if p["name"] in LOCAL]
+    production = dependency_closure(nodes, consumers, production_only=True)
+    for package_id in dependency_closure(nodes, consumers, production_only=False):
+        package = packages[package_id]
         if package["source"] is not None:
             continue
         name = package["name"]

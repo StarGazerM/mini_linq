@@ -71,7 +71,7 @@ def render(doc):
     accepted=[w for w in doc['windows'] if w.get('accepted')]
     lines.append(f"{len(accepted)} accepted thread-count groups; {len(doc['windows'])-len(accepted)} busy/rejected records. Small correctness cases and every retained sample were exact.")
     for w in accepted:lines.append(f"t{w['threads']}: {w['before']['utc'].strip()} through {w['after']['utc'].strip()}.")
-    lines += ['', '```sh', "nice -n 19 env CARGO_TARGET_DIR=/data/mini_linq/experiments/storage-bench/cpu/target RUSTFLAGS='-C target-cpu=native' cargo build --release -j1 --manifest-path experiments/storage-bench/cpu/Cargo.toml --bin h01b", 'experiments/storage-bench/cpu/target/release/h01b --small', '# Only in a quiet authorized measurement window:', 'experiments/storage-bench/cpu/target/release/h01b --machine-quiet', 'python3 experiments/storage-bench/cpu/summarize_h01b.py', '```', '', 'Supplemental raw matrix: `cpu-h01-order-distinct-2026-10-29.json`; it is also embedded as `m6b` in the main M6 JSON.']
+    lines += ['', '```sh', "nice -n 19 env RUSTFLAGS='-C target-cpu=native' cargo build --profile cpu-bench -j1 --manifest-path experiments/storage-bench/cpu/Cargo.toml --bin h01b", 'target/cpu-bench/h01b --small', '# Only in a quiet authorized measurement window:', 'target/cpu-bench/h01b --machine-quiet', 'python3 experiments/storage-bench/cpu/summarize_h01b.py', '```', '', 'Supplemental raw matrix: `cpu-h01-order-distinct-2026-10-29.json`; it is also embedded as `m6b` in the main M6 JSON.']
     return '\n'.join(lines)
 
 if __name__=='__main__':

@@ -1,7 +1,3 @@
-[workspace]
-members = ["test-driver"]
-default-members = [".", "test-driver"]
-resolver = "3"
 
 [package]
 name = "cq-rewrites"

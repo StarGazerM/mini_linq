@@ -498,7 +498,8 @@ def harness(tree, directory, target, source, deps):
     # included worker reads getrusage through libc on unix.
     manifest += 'serde_json="1"\nrayon="1"\n[target.\'cfg(unix)\'.dependencies]\nlibc="0.2"\n'
     (directory / "Cargo.toml").write_text(manifest)
-    lock = tree / "features/workloads/Cargo.lock"
+    owner = metadata(tree / "features/workloads/Cargo.toml", os.environ.copy())["workspace_root"]
+    lock = Path(owner) / "Cargo.lock"
     shutil.copyfile(lock, directory / "Cargo.lock")
     workload = tree / "features/workloads"
     (directory / "src/main.rs").write_text(

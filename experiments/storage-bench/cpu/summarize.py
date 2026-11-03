@@ -132,10 +132,10 @@ for r in rows:
     lines.append(f"| {r['experiment']}: {r['case']} | {r['threads']} | {r['variant']} | {r['ns_per_value']:.4f} | [{lo/n:.4f}, {hi/n:.4f}] | {r['ratio_to_plain']:.3f} [{rl:.3f}, {rh:.3f}] | {bw} | {r['items_per_second']/1e6:.3f} | {r['resident_bytes']/1048576:.3f} |")
 lines += ['', '## Reproduction', '', '```sh',
           'python3 experiments/storage-bench/cpu/extract_strings.py',
-          "nice -n 19 env CARGO_TARGET_DIR=/data/mini_linq/experiments/storage-bench/cpu/target RUSTFLAGS='-C target-cpu=native' cargo build --release -j1 --manifest-path experiments/storage-bench/cpu/Cargo.toml",
-          'experiments/storage-bench/cpu/target/release/storage-cpu-bench --small',
+          "nice -n 19 env RUSTFLAGS='-C target-cpu=native' cargo build --profile cpu-bench -j1 --manifest-path experiments/storage-bench/cpu/Cargo.toml",
+          'target/cpu-bench/storage-cpu-bench --small',
           '# Only after obtaining an exclusive quiet CPU measurement window:',
-          'experiments/storage-bench/cpu/target/release/storage-cpu-bench --machine-quiet',
+          'target/cpu-bench/storage-cpu-bench --machine-quiet',
           'python3 experiments/storage-bench/cpu/summarize.py', '```', '',
           '`--only M1|M2|M3|M5` selects an experiment; set `CPU_BENCH_OUTPUT` to a separate JSON path for a partial run. '
           'The supplemental `cpu-2026-10-28-m2-interleaved.json` preserves the controlled M2 rerun; the main JSON contains the final 476 rows and superseded M2 provenance.']

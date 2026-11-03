@@ -1,7 +1,9 @@
 # Mac (Apple silicon) calibration and cost model
 
-The experiments use standalone workspaces; the native provider and join
-improvements live in the main workspace. Five experiment pieces:
+The Metal-dependent packages share the `experiments/mac` workspace. Portable
+native provider and join improvements, plus `index-bench/native`, belong to the
+root workspace. The native benchmark uses the root `cpu-bench` profile, which
+inherits release with thin LTO and one codegen unit. Five experiment pieces:
 
 - `calib/` — `maccal`: measured primitive costs on this machine (CPU, GPU, and
   CPU+GPU concurrently). Rust + Metal; see `calib/README.md` for every primitive.
@@ -15,8 +17,8 @@ improvements live in the main workspace. Five experiment pieces:
 - `query-expansion/` — matched CPU/GPU index construction and query experiments.
 
 The consolidated GPU runtime lives in [`cq-mac/`](cq-mac/src/lib.rs), backed by
-[`mccl/`](mccl/README.md) and its canonical Metal kernels. These remain standalone
-workspaces outside the portable core; all active commands run from this repository.
+[`mccl/`](mccl/README.md) and its canonical Metal kernels. These share the Metal
+workspace outside the portable root; all active commands run from this repository.
 
 The [Mac implementation plan](../../doc/MAC-IMPLEMENTATION.md) separates
 GPU-assisted host providers, LSM-like snapshot maintenance, Datalog publication,
@@ -439,7 +441,7 @@ default hash, RadixRun immediate, retained, staged, and retained+staged routes:
 cargo run --manifest-path features/rewrites/Cargo.toml --example radix_runs
 cargo test --manifest-path features/rewrites/Cargo.toml
 cargo test -p cq-storage -p cq-lang-structures -p cq-sequence-pull --all-features
-cargo run --release --locked --manifest-path experiments/mac/index-bench/native/Cargo.toml -- 1048576 262144 5
+cargo run --profile cpu-bench --locked --manifest-path experiments/mac/index-bench/native/Cargo.toml -- 1048576 262144 5
 ```
 
 ### Historical native Rust provider measurements (2026-10-24)
@@ -701,7 +703,7 @@ do not identify whether each remaining loss is construction or probing; these
 results do not establish GPU speedup or sorted-index saturation.
 
 Reproduce with `cargo xtask bench --tpch --sf 1 --runs 5 --index-comparison`
-from the workloads workspace. The command now includes the materialized pair
+from the repository root or `features/workloads`. The command now includes the materialized pair
 where advertised, alongside default/radix/radix_retained everywhere.
 
 ### Explicit predicates and transfer diagnosis

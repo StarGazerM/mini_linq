@@ -584,9 +584,16 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
         ir::contract::check(&membership).unwrap().built,
         "supplementary keysets serve membership without retyping payload indices"
     );
+    assert!(
+        retype(
+            &source,
+            quote!(providers { mask = Mask<_> { reads [], build typed }; } kind(selection) => @mask as Mask<_>),
+        )
+        .is_err()
+    );
     let target = retype(
         &source,
-        quote!(providers { mask = Mask<_> { reads [], build typed }; } kind(selection) => @mask as Mask<_>),
+        quote!(providers { mask = Mask<_> { reads [positions], build typed }; } kind(selection) => @mask as Mask<_>),
     )
     .unwrap();
     assert_eq!(source.physical, target.physical);

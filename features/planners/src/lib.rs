@@ -1,7 +1,7 @@
 //! # cq-planners
 //!
-//! An external CQ→RA′ planner on the public `cq-stage` protocol. This standalone
-//! workspace contains a planner library, its protocol macro, the public
+//! An external CQ→RA′ planner on the public `cq-stage` protocol. This feature
+//! group contains a planner library, its protocol macro, the public
 //! `cq-planners` facade, and a test-only Rust refinement driver. Core dependencies
 //! use a version and a local path; the external gate replaces those paths with
 //! packaged dependencies.

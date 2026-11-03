@@ -6,9 +6,6 @@ edition = "2024"
 rust-version = "1.85"
 publish = false
 
-# This documentation driver is outside the compiler workspace.
-[workspace]
-
 [dependencies]
 cq-lang-cq = { path = "../../../languages/cq-lang-cq" }
 cq-lang-ix = { path = "../../../languages/cq-lang-ix" }

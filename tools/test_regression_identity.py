@@ -192,6 +192,18 @@ class IdentityTests(unittest.TestCase):
         self.assertIsNone(self.identity.fingerprint(row))
         self.assertEqual(self.fixture.expansion_calls(), [])
 
+    def test_manifest_doctest_check_ignores_unselected_workspace_siblings(self):
+        self.fixture.packages[1]["targets"][0]["doctest"] = True
+        row = ["app", "manifest-test", "all", "Cargo.toml"]
+        self.fingerprint(row)
+        self.assertTrue(self.fixture.expansion_calls())
+
+    def test_oracle_metadata_qualifies_feature_for_root_manifest(self):
+        self.identity._metadata(["app", "oracle", "golden", "Cargo.toml"], {})
+        command = next(command for command in self.fixture.calls
+                       if command[1] == "metadata")
+        self.assertEqual(command[-2:], ["--features", "app/oracle"])
+
     def test_manifest_tests_cover_all_roots_not_inventory_label(self):
         self.fixture.units[1]["mode"] = "test"
         self.fixture.units[1]["target"]["kind"] = ["bin"]

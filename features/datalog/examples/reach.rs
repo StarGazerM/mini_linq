@@ -1,4 +1,4 @@
-//! Run with `cargo run --manifest-path features/datalog/Cargo.toml --example reach`.
+//! Run from the repository root with `cargo run -p cq-datalog --example reach`.
 use std::collections::BTreeSet;
 
 fn main() {

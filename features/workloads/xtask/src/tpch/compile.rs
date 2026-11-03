@@ -73,7 +73,7 @@ pub(super) fn build_in(
     // root-package entries here; the actual measured build always uses --locked.
     write_if_changed(
         &directory.join("Cargo.lock"),
-        &std::fs::read_to_string(root.join("Cargo.lock"))?,
+        &std::fs::read_to_string(crate::cargo::lockfile()?)?,
     )?;
     // Match the workload/corpus crate allowance: instrumented iterator chains
     // add wrapper types and can exceed rustc's default layout-query depth.

@@ -36,7 +36,10 @@ Datalog's generated layout updates, or a Metal-resident execution backend.
 The GPU experiment is at [experiments/mac/gpu-index](../experiments/mac/gpu-index/README.md),
 alongside the main tree's optimized native `RadixRun`. Its runtime and canonical
 native implementation are consolidated in `experiments/mac/cq-mac` and
-`experiments/mac/mccl`, separate from the portable core workspace. The native
+`experiments/mac/mccl`, in the shared `experiments/mac` Metal workspace, separate
+from the portable root workspace. The native CPU benchmark at
+`experiments/mac/index-bench/native` instead belongs to the root workspace and
+uses its `cpu-bench` profile (release, thin LTO, one codegen unit). The native
 cached numeric-key sort, lazy exact dense-membership bitmap, H09 workload order,
 and profiling changes remain intact. The earlier sibling snapshots are historical
 backups, not build dependencies or active work directories. Archived timings
@@ -333,9 +336,10 @@ the verification counts above describe their original source states, not this me
 
 ## Implemented hybrid runtime
 
-[`experiments/mac/cq-mac`](../experiments/mac/cq-mac/src/lib.rs) is a standalone Cargo workspace,
-not a dependency of the portable workspace. It adds no compiler pass, provider
-name exception, Datalog emission change or implicit `Build` implementation.
+[`experiments/mac/cq-mac`](../experiments/mac/cq-mac/src/lib.rs) belongs to the
+`experiments/mac` Metal workspace, not the portable root workspace. It adds no
+compiler pass, provider name exception, Datalog emission change or implicit
+`Build` implementation.
 
 - `MacContext::new()` fallibly creates an MCCL context. Index construction
   validates unified memory, capacity and compiled pipeline geometry; unsupported
@@ -1038,8 +1042,8 @@ context's platform requirements and synchronous completion protocol.
 
 ## MCCL provider cutover
 
-`experiments/mac/cq-mac` depends on the local `experiments/mac/mccl` workspace.
-Both remain outside the portable core workspace. Core `MacContext` construction/merge,
+`experiments/mac/cq-mac` depends on the local `experiments/mac/mccl` package.
+Both share the Metal workspace outside the portable root workspace. Core `MacContext` construction/merge,
 `MacRun`, CQ read traits, chronological bags and pinned snapshot contracts remain.
 MCCL provides stable u32/u32 GPU radix sort, partitioned merge, exact radix-12
 directories and explicitly selected CPU comparison/radix construction. Tuple
@@ -1735,8 +1739,9 @@ All active Mac implementation sources are now Git-managed in this checkout:
 - `experiments/mac/query-expansion`: authored-query and matched build/read drivers.
 - `runtime/cq-storage`: portable native storage and the shared RadixRun reader.
 
-The Mac crates remain standalone Cargo workspaces outside the portable core.
-Cargo metadata for all four Mac workspaces has no external path package.
+At this historical checkpoint the Mac crates had standalone Cargo workspaces
+outside the portable core; metadata for all four had no external path package.
+They now share the `experiments/mac` Metal workspace.
 The rebuilt `libmccl_native.dylib` resolves MCCL/MLX libraries inside
 `experiments/mac/mccl/build/native`, not a sibling project. Historical source
 paths embedded in archived measurement records are provenance and remain intact.

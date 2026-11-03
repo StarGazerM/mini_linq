@@ -14,7 +14,7 @@
 //! is assumed pure and total, and may move after its free-variable binders.
 //! Written order imposes no dependency; relational predicates use `where`.
 //!
-//! This workspace uses version plus path dependencies for local development.
+//! This package uses version plus path dependencies for local development.
 //! The external gate replaces the core dependencies with packaged public crates.
 //! From the repository root, use `cargo run --manifest-path
 //! features/inspection/Cargo.toml --example cq-inspection --locked` or substitute

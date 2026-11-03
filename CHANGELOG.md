@@ -24,6 +24,18 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   than diagnostic prose. Behavioral and compile-fail coverage remains independent
   of error-message wording; GPU tests are unchanged.
 
+- Consolidate portable compiler, feature consumers, formal examples and CPU
+  benchmarks into the root Cargo workspace and lockfile. Keep GPU's oxide
+  toolchain and Metal's platform dependencies in separate workspaces; preserve
+  standalone external-packaging fixtures as isolation test inputs. Regression
+  rows select explicit packages and retain formerly grouped consumer tests.
+  Closed-core dependency checks remain independent of workspace membership.
+  Preserve package versions/MSRVs, workload debug settings and benchmark LTO
+  profiles; relocate external consumers using materialized public dependencies.
+  Relocated consumer dependencies retain their directory group's sibling datasets.
+  Root default members exclude the five packages whose dev-dependencies enable
+  counters; explicit package regression gates retain their instrumented coverage.
+
 - GPU Sequence placement keeps descriptor-backed `abi columns` index builds at
   their host publication boundary. It no longer copies whole resident columns
   through unpartitioned device publications merely because the index token

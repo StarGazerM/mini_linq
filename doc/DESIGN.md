@@ -199,12 +199,19 @@ Only a terminal Rust printer can end the queue. Failures become
 `compile_error!`. Pass arguments record choices in target IR; subsequent passes
 receive complete programs.
 
+The root Cargo workspace groups portable core, all feature consumers, formal
+examples and fixtures, and CPU benchmarks for shared compilation and lock
+resolution. Membership is not a dependency permission: core-to-feature edges
+remain forbidden and are checked independently. GPU/oxide and Metal packages
+retain separate workspaces at `experiments/gpu` and `experiments/mac`;
+external-packaging fixtures intentionally retain standalone topology.
+
 Features are external consumers, with versioned public core dependencies and
 local development paths. `python3 tools/check_external.py` packages every core
 crate, relocates every feature and its sibling consumer dependencies outside
 the checkout, substitutes packaged core sources, and builds all targets and
-runs workspace tests. Vendoring includes every repository feature's locked
-third-party closure rather than relying on accidental core dependencies.
+runs consumer tests. Vendoring includes every repository feature's third-party
+closure from the owning workspace lock rather than accidental core dependencies.
 Escapes are checked using canonical filesystem paths, including symlinked
 temporary directories. Positive, sibling-closure, and in-tree-only negative
 fixtures always run.

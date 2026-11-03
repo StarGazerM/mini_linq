@@ -11,8 +11,8 @@
 //! their free variables. Written clause order and evaluation counts are not
 //! semantic constraints; relational predicates belong in `where`.
 //! From the repository root, run `python3 features/diverged-ra/check.py` to
-//! validate both routes, or `cargo test --manifest-path
-//! features/diverged-ra/Cargo.toml --locked` for the workspace tests.
+//! validate both routes, or `cargo test -p diverged-ra -p ra-theta
+//! -p theta-passes --locked` for the consumer package tests.
 include!(concat!(env!("OUT_DIR"), "/query.rs"));
 
 #[cfg(test)]

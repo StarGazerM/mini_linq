@@ -2,7 +2,8 @@
 
 Measures the primitive operations a trace-driven cost model of index build /
 merge maintenance / join probe is built from, on the CPU, on the GPU (Metal
-compute) and with both running at once. Standalone cargo workspace; the Metal
+compute) and with both running at once. It belongs to the shared `experiments/mac`
+Cargo workspace; the Metal
 kernels in `src/kernels.metal` are compiled by `build.rs` (`xcrun metal -O3`,
 `metallib`) into `OUT_DIR` and loaded at start.
 

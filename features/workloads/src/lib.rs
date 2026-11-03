@@ -1,6 +1,6 @@
 //! Authored MiniLinq/SQL workloads and deterministic conformance data.
 //!
-//! This standalone workspace consumes public core APIs and sibling planner,
+//! This feature group consumes public core APIs and sibling planner,
 //! rewrite, dialect and surface-pass packages. The primary corpus has 20 queries;
 //! the extended corpus adds 29 authored pairs spanning core and extension queries.
 //! Anti-join workloads use core `!R(..)` clauses without a negation surface pass;
@@ -48,13 +48,15 @@
 //! and the Mac measurement records.
 
 //!
-//! Run acceptance from this standalone workspace. Corpus and benchmark contracts
+//! Run acceptance from the root workspace. Corpus and benchmark contracts
 //! are documented here; commands that measure performance print fresh evidence.
+//! Data and generated benchmark workers remain cached under
+//! `features/workloads/target/bench`; that semantic cache is not the shared Cargo target.
 //!
 //! ```sh
 //! cargo fmt --check
-//! cargo clippy --all-targets -- -D warnings
-//! cargo test
+//! cargo clippy -p 'cq-workload*' -p cq-xtask --all-targets -- -D warnings
+//! cargo test -p 'cq-workload*' -p cq-xtask
 //! cargo test -p cq-workloads --features counters --test growth -- --nocapture
 //! cargo test -p cq-workload-e2e --features parquet
 //! cargo test -p cq-workload-corpus --test 'sequence_conformance_*' -- --nocapture

@@ -43,10 +43,7 @@ jobs:
       - name: Fetch locked dependencies for isolated and packaged gates
         run: |
           cargo fetch --locked
-          # Feature-only dependencies (for example Ascent) are not in the root lock.
-          for manifest in features/*/Cargo.toml; do
-            cargo fetch --locked --manifest-path "$manifest"
-          done
+          # Portable core and all feature closures now share the root lock.
           # cargo package --offline resolves the packaged cq-syntax against the
           # crates.io syn_derive (the workspace uses a git pin), so its whole
           # index closure (proc-macro-error2, ...) must already be cached.
@@ -54,26 +51,36 @@ jobs:
           printf '[package]\nname = "syn-derive-closure"\nversion = "0.0.0"\nedition = "2021"\n[dependencies]\nsyn_derive = "=0.2.0"\n' > "$RUNNER_TEMP/syn-derive-closure/Cargo.toml"
           : > "$RUNNER_TEMP/syn-derive-closure/src/lib.rs"
           cargo fetch --manifest-path "$RUNNER_TEMP/syn-derive-closure/Cargo.toml"
+      - name: Select closed-core CI packages
+        # Clippy retains its former core/course scope. Behavioral tests use
+        # non-instrumented default members plus explicit package regressions.
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import tomllib
+          manifests = [Path("Cargo.toml")]
+          for folder in ("languages", "passes", "runtime", "facade", "testkit"):
+              manifests.extend(sorted(Path(folder).glob("*/Cargo.toml")))
+          packages = [tomllib.loads(path.read_text())["package"]["name"] for path in manifests]
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write("CORE_PACKAGES=" + " ".join("-p " + package for package in packages) + "\n")
+          PY
       - name: Verify component dependency boundaries
-        # Frontend/consumer facade targets run once, in `cargo test --workspace`.
+        # Explicit package regression rows cover instrumented facade consumers.
         run: python3 tools/check_dependencies.py --isolate
       - name: Drop isolation build artifacts
         run: rm -rf target/component-isolation && df -h /
       - name: Test restored compiler regressions
         run: bash tools/test_regressions.sh
-      - name: Drop feature build artifacts
-        # Feature workspaces share features/target; workloads keeps its own.
-        run: |
-          rm -rf features/target
-          df -h /
       - name: Test packaged public API outside the checkout
         run: python3 tools/check_external.py
       - name: Check reviewed public API snapshots
         run: python3 tools/check_public_api.py
-      - name: Test workspace
-        run: cargo test --workspace --locked
-      - name: Check Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test portable default members without instrumentation unification
+        run: cargo test --locked
+      - name: Check closed-core Clippy
+        run: cargo clippy $CORE_PACKAGES --all-targets --locked -- -D warnings
       - name: Check formal source correspondence
         run: python3 doc/formal/check.py
       - name: Check workload goldens

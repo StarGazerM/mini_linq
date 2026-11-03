@@ -2,79 +2,8 @@
 name = "cq-workloads"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-
-[workspace]
-members = [".", "authored", "e2e", "e2e/corpus", "xtask", "pipeline-passes"]
-default-members = [".", "authored", "e2e", "e2e/corpus", "xtask", "pipeline-passes"]
-resolver = "3"
-
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
 rust-version = "1.85.1"
-license = "MIT OR Apache-2.0"
-
-[workspace.dependencies]
-cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
-cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage" }
-cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
-cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
-cq-lang-ra = { version = "0.1.0", path = "../../languages/cq-lang-ra" }
-cq-lang-vo = { version = "0.1.0", path = "../../languages/cq-lang-vo" }
-cq-lang-ix = { version = "0.1.0", path = "../../languages/cq-lang-ix" }
-cq-lang-physical = { version = "0.1.0", path = "../../languages/cq-lang-physical" }
-cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
-cq-syntax = { version = "0.1.0", path = "../../languages/cq-syntax" }
-cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }
-mini-linq = { version = "0.1.0", path = "../../facade/mini-linq" }
-cq-order = { version = "0.1.0", path = "../../passes/cq-order" }
-cq-reduce = { version = "0.1.0", path = "../../passes/cq-reduce" }
-cq-relational-lowering = { version = "0.1.0", path = "../../passes/cq-relational-lowering" }
-cq-index-policy = { version = "0.1.0", path = "../../passes/cq-index-policy" }
-cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-lowering" }
-cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-selection" }
-cq-represent = { version = "0.1.0", path = "../../passes/cq-represent" }
-cq-staging = { version = "0.1.0", path = "../../passes/cq-staging" }
-cq-lang-sequence = { version = "0.1.0", path = "../../languages/cq-lang-sequence" }
-cq-sequence-lowering = { version = "0.1.0", path = "../../passes/cq-sequence-lowering" }
-cq-sequence-pull = { version = "0.1.0", path = "../../passes/cq-sequence-pull" }
-cq-sequence-tasks = { path = "../sequence-tasks" }
-cq-sequence-tasks-macros = { path = "../sequence-tasks/macros" }
-cq-planners = { path = "../planners" }
-cq-planners-plan = { path = "../planners/plan" }
-cq-rewrites = { path = "../rewrites" }
-cq-join-filters = { path = "../join-filters" }
-cq-workload-passes = { path = "pipeline-passes" }
-cq-rewrite-passes = { path = "../rewrites/passes" }
-own-push = { path = "../own-dialect/printer" }
-cq-ext-support = { path = "../extensions/cq-ext-support" }
-cq-ext-aggregate = { path = "../extensions/cq-ext-aggregate" }
-cq-ext-recursion = { path = "../extensions/cq-ext-recursion" }
-cq-ext-correlated = { path = "../extensions/cq-ext-correlated" }
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["extra-traits", "full", "visit", "visit-mut"] }
-prettyplease = "0.2"
-
-# Query macros run the compiler per invocation; optimize the compiler even
-# with the readable pairwise cases rather than a generated full matrix.
-[profile.dev.build-override]
-opt-level = 3
-
-# The explicit kernel matrix is large; omit debug data from its test binaries.
-[profile.dev.package.cq-workload-corpus]
-debug = 0
-
-[profile.test.package.cq-workload-corpus]
-debug = 0
-
-[profile.dev.package.cq-workload-e2e]
-debug = 0
-
-[profile.test.package.cq-workload-e2e]
-debug = 0
+license.workspace = true
 
 [dependencies]
 cq-workload-authored = { path = "authored" }

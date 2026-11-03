@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[workspace]
-
 [dependencies]
 cq-workload-authored = { path = "../../../features/workloads/authored" }
 cq-planners-plan = { path = "../../../features/planners/plan" }

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Package core and test every feature workspace outside the checkout.
+"""Package core and test every feature directory group outside the checkout.
 
 The local directory source contains Cargo-produced .crate archives plus locked
 third-party vendors. No core path dependency is available to feature builds.
-Every features/ workspace must pass; there are no migration exceptions.
+Every features/ group must pass; there are no migration exceptions.
 Mandatory positive and in-tree-only negative fixtures exercise the gate itself.
 The packaging workspace retains the root lock so already-locked yanked
 transitive releases remain resolvable during offline Cargo packaging.
-Use --feature to select a standalone workspace, including one outside the repo,
-and --out to place logs and build artifacts in another directory.
+Use --feature to select a feature directory group or standalone workspace,
+including one outside the repo, and --out for logs and build artifacts.
 """
 from __future__ import annotations
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -103,14 +104,62 @@ def path_dependencies(spec):
                 yield value.get("package", alias), value
 
 
-def copy_feature_closure(feature, directory, names):
-    """Copy local consumer workspaces once, retaining their sibling layout.
+def workspace_owner(manifest):
+    spec = tomllib.loads(manifest.read_text())
+    explicit = spec.get("package", {}).get("workspace")
+    candidates = [(manifest.parent / explicit).resolve()] if explicit else [manifest.parent, *manifest.parent.parents]
+    for parent in candidates:
+        candidate = parent / "Cargo.toml"
+        if candidate.is_file():
+            workspace = tomllib.loads(candidate.read_text()).get("workspace")
+            if workspace is not None:
+                return parent, workspace
+    return None, {}
 
-    Core paths are deliberately not followed: those resolve from Cargo packages.
-    The only other permitted paths are local optional consumers under features/
-    (or the selected external workspace's sibling directory). Metadata still
-    checks the resolved graph after relocation, including absolute paths.
-    """
+
+def materialize_manifest(manifest):
+    """Resolve inheritance in source coordinates before relocating any paths."""
+    spec = tomllib.loads(manifest.read_text())
+    owner, workspace = workspace_owner(manifest)
+    package = spec.get("package", {})
+    package.pop("workspace", None)
+    for key, value in list(package.items()):
+        if isinstance(value, dict) and value.get("workspace") is True:
+            package[key] = copy.deepcopy(workspace["package"][key])
+            if key in {"readme", "license-file"} and isinstance(package[key], str):
+                package[key] = str((owner / package[key]).resolve())
+
+    def inherit(values):
+        for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+            for alias, value in list(values.get(section, {}).items()):
+                if not isinstance(value, dict) or not value.get("workspace"):
+                    continue
+                inherited = copy.deepcopy(workspace["dependencies"][alias])
+                if isinstance(inherited, str):
+                    inherited = {"version": inherited}
+                if "path" in inherited:
+                    inherited["path"] = str((owner / inherited["path"]).resolve())
+                features = inherited.get("features", []) + value.get("features", [])
+                inherited.update({key: item for key, item in value.items() if key not in {"workspace", "features"}})
+                if features:
+                    inherited["features"] = list(dict.fromkeys(features))
+                values[section][alias] = inherited
+        for target in values.get("target", {}).values():
+            inherit(target)
+
+    inherit(spec)
+    if spec.get("lints", {}).get("workspace"):
+        spec["lints"] = copy.deepcopy(workspace["lints"])
+    # No copied package still inherits dependencies or properties. Retain only
+    # standalone workspace topology, never unused paths from the checkout.
+    if "workspace" in spec:
+        for key in ("dependencies", "package", "lints"):
+            spec["workspace"].pop(key, None)
+    return spec
+
+
+def copy_feature_closure(feature, directory, names):
+    """Copy only consumers, materializing inheritance before cutting root ties."""
     feature = feature.resolve()
     directory = directory.resolve()
     feature_root = (ROOT / "features").resolve()
@@ -119,15 +168,23 @@ def copy_feature_closure(feature, directory, names):
     pending = [feature]
     copied = set()
     while pending:
-        workspace = pending.pop()
-        if any(workspace.is_relative_to(parent) for parent in copied):
+        source_root = pending.pop()
+        if any(source_root.is_relative_to(parent) for parent in copied):
             continue
-        destination = tree / workspace.relative_to(base)
-        shutil.copytree(workspace, destination, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("target", ".git", "Cargo.lock"))
-        copied.add(workspace)
-        for manifest in manifests(workspace):
-            spec = tomllib.loads(manifest.read_text())
+        destination = tree / source_root.relative_to(base)
+        shutil.copytree(source_root, destination, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("target", ".git", ".cargo", "Cargo.lock"))
+        copied.add(source_root)
+        for manifest in manifests(source_root):
+            spec = materialize_manifest(manifest)
+            output = tree / manifest.relative_to(base)
+            for key in ("readme", "license-file"):
+                value = spec.get("package", {}).get(key)
+                if isinstance(value, str) and Path(value).is_absolute():
+                    asset = output.parent / ("workspace-" + Path(value).name)
+                    shutil.copy2(value, asset)
+                    spec["package"][key] = asset.name
+            write_manifest(output, spec)
             for package, value in path_dependencies(spec):
                 if package in names:
                     continue
@@ -136,50 +193,82 @@ def copy_feature_closure(feature, directory, names):
                     raise RuntimeError(f"local consumer dependency escapes feature siblings: {manifest}: {dependency}")
                 if not (dependency / "Cargo.toml").is_file():
                     raise RuntimeError(f"missing local consumer dependency: {dependency}")
-                # A package can inherit dependencies/version from its sibling
-                # workspace root, which must travel with the package too.
-                owner = dependency
-                for parent in (dependency, *dependency.parents):
-                    if not parent.is_relative_to(base):
-                        break
-                    parent_manifest = parent / "Cargo.toml"
-                    if parent_manifest.is_file() and "workspace" in tomllib.loads(parent_manifest.read_text()):
-                        owner = parent
-                        break
-                pending.append(owner)
+                owner, _ = workspace_owner(dependency / "Cargo.toml")
+                # Independent sibling workspaces retain their topology. Root-owned
+                # dependencies travel with their feature directory group: packages
+                # may read sibling golden/data files outside their own directory.
+                if owner and owner.is_relative_to(base):
+                    pending.append(owner)
+                elif dependency.is_relative_to(feature_root):
+                    pending.append(feature_root / dependency.relative_to(feature_root).parts[0])
+                else:
+                    pending.append(dependency)
     point_core(tree, names)
-    # Relative paths already work. Relocate absolute local paths as well, and
-    # reject symlinks/overrides that resolved outside the copied source closure.
     for manifest in manifests(tree):
         source = base / manifest.relative_to(tree)
         spec = tomllib.loads(manifest.read_text())
-        for package, value in path_dependencies(spec):
+        for _, value in path_dependencies(spec):
             dependency = (source.parent / value["path"]).resolve()
             relocated = tree / dependency.relative_to(base)
             if not (relocated / "Cargo.toml").is_file():
                 raise RuntimeError(f"dependency was not copied: {dependency}")
             value["path"] = os.path.relpath(relocated, manifest.parent)
         write_manifest(manifest, spec)
+    # Root-owned directory groups may have no manifest at all. Give each
+    # copied consumer root its own workspace, not the checkout's membership.
+    for source_root in sorted(copied, key=lambda path: (len(path.parts), str(path))):
+        destination = tree / source_root.relative_to(base)
+        owner, _ = workspace_owner(destination / "Cargo.toml") if (destination / "Cargo.toml").is_file() else (None, {})
+        if owner is not None and owner.is_relative_to(tree):
+            continue
+        manifest = destination / "Cargo.toml"
+        spec = tomllib.loads(manifest.read_text()) if manifest.is_file() else {}
+        members = []
+        for member in manifests(destination):
+            member_spec = tomllib.loads(member.read_text())
+            if "package" not in member_spec:
+                continue
+            nested_owner, _ = workspace_owner(member)
+            if nested_owner is not None and nested_owner.is_relative_to(destination):
+                continue
+            members.append(str(member.parent.relative_to(destination)))
+        spec["workspace"] = {"members": members, "resolver": "3"}
+        if source_root.is_relative_to(feature_root):
+            root_spec = tomllib.loads((ROOT / "Cargo.toml").read_text())
+            if "profile" in root_spec:
+                spec["profile"] = copy.deepcopy(root_spec["profile"])
+        write_manifest(manifest, spec)
     return tree / feature.relative_to(base), tree
+
+
+def core_packages(packages):
+    """Folder names inside consumers do not confer closed-core identity."""
+    roots = {ROOT / folder for folder in ("languages", "passes", "runtime", "facade", "testkit")}
+    return [package for package in packages
+            if Path(package["manifest_path"]).parent.parent in roots]
+
+
+def packaging_dependencies(dependencies, packages):
+    """Only copied core paths may enter Cargo's packaging auto-membership."""
+    paths = {Path(package["manifest_path"]).parent.resolve() for package in packages}
+    return {alias: copy.deepcopy(value) for alias, value in dependencies.items()
+            if not isinstance(value, dict) or "path" not in value
+            or (ROOT / value["path"]).resolve() in paths}
 
 
 def package_core(directory, log):
     data = json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version=1","--locked"],cwd=ROOT))
-    packages = [p for p in data["packages"] if Path(p["manifest_path"]).parent.parent.name in {"languages","passes","runtime","facade","testkit"}]
+    packages = core_packages(data["packages"])
     names = {p["name"]:p["version"] for p in packages}
     source = directory/"source"; source.mkdir()
     # Pin the derive fork too. cargo package normalizes git dependencies to a
     # version; our directory source preserves the actual locked implementation.
     vendor = directory/"vendor"
-    # Vendor every standalone consumer's locked third-party closure. Core must
-    # not acquire feature dependencies merely to make them available here.
-    command = ["cargo", "vendor", "--locked", "--offline"]
-    for feature in feature_workspaces():
-        command.extend(["--sync", str(feature / "Cargo.toml")])
-    command.append(str(vendor))
-    run(command, ROOT, log)
+    # Root resolution includes every feature's third-party closure without
+    # introducing compiler-to-consumer dependency edges.
+    run(["cargo", "vendor", "--locked", "--offline", str(vendor)], ROOT, log)
     original = tomllib.loads((ROOT/"Cargo.toml").read_text())["workspace"]
-    root = {"workspace":{"members":[],"resolver":"3","package":original["package"],"dependencies":original["dependencies"]}, "patch":{"crates-io":{}}}
+    root = {"workspace":{"members":[],"resolver":"3","package":original["package"],"dependencies":packaging_dependencies(original["dependencies"], packages)}, "patch":{"crates-io":{}}}
     for p in packages:
         relative = Path(p["manifest_path"]).parent.relative_to(ROOT);root["workspace"]["members"].append(str(relative))
         destination=source/relative;shutil.copytree(Path(p["manifest_path"]).parent,destination,ignore=shutil.ignore_patterns("target",".git"))
@@ -188,12 +277,14 @@ def package_core(directory, log):
         manifest["package"]["autotests"]=False;manifest["package"]["autoexamples"]=False;manifest["package"]["autobenches"]=False
         write_manifest(destination/"Cargo.toml",manifest)
         root["patch"]["crates-io"][p["name"]]={"path":str(relative)}
-    for name, dep in root["workspace"]["dependencies"].items():
+    for alias, dep in root["workspace"]["dependencies"].items():
+        name = dep.get("package", alias) if isinstance(dep, dict) else alias
         if isinstance(dep,dict) and name in names: dep["version"]=names[name]
         if isinstance(dep,dict) and "git" in dep:
             candidates=[p for p in vendor.iterdir() if p.is_dir() and tomllib.loads((p/"Cargo.toml").read_text())["package"]["name"]==name]
             if len(candidates)!=1: raise RuntimeError(f"missing pinned vendor: {name}")
             dep.clear();dep.update({"path":str(candidates[0]),"version":tomllib.loads((candidates[0]/"Cargo.toml").read_text())["package"]["version"]})
+            if alias != name: dep["package"] = name
             root["patch"]["crates-io"][name]={"path":str(candidates[0])}
     write_manifest(source/"Cargo.toml",root)
     # Preserve locked yanked dependencies (notably DuckDB's zip 6.0.0).
@@ -217,15 +308,12 @@ def package_core(directory, log):
     return names,vendor
 
 
-def feature_workspaces():
-    workspaces=[]
-    for manifest in manifests(ROOT/"features"):
-        directory=manifest.parent;relative=directory.relative_to(ROOT/"features")
-        spec=tomllib.loads(manifest.read_text())
-        if "workspace" in spec:workspaces.append(directory)
-        elif not any(parent in workspaces for parent in directory.parents):
-            raise RuntimeError(f"feature has no standalone workspace: {relative}")
-    return workspaces
+def feature_groups():
+    """Keep every top-level feature selectable without virtual manifests."""
+    base = ROOT / "features"
+    return sorted({base / manifest.relative_to(base).parts[0]
+                   for manifest in manifests(base)
+                   if "package" in tomllib.loads(manifest.read_text())})
 
 
 def test_feature(feature, directory, names, vendor, log, builddir):
@@ -253,14 +341,13 @@ def test_feature(feature, directory, names, vendor, log, builddir):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--feature",type=Path,action="append",help="standalone feature workspace to test (repeatable; defaults to all features)")
+    parser.add_argument("--feature",type=Path,action="append",help="feature directory group or standalone workspace (repeatable; defaults to all feature groups)")
     parser.add_argument("--out",type=Path,help="directory for logs and build artifacts (default: target)")
     args=parser.parse_args()
-    selected=[p.expanduser().resolve() for p in args.feature] if args.feature else feature_workspaces()
+    selected=[p.expanduser().resolve() for p in args.feature] if args.feature else feature_groups()
     for feature in selected:
-        manifest=feature/"Cargo.toml"
-        if not manifest.is_file() or "workspace" not in tomllib.loads(manifest.read_text()):
-            parser.error(f"feature must be a standalone Cargo workspace: {feature}")
+        if not feature.is_dir() or not any("package" in tomllib.loads(p.read_text()) for p in manifests(feature)):
+            parser.error(f"feature must contain Cargo consumer packages: {feature}")
     out=args.out.expanduser().resolve() if args.out else ROOT/"target"
     if args.out and any(out.is_relative_to(feature) for feature in [ROOT/"tools/fixtures/external",ROOT/"tools/fixtures/external-siblings/consumer",ROOT/"tools/fixtures/in-tree-only"]+selected):
         parser.error("--out must be outside the tested workspaces to avoid copying artifacts into themselves")
