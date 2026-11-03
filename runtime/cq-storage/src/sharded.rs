@@ -116,6 +116,17 @@ where
     }
 }
 
+// A flat build records the singleton cover. Routing into several parts is a
+// separate, checked Sequence decision, not a runtime Build heuristic.
+impl<I, S: Iterator> Build<S> for Sharded<I>
+where
+    I: Build<S>,
+{
+    fn build(source: S) -> Self {
+        Self::from_parts(vec![I::build(source)])
+    }
+}
+
 impl<I> Sharded<I> {
     /// Wrap indexes built from parts routed by [`route_index`].
     pub fn from_parts(shards: Vec<I>) -> Self {
@@ -597,6 +608,18 @@ mod tests {
             assert_eq!((&radix).lookup(&5).collect::<Vec<_>>(), [9, 9]);
             assert_eq!((&radix).lookup(&u32::MAX).collect::<Vec<_>>(), [7]);
             assert_eq!((&radix).lookup(&1).collect::<Vec<_>>(), []);
+        }
+    }
+
+    #[test]
+    fn flat_build_has_one_shard_and_preserves_exact_reads() {
+        for rows in [vec![], vec![(1u32, 7u32), (1, 8), (2, 9)]] {
+            let provider = Sharded::<Index<u32, u32>>::build(rows.into_iter());
+            assert_eq!(provider.shard_count(), 1);
+            let values = (&provider).lookup(&1).collect::<Vec<_>>();
+            assert_eq!(provider.contains(&1), !values.is_empty());
+            assert!(values.is_empty() || values == [7, 8]);
+            assert!(!provider.contains(&3));
         }
     }
 

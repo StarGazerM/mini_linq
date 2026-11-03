@@ -283,6 +283,12 @@ the recorded cover. Fused-arm providers are constructed inside each prefix-row
 invocation; their flat Sequence stores are deferred, not independent builds.
 The top-level provider rewrite therefore cannot retype these local providers:
 rewriting a deferred store would leave the real constructor unrouted.
+Native position snapshots retain their selected carrier: a partitioned Store
+cannot publish a result with a Structures Selection record. Automatic provider
+routing excludes these results, and the Sequence contract checks the recorded
+Store independently of that choice. The base Sharded provider's declared flat
+\code{Build} operation constructs the singleton cover by consuming the source
+once through its inner provider; it does not invent a multi-part routing policy.
 The group law uses the same complete-valuation canonicalization and declared
 monoids as BE-Group. Since $G\to K$, no group crosses a part boundary.
 An unkeyed aggregate uses BE-GroupPartial rather than BE-KeyPartGroup.

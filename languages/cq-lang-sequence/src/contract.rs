@@ -1336,6 +1336,16 @@ impl Checked<'_> {
             }
             Term::Store { capacity, inner } => {
                 let mut fact = self.term(inner, owner)?;
+                if fact.partitioned
+                    && let Meaning::Result(result) = &fact.meaning
+                    && self.analysis.structures.selections.contains_key(result)
+                {
+                    return fail(
+                        term,
+                        "BE-KeyPartProvider",
+                        "a native position snapshot requires its selected carrier",
+                    );
+                }
                 if matches!(fact.len, Len::Unknown(_)) {
                     let carried = match fact.len {
                         Len::Unknown(value) => value,

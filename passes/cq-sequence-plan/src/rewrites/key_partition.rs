@@ -670,6 +670,12 @@ pub fn key_partition_in(
     {
         let analysis = checker.check_shared(source)?;
         let result = analysis.results.get(&symbol_name(&advice.name));
+        if result.is_some_and(|result| analysis.structures.selections.contains_key(result)) {
+            return Err(syn::Error::new_spanned(
+                &advice.name,
+                "BE-KeyPartProvider: a native position snapshot requires its selected carrier",
+            ));
+        }
         if result.is_some_and(|result| {
             analysis
                 .structures

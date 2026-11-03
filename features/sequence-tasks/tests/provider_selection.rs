@@ -175,7 +175,6 @@ fn positional_selection_sharded_index_executes_exact_answers() {
 }
 
 #[test]
-#[ignore = "KP-1/KP-2: routed Selection publication emits an unavailable Build and incompatible row carrier"]
 fn kp_1_kp_2_key_partitioned_positional_selection() {
     run_positional_selection(syn::parse_quote! {
         physical {
@@ -251,6 +250,25 @@ fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Pr
         "the positional Selection must not be replaced with a membership-only sharded index"
     );
     cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    assert!(
+        cq_sequence_plan::rewrites::key_partition(
+            &target,
+            quote::quote!(selected, selected_parts, [order_key], 4),
+        )
+        .is_err(),
+        "authored routing must preserve the native position carrier too"
+    );
+    let mut invalid = target.clone();
+    let index = invalid.sequence.definitions.iter()
+        .position(|definition| definition.name == "selected").unwrap();
+    let original = invalid.sequence.definitions[index].term.clone();
+    invalid.sequence.definitions.insert(index, syn::parse_quote! {
+        selected_snapshot = #original;
+    });
+    invalid.sequence.definitions[index + 1].term = syn::parse_quote! {
+        store partition_k [order_key] (4) selected_snapshot
+    };
+    assert!(cq_lang_sequence::contract::check(&invalid).is_err());
     let planned =
         cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
     let facts =

@@ -204,6 +204,11 @@ pub(crate) fn apply(
         }
         if provider {
             let result = &facts.results[&symbol_name(&definition.name)];
+            // A native position snapshot is not a replayable routed-row
+            // carrier. Preserve the selected publication and its read ABI.
+            if facts.structures.selections.contains_key(result) {
+                continue;
+            }
             // A type/layout belongs to the physical provider, not to one of its
             // Sequence publication aliases. A forbid must retain that type.
             if policies.iter().any(|policy| {

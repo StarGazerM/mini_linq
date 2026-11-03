@@ -13,6 +13,13 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Tasks key partitioning preserves native positional Selection publications:
+  automatic advice retains their selected carrier, and Sequence rejects a
+  partitioned store pretending to publish that carrier. Sharded providers now
+  implement their declared flat `Build` capability as a singleton cover,
+  preserving exact reads without rerouting or copying input rows. The KP-1/KP-2
+  regression executes exact answers with one and four workers.
+
 - Non-GPU rejection tests assert failure and applicable formal rule IDs rather
   than diagnostic prose. Behavioral and compile-fail coverage remains independent
   of error-message wording; GPU tests are unchanged.
