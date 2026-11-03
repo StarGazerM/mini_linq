@@ -564,8 +564,8 @@ fn blocks_are_authored_complete_printable_and_preserve_physical() {
     assert_eq!(blocks.predicates["p"].strategy, ir::blocks::Strategy::Window);
     assert_eq!(blocks.reads["g"].fields.keys().map(String::as_str).collect::<Vec<_>>(), ["y"]);
     assert_eq!(blocks.reads["v"].fields.keys().map(String::as_str).collect::<Vec<_>>(), ["x"]);
-    assert_eq!(blocks.reads["canon:out"].purpose, ir::encoded::ReadPurpose::PreserveCarrier);
-    assert_eq!(blocks.reads["canon:out"].fields["x"].action, ir::blocks::ReadAction::Ordinal);
+    assert!(!blocks.reads.contains_key("canon:out"));
+    assert_eq!(blocks.canonical_keys["out"].fields["x"].action, ir::blocks::ReadAction::Ordinal);
 }
 
 #[test]
@@ -581,6 +581,52 @@ fn blocks_reject_partial_schema_and_unknown_hosts_without_type_recognition() {
     source.program.declarations[0].columns[0].ty = syn::parse_quote!(UnrelatedRustTokens);
     let selected = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
     assert_eq!(selected.encoded.blocks.sources.values().next().unwrap().columns["a"].logical, physical::syntax::LogicalTypeId(17));
+}
+
+#[test]
+fn blocks_identity_is_authored_plain_only_and_checked() {
+    let selected = cq_structure_selection::compile_with(&block_source(), quote!(blocks(R {
+        block_rows 1024; summary none;
+        columns [a: bytes u64, b: plain identity u64];
+    })))
+    .unwrap();
+    assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+    let encoded = &selected.encoded;
+    let identity = |column: &str| {
+        let declaration = encoded.blocks.sources.values().next().unwrap().columns[column].declaration;
+        encoded.obligations.declarations[&declaration].identity
+    };
+    assert!(identity("b"));
+    assert!(!identity("a"));
+    // Identity is never implied by Plain storage.
+    let plain = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
+    assert!(plain.encoded.obligations.declarations.values().all(|declaration| !declaration.identity));
+    assert!(cq_structure_selection::compile_with(&block_source(), quote!(blocks(R {
+        block_rows 1024; summary none;
+        columns [a: bytes identity u64, b: plain u64];
+    })))
+    .is_err());
+    // The checker, not only the advice parser, rejects identity over framed residuals.
+    let mut mutated = selected.clone();
+    for declaration in mutated.encoded.obligations.declarations.values_mut() {
+        declaration.identity = true;
+    }
+    assert!(ir::contract::check(&mutated).is_err());
+}
+
+#[test]
+fn blocks_bind_after_target_provider_binding_with_the_same_records() {
+    let source = block_source();
+    let direct = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+    let blocks = quote!(R { block_rows 1024; summary none; columns [a: bytes u64, b: plain u64]; });
+    assert_eq!(
+        cq_structure_selection::blocked_relations(blocks.clone()).unwrap(),
+        ["R".to_owned()].into_iter().collect()
+    );
+    let ordinary = cq_structure_selection::compile(&source).unwrap();
+    let later = cq_structure_selection::choose_blocks(&ordinary, blocks).unwrap();
+    assert_eq!(later.encoded, direct.encoded);
+    assert_eq!(later.structures, direct.structures);
 }
 
 #[test]
@@ -614,7 +660,7 @@ fn blocks_keep_exact_disjunction_and_cross_column_predicates() {
 #[test]
 fn blocks_canonical_key_demand_cannot_be_replaced_by_positions() {
     let mut target = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
-    target.encoded.blocks.reads.get_mut("canon:out").unwrap().fields.clear();
+    target.encoded.blocks.canonical_keys.get_mut("out").unwrap().fields.clear();
     assert!(ir::contract::check(&target).is_err());
     let mut target = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
     target.encoded.blocks.reads.get_mut("v").unwrap().fields.get_mut("x").unwrap().action = ir::blocks::ReadAction::BorrowedScoped;

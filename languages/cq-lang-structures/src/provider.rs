@@ -107,10 +107,15 @@ pub enum Capability {
     /// narrow by a positional predicate, and expose survivor positions and rows.
     /// This is not membership of logical keys or canonical row storage.
     Positions,
+    /// Formal rule STR-ComparatorRows: canonicalize arbitrary retained
+    /// carriers by their separately supplied complete logical key (a CPU
+    /// comparator or injective complete-row codes), keeping exactly one
+    /// original carrier per key-equality class. Not carrier/position equality.
+    ComparatorRows,
 }
 
 impl Capability {
-    const ALL: [(Capability, &'static str); 8] = [
+    const ALL: [(Capability, &'static str); 9] = [
         (Capability::Exact, "exact"),
         (Capability::Range, "range"),
         (Capability::Membership, "membership"),
@@ -119,6 +124,7 @@ impl Capability {
         (Capability::Resident, "resident"),
         (Capability::Candidates, "candidates"),
         (Capability::Positions, "positions"),
+        (Capability::ComparatorRows, "comparator_rows"),
     ];
 
     fn name(&self) -> &'static str {
@@ -170,6 +176,9 @@ pub enum NativeAbi {
     /// Grouped radix index (`RadixLayout`): whole packed order keys, explicit
     /// item lanes; every instance records its [`RadixAdvice`].
     Radix,
+    /// Shared S1 scan blocks (P6 C): retained per-column block descriptors;
+    /// families and domains are the Structures blocked records, not the type.
+    ScanBlocks,
 }
 
 /// Formal rule GPU-RadixAdvice: authored per-instance parameters of a radix
@@ -923,6 +932,7 @@ impl syn::parse::Parse for Declaration {
                     "radix_relation" => NativeAbi::RadixRelation,
                     "columns" => NativeAbi::Columns,
                     "radix" => NativeAbi::Radix,
+                    "scan_blocks" => NativeAbi::ScanBlocks,
                     _ => return error(&abi, "unknown native ABI"),
                 });
             } else if lookahead.peek(kw::contiguous_range) {
@@ -1049,6 +1059,7 @@ impl ToTokens for Declaration {
                 NativeAbi::RadixRelation => quote::quote!(abi radix_relation),
                 NativeAbi::Columns => quote::quote!(abi columns),
                 NativeAbi::Radix => quote::quote!(abi radix),
+                NativeAbi::ScanBlocks => quote::quote!(abi scan_blocks),
             });
         }
         if *contiguous_range {
@@ -1170,7 +1181,7 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
                 reader: ReaderRef::Scan,
                 ..
             }
-        ) && matches!(facts.abi, Some(NativeAbi::RadixRelation | NativeAbi::Columns))
+        ) && matches!(facts.abi, Some(NativeAbi::RadixRelation | NativeAbi::Columns | NativeAbi::ScanBlocks))
             && provider.input.is_none()
         {
             return error(

@@ -140,6 +140,13 @@ single-consumer fusion paths, aligned disjoint tiles and demanded-read placement
 independently of the producer; a lawful split run is not rejected merely because
 the lowering prefers one reused mask. Pull and Tasks print these checked facts.
 Ordinary programs have no blocks records and retain their prior realization.
+Structures' `canonical_keys` entries are checked key recipes, not unconditional
+reads. Sequence records `read "canon:input"` exactly at actual `Canon` input
+sites; `BE-Blocks` checks ordinary reads plus precisely those references.
+The r6 `group_without_canon` rewrite retains the recipe but removes references
+to eliminated canonicalizers. GPU tile scans reject remaining canonical sites
+with `T-Gpu`; unused recipes are legal when a keyless fold consumes the lane
+mask directly.
 Recorded `route` entries also identify each `PartitionK` source key's
 Structures representation. Routing compares/hashes compatible global ordinal
 carriers, never block-relative residuals or reconstructed logical rows. The

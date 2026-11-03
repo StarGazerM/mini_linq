@@ -24,8 +24,7 @@ impl Context<'_> {
                     structures::encoded::Carrier::U32 => quote!(::cq_storage::scan::Width::W32),
                     structures::encoded::Carrier::U64 => quote!(::cq_storage::scan::Width::W64),
                 };
-                let namespace = declaration.domain.code.map_or(2 * u64::from(column.logical.0) + 1, |id| 2 * u64::from(id.0) + 2);
-                let version = declaration.domain.dictionary.as_ref().map_or(0, |dictionary| dictionary.version);
+                let (namespace, version) = structures::blocks::runtime_domain(declaration, column);
                 let block_rows = binding.block_rows as usize;
                 let summary = binding.summary == structures::blocks::Summary::MinMax;
                 self.statements.push(syn::parse_quote! {
@@ -89,8 +88,7 @@ impl Context<'_> {
     /// Cache only demanded global ordinal keys once, retain owned computed
     /// fields in their original carrier, and return one representative carrier.
     pub fn blocked_canon_rows(&self, result: &str, rows: TokenStream, parallel: bool) -> Option<TokenStream> {
-        let consumer = format!("canon:{result}");
-        let read = self.encoded.blocks.reads.get(&consumer)?;
+        let read = self.encoded.blocks.canonical_keys.get(result)?;
         let pattern = self.bind_columns(result, self.heading(result), true);
         let keys: Vec<_> = read.fields.iter().map(|(column, field)| {
             let representation = &self.encoded.records.representations[&field.representation];

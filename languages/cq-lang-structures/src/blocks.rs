@@ -58,16 +58,35 @@ pub struct Read {
     pub purpose: ReadPurpose,
     pub fields: BTreeMap<String, FieldRead>,
 }
+/// Already-owned computed operand in a canonical logical key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Operand { Owned { column: String } }
+/// Relational value-key recipe; execution sites belong to Sequence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalKeys {
+    pub input: String,
+    pub fields: BTreeMap<String, FieldRead>,
+    pub ordinary: BTreeMap<String, Operand>,
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Contract {
     /// Original explicit provider/binder obligations, not a second family table.
     pub sources: BTreeMap<SourceId, Source>,
     pub scans: BTreeMap<String, Scan>,
     pub predicates: BTreeMap<String, Predicate>,
+    pub canonical_keys: BTreeMap<String, CanonicalKeys>,
     pub reads: BTreeMap<String, Read>,
 }
 fn require(ok: bool, message: &str) -> syn::Result<()> {
     if ok { Ok(()) } else { Err(syn::Error::new(proc_macro2::Span::call_site(), format!("blocked contract: {message}"))) }
+}
+/// The runtime S1 domain identity `(namespace, version)` a blocked column's
+/// payload must carry: its declaration-table code domain when present,
+/// otherwise its logical type identity. Shared by every target printer.
+pub fn runtime_domain(declaration: &Declaration, column: &Column) -> (u64, u64) {
+    let namespace = declaration.domain.code.map_or(2 * u64::from(column.logical.0) + 1, |id| 2 * u64::from(id.0) + 2);
+    let version = declaration.domain.dictionary.as_ref().map_or(0, |dictionary| dictionary.version);
+    (namespace, version)
 }
 
 /// Operations required by the original algebra, including every disjunction arm.
@@ -124,6 +143,9 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
             require(bound.widths == widths, "invalid physical width set")?;
             require(binding.summary != Summary::MinMax || declaration.buffers.contains(&BufferKind::BlockSummaries), "summary enclosure capability missing")?;
             require(declaration.preserves == BTreeSet::from([Preservation::Equality, Preservation::Order]), "S1 ordinal preserved-operation law missing")?;
+            // Authored semantic identity: frameless Plain ordinals of a value
+            // domain; dictionary codes and Bytes residuals are never values.
+            require(!declaration.identity || (declaration.family == Family::Plain && declaration.domain.code.is_none() && declaration.domain.dictionary.is_none()), "semantic identity requires frameless plain value storage")?;
             used.insert(id);
         }
         source_coverage.insert(scan.source);
@@ -131,6 +153,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
     require(source_coverage.iter().eq(contract.sources.keys()), "source binding coverage")?;
     let mut expected_predicates = BTreeSet::new();
     let mut expected_reads = BTreeSet::new();
+    let mut expected_canonical_keys = BTreeSet::new();
     let mut read_ids = BTreeSet::new();
     let mut active = BTreeSet::new();
     for definition in &program.physical.program.definitions {
@@ -207,19 +230,17 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
             }
         }
         if carry && definition.canon.is_some() {
-            require(matches!(facts.canonical.get(&name), Some(crate::CanonSource::Rows(provider)) if symbol_name(&provider.token) == "sort"), "blocked canonical boundary requires recorded comparator rows")?;
-            let key = format!("canon:{name}");
-            check_read(program, facts, &origins, &key, &name, facts.physical.headings[&name].iter().cloned().collect(), Consumer::Relational(name.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;
-            expected_reads.insert(key);
+            require(matches!(facts.canonical.get(&name), Some(crate::CanonSource::Rows(provider)) if program.structures.providers.facts(provider).is_some_and(|facts| facts.reads(&crate::Capability::ComparatorRows))), "blocked canonical boundary requires recorded comparator rows")?;
+            check_canonical_keys(program, facts, &origins, &name)?;
+            expected_canonical_keys.insert(name.clone());
         }
     }
     let returned = symbol_name(&program.physical.program.returned);
     if active.contains(&returned) {
         if program.physical.program.return_canon.is_some() {
-            require(facts.head_dedup.get(&returned).is_some_and(|provider| symbol_name(&provider.token) == "sort"), "blocked return canonical boundary requires recorded comparator rows")?;
-            let key = format!("canon:{returned}");
-            if expected_reads.insert(key.clone()) {
-                check_read(program, facts, &origins, &key, &returned, facts.physical.headings[&returned].iter().cloned().collect(), Consumer::Relational(returned.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;
+            require(facts.head_dedup.get(&returned).is_some_and(|provider| program.structures.providers.facts(provider).is_some_and(|facts| facts.reads(&crate::Capability::ComparatorRows))), "blocked return canonical boundary requires recorded comparator rows")?;
+            if expected_canonical_keys.insert(returned.clone()) {
+                check_canonical_keys(program, facts, &origins, &returned)?;
             }
         }
         let consumer = symbol_name(&program.physical.program.head.relation);
@@ -252,6 +273,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
     }
     require(expected_predicates.iter().eq(contract.predicates.keys()), "predicate decision coverage")?;
     require(expected_reads.iter().eq(contract.reads.keys()), "materialization decision coverage")?;
+    require(expected_canonical_keys.iter().eq(contract.canonical_keys.keys()), "canonical key recipe coverage")?;
     Ok(used)
 }
 fn check_read(program: &Program, facts: &Analysis, origins: &BTreeMap<String, Vec<crate::Lineage>>, name: &str, input: &str, fields: BTreeSet<String>, expected_consumer: Consumer, purpose: ReadPurpose, ids: &mut BTreeSet<u64>) -> syn::Result<()> {
@@ -259,9 +281,22 @@ fn check_read(program: &Program, facts: &Analysis, origins: &BTreeMap<String, Ve
     let read = contract.reads.get(name).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing blocked materialization authorization"))?;
     require(read.id <= u32::MAX as u64 && ids.insert(read.id), "duplicate or invalid consumer identity")?;
     require(read.input == input && read.consumer == expected_consumer && read.purpose == purpose, "invalid materialization consumer")?;
+    check_fields(program, facts, origins, name, input, fields, &read.fields, purpose)
+}
+fn check_canonical_keys(program: &Program, facts: &Analysis, origins: &BTreeMap<String, Vec<crate::Lineage>>, input: &str) -> syn::Result<()> {
+    let keys = program.encoded.blocks.canonical_keys.get(input).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing blocked canonical key recipe"))?;
+    require(keys.input == input, "canonical key input changed")?;
+    let fields: BTreeSet<_> = facts.physical.headings[input].iter().cloned().collect();
+    let ordinary = fields.iter().filter(|field| facts.physical.rows[input].computed.contains(*field))
+        .map(|field| (field.clone(), Operand::Owned { column: field.clone() })).collect();
+    require(keys.ordinary == ordinary, "exact canonical ordinary demand changed")?;
+    check_fields(program, facts, origins, input, input, fields, &keys.fields, ReadPurpose::PreserveCarrier)
+}
+fn check_fields(program: &Program, facts: &Analysis, origins: &BTreeMap<String, Vec<crate::Lineage>>, name: &str, input: &str, fields: BTreeSet<String>, recorded: &BTreeMap<String, FieldRead>, purpose: ReadPurpose) -> syn::Result<()> {
+    let contract = &program.encoded.blocks;
     let demanded: BTreeSet<_> = fields.into_iter().filter(|f| !facts.physical.rows[input].computed.contains(f)).collect();
-    require(read.fields.keys().cloned().collect::<BTreeSet<_>>() == demanded, "exact materialization demand changed")?;
-    for (logical, field) in &read.fields {
+    require(recorded.keys().cloned().collect::<BTreeSet<_>>() == demanded, "exact materialization demand changed")?;
+    for (logical, field) in recorded {
         let original = origins[input].iter().find_map(|o| contract.scans.get(&o.occurrence).and_then(|scan| o.columns.get(logical).and_then(|base| scan.columns.get(base))));
         require(original == Some(&field.representation), "materialization lineage changed")?;
         require((field.action == ReadAction::Ordinal) == (purpose == ReadPurpose::PreserveCarrier), "physical code read is not semantic reconstruction")?;

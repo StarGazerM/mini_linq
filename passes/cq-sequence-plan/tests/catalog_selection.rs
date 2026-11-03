@@ -172,7 +172,7 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
             answer = let canon semi eager [a] projected,r;
             return answer as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r = @index as Index [a];
@@ -205,7 +205,7 @@ fn host_keyed_read() -> structures::Program {
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
-        structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_columns as HostColumns [];
             r host scan = @host_columns as HostColumns [];
             r host result(answer) = @host_columns as HostColumns [a];
@@ -313,7 +313,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                 answer = let canon project r keep {a,b,c};
                 return answer as answer(a,b,c);
             }
-            structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 r host scan = @host_columns as HostColumns [];
                 answer rows = @sort as ::cq_storage::dedup::Sort;
                 answer canon = rows;
@@ -327,7 +327,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                     answer = let canon project r keep {a,b};
                     return answer as answer(a,b);
                 }
-                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                     r host scan = @host_columns as HostColumns [];
                     answer rows = @sort as ::cq_storage::dedup::Sort;
                     answer canon = rows;

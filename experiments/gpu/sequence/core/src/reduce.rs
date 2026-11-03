@@ -86,6 +86,9 @@ pub struct GroupInput {
     pub load: TokenStream,
     pub columns: std::collections::BTreeMap<String, TokenStream>,
     pub length: TokenStream,
+    /// A recorded tile source (P6 C): the fold iterates its vectors and the
+    /// surviving lanes instead of a grid-stride position loop.
+    pub tiles: Option<crate::tiles::TileLoop>,
 }
 
 /// Lower the machine instance of BE-Group at an already published canonical
@@ -117,6 +120,9 @@ pub fn group(
             let id = format_ident!("__cq_store_length_{input_index}");
             quote!(#id)
         });
+    if direct.as_ref().is_some_and(|input| input.tiles.is_some()) {
+        return Err(syn::Error::new_spanned(group, "T-Gpu: a tile source feeds only a keyless fused fold"));
+    }
     if let Some(key) = group
         .keys
         .iter()
@@ -537,6 +543,7 @@ pub fn global(
         });
     }
     let decoded = decoders(group, &columns, output_columns, output_types, codecs)?;
+    let tiles = direct.as_ref().and_then(|input| input.tiles.clone());
     let (load, input_parameters, input_arguments, status) = if let Some(input) = direct {
         (input.load, quote!(), quote!(), quote!())
     } else {
@@ -547,6 +554,57 @@ pub fn global(
             quote!(__cq_statuses.push(#owner.metadata().clone());),
         )
     };
+    // Formal rule GPU-TilePredicate: a tile source's block owns whole vectors;
+    // each lane folds its surviving rows, so no position publication exists.
+    let (rows_loop, parts) = match &tiles {
+        Some(tiles) => {
+            if tiles.lanes != geometry.block_threads {
+                return Err(syn::Error::new_spanned(group, "GPU-TilePredicate: tile lanes differ from the fold geometry"));
+            }
+            let crate::tiles::TileLoop { prologue, vectors, rows_per_lane, vector_rows, .. } = tiles;
+            let rows_per_lane = proc_macro2::Literal::u32_suffixed(*rows_per_lane);
+            let lanes = proc_macro2::Literal::u32_suffixed(tiles.lanes);
+            let vector_rows_value = proc_macro2::Literal::u64_suffixed(*vector_rows);
+            let vector_rows = proc_macro2::Literal::usize_suffixed(*vector_rows as usize);
+            (
+                quote! {
+                    let _ = length;
+                    let __cq_tile_lane = __tid as u32;
+                    let __cq_tile_vectors = #vectors;
+                    let mut __cq_tile_v = ::cuda_device::thread::blockIdx_x() as u64;
+                    while __cq_tile_v < __cq_tile_vectors {
+                        #prologue
+                        let mut __cq_tile_k = 0u32;
+                        while __cq_tile_mask != 0 && __cq_tile_k < #rows_per_lane {
+                            if __cq_tile_mask & (1u32 << __cq_tile_k) != 0 {
+                                let __cq_tile_local = __cq_tile_k * #lanes + __cq_tile_lane;
+                                let position = (__cq_tile_v * #vector_rows_value + __cq_tile_local as u64) as usize;
+                                let _ = position;
+                                let mut __live = true;
+                                #load
+                                if __live { #(#update)* }
+                            }
+                            __cq_tile_k += 1;
+                        }
+                        __cq_tile_v += ::cuda_device::thread::gridDim_x() as u64;
+                    }
+                },
+                quote!(#length.div_ceil(#vector_rows)),
+            )
+        }
+        None => (
+            quote! {
+                let mut position = ::cuda_device::thread::index_1d().get() as usize;
+                while position < length {
+                    let mut __live = true;
+                    #load
+                    if __live { #(#update)* }
+                    position += ::cuda_device::thread::gridDim_x() as usize * #threads;
+                }
+            },
+            quote!(#length.div_ceil(#threads)),
+        ),
+    };
     let abi = crate::emit::CheckedKernel::lower(kernel, quote! {
         #[kernel]
         #[launch_bounds(#threads)]
@@ -555,13 +613,7 @@ pub fn global(
                 unsafe {
                     let __tid = ::cuda_device::thread::threadIdx_x() as usize;
                     #(#declare)*
-                    let mut position = ::cuda_device::thread::index_1d().get() as usize;
-                    while position < length {
-                        let mut __live = true;
-                        #load
-                        if __live { #(#update)* }
-                        position += ::cuda_device::thread::gridDim_x() as usize * #threads;
-                    }
+                    #rows_loop
                     let shared = ::cuda_device::DynamicSharedArray::<u8, 16>::get_raw();
                     let values = shared.cast::<i64>();
                     let present = shared.add(#presence).cast::<u32>();
@@ -576,7 +628,7 @@ pub fn global(
         abi.definition(),
         quote! {
             let shape = #shape?;
-            let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(#threads),#threads,#shared)?;
+            let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#parts,#threads,#shared)?;
             let __cq_global = ::cq_gpu_sequence_runtime::group::GlobalFold::new(
                 __cq_pool.clone(), grid as usize, &[#(#descriptors),*])?;
             let prepared = #prepare?;

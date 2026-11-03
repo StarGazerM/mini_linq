@@ -8,6 +8,8 @@ mod host;
 mod kernels;
 mod memory;
 pub mod scan;
+pub mod scan_table;
+pub mod tile;
 use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
@@ -42,6 +44,7 @@ pub fn prepare_kernels(pool: &Pool) -> Result<()> {
 pub fn release_cached_kernels() {
     MODULE.with(|cache| cache.borrow_mut().take());
     scan::release_cached_kernels();
+    tile::release_cached_kernels();
 }
 fn config(items: usize) -> LaunchConfig1D {
     LaunchConfig1D::new(items.div_ceil(256).clamp(1, 568) as u32, 256, 0)

@@ -1,7 +1,7 @@
 //! GPU provider tokens (STR-Provider): resident range reads, full-key radix relations
-//! and columns, grouped radix indices and the canonical distinct builds. A
-//! token's facts are declared here once; recorded entries carry its id and
-//! spelling.
+//! and columns, grouped radix indices, the canonical distinct builds and
+//! retained shared-S1 scan blocks. A token's facts are declared here once;
+//! recorded entries carry its id and spelling.
 use cq_lang_structures::{Declaration, Providers};
 
 /// Every GPU declaration, in catalog order.
@@ -19,8 +19,14 @@ pub fn declarations() -> Vec<Declaration> {
         device_columns = ::cq_gpu_runtime::DeviceColumns<_> {
             reads [], build typed, abi columns, bounds resident_columns
         };
+        device_scan = ::cq_gpu_runtime::scan_table::DeviceScanTable<_> {
+            reads [], build typed, abi scan_blocks
+        };
+        // ComparatorRows: the build keys every row by its complete packed
+        // row code (GPU-RadixSet), injective over the row's recorded columns,
+        // and retains one representative per equal key.
         radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> {
-            reads [distinct, resident], build inferred
+            reads [distinct, resident, comparator_rows], build inferred
         };
     });
     providers.declarations

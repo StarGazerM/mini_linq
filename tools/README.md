@@ -616,6 +616,24 @@ updated tooling to use interpreted benchmarks; previously built archives retain
 their original pod runner. Gate selection does not change seeding, result
 retrieval, the 60-minute watchdog, or teardown.
 
+For P6C's N-bundle comparisons (N >= 2), bundle every variant with the driver and
+use `--gate-bundles none --bench 'python3 source/experiments/gpu/compare/pod_bench_p6c.py --results {results} --queries h06 --scales sf1,sf10 --pairs 7 --budget 1500'`.
+Only the last bundle invocation measures: one excluded warmup round, then fresh
+processes in rotated bundle order per round and scale. `pod-bench.json` is saved
+after each process with exactness, resident medians/samples, wall time, load/transfer
+fields, child resource deltas, round GPU snapshots, and the unrun budget remainder.
+Linux child `maxrss` deltas are cumulative high-water changes, not process peaks.
+Analyze retrieved files locally with
+`python3 experiments/gpu/compare/p6c_analyze.py RESULTS/pod-bench.json --reference 0 --control 4 --output analysis.json`;
+additional input files pool paired rounds without pairing across sessions (keep
+bundle index assignments consistent). It prints a Markdown table, including the
+layout-control CI, and writes seeded paired bootstrap statistics as JSON.
+`bundle.py WORKTREE OUTPUT --no-tests --native experiments/storage-bench/gpu/bench`
+adds a prebuilt executable (repeat `--native PATH`; relative paths use WORKTREE).
+Native executables share dependency collection and SHA-256 recording with Cargo
+binaries; invoke them with session `--bench 'bench q6 1'`. Build provenance also
+records `TPCH_GPU_ADVICE`, `CQ_GPU_TPCH_QUERIES`, and `RUSTFLAGS` when set.
+
 The GPU id list is comma-separated and tried in priority order; the volume's DC
 must offer those devices (US-WA-1 currently has RTX 6000 Ada, not L40). The dataset
 repo defaults to `<hf auth whoami>/mini-linq-gpu-data`.

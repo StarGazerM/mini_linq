@@ -1,0 +1,9 @@
+{
+  "h06": {
+    "plan": "no_reduce, order(Lineitem)",
+    "recipe": {
+      "membership": true
+    },
+    "blocks": "Lineitem { block_rows 1024; summary minmax; columns [l_orderkey: plain u64, l_linenumber: plain u64, l_extendedprice: plain identity u64, l_discount: plain identity u64, l_quantity: plain identity u64, l_shipdate: bytes u32]; }"
+  }
+}

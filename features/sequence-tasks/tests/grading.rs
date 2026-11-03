@@ -37,7 +37,7 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
             relation R(a:i32);
             r = let canon rename R@0 {a -> a};
             return r as answer(a);
-        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #sequence }
         graded tasks { #grades }
     })
@@ -1037,7 +1037,7 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             result = let canon probe first [b] joined,s;
             return result as answer(a,b,c);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r host result(joined) = @reader as Reader [a];
@@ -2719,6 +2719,76 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
                     routed.sort();
                     assert_eq!(routed,expected);
                     assert_eq!(CALLS.load(Ordering::Relaxed),survivors.len(), "ordinal routing reads each bounded source range once");
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn blocked_group_canon_removal_executes_exactly_in_pull_and_tasks() {
+    let physical = syn::parse_quote!(physical {
+        relation R(id:i64 [1],value:i64 [1]);
+        r = pipe rename R@0 {id -> id,value -> value};
+        v = pipe bind r with amount:i64 = (*value * 2);
+        valuations = let canon project v keep {id,amount};
+        totals = pipe group valuations by [] { n:usize = count(); total:i64 = sum(amount); };
+        return totals as answer(n,total);
+    });
+    let structures = cq_structure_selection::compile_with(&physical,quote::quote!(
+        blocks(R {block_rows 1024;summary none;columns [id:bytes u64,value:bytes u64];})
+    )).unwrap();
+    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    source.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") {
+        trusted_key R [id];
+    });
+    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    let group = facts.canon_free_groups.iter().next().expect("authored unique valuation key");
+    let group: syn::Ident = syn::parse_str(group).unwrap();
+    let rewritten = cq_sequence_plan::rewrites::group_without_canon(&source,quote::quote!(#group)).unwrap();
+    assert_ne!(source.sequence,rewritten.sequence,"r6 must remove an executed canonicalizer");
+    assert!(rewritten.structures.encoded.blocks.canonical_keys.contains_key("valuations"));
+    assert!(!rewritten.structures.encoded.blocks.reads.keys().any(|key| key.starts_with("canon:")));
+    assert!(source.representation.blocks.reads.contains("canon:valuations"));
+    assert!(!rewritten.representation.blocks.reads.contains("canon:valuations"));
+    let mut stale = rewritten.clone();
+    stale.representation.blocks.reads.insert("canon:valuations".into());
+    assert!(cq_lang_sequence::contract::check(&stale).is_err());
+    let mut missing = source.clone();
+    missing.representation.blocks.reads.remove("canon:valuations");
+    assert!(cq_lang_sequence::contract::check(&missing).is_err());
+    let pull = |program: &Program| {
+        let facts = check_grading(program,&cq_sequence_pull::machine()).unwrap();
+        cq_sequence_pull::translate(program,&facts).unwrap()
+    };
+    let original_pull = pull(&source);
+    let rewritten_pull = pull(&rewritten);
+    let selected = cq_sequence_tasks::select_providers(&rewritten,&cq_sequence_tasks::catalog()).unwrap();
+    let planned = cq_sequence_plan::decompose(&selected,&machine(),&cq_sequence_tasks::catalog()).unwrap().program;
+    let facts = check_grading(&planned,&machine()).unwrap();
+    let tasks = translate(&planned,&facts).unwrap();
+    run_partition_fixture(quote::quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        fn main() {
+            let geometry = BlockRows::new(1024).unwrap();
+            let domain = Domain {id:DomainId {namespace:3,version:0},carrier:Width::W64,equality:true,order:true};
+            for len in [0usize,1,1024,1027,2051] {
+                let ids:Vec<i64> = (0..len).map(|i| i as i64).collect();
+                let values:Vec<i64> = (0..len).map(|i| (i%7) as i64-3).collect();
+                let R = ScanTable::new((
+                    ScanColumn::<i64,Bytes>::new(&ids,geometry,false),
+                    ScanColumn::<i64,Bytes>::new(&values,geometry,false),
+                )).bind_domains(&[domain,domain]).unwrap();
+                let expected = vec![(len,values.iter().sum::<i64>()*2)];
+                let original:Vec<_> = (#original_pull).into_iter().collect();
+                let rewritten:Vec<_> = (#rewritten_pull).into_iter().collect();
+                assert_eq!(original,expected);
+                assert_eq!(rewritten,expected);
+                for workers in [1,4] {
+                    let pool = rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap();
+                    let actual:Vec<_> = pool.install(|| (#tasks).into_iter().collect());
+                    assert_eq!(actual,expected);
                 }
             }
         }

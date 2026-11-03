@@ -1253,6 +1253,14 @@ complete logical valuations collapse even at distinct source positions; the
 chosen representative retains its original snapshot-bound position. Final
 answer reads have their separate publication authorization. String codes
 remain codes throughout these actions.
+Structures' \code{canonical\_keys} table is a checked key recipe, separate
+from executable opaque/final read packets. Sequence's
+\code{read "canon:input"} references exist exactly for actual \code{Canon}
+constructors over that input. Rule r6 (\code{group\_without\_canon}) removes
+these execution references when its independently checked BE-GroupKey proof
+eliminates valuation canonicalizers. The key recipe remains available and
+checked; no Sequence trusted-key premise is copied into Structures, and no
+unused full-key read is retained merely to satisfy coverage.
 
 The independent checker checks source and predicate coverage, phase order,
 the original intervening operators and their use counts, materialization

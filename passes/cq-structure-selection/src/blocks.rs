@@ -8,7 +8,8 @@ pub(super) struct Advice(pub BTreeMap<String, Binding>);
 pub(super) struct Binding {
     block_rows: u64,
     summary: b::Summary,
-    columns: BTreeMap<String, (e::Family, e::Carrier)>,
+    /// Family, carrier and explicit semantic identity (`plain identity`).
+    columns: BTreeMap<String, (e::Family, e::Carrier, bool)>,
 }
 fn word(input: ParseStream<'_>, expected: &str) -> syn::Result<()> {
     let word: syn::Ident = input.parse()?;
@@ -35,9 +36,16 @@ impl Parse for Advice {
                 columns_body.parse::<syn::Token![:]>()?;
                 let family: syn::Ident = columns_body.parse()?;
                 let family = match family.to_string().as_str() { "plain" => e::Family::Plain, "bytes" => e::Family::Bytes, _ => return Err(syn::Error::new_spanned(family, "expected plain or bytes")) };
+                // Identity is an authored binder premise, never inferred from a
+                // type; framed Bytes residuals cannot declare it.
+                let identity = columns_body.peek(syn::Ident) && columns_body.fork().parse::<syn::Ident>().is_ok_and(|word| word == "identity");
+                if identity {
+                    let word: syn::Ident = columns_body.parse()?;
+                    if family != e::Family::Plain { return Err(syn::Error::new_spanned(word, "only plain storage can declare semantic identity")); }
+                }
                 let carrier: syn::Ident = columns_body.parse()?;
                 let carrier = match carrier.to_string().as_str() { "u8" => e::Carrier::U8, "u16" => e::Carrier::U16, "u32" => e::Carrier::U32, "u64" => e::Carrier::U64, _ => return Err(syn::Error::new_spanned(carrier, "expected explicit u8/u16/u32/u64 carrier")) };
-                if columns.insert(symbol_name(&column), (family, carrier)).is_some() { return Err(syn::Error::new_spanned(column, "duplicate block column")); }
+                if columns.insert(symbol_name(&column), (family, carrier, identity)).is_some() { return Err(syn::Error::new_spanned(column, "duplicate block column")); }
                 if !columns_body.is_empty() { columns_body.parse::<syn::Token![,]>()?; }
             }
             body.parse::<syn::Token![;]>()?;
@@ -69,7 +77,7 @@ pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::
         let mut selected = BTreeMap::new();
         for (slot, column) in relation.columns.iter().enumerate() {
             let name = symbol_name(&column.name);
-            let (family, carrier) = binding.columns[&name];
+            let (family, carrier, identity) = binding.columns[&name];
             let declaration = e::DeclarationId(next);
             let representation = e::RepresentationId(next); next += 1;
             let logical = column.logical_type_id.ok_or_else(|| syn::Error::new_spanned(&column.name, "blocks require declaration-table logical identity"))?;
@@ -79,7 +87,7 @@ pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::
             if binding.summary == b::Summary::MinMax { buffers.insert(e::BufferKind::BlockSummaries); }
             target.encoded.obligations.declarations.insert(declaration, e::Declaration {
                 provider: provider.clone(), domain: e::Domain { code: column.domain.as_ref().and_then(|d| d.id), dictionary: None },
-                role: e::Role::ScanColumn, family, layout: e::Layout::S1, carrier, identity: false,
+                role: e::Role::ScanColumn, family, layout: e::Layout::S1, carrier, identity,
                 preserves: BTreeSet::from([e::Preservation::Equality, e::Preservation::Order]), buffers,
             });
             target.encoded.records.representations.insert(representation, e::Representation { declaration, source, column: name.clone(), snapshot });
@@ -136,24 +144,15 @@ pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::
             }
         }
         if active.contains(&name) && definition.canon.is_some() {
-            let mut read = make_read(target, &facts, &origins, &name, &name, facts.physical.headings[&name].iter().cloned().collect(), false, next)?;
-            next += 1;
-            read.consumer = e::Consumer::Relational(name.clone());
-            read.purpose = e::ReadPurpose::PreserveCarrier;
-            for field in read.fields.values_mut() { field.action = b::ReadAction::Ordinal; }
-            target.encoded.blocks.reads.insert(format!("canon:{name}"), read);
+            let keys = make_canonical_keys(target, &facts, &origins, &name)?;
+            target.encoded.blocks.canonical_keys.insert(name.clone(), keys);
         }
     }
     let returned = symbol_name(&target.physical.program.returned);
     if active.contains(&returned) {
-        let canonical_key = format!("canon:{returned}");
-        if target.physical.program.return_canon.is_some() && !target.encoded.blocks.reads.contains_key(&canonical_key) {
-            let mut read = make_read(target, &facts, &origins, &returned, &returned, facts.physical.headings[&returned].iter().cloned().collect(), false, next)?;
-            next += 1;
-            read.consumer = e::Consumer::Relational(returned.clone());
-            read.purpose = e::ReadPurpose::PreserveCarrier;
-            for field in read.fields.values_mut() { field.action = b::ReadAction::Ordinal; }
-            target.encoded.blocks.reads.insert(canonical_key, read);
+        if target.physical.program.return_canon.is_some() && !target.encoded.blocks.canonical_keys.contains_key(&returned) {
+            let keys = make_canonical_keys(target, &facts, &origins, &returned)?;
+            target.encoded.blocks.canonical_keys.insert(returned.clone(), keys);
         }
         let consumer = symbol_name(&target.physical.program.head.relation);
         if let Some(demand) = &target.consumer {
@@ -189,4 +188,17 @@ fn make_read(target: &structures::Program, facts: &structures::Analysis, origins
         reads.insert(logical, b::FieldRead { representation, action: b::ReadAction::Owned });
     }
     Ok(b::Read { id, input: input.into(), consumer: if final_answer { e::Consumer::FinalAnswer(name.into()) } else { e::Consumer::OpaqueRust(name.into()) }, purpose: if final_answer { e::ReadPurpose::FinalHostAnswer } else { e::ReadPurpose::OpaqueRustRead }, fields: reads })
+}
+fn make_canonical_keys(target: &structures::Program, facts: &structures::Analysis, origins: &BTreeMap<String, Vec<structures::Lineage>>, input: &str) -> syn::Result<b::CanonicalKeys> {
+    let mut fields = BTreeMap::new();
+    let mut ordinary = BTreeMap::new();
+    for logical in &facts.physical.headings[input] {
+        if facts.physical.rows[input].computed.contains(logical) {
+            ordinary.insert(logical.clone(), b::Operand::Owned { column: logical.clone() });
+        } else {
+            let representation = origins[input].iter().find_map(|o| target.encoded.blocks.scans.get(&o.occurrence).and_then(|s| o.columns.get(logical).and_then(|c| s.columns.get(c)))).copied().ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "blocked canonical field has no source binding"))?;
+            fields.insert(logical.clone(), b::FieldRead { representation, action: b::ReadAction::Ordinal });
+        }
+    }
+    Ok(b::CanonicalKeys { input: input.into(), fields, ordinary })
 }

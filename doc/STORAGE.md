@@ -952,6 +952,37 @@ Exact demanded field/buffer coverage and retained lineage are checked while
 concrete count/capacity/events/owners remain Sequence/GPU-owned facts.
 An absent encoded envelope is a vacuous check and leaves ordinary program
 printing and selection unchanged.
+
+**P6 C cooperative tile scans (opt-in).** Authored `blocks(...)` advice reaches
+the GPU as a recorded `SourceAccess::Tiles(TileScan)` realization. One
+256-lane block owns each whole 1024-row vector (4 rows per lane). The tile's
+tests are the scan's Sequence run, in order, with each Structures
+strategy/test copied. A summary test is legal only for a non-Formula
+single-column `Prune::MinMax` over a summarized source. Identity reads load
+once, at their first opaque consumer, and only for survivors. The leased
+upload columns are exactly the tested and read columns. `realize::check`
+independently verifies each of these facts (GPU-TilePredicate,
+GPU-NarrowCarrier); a blocked scan with any other access is rejected. Blocked
+fields reach device opaque Rust only through explicit `plain identity`
+declarations (Plain only). Canonical key recipes stay Structures facts. A canon
+entry with a blocked recipe needs a `comparator_rows` provider
+(STR-ComparatorRows). The device helpers are in
+`experiments/gpu/device-columns/src/tile.rs` and the printer is
+`experiments/gpu/sequence/core/src/tiles.rs`.
+
+Measured locally on 2026-11-03 (RTX 6000 Ada, h06, 7 rotated rounds, every
+invocation exact; `experiments/gpu/compare/p6c-2026-11-03.json`). Columns are
+the geometric-mean paired ratio vs default advice R, with 95% bootstrap CIs:
+
+| scale | C-plain | C-bytes | C-bytes-summary | process wall (C-bytes) |
+|---|---|---|---|---|
+| SF1 resident `total_ms` | 0.567 [0.561, 0.577] | 0.563 [0.552, 0.577] | 0.576 [0.566, 0.590] | 1.327 [1.287, 1.357] |
+| SF10 resident `total_ms` | 0.673 [0.668, 0.680] | 0.615 [0.609, 0.622] | 0.618 [0.614, 0.622] | 1.564 [1.511, 1.615] |
+
+The resident gain comes from lazy survivor loads and fewer transferred
+columns. In dbgen shipdate order the vector summaries prune nothing useful.
+Cold process time regresses because the loader encodes S1 blocks on the host
+for each process. Default advice and all other targets are unchanged.
  
 **P5 S2 columnar input boundary.** `ScanColumnBuilder<T, F>` retains at most
 one block of ordinals per ordinary column and collects extrema while accepting

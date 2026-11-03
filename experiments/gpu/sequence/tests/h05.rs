@@ -424,7 +424,7 @@ fn semijoin_device_store_builds_provider_after_publication() {
             answer = let canon semi eager [nation] customer,r2;
             return answer as answer(customer,nation);
         }
-        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+        structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
             r1 host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
             nation_base host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
             customer host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];

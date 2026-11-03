@@ -847,6 +847,17 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   grouped-run integration remain later slices. Slice A retires none of
   the 74 P6 V sites and makes no performance claim; default expanded targets
   must remain identical. Formal registration is not a gate-result claim.
+  Slice C (2026-11-03) realizes authored blocked scans on the GPU as
+  recorded cooperative tile scans (`TileScan`/`TileTest`/`TileRead`;
+  GPU-TilePredicate, GPU-NarrowCarrier, STR-ComparatorRows). A blocked scan
+  without a tile realization is rejected, and the silent legacy read is gone.
+  `plain identity` advice is the only route by which blocked fields reach
+  device opaque Rust. Only h06 changes, and only under
+  `tpch/advice/p6c-blocks-*.json`. The default advice is unchanged. Local
+  RTX 6000 Ada, 7 rotated rounds, all exact. Resident h06 `total_ms` vs R:
+  SF1 0.563–0.576×, SF10 0.615× (Bytes) / 0.673× (Plain); every CI excludes 1.
+  Process wall time is 1.30–1.59× slower because of host S1 encoding at load.
+  No default changes (`experiments/gpu/compare/p6c-2026-11-03.json`).
 - **P6b GPU Datalog parallelism — historical initial profile** (2026-10-31,
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel

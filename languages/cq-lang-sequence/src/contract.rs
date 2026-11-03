@@ -240,7 +240,7 @@ fn check_native_read(
         Capability::Range => matches!(read, HostRead::Range | HostRead::Ordered),
         Capability::Ordered => read == HostRead::Ordered,
         Capability::Candidates => read == HostRead::Candidates,
-        Capability::Resident | Capability::Distinct | Capability::Positions => false,
+        Capability::Resident | Capability::Distinct | Capability::Positions | Capability::ComparatorRows => false,
     };
     if !covers || !matches!(read, HostRead::Membership | HostRead::Exact) {
         return fail(
@@ -1901,7 +1901,7 @@ mod tests {
                 grouped = let group r by [k] { n: usize = count(); };
                 return grouped as answer(k,n);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; rows = Rows { reads [exact, range, membership], build inferred }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; rows = Rows { reads [exact, range, membership], build inferred }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
                 r host scan = @reader as Reader [];
                 r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
                 grouped rows = @rows as Rows;
@@ -1933,7 +1933,7 @@ mod tests {
                 output = let canon project r keep {a};
                 return output as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; output rows = @sort as ::cq_storage::dedup::Sort; output canon = rows; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @reader as Reader []; output rows = @sort as ::cq_storage::dedup::Sort; output canon = rows; }
             sequence {
                 a_view = canon rows r;
                 before = rows r;

@@ -18,6 +18,7 @@ mod realize;
 mod reduce;
 mod rows;
 pub mod runs;
+mod tiles;
 
 pub use arena::translate_arena;
 pub use emit::translate;

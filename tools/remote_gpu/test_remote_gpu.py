@@ -3,6 +3,7 @@
 import contextlib
 import hashlib
 import io
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,18 @@ import data_manifest
 import pod_gate
 import seed_volume
 import session
+
+
+def compare_module(name):
+    path = Path(__file__).resolve().parents[2] / 'experiments/gpu/compare' / (name + '.py')
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+p6c_driver = compare_module('pod_bench_p6c')
+p6c_analysis = compare_module('p6c_analyze')
 
 
 class MirrorTests(unittest.TestCase):
@@ -65,7 +78,7 @@ class MirrorTests(unittest.TestCase):
 
 
 class BundleTests(unittest.TestCase):
-    def test_no_tests_builds_only_binaries_and_emits_no_gate(self):
+    def exercise_bundle(self, natives=(), absolute=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = root / 'experiments/gpu'
@@ -75,11 +88,20 @@ class BundleTests(unittest.TestCase):
             names = ['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu']
             for name in names:
                 (target / name).write_bytes(b'executable fixture')
+            native_args = []
+            for relative, mode in natives:
+                path = root / relative
+                if mode is not None:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b'native executable fixture')
+                    path.chmod(mode)
+                native_args.extend(['--native', str(path) if absolute else relative])
             metadata = dict(target_directory=str(target), packages=[
                 dict(id=name, name=name, manifest_path=str(workspace / name / 'Cargo.toml'), targets=[])
                 for name in names])
             archive_manifest = {}
             oxide_commands = []
+            linked_executables = []
 
             def check_output(argv, **kwargs):
                 if argv[0] == 'git':
@@ -87,6 +109,7 @@ class BundleTests(unittest.TestCase):
                 if argv[0] == 'cargo':
                     return json.dumps(metadata)
                 if argv[0] == 'ldd':
+                    linked_executables.append(argv[1])
                     return 'libc.so.6 => /lib/libc.so.6 (0x0)\n'
                 raise AssertionError(argv)
 
@@ -101,21 +124,59 @@ class BundleTests(unittest.TestCase):
                     stage = Path(argv[argv.index('-C') + 1])
                     archive_manifest.update(json.loads((stage / 'manifest.json').read_text()))
                     self.assertEqual((stage / 'source/fixture.txt').read_text(), 'runtime source')
+                    for relative, mode in natives:
+                        packaged = stage / 'bin' / Path(relative).name
+                        self.assertEqual(packaged.read_bytes(), b'native executable fixture')
+                        self.assertTrue(os.access(packaged, os.X_OK))
+                        self.assertEqual(archive_manifest['files'][str(packaged.relative_to(stage))],
+                                         hashlib.sha256(packaged.read_bytes()).hexdigest())
                     Path(argv[argv.index('-cf') + 1]).write_bytes(b'archive fixture')
                 elif argv[0] not in ('flock', 'python3'):
                     raise AssertionError(argv)
                 return subprocess.CompletedProcess(argv, 0)
 
-            with patch.object(sys, 'argv', ['bundle', str(root), str(root / 'bundle.tar.zst'), '--no-tests']), \
+            with patch.object(sys, 'argv', ['bundle', str(root), str(root / 'bundle.tar.zst'),
+                                           '--no-tests', *native_args]), \
                  patch.object(subprocess, 'check_output', side_effect=check_output), \
                  patch.object(subprocess, 'run', side_effect=run), \
+                 patch.dict(os.environ, {'DUCKDB_CLI': str(target / names[0]),
+                     'TPCH_GPU_ADVICE': 'candidate.json', 'CQ_GPU_TPCH_QUERIES': 'h06',
+                     'RUSTFLAGS': '-Clink-arg=-Wl,--sort-section=name'}), \
                  contextlib.redirect_stdout(io.StringIO()):
                 bundle_builder.main()
             self.assertEqual(len(oxide_commands), 1)
             self.assertEqual(archive_manifest['tests'], [])
             self.assertEqual(archive_manifest['steps'], [])
-            self.assertEqual(set(archive_manifest['binaries']), set(names))
+            self.assertEqual(set(archive_manifest['binaries']),
+                             set(names) | {Path(relative).name for relative, mode in natives})
             self.assertEqual([build['name'] for build in archive_manifest['builds']], ['binaries-build'])
+            for relative, mode in natives:
+                self.assertIn(str(root / relative), linked_executables)
+            environment = archive_manifest['builds'][0]['environment']
+            self.assertEqual(environment['TPCH_GPU_ADVICE'], 'candidate.json')
+            self.assertEqual(environment['CQ_GPU_TPCH_QUERIES'], 'h06')
+            self.assertEqual(environment['RUSTFLAGS'], '-Clink-arg=-Wl,--sort-section=name')
+            return archive_manifest
+
+    def test_no_tests_builds_only_binaries_and_emits_no_gate(self):
+        self.exercise_bundle()
+
+    def test_native_repeatable_relative_and_absolute_paths(self):
+        for absolute in (False, True):
+            with self.subTest(absolute=absolute):
+                manifest = self.exercise_bundle([('native/bench', 0o755), ('native/scan', 0o755)],
+                                                absolute=absolute)
+                self.assertEqual(pod_gate.benchmark_argv(Path('/bundle'), manifest, ['bench', 'q6', '1']),
+                                 ['/bundle/bin/bench', 'q6', '1'])
+
+    def test_native_rejects_missing_nonexecutable_and_collisions(self):
+        for natives in ([('native/missing', None)], [('native/noexec', 0o644)],
+                        [('native/cq-gpu-tpch', 0o755)], [('native/duckdb', 0o755)],
+                        [('one/bench', 0o755), ('two/bench', 0o755)]):
+            with self.subTest(natives=natives), contextlib.redirect_stderr(io.StringIO()), \
+                 self.assertRaises(SystemExit) as error:
+                self.exercise_bundle(natives)
+            self.assertEqual(error.exception.code, 2)
 
     def test_pod_runner_rejects_full_gate_without_tests(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -127,6 +188,149 @@ class BundleTests(unittest.TestCase):
                  contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
                 pod_gate.main()
             self.assertEqual(error.exception.code, 2)
+
+
+class P6cBenchmarkTests(unittest.TestCase):
+    def test_rotation_and_warmup_schedule(self):
+        self.assertEqual(p6c_driver.rotation_order(3, 0), [0, 1, 2])
+        self.assertEqual(p6c_driver.rotation_order(3, 1), [1, 2, 0])
+        self.assertEqual(p6c_driver.rotation_order(3, 2), [2, 0, 1])
+        plan = p6c_driver.schedule(3, ['sf1', 'sf10'], 3)
+        self.assertEqual(len(plan), 24)
+        for r in range(-1, 3):
+            for scale in ('sf1', 'sf10'):
+                group = [item for item in plan if item['round'] == r and item['scale'] == scale]
+                self.assertEqual([item['bundle'] for item in group],
+                                 p6c_driver.rotation_order(3, max(r, 0)))
+                self.assertEqual([item['warmup'] for item in group], [r < 0] * 3)
+
+    def test_bootstrap_exact_and_seeded_sampling(self):
+        result = p6c_analysis.bootstrap_ratios([1, 4])
+        self.assertAlmostEqual(result['geometric_mean'], 2)
+        self.assertEqual(result['resamples'], 4)
+        self.assertEqual(result['method'], 'exhaustive')
+        self.assertLess(result['ci95'][0], 2)
+        self.assertGreater(result['ci95'][1], 2)
+        constant = p6c_analysis.bootstrap_ratios([0.5] * 3)
+        self.assertEqual(constant['ci95'], [0.5, 0.5])
+        sampled = p6c_analysis.bootstrap_ratios(list(range(1, 9)), seed=7)
+        self.assertEqual(sampled['resamples'], 20000)
+        self.assertEqual(sampled['method'], 'monte_carlo')
+        self.assertEqual(sampled, p6c_analysis.bootstrap_ratios(list(range(1, 9)), seed=7))
+        self.assertIsNone(p6c_analysis.bootstrap_ratios([])['ci95'])
+
+    def test_parsing_retains_exactness_samples_and_nested_transfer(self):
+        row = dict(query='h06', exact=True, answer_rows=1, median_ms=dict(total=2, kernels=1, build=1),
+                   samples=[dict(total_ms=2)], load_ms=3, inputs=[dict(transfer_bytes=64)])
+        parsed = p6c_driver.parse_results(dict(results=[row]), ['h06'])['h06']
+        self.assertTrue(parsed['exact'])
+        self.assertEqual(parsed['samples'], row['samples'])
+        self.assertEqual(parsed['median_ms'], row['median_ms'])
+        self.assertEqual(parsed['load_transfer']['load_ms'], 3)
+        self.assertEqual(parsed['load_transfer']['inputs']['0']['transfer_bytes'], 64)
+        with self.assertRaises(ValueError):
+            p6c_driver.parse_results(dict(results=[]), ['h06'])
+
+    def test_analysis_pairs_within_sessions_and_reports_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for session_index in range(2):
+                records = []
+                for r in range(-1, 2):
+                    for index, factor in enumerate((1, 0.5, 1.02)):
+                        value = (10 + session_index * 20 + r) * factor
+                        records.append(dict(round=r, warmup=r < 0, bundle=index, scale='sf1',
+                            process_seconds=value, exit_code=0, exact=True, failed=False,
+                            rusage_delta=dict(minflt=100 + r, majflt=r + 1, maxrss=0),
+                            per_query={'h06': dict(exact=True, median_ms=dict(total=value, kernels=value))}))
+                path = Path(directory) / f'{session_index}.json'
+                path.write_text(json.dumps(dict(bundles=[{}, {}, {}], mode='advised', processes=records)))
+                paths.append(path)
+            report = p6c_analysis.analyze(paths, control=2)
+            rows = [row for row in report['rows'] if row['bundle'] == 1]
+            self.assertEqual(len(rows), 3)
+            for row in rows:
+                self.assertEqual(row['pairs'], 4)
+                self.assertEqual(row['geometric_mean'], 0.5)
+                self.assertAlmostEqual(row['control_ci95'][0], 1.02)
+                self.assertEqual(row['minflt_range'], [100, 101])
+                self.assertEqual({pair['input'] for pair in row['paired_ratios']}, {0, 1})
+            self.assertIn('layout-control', p6c_analysis.markdown(report))
+
+    def test_driver_budget_failure_and_per_process_checkpoint(self):
+        for budget, fail, expected_count in ((100, False, 18), (8, False, 2), (100, True, 18)):
+            with self.subTest(budget=budget, fail=fail), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                directories = [root / f'bundle-{index}' for index in range(3)]
+                for bundle in directories:
+                    bundle.mkdir()
+                    (bundle / 'manifest.json').write_text(json.dumps(dict(
+                        commit='same-commit', worktree=str(root / 'shared-worktree'),
+                        binaries={'cq-gpu-tpch': 'bin/cq-gpu-tpch'})))
+                clock = [0]
+                calls = []
+                output = root / 'results/pod-bench.json'
+
+                def run(bundle, result_path, queries, scale, mode, timeout):
+                    checkpoint = json.loads(output.read_text())
+                    self.assertEqual(len(checkpoint['processes']), len(calls))
+                    self.assertEqual(queries, ['h06'])
+                    self.assertEqual(mode, 'advised')
+                    self.assertGreater(timeout, 0)
+                    calls.append((directories.index(bundle.dir), scale))
+                    clock[0] += 2
+                    return dict(process_seconds=2, failed=fail, timed_out=False)
+
+                with patch.object(sys, 'argv', ['driver', '--results', str(output.parent),
+                        '--queries', 'h06', '--scales', 'sf1,sf10', '--pairs', '2',
+                        '--budget', str(budget)]), \
+                     patch.dict(os.environ, {'BUNDLE_DIR': str(directories[-1]),
+                         'BUNDLE_DIRS': json.dumps(list(map(str, directories)))}), \
+                     patch.object(p6c_driver.time, 'monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(p6c_driver, 'gpu_state', return_value={'gpu': 'test-state'}), \
+                     patch.object(p6c_driver, 'run_process', side_effect=run), \
+                     patch.object(pod_gate, 'mirror') as mirror:
+                    self.assertEqual(p6c_driver.main(), int(fail))
+                result = json.loads(output.read_text())
+                self.assertEqual(len(result['processes']), expected_count)
+                self.assertEqual(len(result['not_run']), 18 - expected_count)
+                expected = p6c_driver.schedule(3, ['sf1', 'sf10'], 2)
+                self.assertEqual(calls, [(item['bundle'], item['scale']) for item in expected[:expected_count]])
+                self.assertEqual(mirror.call_count, expected_count + 1)
+                self.assertTrue(all('before' in row and 'after' in row for row in result['rounds']))
+                self.assertEqual(result['stop_reason'] is not None, budget == 8)
+
+    def test_driver_defers_before_loading_nonlast_bundle(self):
+        with patch.object(sys, 'argv', ['driver', '--results', '/unused', '--budget', '10']), \
+             patch.dict(os.environ, {'BUNDLE_DIR': '/bundle-0',
+                 'BUNDLE_DIRS': json.dumps(['/bundle-0', '/bundle-1'])}), \
+             patch.object(p6c_driver, 'Bundle', side_effect=AssertionError('must defer')), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(p6c_driver.main(), 0)
+
+    def test_process_records_failure_resources_and_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'manifest.json').write_text(json.dumps(dict(worktree=str(root),
+                binaries={'cq-gpu-tpch': 'bin/cq-gpu-tpch'})))
+            bundle = p6c_driver.Bundle(root)
+            output = root / 'query.json'
+            for code, exact in ((0, True), (1, True), (0, False)):
+                output.write_text(json.dumps(dict(results=[dict(query='h06', exact=exact,
+                    answer_rows=1, samples=[], median_ms=dict(total=1, build=0, kernels=1))])))
+                with self.subTest(code=code, exact=exact), \
+                     patch.object(p6c_driver.subprocess, 'Popen') as popen:
+                    popen.return_value.communicate.return_value = ('stdout', 'stderr')
+                    popen.return_value.returncode = code
+                    record = p6c_driver.run_process(bundle, output, ['h06'], 'sf1', 'advised', 10)
+                self.assertEqual(record['failed'], code != 0 or not exact)
+                self.assertEqual(record['exit_code'], code)
+                self.assertEqual(record['exact'], exact)
+                self.assertEqual(record['results_json'], str(output))
+                self.assertEqual(set(record['rusage_delta']), {'minflt', 'majflt', 'maxrss'})
+                self.assertEqual(record['argv'][-6:], ['--query', 'h06', '--scale', 'sf1', '--mode', 'advised'])
+                self.assertEqual(bundle.env['DUCKDB_CLI'], str(root / 'bin/duckdb'))
+                self.assertEqual(bundle.env['LD_LIBRARY_PATH'].split(':')[0], str(root / 'lib'))
 
 
 class BenchmarkTests(unittest.TestCase):

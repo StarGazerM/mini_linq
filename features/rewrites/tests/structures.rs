@@ -23,7 +23,7 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
         r = let rename R@1 {a -> x,b -> y};
         joined = let canon probe first [x,y] l,r;
         return joined as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
@@ -56,7 +56,7 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
         r = let rename R@1 {a -> x,b -> y};
         joined = let canon probe first [x] l,r;
         return joined as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -74,7 +74,7 @@ fn smallest_expand_source() -> ir::Program {
         candidate = pipe probe smallest [b] l,r;
         checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
-    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         r = @custom_directory as CustomDirectory [b][c] supports [expand];
         s = @custom_directory as CustomDirectory [a][c] supports [expand];
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -197,7 +197,7 @@ fn membership_bridge_source() -> ir::Program {
         last = pipe probe first [c] after,t;
         out = let canon project last keep {a,b,c,d,tag};
         return out as answer(a,b,c,d,tag);
-    } structures { providers { adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         selected = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64> [b] membership payload [b] constants {tag = 7};
         r = @sorted_run as ::cq_storage::SortedRun<_,_> [a] supports [expand];
         s = @sorted_run as ::cq_storage::SortedRun<_,_> [b] supports [expand];
@@ -502,7 +502,7 @@ fn computed_head_uses_sort_without_touching_physical() {
             relation R(a:i32); r = let canon rename R@0 {a -> x};
             return dedup r as answer(*x % 2);
         }
-        structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
+        structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
             r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort;
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             r head = @sort as ::cq_storage::dedup::Sort;
@@ -543,7 +543,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         }
         structures {
             providers {
-                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
                 host_scan = ::core::iter::Map<_, _> { reads [], build typed };
                 shared_index = Shared<'_, _, _> { reads [exact, membership], build typed };
             }

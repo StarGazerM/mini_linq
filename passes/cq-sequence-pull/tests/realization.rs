@@ -818,7 +818,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         p = pipe probe first [x] l,r;
         j = let canon project p keep {x,y};
         return j as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];

@@ -838,6 +838,26 @@ pub fn compile_with_consumer(
     Ok(target)
 }
 
+/// Bind authored `blocks(...)` advice to a Structures program whose scan
+/// providers are already the serving target providers (for example a GPU
+/// loader binding). The same chooser and checker as `select(blocks(...))`.
+pub fn choose_blocks(
+    source: &structures::Program,
+    arguments: TokenStream,
+) -> syn::Result<structures::Program> {
+    let advice: blocks::Advice = syn::parse2(arguments)?;
+    let mut target = source.clone();
+    blocks::choose(&mut target, &advice)?;
+    Ok(target)
+}
+
+/// The relations an authored `blocks(...)` argument binds, so a target's
+/// loader binding can serve them with its declared scan-block provider first.
+pub fn blocked_relations(arguments: TokenStream) -> syn::Result<BTreeSet<String>> {
+    let advice: blocks::Advice = syn::parse2(arguments)?;
+    Ok(advice.0.into_keys().collect())
+}
+
 /// Context premises authorized by this pass's explicit argument packet.
 pub fn context(arguments: TokenStream) -> syn::Result<physical::Context> {
     Ok(syn::parse2::<Arguments>(arguments)?.facts.context())

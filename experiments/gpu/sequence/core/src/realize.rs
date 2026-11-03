@@ -9,7 +9,7 @@ use cq_lang_sequence::gpu::realization::{
     DescriptorBounds, Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput,
     HostUnion, Interval, Phase, ProviderBuild, Realization, Side, SmallestRealization,
     SmallestSide, SourceAccess, SourceOrigin, SourceRealization, Step, TerminalGroup, Ties,
-    Transfer, TransferSource, UnionArm, Launch,
+    TileRead, TileScan, TileTest, Transfer, TransferSource, UnionArm, Launch,
 };
 use cq_lang_sequence::gpu::{Grid, Publication};
 use cq_lang_sequence::{Analysis, Program, Term};
@@ -316,6 +316,8 @@ struct Facts<'a> {
     carriers: &'a BTreeMap<String, syn::Type>,
     resident: BTreeSet<String>,
     runs: BTreeSet<String>,
+    /// Inputs served by retained shared-S1 scan blocks (P6 C).
+    blocked: BTreeSet<String>,
     device_results: BTreeSet<String>,
     /// Physical results of nonterminal dispatch and host-union publications:
     /// their publication step builds the result's providers, so no source does.
@@ -344,6 +346,7 @@ impl<'a> Facts<'a> {
         let carriers = &analysis.gpu_bindings.carriers;
         let mut resident = BTreeSet::new();
         let mut runs = BTreeSet::new();
+        let mut blocked = BTreeSet::new();
         for input in program.structures.physical.inputs() {
             let name = symbol_name(&input.name);
             for entry in &program.structures.structures.entries {
@@ -369,6 +372,11 @@ impl<'a> Facts<'a> {
                     } else if analysis.structures.facts(&keyed.provider).abi
                         == Some(cq_lang_structures::provider::NativeAbi::Columns)
                     {
+                        resident.insert(name.clone());
+                    } else if analysis.structures.facts(&keyed.provider).abi
+                        == Some(cq_lang_structures::provider::NativeAbi::ScanBlocks)
+                    {
+                        blocked.insert(name.clone());
                         resident.insert(name.clone());
                     }
                 }
@@ -436,6 +444,7 @@ impl<'a> Facts<'a> {
             carriers,
             resident,
             runs,
+            blocked,
             device_results,
             published,
             codecs,
@@ -659,6 +668,10 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
     let demands = crate::rows::lookup_demands(facts.program);
     let mut sources = BTreeMap::new();
     for (name, definition) in &facts.definitions {
+        if facts.program.structures.encoded.blocks.scans.contains_key(name) {
+            sources.insert(name.clone(), tile_source(facts, name)?);
+            continue;
+        }
         let rename = matches!(definition.operator, Operator::Rename(_));
         if !rename && (facts.device_results.contains(name) || !required.contains(name)) {
             continue;
@@ -696,6 +709,10 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
             let Some(origin) = crate::rows::origin(name, &host_bound)? else {
                 continue;
             };
+            // Every read of a blocked relation is its scan's tile chain.
+            if facts.blocked.contains(&origin.host) {
+                continue;
+            }
             // A predicate-filtered result is computed from its run as row work.
             if origin.predicate {
                 continue;
@@ -794,6 +811,111 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
     Ok(sources)
 }
 
+/// Formal rule GPU-TilePredicate: realize a Structures blocked scan and its
+/// Sequence run as cooperative vector tiles. The run's predicates are tested
+/// in run order; identity reads load at their first opaque consumer. Every
+/// other blocked decision (later runs, carrier publication, final answers)
+/// has no device tile realization in this slice and is rejected.
+fn tile_source(facts: &Facts, name: &str) -> syn::Result<SourceRealization> {
+    use cq_lang_structures::encoded::{Consumer, ReadPurpose};
+    let encoded = &facts.program.structures.encoded;
+    let blocks = &encoded.blocks;
+    let scan = &blocks.scans[name];
+    let source = &encoded.obligations.sources[&scan.source];
+    let execution = facts
+        .program
+        .representation
+        .blocks
+        .scans
+        .get(name)
+        .ok_or_else(|| error("BE-Blocks: blocked scan has no recorded execution"))?;
+    let Operator::Rename(rename) = &facts.definitions[name].operator else {
+        return Err(error("GPU-TilePredicate: blocked scan is not a rename"));
+    };
+    let column = |representation| encoded.records.representations[representation].column.clone();
+    let run = facts.program.representation.blocks.runs.get(name).map_or(&[][..], Vec::as_slice);
+    if let Some(predicate) = blocks.predicates.keys().find(|predicate| !run.contains(predicate)) {
+        return Err(error(format!(
+            "T-Gpu: blocked predicate `{predicate}` is not in its scan's tile run"
+        )));
+    }
+    let tests = run
+        .iter()
+        .map(|predicate| {
+            let record = &blocks.predicates[predicate];
+            TileTest {
+                predicate: predicate.clone(),
+                strategy: record.strategy,
+                summary: record.prune == cq_lang_structures::blocks::Prune::MinMax,
+                columns: record.columns.values().map(column).collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+    if blocks.scans.len() != 1 {
+        return Err(error("T-Gpu: a device program realizes at most one blocked scan"));
+    }
+    // Keyless folds consume the lane mask directly after r6 removes Canon.
+    // A retained recipe is not a read, but an actual Canon still needs a carrier.
+    if !cq_lang_sequence::blocks::canonical_read_sites(facts.program, facts.analysis).is_empty() {
+        return Err(error("T-Gpu: canonical read sites have no tile realization"));
+    }
+    let mut reads = Vec::new();
+    let mut loaded = BTreeSet::new();
+    let mut consumers = 0;
+    for definition in facts.program.structures.physical.program.definitions.iter() {
+        let consumer = symbol_name(&definition.name);
+        let Some(read) = blocks.reads.get(&consumer) else {
+            continue;
+        };
+        if read.consumer != Consumer::OpaqueRust(consumer.clone())
+            || read.purpose != ReadPurpose::OpaqueRustRead
+        {
+            break;
+        }
+        consumers += 1;
+        for (field, value) in &read.fields {
+            let column = column(&value.representation);
+            reads.push(TileRead {
+                consumer: consumer.clone(),
+                field: field.clone(),
+                load: loaded.insert(column.clone()),
+                column,
+            });
+        }
+    }
+    if consumers != blocks.reads.len() {
+        return Err(error(
+            "T-Gpu: blocked carrier and final-answer publication have no tile realization",
+        ));
+    }
+    let columns = tests
+        .iter()
+        .flat_map(|test| test.columns.iter().cloned())
+        .chain(reads.iter().map(|read| read.column.clone()))
+        .collect();
+    let vector_rows = execution.tile_rows as u64;
+    Ok(SourceRealization {
+        origin: SourceOrigin::Blocked {
+            host: source.relation.clone(),
+            source: scan.source,
+        },
+        columns: rename
+            .mapping
+            .iter()
+            .map(|mapping| (symbol_name(&mapping.target), symbol_name(&mapping.source)))
+            .collect(),
+        access: SourceAccess::Tiles(TileScan {
+            vector_rows,
+            block_threads: crate::BLOCK_THREADS,
+            rows_per_lane: (vector_rows / u64::from(crate::BLOCK_THREADS)) as u32,
+            columns,
+            tests,
+            reads,
+        }),
+        phase: Phase::Setup,
+    })
+}
+
 pub(crate) fn grouped_boundary<'a>(
     term: &'a Term,
     definitions: &BTreeMap<String, &'a Term>,
@@ -876,7 +998,7 @@ impl<'f, 'a> Steps<'f, 'a> {
                 SourceOrigin::Uploaded { .. } => {
                     (name, &facts.analysis.structures.layouts[name], true)
                 }
-                SourceOrigin::RadixRelation { .. } => continue,
+                SourceOrigin::RadixRelation { .. } | SourceOrigin::Blocked { .. } => continue,
             };
             for (column, original) in &source.columns {
                 let index = layout
@@ -1534,6 +1656,9 @@ pub(crate) fn check(
                 if !facts.resident.contains(host) || nonresident {
                     return Err(error("resident source reads a nonresident input"));
                 }
+                if facts.blocked.contains(host) {
+                    return Err(error("GPU-TilePredicate: a blocked input is read only by its tile scan"));
+                }
                 if let SourceOrigin::RadixRelation { providers, .. } = &source.origin {
                     if !facts.runs.contains(host) || source.access != SourceAccess::Scan {
                         return Err(error("packed runs have no interval or provider access"));
@@ -1556,6 +1681,16 @@ pub(crate) fn check(
                 CheckState::default().evaluation(&facts, evaluation, name)?;
                 &analysis.structures.layouts[name]
             }
+            SourceOrigin::Blocked { host, source: id } => {
+                if !facts.blocked.contains(host) || nonresident || source.phase != Phase::Setup {
+                    return Err(error("GPU-TilePredicate: tile source must read its retained blocked input"));
+                }
+                let SourceAccess::Tiles(tiles) = &source.access else {
+                    return Err(error("GPU-TilePredicate: a blocked source is read by tiles"));
+                };
+                check_tiles(&facts, name, host, *id, tiles)?;
+                &analysis.structures.host_layouts[host]
+            }
         };
         if (source.phase == Phase::Build) != matches!(source.origin, SourceOrigin::Uploaded { .. })
         {
@@ -1571,7 +1706,7 @@ pub(crate) fn check(
             return Err(error("source column is absent from its origin layout"));
         }
         let selection = match &source.access {
-            SourceAccess::Scan => None,
+            SourceAccess::Scan | SourceAccess::Tiles(_) => None,
             SourceAccess::Positions(interval) => Some(interval),
             SourceAccess::Provider { selection } => {
                 let built = analysis
@@ -1598,10 +1733,39 @@ pub(crate) fn check(
                 selection.as_ref()
             }
         };
+        if matches!(source.access, SourceAccess::Tiles(_))
+            != matches!(source.origin, SourceOrigin::Blocked { .. })
+        {
+            return Err(error("GPU-TilePredicate: tiles read exactly the blocked sources"));
+        }
         if let SourceOrigin::Resident { host } = &source.origin {
             check_resident_chain(&host_bound, name, host, &source.columns, selection)?;
         } else if selection.is_some() {
             return Err(error("only resident sources fold interval selections"));
+        }
+    }
+    for scan in program.structures.encoded.blocks.scans.keys() {
+        if !records
+            .sources
+            .get(scan)
+            .is_some_and(|source| matches!(source.origin, SourceOrigin::Blocked { .. }))
+        {
+            return Err(error(format!(
+                "GPU-TilePredicate: blocked scan `{scan}` has no tile realization"
+            )));
+        }
+        // The slice's only tile consumer is the keyless fused fold: its lanes
+        // consume the survivor mask directly, without a position publication.
+        if !records.steps.iter().any(|(_, step)| {
+            matches!(step, Step::Group(TerminalGroup {
+                input: GroupInput::Source { source },
+                completion: GroupCompletion::GridPartials { .. },
+                ..
+            }) if source == scan)
+        }) {
+            return Err(error(format!(
+                "T-Gpu: blocked scan `{scan}` requires a keyless fused fold consumer"
+            )));
         }
     }
     let definitions: Vec<_> = program
@@ -2071,7 +2235,7 @@ impl CheckState {
                     SourceOrigin::Uploaded { .. } => {
                         (name, &facts.analysis.structures.layouts[name], true)
                     }
-                    SourceOrigin::RadixRelation { .. } => continue,
+                    SourceOrigin::RadixRelation { .. } | SourceOrigin::Blocked { .. } => continue,
                 };
                 let Some(original) = source.columns.get(column) else {
                     continue;
@@ -2143,6 +2307,95 @@ impl CheckState {
         }
         Ok(())
     }
+}
+
+/// Formal rules GPU-TilePredicate / GPU-NarrowCarrier: independently check a
+/// tile realization against the Structures blocked records and the Sequence
+/// run it realizes. Whole tiles: the block's lanes times rows per lane are the
+/// recorded vector, which never straddles a block. Every blocked predicate is
+/// tested in run order with its recorded strategy and summary decision;
+/// identity reads are exactly the opaque reads, each of an identity-declared
+/// column, loaded once at its first consumer; only those columns are leased.
+fn check_tiles(
+    facts: &Facts,
+    name: &str,
+    host: &str,
+    id: cq_lang_structures::encoded::SourceId,
+    tiles: &TileScan,
+) -> syn::Result<()> {
+    use cq_lang_structures::{blocks::Prune, encoded::{Consumer, ReadPurpose}};
+    let invalid = |message: &str| error(format!("GPU-TilePredicate: {message}"));
+    let encoded = &facts.program.structures.encoded;
+    let blocks = &encoded.blocks;
+    // Independently reject live canonical sites; unused recipes require no payload.
+    if !cq_lang_sequence::blocks::canonical_read_sites(facts.program, facts.analysis).is_empty() {
+        return Err(error("T-Gpu: canonical read sites have no tile realization"));
+    }
+    let scan = blocks.scans.get(name).ok_or_else(|| invalid("tile source is not a blocked scan"))?;
+    if scan.source != id || encoded.obligations.sources[&id].relation != host {
+        return Err(invalid("tile source changed its blocked source"));
+    }
+    let execution = facts.program.representation.blocks.scans.get(name)
+        .ok_or_else(|| invalid("blocked scan has no recorded execution"))?;
+    if tiles.block_threads != crate::BLOCK_THREADS
+        || tiles.vector_rows != execution.tile_rows as u64
+        || u64::from(tiles.block_threads) * u64::from(tiles.rows_per_lane) != tiles.vector_rows
+        || blocks.sources[&id].block_rows % tiles.vector_rows != 0
+    {
+        return Err(invalid("tile is not a whole cooperative vector inside one block"));
+    }
+    let column = |representation| encoded.records.representations[representation].column.clone();
+    let run = facts.program.representation.blocks.runs.get(name).map_or(&[][..], Vec::as_slice);
+    if tiles.tests.iter().map(|test| &test.predicate).ne(run.iter())
+        || blocks.predicates.keys().any(|predicate| !run.contains(predicate))
+    {
+        return Err(invalid("tile tests differ from the scan's recorded run"));
+    }
+    for test in &tiles.tests {
+        let record = &blocks.predicates[&test.predicate];
+        if test.strategy != record.strategy
+            || test.summary != (record.prune == Prune::MinMax)
+            || test.columns.iter().ne(record.columns.values().map(column).collect::<Vec<_>>().iter())
+        {
+            return Err(invalid("tile test differs from its blocked predicate"));
+        }
+    }
+    let mut expected = Vec::new();
+    for definition in &facts.program.structures.physical.program.definitions {
+        let consumer = symbol_name(&definition.name);
+        if let Some(read) = blocks.reads.get(&consumer) {
+            if read.consumer != Consumer::OpaqueRust(consumer.clone()) || read.purpose != ReadPurpose::OpaqueRustRead {
+                return Err(invalid("only opaque device reads have a tile realization"));
+            }
+            for (field, value) in &read.fields {
+                expected.push((consumer.clone(), field.clone(), value.representation));
+            }
+        }
+    }
+    if expected.len() != tiles.reads.len() || blocks.reads.keys().any(|key| !facts.definitions.contains_key(key)) {
+        return Err(invalid("tile reads differ from the opaque read records"));
+    }
+    let mut loaded = BTreeSet::new();
+    for (read, (consumer, field, representation)) in tiles.reads.iter().zip(&expected) {
+        let declaration = &encoded.obligations.declarations[&encoded.records.representations[representation].declaration];
+        if read.consumer != *consumer || read.field != *field || read.column != column(representation) {
+            return Err(invalid("tile read differs from its opaque read record"));
+        }
+        // GPU-NarrowCarrier: only an authored identity column reaches Rust.
+        if !declaration.identity {
+            return Err(error("GPU-NarrowCarrier: opaque device Rust reads a non-identity blocked column"));
+        }
+        if read.load != loaded.insert(read.column.clone()) {
+            return Err(invalid("an identity read must load once, at its first consumer"));
+        }
+    }
+    let columns: BTreeSet<_> = tiles.tests.iter().flat_map(|test| test.columns.iter().cloned())
+        .chain(tiles.reads.iter().map(|read| read.column.clone()))
+        .collect();
+    if columns != tiles.columns {
+        return Err(invalid("leased columns differ from tile demand"));
+    }
+    Ok(())
 }
 
 /// The completed publications a host-union arm denotes, in order.
@@ -2443,7 +2696,7 @@ mod tests {
             structures {
                 providers {
                     device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns };
-                    radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred };
+                    radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred };
                     range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range };
                 }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64,i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
@@ -2560,7 +2813,7 @@ mod tests {
                 answer = let canon union r,s;
                 return answer as answer(a);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
                 s host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
                 answer rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
@@ -2624,7 +2877,7 @@ mod tests {
                 result = let canon project joined keep {a, value, payload};
                 return result as answer(a, value, payload);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; #host_scan range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; #host_scan range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 driver host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];
                 #reader
                 #filtered
@@ -2802,5 +3055,94 @@ mod tests {
                 },
             ],
         );
+    }
+
+    /// h06 under the authored p6c `C-bytes-summary` blocks advice (SF1), as
+    /// planned by the TPC-H build: one blocked Lineitem scan whose run is the
+    /// shipdate window, read by three opaque device consumers.
+    fn blocked_h06() -> (Program, Analysis) {
+        let program: Program = syn::parse_str(include_str!("fixtures/h06_blocked.program")).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        (program, analysis)
+    }
+
+    fn tiles(realization: &mut Realization) -> &mut TileScan {
+        realization
+            .sources
+            .values_mut()
+            .find_map(|source| match &mut source.access {
+                SourceAccess::Tiles(tiles) => Some(tiles),
+                _ => None,
+            })
+            .expect("the blocked scan is realized by tiles")
+    }
+
+    #[test]
+    fn blocked_scan_records_whole_vector_tiles_for_its_run_and_reads() {
+        let (program, analysis) = blocked_h06();
+        let mut realization = select(&program, &analysis).unwrap();
+        let tiles = tiles(&mut realization).clone();
+        assert_eq!(tiles.vector_rows, 1024);
+        assert_eq!(u64::from(tiles.block_threads) * u64::from(tiles.rows_per_lane), tiles.vector_rows);
+        assert_eq!(tiles.tests.iter().map(|test| test.predicate.as_str()).collect::<Vec<_>>(), ["r1"]);
+        assert!(tiles.tests[0].summary);
+        let columns: BTreeSet<_> = ["l_discount", "l_extendedprice", "l_quantity", "l_shipdate"].map(String::from).into();
+        assert_eq!(tiles.columns, columns);
+        let loads: Vec<_> = tiles.reads.iter().filter(|read| read.load).map(|read| read.column.as_str()).collect();
+        assert_eq!(loads.len(), 3, "each identity column loads once: {loads:?}");
+    }
+
+    #[test]
+    fn checker_rejects_tile_realizations_that_differ_from_blocked_records() {
+        rejects(
+            blocked_h06(),
+            &[
+                &|realization| tiles(realization).vector_rows = 2048,
+                &|realization| tiles(realization).rows_per_lane *= 2,
+                &|realization| tiles(realization).block_threads /= 2,
+                &|realization| {
+                    tiles(realization).tests.clear();
+                },
+                &|realization| {
+                    let test = tiles(realization).tests[0].clone();
+                    tiles(realization).tests.push(test);
+                },
+                &|realization| tiles(realization).tests[0].summary = false,
+                &|realization| tiles(realization).tests[0].strategy = cq_lang_structures::blocks::Strategy::Formula,
+                &|realization| tiles(realization).tests[0].columns.push("l_quantity".into()),
+                &|realization| {
+                    tiles(realization).columns.insert("l_orderkey".into());
+                },
+                &|realization| {
+                    tiles(realization).columns.remove("l_quantity");
+                },
+                &|realization| {
+                    tiles(realization).reads.pop();
+                },
+                &|realization| tiles(realization).reads.reverse(),
+                &|realization| {
+                    let read = tiles(realization).reads.iter_mut().find(|read| !read.load).unwrap();
+                    read.load = true;
+                },
+                &|realization| tiles(realization).reads[0].column = "l_orderkey".into(),
+                &|realization| {
+                    let source = realization
+                        .sources
+                        .values_mut()
+                        .find(|source| matches!(source.access, SourceAccess::Tiles(_)))
+                        .unwrap();
+                    source.access = SourceAccess::Scan;
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn blocked_identity_is_plain_only() {
+        let (program, _) = blocked_h06();
+        let mut forged = program.structures.clone();
+        let shipdate = cq_lang_structures::encoded::DeclarationId(7);
+        forged.encoded.obligations.declarations.get_mut(&shipdate).unwrap().identity = true;
+        assert!(cq_lang_structures::contract::check(&forged).is_err());
     }
 }

@@ -24,6 +24,8 @@ def main():
     parser.add_argument('--bench', nargs='+', action='extend', default=[])
     parser.add_argument('--no-tests', action='store_true',
                         help='Build a benchmark-only bundle without test harnesses or doctests')
+    parser.add_argument('--native', type=Path, action='append', default=[], metavar='PATH',
+                        help='Package a prebuilt executable (repeatable; relative to worktree)')
     args = parser.parse_args()
     root, output = args.worktree.resolve(), args.output.absolute()
     workspace = root / 'experiments/gpu'
@@ -64,7 +66,7 @@ def main():
             manifest['builds'].append(dict(name=name, argv=actual, cwd=str(workspace),
                 environment={key: env[key] for key in ('CARGO_INCREMENTAL', 'CARGO_BUILD_JOBS',
                     'CUDA_HOME', 'BINDGEN_EXTRA_CLANG_ARGS', 'LIBRARY_PATH', 'LD_LIBRARY_PATH',
-                    'RUSTDOCFLAGS') if key in env},
+                    'RUSTDOCFLAGS', 'TPCH_GPU_ADVICE', 'CQ_GPU_TPCH_QUERIES', 'RUSTFLAGS') if key in env},
                 seconds=elapsed, gate_wait_seconds=began - waited))
             print(f'Gate time {name}: {elapsed:.3f}s (gate wait {began - waited:.3f}s)', flush=True)
             if result.returncode:
@@ -116,6 +118,17 @@ def main():
             executables.append(Path(artifact['executable']))
         if set(manifest['binaries']) != set(binaries):
             raise RuntimeError('Missing requested binary artifacts')
+        for native in args.native:
+            source = native if native.is_absolute() else root / native
+            name = native.name
+            if not source.is_file() or not os.access(source, os.X_OK):
+                parser.error(f'Native executable is missing or not executable: {source}')
+            destination = 'bin/' + name
+            if name == 'duckdb' or (stage / destination).exists():
+                parser.error(f'Native executable name collides with a bundled executable: {name}')
+            shutil.copy2(source, stage / destination)
+            manifest['binaries'][name] = destination
+            executables.append(source)
 
         # Cargo --no-run omits doctests. rustdoc has its own compile-only mode;
         # persist those executables locally rather than invoking a test runner.

@@ -152,6 +152,12 @@ impl<T: OrdinalDecode, F: Family> DeviceScanView<T, F> {
     pub fn snapshot(&self) -> SnapshotId {
         self.owner.snapshot()
     }
+    pub(crate) fn lane(&self) -> &Arc<Pool> {
+        &self.lane
+    }
+    pub(crate) fn has_summaries(&self) -> bool {
+        self.owner.block_summaries.is_some() || self.owner.vector_summaries.is_some()
+    }
     pub fn filter_mask(
         &self,
         domain: cq_storage::scan::format::DomainId,
@@ -268,14 +274,14 @@ impl<T: OrdinalDecode, F: Family> Drop for DeviceScanView<T, F> {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ScanDeviceDescriptor {
-    payload: *const u8,
-    headers: *const BlockHeader,
-    block_summaries: *const MinMax,
-    vector_summaries: *const MinMax,
-    capacity: u64,
-    live_count: u64,
-    block_rows: u64,
-    snapshot: u64,
+    pub(crate) payload: *const u8,
+    pub(crate) headers: *const BlockHeader,
+    pub(crate) block_summaries: *const MinMax,
+    pub(crate) vector_summaries: *const MinMax,
+    pub(crate) capacity: u64,
+    pub(crate) live_count: u64,
+    pub(crate) block_rows: u64,
+    pub(crate) snapshot: u64,
 }
 unsafe impl DeviceCopy for ScanDeviceDescriptor {}
 #[repr(C)]

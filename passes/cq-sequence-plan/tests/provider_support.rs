@@ -12,7 +12,7 @@ fn source(decision: &str) -> structures::Program {
             p = let canon probe first [x] s,r;
             return p as answer(x,y);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; original = Original { reads [exact, range, membership], supports [expand, keys], build inferred, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; filter = Filter { reads [membership], build inferred }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; original = Original { reads [exact, range, membership], supports [expand, keys], build inferred, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; filter = Filter { reads [membership], build inferred }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r = @original as Original [x] supports [expand, keys];
@@ -36,7 +36,7 @@ fn catalog(supports: Vec<Support>) -> Catalog {
         selected_alias = SelectedAlias {
             reads [exact, range, membership], supports [#(#supports),*], build inferred, join_filter
         };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
     });
     let mut catalog = Catalog::default();
     for declaration in declared.declarations {

@@ -329,6 +329,12 @@ pub struct Rows {
     provider_layouts: BTreeMap<String, Vec<ProviderLayout>>,
     /// Checked Physical Rust-read facts of each Bind/Guard definition.
     rust_reads: BTreeMap<String, BTreeSet<String>>,
+    /// Tile sources (P6 C), by source result: their per-vector loop parts.
+    tiles: BTreeMap<String, crate::tiles::TileLoop>,
+    /// Predicates realized by a tile prologue rather than as row predicates.
+    tile_tests: BTreeSet<String>,
+    /// Identity reads `(consumer, field)` → (vector frame, loads here).
+    tile_reads: BTreeMap<(String, String), (Ident, bool)>,
 }
 
 impl Rows {
@@ -469,6 +475,7 @@ impl Rows {
             let name = symbol_name(&input.name);
             let mut run_binding = None;
             let mut resident = false;
+            let mut blocked = false;
             for entry in &program.structures.structures.entries {
                 if analysis
                     .structures
@@ -494,6 +501,11 @@ impl Rows {
                         == Some(cq_lang_structures::provider::NativeAbi::Columns)
                     {
                         resident = true;
+                    } else if analysis.structures.facts(&keyed.provider).abi
+                        == Some(cq_lang_structures::provider::NativeAbi::ScanBlocks)
+                    {
+                        resident = true;
+                        blocked = true;
                     }
                 }
             }
@@ -519,6 +531,18 @@ impl Rows {
                     let __cq_pool = #id.pool().clone();
                 });
                 first = false;
+            }
+            // A retained blocked table exposes only its leased descriptors;
+            // its recorded tile source checks and binds them.
+            if blocked {
+                setup.extend(quote! {
+                    if !::std::sync::Arc::ptr_eq(&__cq_pool, #id.pool()) {
+                        return Err("T-Gpu: resident inputs must share a pool and stream".into());
+                    }
+                    let #length = #id.len();
+                });
+                hosts.insert(name, (id, length));
+                continue;
             }
             if let Some(read) = run_binding {
                 let types = read.key_types.clone();
@@ -668,6 +692,10 @@ impl Rows {
         let mut providers = BTreeMap::new();
         let mut run_sources = BTreeMap::new();
         let mut run_providers = BTreeSet::new();
+        let mut tiles = BTreeMap::new();
+        let mut tile_tests = BTreeSet::new();
+        let mut tile_reads = BTreeMap::new();
+        let tile_bound = crate::realize::host_bound(&definitions, &realization.captures);
         // Formal rule GPU-Realization: every device source, its origin, access
         // and construction phase are recorded before printing.
         for (name, realization) in &realization.sources {
@@ -714,10 +742,29 @@ impl Rows {
                 hosts.insert(name.clone(), (id, length));
             }
             let origin_host = match &realization.origin {
-                SourceOrigin::Resident { host } | SourceOrigin::RadixRelation { host, .. } => host.clone(),
+                SourceOrigin::Resident { host }
+                | SourceOrigin::RadixRelation { host, .. }
+                | SourceOrigin::Blocked { host, .. } => host.clone(),
                 SourceOrigin::Uploaded { .. } => name.clone(),
             };
             let (host, host_length) = &hosts[&origin_host];
+            if let SourceAccess::Tiles(scan) = &realization.access {
+                let printed = crate::tiles::print(program, analysis, name, host, scan, &tile_bound)?;
+                setup.extend(printed.setup);
+                parameters.extend(printed.parameters);
+                tile_tests.extend(printed.tests);
+                tile_reads.extend(printed.reads);
+                tiles.insert(name.clone(), printed.tiles);
+                sources.insert(
+                    name.clone(),
+                    Source {
+                        reads: Vec::new(),
+                        length: quote!(#host_length),
+                        positions: None,
+                    },
+                );
+                continue;
+            }
             if let SourceOrigin::RadixRelation {
                 providers: native, ..
             } = &realization.origin
@@ -826,7 +873,7 @@ impl Rows {
             }
             let fields = &raw[&origin_host];
             let interval = match &realization.access {
-                SourceAccess::Scan => None,
+                SourceAccess::Scan | SourceAccess::Tiles(_) => None,
                 SourceAccess::Positions(interval) => Some(interval),
                 SourceAccess::Provider { selection } => selection.as_ref(),
             };
@@ -1186,6 +1233,9 @@ impl Rows {
             capture_uses,
             provider_layouts,
             rust_reads,
+            tiles,
+            tile_tests,
+            tile_reads,
         })
     }
 
@@ -1255,6 +1305,11 @@ impl Rows {
         position: TokenStream,
         row: TokenStream,
     ) -> syn::Result<TokenStream> {
+        if self.tiles.contains_key(name) {
+            return Err(error(format!(
+                "GPU-TilePredicate: {name} is read by its recorded tile loop, not by rows"
+            )));
+        }
         if let Some(source) = self.run_sources.get(name) {
             let view = &source.view;
             // DECODE V: P6 run scans unpack every demanded field before relational consumers; retain narrow codes unless rust_reads requires identity.
@@ -1516,6 +1571,25 @@ impl Rows {
             .collect())
     }
 
+    /// The recorded tile loop of source result `source`, if it is one.
+    pub(crate) fn tile_loop(&self, source: &str) -> Option<&crate::tiles::TileLoop> {
+        self.tiles.get(source)
+    }
+
+    /// The identity read a tile realization records at `consumer` for
+    /// `column`: the lane's live row value, loaded once into its row slot.
+    fn tile_load(&self, consumer: &str, column: &str, ty: &Type, row: &TokenStream) -> TokenStream {
+        let Some((frame, true)) = self.tile_reads.get(&(consumer.to_owned(), column.to_owned())) else {
+            return TokenStream::new();
+        };
+        let slot = self.columns[column];
+        quote! {
+            #row[#slot] = <#ty as ::gpu_datalog_runtime::Scalar>::encode(&unsafe {
+                ::cq_gpu_runtime::tile::value::<#ty, _>(::cq_gpu_runtime::tile::RawPayload, #frame, __cq_tile_local)
+            });
+        }
+    }
+
     pub fn map(
         &self,
         name: &str,
@@ -1525,6 +1599,11 @@ impl Rows {
     ) -> syn::Result<TokenStream> {
         let mut output = TokenStream::new();
         for definition in self.map_definitions(name, input_result)?.into_iter().rev() {
+            let consumer = symbol_name(&definition.name);
+            // A tile prologue already tested this recorded run predicate.
+            if self.tile_tests.contains(&consumer) {
+                continue;
+            }
             match &definition.operator {
                 Operator::Rename(_) | Operator::Project(_) | Operator::Unit(_) => {}
                 Operator::Select(select)
@@ -1580,6 +1659,10 @@ impl Rows {
                             error("T-Gpu: opaque Rust binding requires host evaluation")
                         })?;
                     let dependencies = analysis_reads(&self.rust_reads, definition)?;
+                    let loads = dependencies
+                        .iter()
+                        .map(|column| self.tile_load(&consumer, column, &input_row.types[column], &row))
+                        .collect::<Vec<_>>();
                     let bindings = dependencies.iter().map(|column| {
                         let id = &input_row.bindings[column];
                         let ty = &input_row.types[column];
@@ -1592,7 +1675,7 @@ impl Rows {
                     let ty = &self.physical_rows[&symbol_name(&definition.name)].types
                         [&symbol_name(&names[0])];
                     output.extend(quote! {
-                        if #live { #(#bindings)* #row[#slot] = <#ty as ::gpu_datalog_runtime::Scalar>::encode(&(#expression)); }
+                        if #live { #(#loads)* #(#bindings)* #row[#slot] = <#ty as ::gpu_datalog_runtime::Scalar>::encode(&(#expression)); }
                     });
                 }
                 Operator::Guard(guard) => {
@@ -1605,6 +1688,10 @@ impl Rows {
                             error("T-Gpu: opaque Rust guard requires host evaluation")
                         })?;
                     let dependencies = analysis_reads(&self.rust_reads, definition)?;
+                    let loads = dependencies
+                        .iter()
+                        .map(|column| self.tile_load(&consumer, column, &input_row.types[column], &row))
+                        .collect::<Vec<_>>();
                     let bindings = dependencies.iter().map(|column| {
                         let id = &input_row.bindings[column];
                         let ty = &input_row.types[column];
@@ -1612,7 +1699,7 @@ impl Rows {
                         // DECODE R: Guard free-variable dependencies select these columns; checked identity representation permits the verbatim opaque Rust condition.
                         quote!(let #id = &<#ty as ::gpu_datalog_runtime::Scalar>::decode(#row[#slot] as i128);)
                     });
-                    output.extend(quote! { if #live { #(#bindings)* #live = #expression; } });
+                    output.extend(quote! { if #live { #(#loads)* #(#bindings)* #live = #expression; } });
                 }
                 Operator::Group(_) => {
                     return Err(syn::Error::new_spanned(
@@ -2357,7 +2444,7 @@ mod tests {
                 result = let canon project filtered keep {id};
                 return result as answer(id);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 h host scan = @host_scan as ::core::iter::Map<_,_> [];
                 h rows = @vec as ::std::vec::Vec<_>;
@@ -2396,7 +2483,7 @@ mod tests {
                 selected = let canon point select r if (b = 7);
                 return selected as answer(a,b);
             }
-            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 r host scan = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [];
                 r host result(selected) = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [b];
                 selected rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
@@ -2437,7 +2524,7 @@ mod tests {
                 result = let canon project joined keep {a,b};
                 return result as answer(a,b);
             }
-            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 d host scan = @radix_relation input { keys 1; columns [i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,),(),u64,u64,()> [];
                 r host scan = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u128,u64,()> [];
                 r = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u128,u64,()> [b];
@@ -2618,7 +2705,7 @@ mod tests {
                 result = let canon project r keep {x,y};
                 return result as answer(x,y);
             }
-            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 r host scan = @radix_relation input { keys 2; columns [i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [7] Codec, i32 => ::gpu_datalog_runtime::Symbol<i32, Codec> codec [8] Codec] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
                     (::gpu_datalog_runtime::Symbol<i32, Codec>, ::gpu_datalog_runtime::Symbol<i32, Codec>), (), u64, u64, ()> [];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
@@ -2665,7 +2752,7 @@ mod tests {
                 result = let canon project joined keep {order_key,part_key,supplier_nation};
                 return result as answer(order_key,part_key,supplier_nation);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 driver host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64, i64 => i64, i64 => i64, i64 => i64, i64 => i64, i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64,i64,i64,i64,i64,i64,i64)> [];
                 nation host scan = @host_scan as ::core::iter::Map<_,_> [];
                 nation = @sorted_run as ::cq_storage::SortedRun<_,_> [supplier_nation];

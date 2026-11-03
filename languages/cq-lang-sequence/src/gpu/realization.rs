@@ -20,6 +20,11 @@ pub enum SourceOrigin {
     },
     /// Host-evaluated rows uploaded through the recorded adapter during build.
     Uploaded { evaluation: HostEvaluation },
+    /// Retained, uploaded shared S1 scan blocks of a Structures blocked source.
+    Blocked {
+        host: String,
+        source: cq_lang_structures::encoded::SourceId,
+    },
 }
 
 /// A contiguous half-open interval on one resident column: the intersection
@@ -60,6 +65,50 @@ pub enum SourceAccess {
     /// Build the recorded Range provider over the source, restricted to the
     /// optional interval; the provider's payload is the source read.
     Provider { selection: Option<Interval> },
+    /// Cooperative vector tiles over a blocked source (P6 C).
+    Tiles(TileScan),
+}
+
+/// Formal rules GPU-TilePredicate / GPU-NarrowCarrier: the device realization
+/// of a Structures blocked scan and its Sequence run. Structures owns families,
+/// predicate strategies and read authorization; this records only the tile
+/// shape, the leased columns, the tile tests and where identity reads load.
+/// Lane `l` of a block owns rows `k * block_threads + l`, `k < rows_per_lane`,
+/// of one `vector_rows` vector; survivor positions stay in that lane mask.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileScan {
+    pub vector_rows: u64,
+    pub block_threads: u32,
+    pub rows_per_lane: u32,
+    /// Leased source columns: exactly the tested and read columns.
+    pub columns: BTreeSet<String>,
+    /// The scan's fused Sequence run, in run order.
+    pub tests: Vec<TileTest>,
+    /// Identity reads of opaque device Rust consumers, in Physical order.
+    pub reads: Vec<TileRead>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileTest {
+    /// Physical predicate definition (a Structures blocked predicate).
+    pub predicate: String,
+    pub strategy: cq_lang_structures::blocks::Strategy,
+    /// Classify each vector by its recorded summary before any payload load.
+    pub summary: bool,
+    /// Tested source columns.
+    pub columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileRead {
+    /// Opaque Rust consumer (Guard or Bind) of the Structures read record.
+    pub consumer: String,
+    /// Logical column read by the consumer.
+    pub field: String,
+    /// Source column it reads.
+    pub column: String,
+    /// The first consumer loads the lane's value; later consumers reuse it.
+    pub load: bool,
 }
 
 /// Construction placement: before the timed build (immutable resident

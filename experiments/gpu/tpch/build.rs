@@ -14,6 +14,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use serde_json::json;
 use std::{
+    collections::BTreeSet,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -56,6 +57,71 @@ enum KeyBounds {
         resident: bool,
     },
     Full,
+}
+
+/// The recorded loader facts of a blocked relation (P6 C), rendered from its
+/// Structures blocked binding and its GPU tile realization's leased columns.
+fn scan_specs(
+    program: &cq_lang_sequence::Program,
+    analysis: &cq_lang_sequence::Analysis,
+    relation: &str,
+) -> Option<Vec<TokenStream>> {
+    use cq_lang_sequence::gpu::realization::{SourceAccess, SourceOrigin};
+    use cq_lang_structures::{blocks::Summary, encoded::{Carrier, Family}};
+    let encoded = &program.structures.encoded;
+    let (id, binding) = encoded
+        .blocks
+        .sources
+        .iter()
+        .find(|(id, _)| encoded.obligations.sources[*id].relation == relation)?;
+    let leased: BTreeSet<&String> = analysis
+        .gpu_bindings
+        .realization
+        .sources
+        .values()
+        .filter(|source| matches!(&source.origin, SourceOrigin::Blocked { source, .. } if source == id))
+        .filter_map(|source| match &source.access {
+            SourceAccess::Tiles(tiles) => Some(&tiles.columns),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let mut columns: Vec<_> = binding.columns.iter().collect();
+    columns.sort_by_key(|(_, column)| column.slot);
+    Some(
+        columns
+            .into_iter()
+            .map(|(name, column)| {
+                let declaration = &encoded.obligations.declarations[&column.declaration];
+                let family = match declaration.family {
+                    Family::Plain => quote!(Plain),
+                    _ => quote!(Bytes),
+                };
+                let width = match declaration.carrier {
+                    Carrier::U8 => quote!(W8),
+                    Carrier::U16 => quote!(W16),
+                    Carrier::U32 => quote!(W32),
+                    Carrier::U64 => quote!(W64),
+                };
+                let (namespace, version) = cq_lang_structures::blocks::runtime_domain(declaration, column);
+                let block_rows = binding.block_rows as usize;
+                let summaries = binding.summary == Summary::MinMax;
+                let upload = leased.contains(name);
+                quote!(crate::loader::ScanSpec {
+                    family: cq_gpu_runtime::scan_table::FamilyId::#family,
+                    domain: cq_gpu_runtime::scan_table::Domain {
+                        id: cq_gpu_runtime::scan_table::DomainId { namespace: #namespace, version: #version },
+                        carrier: cq_gpu_runtime::scan_table::Width::#width,
+                        equality: true,
+                        order: true,
+                    },
+                    block_rows: #block_rows,
+                    summaries: #summaries,
+                    upload: #upload,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Select the grouped conversion at DR-Publication: slots follow the
@@ -669,6 +735,17 @@ fn compile_stage(
     }
     // The loader, not the planner or translator, owns the input representation.
     // Record its uniform DeviceColumns adapter with the checked retype rewrite.
+    // Authored blocked relations (P6 C) are served by retained S1 scan blocks.
+    let blocked = if host || pipeline.blocks.is_empty() {
+        BTreeSet::new()
+    } else {
+        checked(
+            "blocks advice",
+            &structures,
+            syn::parse_str::<proc_macro2::TokenStream>(&pipeline.blocks)
+                .and_then(cq_structure_selection::blocked_relations),
+        )?
+    };
     for index in 0..structures.structures.entries.len() {
         let entry = &structures.structures.entries[index];
         if !host && matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) {
@@ -701,23 +778,39 @@ fn compile_stage(
                     .collect(),
             };
             let device_columns = cq_gpu_sequence::providers::declaration("device_columns");
+            let published = kernel
+                .published
+                .iter()
+                .any(|input| input.name == relation.name);
+            let tokens = if blocked.contains(&relation.name.to_string()) {
+                if published {
+                    return Err(Rejected {
+                        phase: "blocks advice",
+                        error: "a blocked relation is a scanned input, not a stage publication".into(),
+                        term: cpu_source.to_string(),
+                    });
+                }
+                let device_scan = cq_gpu_sequence::providers::declaration("device_scan");
+                quote!(providers { #device_scan } entry(#index) => @device_scan #input as ::cq_gpu_runtime::scan_table::DeviceScanTable<(#(#types,)*)>)
+            } else if published {
+                quote!(providers { #device_columns } entry(#index) => @device_columns #input as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
+            } else {
+                quote!(providers { #device_columns } entry(#index) => @device_columns #input as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
+            };
             structures = checked(
                 "loader host adapter",
                 &structures,
-                cq_structure_selection::retype(
-                    &structures,
-                    if kernel
-                        .published
-                        .iter()
-                        .any(|input| input.name == relation.name)
-                    {
-                        quote!(providers { #device_columns } entry(#index) => @device_columns #input as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*)>)
-                    } else {
-                        quote!(providers { #device_columns } entry(#index) => @device_columns #input as ::cq_gpu_runtime::DeviceColumns<'static, (#(#types,)*), ::cq_gpu_runtime::For>)
-                    },
-                ),
+                cq_structure_selection::retype(&structures, tokens),
             )?;
         }
+    }
+    if !blocked.is_empty() {
+        structures = checked(
+            "blocks advice",
+            &structures,
+            syn::parse_str::<proc_macro2::TokenStream>(&pipeline.blocks)
+                .and_then(|arguments| cq_structure_selection::choose_blocks(&structures, arguments)),
+        )?;
     }
     if !host {
         structures = checked(
@@ -982,6 +1075,10 @@ fn compile_stage(
                     .collect()
             }));
             sequential_bindings.push(quote!(let #field = &data.#field;));
+        } else if let Some(specs) = scan_specs(&planned.program, &analysis, &relation.name.to_string()) {
+            input_types.push(quote!(cq_gpu_runtime::scan_table::DeviceScanTable<#row>));
+            bindings.push(quote!(loader.bind_scan::<#row>(#table, #names, &[#(#specs),*])?));
+            sequential_bindings.push(quote!(let #field = data.#field.to_host()?;));
         } else {
             input_types
                 .push(quote!(cq_gpu_runtime::DeviceColumns<'static, #row, cq_gpu_runtime::For>));

@@ -16,6 +16,10 @@ pub struct Pipeline {
     pub physical: Vec<String>,
     #[serde(default)]
     pub structures: Vec<String>,
+    /// Authored `blocks(...)` scan-block bindings (P6 C), applied once the
+    /// loader binds those relations to the declared `device_scan` provider.
+    #[serde(default)]
+    pub blocks: String,
     /// A replay artifact already records every grade and output decision.
     #[serde(default)]
     pub complete: bool,
@@ -89,6 +93,7 @@ impl Pipeline {
             plan: String::new(),
             physical: Vec::new(),
             structures: Vec::new(),
+            blocks: String::new(),
             sequence: Vec::new(),
             complete: false,
             target: Target::Device,

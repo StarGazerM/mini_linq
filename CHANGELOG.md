@@ -13,6 +13,23 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P6 slice C: authored GPU blocked scans become recorded cooperative tile
+  scans. The new realization records are `TileScan`, `TileTest` and
+  `TileRead`, with the device tile helpers in `gpu-device-columns::tile` and
+  the printer in `cq-gpu-sequence-core::tiles`. The rules are
+  GPU-TilePredicate, GPU-NarrowCarrier and STR-ComparatorRows. A blocked scan
+  without a tile realization is now rejected instead of being printed as a
+  legacy read. `plain identity` block advice is the only route to device
+  opaque Rust. Canon entries with blocked key recipes require `comparator_rows`
+  providers, and every required capability is now checked, following P5Joins
+  r6. Only h06 changes, and only under `tpch/advice/p6c-blocks-*.json`. The
+  default advice is unchanged. Measured locally (7 rotated rounds, all exact):
+  resident h06 is 0.56-0.58x of R at SF1 and 0.62x (Bytes) / 0.67x (Plain) at
+  SF10. Process wall time is 1.30-1.59x slower because of host S1 encoding at
+  load. The device tile tests are split into `tile_scan` (library kernels) and
+  `tile_probe` (test-defined kernel), because a package's test-binary kernel
+  bundle shadows its library kernels.
+
 - P8 measures Masks against the unconditional Tree reducer on all 29 CPU TPC-H
   SF1 default kernels and the 30-scenario planners corpus. Masks stays default:
   Tree's supported-kernel geometric mean is 1.03541x, versus 1.26056x on the

@@ -940,6 +940,7 @@ record!(Contract {
 mod blocked_wire {
     use super::*;
     use crate::blocks::{Column, Source, Scan, Predicate, FieldRead, Read, Contract, Summary, Prune, Test, Translation, Strategy, ReadAction};
+    use crate::blocks::{CanonicalKeys, Operand};
     atoms!(Summary { None, MinMax });
     atoms!(Prune { None, MinMax });
     atoms!(Test { Encoded, DecodeCodes });
@@ -952,7 +953,22 @@ mod blocked_wire {
     record!(Predicate { input, source, columns, prune, test, strategy, translation, preserves });
     record!(FieldRead { representation, action });
     record!(Read { id, input, consumer, purpose, fields });
-    record!(Contract { sources, scans, predicates, reads });
+    record!(CanonicalKeys { input, fields, ordinary });
+    impl Wire for Operand {
+        fn read(input: ParseStream<'_>) -> syn::Result<Self> {
+            let tag: syn::Ident = input.parse()?;
+            match tag.to_string().as_str() {
+                "Owned" => Ok(Self::Owned { column: String::read(input)? }),
+                _ => Err(syn::Error::new_spanned(tag, "unknown blocked operand")),
+            }
+        }
+        fn emit(&self, tokens: &mut TokenStream) {
+            match self {
+                Self::Owned { column } => { syn::Ident::new("Owned", Span::call_site()).to_tokens(tokens); column.emit(tokens); }
+            }
+        }
+    }
+    record!(Contract { sources, scans, predicates, canonical_keys, reads });
 }
 impl Wire for Consumer {
     fn read(input: ParseStream<'_>) -> syn::Result<Self> {

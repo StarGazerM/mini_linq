@@ -806,11 +806,11 @@ fn blocked_fixture() -> structures::Program {
         structures {
             providers {
                 input = ScanProvider { reads [], build typed };
-                sort = Dedup { reads [distinct], build inferred, shared };
+                by_value = Dedup { reads [distinct, comparator_rows], build inferred, shared };
             }
             r host scan = @input as ScanProvider [];
             r host result(p) = @input as ScanProvider [x];
-            g head = @sort as Dedup;
+            g head = @by_value as Dedup;
             r repr = positions { R lineage { x -> a, y -> b } } owned [];
             p repr = positions { R lineage { x -> a, y -> b } } owned [];
             g repr = positions { R lineage { x -> a, y -> b } } owned [];
@@ -863,15 +863,25 @@ fn blocked_fixture() -> structures::Program {
             ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Owned }),
         ].into(),
     });
-    program.encoded.blocks.reads.insert("canon:g".into(), b::Read {
-        id: 3, input: "g".into(), consumer: Consumer::Relational("g".into()),
-        purpose: ReadPurpose::PreserveCarrier,
+    program.encoded.blocks.canonical_keys.insert("g".into(), b::CanonicalKeys {
+        input: "g".into(),
         fields: [
             ("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Ordinal }),
             ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Ordinal }),
         ].into(),
+        ordinary: BTreeMap::new(),
     });
     program
+}
+
+#[test]
+fn blocked_canonicalization_requires_capability_not_provider_spelling() {
+    let mut program = blocked_fixture();
+    check(&program).unwrap();
+    for declaration in &mut program.structures.providers.declarations {
+        declaration.facts.reads.retain(|capability| capability != &structures::Capability::ComparatorRows);
+    }
+    assert!(check(&program).is_err());
 }
 
 #[test]

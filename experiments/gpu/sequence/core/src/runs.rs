@@ -268,6 +268,33 @@ pub fn record_representation(
             }
         }
     }
+    // Blocked S1 columns (P6 C): only an authored identity declaration makes a
+    // source column's device read a logical value; every other blocked column
+    // is an ordinal or residual code, whatever its input schema spells.
+    let encoded = &source.structures.encoded;
+    for definition in &source.structures.physical.program.definitions {
+        let cq_lang_structures::physical::Operator::Rename(rename) = &definition.operator else {
+            continue;
+        };
+        let Some(scan) = encoded.blocks.scans.get(&symbol_name(&definition.name)) else {
+            continue;
+        };
+        for mapping in &rename.mapping {
+            let column = symbol_name(&mapping.target);
+            let representation = scan.columns.get(&symbol_name(&mapping.source)).ok_or_else(|| {
+                syn::Error::new_spanned(&definition.name, "GPU-Representation: blocked column has no representation")
+            })?;
+            let declaration = &encoded.obligations.declarations
+                [&encoded.records.representations[representation].declaration];
+            if declaration.identity {
+                target.representation.encoded.remove(&column);
+                target.representation.identity.insert(column);
+            } else {
+                target.representation.identity.remove(&column);
+                target.representation.encoded.insert(column);
+            }
+        }
+    }
     for entry in &source.structures.structures.entries {
         let Structure::Built { keyed, .. } = &entry.structure else {
             continue;
@@ -313,7 +340,7 @@ mod tests {
                 result = let canon project bound keep {value};
                 return result as answer(value);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,)> [];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
@@ -435,7 +462,7 @@ mod tests {
                 result = let canon project selected keep {x,y};
                 return result as answer(x,y);
             }
-            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
+            structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident, comparator_rows], build inferred }; }
                 r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;

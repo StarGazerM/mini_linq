@@ -5,6 +5,8 @@
 pub mod expansions;
 pub mod nvtx;
 
+pub use gpu_device_columns::{scan, scan_table, tile};
+
 pub use gpu_device_columns::{
     decode_stripe, decode_tile_pair, decode_value, detect_integer_codec, encode_value, Bounds,
     Buffer, Codec, ColumnView, DecodeValue, Delta, DeviceColumns, Dictionary, DictionaryCodec,

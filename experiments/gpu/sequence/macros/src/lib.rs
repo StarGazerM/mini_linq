@@ -260,7 +260,7 @@ mod tests {
                     radix_set = ::gpu_datalog_runtime::RadixLayout<
                         ::gpu_datalog_runtime::radix_run::EncodedRow, (),
                         ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()
-                    > { reads [distinct, resident], build inferred };
+                    > { reads [distinct, resident, comparator_rows], build inferred };
                     grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> {
                         reads [exact, range, membership], build typed
                     };

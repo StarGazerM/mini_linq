@@ -336,6 +336,43 @@ these laws do not assert cooperative tile scheduling, payload-read pruning,
 default codec selection or retirement of existing logical inverse sites.
 Legacy FastLanes is not a selectable S1 family.
 
+\paragraph{Cooperative tile scans (P6 C, authored).}
+A GPU realization $T$ of a Structures blocked scan over source $S$ records
+its vector size $V$, lanes $L$, rows per lane $k$, the leased columns, the
+tests of the scan's Sequence run and the identity reads of its opaque
+consumers. Lane $l$ of the block owning vector $v$ holds rows
+$vV+jL+l$, $j<k$, below the live count; its survivor positions are that
+lane mask. Window and point tests translate closed operands once into the
+column's ordinal domain ($\tau$); each vector derives its saturated residual
+window from its own frame (RT-Translate). A Formula test compares global
+ordinals of one compatible domain.
+\begin{mathpar}
+\Rule{GPU-TilePredicate}{T\text{ checked}\quad L\cdot k=V\quad
+ V\mid B_S\quad \mathsf{tests}(T)=\mathsf{run}(S)\\
+ \mathsf{summary}(t)\Rightarrow\mathsf{prune}(t)=\mathsf{MinMax}}
+ {\mathsf{mask}_T(v)=\{p\in v\mid p<\mathsf{live}(S),\ \bigwedge_{t}E_t(\mathsf{code}(p),\tau(t))\}
+  \quad \mathsf{class}(v)=\mathsf{Disqualified}\Rightarrow\mathsf{loads}(v)=\emptyset}
+\Rule{GPU-NarrowCarrier}{r\in\mathsf{reads}(T)\quad
+ \mathsf{purpose}(r)=\mathsf{OpaqueRustRead}\quad \mathsf{identity}(\mathsf{decl}(r))}
+ {\text{tested codes are loaded and compared at the vector's native width}\quad
+  \mathsf{value}(r)=\mathsf{ord}^{-1}_D(\mathsf{code})\text{ once, at its first consumer}}
+\Rule{STR-ComparatorRows}{\mathsf{reads}(P)\ni\mathsf{comparator\_rows}\quad
+ K\text{ the separately supplied complete logical key of carriers }C}
+ {\mathsf{canon}_P(C)\text{ keeps exactly one original carrier per }K\text{-equality class of }C}
+\end{mathpar}
+Identity is an authored binder premise for frameless Plain value ordinals
+only; framed Bytes residuals and dictionary codes never declare it.
+STR-ComparatorRows partitions carriers by their complete logical key, not
+by carrier or position equality. CPU \code{sort} discharges it with the
+supplied comparator. GPU \code{radix\_set} declares it only because its
+recorded key recipe packs the complete row into injective complete-row
+codes: equal keys have equal codes and conversely. Its use on a blocked spine
+additionally requires the checked correspondence between that complete key
+and the retained carrier. This slice realizes only keyless fused folds over
+one blocked scan. Join, store, carrier-publication and final-answer tile
+consumers reject before printing. Duplicate or reordered positions exist
+only behind such consumers, so they do not arise here.
+
 \paragraph{Membership representation law.}
 Selection records the \code{dense\_membership} token
 \code{DenseMembership<K,B>} for a membership store with one stored key column
@@ -950,9 +987,12 @@ original requirement, rejecting simultaneous edits to it and its selected
 packets. The printer emits the selected actions; it does not infer consumers
 or reconstruct ignored values.
 
-Canonical reads name the canonical result with purpose
-\code{PreserveCarrier} and action \code{Ordinal}, covering every noncomputed
-logical heading field. They authorize no inverse codec. Canonical equality is
+Canonical key recipes name the canonical result, covering every heading field
+with an \code{Ordinal} action or its recorded owned computed operand.
+They authorize no inverse codec and are not unconditional executable reads:
+Structures owns the key layout, while Sequence owns each actual \code{Canon}
+execution site. Removing an execution site does not remove its source recipe.
+Canonical equality is
 equality of the full logical heading (ordinal keys plus owned computed values),
 not equality of occurrence positions; equal witnesses at different positions
 still deduplicate by value. Comparator rows are explicitly selected for this

@@ -41,7 +41,7 @@ fn lookup_program(body: proc_macro2::TokenStream, grades: proc_macro2::TokenStre
             r = let rename R@1 {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r = @provider as Provider [a];
@@ -79,7 +79,7 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
             selected = pipe select j if (x > 0);
             projected = let canon project selected keep {b};
             return projected as answer(b);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r = @provider as Provider [a];
@@ -188,7 +188,7 @@ fn membership_reads_do_not_allocate_payload_scratch() {
                 r = let rename R@1 {a -> a};
                 j = let canon #operation eager [a] l,r;
                 return j as answer(a);
-            } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 l host scan = @reader as Reader [];
                 r host scan = @reader as Reader [];
                 r = @provider as Provider [a];
@@ -218,7 +218,7 @@ fn later_lookup_keys_are_live_across_an_earlier_payload() {
             second = pipe probe first [x] first,s;
             projected = let canon project second keep {c};
             return projected as answer(c);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             s host scan = @reader as Reader [];
@@ -246,7 +246,7 @@ fn union_retains_every_arm_without_reusing_allocations() {
             j = let probe first [a] l,r;
             out = let canon union j,j;
             return out as answer(a,b);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r = @provider as Provider [a];
@@ -278,7 +278,7 @@ fn a_host_consumer_requires_expanded_rows_instead_of_virtual_ranges() {
             j = let canon probe first [a] l,r;
             guarded = pipe guard j if (a % 2 == 0);
             return guarded as answer(a,b);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r = @provider as Provider [a];
