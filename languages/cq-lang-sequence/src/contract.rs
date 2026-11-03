@@ -240,7 +240,7 @@ fn check_native_read(
         Capability::Range => matches!(read, HostRead::Range | HostRead::Ordered),
         Capability::Ordered => read == HostRead::Ordered,
         Capability::Candidates => read == HostRead::Candidates,
-        Capability::Resident | Capability::Distinct => false,
+        Capability::Resident | Capability::Distinct | Capability::Positions => false,
     };
     if !covers || !matches!(read, HostRead::Membership | HostRead::Exact) {
         return fail(

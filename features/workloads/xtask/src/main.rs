@@ -75,6 +75,16 @@ fn run() -> Result<()> {
         }
         "explain" => explain::run(arguments, &repository_root()),
         "bench" => bench::run(arguments),
+        "compile-tpch" => {
+            #[cfg(feature = "oracle")]
+            {
+                tpch::compile_all(arguments)
+            }
+            #[cfg(not(feature = "oracle"))]
+            {
+                rerun_with_oracle("compile-tpch", &arguments)
+            }
+        }
         "profile" => {
             #[cfg(feature = "oracle")]
             {
@@ -550,6 +560,7 @@ MiniLinq workload tasks
   cargo xtask explain CASE [--through STAGE]
   cargo xtask bench [--scale N] [--seed N]
   cargo xtask bench --tpch --sf 0.1|1|10 [--runs N] [--cap-seconds N] [--query NAME] [--config NAME[,NAME...] | --reduction-comparison | --index-comparison]
+  cargo xtask compile-tpch
   cargo xtask profile --tpch --sf 0.1|1|10 [--query NAME] [--config NAME] [--output DIR]
 
 SCENARIO is coverage, empty-input, no-match, or all.
@@ -560,6 +571,9 @@ Bench always builds and runs in the release profile; time is never asserted.
 The synthetic bench reports scales N, 2N and 4N (default N=128).
 The TPC-H-derived bench enables the DuckDB oracle, caches data under target/,
 and reports warm medians for the selected scale factor.
+compile-tpch builds every catalog kernel in release and checks default/par route
+metadata, without generating/loading data or running queries. It accepts no options.
+This opt-in Main batch gate is not part of the default regression inventory.
 Runs must be positive and odd (1 is useful for smoke checks; default 5).
 --cap-seconds bounds configuration workers, including load and counting, not compilation or DuckDB;
 expired configurations report timeout with no query timing. The default is no cap.

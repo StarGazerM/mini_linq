@@ -147,3 +147,166 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
         );
     }
 }
+
+#[test]
+fn positional_selection_sharded_index_executes_exact_answers() {
+    // Minimize retail_h07_block's positional filter with a whole-relation
+    // consumer: zero-key probes retain a Selection, not a zero-column index.
+    // This is the shape exposed by the introducing zero-key-read cutover.
+    let physical = syn::parse_quote! {
+        physical {
+            relation Lineitem(order_key:i64,supplier_key:i64,ship_date:i32);
+            relation Orders(order_key:i64,customer_key:i64);
+            lineitem = pipe rename Lineitem@0 {
+                order_key -> order_key,supplier_key -> supplier_key,ship_date -> ship_date
+            };
+            orders = pipe rename Orders@1 {
+                order_key -> wanted_key,customer_key -> customer_key
+            };
+            selected = let range select lineitem if
+                (ship_date >= 19950101, ship_date <= 19961231);
+            expanded = pipe probe first [] orders,selected;
+            joined = pipe guard expanded if (*order_key == *wanted_key);
+            answer = let canon project joined keep {order_key,supplier_key,customer_key};
+            return answer as answer(order_key,supplier_key,customer_key);
+        }
+    };
+    run_positional_selection(physical);
+}
+
+#[test]
+#[ignore = "KP-1/KP-2: routed Selection publication emits an unavailable Build and incompatible row carrier"]
+fn kp_1_kp_2_key_partitioned_positional_selection() {
+    run_positional_selection(syn::parse_quote! {
+        physical {
+            relation Lineitem(order_key:i64,supplier_key:i64,ship_date:i32);
+            relation Orders(order_key:i64,customer_key:i64);
+            lineitem = pipe rename Lineitem@0 {
+                order_key -> order_key,supplier_key -> supplier_key,ship_date -> ship_date
+            };
+            orders = let rename Orders@1 {
+                order_key -> order_key,customer_key -> customer_key
+            };
+            selected = let range select lineitem if
+                (ship_date >= 19950101, ship_date <= 19961231);
+            expanded = pipe probe first [order_key] selected,orders;
+            keys = pipe project expanded keep {order_key,customer_key};
+            joined = pipe probe first [order_key] keys,selected;
+            answer = let canon project joined keep {order_key,supplier_key,customer_key};
+            return answer as answer(order_key,supplier_key,customer_key);
+        }
+    });
+}
+
+fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Program) {
+    let structures = cq_structure_selection::compile_with(
+        &physical,
+        quote::quote!(positional(Lineitem, Orders)),
+    )
+    .unwrap();
+    let selection = structures
+        .structures
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.name == "selected"
+                && matches!(
+                    entry.structure,
+                    cq_lang_sequence::structures::Structure::Selection { .. }
+                )
+        })
+        .expect("fixture must retain the positional Selection")
+        .clone();
+    // Membership does not certify a position snapshot. The legality checker
+    // must reject this authored substitution without rerunning selection.
+    let mut invalid = structures.clone();
+    let sharded_index =
+        cq_lang_sequence::structures::provider::base::declaration("sharded_index");
+    invalid.structures.providers.declare(&sharded_index);
+    for entry in &mut invalid.structures.entries {
+        if entry.name == "selected"
+            && let cq_lang_sequence::structures::Structure::Selection { provider, .. } =
+                &mut entry.structure
+        {
+            *provider = sharded_index.instance();
+        }
+    }
+    let error = cq_lang_sequence::structures::contract::check(&invalid).unwrap_err();
+    assert!(error.to_string().contains("STR-Positions"), "{error}");
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let catalog = cq_sequence_tasks::catalog();
+    let mut missing_positions = catalog.clone();
+    missing_positions.providers.retain(|entry| {
+        !catalog.facts(&entry.provider).unwrap().reads.contains(
+            &cq_lang_sequence::structures::provider::Capability::Positions,
+        )
+    });
+    assert!(
+        cq_sequence_plan::rewrites::select_from_catalog(&structures, &missing_positions).is_err(),
+        "a catalog without positions cannot substitute an ordinary membership provider"
+    );
+    let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
+    assert!(
+        target.structures.structures.entries.contains(&selection),
+        "the positional Selection must not be replaced with a membership-only sharded index"
+    );
+    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let planned =
+        cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
+    let facts =
+        cq_lang_sequence::check_grading(&planned.program, &cq_sequence_tasks::machine()).unwrap();
+    let expression = cq_sequence_tasks::translate(&planned.program, &facts).unwrap();
+    let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
+        cq_testkit::rustc::linked_dependency::<rayon::ThreadPool>("rayon", "rayon::ThreadPool"),
+        cq_testkit::rustc::linked_dependency::<cq_sequence_tasks::Config>(
+            "cq_sequence_tasks",
+            "cq_sequence_tasks::Config",
+        ),
+        cq_testkit::rustc::linked_dependency::<cq_storage::sharded::FullKey>(
+            "cq_storage",
+            "cq_storage::sharded::FullKey",
+        ),
+        cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
+            "cq_load",
+            "cq_load::ColumnAt<0>",
+        ),
+    ]);
+    runtime.run(
+        &quote::quote! {
+            #![allow(non_snake_case, unused_variables)]
+            fn main() {
+                // Keep excluded rows between selected positions, duplicate
+                // witnesses, both inclusive boundaries, and a missing order.
+                let populated = [
+                    (10i64, 1i64, 19950101i32),
+                    (11, 2, 19941231),
+                    (12, 3, 19961231),
+                    (10, 1, 19950101),
+                    (13, 4, 19970101),
+                    (14, 5, 19960101),
+                    (15, 6, 19960101),
+                ];
+                let Orders = &[(10i64, 100i64), (11, 101), (12, 102), (13, 103), (14, 104)][..];
+                for threads in [1, 4] {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads).build().unwrap();
+                    for Lineitem in [&populated[..], &[][..]] {
+                        let mut actual: Vec<_> = pool.install(|| {
+                            (#expression).into_iter()
+                                .map(|(order, supplier, customer)| (*order, *supplier, *customer))
+                                .collect()
+                        });
+                        actual.sort();
+                        let expected = if Lineitem.is_empty() {
+                            vec![]
+                        } else {
+                            vec![(10, 1, 100), (12, 3, 102), (14, 5, 104)]
+                        };
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+        .to_string(),
+    );
+}

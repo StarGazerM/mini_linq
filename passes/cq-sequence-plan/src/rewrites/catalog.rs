@@ -309,9 +309,11 @@ fn select(
                 required.push(Capability::Range);
                 "rows"
             }
-            Structure::Selection { .. }
-            | Structure::KeySet { .. }
-            | Structure::JoinFilter { .. } => {
+            Structure::Selection { .. } => {
+                required.push(Capability::Positions);
+                "selection"
+            }
+            Structure::KeySet { .. } | Structure::JoinFilter { .. } => {
                 required.push(Capability::Membership);
                 "set"
             }

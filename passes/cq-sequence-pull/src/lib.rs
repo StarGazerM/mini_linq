@@ -65,6 +65,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         "dense_membership",
         "positional_keyset",
         "join_filter_membership",
+        "selection",
         // Formal rule PL-Distinct: canonical rows records. Exists is the
         // 0-ary set, whose build already yields the distinct rows.
         "sort",

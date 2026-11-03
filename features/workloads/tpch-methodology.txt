@@ -16,6 +16,29 @@ exactness-contract limitation. tpch/numeric_contract.txt gives the details. Stri
 LIKE patterns, HAVING, AVG composition and COUNT DISTINCT are not falsely
 reported missing merely because their SQL keywords are absent.
 
+Compile-only CPU gate
+From features/workloads, run:
+  cargo xtask compile-tpch
+Or from the repository root:
+  cargo run --locked --manifest-path features/workloads/xtask/Cargo.toml --features oracle -- compile-tpch
+This opt-in Main batch gate builds all 29 catalog kernels as ordinary release
+timing workers, including both default and par (Sequence Tasks) and every other
+authored CPU configuration. It uses the same sources, compiler pipeline and
+target/bench crate/build cache as the benchmark; CARGO_TARGET_DIR, when set,
+places compiled workers under its tpch-workers subdirectory. It builds neither
+counting nor profiling variants. Each worker's metadata-only describe command
+must advertise default and par; a build or missing-route failure fails the gate.
+The xtask enables its existing oracle feature for shared benchmark plumbing,
+but does not invoke DuckDB, dbgen, projection export, data loaders, or queries.
+No SF1 dataset (or any scale-factor data) is required. Unlike bench --runs 0,
+this is compilation coverage, not an exact-answer or runtime gate.
+The command accepts no options, so --query/--config cannot accidentally narrow
+the catalog coverage. New CASES entries are included automatically.
+Keep this release-build matrix in Main's explicit batch, outside the default
+regression inventory and quick tier: compiling all authored routes in 29
+independent workers is substantially more expensive than a focused contract
+test. Run it before CPU benchmark batches and after compiler/Tasks changes.
+
 Data and correctness
 The xtask oracle uses DuckDB tpch CALL dbgen at SF 0.1, SF 1 and SF 10. Generated
 DuckDB tables, per-query projected Parquet files, manifests, executable crates,

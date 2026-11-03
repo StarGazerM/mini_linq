@@ -183,6 +183,42 @@ fn describe_with(
     })
 }
 
+/// Compile the complete CPU catalog before any data preparation or query execution.
+/// Each ordinary timing worker contains every authored configuration, so this
+/// covers default and Tasks/par without a second, compile-only query shell.
+pub(super) fn compile_all(arguments: Vec<String>) -> Result<()> {
+    if !arguments.is_empty() {
+        return Err("compile-tpch accepts no options; it builds every catalog kernel".into());
+    }
+    let root = crate::repository_root();
+    for case in cq_workloads::tpch::CASES {
+        let source = root.join(
+            case.rust_path
+                .strip_prefix("workloads/")
+                .unwrap_or(case.rust_path),
+        );
+        // `describe` only reads the compiled worker's metadata; it never loads
+        // projections, calls dbgen, or executes any query configuration.
+        let query = describe(&root, &source, false)?;
+        require_compile_routes(&query.name, &query.configs)?;
+        println!("compiled {}: default,par (all authored routes)", query.name);
+    }
+    println!(
+        "compiled all {} CPU TPC-H-derived kernels; no data loaded or queries executed",
+        cq_workloads::tpch::CASES.len()
+    );
+    Ok(())
+}
+
+fn require_compile_routes(name: &str, configs: &[String]) -> Result<()> {
+    for required in ["default", "par"] {
+        if !configs.iter().any(|config| config == required) {
+            return Err(format!("{name} requires a {required} configuration for compile-tpch").into());
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn run(arguments: Vec<String>) -> Result<()> {
     let options = Options::parse(arguments)?;
     let root = crate::repository_root();
@@ -786,6 +822,29 @@ fn answer_set(connection: &Connection, sql: &str) -> Result<Answers> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compile_gate_requires_both_cpu_routes() {
+        for configs in [vec![], vec!["default"], vec!["par"], vec!["transfer"]] {
+            let configs = configs.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(require_compile_routes("kernel", &configs).is_err());
+        }
+        let configs = ["default", "par", "transfer"].map(str::to_owned);
+        assert!(require_compile_routes("kernel", &configs).is_ok());
+    }
+
+    #[test]
+    fn compile_gate_rejects_data_and_subset_options_before_building() {
+        for args in [
+            vec!["--sf", "1"],
+            vec!["--query", "retail_h07_block"],
+            vec!["--config", "default"],
+            vec!["--runs", "0"],
+        ] {
+            let error = compile_all(args.into_iter().map(str::to_owned).collect()).unwrap_err();
+            assert!(error.to_string().contains("accepts no options"));
+        }
+    }
+
     #[test]
     fn strict_scale_and_sampling_options() {
         let parse = |args: &[&str]| Options::parse(args.iter().map(|s| (*s).to_owned()).collect());

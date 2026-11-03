@@ -72,7 +72,7 @@ pub fn declarations() -> Vec<Declaration> {
         group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> {
             reads [], build typed
         };
-        selection = ::cq_storage::Selection<_> { reads [], build typed };
+        selection = ::cq_storage::Selection<_> { reads [positions], build typed, shared };
     });
     providers.declarations
 }

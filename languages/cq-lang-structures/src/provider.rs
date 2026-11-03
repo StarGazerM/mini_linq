@@ -82,7 +82,7 @@ pub mod kw {
     syn::custom_keyword!(statistics);
 }
 
-/// Declared read capabilities, discharged against Sequence obligations.
+/// Declared provider capabilities, discharged against Structures and Sequence obligations.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Capability {
     Exact,
@@ -103,10 +103,14 @@ pub enum Capability {
     /// per-run counts) and membership of `(prefix, v)`. `Range` alone never
     /// discharges this obligation of a PH-Smallest candidate side.
     Candidates,
+    /// Immutable base-occurrence selection: construct with `from_positions`,
+    /// narrow by a positional predicate, and expose survivor positions and rows.
+    /// This is not membership of logical keys or canonical row storage.
+    Positions,
 }
 
 impl Capability {
-    const ALL: [(Capability, &'static str); 7] = [
+    const ALL: [(Capability, &'static str); 8] = [
         (Capability::Exact, "exact"),
         (Capability::Range, "range"),
         (Capability::Membership, "membership"),
@@ -114,6 +118,7 @@ impl Capability {
         (Capability::Distinct, "distinct"),
         (Capability::Resident, "resident"),
         (Capability::Candidates, "candidates"),
+        (Capability::Positions, "positions"),
     ];
 
     fn name(&self) -> &'static str {
@@ -1150,6 +1155,15 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
             .providers
             .facts(provider)
             .expect("checked instance");
+        // Formal rule STR-Positions: a selection's recorded token supplies its positional protocol.
+        if matches!(&entry.structure, Structure::Selection { .. })
+            && !facts.reads(&Capability::Positions)
+        {
+            return error(
+                &provider.token,
+                "STR-Positions: selection requires the declared positions capability",
+            );
+        }
         if matches!(
             &entry.structure,
             Structure::Host {

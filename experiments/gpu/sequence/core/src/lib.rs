@@ -146,6 +146,10 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
         cq_lang_structures::provider::base::declaration("sorted_run"),
         vec![vec!["host".into()]],
     );
+    catalog.register(
+        cq_lang_structures::provider::base::declaration("selection"),
+        vec![vec!["host".into()]],
+    );
     // Formal rule PL-Distinct: the device sort/unique build of a canonical
     // rows record. Its scan is the publication itself.
     catalog.register(providers::declaration("radix_set"), levels.clone());

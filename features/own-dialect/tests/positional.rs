@@ -192,7 +192,7 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
                     last = let range select second if (x < 4);
                     return last as answer(x,y);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; selection = ::cq_storage::Selection<_> { reads [], build typed }; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; selection = ::cq_storage::Selection<_> { reads [positions], build typed, shared }; }
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     first read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     second read = positional base R lineage{x -> a,y -> b} column b marker ::cq_load::ColumnAt<1> predicate physical;

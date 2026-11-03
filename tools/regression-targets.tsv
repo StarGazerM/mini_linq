@@ -11,6 +11,7 @@ cq-sequence-conformance	manifest-target-test	lowering	features/sequence-conforma
 cq-sequence-conformance	manifest-target-test	pull_translation	features/sequence-conformance/Cargo.toml
 cq-sequence-conformance	manifest-target-test	sequence_conformance	features/sequence-conformance/Cargo.toml
 cq-sequence-tasks-macros	manifest-target-test	planning	features/sequence-tasks/macros/Cargo.toml
+cq-sequence-tasks	manifest-target-test	provider_selection	features/sequence-tasks/Cargo.toml
 mini-linq	test	physical_query	facade/mini-linq/tests/physical_query.rs
 mini-linq-macros	lib	macro_inputs	facade/mini-linq-macros/src/lib.rs
 cq-stage	test	protocol	facade/cq-stage/tests/protocol.rs
