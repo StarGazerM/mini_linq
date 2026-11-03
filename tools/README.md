@@ -493,6 +493,23 @@ uses `nice -n 10`; it never takes the GPU lock or runs a built executable.
 `--bench` binary names. Rustdoc's separate `--no-run --persist-doctests` path
 compiles doctests without execution. Compile-fail checks happen locally.
 
+For a benchmark-only revision whose tests need not be built, add `--no-tests`:
+
+```sh
+bash "$wt/tools/remote_gpu/bundle.sh" /path/to/reference-worktree \
+  "$wt/target/remote-gpu/reference-bench.tar.zst" --no-tests \
+  --bench cq-gpu-tpch doop-gpu srd-doop-gpu
+```
+
+This skips both test-harness and doctest compilation; the three default binaries,
+additional named binaries, source snapshot, generated runtime fixtures and
+runtime dependencies are still included. Its manifest records empty `tests` and
+`steps` arrays: it is not a GPU-gate bundle. Use `--gate-bundles none`, or exclude
+that bundle's index when mixing it with full-gate bundles. Session preflight
+rejects a selected full gate for a benchmark-only archive before provisioning;
+the pod runner independently rejects full-gate execution rather than treating
+missing tests as a pass.
+
 The archive contains `manifest.json` (commit, commands, working directories,
 timings, per-file SHA256), `bin/`, `lib/`, the complete nonignored source/fixture
 snapshot in `source/`, local build logs, downloader dependencies, and the pod

@@ -22,6 +22,8 @@ def main():
     parser.add_argument('worktree', type=Path)
     parser.add_argument('output', type=Path)
     parser.add_argument('--bench', nargs='+', action='extend', default=[])
+    parser.add_argument('--no-tests', action='store_true',
+                        help='Build a benchmark-only bundle without test harnesses or doctests')
     args = parser.parse_args()
     root, output = args.worktree.resolve(), args.output.absolute()
     workspace = root / 'experiments/gpu'
@@ -86,8 +88,9 @@ def main():
 
         oxide = ['cargo', '+1.99.1', 'oxide']
         common = ['--arch', 'sm_89', '--materialize-cubin', '--', '--release', '--message-format=json']
-        tests = build('crates-build', oxide + ['test'] + common + ['--no-run'] +
-                      [arg for package in PACKAGES for arg in ['-p', package]])
+        tests = [] if args.no_tests else build(
+            'crates-build', oxide + ['test'] + common + ['--no-run'] +
+            [arg for package in PACKAGES for arg in ['-p', package]])
         binaries = sorted(set(['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu'] + args.bench))
         built = build('binaries-build', oxide + ['build'] + common +
                       [arg for binary in binaries for arg in ['--bin', binary]])
@@ -101,7 +104,7 @@ def main():
             manifest['tests'].append(dict(argv=[destination],
                 cwd=str(Path(package['manifest_path']).parent), package=package['name']))
             executables.append(Path(artifact['executable']))
-        if not manifest['tests']:
+        if not args.no_tests and not manifest['tests']:
             raise RuntimeError('No test harnesses were enumerated')
         for artifact in built:
             name = artifact['target']['name']
@@ -117,7 +120,7 @@ def main():
         # Cargo --no-run omits doctests. rustdoc has its own compile-only mode;
         # persist those executables locally rather than invoking a test runner.
         # Keep package directories separate because rustdoc names can collide.
-        for package_name in PACKAGES:
+        for package_name in ([] if args.no_tests else PACKAGES):
             package = next(p for p in packages.values() if p['name'] == package_name)
             if not any(t.get('doctest') for t in package['targets']):
                 continue
@@ -193,7 +196,7 @@ def main():
         subprocess.run(['python3', '-m', 'pip', 'install', '--disable-pip-version-check',
                         '--only-binary=:all:', '--target', str(stage / 'hf'),
                         'huggingface_hub==1.1.5'], check=True)
-        manifest['steps'] = [
+        manifest['steps'] = [] if args.no_tests else [
             dict(name='crates', commands=manifest['tests']),
             dict(name='tpch-h05-sf10-ceiling', argv=['bin/cq-gpu-tpch', '{results}/gpu-gate-h05-sf10.json',
                  '--query', 'h05', '--scale', 'sf10', '--mode', 'advised']),

@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import bundle as bundle_builder
 import data_manifest
 import pod_gate
 import seed_volume
@@ -61,6 +62,71 @@ class MirrorTests(unittest.TestCase):
             with patch.object(sys, 'argv', ['seed', 'owner/data', revision, str(manifest), str(root)]), \
                  patch.object(subprocess, 'run', side_effect=AssertionError('must not download')):
                 seed_volume.main()
+
+
+class BundleTests(unittest.TestCase):
+    def test_no_tests_builds_only_binaries_and_emits_no_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / 'experiments/gpu'
+            target = workspace / 'target'
+            target.mkdir(parents=True)
+            (root / 'fixture.txt').write_text('runtime source')
+            names = ['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu']
+            for name in names:
+                (target / name).write_bytes(b'executable fixture')
+            metadata = dict(target_directory=str(target), packages=[
+                dict(id=name, name=name, manifest_path=str(workspace / name / 'Cargo.toml'), targets=[])
+                for name in names])
+            archive_manifest = {}
+            oxide_commands = []
+
+            def check_output(argv, **kwargs):
+                if argv[0] == 'git':
+                    return 'commit\n' if 'rev-parse' in argv else b'fixture.txt\0'
+                if argv[0] == 'cargo':
+                    return json.dumps(metadata)
+                if argv[0] == 'ldd':
+                    return 'libc.so.6 => /lib/libc.so.6 (0x0)\n'
+                raise AssertionError(argv)
+
+            def run(argv, **kwargs):
+                if 'oxide' in argv:
+                    oxide_commands.append(argv)
+                    self.assertEqual(argv[argv.index('oxide') + 1], 'build')
+                    for name in names:
+                        kwargs['stdout'].write(json.dumps(dict(reason='compiler-artifact',
+                            executable=str(target / name), target=dict(name=name))) + '\n')
+                elif argv[0] == 'tar':
+                    stage = Path(argv[argv.index('-C') + 1])
+                    archive_manifest.update(json.loads((stage / 'manifest.json').read_text()))
+                    self.assertEqual((stage / 'source/fixture.txt').read_text(), 'runtime source')
+                    Path(argv[argv.index('-cf') + 1]).write_bytes(b'archive fixture')
+                elif argv[0] not in ('flock', 'python3'):
+                    raise AssertionError(argv)
+                return subprocess.CompletedProcess(argv, 0)
+
+            with patch.object(sys, 'argv', ['bundle', str(root), str(root / 'bundle.tar.zst'), '--no-tests']), \
+                 patch.object(subprocess, 'check_output', side_effect=check_output), \
+                 patch.object(subprocess, 'run', side_effect=run), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                bundle_builder.main()
+            self.assertEqual(len(oxide_commands), 1)
+            self.assertEqual(archive_manifest['tests'], [])
+            self.assertEqual(archive_manifest['steps'], [])
+            self.assertEqual(set(archive_manifest['binaries']), set(names))
+            self.assertEqual([build['name'] for build in archive_manifest['builds']], ['binaries-build'])
+
+    def test_pod_runner_rejects_full_gate_without_tests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'manifest.json').write_text(json.dumps(dict(commit='test', steps=[])))
+            with patch.object(sys, 'argv', ['pod-gate', '--bundle', str(root),
+                    '--results', str(root / 'results')]), \
+                 patch.object(subprocess, 'check_output', side_effect=AssertionError('must reject before GPU checks')), \
+                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                pod_gate.main()
+            self.assertEqual(error.exception.code, 2)
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -118,7 +184,7 @@ class BenchmarkTests(unittest.TestCase):
 
 
 class SessionTests(unittest.TestCase):
-    def exercise(self, mode, options=(), bundle_count=1):
+    def exercise(self, mode, options=(), bundle_count=1, benchmark_only=False, reject_gate=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             key, token, bundle, manifest = [root / name for name in ['key', 'token', 'bundle.tar.zst', 'SHA256SUMS']]
@@ -136,7 +202,8 @@ class SessionTests(unittest.TestCase):
                 if argv[0] == 'hf':
                     return '{"user":"tester"}'
                 if argv[0] == 'tar':
-                    return b'{"binaries":{"cq-gpu-tpch":"bin/cq-gpu-tpch"},"files":{"source/driver.py":"hash"}}'
+                    return json.dumps(dict(binaries={'cq-gpu-tpch': 'bin/cq-gpu-tpch'},
+                        files={'source/driver.py': 'hash'}, steps=[] if benchmark_only else [{'name': 'crates'}]))
                 if argv[:3] == ['runpodctl', 'pod', 'create'] and '--help' in argv:
                     return '--min-cuda-version --network-volume-id --wait-timeout --env'
                 raise AssertionError(argv)
@@ -197,6 +264,13 @@ class SessionTests(unittest.TestCase):
                  patch.object(signal, 'signal', side_effect=lambda sig, handler: handlers.update({sig: handler})), \
                  patch.object(os, 'killpg'), contextlib.redirect_stdout(io.StringIO()), \
                  contextlib.redirect_stderr(io.StringIO()):
+                if reject_gate:
+                    with self.assertRaises(SystemExit) as error:
+                        session.main()
+                    self.assertEqual(error.exception.code, 2)
+                    self.assertEqual(executed, [])
+                    self.assertEqual(timer, {})
+                    return None, None
                 code = session.main()
             self.assertEqual(deletes, ['test-pod'])
             self.assertEqual(timer['seconds'], 3600)
@@ -261,6 +335,15 @@ class SessionTests(unittest.TestCase):
         code, state = self.exercise('success', bundle_count=2)
         self.assertEqual(code, 0)
         self.assertEqual(state['completed'], ['seed', '0/gate', '1/gate'])
+
+    def test_benchmark_only_archive_is_rejected_before_provisioning(self):
+        self.exercise('success', benchmark_only=True, reject_gate=True)
+
+    def test_benchmark_only_archive_runs_when_gate_is_excluded(self):
+        code, state = self.exercise('success', benchmark_only=True, options=[
+            '--gate-bundles', 'none', '--bench', 'cq-gpu-tpch output.json'])
+        self.assertEqual(code, 0)
+        self.assertEqual(state['completed'], ['seed', '0/bench-0'])
 
 
 if __name__ == '__main__':

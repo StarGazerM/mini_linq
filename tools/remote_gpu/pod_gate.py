@@ -64,6 +64,8 @@ def main():
     def save():
         status_path.write_text(json.dumps(status, indent=2) + '\n')
 
+    if args.bench is None and not manifest.get('steps'):
+        parser.error('This benchmark-only bundle has no GPU gate (--no-tests); use --bench')
     try:
         steps = manifest['steps'] if args.bench is None else [dict(
             name='bench-' + (args.bench[0] if args.bench else 'invalid'),

@@ -72,9 +72,11 @@ def main():
     benches = [shlex.split(command) for command in args.bench]
     if any(not command for command in benches):
         parser.error('Empty --bench command')
-    for bundle in args.bundles:
+    for index, bundle in enumerate(args.bundles):
         packaged = json.loads(subprocess.check_output(
             ['tar', '--zstd', '-xOf', str(bundle.resolve()), './manifest.json']))
+        if index in gate_indices and not packaged.get('steps'):
+            parser.error(f'{bundle} is benchmark-only (--no-tests); exclude index {index} with --gate-bundles')
         for argv in benches:
             try:
                 benchmark_argv(Path('/bundle'), packaged, argv)
@@ -285,7 +287,9 @@ def main():
                      host + ':' + remote + '/' + str(index) + '.tar.zst'], f'copy-bundle-{index}')
             directory = bundle_dirs[index]
             ssh(['mkdir', '-p', directory], f'mkdir-bundle-{index}')
-            ssh(['tar', '--zstd', '-xf', remote + '/' + str(index) + '.tar.zst', '-C', directory], f'unpack-{index}')
+            # The network volume refuses chown; keep the pod user's ownership.
+            ssh(['tar', '--zstd', '--no-same-owner', '-xf', remote + '/' + str(index) + '.tar.zst',
+                 '-C', directory], f'unpack-{index}')
         first_tools = remote + '/bundle-0/tools'
         # sshd does not guarantee propagation of the container's environment.
         # Read HF_TOKEN from PID 1's environment remotely, without printing it.
