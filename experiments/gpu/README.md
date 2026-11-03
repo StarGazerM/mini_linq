@@ -1149,6 +1149,14 @@ output file is captured before replacement. `--authored FILE` reads the
 Advised H05 performance acceptance requires SF10 total ≤ 10.35 ms and, when
 provided, no slower than the measured authored R. A failed timing gate keeps
 the exactness/timing evidence and exits unsuccessfully.
+`tools/gpu_gate.sh` runs that advised H05 SF10 acceptance command under the
+same GPU lock as the crate suites and writes `target/gpu-gate-h05-sf10.json`.
+Exactness-only tests are not a substitute for this timing gate. Column-backed
+index sources retain a host publication grade: their recorded GPU source
+provider builds consume resident column descriptors directly, without an
+identity-copy device dispatch. Rebuilding a row-oriented native provider
+continues to require descendant row work.
+
 
 `TPCH_GPU_ADVICE=/path/advice.json` selects build-time per-query overrides.
 Each entry is a pipeline object, for example:

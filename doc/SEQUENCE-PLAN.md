@@ -1054,6 +1054,13 @@ in the replayable trace. Partition/segment construction returns its already
 checked program instead of immediately replaying the same rewrite list a second
 time. Resource alternatives first use nested `segment` stores and tiles;
 named `store_level` and choice publications split dispatches only as a last resort.
+An index build over a declared `abi columns` scan retains its host publication
+boundary when no other row work requires a descendant grade: GPU realization
+records a source provider build from resident column descriptors. A different
+index token alone must not introduce an identity-copy device publication.
+Rebuilding row-oriented `range`, `runs`, or `radix` scans still selects
+descendant row work. The distinction uses declared ABI facts, and the selected
+grades remain subject to the ordinary independent catalog/grading checks.
 
 Generated keyed tokens account for their reader layouts as well as provider
 payloads: a String-carrying host reader requires a host-capable catalog token.

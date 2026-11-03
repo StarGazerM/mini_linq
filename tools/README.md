@@ -37,9 +37,12 @@ for the final gate. Unknown selectors are errors, not successful empty gates.
 The regression inventory contains no GPU targets. When a merge batch can affect
 GPU code (any shared compiler crate, `experiments/gpu`, or the Datalog
 pipelines), Main also runs `bash tools/gpu_gate.sh` once for the batch: the GPU
-Datalog, Sequence and TPC-H crate suites, the `doop-gpu`/`srd-doop-gpu` builds,
-and `doop-gpu` on Cassandra, which compares all 26 complete output tuple sets
-against `doop-mini`. It holds `/tmp/mini_linq-gpu.lock` for the whole run.
+Datalog, Sequence and TPC-H crate suites, the advised H05 SF10 benchmark (including
+its existing 10.35 ms ceiling), the `doop-gpu`/`srd-doop-gpu` builds, and `doop-gpu`
+on Cassandra, which compares all 26 complete output tuple sets against `doop-mini`.
+It holds `/tmp/mini_linq-gpu.lock` for the whole run. H05 timing and exactness
+evidence is written to `target/gpu-gate-h05-sf10.json`; a ceiling failure fails
+the batch even when every answer is exact.
 
 Verification follows what a change can break: docs-only changes run nothing;
 test tooling runs its own unit tests; an oracle/infrastructure swap checks only

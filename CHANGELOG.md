@@ -13,6 +13,14 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Sequence placement keeps descriptor-backed `abi columns` index builds at
+  their host publication boundary. It no longer copies whole resident columns
+  through unpartitioned device publications merely because the index token
+  differs from the scan token. Row-oriented native provider rebuilds still
+  publish device rows; the choice is recorded in Sequence grades and checked
+  through ordinary catalog/grading obligations. The GPU batch gate now runs
+  advised H05 SF10 and enforces its unchanged 10.35 ms benchmark ceiling.
+
 - P4-GPU slice E records complete-codec active-bit sort windows and admitted
   input certificates in device Storage. Full/delta consumers share one sorted
   batch per recorded physical order; canonical-order input is adopted without

@@ -752,6 +752,22 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Source/binary/data identities, Nsight attribution, counters, sampled VRAM,
   page faults and per-command gate times:
   `experiments/gpu/compare/p4-gpu-e.results.json`.
+  **H05 regression follow-up:** first-parent bisection isolates the native
+  placement change in `b2bb698c`: declared column-backed index sources move
+  from host descriptor builds to unpartitioned device publications. That
+  revision cannot compile H05 because it emits duplicate provider parameters;
+  `d3b62f04` repairs ownership and is the first runnable slow revision
+  (947.118 ms). Its planned Sequence is identical to its parent's.
+  Nsight identifies single-block Lineitem and Orders identity-copy
+  publications, not deduplication, as the dominant added work.
+  Placement now retains descriptor-backed column builds at host, while
+  row-oriented native rebuilds retain descendant grades. Fixed advised H05
+  SF10 measures **9.978 ms** in the full free-device inventory, below the
+  unchanged **10.35 ms** ceiling; all **104/104** advised/automatic SF1/SF10
+  cases are exact. GPU Sequence/core/TPC-H, root, quick, formal and API gates
+  pass. `tools/gpu_gate.sh` now enforces that ceiling explicitly. Bisection,
+  recorded plans/realizations, profiling caveats and gate evidence:
+  `experiments/gpu/compare/h05-regression.results.json`.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with

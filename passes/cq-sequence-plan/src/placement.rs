@@ -544,10 +544,10 @@ fn has_row_work(
     }
 }
 
-// A new index over a native host provider is row work, not a host descriptor
-// alias. Keep an already matching native representation at host. Nativeness
-// is the scanned token's declared `abi` fact (GPU-NativeAbi), never inferred
-// from catalog read levels or the provider's Rust spelling.
+// Rebuilding a row-oriented native provider requires descendant row work.
+// Columns already expose the descriptors consumed by source provider builds;
+// retain their host boundary instead of materializing an identity row stream.
+// Both choices use declared ABI facts, never Rust spelling or catalog levels.
 fn rebuilds_native_provider(
     program: &Program,
     facts: &cq_lang_sequence::Analysis,
@@ -584,7 +584,14 @@ fn rebuilds_native_provider(
                             .hosts
                             .get(&symbol_name(&entry.name))
                             == Some(&host)
-                        && facts.structures.facts(&keyed.provider).abi.is_some()
+                        && matches!(
+                            facts.structures.facts(&keyed.provider).abi,
+                            Some(
+                                cq_lang_sequence::structures::provider::NativeAbi::Range
+                                    | cq_lang_sequence::structures::provider::NativeAbi::Radix
+                                    | cq_lang_sequence::structures::provider::NativeAbi::RadixRelation
+                            )
+                        )
                         && builds
                             .iter()
                             .any(|(_, provider)| *provider != keyed.provider)
@@ -1147,7 +1154,11 @@ mod tests {
         ));
     }
 
-    fn native_program(abi: proc_macro2::TokenStream, ty: proc_macro2::TokenStream) -> Program {
+    fn native_program(
+        abi: proc_macro2::TokenStream,
+        ty: proc_macro2::TokenStream,
+        input: proc_macro2::TokenStream,
+    ) -> Program {
         let mut source: Program = syn::parse_quote! {
             physical {
                 relation R(a:i32); relation L(a:i32);
@@ -1157,7 +1168,7 @@ mod tests {
                 answer = pipe probe first [a] l,r;
                 return answer as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; native = Native { reads [exact, range, membership], build inferred #abi }; index = Index { reads [exact, membership], build inferred }; } l host scan = @reader as Reader []; r host scan = @native as Native []; r = #ty [a]; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; native = Native { reads [exact, range, membership], build inferred #abi }; index = Index { reads [exact, membership], build inferred }; } l host scan = @reader as Reader []; r host scan = @native #input as Native []; r = #ty [a]; }
             sequence {
                 input = store rows l;
                 r = store rows r;
@@ -1180,11 +1191,12 @@ mod tests {
         let with_host: Vec<Vec<String>> = std::iter::once(vec!["host".into()])
             .chain(descendant.iter().cloned())
             .collect();
-        for (abi, ty, native_levels, rebuilds) in [
+        for (abi, ty, input, native_levels, rebuilds) in [
             // A rebuilt index over a declared native provider is row work.
             (
                 quote::quote!(, abi range),
                 quote::quote!(@index as Index),
+                quote::quote!(),
                 descendant.clone(),
                 true,
             ),
@@ -1193,13 +1205,24 @@ mod tests {
             (
                 quote::quote!(, abi range),
                 quote::quote!(@index as Index),
+                quote::quote!(),
                 with_host.clone(),
                 true,
+            ),
+            // Column descriptors feed the source provider build directly;
+            // no descendant identity-copy publication is needed.
+            (
+                quote::quote!(, abi columns),
+                quote::quote!(@index as Index),
+                quote::quote!(input { keys 0; columns [i32 => i32] }),
+                with_host.clone(),
+                false,
             ),
             // The already matching native representation stays at host.
             (
                 quote::quote!(, abi range),
                 quote::quote!(@native as Native),
+                quote::quote!(),
                 descendant.clone(),
                 false,
             ),
@@ -1207,11 +1230,12 @@ mod tests {
             (
                 quote::quote!(),
                 quote::quote!(@index as Index),
+                quote::quote!(),
                 descendant.clone(),
                 false,
             ),
         ] {
-            let source = native_program(abi.clone(), ty);
+            let source = native_program(abi.clone(), ty, input);
             let facts = cq_lang_sequence::contract::check(&source).unwrap();
             let mut available = catalog(descendant.clone());
             available.register(
@@ -1240,7 +1264,11 @@ mod tests {
     // change placement; the record must equal the catalog declaration.
     #[test]
     fn native_abi_omitted_from_a_catalog_token_is_rejected() {
-        let source = native_program(quote::quote!(), quote::quote!(@index as Index));
+        let source = native_program(
+            quote::quote!(),
+            quote::quote!(@index as Index),
+            quote::quote!(),
+        );
         let facts = cq_lang_sequence::contract::check(&source).unwrap();
         let levels = vec![vec!["host".into(), "device".into()]];
         let mut available = catalog(levels.clone());
