@@ -44,6 +44,7 @@ Grammars and extension APIs live in crate `//!` documentation. See
 [the design](doc/DESIGN.md) and [the formal specification](doc/formal/README.md).
 `passes/cq-reduce/tests/ya_schedule.rs` supplies the reduction pass's teaching acceptance tests.
 
+The development layout has three Cargo workspaces (consolidated from 28).
 The root workspace shares one lockfile and Cargo target directory across portable
 core, all features (including Datalog SRD engines), formal examples and fixtures,
 the CPU storage benchmark, and the Mac native CPU benchmark. Root `cargo test`
@@ -53,6 +54,12 @@ selects 113 default members; the five counter-enabled packages (`mini-linq`,
 `experiments/gpu` retains its separate oxide toolchain/workspace; Metal-dependent
 packages share `experiments/mac`. Intentional standalone external-packaging
 fixtures remain isolated because their topology is test input.
+GPU execution can also use the disposable RunPod lane in `tools/remote_gpu`:
+build bundles locally, seed the persistent dataset volume from a pinned HF
+revision, then run gates or interleaved benchmark bundles on the pod. Bundles
+include DuckDB and HF dependencies; sessions pull results, prune stale bundles
+and enforce a 60-minute deletion watchdog. See [tools/README.md](tools/README.md)
+for prerequisites and explicit billable session commands.
 All active Mac sources live in this checkout; no sibling checkout is required.
 See [Mac implementation and build commands](doc/MAC-IMPLEMENTATION.md).
 
@@ -120,8 +127,14 @@ outside the repository against Cargo-packaged core crates.
 
 ## Gates
 
-Run from the repository root with the pinned Rust toolchain. Heavy external
-builds disable incremental compilation. Workloads use visible typed cases and
+Run from the repository root with the pinned Rust toolchain.
+Follow the [timing lock protocol](tools/README.md): build/test shared locks cover
+one command, not an entire multi-command runner. CPU measurements use the gate
+and exclusive timing lock. GPU timing normally holds only the GPU lock, with
+rotating interleaving and load-average recording; near-neutral claims require
+CPU-exclusive confirmation after taking the GPU lock.
+
+Heavy external builds disable incremental compilation. Workloads use visible typed cases and
 pairwise pipeline coverage per classic/retail family, plus a joining triangle
 kernel's full 2,400 supported configurations. Push excludes merge/smallest;
 native leading merge reads require ordered hosts. Named kernel targets split

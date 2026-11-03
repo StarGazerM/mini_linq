@@ -8,7 +8,7 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
-**Latest paired measurement (2026-11-02/03, `44bf82bc` vs `c1b75718`;
+**Historical paired measurement (2026-11-02/03, `44bf82bc` vs `c1b75718`;
 [summary](../experiments/gpu/compare/bench-2026-11-02.md), raw samples in
 [`bench-2026-11-02.results.json`](../experiments/gpu/compare/bench-2026-11-02.results.json)).**
 Five interleaved fresh-process pairs (GPU TPC-H SF10: four), every sample exact. Geometric-mean
@@ -38,8 +38,35 @@ regressions: current charges terminal downloads to build/total and reference
 does not. Separate download accounting restores a comparable boundary; the
 historical samples lack the download field needed for arithmetic correction.
 
+**Corrected GPU TPC-H checkpoint (2026-11-03):** separate terminal
+`download_ms` accounting restores the reference boundary; intermediate transfers
+stay timed. The local RTX 6000 Ada SF1 comparison versus `c1b75718` is
+**0.948 [0.946, 0.949]** across 26 queries. This is exploratory evidence from
+three exact pairs, not five-pair acceptance and not a corrected SF10 result.
+H03 remains **1.141 [1.140, 1.142]**; its publication-write layout is under
+investigation separately. [Boundary evidence](../experiments/gpu/compare/gpu-tpch-boundary.results.json)
+supersedes the confounded SF1 headline, without rewriting those historical samples.
+The DOOP pod also lacks both the live SRD toolchain and the prepared corpus for
+`srd-doop-gpu`; its results cannot replace historical SRDatalog fullclock evidence.
+
 ## Where we are
 
+- P7.2 merged in `514ef6af`, advice-only: Structures records
+  `Ordinary` versus `Statistics(BuildDemand)` construction, checked statistic
+  publications and borrowed/attached filters. Ordinary builds retain their
+  no-statistic-work path; automatic activation remains P7.3 design work.
+- Development uses three workspaces (formerly 28): root for portable core,
+  features, formal examples and CPU benchmarks; `experiments/gpu` for oxide;
+  `experiments/mac` for Metal dependencies. Standalone packaging fixtures remain
+  intentionally isolated. Root default members exclude five counter-enabled
+  packages; explicit regression rows cover them.
+- The RunPod lane in `tools/remote_gpu` builds bundles locally, seeds a persistent
+  volume from a pinned HF revision, executes on disposable GPU pods and pulls
+  results with a 60-minute deletion watchdog. DuckDB/HF dependencies travel in
+  the bundle; session pruning keeps old bundles from filling the volume.
+  See [tools](../tools/README.md) for prerequisites and lock protocol: shared
+  build/test locks per command, GPU-only timing locks unless confirming a
+  near-neutral claim under CPU exclusion.
 - Contract 7: `if`/`let`/`for` embed unchanged opaque Rust, pure and total by
   premise, placed by free variables only. Explicit `where` owns relational
   comparisons, membership, ranges and boolean predicates; closed Rust operands

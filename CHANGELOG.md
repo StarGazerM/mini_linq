@@ -13,6 +13,45 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P7.2 merged advice-only: Structures records `Construction::Ordinary` or
+  `Statistics(BuildDemand)` (rows/max-group), with declared `statistics_build`
+  support and independently checked publication witnesses. Ordinary builds do
+  not accumulate demanded statistics; statistic builds use `BuildWithStatistics`.
+  CPU run/hash statistics, borrowed ordered-run filters and attached sidecars
+  remain explicitly authored. Default activation is unchanged; P7.3 is design.
+
+- `tools/remote_gpu` builds execution bundles locally and runs gates/benchmarks
+  on disposable RunPod pods, with pinned HF dataset seeding on a persistent
+  volume and a 60-minute deletion watchdog. Bundles include Python benchmark
+  drivers, the prebuilt DuckDB CLI and HF's `click` dependency; pod execution
+  exports `DUCKDB_CLI` and puts bundle binaries on `PATH`. `--no-tests`,
+  `--gate-bundles` and `BUNDLE_DIRS` support benchmark-only and interleaved
+  multi-bundle sessions. Extraction uses `--no-same-owner`; result retrieval
+  streams tar over SSH. Sessions prune older pod directories and remove their
+  own bundles after successfully pulling results to avoid filling the volume.
+  Benchmark ceiling failures are recorded without skipping exactness checks.
+
+- Timing protocol: builds/tests take the shared timing lock per command, never
+  around a multi-command runner. CPU measurements take the gate and exclusive
+  timing lock; GPU timing holds only the GPU lock, rotates interleaved samples
+  and records load average. Claims whose CI lies within 5% of one require a
+  repeat with the CPU exclusive lock acquired after the GPU lock.
+
+- DriftFix6/7 repair ordering readiness, asynchronous empty GPU publications,
+  lazy owner lifetimes, recorded radix windows/logical identities and kernel ABI
+  launch caches; radix work counters are feature-gated. Rejection tests retain
+  specific behavioral coverage rather than diagnostic wording. The workspace
+  split test is gated and benchmark reports mark provisional/unconfirmed effects.
+  `retail_h07_block` parallel compilation is restored through declared Positions
+  capability; external fixtures consume recorded provider tokens/types.
+
+- Recorded 2026-11-02/03 comparisons (not new runs of this tree): CPU TPC-H SF1
+  default/par geometric means are 0.908/0.820 versus `c1b75718`. Corrected GPU
+  TPC-H SF1 is 0.948 [0.946, 0.949], an exploratory three-pair result; H03
+  remains 1.141 with publication-write layout under investigation. Pod DOOP GPU
+  xalan/batik ratios 0.239/0.724 are low confidence (up to 10x same-binary
+  spread), not a fresh SRDatalog comparison. See planning progress for evidence.
+
 - GPU TPC-H separates final host downloads into `download_ms`, outside build
   and total, restoring the reference benchmark boundary without removing work.
   Checked stage-use facts retain intermediate downloads inside query execution;
@@ -34,6 +73,8 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   implement their declared flat `Build` capability as a singleton cover,
   preserving exact reads without rerouting or copying input rows. The KP-1/KP-2
   regression executes exact answers with one and four workers.
+  P8's separate routing-projection census closes at a measured stop: 66 exchanges,
+  782 MB of carriers and no droppable columns at SF1; no projection is added.
 
 - P5's authored CPU blocked-scan checkpoint connects Plain/Bytes ScanTables to
   checked Structures and printable Sequence execution facts. Pull and Tasks
@@ -55,8 +96,9 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   than diagnostic prose. Behavioral and compile-fail coverage remains independent
   of error-message wording; GPU tests are unchanged.
 
-- Consolidate portable compiler, feature consumers, formal examples and CPU
-  benchmarks into the root Cargo workspace and lockfile. Keep GPU's oxide
+- Consolidate 28 Cargo workspaces into three: root, `experiments/gpu` and
+  `experiments/mac`. Portable compiler, feature consumers, formal examples and
+  CPU benchmarks share the root lockfile and target directory. Keep GPU's oxide
   toolchain and Metal's platform dependencies in separate workspaces; preserve
   standalone external-packaging fixtures as isolation test inputs. Regression
   rows select explicit packages and retain formerly grouped consumer tests.

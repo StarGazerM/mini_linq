@@ -769,6 +769,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   pass. `tools/gpu_gate.sh` now enforces that ceiling explicitly. Bisection,
   recorded plans/realizations, profiling caveats and gate evidence:
   `experiments/gpu/compare/h05-regression.results.json`.
+  **Current state (2026-11-03, through `dbe4c2cb`):** slices D/E and the H05
+  descriptor-placement repair are merged. Directory/provider defaults remain
+  conservative; this is not completion of every GPU storage optimization.
+  H03's remaining publication-write layout slowdown is separate work, not a
+  reason to reinterpret the historical D/E or H05 results.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with
@@ -827,12 +832,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Main's consolidated-workspace gate. Complete samples, controls, source/binary
   identities, faults, counter caveats and per-command gate times:
   `experiments/storage-bench/results/p5-s3-q06.json`.
-  **Next-step proposal only (not implemented):** author Bytes on Q06's existing
-  Tasks/par route, retaining the serial row host and explicit representation
-  facts rather than a query-name-specific compiler rule. After join/index
-  integration, evaluate and author the Tasks routes for H12/H14/H19 under the
-  same exactness, paired-measurement and layout-control requirements. The
-  present `par` route and other kernels are unchanged by this proposal.
+  **Current state (2026-11-03):** retain Q06's authored parallel Bytes route
+  (`blocks-bytes-par`) and serial/parallel Plain/Bytes opt-ins. The existing
+  `par` configuration still uses the row host; promoting Bytes into that route
+  is not merged. Join/index integration and H12/H14/H19 authorship remain
+  follow-on work, subject to exactness, paired measurements and layout controls.
 - **P6 GPU storage** (compression for transfer/capacity first; resident
   scan codecs only where measured). Slice A adds an opt-in shared S1
   Plain/Bytes format and recorded read contracts, not automatic selection.
@@ -847,6 +851,9 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   grouped-run integration remain later slices. Slice A retires none of
   the 74 P6 V sites and makes no performance claim; default expanded targets
   must remain identical. Formal registration is not a gate-result claim.
+  **Current state (2026-11-03):** slice C is in progress, not a merged
+  intermediate/publication cutover or a new performance result. The slice-A
+  boundaries and historical evidence above must not be read as slice-C acceptance.
 - **P6b GPU Datalog parallelism — historical initial profile** (2026-10-31,
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel
@@ -983,7 +990,7 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   cannot become the explicit `trusted_key` semantic premise. No automatic
   statistics, filter activation policy, runtime population, device transfer or
   committed-round publication is selected by this slice.
-  **P7.2 implementation (subject to integrated gates):** CPU run/hash builds
+  **P7.2 merged (2026-11-03, `514ef6af`; advice-only):** CPU run/hash builds
   publish cheap optional occurrence/key/group statistics (`RT-BuildStats`);
   run views borrow ordered keys for exact point/interval tests (`RT-RunFilter`).
   Provider fact `run_filter` records source capability; explicit advice selects
@@ -994,27 +1001,27 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   are not selected by default. Existing main projected filters retain ordinary
   Build, exact Keys::key_count activation and conditional projected construction.
   Borrowed/attached filters and optional-statistic guards require authored advice.
-  **P7-next construction repair:** the content rebase onto `4dd291be` reproduced
+  **Historical construction-repair investigation (now merged):** the content rebase onto `4dd291be` reproduced
   H09 default/radix regressions of 1.12260/1.11745; linker-shuffled P7.2 remained
   slower. Identical counters and CPU perf/assembly locate the cause in optional
   initializer dispatch inside the no-demand HashIndex closure: it changes the
   hot loop's register allocation. A diagnostic isolating dispatch restored the
   baseline loop and was neutral within its five-pair confidence intervals.
-  `STR-Construction` now records ordinary versus statistic-demand construction
+  `STR-Construction` now records `Ordinary` versus `Statistics(BuildDemand)`
   on the Structures provider instance, with explicit `statistics_build` support
   and independently checked publication witnesses. Printers consume that
-  record, not the presence of a MaxGroup accessor. No consumer selects ordinary
-  `Build::build`; requested row/max work uses `BuildWithStatistics`, with lazy
+  record, not the presence of a MaxGroup accessor. With no statistic consumer,
+  construction selects ordinary `Build::build`; requested row/max work uses `BuildWithStatistics`, with lazy
   initializer selection outside the ordinary `OnceCell` closure. Cheap lengths
   remain available; ordinary runtime Build no longer accumulates statistics.
   **P7.3 cost-model evidence, not an accepted default:** after the H09 repair,
   five interleaved pairs per changed default/radix kernel (SF1, complete exact
   answers each sample, bootstrap 95% intervals, zero major faults) still showed
-  H05/H21/d72 losses with P7.2 publication/activation on. Consequently the merge
-  candidate has no P7.2 default activation; its default/radix expansions must
-  match main `907b9b0d`. The construction/statistic/filter runtime and records
-  remain available through authored advice only. Measurements below describe
-  the rejected activation-enabled candidate, not the advice-only merge candidate.
+  H05/H21/d72 losses with P7.2 publication/activation on. Consequently the merged
+  advice-only implementation has no P7.2 default activation; its default/radix
+  expansions match main `907b9b0d` in the recorded acceptance below.
+  The construction/statistic/filter runtime and records remain authored-only.
+  Measurements below describe the rejected activation-enabled candidate.
 
   | Kernel/configuration | P7.2/main ratio [95% CI] | Same-source main shuffle ratio [95% CI] |
   |---|---|---|
@@ -1051,8 +1058,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   58 default/radix exact-answer and repeated-counter cases; 17 library oracles,
   behavioral/package/quick/formal gates and 29 public-API snapshots pass.
   No GPU execution or automatic-activation performance gain is claimed.
-- **P8 Remaining items.** Placement spine (only when a branching machine
-  appears), delta=k SRDatalog plans. Masks as full reducer: measured below.
+- **P8 Current state (2026-11-03).** Key-partition routing projection is closed
+  at the measured stop below; KP-1/KP-2 positional support merged in `925d5f73`.
+  Masks versus Tree is closed with Masks retained; the selective proposal is
+  not implemented. `delta=k` SRDatalog plans are in progress. Placement spine
+  remains conditional on a branching machine.
   **Key-partition routing projection: no target in the measured CPU suite**
   (2026-11-03, 57216a5c). The preimplementation census covered 28 Tasks/par
   kernels at SF1 with six workers; all complete answers matched DuckDB.
@@ -1395,6 +1405,48 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
    laws remain premises; this resolution records no fresh gate evidence.
 
 ## Progress
+
+### Integration ledger: 2026-11-03 (`57216a5c..dbe4c2cb`)
+
+Every first-parent commit in the requested range is listed below. These are
+integration dates; benchmark dates and original measurements remain historical.
+The older progress entries following the ledger retain their original context.
+
+| Date | Commit | Merged change / evidence boundary |
+|---|---|---|
+| 2026-11-03 | `9e8a89cd` | Shared build/test timing lock and exclusive measurement gate documented; refined by `c5b1bd71` below. |
+| 2026-11-03 | `61582bc0` | Rejection tests use failure, structured facts and rule IDs rather than diagnostic prose; no tests deleted. |
+| 2026-11-03 | `cda68a77` | P8 routing-projection census closes at a measured stop: 66 exchanges, 782 MB carriers, zero droppable SF1 columns. |
+| 2026-11-03 | `fa7c9372` | Declared Positions capability repairs `retail_h07_block` parallel compilation; positional-selection regressions and workload methodology updated. |
+| 2026-11-03 | `4dd291be` | External fixture consumes recorded provider token/type; missing SRD lockfile supplied for locked vendoring (later consolidated). |
+| 2026-11-03 | `925d5f73` | KP-1/KP-2 preserve native positional Selection on Tasks and supply sharded flat Build as a singleton cover. |
+| 2026-11-03 | `545ff640` | Local GPU execution bundles and disposable RunPod sessions; pinned HF volume seeding and 60-minute deletion watchdog. |
+| 2026-11-03 | `4bf6555e` | Bundle Python benchmark drivers; `--gate-bundles` and `BUNDLE_DIRS` enable cross-bundle interleaving. |
+| 2026-11-03 | `907b9b0d` | Consolidate 28 workspaces into root, GPU and Mac; retain packaging isolation, explicit regression packages and non-instrumented root defaults. |
+| 2026-11-03 | `a2936f47` | P8 Masks/Tree comparison closes: Tree/Masks 1.035 [1.025, 1.046]; Masks stays default, selective-count proposal remains design. |
+| 2026-11-03 | `2ae9c34a` | Benchmark-only `--no-tests` bundles and `--no-same-owner` extraction for the RunPod volume. |
+| 2026-11-03 | `cbab9ab7` | Bundle `click` with HF CLI; `typer-slim` alone omitted that dependency. |
+| 2026-11-03 | `6331301d` | Historical CPU paired report: SF1 default 0.908 [0.902, 0.917], par 0.820 [0.800, 0.840] versus `c1b75718`; pod benchmark driver added. |
+| 2026-11-03 | `71887d6b` | Pull pod results through tar over SSH, avoiding recursive scp's rejected `/.` source. |
+| 2026-11-03 | `8a38bdf1` | P5 S2/S3 checked blocked CPU scans, Q06 authored opt-ins; retain parallel Bytes evidence without serial/default promotion. |
+| 2026-11-03 | `d2bad61f` | Bundle prebuilt DuckDB CLI and export `DUCKDB_CLI` for pod exactness oracles. |
+| 2026-11-03 | `a591b050` | Put bundle binaries on `PATH`; record benchmark ceiling failures while still checking exactness. |
+| 2026-11-03 | `ab40cbaa` | Historical RunPod TPC-H report: SF1 1.085, SF10 1.023 (four SF10 pairs). Terminal-download boundary confounds these ratios; not current regression claims. |
+| 2026-11-03 | `61af703a` | DriftFix6: ordering readiness, async empty publications, lazy owner lifetimes, recorded active bits/logical IDs, checked kernel ABI and cache-miss launch resolution, feature-gated radix counters; GPU gate invocation repaired. |
+| 2026-11-03 | `f6bf1d04` | Pod DOOP GPU xalan/batik 0.239/0.724, exact but low confidence: same-binary spread up to 10x. No live SRD toolchain or prepared SRD GPU corpus on the pod. |
+| 2026-11-03 | `b35d9da4` | Prune earlier pod session directories; remove own bundles after successful result retrieval to protect the 40 GB volume. |
+| 2026-11-03 | `ce52ccee` | DriftFix7 restores specific rejections/behavioral tests, labels provisional/unconfirmed benchmarks, gates workspace-split coverage and documents root default members. |
+| 2026-11-03 | `c5b1bd71` | Shared lock per command, never around multi-command runners. GPU timing holds only GPU lock, with rotating interleaving/loadavg; near-neutral claims require CPU-exclusive confirmation. |
+| 2026-11-03 | `514ef6af` | P7.2 merged advice-only: recorded Ordinary/Statistics(BuildDemand), statistic builds and borrowed/attached filters. P7.3 automatic activation remains design. |
+| 2026-11-03 | `dbe4c2cb` | Final GPU TPC-H downloads reported separately as `download_ms`; corrected SF1 0.948 [0.946, 0.949] versus `c1b75718`, exploratory three-pair evidence. H03 1.141 publication-write layout remains under investigation; no corrected SF10 claim. |
+
+Evidence for benchmark rows: [paired report](../experiments/gpu/compare/bench-2026-11-02.md),
+[boundary samples](../experiments/gpu/compare/gpu-tpch-boundary.results.json),
+and the P5/P8 step entries above. Current work is P4-GPU's remaining layout
+work, P5's retained authored Q06 parallel Bytes route and subsequent integration,
+P6 slice C, P7.3 design and P8 `delta=k`; these are not additional merged results.
+
+### Earlier progress and historical measurements
 
 - P2 remote inventory: reviewed the messages and `git show --stat` for all
   nine remote-only commits (`9426e27b`, `33e1ffa6`, `eebf5498`, `2698fc8f`,
