@@ -1046,12 +1046,16 @@ both binaries matched the CPU's **26/26** complete Cassandra output sets.
 The comparison checked duplicate-free exported counts as well as tuple hashes.
 
 **Fresh paired run (2026-11-02/03, `44bf82bc` vs `c1b75718`):** see
-[`compare/bench-2026-11-02.md`](compare/bench-2026-11-02.md). Its CPU suites are
-complete. The GPU TPC-H advised SF1/SF10 and `doop-gpu` xalan/batik pairs are
-pending a RunPod session ([`compare/pod_bench_2026_11_02.py`](compare/pod_bench_2026_11_02.py)),
-because a foreign tenant occupied the local GPU. Live SRDatalog and `srd-doop-gpu`
-are not part of that run (the pod has no SRD toolchain or prepared corpus), so
-the numbers above and the SRD ranges below remain the latest GPU DOOP records.
+[`compare/bench-2026-11-02.md`](compare/bench-2026-11-02.md). GPU TPC-H advised ran
+on a RunPod RTX 6000 Ada ([`compare/pod_bench_2026_11_02.py`](compare/pod_bench_2026_11_02.py)),
+because a foreign tenant occupied the local GPU. Every query was exact. SF1
+geomean was **1.085 [1.033, 1.120]** (5 pairs) and SF10 **1.023 [1.000, 1.054]**
+(4 pairs). Named regressions: h09 2.52/2.34, h21_positive 2.07/2.09, h10
+1.55/1.61, h03 1.26/1.22, h04 1.15/1.16. Improvements: h12 0.456/0.423, h11 SF10
+0.416, h02 SF10 0.735. The `doop-gpu` xalan/batik pairs are pending a second pod
+session. Live SRDatalog and `srd-doop-gpu` are not part of it (the pod has no SRD
+toolchain or prepared corpus), so the DOOP numbers above and the SRD ranges
+below remain the latest GPU DOOP records.
 
 For context only, the older SRDatalog fullclock reference ranges are
 **1.008194–1.021628 s xalan / 1.818340–2.101104 s batik**, retained in

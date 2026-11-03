@@ -17,8 +17,12 @@ current/reference ratios: CPU TPC-H SF1 `default` **0.908 [0.902, 0.917]** and `
 `44bf82bc` (`sharded::Index::from_positions`, E0599). Regressions whose CI lies
 above 1: `default` `retail_h06` 1.026 [1.017, 1.043] and `retail_h20` 1.024
 [1.015, 1.035]. CPU DOOP xalan: `mini` 8.97 s, 0.975 [0.969, 0.982]; `mini-par`
-(24 threads) 2.04 s, 0.913 [0.891, 0.969]. GPU suites are pending a RunPod
-session (local GPU occupied by a foreign tenant).
+(24 threads) 2.04 s, 0.913 [0.891, 0.969]. GPU TPC-H advised (RunPod RTX 6000
+Ada, every query exact): SF1 **1.085 [1.033, 1.120]**; SF10 **1.023 [1.000, 1.054]**
+(4 pairs). Regressions with CIs above 1 include h09 2.52/2.34, h21_positive
+2.07/2.09, h10 1.55/1.61 and h03 1.26/1.22; best h12 0.456/0.423 and h11
+SF10 0.416. DOOP GPU awaits a second pod session. No live SRDatalog
+comparison is possible on the pod.
 
 ## Where we are
 

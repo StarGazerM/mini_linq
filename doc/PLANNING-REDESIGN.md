@@ -1732,9 +1732,16 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
   (not investigated here). `retail_h07_block` fails to compile on `44bf82bc`
   (E0599 `cq_storage::sharded::Index::from_positions`, emitted by
   `cq-print/src/positional.rs:393` for `par`). CPU DOOP xalan (Ascent-exact):
-  `mini` 0.975 [0.969, 0.982], `mini-par` 0.913 [0.891, 0.969]. GPU suites
-  (TPC-H advised SF1/SF10, `doop-gpu` xalan/batik) are pending a RunPod
-  session (`pod_bench_2026_11_02.py`). Local GPU timing was blocked by a
-  foreign vLLM tenant. Live SRDatalog and `srd-doop-gpu` are not part of the
+  `mini` 0.975 [0.969, 0.982], `mini-par` 0.913 [0.891, 0.969]. Local GPU
+  timing was blocked by a foreign vLLM tenant, so GPU TPC-H advised ran on
+  RunPod (RTX 6000 Ada, `pod_bench_2026_11_02.py`, session
+  `20261103T164334.987048Z`, every query exact). SF1 geomean was 1.085
+  [1.033, 1.120] (5 pairs) and SF10 1.023 [1.000, 1.054] (4 pairs, budget).
+  CIs above 1 at SF1 cover 13 queries, led by h09 2.524, h21_positive 2.065,
+  h10 1.553 and h03 1.264. At SF10 they cover 11, led by h09 2.340,
+  h21_positive 2.088, h10 1.609 and h03 1.221. Not investigated here; the
+  h09, h21_positive and h10 growth is in build. An earlier pod gives SF1 1.169
+  [1.116, 1.217] with the same outliers. `doop-gpu` xalan/batik awaits a
+  second pod session. Live SRDatalog and `srd-doop-gpu` are not part of the
   pod run (no SRD toolchain or prepared corpus there), so the Oct 26 SRD
   fullclock ranges remain the only, historical, SRD reference.
