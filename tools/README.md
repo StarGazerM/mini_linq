@@ -44,6 +44,19 @@ It holds `/tmp/mini_linq-gpu.lock` for the whole run. H05 timing and exactness
 evidence is written to `target/gpu-gate-h05-sf10.json`; a ceiling failure fails
 the batch even when every answer is exact.
 
+Builds, tests and timings share one machine through two lock files:
+
+```sh
+# Builds and tests: run concurrently with each other, never during a measurement.
+flock /tmp/mini_linq-timing-gate.lock true && flock -s /tmp/mini_linq-timing.lock CMD
+# Timing measurements: exclusive. Holding the gate blocks new builds, so a
+# measurement cannot be starved by a stream of shared holders.
+flock /tmp/mini_linq-timing-gate.lock flock -x /tmp/mini_linq-timing.lock CMD
+```
+
+GPU execution additionally holds `/tmp/mini_linq-gpu.lock`, taken before the
+timing locks. Hold the exclusive lock only for the measurement itself.
+
 Verification follows what a change can break: docs-only changes run nothing;
 test tooling runs its own unit tests; an oracle/infrastructure swap checks only
 that the oracle is unchanged; compiler/runtime changes run the track gate above.
