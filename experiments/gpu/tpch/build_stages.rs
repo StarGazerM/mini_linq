@@ -135,10 +135,8 @@ pub fn compile(
     let mut cpu_terminal = Vec::new();
     for (position, terminal) in program.terminal.iter().enumerate() {
         let index = program.stage_index(&terminal.stage).map_err(&reject)?;
-        let module = format_ident!("stage_{index}");
-        let data = format_ident!("data_{index}");
         let result = format_ident!("result_{index}");
-        // DECODE P: only terminal stage results download logical tuples for final user-answer composition.
+        // DECODE P: terminal stage results download native answer tuples; source dictionary resolution is deferred until validation selects rows.
         let download = if publication_facts[index].resident() {
             quote!(measurement.final_download(|| #result.to_host())?)
         } else {
@@ -150,22 +148,34 @@ pub fn compile(
             if terminal.direct {
                 quote!(let mut answer = #composition;)
             } else {
-                quote!(let mut answer: Vec<Vec<String>> = (#composition).collect();)
+                quote!(let mut answer: Vec<_> = (#composition).collect();)
             }
         } else {
             quote!(answer.extend(#composition);)
         };
-        // DECODE P: terminal GPU answer resolves source dictionaries and formats values after download.
         device_terminal.push(quote! {
-            let rows = #module::decode(&#data, manifest, #download)?;
+            let rows = #download;
             #append
         });
-        // DECODE P: terminal CPU reference answer resolves the same source dictionaries for final comparison.
         cpu_terminal.push(quote! {
-            let rows = #module::decode(&#data, manifest, #result)?;
+            let rows = #result;
             #append
         });
     }
+    let first = &program.terminal[0];
+    let first_index = program.stage_index(&first.stage).map_err(&reject)?;
+    let first_module = format_ident!("stage_{first_index}");
+    let first_data = format_ident!("data_{first_index}");
+    let formatted_fields: Vec<_> = first.projection.iter().enumerate().map(|(position, projection)| {
+        let output = syn::Index::from(position);
+        match projection {
+            stages::Projection::Column(slot) => {
+                let source = syn::Index::from(*slot);
+                quote!((decoders.#source)(&row.#output))
+            }
+            stages::Projection::Value(_) => quote!(row.#output.to_string()),
+        }
+    }).collect();
     let preprocessing = program.preprocessing_tokens().map_err(&reject)?;
     let terminal_stages: Vec<_> = program
         .terminal
@@ -190,18 +200,23 @@ pub fn compile(
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
                 #preprocessing
                 #(#loads)*
+                let reference_started = ::std::time::Instant::now();
+                let decoders = #first_module::decoders(&#first_data, manifest)?;
                 let reference = if manifest.sf == 1 {
                     #(#sequential)*
                     #(#cpu_terminal)*
-                    Some(answer)
+                    // DECODE P: the complete terminal CPU reference resolves source dictionaries once before the benchmark loop.
+                    Some(answer.iter().map(|row| vec![#(#formatted_fields),*]).collect())
                 } else { None };
-                crate::benchmark::run(manifest, query, || {
+                let reference_seconds = reference_started.elapsed().as_secs_f64();
+                crate::benchmark::run(manifest, query, #mode, || {
                     let mut measurement = crate::benchmark::Measurement::default();
                     #(#device)*
                     #(#device_terminal)*
                     cq_gpu_runtime::publish_timings(measurement.timings);
                     Ok((answer, measurement.boundary))
-                }, reference, conformance_only)
+                // DECODE P: terminal GPU answer rows resolve source dictionaries only when full or sampled validation requests their values.
+                }, |row| vec![#(#formatted_fields),*], reference, reference_seconds, conformance_only)
             }
         },
         artifact,
@@ -247,19 +262,16 @@ fn terminal_projection(terminal: &stages::Terminal) -> TokenStream {
     if terminal.direct {
         return quote!(rows);
     }
-    let mut captures = Vec::new();
     let outputs = terminal
         .projection
         .iter()
-        .enumerate()
-        .map(|(index, projection)| match projection {
-            stages::Projection::Column(slot) => quote!(::std::mem::take(&mut row[#slot])),
-            stages::Projection::Value(expression) => {
-                let name = format_ident!("__cq_terminal_value_{index}");
-                captures.push(quote!(let #name = ({ #expression }).to_string();));
-                quote!(#name.clone())
+        .map(|projection| match projection {
+            stages::Projection::Column(slot) => {
+                let slot = syn::Index::from(*slot);
+                quote!(row.#slot)
             }
+            stages::Projection::Value(expression) => quote!({ #expression }),
         })
         .collect::<Vec<_>>();
-    quote!({ #(#captures)* rows.into_iter().map(move |mut row| vec![#(#outputs),*]) })
+    quote!(rows.into_iter().map(|row| (#(#outputs,)*)))
 }

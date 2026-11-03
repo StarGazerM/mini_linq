@@ -41,6 +41,7 @@ pub(super) fn build_in(
     );
     manifest.push_str("[features]\ncounters = [\"cq-storage/counters\"]\nprofile = [\"cq-storage/operator-timing\"]\n[dependencies]\n");
     manifest.push_str(&crate::cargo::dependencies(&[
+        "bench-check",
         "mini-linq",
         "cq-load",
         "cq-storage",

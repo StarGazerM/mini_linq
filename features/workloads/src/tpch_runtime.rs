@@ -523,7 +523,10 @@ macro_rules! retail_kernel {
             }
         }
         pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-            rows.iter().map(|($($out,)+)| vec![$($out.to_string(),)+]).collect()
+            rows.iter().map(canonical_row).collect()
+        }
+        pub fn canonical_row(($($out,)+): &Answer) -> Vec<String> {
+            vec![$($out.to_string(),)+]
         }
     };
 }

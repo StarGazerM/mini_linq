@@ -1,4 +1,4 @@
-//! Operator profiles use the same authored sources, exports and exact oracle as bench.
+//! Operator profiles use the same authored sources, exports and full-first oracle checks as bench.
 use super::*;
 const RUNS: usize = 11;
 const EVIDENCE: &str = "/data/codex/opprofile-evidence";
@@ -122,6 +122,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         }
         let mut measured: Value =
             serde_json::from_slice(&std::fs::read(counted_dir.join("metrics.json"))?)?;
+        validate_checks(&measured, expected.rows.len(), RUNS, bench_check::Policy::from_env(0)?)?;
         if measured["operator_rows"] != raw["operator_rows"] {
             return Err(format!(
                 "{} / {config}: operator rows differ from independent counters worker",
@@ -174,7 +175,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             plain,
             instrumented,
             overhead,
-            "Stream time: inclusive first-demand-to-exhaustion/drop span; nested times overlap. Build time: initialization wall clock, including deferred initialization. in/inserted count actual input occurrences; inserted includes duplicates. Rows come from a separate counters execution; timings come from the same operator graph with row counters disabled. Both executions are verified exactly against DuckDB.",
+            "Stream time: inclusive first-demand-to-exhaustion/drop span; nested times overlap. Build time: initialization wall clock, including deferred initialization. in/inserted count actual input occurrences; inserted includes duplicates. Rows come from a separate fully checked counters execution; timings come from the same operator graph with row counters disabled. Warmups and first measured samples are checked fully against DuckDB; later samples check exact logical counts and up to 1000 seeded actual-row memberships.",
             measured["tree"]
                 .as_str()
                 .ok_or("profile worker omitted tree")?

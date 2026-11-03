@@ -1225,10 +1225,16 @@ cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch -- --nocapture
 
 The binary visits both SF1 and SF10 and writes
 [`compare/gpu_tpch.results.json`](compare/gpu_tpch.results.json). For accepted
-translations it performs one warmup plus five measured iterations, checks every
-iteration exactly against `answer.retail_<query>.tsv` and its `.count`, and
-reports median CUDA-event total/build/kernels/dedup milliseconds. Input loading,
-answer download, and comparison are outside those event intervals. SF1 also
+translations it performs one warmup plus five measured iterations. The shared
+`tools/bench-check` helper fully compares the first measured sample of each
+binary/configuration against `answer.retail_<query>.tsv` and its `.count`;
+later samples check exact answer counts and up to 1,000 seeded actual tuples
+for reference membership (all if smaller). References are indexed outside the
+sample loop. Reports distinguish full and sampled checks, with seed, counts and
+validation seconds; historical result files retain their original policy.
+The binary reports median CUDA-event total/build/kernels/dedup milliseconds.
+Input loading, answer download and validation are outside those event intervals.
+Conformance tests remain fully exact. SF1 also
 compares the GPU answer to independent Sequential translation of the identical
 Physical using `cq_testkit::conformance::assert_answers_equal`, the external
 target API used by H05 (`assert_conformant` itself exposes only CPU targets).

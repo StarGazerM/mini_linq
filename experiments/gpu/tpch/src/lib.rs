@@ -118,6 +118,7 @@ pub fn run(
                     successful = false;
                     result["status"] = json!("ran");
                     result["exact"] = json!(false);
+                    result["validated"] = json!(false);
                     result["error"] = json!(error.to_string());
                 }
             }
@@ -129,7 +130,7 @@ pub fn run(
         }
         let previous = baseline_results
             .iter()
-            .filter(|row| row["query"] == query && row["sf"] == sf && row["exact"] == true)
+            .filter(|row| row["query"] == query && row["sf"] == sf && (row["validated"] == true || row["exact"] == true))
             .filter_map(|row| row["median_ms"]["total"].as_f64().map(|total| (row, total)))
             .min_by(|(_, a), (_, b)| a.total_cmp(b));
         if let Some((previous, previous_ms)) = previous {
@@ -140,6 +141,7 @@ pub fn run(
                 "median_ms": previous["median_ms"],
                 "samples": previous["samples"],
                 "exact": previous["exact"],
+                "validation": previous["validation"],
             });
             if let Some(total) = result["median_ms"]["total"].as_f64() {
                 result["baseline_comparison"] = json!({
@@ -148,7 +150,7 @@ pub fn run(
                 });
             }
         }
-        if query == "h05" && mode == "advised" && result["exact"] == true {
+        if query == "h05" && mode == "advised" && result["validated"] == true {
             if let Some(total) = result["median_ms"]["total"].as_f64() {
                 let reference = authored_results.as_ref().and_then(|rows| {
                     rows.iter()
@@ -186,7 +188,7 @@ pub fn run(
     fs::write(
         output,
         serde_json::to_vec_pretty(&json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "data_root": data_root(),
             "warmup_runs": benchmark::WARMUP_RUNS,
             "measured_runs": benchmark::MEASURED_RUNS,

@@ -105,16 +105,18 @@ crate::tpch_runtime::standalone_configs! { $;
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter()
-        .map(|(name, customer, order, date, price, quantity)| {
-            vec![
-                name.clone(),
-                customer.to_string(),
-                order.to_string(),
-                date.days_since_epoch().to_string(),
-                price.to_string(),
-                quantity.to_string(),
-            ]
-        })
-        .collect()
+    rows.iter().map(canonical_row).collect()
+}
+
+pub fn canonical_row((name, customer, order, date, price, quantity): &Answer) -> Vec<String> {
+    {
+        vec![
+            name.clone(),
+            customer.to_string(),
+            order.to_string(),
+            date.days_since_epoch().to_string(),
+            price.to_string(),
+            quantity.to_string(),
+        ]
+    }
 }

@@ -11,7 +11,14 @@ are historical, not a replacement for that plan.
 **Historical paired measurement (2026-11-02/03, `44bf82bc` vs `c1b75718`;
 [summary](../experiments/gpu/compare/bench-2026-11-02.md), raw samples in
 [`bench-2026-11-02.results.json`](../experiments/gpu/compare/bench-2026-11-02.results.json)).**
-Five interleaved fresh-process pairs (GPU TPC-H SF10: four), every sample exact. Geometric-mean
+Five interleaved fresh-process pairs (GPU TPC-H SF10: four). Historical TPC-H
+samples used complete answer comparisons; DOOP timing samples checked all
+relation counts after a separate full-tuple check, not full tuples in every
+sample. Current timing policy uses a full first measured sample per
+binary/configuration and exact counts plus seeded actual-tuple membership checks
+thereafter; see
+[`tools/README.md`](../tools/README.md#timing-sample-answer-validation).
+Geometric-mean
 current/reference ratios: CPU TPC-H SF1 `default` **0.908 [0.902, 0.917]** and `par`
 **0.820 [0.800, 0.840]** (28 kernels). `retail_h07_block` does not compile on
 `44bf82bc` (`sharded::Index::from_positions`, E0599). Apparent CPU slowdowns:

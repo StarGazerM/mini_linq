@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect retained CPU profiles or isolated exact parallel plain/profile pairs.
+"""Collect retained CPU profiles or isolated full-first parallel plain/profile pairs.
 
 Parallel protocol (run serially): all --par --threads 1|24 --sf 0.1|1|10
 --cap-seconds 100. SF0.1 verifies one untimed answer; SF1/SF10 use one warmup
@@ -11,6 +11,7 @@ import csv
 from functools import cache
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -59,6 +60,50 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n')
 
 
+def validation_evidence(metrics, require_native=False):
+    """Read native evidence, without loading or reformatting answer tuples."""
+    if metrics is None:
+        return None
+    if 'samples_ms' not in metrics:
+        if not metrics.get('verified'):
+            raise ValueError('correctness-only worker did not verify its full result')
+        return {'method': 'full_correctness_only', 'answer_rows': metrics['answer_rows']}
+    if 'samples_checks' not in metrics:
+        if require_native:
+            raise ValueError('timed worker omitted native check evidence')
+        # Retained pre-cutover artifacts used complete comparisons on every run.
+        # Do not synthesize per-relation evidence for those historical results.
+        return {'method': 'legacy_full', 'evidence': 'pre-cutover worker contract'}
+    policy = metrics['check_policy']
+    sample_size = policy['sample_size']
+    if policy['mode'] not in ('full', 'sampled') or not isinstance(sample_size, int) or sample_size <= 0:
+        raise ValueError('invalid native check policy')
+    checks = metrics['samples_checks']
+    if len(checks) != len(metrics['samples_ms']) or not checks:
+        raise ValueError('native check count differs from measured sample count')
+    count = metrics['answer_rows']
+
+    def check(relations, mode):
+        if set(relations) != {'answer'}:
+            raise ValueError('native answer relation evidence is incomplete')
+        evidence = relations['answer']
+        selected = count if mode == 'full' else min(count, sample_size)
+        if (evidence['mode'] != mode or evidence['expected_count'] != count
+                or evidence['actual_count'] != count or evidence['sampled_count'] != selected
+                or not isinstance(evidence['seed'], int) or not 0 <= evidence['seed'] < 2**64
+                or not math.isfinite(evidence['validation_seconds']) or evidence['validation_seconds'] < 0):
+            raise ValueError('invalid native answer check evidence')
+
+    check(metrics['warm_check'], 'full')
+    for ordinal, evidence in enumerate(checks):
+        check(evidence, policy['mode'] if ordinal == 0 else 'sampled')
+    return {
+        'method': 'full_first_sampled' if policy['mode'] == 'full' else 'sampled',
+        'check_policy': policy, 'warm_check': metrics['warm_check'],
+        'samples_checks': checks, 'order': 'execution',
+    }
+
+
 def artifact_name(kind=''):
     prefix = (f'performance_cpu_par_t{THREADS}' if PAR else
               f'performance_cpu_default_spotcheck_t{THREADS}' if DEFAULT_SPOTCHECK else 'performance_cpu')
@@ -74,7 +119,7 @@ def compiler_fingerprint():
     """Hash compiler/runtime inputs once per invocation, including new sources."""
     paths = [ROOT / name for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain']
              if (ROOT / name).is_file()]
-    for root in ['facade', 'features', 'languages', 'passes', 'runtime', 'testkit', '.cargo']:
+    for root in ['facade', 'features', 'languages', 'passes', 'runtime', 'testkit', '.cargo', 'tools/bench-check']:
         for directory, children, files in os.walk(ROOT / root):
             children[:] = sorted(child for child in children if child not in ['target', '.git'])
             paths.extend(Path(directory) / name for name in files
@@ -105,6 +150,7 @@ def invoke(args, log, env=ENV, timeout=None):
 
 def build():
     dependencies = {
+        'bench-check': 'tools/bench-check',
         'mini-linq': 'facade/mini-linq', 'cq-load': 'runtime/cq-load',
         'cq-storage': 'runtime/cq-storage', 'cq-planners': 'features/planners',
         'cq-rewrites': 'features/rewrites', 'cq-join-filters': 'features/join-filters',
@@ -144,7 +190,7 @@ def build():
         for dep, path in dependencies.items():
             features = ', features = ["parquet"]' if dep == 'cq-load' else ''
             manifest += f'{dep} = {{ path = "{ROOT / path}"{features} }}\n'
-        manifest += 'serde_json = "1"\nrayon = "1"\n'
+        manifest += 'serde_json = "1"\nrayon = "1"\n[target.\'cfg(unix)\'.dependencies]\nlibc = "0.2"\n'
         (crate / 'Cargo.toml').write_text(manifest)
         main = '#![recursion_limit = "512"]\n'
         main += f'#[allow(unused_imports, unused_macros, dead_code)] #[path = "{WORK / "src/tpch_runtime.rs"}"] mod tpch_runtime;\n'
@@ -172,7 +218,8 @@ def build():
 def build_stamp(name):
     paths = [WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs',
              WORK / 'xtask/src/tpch/comparison.rs', CACHE_ROOT / 'adaptive-worker.rs',
-             WORK / 'src/queries/retail/tpch' / (name + '.rs'), Path(__file__)]
+             WORK / 'src/queries/retail/tpch' / (name + '.rs'), Path(__file__),
+             ROOT / 'tools/bench-check/Cargo.toml', ROOT / 'tools/bench-check/src/lib.rs']
     stamp = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     if isolated():
         stamp['compiler_runtime_sha256'] = compiler_fingerprint()
@@ -220,7 +267,7 @@ def prepare():
             'verification_only': verification_only(), 'runs': 0 if verification_only() else RUNS} if isolated() else {}),
         **({'compiler_runtime_sha256': compiler_fingerprint(),
             'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()} if isolated() else {}),
-        'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
+        'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs', WORK / 'xtask/src/tpch/comparison.rs', ROOT / 'tools/bench-check/Cargo.toml', ROOT / 'tools/bench-check/src/lib.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
     })
 
 
@@ -234,16 +281,16 @@ def replace_once(source, old, new):
 def adaptive():
     """Only alter generated measurement controls; preserve query and planner sources."""
     source = (WORK / 'xtask/src/tpch/worker.rs').read_text()
-    source = replace_once(source, '    let warm = query::run(&data, &args[1]);',
-                            '    let warm_started = Instant::now();\n    let warm = query::run(&data, &args[1]);\n    let warm_ms = warm_started.elapsed().as_secs_f64() * 1000.0;\n    let runs = if runs > 0 && warm_ms > 60000.0 { 3 } else { runs };')
-    source = replace_once(source, '    times.sort_by(f64::total_cmp);',
-                            '    if times.iter().any(|&ms| ms > 60000.0) { times.truncate(3); }\n    let runs = times.len();\n    times.sort_by(f64::total_cmp);')
-    source = replace_once(source, '    for _ in 0..runs {\n        let start = Instant::now();',
-                            '    for _ in 0..runs {\n        if times.len() >= 3 && times.iter().any(|&ms| ms > 60000.0) { break; }\n        let start = Instant::now();')
-    source = replace_once(source, '    for _ in 0..runs {\n        counters::reset();',
-                            '    for _ in 0..runs {\n        if samples.len() >= 3 && samples.iter().any(|s: &(f64, serde_json::Value)| s.0 > 60000.0) { break; }\n        counters::reset();')
+    source = replace_once(source, '    let mut warm = query::run(&data, &args[1]);',
+                            '    let warm_started = Instant::now();\n    let mut warm = query::run(&data, &args[1]);\n    let warm_ms = warm_started.elapsed().as_secs_f64() * 1000.0;\n    let runs = if runs > 0 && warm_ms > 60000.0 { 3 } else { runs };')
+    source = replace_once(source, '    samples.sort_by(|left, right| left.0.total_cmp(&right.0));',
+                            '    if samples.iter().any(|s| s.0 > 60000.0) { samples.truncate(3); checks.truncate(3); }\n    let runs = samples.len();\n    samples.sort_by(|left, right| left.0.total_cmp(&right.0));')
+    source = replace_once(source, '    for ordinal in 0..runs {\n        let before = usage()?;',
+                            '    for ordinal in 0..runs {\n        if samples.len() >= 3 && samples.iter().any(|s: &(f64, Option<u64>, Option<u64>, Option<u64>)| s.0 > 60000.0) { break; }\n        let before = usage()?;')
+    source = replace_once(source, '    for ordinal in 0..runs {\n        counters::reset();',
+                            '    for ordinal in 0..runs {\n        if samples.len() >= 3 && samples.iter().any(|s: &(f64, serde_json::Value)| s.0 > 60000.0) { break; }\n        counters::reset();')
     source = replace_once(source, '    samples.sort_by(|a, b| a.0.total_cmp(&b.0));',
-                            '    if samples.iter().any(|s| s.0 > 60000.0) { samples.truncate(3); }\n    let runs = samples.len();\n    samples.sort_by(|a, b| a.0.total_cmp(&b.0));')
+                            '    if samples.iter().any(|s| s.0 > 60000.0) { samples.truncate(3); checks.truncate(3); }\n    let runs = samples.len();\n    samples.sort_by(|a, b| a.0.total_cmp(&b.0));')
     source = source.replace('> 60.0', f'> {float(SLOW_SECONDS)}').replace('> 60000.0', f'> {float(SLOW_SECONDS * 1000)}')
     if isolated():
         # Tasks buffers/canonicalization do not map one-to-one onto the
@@ -263,7 +310,7 @@ def adaptive():
     save(OUT / (artifact_name('adaptive') + '.json'), {
         'generated_worker_sha256': hashlib.sha256(source.encode()).hexdigest(),
         'policy': f'{CAP_SECONDS}-second combined wall budget per configuration; SF0.1 is untimed exactness only. Otherwise one exact warmup per mode and five timed runs, reduced to the first three when any warm/timed query exceeds {SLOW_SECONDS}s. Profile winners only: {PROFILE_WINNERS_ONLY}. Completed measurements are retained.',
-        'changes': 'Generated warm clock, adaptive sample count, loop stopping and effective median index. If a fourth/fifth sample triggers reduction, retain the first three rather than an even sample count. Isolated workers retain actual Tasks primitive counters but mark sequential bag/set agreement inapplicable; exact answers, counted operator graph and root wall checks remain mandatory. Authored worker, query sources and plans unchanged.',
+        'changes': 'Generated warm clock, adaptive sample count, loop stopping and effective median index. If a fourth/fifth sample triggers reduction, retain the first three timing samples and their validation evidence. Isolated workers retain actual Tasks primitive counters but mark sequential bag/set agreement inapplicable; full-first checks, counted operator graph and root wall checks remain mandatory. Authored query sources and plans unchanged.',
     })
 
 
@@ -301,6 +348,7 @@ def measure():
                 start = time.monotonic()
                 try:
                     invoke([crate / binary, CACHE / 'data' / name, config, runs, directory / (kind + '.answers.json'), directory / (kind + '.json'), raw / 'oracle.json'], directory / 'commands.log', env, max(0.001, CAP_SECONDS - budget['wall_seconds']))
+                    validation_evidence(json.loads((directory / (kind + '.json')).read_text()), require_native=True)
                 except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
                     save(directory / 'status.json', {'status': 'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'error', 'phase': kind, 'worker_wall_limit_seconds': CAP_SECONDS, 'configuration_wall_seconds': budget['wall_seconds'] + time.monotonic() - start, 'warm_correctness': 'ok' if (directory / (kind + '.answers.json')).exists() else 'unavailable', 'correctness': 'ok' if (directory / 'plain.json').exists() else 'unavailable', 'error': str(error)})
                     return
@@ -342,6 +390,7 @@ def consolidate_isolated():
                    if (directory / (kind + '.json')).exists() else None
                    for kind in ['plain', 'counts', 'profile']}
         plain, counts, profile = [metrics[k] for k in ['plain', 'counts', 'profile']]
+        validation = {kind: validation_evidence(value) for kind, value in metrics.items()}
         path = directory / 'status.json'
         status = json.loads(path.read_text()) if path.exists() else {
             'status': 'complete' if plain and (verification_only() or profile) else 'missing',
@@ -367,6 +416,7 @@ def consolidate_isolated():
             'sf': SF, 'query': name, 'configuration': config, 'threads': THREADS,
             'status': status['status'], 'status_details': status,
             'correctness': 'ok' if plain else 'unavailable',
+            'validation': validation,
             'verification_only': verification_only(),
             'runs': len(plain.get('samples_ms', [])) if plain else 0,
             'profile_runs': len(profile['samples_ms']) if profile else 0,
@@ -389,13 +439,13 @@ def consolidate_isolated():
             'raw_directory': str(directory.relative_to(ROOT)),
         })
     save(OUT / (artifact_name() + '.json'), {
-        'schema_version': 2, 'sf': SF, 'configuration': config, 'threads': THREADS,
+        'schema_version': 3, 'sf': SF, 'configuration': config, 'threads': THREADS,
         'compiler_runtime_sha256': compiler_fingerprint(),
         'methodology': {
             'scope': 'All 27 catalog queries; fixed par configuration, no plan selection.' if PAR else 'Five isolated untimed default exactness spotchecks.',
             'invocations': 'One untimed exact execution at SF0.1. SF1/SF10: one warmup and five plain samples; independent untimed counts; one warmup and five profile samples. Any warm/timed execution above ten seconds reduces that mode to its first three samples.',
             'cap_seconds': CAP_SECONDS, 'slow_seconds': SLOW_SECONDS, 'rayon_num_threads': THREADS,
-            'correctness': 'Every warm and timed result matches the authored DuckDB SQL as a normalized exact set; DECIMAL trailing-zero normalization only.',
+            'correctness': 'SF0.1 and independent counts remain full exact checks. Warmups and first measured sample per binary/configuration are full exact; subsequent samples check exact logical counts plus 1000 seeded actual-row memberships (all rows when smaller), with only selected typed rows formatted. DECIMAL trailing-zero normalization only. Per-mode validation evidence is retained in execution order.',
             'plain_boundary': 'query::run including query-local construction; excludes loading, canonicalization, comparison and final answer destruction.',
             'profile_phase_labels': {'profile_build_at_median_total_ms': 'setup+build', 'profile_query_residual_at_median_total_ms': 'final evaluation'},
             'profile_boundary': 'Setup+build and final evaluation come from the same median-total profile execution, never from plain total. TASKS_BUILD_WALL_TOTAL measures the wall-time union of setup/publication intervals across all Tasks programs in that execution; nested/concurrent intervals count once. Setup+build includes upstream scans, routing and joins needed to publish stores. Final evaluation is profile total minus that union, including boundary/teardown residual. Per-program TASKS_QUERY_WALL spans remain raw diagnostics, not an additive split. Uninstrumented whole-query totals are primary for performance comparisons.',
@@ -404,13 +454,13 @@ def consolidate_isolated():
         },
         'rows': rows,
     })
-    columns = [k for k in rows[0] if k not in ['status_details', 'measurement_policy'] and not k.endswith('_samples_ms')]
+    columns = [k for k in rows[0] if k not in ['status_details', 'measurement_policy', 'validation'] and not k.endswith('_samples_ms')]
     with (OUT / (artifact_name() + '.tsv')).open('w') as stream:
         writer = csv.DictWriter(stream, fieldnames=columns, delimiter='\t', extrasaction='ignore')
         writer.writeheader()
         writer.writerows(rows)
     print(json.dumps({'sf': SF, 'threads': THREADS, 'queries': len(rows),
-                      'exact_complete': sum(r['correctness'] == 'ok' for r in rows),
+                      'checked_complete': sum(r['correctness'] == 'ok' for r in rows),
                       'profile_complete': sum(r['profile_runs'] > 0 for r in rows)}))
 
 
@@ -431,6 +481,7 @@ def consolidate():
             directory = raw / config
             metrics = {kind: json.loads((directory / (kind + '.json')).read_text()) if (directory / (kind + '.json')).exists() else None for kind in ['plain', 'counts', 'profile']}
             plain, counts, profile = [metrics[k] for k in ['plain', 'counts', 'profile']]
+            validation = {kind: validation_evidence(value) for kind, value in metrics.items()}
             status = json.loads((directory / 'status.json').read_text()) if (directory / 'status.json').exists() else {'status': 'complete' if plain and profile else 'missing'}
             if plain:
                 assert len(plain['samples_ms']) in [3, 5] and not plain['instrumented']
@@ -447,6 +498,7 @@ def consolidate():
                 'runs': len(plain['samples_ms']) if plain else 0,
                 'profile_runs': len(profile['samples_ms']) if profile else 0,
                 'correctness': 'ok' if plain else status.get('correctness', 'unavailable'),
+                'validation': validation,
                 'answer_rows': plain['answer_rows'] if plain else None,
                 'load_ms': plain['load_ms'] if plain else None,
                 'zone_build_ms': plain['zone_build_ms'] if plain else None,
@@ -481,7 +533,7 @@ def consolidate():
     methodology = {
         'scope': f'All 27 catalog queries at SF{SF}; default, le, le_runs and advised, without pruning.',
         'invocations': f'One warm execution, {RUNS} plain runs, independent counters and {RUNS} profile runs. Latest policy: three runs above {SLOW_SECONDS} seconds, {CAP_SECONDS}-second combined wall cap, profile column winners only={PROFILE_WINNERS_ONLY}. Completed original 600-second/60-second-threshold measurements retained. Per-row measurement_policy and status_details retain actual policy and timeout cap.',
-        'correctness': f'Exact normalized answer sets against identical authored SQL in /data/tpch-gpu/sf{SF}/dbgen.duckdb, checked before and after every timed execution; DECIMAL trailing-zero normalization only.',
+        'correctness': f'Authored SQL in /data/tpch-gpu/sf{SF}/dbgen.duckdb is indexed once per worker. Native bench-check checks warmup and first measured sample fully, then exact logical counts and 1000 seeded actual-row memberships (all rows when smaller); only selected typed rows are formatted. Correctness-only/counting runs remain full. DECIMAL trailing-zero normalization only. Per-mode validation evidence distinguishes retained legacy full checks.',
         'plain_boundary': 'Instant surrounds query::run, including query-local preprocessing, index construction, collection/cloning into native answers. Parquet load, canonicalization, sorting, oracle comparison, serialization and final answer destruction are excluded.',
         'profile_boundary': 'Same query::run plus operator timing instrumentation. Report build and residual from the very same execution selected by median profile total; residual = profile total - exclusive build. These are NOT independent medians of phase samples.',
         'build_definition': 'Runtime render_operators BUILD_EXCLUSIVE_TOTAL sums elapsed.saturating_sub(source_elapsed) for every operator kind ending _BUILD. Source production is excluded from construction. The emitted tree rounds build total to 0.001ms; residual has corresponding rounding uncertainty. Inclusive stream times must not be summed.',
@@ -491,14 +543,14 @@ def consolidate():
             'Profile-only insertion drains each build input into a Vec before construction; its buffering, clock and operator bookkeeping overhead can substantially alter execution. Profile phase numbers are instrumented, not an exact split of the uninstrumented median.',
             'No subtraction combines uninstrumented total and profile build. Both totals and overhead are retained.',
             'Load and any ZoneRows preparation are excluded from query total and separately reported; query-local preprocessing remains in total and residual unless covered by a build operator.',
-            'Samples are sorted by the worker; execution order is not retained.',
-            'Timeout covers process loading, warm verification, repeated measured executions and exact comparisons across modes; it is not a per-query timing.',
+            'Timing samples are sorted; samples_checks validation evidence remains in execution order.',
+            'Timeout covers process loading, warm verification, repeated measured executions and native checks across modes; it is not a per-query timing.',
             'A completed plain measurement remains valid when a later mode times out; missing phase timings remain null.',
             'Primitive insertion-count agreement is recorded separately from exact answers and operator-graph checks.',
         ],
     }
     save(OUT / f'performance_cpu_sf{SF}.json', {'methodology': methodology, 'rows': rows, 'selections': selections})
-    columns = [k for k in rows[0] if not k.endswith('_samples_ms') and k not in ['status_details', 'measurement_policy']]
+    columns = [k for k in rows[0] if not k.endswith('_samples_ms') and k not in ['status_details', 'measurement_policy', 'validation']]
     with (OUT / f'performance_cpu_sf{SF}.tsv').open('w') as stream:
         writer = csv.DictWriter(stream, fieldnames=columns, delimiter='\t', extrasaction='ignore')
         writer.writeheader()

@@ -3,6 +3,7 @@
 import contextlib
 import hashlib
 import io
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,12 @@ import data_manifest
 import pod_gate
 import seed_volume
 import session
+
+_pod_bench_spec = importlib.util.spec_from_file_location(
+    'pod_bench', Path(__file__).resolve().parents[2] /
+    'experiments/gpu/compare/pod_bench_2026_11_02.py')
+pod_bench = importlib.util.module_from_spec(_pod_bench_spec)
+_pod_bench_spec.loader.exec_module(pod_bench)
 
 
 class MirrorTests(unittest.TestCase):
@@ -73,6 +80,7 @@ class BundleTests(unittest.TestCase):
             target.mkdir(parents=True)
             (root / 'fixture.txt').write_text('runtime source')
             names = ['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu']
+            (target / 'bench-check').write_bytes(b'host checker fixture')
             for name in names:
                 (target / name).write_bytes(b'executable fixture')
             metadata = dict(target_directory=str(target), packages=[
@@ -80,6 +88,7 @@ class BundleTests(unittest.TestCase):
                 for name in names])
             archive_manifest = {}
             oxide_commands = []
+            host_commands = []
 
             def check_output(argv, **kwargs):
                 if argv[0] == 'git':
@@ -97,6 +106,16 @@ class BundleTests(unittest.TestCase):
                     for name in names:
                         kwargs['stdout'].write(json.dumps(dict(reason='compiler-artifact',
                             executable=str(target / name), target=dict(name=name))) + '\n')
+                elif 'cargo' in argv and 'build' in argv:
+                    host_commands.append(argv)
+                    self.assertEqual(kwargs['cwd'], root)
+                    self.assertNotIn('CUDA_HOME', kwargs['env'])
+                    self.assertNotIn('LIBRARY_PATH', kwargs['env'])
+                    self.assertEqual(kwargs['env']['CARGO_BUILD_JOBS'], '6')
+                    self.assertIn('--locked', argv)
+                    self.assertEqual(argv[:3], ['flock', '-s', '/tmp/mini_linq-timing.lock'])
+                    kwargs['stdout'].write(json.dumps(dict(reason='compiler-artifact',
+                        executable=str(target / 'bench-check'), target=dict(name='bench-check'))) + '\n')
                 elif argv[0] == 'tar':
                     stage = Path(argv[argv.index('-C') + 1])
                     archive_manifest.update(json.loads((stage / 'manifest.json').read_text()))
@@ -112,10 +131,62 @@ class BundleTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()):
                 bundle_builder.main()
             self.assertEqual(len(oxide_commands), 1)
+            self.assertEqual(len(host_commands), 1)
             self.assertEqual(archive_manifest['tests'], [])
             self.assertEqual(archive_manifest['steps'], [])
-            self.assertEqual(set(archive_manifest['binaries']), set(names))
-            self.assertEqual([build['name'] for build in archive_manifest['builds']], ['binaries-build'])
+            self.assertEqual(set(archive_manifest['binaries']), set(names + ['bench-check']))
+            self.assertEqual([build['name'] for build in archive_manifest['builds']],
+                             ['binaries-build', 'bench-check-build'])
+
+    def test_doop_samples_require_tuple_check_and_isolate_warmup(self):
+        class Bundle:
+            def key(self, binary, configuration):
+                return binary + ':' + configuration
+
+        class Checker:
+            def __init__(self):
+                self.plans = []
+                self.checked = []
+
+            def plan(self, key, reference, ordinal):
+                self.plans.append((key, reference, ordinal))
+                return dict(mode='full' if ordinal == 0 else 'sampled',
+                            seed=123, sample_size=1000, sample=ordinal)
+
+            env = staticmethod(pod_bench.Checker.env)
+
+            def check(self, key, reference, ordinal, witness):
+                self.checked.append((key, reference, ordinal, witness))
+                if witness.read_text() != 'actual tuples':
+                    raise RuntimeError('tuple membership mismatch')
+                return {'mode': 'full' if ordinal == 0 else 'sampled'}
+
+        checker = Checker()
+        with tempfile.TemporaryDirectory() as directory:
+            witness = Path(directory) / 'actual.json'
+
+            def producer(bundle, dataset, env):
+                self.assertEqual(env['BENCH_CHECK_WITNESS'], str(witness))
+                witness.write_text('actual tuples')
+                return dict(witness_seconds=0.25, relation_counts={'Answer': 1001})
+
+            with patch.object(pod_bench, 'doop', side_effect=producer):
+                for pair in (-1, 0, 1):
+                    result = pod_bench.doop_sample(Bundle(), 'xalan', checker, 'reference', pair, witness)
+                    self.assertGreaterEqual(result['validation_seconds'], 0.25)
+                    self.assertFalse(witness.exists())
+            self.assertEqual(len(checker.checked), 3)
+            self.assertNotEqual(checker.plans[0][0], checker.plans[1][0])
+            self.assertEqual(checker.plans[1][0], checker.plans[2][0])
+            self.assertEqual([plan[2] for plan in checker.plans], [0, 0, 1])
+
+            def corrupt_producer(bundle, dataset, env):
+                witness.write_text('wrong tuples with matching counts')
+                return dict(witness_seconds=0.0, relation_counts={'Answer': 1001})
+
+            with patch.object(pod_bench, 'doop', side_effect=corrupt_producer), \
+                 self.assertRaisesRegex(RuntimeError, 'tuple membership mismatch'):
+                pod_bench.doop_sample(Bundle(), 'xalan', checker, 'reference', 2, witness)
 
     def test_pod_runner_rejects_full_gate_without_tests(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -130,6 +201,49 @@ class BundleTests(unittest.TestCase):
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_pod_child_resources_are_per_pid_and_capture_large_streams(self):
+        class Bundle:
+            env = os.environ.copy()
+
+        bundle = Bundle()
+        real_wait4 = os.wait4
+        observed = []
+
+        def wait4(pid, options):
+            result = real_wait4(pid, options)
+            self.assertEqual(result[0], pid)
+            observed.append(result[2])
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            bundle.worktree = Path(directory)
+            (bundle.worktree / 'experiments/gpu').mkdir(parents=True)
+            with patch.object(pod_bench, 'tenants', return_value=''), \
+                 patch.object(pod_bench, 'gpu_state', return_value='offline'), \
+                 patch.object(pod_bench.os, 'wait4', side_effect=wait4):
+                for code in (0, 7):
+                    script = ('import sys\n'
+                              'data = bytearray(4 * 1024 * 1024)\n'
+                              'sys.stdout.write(\"o\" * 262144)\n'
+                              'sys.stderr.write(\"e\" * 262144)\n'
+                              f'sys.exit({code})\n')
+                    result = pod_bench.run(bundle, [sys.executable, '-c', script], allowed=(0, 7))
+                    self.assertEqual(result['exit_code'], code)
+                    self.assertEqual(result['stdout'], 'o' * 262144)
+                    self.assertEqual(result['stderr'], 'e' * 262144)
+                    usage = observed[-1]
+                    self.assertEqual(result['resources'], {
+                        'scope': 'benchmark child process (wait4)',
+                        'minor_page_faults': usage.ru_minflt,
+                        'major_page_faults': usage.ru_majflt,
+                        'peak_rss_kib': usage.ru_maxrss,
+                        'peak_rss_units': 'KiB (Linux ru_maxrss)'})
+                    self.assertGreater(result['resources']['peak_rss_kib'], 0)
+                with self.assertRaisesRegex(RuntimeError, 'failed 9: failure detail'):
+                    pod_bench.run(bundle, [sys.executable, '-c',
+                                          'import sys; sys.stderr.write("failure detail"); sys.exit(9)'])
+        self.assertEqual(len(observed), 3)
+
     def test_python_argv_resolves_only_bundled_source(self):
         manifest = dict(files={'source/driver.py': 'hash'}, binaries={'bench': 'bin/bench'})
         bundle = Path('/bundle')

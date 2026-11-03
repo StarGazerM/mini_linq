@@ -1847,8 +1847,11 @@ P6 slice C, P7.3 design and P8 `delta=k`; these are not additional merged result
   2026-11-02/03. Summary
   [`bench-2026-11-02.md`](../experiments/gpu/compare/bench-2026-11-02.md), raw
   samples and CIs in `bench-2026-11-02.results.json`. Five interleaved
-  fresh-process pairs (GPU TPC-H SF10: four), exact answers every sample, paired bootstrap 95% CI
-  of median ratios (cur/ref). CPU TPC-H SF1 (28 of 29 kernels, DuckDB-exact):
+  fresh-process pairs (GPU TPC-H SF10: four); TPC-H answers fully checked every
+  sample, DOOP relation counts checked after separate full-tuple validation;
+  paired bootstrap 95% CI of median ratios (cur/ref). These are historical
+  checks, not the current full-first/sampled-later protocol. CPU TPC-H SF1
+  (28 of 29 kernels, DuckDB-exact):
   `default` geomean 0.908 [0.902, 0.917], best h19 0.288, h04 0.535, q19
   0.707; `par` 0.820 [0.800, 0.840], best h19 0.199, h04 0.231, q06 0.235.
   CIs above 1: `default` h06 1.026 [1.017, 1.043], h20 1.024 [1.015, 1.035]

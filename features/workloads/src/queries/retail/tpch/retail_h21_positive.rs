@@ -139,5 +139,9 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter().map(|(order_key, waiting_supplier, other_supplier,)| vec![order_key.to_string(), waiting_supplier.to_string(), other_supplier.to_string()]).collect()
+    rows.iter().map(canonical_row).collect()
+}
+
+pub fn canonical_row((order_key, waiting_supplier, other_supplier,): &Answer) -> Vec<String> {
+    vec![order_key.to_string(), waiting_supplier.to_string(), other_supplier.to_string()]
 }

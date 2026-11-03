@@ -12,6 +12,7 @@ oracle = ["cq-testkit/duckdb"]
 counters = ["cq-workloads/counters"]
 
 [dependencies]
+bench-check = { path = "../../../tools/bench-check" }
 cq-workloads = { path = ".." }
 cq-testkit.workspace = true
 cq-lang-cq.workspace = true

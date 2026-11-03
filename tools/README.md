@@ -61,8 +61,9 @@ separator.
 Builds, tests and timings share one machine through two lock files:
 
 ```sh
-# Builds and tests: run concurrently with each other, never during a measurement.
-flock /tmp/mini_linq-timing-gate.lock true && flock -s /tmp/mini_linq-timing.lock CMD
+# Builds and tests: ONE cargo/target command per shared-lock acquisition.
+# Multi-command runners release and reacquire between commands.
+flock -s /tmp/mini_linq-timing.lock CMD
 # Timing measurements: exclusive. Holding the gate blocks new builds, so a
 # measurement cannot be starved by a stream of shared holders.
 flock /tmp/mini_linq-timing-gate.lock flock -x /tmp/mini_linq-timing.lock CMD
@@ -77,7 +78,8 @@ lock per command.
 
 GPU execution holds `/tmp/mini_linq-gpu.lock`. GPU timing holds only the GPU
 lock, not the CPU timing locks: samples interleave A/B in rotating order and
-record load average, which controls for background builds. A GPU claim whose
+record load average, which controls for background builds. Check for foreign
+tenants before each sample and discard contaminated samples. A GPU claim whose
 CI lies within 5% of 1 is rerun with the CPU exclusive lock taken after the GPU
 lock. CPU timing holds the exclusive lock only for the measurement itself.
 
@@ -103,6 +105,80 @@ changelog-only changes select no behavioral targets. A proven-empty selection is
 a successful gate; uncertainty is never treated as an unaffected target.
 
 ## Timing and scheduling
+
+### Timing-sample answer validation
+
+Timing uses the shared host-only `tools/bench-check` library/CLI; Python
+controllers use the transport in `tools/bench_check.py`. Build the CLI with
+`cargo build --release -p bench-check` under the build locks above. Remote
+benchmark bundles include it; `BENCH_CHECK_BIN` selects an explicit executable.
+
+The **first measured sample of each binary/configuration** receives a complete
+exact comparison. A warmup or separate correctness command does not substitute
+for that first sample. Every later sample must match the exact count of **each**
+output relation/query and check up to **1,000 seeded, uniformly selected actual
+tuples per relation** for membership in the reference (all tuples if smaller).
+Relation names and empty relations are checked too. Counts preserve the existing
+logical set semantics; an arbitrary bag length is not a distinct count.
+Sampling is not a full exactness proof and is never reported as one.
+
+References are indexed once per immutable dataset/query identity in the
+controller, or once outside a native worker's sample loop. A controller retains
+first-full state across fresh processes and keys it by binary identity, dataset,
+query, engine/plan, threads and storage configuration. The native library owns
+the stable sampling algorithm; Python does not rebuild full tuple sets for later
+samples. Producers emit full-first or compact count/sample witnesses. External
+SRDatalog currently exposes only full TSV export: its adapter streams that export
+through the native checker and still reports the export cost separately.
+
+Record verification mode, seed, per-relation counts/sample sizes, reference and
+first-full provenance, and validation seconds. Reference preparation,
+canonicalization, checking, serialization and destruction remain outside the
+existing query timers, but count toward command wall time. Keep interleaved
+fresh-process A/B pairs; do not replace them with a persistent query worker.
+`BENCH_CHECK_MODE`, `BENCH_CHECK_SEED`, `BENCH_CHECK_SIZE` and
+`BENCH_CHECK_SAMPLE` are controller-to-worker timing protocol fields, not a way
+to bypass a correctness gate.
+Raw/prepared DOOP timing producers write a full or sampled semantic witness to
+`BENCH_CHECK_WITNESS`; raw GPU DOOP can separately export its full CPU reference
+with `BENCH_CHECK_REFERENCE`. GPU TPC-H uses `BENCH_CHECK_WITNESS_DIR`, with files
+`sfSCALE/MODE/QUERY-LOCAL_ORDINAL.json` to keep scales and modes distinct.
+Its schema-3 results retain per-sample `check` evidence and distinguish
+`validated` from the stronger all-samples-full `exact` flag. CPU workers retain
+`check_policy`, `warm_check` and execution-ordered `samples_checks`; their
+validation durations include typed canonicalization and selected-row formatting.
+
+This policy applies to the CPU TPC-H plain/profile workers, raw and prepared
+DOOP timing harnesses, GPU TPC-H timing loop and paired pod driver. Tests,
+explicit correctness commands, independently counted checks and conformance
+gates keep complete comparisons. Mac, compiled-triangle and storage
+microbenchmarks retain their current full checks pending separate migration.
+Dated benchmark reports describe the policy used when recorded; their historical
+full-exactness claims are not evidence of sampling or of current-run validation.
+
+Dataset loading is a separate concern. CPU TPC-H workers already load once per
+process. Process-wide immutable test fixtures, a prepared mapped P5/S2 columnar
+cache and context-owned GPU base-column residency are proposals, not implemented
+by this timing-check cutover. Loader benchmarks must continue measuring real
+fresh loads; never hide `Dataset::clone` or remove loading from an upload-inclusive
+metric and call it a cache speedup.
+
+Measured checkpoint (2026-11-03, shared-data worktree): real SF1 default H03
+validated 11,620 rows in 2.096 ms for the first full sample, then 0.605/0.677 ms
+for two 1,000-tuple samples. H13 validated 150,000 rows in 26.472 ms, then
+4.052/4.020 ms. These phases include typed canonicalization and formatting;
+they are full-versus-sampled phase observations, not old/new query speedups.
+Worker evidence is under `features/workloads/target/bench/runs/sf-1/`.
+
+Fixture-cache admission was measured separately: `kernel_written_coarse` spent
+0.148373 s in 336 dataset parses; `sequence_conformance_kernel_written_coarse`
+spent 0.065304 s in 156 parses. Extrapolating their means to 6,018 avoided
+parses gives **2.617 s of sequential parsing work**, below the approximately
+30 s gate-wall threshold. The OnceLock registry was therefore not implemented;
+temporary instrumentation was removed. Raw logs and command/lock timing ledger
+are in `target/shared-data-gates/`. Root, five counters packages, quick, formal,
+API, complete TPC-H catalog compilation, GPU-workspace compile-only and the two
+real SF1 benchmark commands passed; GPU device execution is not claimed.
 
 Every run writes a new `target/regression-logs/RUN-ID/` directory, or the fresh
 location passed to `--output`. `results.tsv` retains package/kind/target/status/log
@@ -204,7 +280,8 @@ still independent of Cargo's build directory. The preexisting workload corpus/e2
   production build groups. The external gate reconstructs consumer-only
   workspaces outside the checkout and substitutes Cargo-packaged core crates.
 
-Root `default-members` contains 113 of the 118 packages, excluding these five whose
+Root `default-members` contains 114 of the 119 packages (including the host-only
+benchmark checker), excluding these five whose
 **dev-dependencies** explicitly enable `cq-storage/counters`:
 `mini-linq`, `cq-load`, `own-dialect`, `cq-rewrites`, and `cq-sequence-tasks`.
 No normal dependency or default feature enables another instrumentation feature.

@@ -160,19 +160,19 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     }
 }
 
+pub fn canonical_row(value: &Answer) -> Vec<String> {
+    vec![value.map_or_else(
+        || "\\N".into(),
+        |value| {
+            let sign = if value < 0 { "-" } else { "" };
+            let magnitude = value.unsigned_abs();
+            format!("{sign}{}.{:04}", magnitude / 10_000, magnitude % 10_000)
+        },
+    )]
+}
+
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter()
-        .map(|value| {
-            vec![value.map_or_else(
-                || "\\N".into(),
-                |value| {
-                    let sign = if value < 0 { "-" } else { "" };
-                    let magnitude = value.unsigned_abs();
-                    format!("{sign}{}.{:04}", magnitude / 10_000, magnitude % 10_000)
-                },
-            )]
-        })
-        .collect()
+    rows.iter().map(canonical_row).collect()
 }
 
 #[cfg(test)]

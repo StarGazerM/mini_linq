@@ -31,6 +31,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "bench-check"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.69.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -464,6 +472,7 @@ dependencies = [
 name = "cq-gpu-tpch"
 version = "0.1.0"
 dependencies = [
+ "bench-check",
  "cq-gpu-runtime",
  "cq-gpu-sequence",
  "cq-gpu-sequence-runtime",
@@ -1115,6 +1124,7 @@ dependencies = [
 name = "doop-gpu"
 version = "0.1.0"
 dependencies = [
+ "bench-check",
  "cq-datalog",
  "cq-gpu-datalog",
  "cq-gpu-runtime",
@@ -1148,6 +1158,7 @@ name = "doop-shared"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "bench-check",
  "cq-storage",
  "libc",
 ]
@@ -1812,6 +1823,7 @@ dependencies = [
 name = "srd-doop-harness"
 version = "0.1.0"
 dependencies = [
+ "bench-check",
  "serde_json",
  "srd-doop-shared",
 ]
@@ -1820,6 +1832,7 @@ dependencies = [
 name = "srd-doop-shared"
 version = "0.1.0"
 dependencies = [
+ "bench-check",
  "serde_json",
 ]
 

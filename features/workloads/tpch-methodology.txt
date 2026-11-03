@@ -200,16 +200,24 @@ An odd run count of at least three may be requested. Each timed execution
 constructs a fresh query, builds required indexes, runs and fully materializes
 its typed output. Load time, string formatting, answer-set normalization,
 comparison, file I/O and result destruction are outside the query timer.
+The shared tools/bench-check helper checks the first measured sample of each
+binary/configuration fully against the retained DuckDB reference. Later samples
+check exact logical answer counts and up to 1,000 seeded actual tuples for
+reference membership (all if smaller). Warmup exactness does not replace the
+first measured full check. Reference indexing is outside the sample loop;
+validation mode, seed, sample count and seconds are retained in worker evidence.
+Tests, zero-run correctness gates and independent counter checks stay full.
 
 DuckDB uses separately preloaded in-memory tables from the identical Parquet
 projections. Its load is measured separately. Both threads=1 and the engine's
 observed default thread count are reported. Each mode performs its correctness
 execution and one additional explicit warm execution before N measured runs.
-DuckDB timing includes preparation/planning/optimization, execution and complete
-Arrow result collection. MiniLinq produces a Vec of typed Rust tuples; DuckDB
-produces typed columnar Arrow batches. Neither timer includes textual output
-conversion. This is an end-to-end execution boundary, not an isolated operator
-benchmark. Engine/client output layouts and DuckDB's runtime planning differ.
+DuckDB CLI timing includes preparation/planning/optimization, execution, CSV
+serialization, transfer and parsing. The separately reported execute-only mode
+prepares once outside sampling. CLI startup and table preload are excluded.
+MiniLinq produces a Vec of typed Rust tuples and excludes textual conversion
+from its query timer. These are end-to-end execution boundaries, not identical
+output layouts or isolated operator benchmarks.
 
 The getrusage peak_rss_kib reading is the worker process peak RSS. It includes
 loading, oracle/answer witnesses, warmup, all samples, and canonical comparison;
@@ -320,10 +328,13 @@ fixture loading, canonicalization/serialization, answer checking and answer drop
 DuckDB's JSON operator timings are displayed as provided; they are not the same
 quantity as our inclusive pipeline spans.
 
-The runner warms both workers, checks every sample exactly against DuckDB, and
-reports the median of eleven executions and the measured overhead against a
-separate release worker without counters. It does not subtract estimated overhead
-or scale the operator times to make them agree with an uninstrumented measurement.
+The runner warms both workers, fully checks each binary/configuration's first
+measured sample, then checks exact counts and up to 1,000 seeded actual tuples
+against the reference in later samples using tools/bench-check. It reports the
+median of eleven executions and the measured overhead against a separate release
+worker without counters. It does not subtract estimated overhead or scale the
+operator times to make them agree with an uninstrumented measurement. Dated
+results retain the full-per-sample policy used when they were recorded.
 The timing worker enables cq-storage/operator-timing, independently of counters,
 for operator clocks with the normal aHash algorithm and row/primitive counters
 disabled. A separate counters-only worker supplies operator rows and primitive

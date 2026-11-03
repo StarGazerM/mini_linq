@@ -140,7 +140,9 @@ crate::tpch_runtime::standalone_configs! { $;
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter()
-        .map(|(name, address)| vec![name.clone(), address.clone()])
-        .collect()
+    rows.iter().map(canonical_row).collect()
+}
+
+pub fn canonical_row((name, address): &Answer) -> Vec<String> {
+    vec![name.clone(), address.clone()]
 }

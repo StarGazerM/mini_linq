@@ -189,7 +189,9 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter()
-        .map(|(part_key, suppkey)| vec![part_key.to_string(), suppkey.to_string()])
-        .collect()
+    rows.iter().map(canonical_row).collect()
+}
+
+pub fn canonical_row((part_key, suppkey): &Answer) -> Vec<String> {
+    vec![part_key.to_string(), suppkey.to_string()]
 }

@@ -262,10 +262,12 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     }
 }
 
+pub fn canonical_row(value: &Answer) -> Vec<String> {
+    vec![value.map_or_else(|| "\\N".into(), fixed_four)]
+}
+
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter()
-        .map(|value| vec![value.map_or_else(|| "\\N".into(), fixed_four)])
-        .collect()
+    rows.iter().map(canonical_row).collect()
 }
 
 fn fixed_four(value: i128) -> String {

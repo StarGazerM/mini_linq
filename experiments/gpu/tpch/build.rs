@@ -1003,7 +1003,6 @@ fn compile_stage(
     let mut decode_bindings = Vec::new();
     let mut owned_outputs = Vec::new();
     for (index, ((_, ty), column)) in kernel.answer.iter().zip(&answer_columns).enumerate() {
-        let output = syn::Index::from(index);
         answer_types.push(if let Some(output) = cq.output() {
             &output.columns[index].ty
         } else {
@@ -1016,7 +1015,7 @@ fn compile_stage(
             let decoder = format_ident!("domain_{index}");
             decode_bindings.push(quote!(let #decoder = data.catalog.domain(#domain)?;));
             // DECODE P: final answer formatting inverts dense source-key domains on the host.
-            owned_outputs.push(quote!(#decoder.value(row.#output).to_string()));
+            owned_outputs.push(quote!(#decoder.value(*value).to_string()));
         } else if column.as_ref().is_some_and(|origin| {
             stored_types.contains_key(origin)
                 && manifest
@@ -1031,11 +1030,11 @@ fn compile_stage(
                 quote!(let #decoder = manifest.dictionary(manifest.column(#table, #column)?)?;),
             );
             // DECODE P: final answer formatting resolves source string dictionaries on the host.
-            owned_outputs.push(quote!(#decoder[row.#output as usize].clone()));
+            owned_outputs.push(quote!(#decoder[*value as usize].clone()));
         } else if publication.nullable[index] {
-            owned_outputs.push(quote!(format!("{:?}", row.#output)));
+            owned_outputs.push(quote!(format!("{:?}", value)));
         } else {
-            owned_outputs.push(quote!(row.#output.to_string()));
+            owned_outputs.push(quote!(value.to_string()));
         }
     }
     let (catalog_field, catalog_init, load_setup) = if storage_schema.is_some() {
@@ -1170,6 +1169,7 @@ fn compile_stage(
                 .map(|ty| ty.to_token_stream().to_string())
                 .collect::<Vec<_>>()
         );
+        let decode_fields: Vec<_> = (0..answer_types.len()).map(syn::Index::from).collect();
         return Ok((
             quote! {
                 use cq_load::{Date, Load, StringCode};
@@ -1191,9 +1191,13 @@ fn compile_stage(
                     #(#sequential_bindings)*
                     Ok((#cpu).map(|row| #own_row).collect())
                 }
-                pub(super) fn decode(data: &Inputs, manifest: &crate::manifest::Manifest, rows: Vec<Answer>) -> crate::manifest::Result<Vec<Vec<String>>> {
+                pub(super) fn decoders<'a>(data: &'a Inputs, manifest: &crate::manifest::Manifest) -> crate::manifest::Result<(#(impl Fn(&#answer_types) -> String + 'a,)*)> {
                     #(#decode_bindings)*
-                    Ok(rows.into_iter().map(|row| vec![#(#owned_outputs),*]).collect())
+                    Ok((#(move |value: &#answer_types| #owned_outputs,)*))
+                }
+                pub(super) fn decode(data: &Inputs, manifest: &crate::manifest::Manifest, rows: Vec<Answer>) -> crate::manifest::Result<Vec<Vec<String>>> {
+                    let decoders = decoders(data, manifest)?;
+                    Ok(rows.iter().map(|row| vec![#((decoders.#decode_fields)(&row.#decode_fields)),*]).collect())
                 }
             },
             artifact,

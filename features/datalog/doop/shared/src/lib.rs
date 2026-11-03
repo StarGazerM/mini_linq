@@ -126,6 +126,54 @@ pub struct Results {
 }
 
 impl Results {
+    /// Timing-only semantic witness. Canonicalize typed rows before counting;
+    /// resolve dictionary strings only for the actual rows selected by policy.
+    pub fn witness(&mut self, policy: bench_check::Policy) -> bench_check::Witness {
+        let mut witness = bench_check::Witness::new();
+        macro_rules! relation {
+            ($name:literal, $field:ident, $($column:tt),+) => {{
+                self.$field.sort_unstable();
+                self.$field.dedup();
+                witness.insert($name.into(), bench_check::make_witness(
+                    $name,
+                    self.$field.len(),
+                    |index| {
+                        let row = &self.$field[index];
+                        vec![$(interner::res(row.$column).to_string()),+]
+                    },
+                    policy,
+                ));
+            }};
+        }
+        relation!("MainClass", mainclass, 0);
+        relation!("Method_SimpleName", method_simplename, 0, 1);
+        relation!("Method_DeclaringType", method_declaringtype, 0, 1);
+        relation!("Method_Modifier", method_modifier, 0, 1);
+        relation!("Method_ParamTypes", method_paramtypes, 0, 1);
+        relation!("Method_ReturnType", method_returntype, 0, 1);
+        relation!("Method_Descriptor", method_descriptor, 0, 1);
+        relation!("MethodLookup", methodlookup, 0, 1, 2, 3);
+        relation!("MethodImplemented", methodimplemented, 0, 1, 2, 3);
+        relation!("DirectSubclass", directsubclass, 0, 1);
+        relation!("Subclass", subclass, 0, 1);
+        relation!("Superclass", superclass, 0, 1);
+        relation!("Superinterface", superinterface, 0, 1);
+        relation!("SubtypeOf", subtypeof, 0, 1);
+        relation!("SupertypeOf", supertypeof, 0, 1);
+        relation!("SubtypeOfDifferent", subtypeofdifferent, 0, 1);
+        relation!("MainMethodDeclaration", mainmethoddeclaration, 0);
+        relation!("ClassInitializer", classinitializer, 0, 1);
+        relation!("InitializedClass", initializedclass, 0);
+        relation!("Assign", assign, 0, 1);
+        relation!("VarPointsTo", varpointsto, 0, 1);
+        relation!("InstanceFieldPointsTo", instancefieldpointsto, 0, 1, 2);
+        relation!("StaticFieldPointsTo", staticfieldpointsto, 0, 1);
+        relation!("CallGraphEdge", callgraphedge, 0, 1);
+        relation!("ArrayIndexPointsTo", arrayindexpointsto, 0, 1);
+        relation!("Reachable", reachable, 0);
+        witness
+    }
+
     pub fn print_sizes(&self) {
         println!("MainClass	{}", self.mainclass.len());
         println!("Method_SimpleName	{}", self.method_simplename.len());
@@ -444,5 +492,77 @@ impl Results {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod witness_tests {
+    use super::*;
+    use bench_check::{Mode, Policy};
+
+    fn empty_results() -> Results {
+        Results {
+            mainclass: Vec::new(),
+            method_simplename: Vec::new(),
+            method_declaringtype: Vec::new(),
+            method_modifier: Vec::new(),
+            method_paramtypes: Vec::new(),
+            method_returntype: Vec::new(),
+            method_descriptor: Vec::new(),
+            methodlookup: Vec::new(),
+            methodimplemented: Vec::new(),
+            directsubclass: Vec::new(),
+            subclass: Vec::new(),
+            superclass: Vec::new(),
+            superinterface: Vec::new(),
+            subtypeof: Vec::new(),
+            supertypeof: Vec::new(),
+            subtypeofdifferent: Vec::new(),
+            mainmethoddeclaration: Vec::new(),
+            classinitializer: Vec::new(),
+            initializedclass: Vec::new(),
+            assign: Vec::new(),
+            varpointsto: Vec::new(),
+            instancefieldpointsto: Vec::new(),
+            staticfieldpointsto: Vec::new(),
+            callgraphedge: Vec::new(),
+            arrayindexpointsto: Vec::new(),
+            reachable: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn full_witness_uses_semantic_strings_and_logical_counts() {
+        let mut result = empty_results();
+        let heap = interner::sym("semantic-heap");
+        let variable = interner::sym("semantic-variable");
+        result.varpointsto = vec![(heap, variable), (heap, variable)];
+        let witness = result.witness(Policy::full());
+        assert_eq!(witness.len(), 26);
+        assert_eq!(witness["VarPointsTo"].count, 1);
+        assert_eq!(witness["VarPointsTo"].rows,
+                   vec![vec!["semantic-heap".to_string(), "semantic-variable".to_string()]]);
+        assert_eq!(witness["Reachable"].count, 0);
+        assert!(witness["Reachable"].rows.is_empty());
+    }
+
+    #[test]
+    fn sampled_witness_contains_distinct_actual_semantic_rows() {
+        let mut result = empty_results();
+        result.reachable = (0..1501)
+            .map(|index| (interner::sym(&format!("reachable-method-{index}")),))
+            .collect();
+        result.reachable.push(result.reachable[0]);
+        let policy = Policy { mode: Mode::Sampled, seed: 17, sample_size: 1000 };
+        let witness = result.witness(policy);
+        let relation = &witness["Reachable"];
+        assert_eq!(relation.count, 1501);
+        assert_eq!(relation.rows.len(), 1000);
+        assert_eq!(relation.rows.iter().collect::<std::collections::BTreeSet<_>>().len(), 1000);
+        assert!(relation.rows.iter().all(|row| row.len() == 1
+            && row[0].strip_prefix("reachable-method-")
+                .and_then(|suffix| suffix.parse::<usize>().ok())
+                .is_some_and(|index| index < 1501)));
+        assert_eq!(relation.rows, result.witness(policy)["Reachable"].rows);
     }
 }

@@ -23,23 +23,28 @@ pub(crate) fn normalize_decimal(value: String) -> String {
     value
 }
 
+pub(crate) fn normalize_row(
+    row: Vec<String>,
+    decimal_columns: &BTreeSet<usize>,
+) -> Vec<String> {
+    row.into_iter()
+        .enumerate()
+        .map(|(column, value)| {
+            if decimal_columns.contains(&column) {
+                normalize_decimal(value)
+            } else {
+                value
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn normalize_set(
     rows: Vec<Vec<String>>,
     decimal_columns: &BTreeSet<usize>,
 ) -> BTreeSet<Vec<String>> {
     rows.into_iter()
-        .map(|row| {
-            row.into_iter()
-                .enumerate()
-                .map(|(column, value)| {
-                    if decimal_columns.contains(&column) {
-                        normalize_decimal(value)
-                    } else {
-                        value
-                    }
-                })
-                .collect()
-        })
+        .map(|row| normalize_row(row, decimal_columns))
         .collect()
 }
 

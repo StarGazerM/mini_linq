@@ -1,7 +1,8 @@
 use crate::manifest::{Manifest, Result};
 use cq_testkit::conformance::assert_answers_equal;
 use serde_json::{Value, json};
-use std::fs;
+use bench_check::{Mode, Policy, check_relation, make_witness, write_witness};
+use std::{collections::BTreeSet, fs, path::PathBuf, time::Instant};
 
 pub const WARMUP_RUNS: usize = 1;
 pub const MEASURED_RUNS: usize = 5;
@@ -74,31 +75,27 @@ pub fn answer(manifest: &Manifest, query: &str) -> Result<Vec<Vec<String>>> {
     Ok(rows)
 }
 
-fn exact(
-    expected: &[Vec<String>],
-    actual: &mut [Vec<String>],
-    query: &str,
-    sf: u32,
-    iteration: usize,
-) -> Result<()> {
-    actual.sort_unstable();
-    if actual != expected {
-        let first = actual.iter().zip(expected).position(|(a, b)| a != b);
-        return Err(format!("{query} SF{sf} iteration {iteration}: exact answer mismatch; expected {} rows, got {}; first differing row {first:?}", expected.len(), actual.len()).into());
-    }
-    Ok(())
-}
 
-pub fn run(
+pub fn run<T: Ord>(
     manifest: &Manifest,
     query: &str,
-    mut execute: impl FnMut() -> Result<(Vec<Vec<String>>, TimingBoundary)>,
+    mode: &str,
+    mut execute: impl FnMut() -> Result<(Vec<T>, TimingBoundary)>,
+    decode: impl Fn(&T) -> Vec<String>,
     reference: Option<Vec<Vec<String>>>,
+    reference_seconds: f64,
     conformance_only: bool,
 ) -> Result<Value> {
-    let expected = answer(manifest, query)?;
+    let reference_started = Instant::now();
+    let expected: BTreeSet<_> = answer(manifest, query)?.into_iter().collect();
+    let reference_seconds = reference_seconds + reference_started.elapsed().as_secs_f64();
     let (mut warmup, boundary) = execute()?;
-    exact(&expected, &mut warmup, query, manifest.sf, 0)?;
+    let warmup_started = Instant::now();
+    warmup.sort_unstable();
+    warmup.dedup();
+    let warmup_check = check_relation(&expected, query, warmup.len(), |i| decode(&warmup[i]), Policy::full())?;
+    let mut validation_seconds = warmup_started.elapsed().as_secs_f64();
+    let conformance_started = Instant::now();
     let conformance = if let Some(reference) = reference {
         // This is the external-target cq-testkit API used by H05. The generic
         // assert_conformant driver only exposes Sequential/Tasks targets.
@@ -106,16 +103,19 @@ pub fn run(
             "Sequential of the same Physical",
             reference,
             "planned CUDA Sequence",
-            warmup.iter().cloned(),
+            warmup.iter().map(&decode),
             true,
         );
         json!({"status": "passed", "api": "cq_testkit::conformance::assert_answers_equal", "sf": 1})
     } else {
         Value::Null
     };
+    validation_seconds += reference_seconds + conformance_started.elapsed().as_secs_f64();
+    drop(warmup);
     let mut samples = Vec::new();
+    let mut full_samples = 0;
     if !conformance_only {
-        for iteration in 1..=MEASURED_RUNS {
+        for iteration in 0..MEASURED_RUNS {
             cq_gpu_runtime::take_last_timings();
             let (mut actual, measured_boundary) = execute()?;
             if measured_boundary != boundary {
@@ -123,10 +123,24 @@ pub fn run(
             }
             let timing = cq_gpu_runtime::take_last_timings()
                 .ok_or("GPU translation published no phase timings")?;
-            exact(&expected, &mut actual, query, manifest.sf, iteration)?;
+            let started = Instant::now();
+            actual.sort_unstable();
+            actual.dedup();
+            let policy = if cfg!(test) { Policy::full() } else { Policy::from_env(iteration)? };
+            let evidence = check_relation(&expected, query, actual.len(), |i| decode(&actual[i]), policy)?;
+            full_samples += usize::from(policy.mode == Mode::Full);
+            if let Some(directory) = std::env::var_os("BENCH_CHECK_WITNESS_DIR") {
+                let directory = PathBuf::from(directory).join(format!("sf{}", manifest.sf)).join(mode);
+                fs::create_dir_all(&directory)?;
+                let witness = [(query.to_owned(), make_witness(query, actual.len(), |i| decode(&actual[i]), policy))].into();
+                write_witness(&directory.join(format!("{query}-{iteration}.json")), &witness)?;
+            }
+            let check_seconds = started.elapsed().as_secs_f64();
+            validation_seconds += check_seconds;
             samples.push(json!({"build_ms": timing.build_ms, "kernels_ms": timing.kernel_ms,
                 "dedup_ms": timing.dedup_ms, "download_ms": timing.download_ms,
-                "total_ms": timing.total_ms, "wall_ms": timing.wall_ms}));
+                "total_ms": timing.total_ms, "wall_ms": timing.wall_ms,
+                "check": evidence, "validation_seconds": check_seconds}));
         }
     }
     let median = |key: &str| -> Value {
@@ -141,7 +155,11 @@ pub fn run(
         json!(values[values.len() / 2])
     };
     Ok(
-        json!({"status": "ran", "exact": true, "answer_rows": expected.len(), "conformance": conformance,
+        json!({"status": "ran", "exact": conformance_only || full_samples == MEASURED_RUNS, "validated": true,
+        "validation": {"policy": if conformance_only || full_samples == MEASURED_RUNS { "full" } else if full_samples > 0 { "full_then_sampled" } else { "sampled" },
+            "full_samples": full_samples, "warmup": warmup_check, "seconds": validation_seconds,
+            "reference_seconds": reference_seconds},
+        "answer_rows": expected.len(), "conformance": conformance,
         "median_ms": {"total": median("total_ms"), "build": median("build_ms"), "kernels": median("kernels_ms"), "dedup": median("dedup_ms"), "download": median("download_ms")},
         "timing_boundary": boundary, "samples": samples}),
     )
@@ -163,17 +181,17 @@ pub fn duckdb(manifest: &Manifest, query: &str) -> Result<Value> {
 
 pub fn table(results: &[Value]) -> String {
     let mut table = String::from(
-        "| query | mode | scale | exact | GPU total ms (build/kernels/dedup) | DuckDB t24 ms | status |\n|---|---|---|---|---|---|---|\n",
+        "| query | mode | scale | validation | GPU total ms (build/kernels/dedup) | DuckDB t24 ms | status |\n|---|---|---|---|---|---|---|\n",
     );
     for row in results {
         let query = row["query"].as_str().unwrap();
         let mode = row["mode"].as_str().unwrap();
         let sf = row["sf"].as_u64().unwrap();
-        let exact = |row: &Value| match row["exact"].as_bool() {
-            Some(true) => "yes",
-            Some(false) => "NO",
+        let validation = row["validation"]["policy"].as_str().unwrap_or_else(|| match row["exact"].as_bool() {
+            Some(true) => "full",
+            Some(false) => "FAILED",
             None => "not run",
-        };
+        });
         let timing = &row["median_ms"];
         let gpu = if let Some(total) = timing["total"].as_f64() {
             format!(
@@ -196,7 +214,7 @@ pub fn table(results: &[Value]) -> String {
         };
         table.push_str(&format!(
             "| {query} | {mode} | SF{sf} | {} | {gpu} | {:.3} | {status} |\n",
-            exact(row),
+            validation,
             row["duckdb"]["t24_median_ms"].as_f64().unwrap()
         ));
     }
@@ -239,8 +257,22 @@ mod tests {
             })
         });
         let rendered = table(&rows);
-        assert!(rendered.contains("| h05 | automatic | SF10 | yes |"));
-        assert!(rendered.contains("| h05 | advised | SF10 | yes |"));
+        assert!(rendered.contains("| h05 | automatic | SF10 | full |"));
+        assert!(rendered.contains("| h05 | advised | SF10 | full |"));
         assert!(!rendered.contains("SF1 |"));
+    }
+
+    #[test]
+    fn sampled_table_does_not_claim_full_exactness() {
+        let row = json!({
+            "query": "h05", "mode": "advised", "sf": 10, "status": "ran",
+            "exact": false, "validated": true,
+            "validation": {"policy": "full_then_sampled"},
+            "median_ms": {"total": 10.0, "build": 2.0, "kernels": 7.0, "dedup": 1.0},
+            "duckdb": {"t24_median_ms": 172.0}
+        });
+        let rendered = table(&[row]);
+        assert!(rendered.contains("| h05 | advised | SF10 | full_then_sampled |"));
+        assert!(!rendered.contains("FAILED"));
     }
 }

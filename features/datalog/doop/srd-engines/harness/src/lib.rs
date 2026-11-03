@@ -74,7 +74,7 @@ pub fn execute(
     eprintln!("phase\tload\tdone\t{:.6}", load.as_secs_f64());
     eprintln!("phase\tevaluation\tstart");
     let start = Instant::now();
-    let results = run(facts);
+    let mut results = run(facts);
     let evaluation = start.elapsed();
     eprintln!("phase\tevaluation\tdone\t{:.6}", evaluation.as_secs_f64());
     println!("counts\t{}", serde_json::to_string(&results.counts())?);
@@ -93,6 +93,11 @@ pub fn execute(
         let start = Instant::now();
         results.export(&directory)?;
         eprintln!("phase\texport\tdone\t{:.6}", start.elapsed().as_secs_f64());
+    } else if let Some(path) = std::env::var_os("BENCH_CHECK_WITNESS") {
+        let start = Instant::now();
+        let witness = results.witness(bench_check::Policy::from_env(0)?);
+        bench_check::write_witness(&PathBuf::from(path), &witness)?;
+        eprintln!("phase\tbench_check_witness\tdone\t{:.6}", start.elapsed().as_secs_f64());
     }
     Ok(())
 }

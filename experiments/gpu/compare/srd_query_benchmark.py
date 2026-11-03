@@ -10,13 +10,18 @@ From the MiniLinq checkout (all paths have CLI overrides)::
 ``build`` compiles only SRDatalog, with no deadline, using the checkout's .venv.
 Prebuild srd-doop-mini, srd-doop-mini-par, srd-doop-gpu and doop-gpu separately.
 ``run`` uses one fresh-process warmup and three measurements, each killed after
-10 seconds. ``export`` performs separate correctness runs (default 300 seconds,
+10 seconds. Timing validation loads one serial reference per dataset/schema;
+the first measured sample of every binary/configuration is full, subsequent
+samples check all logical counts and 1000 seeded actual tuples per relation.
+Warmup validation never discharges the first measured full check. External SRD
+libraries transport tuples via their native TSV export, outside query timing.
+``export`` performs separate full correctness runs (default 300 seconds,
 override with --correctness-timeout); these never enter benchmark medians.
 ``run --export-tuples`` does both. Select subsets using --engines and --datasets;
 sequential invocations accumulate records in --results. Do not write the same
 results file from concurrent CPU/GPU invocations. No timeout is interpreted as
-a count or equality result. Exports are retained. Serial ``mini`` is included
-by default for correctness, not timing. Existing serial exports can be checked::
+a count or equality result. Exports are retained. Serial ``mini`` supplies the
+prepared-data reference, not timings. Existing serial exports can be checked::
 
     python3 experiments/gpu/compare/srd_query_benchmark.py compare --dataset xalan \\
         --mini-export /path/to/mini --mini-log /path/to/mini.stdout.log \\
@@ -59,6 +64,8 @@ import threading
 import time
 
 REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO / 'tools'))
+from bench_check import Checker
 SOURCE = Path('/home/stargazermiao/workspace/srdatalog-python')
 DATA = Path('/data/doop-bench')
 ENGINES = ('mini-par', 'mini-gpu', 'srd-default', 'srd-field_flow', 'original-doop-gpu')
@@ -66,7 +73,9 @@ TIMEOUT = 10.0
 CANDIDATE = 'research/doop_field_flow/harness/candidate.py'
 ENV_KEYS = ('PATH', 'LD_LIBRARY_PATH', 'CUDA_HOME', 'CUDA_PATH', 'CXX', 'CC',
             'CARGO_TARGET_DIR', 'RUSTFLAGS', 'SRDATALOG_RMM_RESOURCE',
-            'GPU_DATALOG_PHASES', 'RAYON_NUM_THREADS', 'CUDA_VISIBLE_DEVICES')
+            'GPU_DATALOG_PHASES', 'RAYON_NUM_THREADS', 'CUDA_VISIBLE_DEVICES',
+            'BENCH_CHECK_MODE', 'BENCH_CHECK_SEED', 'BENCH_CHECK_SAMPLE',
+            'BENCH_CHECK_WITNESS', 'BENCH_CHECK_REFERENCE')
 
 
 def load(path):
@@ -105,7 +114,8 @@ def identity(source):
 
 
 def environment():
-    result = os.environ.copy()
+    result = {key: value for key, value in os.environ.items()
+              if not key.startswith('BENCH_CHECK_')}
     result.update(SRDATALOG_RMM_RESOURCE='cuda_async', GPU_DATALOG_PHASES='1',
                   RAYON_NUM_THREADS='15', PYTHONDONTWRITEBYTECODE='1')
     return result
@@ -290,8 +300,9 @@ def count_schema(args, record):
     raise FileNotFoundError(path)
 
 
-def launch(args, engine, dataset, directory, export=False):
-    exports = directory / 'relations' if export else None
+def launch(args, engine, dataset, directory, export=False, check_plan=None, reference_path=None):
+    exports = directory / 'relations' if export else (
+        directory / 'bench-check-relations' if check_plan and engine.startswith('srd-') else None)
     native = directory / 'native.json'
     if engine.startswith('srd-'):
         variant = engine.removeprefix('srd-')
@@ -299,10 +310,12 @@ def launch(args, engine, dataset, directory, export=False):
         if build['source_identity'] != identity(args.source):
             raise ValueError('SRD build source identity differs from current source')
         command = worker_command(args, '_run', dataset, variant) + ['--report', str(native)]
-        if export:
+        if exports is not None:
             command += ['--export-dir', str(exports)]
     elif engine == 'original-doop-gpu':
-        command = [str(args.original_gpu), str(args.original_data / dataset), '--gpu-only']
+        command = [str(args.original_gpu), str(args.original_data / dataset)]
+        if reference_path is None:
+            command += ['--gpu-only']
     else:
         binary = args.mini if engine == 'mini' else args.mini_par if engine == 'mini-par' else args.mini_gpu
         command = [str(binary), str(args.prepared / dataset)]
@@ -312,9 +325,16 @@ def launch(args, engine, dataset, directory, export=False):
             command += ['--gpu-only']
         if export:
             command += ['--export', str(exports)]
-    record = monitored(command, directory, args.repo, environment(),
+    env = environment()
+    if check_plan is not None:
+        env.update(Checker.env(check_plan))
+        if not engine.startswith('srd-'):
+            env['BENCH_CHECK_WITNESS'] = str(directory / 'witness.json')
+    if reference_path is not None:
+        env['BENCH_CHECK_REFERENCE'] = str(reference_path)
+    record = monitored(command, directory, args.repo, env,
                        gpu=engine not in ('mini', 'mini-par'),
-                       timeout=args.correctness_timeout if export else TIMEOUT)
+                       timeout=args.correctness_timeout if export or reference_path else TIMEOUT)
     record['executable_sha256'] = sha(command[0])
     if engine.startswith('srd-'):
         record['build'] = build
@@ -328,8 +348,12 @@ def launch(args, engine, dataset, directory, export=False):
     elif engine.startswith('srd-') and record['status'] == 'passed':
         record['status'] = 'failed'
         record['error'] = 'No completed native report'
-    if exports is not None:
+    if export:
         record['exports'] = str(exports)
+    elif exports is not None:
+        record['validation_exports'] = str(exports)
+    if check_plan is not None and not engine.startswith('srd-'):
+        record['witness'] = str(directory / 'witness.json')
     save(directory / 'process.json', record)
     return record
 
@@ -402,6 +426,84 @@ def compare_records(args, left, right, relations):
     return result
 
 
+def timing_references(args, dataset, engines, session, checker):
+    """One independent full reference and native index per dataset/schema."""
+    references, records = {}, {}
+    if any(engine != 'original-doop-gpu' for engine in engines):
+        record = launch(args, 'mini', dataset, session / dataset / 'reference-prepared', True)
+        record['purpose'] = 'reference'
+        if record['status'] != 'passed':
+            raise RuntimeError(f'{dataset}: serial prepared reference did not complete')
+        names, _ = count_schema(args, record)
+        files = {name: str(Path(record['exports']) / f'{name}.csv') for name in names}
+        found = {path.stem for path in Path(record['exports']).glob('*.csv')}
+        if found != names:
+            raise ValueError(f'{dataset}: incomplete/extra serial reference relations')
+        reference = f'prepared:{args.prepared / dataset}:field_flow'
+        checker.register_files(reference, files)
+        references['field_flow'] = reference
+        records['field_flow'] = record
+        if 'srd-default' in engines:
+            default_names = schema(args, dataset, 'default')
+            reference = f'prepared:{args.prepared / dataset}:default'
+            checker.register_files(reference, {name: files[name] for name in default_names})
+            references['default'] = reference
+            records['default'] = record
+    if 'original-doop-gpu' in engines:
+        directory = session / dataset / 'reference-original'
+        path = directory / 'cpu-reference.json'
+        record = launch(args, 'original-doop-gpu', dataset, directory, reference_path=path)
+        record['purpose'] = 'reference'
+        if record['status'] != 'passed':
+            raise RuntimeError(f'{dataset}: original DOOP full reference did not complete')
+        reference = f'raw-doop:{args.original_data / dataset}:26'
+        checker.register_witness(reference, path)
+        references['original'] = reference
+        records['original'] = record
+    return references, records
+
+
+def timing_key(args, dataset, engine):
+    if engine.startswith('srd-'):
+        build = load(args.work / 'builds' / dataset / engine.removeprefix('srd-') / 'build.json')
+        identity = build['library_sha256']
+    else:
+        binary = (args.original_gpu if engine == 'original-doop-gpu' else
+                  args.mini_par if engine == 'mini-par' else args.mini_gpu)
+        identity = sha(binary)
+    return f'{dataset}:{engine}:{identity}:threads=15:plan=baseline:resource=cuda_async'
+
+
+def validate_timing(args, record, checker, key, reference, ordinal, plan):
+    start = time.monotonic()
+    if record['engine'].startswith('srd-'):
+        variant = record['engine'].removeprefix('srd-')
+        names = schema(args, record['dataset'], variant)
+        directory = Path(record['validation_exports'])
+        if {path.stem for path in directory.glob('*.tsv')} != set(names):
+            raise ValueError('Incomplete/extra native validation export schema')
+        evidence = checker.check_files(
+            key, reference, ordinal, {name: str(directory / f'{name}.tsv') for name in names})
+        for name, relation in evidence['relations'].items():
+            if relation['actual_count'] != record['relation_counts'].get(name):
+                raise ValueError(f'{name}: native count differs from exported logical count')
+        producer_seconds = record['native']['stages_seconds']['export']
+    else:
+        evidence = checker.check(key, reference, ordinal, Path(record['witness']))
+        producer_seconds = next((float(phase[2]) for phase in record['phases']
+                                 if len(phase) == 3 and phase[:2] == ['bench_check_witness', 'done']), None)
+        if producer_seconds is None:
+            raise ValueError('Missing witness generation timing')
+    checker_seconds = time.monotonic() - start
+    record['validation'] = {
+        'plan': plan, 'evidence': evidence, 'reference_id': reference,
+        'checker_seconds': checker_seconds, 'producer_seconds': producer_seconds,
+        'validation_seconds': checker_seconds + producer_seconds,
+        'transport': 'native TSV export' if record['engine'].startswith('srd-') else 'semantic witness',
+    }
+    save(Path(record['stdout']).parent / 'process.json', record)
+
+
 def summaries(records):
     result = []
     keys = sorted({(r['dataset'], r['engine']) for r in records})
@@ -459,16 +561,42 @@ def run_suite(args):
             raise ValueError(f'Prepared inputs changed since previous runs: {dataset}')
         previous[dataset] = files
     save(args.results, result)
+    if args.command == 'run':
+        with Checker() as checker:
+            collect(args, result, session, checker)
+    else:
+        collect(args, result, session, None)
+
+
+def collect(args, result, session, checker):
     try:
         for dataset in args.datasets:
             engines = [e for e in args.engines if dataset != 'cassandra' or e == 'original-doop-gpu']
             if args.command == 'run':
                 timed_engines = [e for e in engines if e != 'mini']
+                references, reference_records = timing_references(
+                    args, dataset, timed_engines, session, checker)
+                result.setdefault('validation_references', {})[dataset] = reference_records
+                keys = {engine: timing_key(args, dataset, engine) for engine in timed_engines}
                 for index in range(-1, 3):
                     # Alternate order, as in the retained research paired harness.
                     for engine in timed_engines if index % 2 else reversed(timed_engines):
-                        record = launch(args, engine, dataset, session / dataset / engine / f'run-{index}')
+                        scope = ('original' if engine == 'original-doop-gpu' else
+                                 'default' if engine == 'srd-default' else 'field_flow')
+                        reference = references[scope]
+                        # A separate warmup key preserves the first measured full check.
+                        key = keys[engine] + (':warmup' if index < 0 else '')
+                        ordinal = max(index, 0)
+                        plan = checker.plan(key, reference, ordinal)
+                        record = launch(args, engine, dataset, session / dataset / engine / f'run-{index}',
+                                        check_plan=plan)
                         record.update(index=index, warmup=index < 0)
+                        if record['status'] == 'passed':
+                            try:
+                                validate_timing(args, record, checker, key, reference, ordinal, plan)
+                            except Exception as error:
+                                record.update(status='failed', validation_error=repr(error))
+                                save(Path(record['stdout']).parent / 'process.json', record)
                         result['runs'].append(record)
                         result['summary'] = summaries(result['runs'])
                         save(args.results, result)
@@ -521,7 +649,9 @@ def run_suite(args):
         failures |= any(not c['passed'] for c in checks)
         failures |= any(c['status'] != 'passed' for c in result['comparisons'])
         result['status'] = 'completed_with_failures_or_timeouts' if failures else 'completed'
-        result['tuple_validation'] = 'not_requested' if not result['comparisons'] else 'see_comparisons'
+        result['tuple_validation'] = ('full_first_then_sampled_actual_tuples_and_exact_counts'
+                                      if args.command == 'run' else
+                                      'not_requested' if not result['comparisons'] else 'see_comparisons')
     except BaseException as error:
         result.update(status='failed', error=repr(error))
         raise

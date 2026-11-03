@@ -92,7 +92,24 @@ impl Harness<'_> {
     /// Execute within the context installed by the caller. String errors can
     /// cross an execution-context boundary without transferring boxed errors.
     pub fn execute(&self, options: &Options) -> std::result::Result<(), String> {
-        let run = |name: &str| -> Result<Results> { run(self.engine(name)?, &options.directory) };
+        // Explicit correctness runs remain full comparisons and ignore timing policy.
+        let witness_path = (!options.check)
+            .then(|| std::env::var_os("BENCH_CHECK_WITNESS"))
+            .flatten()
+            .map(PathBuf::from);
+        if witness_path.is_some() && options.engine == "both" {
+            return Err("BENCH_CHECK_WITNESS requires one explicit --engine".into());
+        }
+        let run = |name: &str| -> Result<Results> {
+            let mut result = run(self.engine(name)?, &options.directory)?;
+            if let Some(path) = &witness_path {
+                let start = Instant::now();
+                let witness = result.witness(bench_check::Policy::from_env(0)?);
+                bench_check::write_witness(path, &witness)?;
+                println!("bench_check_witness_seconds={:.6}", start.elapsed().as_secs_f64());
+            }
+            Ok(result)
+        };
         if options.check {
             let mut expected = run(self.reference).map_err(|error| error.to_string())?;
             for &name in self.checked {

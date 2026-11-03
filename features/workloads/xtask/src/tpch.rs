@@ -588,8 +588,8 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         "duckdb_version":database.version,"duckdb_default_threads":database.default_threads,
         "rustc":String::from_utf8_lossy(&rustc.stdout).trim(),
         "compile_method":"Cargo --release --timings per-query binary unit (all authored configurations; proc macros at opt-level 3); macro expansion + optimization + linking; dependency units excluded; not isolated proc-macro CPU time; null/NA when Cargo reused an up-to-date worker",
-        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, canonical set comparison and result drop for MiniLinq; DuckDB CLI timings include query execution, CSV serialization, file transfer and parsing; duckdb_1_median_ms also includes prepare/optimization; duckdb_1_execute_median_ms prepares once untimed; CLI process startup and table loading are excluded",
-        "sf_0_1_gate":"SF 1/10: every query/configuration worker checked at SF 0.1 before timing; SF 0.1: timed workers check exact answers before sampling",
+        "query_boundary":"fresh query initialization, index construction, full typed result materialization; excludes load, serialization, typed deduplication, answer validation and result drop for MiniLinq; DuckDB CLI timings include query execution, CSV serialization, file transfer and parsing; duckdb_1_median_ms also includes prepare/optimization; duckdb_1_execute_median_ms prepares once untimed; CLI process startup and table loading are excluded",
+        "sf_0_1_gate":"SF 1/10: every query/configuration worker checked fully at SF 0.1 before timing; all warmups and each binary/configuration's first measured sample checked fully, then exact logical counts plus up to 1000 seeded actual-row membership checks",
         "memory_method":"getrusage(RUSAGE_SELF) ru_maxrss in KiB (Darwin bytes converted); process lifetime high water includes load, warmup, answers and correctness; not incremental query-only memory; NA on non-Unix",
         "fault_method":"getrusage(RUSAGE_SELF) ru_minflt/ru_majflt deltas immediately around each query, outside its wall timer; excludes load, result canonicalization/comparison and drop; query_* TSV fields are paired with the median-time sample, samples_* JSON arrays share timing order; warm_* records first-touch warm execution separately; RSS is process lifetime high water at the end of that query",
         "counter_scope":"cq-storage instrumentation disabled in timed binary; counters collected in a separately compiled binary and untimed execution; extension aggregate folds and uninstrumented host work are not counted; DuckDB lacks equivalent instrumentation",
@@ -601,7 +601,7 @@ pub(super) fn run(arguments: Vec<String>) -> Result<()> {
         serde_json::to_vec_pretty(&metadata)?,
     )?;
     println!(
-        "completed configurations matched DuckDB exactly; see status rows for timeouts; wrote {}",
+        "completed configurations passed full-first/count-and-sample DuckDB validation; see status rows for timeouts; wrote {}",
         path.display()
     );
     Ok(())
@@ -741,16 +741,63 @@ fn execute_worker_limited(
     if !status.success() {
         return Err(format!("{} / {config} failed: {status}", query.name).into());
     }
-    let actual: Vec<Vec<String>> = serde_json::from_slice(&std::fs::read(&answers)?)?;
-    let actual = normalize_set(actual, &expected.decimal_columns);
-    if actual != expected.rows {
-        return Err(format!(
-            "{} / {config} worker answer differs from DuckDB",
-            query.name
-        )
-        .into());
+    let measured: Value = serde_json::from_slice(&std::fs::read(&metrics)?)?;
+    if runs == 0 {
+        let actual: Vec<Vec<String>> = serde_json::from_slice(&std::fs::read(&answers)?)?;
+        let actual = normalize_set(actual, &expected.decimal_columns);
+        if actual != expected.rows {
+            return Err(format!(
+                "{} / {config} worker answer differs from DuckDB",
+                query.name
+            )
+            .into());
+        }
+    } else {
+        validate_checks(&measured, expected.rows.len(), runs, bench_check::Policy::from_env(0)?)?;
     }
-    Ok(Some(serde_json::from_slice(&std::fs::read(&metrics)?)?))
+    Ok(Some(measured))
+}
+
+fn validate_checks(
+    metrics: &Value,
+    expected_count: usize,
+    runs: usize,
+    policy: bench_check::Policy,
+) -> Result<()> {
+    let recorded: bench_check::Policy = serde_json::from_value(metrics["check_policy"].clone())?;
+    if recorded.mode != policy.mode || recorded.sample_size != policy.sample_size || recorded.seed != policy.seed {
+        return Err("worker check policy differs from requested policy".into());
+    }
+    let check = |value: &Value, mode: bench_check::Mode| -> Result<()> {
+        let relations: std::collections::BTreeMap<String, bench_check::RelationEvidence> =
+            serde_json::from_value(value.clone())?;
+        let evidence = relations.get("answer").ok_or("missing answer check evidence")?;
+        let selected = if evidence.mode == bench_check::Mode::Full {
+            expected_count
+        } else {
+            expected_count.min(policy.sample_size)
+        };
+        if relations.len() != 1
+            || evidence.expected_count != expected_count
+            || evidence.actual_count != expected_count
+            || evidence.sampled_count != selected
+            || evidence.mode != mode
+            || !evidence.validation_seconds.is_finite()
+            || evidence.validation_seconds < 0.
+        {
+            return Err("invalid native answer check evidence".into());
+        }
+        Ok(())
+    };
+    check(&metrics["warm_check"], bench_check::Mode::Full)?;
+    let samples = metrics["samples_checks"].as_array().ok_or("missing measured checks")?;
+    if samples.len() != runs {
+        return Err("measured check count differs from timing count".into());
+    }
+    for (ordinal, evidence) in samples.iter().enumerate() {
+        check(evidence, if ordinal == 0 { policy.mode } else { bench_check::Mode::Sampled })?;
+    }
+    Ok(())
 }
 
 fn number(value: &Value, key: &str) -> Result<f64> {
@@ -822,6 +869,33 @@ fn answer_set(connection: &Connection, sql: &str) -> Result<Answers> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_evidence_requires_measured_full_independently_of_warmup() {
+        let policy = bench_check::Policy::full();
+        let evidence = |mode, sampled_count| serde_json::json!({"answer": {
+            "mode": mode, "expected_count": 1200, "actual_count": 1200,
+            "sampled_count": sampled_count, "seed": policy.seed, "validation_seconds": 0.01,
+        }});
+        let full = evidence("full", 1200);
+        let sampled = evidence("sampled", 1000);
+        let mut metrics = serde_json::json!({
+            "check_policy": policy, "warm_check": full,
+            "samples_checks": [full, sampled],
+        });
+        assert!(validate_checks(&metrics, 1200, 2, policy).is_ok());
+        metrics["samples_checks"][0] = sampled.clone();
+        assert!(validate_checks(&metrics, 1200, 2, policy).is_err());
+        let outer_policy = bench_check::Policy { mode: bench_check::Mode::Sampled, ..policy };
+        metrics["check_policy"] = serde_json::to_value(outer_policy).unwrap();
+        assert!(validate_checks(&metrics, 1200, 2, outer_policy).is_ok());
+        metrics["samples_checks"][1]["answer"]["actual_count"] = serde_json::json!(1199);
+        assert!(validate_checks(&metrics, 1200, 2, outer_policy).is_err());
+        metrics["samples_checks"][1] = sampled;
+        assert!(validate_checks(&metrics, 1200, 3, outer_policy).is_err());
+        metrics["warm_check"]["answer"]["mode"] = serde_json::json!("sampled");
+        assert!(validate_checks(&metrics, 1200, 2, outer_policy).is_err());
+    }
     #[test]
     fn compile_gate_requires_both_cpu_routes() {
         for configs in [vec![], vec!["default"], vec!["par"], vec!["transfer"]] {

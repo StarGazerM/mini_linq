@@ -330,7 +330,7 @@ def runtime_sources(metadata):
         name = p["name"]
         path = Path(p["manifest_path"]).parent
         dependencies.append([name, p["version"], p["source"], sorted(graph[identifier]["features"])])
-        if name in {"cq-storage", "cq-load", "cq-sequence-tasks"} or (name.startswith("cq-gpu") and "runtime" in name) or "gpu" in path.parts:
+        if name in {"cq-storage", "cq-load", "cq-sequence-tasks", "bench-check"} or (name.startswith("cq-gpu") and "runtime" in name) or "gpu" in path.parts:
             runtimes[name] = crate_digest(path)
     return dict(sorted(runtimes.items())), sorted(dependencies, key=lambda x: canonical(x))
 
@@ -494,6 +494,10 @@ def harness(tree, directory, target, source, deps):
         if name == "cq-load":
             manifest += ', features = ["parquet"]'
         manifest += ' }\n'
+    # Historical baselines predate the native timing checker. Resolve the
+    # dependency only when the included worker actually uses it.
+    if "bench_check::" in (tree / "features/workloads/xtask/src/tpch/worker.rs").read_text():
+        manifest += f'bench-check = {{ path = {json.dumps(str(tree / "tools/bench-check"))} }}\n'
     # Mirrors the bench harness manifest (xtask/src/tpch/compile.rs): the
     # included worker reads getrusage through libc on unix.
     manifest += 'serde_json="1"\nrayon="1"\n[target.\'cfg(unix)\'.dependencies]\nlibc="0.2"\n'

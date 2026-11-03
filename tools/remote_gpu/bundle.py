@@ -33,6 +33,14 @@ def main():
                BINDGEN_EXTRA_CLANG_ARGS='-I' + HPC + '/math_libs/13.0/targets/x86_64-linux/include',
                LIBRARY_PATH=HPC + '/math_libs/13.0/targets/x86_64-linux/lib',
                LD_LIBRARY_PATH=HPC + '/math_libs/13.0/targets/x86_64-linux/lib')
+    cpu_env = os.environ.copy()
+    for key in ('CUDA_HOME', 'CUDA_PATH', 'BINDGEN_EXTRA_CLANG_ARGS', 'LIBRARY_PATH',
+                'LD_LIBRARY_PATH', 'RUSTDOCFLAGS', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS',
+                'CARGO_TARGET_DIR'):
+        cpu_env.pop(key, None)
+    cpu_env.update(CARGO_INCREMENTAL='0', CARGO_BUILD_JOBS='6',
+                   CARGO_PROFILE_DEV_DEBUG='line-tables-only',
+                   CARGO_PROFILE_TEST_DEBUG='line-tables-only')
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='remote-gpu-bundle-') as temporary:
         stage = Path(temporary)
@@ -50,7 +58,8 @@ def main():
         runtime_output_dirs = set()
         selected_packages = set(PACKAGES + args.bench + ['doop-gpu', 'srd-doop-gpu'])
 
-        def build(name, command, require_executables=True):
+        def build(name, command, require_executables=True, cwd=workspace, build_env=None):
+            build_env = env if build_env is None else build_env
             # Gate acquisition is separate, matching tools/README.md exactly.
             waited = time.monotonic()
             subprocess.run(['flock', '/tmp/mini_linq-timing-gate.lock', 'true'], check=True)
@@ -59,12 +68,12 @@ def main():
             with (stage / 'logs' / (name + '.jsonl')).open('w') as stdout, \
                  (stage / 'logs' / (name + '.stderr')).open('w') as stderr:
                 result = subprocess.run(['flock', '-s', '/tmp/mini_linq-timing.lock', *actual],
-                                        cwd=workspace, env=env, stdout=stdout, stderr=stderr)
+                                        cwd=cwd, env=build_env, stdout=stdout, stderr=stderr)
             elapsed = time.monotonic() - began
-            manifest['builds'].append(dict(name=name, argv=actual, cwd=str(workspace),
-                environment={key: env[key] for key in ('CARGO_INCREMENTAL', 'CARGO_BUILD_JOBS',
+            manifest['builds'].append(dict(name=name, argv=actual, cwd=str(cwd),
+                environment={key: build_env[key] for key in ('CARGO_INCREMENTAL', 'CARGO_BUILD_JOBS',
                     'CUDA_HOME', 'BINDGEN_EXTRA_CLANG_ARGS', 'LIBRARY_PATH', 'LD_LIBRARY_PATH',
-                    'RUSTDOCFLAGS') if key in env},
+                    'RUSTDOCFLAGS', 'CARGO_PROFILE_DEV_DEBUG', 'CARGO_PROFILE_TEST_DEBUG') if key in build_env},
                 seconds=elapsed, gate_wait_seconds=began - waited))
             print(f'Gate time {name}: {elapsed:.3f}s (gate wait {began - waited:.3f}s)', flush=True)
             if result.returncode:
@@ -94,6 +103,13 @@ def main():
         binaries = sorted(set(['cq-gpu-tpch', 'doop-gpu', 'srd-doop-gpu'] + args.bench))
         built = build('binaries-build', oxide + ['build'] + common +
                       [arg for binary in binaries for arg in ['--bin', binary]])
+        # Host-only checker: ordinary Cargo in the CPU workspace, never oxide or
+        # an execution command. It obeys the same build locks as GPU compilation.
+        built += build('bench-check-build',
+                       ['cargo', '+1.99.1', 'build', '--locked', '--release',
+                        '--message-format=json', '-p', 'bench-check', '--bin', 'bench-check'],
+                       cwd=root, build_env=cpu_env)
+        binaries.append('bench-check')
         executables = []
         for index, artifact in enumerate(tests):
             if not artifact['profile']['test']:

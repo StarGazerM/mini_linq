@@ -58,6 +58,16 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   reports expose the executed accounting paths. The 2026-11-02 GPU TPC-H ratios
   are boundary-confounded: current included terminal downloads, reference did not.
 
+- Timing validation uses one shared `tools/bench-check` implementation for CPU
+  TPC-H, raw/prepared DOOP, GPU TPC-H and paired pod benchmarks. Each
+  binary/configuration's first measured sample is fully compared; later samples
+  retain exact per-relation counts and seeded actual-tuple membership checks
+  (up to 1,000 tuples, all for smaller outputs). References are indexed outside
+  sample loops, validation evidence/timing is explicit, and Python drivers use
+  the native checker rather than repeated complete tuple comparisons. Tests and
+  explicit correctness checks stay full; query timers and fresh-process pairing
+  are unchanged. Mac and storage microbenchmarks retain their existing checks.
+
 - P8 measures Masks against the unconditional Tree reducer on all 29 CPU TPC-H
   SF1 default kernels and the 30-scenario planners corpus. Masks stays default:
   Tree's supported-kernel geometric mean is 1.03541x, versus 1.26056x on the

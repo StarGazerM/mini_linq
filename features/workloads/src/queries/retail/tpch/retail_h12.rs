@@ -152,7 +152,9 @@ crate::tpch_runtime::standalone_configs! { $;
 }
 
 pub fn canonical(rows: &[Answer]) -> Vec<Vec<String>> {
-    rows.iter()
-        .map(|(mode, high, low)| vec![mode.clone(), high.to_string(), low.to_string()])
-        .collect()
+    rows.iter().map(canonical_row).collect()
+}
+
+pub fn canonical_row((mode, high, low): &Answer) -> Vec<String> {
+    vec![mode.clone(), high.to_string(), low.to_string()]
 }
