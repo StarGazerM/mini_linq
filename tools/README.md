@@ -87,6 +87,17 @@ tenants before each sample and discard contaminated samples. A GPU claim whose
 CI lies within 5% of 1 is rerun with the CPU exclusive lock taken after the GPU
 lock. CPU timing holds the exclusive lock only for the measurement itself.
 
+**Read before you measure.** Before building a benchmark or timing anything,
+print the recorded plans (checked VO, Structures, Sequence, GPU realization)
+and read the expanded Rust of every kernel or rule the change touches, for both
+the baseline and the candidate. Write down what changed and why each change is
+right given the other planning decisions (evidence roots, L&E phases, Masks,
+join filters, blocked scans, admission/canon, providers). Measure only after that
+review finds nothing wrong; a timing result on an unreviewed plan carries no
+information. Plan-level changes (join order, delta plans, reductions, filters)
+are produced by the planner from recorded evidence together with the other
+join-planning decisions, never imported or authored in isolation and measured.
+
 Verification follows what a change can break: docs-only changes run nothing;
 test tooling runs its own unit tests; an oracle/infrastructure swap checks only
 that the oracle is unchanged; compiler/runtime changes run the track gate above.
