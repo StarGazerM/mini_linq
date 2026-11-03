@@ -289,6 +289,10 @@ def main():
                    '-o', 'StrictHostKeyChecking=accept-new', '-o', 'UserKnownHostsFile=' + str(results / 'known_hosts')]
         connection = ['ssh', *options, '-p', port, host]
         ssh(['mkdir', '-p', remote + '/results'], 'remote-mkdir')
+        # The 40 GB volume holds the dataset; earlier sessions' unpacked bundles
+        # would exhaust it. Their results were pulled when they ran.
+        ssh(['find', '/workspace/remote-gpu', '-mindepth', '1', '-maxdepth', '1', '-type', 'd',
+             '!', '-name', stamp, '-exec', 'rm', '-rf', '{}', '+'], 'prune-stale-sessions')
         command(['scp', *options, '-P', port, str(args.data_manifest.resolve()),
                  host + ':' + remote + '/SHA256SUMS'], 'copy-data-manifest')
         for index, bundle in enumerate(args.bundles):
@@ -340,7 +344,10 @@ def main():
         # deletion wins; partial logs remain on the persistent network volume.
         if connection and not state['capped'] and not cancelled:
             try:
-                pull('pull-final', check=False, timeout=30)
+                code, _, _ = pull('pull-final', check=False, timeout=30)
+                if code == 0:
+                    ssh(['bash', '-c', 'rm -rf "$1"/bundle-* "$1"/*.tar.zst', '_', remote],
+                        'remove-bundles', check=False, timeout=60)
             except Exception as error:
                 state['errors'].append(str(error))
         delete()
