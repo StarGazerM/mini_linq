@@ -1204,6 +1204,75 @@ leading scan is \code{tile} of \code{rows}, its grain the tile size, its
 sharded admission BE-Canon, its publication barriers host-level
 boundaries.
 
+\paragraph{Checked blocked host scans.}
+Structures owns source/declaration/representation identities, the exact
+Physical predicate, its translation and summary strategy, and every authorized
+read demand. Sequence adds a printable execution refinement, not another
+family or domain table. Each scan names its Structures source, a native
+snapshot-bound position carrier, a 1024-row vector and a 1024-byte reusable
+mask. The final vector is clipped to the initialized source extent; an empty
+extent produces no positions and performs no predicate or payload work.
+\begin{mathpar}
+\Rule{BE-Blocks}{
+ \mathsf{STRBlocks}(s)\quad
+ \mathsf{cover}(s)=\biguplus_i[1024i,\min(1024(i+1),|s|))\\
+ \mathsf{run}(r)=[p_1,\ldots,p_k]\text{ is an exact single-use Physical spine}\\
+ \mathsf{phases}(p_j)=[\mathsf{prune},\mathsf{exact},\mathsf{positions}]
+ \quad \mathsf{reads}(c)=\mathsf{StructuresDemand}(c)
+}{
+ \mathsf{blocked}(s,r,c)\sim
+ \mathsf{demandedRead}_c(\mathsf{select}_{p_k}\cdots
+ \mathsf{select}_{p_1}(\mathsf{positions}(s)))
+}
+\end{mathpar}
+A run crosses only noncanonical pipe projections and total relational
+predicates with a single consumer. Its original predicate identities remain
+in the Sequence operator spine. It never crosses a Bind, Guard, retained
+publication or fan-out. Every predicate occurs in exactly one recorded run,
+in Physical order; lawful shorter runs remain legal. One run intersects one
+mask in that order, with summary-disqualified vectors skipped and qualified
+tests elided only by their recorded certificate. Formula predicates preserve
+every disjunction and cross-column comparison; carrier restoration is not
+semantic reconstruction. Closed operands are evaluated before traversal once;
+opaque expressions execute only when their surviving occurrence is demanded.
+
+Demanded opaque fields become owned locals whose references are scoped to the
+unchanged Rust expression. Positional carriers and owned computed fields, not
+references to those locals, cross relational boundaries. Canonicalization
+gathers exactly the recorded global-ordinal keys once per survivor and
+compares those cached keys together with the owned computed fields. Equal
+complete logical valuations collapse even at distinct source positions; the
+chosen representative retains its original snapshot-bound position. Final
+answer reads have their separate publication authorization. String codes
+remain codes throughout these actions.
+
+The independent checker checks source and predicate coverage, phase order,
+the original intervening operators and their use counts, materialization
+consumers and bounded geometry directly. It does not invoke the producer or
+compare with a preferred plan. Plain/Bytes, summaries disabled, code-decoded
+tests and shorter lawful runs are accepted under their Structures premises.
+The initial host slice rejects unsupported join/index and unrecorded
+relational reconstruction boundaries before either printer runs.
+
+For Tasks, BE-TaskProducer names the borrowed blocked source and partitions
+aligned half-open ranges, clipped only at the live final extent. Each task
+executes the same recorded run on its disjoint range, with worker-local
+bounded scratch; no complete source collection or repeated whole-table scan
+is a source adapter. BE-CarrierPublication retains immutable source owners
+through task completion. Pull uses the same protocol lazily and may stop
+without preparing later vectors or executing later opaque consumers.
+For a key-disjoint cover, the printed \code{PartitionK} constructor records
+keys and partition count; the blocked execution's \code{route} records map
+each source-field key to its Structures representation identity. Independent
+checking requires exact key-read coverage, retained occurrence lineage and
+the declaration's equality preservation. Computed keys remain owned carrier
+fields. Routing restores each demanded global ordinal once per row and
+hashes that value, never a reference to a reconstructed logical temporary.
+A borrowed blocked source is routed from its recorded vector-sized native
+ranges, not through \code{Rows} or \code{PositionalRows}; its published
+length comes from the immutable source extent without traversing predicates.
+The original positional carrier is retained in each destination buffer.
+
 \paragraph{GPU translation.}
 \begin{mathpar}
 \Rule{T-Gpu}{t\text{ checked against }\mathsf{host}>\mathsf{device}(\text{separated, dynamic})>\mathsf{block}(\text{collaborative})>\mathsf{lane}}

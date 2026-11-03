@@ -132,6 +132,7 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
     Ok(cq_stage::Pipeline {
         passes,
         observer: None,
+        output_consumer: None,
     })
 }
 
@@ -246,10 +247,10 @@ pub fn lower(input: TokenStream) -> TokenStream {
 /// Lower/select context facts may be interleaved with positional arguments.
 #[proc_macro]
 pub fn select(input: TokenStream) -> TokenStream {
-    cq_stage::pass_with_context::<cq_lang_physical::Program, cq_lang_structures::Program>(
+    cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, cq_lang_structures::Program>(
         input.into(),
         cq_structure_selection::context,
-        cq_structure_selection::compile_with,
+        cq_structure_selection::compile_with_consumer,
     )
     .into()
 }
@@ -674,14 +675,14 @@ mod tests {
     fn select_packet_authorization_survives_structures_continuation() {
         let physical = physical(quote!());
         let output =
-            cq_stage::pass_with_context::<cq_lang_physical::Program, cq_lang_structures::Program>(
+            cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, cq_lang_structures::Program>(
                 quote!(
                     arguments { consumer = canonical, positional(R), host_set R discharged };
                     pipeline { printer };
                     #physical
                 ),
                 cq_structure_selection::context,
-                cq_structure_selection::compile_with,
+                cq_structure_selection::compile_with_consumer,
             );
         let invocation: syn::Macro = syn::parse2(output).unwrap();
         let output = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
@@ -695,5 +696,83 @@ mod tests {
             },
         );
         assert_eq!(output.to_string(), "42");
+    }
+
+    #[test]
+    fn aggregate_demand_binds_original_head_including_host_captures() {
+        let physical: cq_lang_physical::Program = syn::parse_quote!(physical {
+            relation R(a: i32);
+            capture { let group: i32 = 0; }
+            r = pipe rename R@0 { a -> x };
+            return canon r as answer(group, x);
+        });
+        let demand: cq_stage::OutputConsumer = syn::parse_quote!(output_consumer {
+            "outer_fold"; head ["group", "x"]; value_reads ["group"];
+        });
+        let output = cq_stage::pass_with_output_consumer::<
+            cq_lang_physical::Program, cq_lang_structures::Program
+        >(
+            quote!(pipeline {} observe { inspect } #demand; #physical),
+            cq_structure_selection::context,
+            cq_structure_selection::compile_with_consumer,
+        );
+        let invocation: syn::Macro = syn::parse2(output).unwrap();
+        let selected: cq_lang_structures::Program = syn::parse2(invocation.tokens).unwrap();
+        assert_eq!(selected.consumer.as_ref(), Some(&demand));
+        assert!(selected.context().is_empty());
+        assert!(selected.physical.program.return_canon.is_some());
+        let ordinary = cq_structure_selection::compile(&physical).unwrap();
+        assert_eq!(selected.structures, ordinary.structures);
+        let roundtrip: cq_lang_structures::Program =
+            syn::parse2(selected.to_token_stream()).unwrap();
+        cq_lang_structures::contract::check(&roundtrip).unwrap();
+        assert_eq!(roundtrip, selected);
+        let mut forged = selected.clone();
+        forged.consumer.as_mut().unwrap().head.swap(0, 1);
+        assert!(cq_lang_structures::contract::check(&forged).is_err());
+        let mut forged = selected.clone();
+        forged.consumer.as_mut().unwrap().value_reads.clear();
+        // Locally valid demand is not authority to change the original consumer.
+        cq_lang_structures::contract::check(&forged).unwrap();
+        assert!(cq_lang_structures::check_rewrite(&selected, &forged).is_err());
+        assert!(cq_lang_structures::check_retention_rewrite(&selected, &forged).is_err());
+        let output = cq_stage::pass_with_output_consumer::<
+            cq_lang_physical::Program, cq_lang_structures::Program
+        >(
+            quote!(pipeline {} observe { inspect } #demand; #physical),
+            cq_structure_selection::context,
+            |_, _, _| Ok(forged),
+        );
+        assert!(output.to_string().contains("ST-Consumer"));
+    }
+
+    #[test]
+    fn ordinary_row_host_rust_is_unchanged_by_consumer_demand() {
+        let physical = syn::parse_quote!(physical {
+            relation R(a: i32);
+            r = let canon rename R@0 { a -> x };
+            return r as answer(x);
+        });
+        let ordinary = cq_structure_selection::compile(&physical).unwrap();
+        let render = |program: &cq_lang_structures::Program| {
+            let sequence = cq_sequence_lowering::compile(program).unwrap();
+            let analysis =
+                cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
+            let plain = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+            let profile = cq_sequence_pull::translate_profile(&sequence, &analysis).unwrap();
+            (quote!(#plain).to_string(), quote!(#profile).to_string())
+        };
+        let expected = render(&ordinary);
+        for reads in [vec![], vec!["x".to_owned()]] {
+            let demand = cq_stage::OutputConsumer {
+                original_consumer: "fold".into(),
+                head: vec!["x".into()],
+                value_reads: reads,
+            };
+            let selected = cq_structure_selection::compile_with_consumer(
+                &physical, Default::default(), Some(&demand),
+            ).unwrap();
+            assert_eq!(render(&selected), expected);
+        }
     }
 }

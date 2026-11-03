@@ -979,6 +979,87 @@ hash/btree decode violations still await P4 encoded index keys; CSV scan loads
 have a direct columnar route. No query compiler or workload-default selection
 changes in S2.
 
+**P5 S3 authored CPU checkpoint.** `select(blocks(R { block_rows 1024;
+summary none; columns [a: plain u64, b: bytes u32]; }))` binds explicit
+declaration-order column facts to the existing Structures encoded contract.
+Plain/Bytes family, native carrier, allowed residual widths, preserved equality
+and order, logical/domain IDs, immutable source identity, exact predicate
+strategy and demanded consumers are recorded facts, not Rust type inspection.
+The loader's `ScanTable::bind_domains` binds the same explicitly declared
+domain identities without copying or reencoding payload. Runtime premise checks
+validate the actual source family, width, geometry and domain before scanning.
+
+Sequence's printable `representation { blocks { ... } }` records bounded
+vector scans, native positions, scratch, predicate phases, fused predicate
+runs and read-consumer IDs. Independent STR-Blocks/STR-BlockPredicate/
+STR-PreservedOp and BE-Blocks checks validate legality without replaying
+selection. Adjacent total predicates share one reused 1024-row mask; fusion
+does not cross an opaque Rust boundary. Pull and Tasks emit this same protocol.
+Tasks partitions aligned, clipped source ranges rather than collecting the
+whole source or running a whole-column filter per task.
+
+The runtime exposes typed column slots, lazy bounded position streams and
+separate ordinal versus authorized logical reads. Canonicalization gathers
+its demanded ordinal keys once, retaining representative carriers; it does not
+deduplicate by row position or repeatedly reconstruct keys during sorting.
+Opaque Rust reads create only their demanded owned locals after filtering.
+Final publication has its own read purpose. Physical decoding to a retained
+ordinal carrier is not a new semantic predicate/string-decoding exception.
+
+An aggregate extension's inner row stream is not final host publication.
+Its checked key/measure context derives which head values the outer fold
+actually reads; typed continuation transport binds that requirement into
+Structures without introducing `consumer = canonical`. Ignored witness
+columns publish their injective global value codes, with an independently
+checked PreserveCarrier action. Equal values remain equal codes, so duplicate
+value rows still collapse correctly; no row-position substitution or primary-key
+premise is involved. Captured and computed values retain their existing
+ownership. Outer folds demanding encoded base values remain a checked
+unsupported ownership boundary of this initial checkpoint.
+
+Only Q06 has authored `blocks-plain`, `blocks-bytes`, and corresponding `-par`
+routes at this checkpoint; existing default/par routes remain row hosts.
+Its quantity/discount/date predicates are all `where`; the retail H06 opaque
+numeric guards are not rewritten. Initial admission rejects join/index
+boundaries, grouping directly on encoded base fields, restricted source
+renames and undischarged host-set verification in the checker, with negative
+fixtures. Those integrations remain open; there is no decoded-row fallback.
+The P5 planning entry tracks this staged boundary and its measurement decision.
+
+The new 29-kernel SF1 census at B=1024 finds no summary-disqualified static
+predicate blocks in physical load order. H01 has six fully qualified lineitem
+blocks; D72/D85's positive available-quantity test qualifies all 782 partsupp
+blocks. Q06's three predicate-column payloads can shrink from 120,024,300 to
+30,006,075 bytes under the shipped Bytes width policy, excluding headers and
+summaries. These are data-property/size observations, not measured CPU traffic
+or an end-to-end speedup. Summaries remain off in the Q06 comparison.
+
+**Measured Q06 decision (SF1, five interleaved process pairs per comparison,
+five warmups and 21 exact samples per process, versus `4dd291be`):**
+
+| Route | Blocked Plain / row time [95% CI] | Blocked Bytes / row time [95% CI] | Row -> Bytes median ms |
+|---|---|---|---|
+| serial/default | 1.746 [1.728, 1.771] | **1.112 [1.097, 1.130]** | 23.063 -> 25.427 |
+| Tasks, 24 workers | 1.049 [0.928, 1.151] | **0.766 [0.719, 0.843]** | 10.320 -> 7.560 |
+
+Ratios are geometric means of paired process-median ratios, not ratios of
+the separately reported aggregate medians. Same-source linker-shuffle Bytes
+controls are 0.960 [0.936, 0.986] serial and 1.016 [0.901, 1.158] parallel.
+The small current-row/old-row serial difference (1.008) is not attributed to
+an algorithm: same-source row layout controls alone move it by about 2.5%.
+All 2,520 timed answers and 600 warm answers are exact, with zero process major
+faults. Serial row/Bytes process minor faults are 73,391/46,493 and peak RSS
+296,156/184,764 KiB. Parallel query minor-fault medians are 18/18 in the paired
+row/Bytes comparison; full ranges and load times are retained in the evidence.
+
+Bytes beats blocked Plain but **does not beat the existing serial row host**.
+Stop the authored rollout at Q06, retain the mechanism/tests and existing
+defaults, and do not extrapolate the parallel gain to other kernels.
+The legacy scan counters do not instrument the new bounded protocol; their
+zero row-test/block counts are not evidence of zero work or DRAM traffic.
+Raw samples, page faults, controls, exactness/counter gates, source/binary
+identities and command times: `experiments/storage-bench/results/p5-s3-q06.json`.
+
 S1 microbenchmark (`experiments/storage-bench/scan_bench.py`, raw
 `results/p5-s1-scan-vectorized.json`): 4,194,304 and 67,108,864 u64 values,
 8/16-bit spans, 16,384-row blocks, summaries off. Five interleaved pairs,
@@ -1050,10 +1131,13 @@ constant-folded bounds on the Vec side. No compiler default changes in S1.
    the result's only storage (its build need not be duplicate-free).
    `ret head = ::cq_storage::dedup::Sort` types the answer's identity index,
    including computed heads.
-   Aggregate holes resume the core pipeline fact-free: CK-Return supplies the
+   Aggregate holes introduce no multiplicity-relaxing optimizer facts:
+   CK-Return supplies the
    canonical index or inferred key under every checked terminal. The aggregate
    folds that set directly, without terminal-name recognition or a separate
    seen HashSet.
+   Derived outer-consumer demand may retain unread witnesses as injective
+   value codes; it does not remove that set boundary.
    On CPU, `dedup::Sort` collects the whole boundary stream, uses `sort_unstable_by` with
    Rust `Ord` comparisons of the fields, then removes adjacent equal rows.
    Tasks uses `par_sort_unstable_by`; its adjacent-unique pass is sequential.

@@ -628,3 +628,168 @@ fn observed_boundaries_are_prefixes_of_the_resolved_queue() {
         );
     }
 }
+
+#[derive(Clone)]
+struct ConsumedNumber {
+    number: Number,
+    consumer: Option<cq_stage::OutputConsumer>,
+}
+
+impl Parse for ConsumedNumber {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        Ok(Self {
+            number: input.parse()?,
+            consumer: cq_stage::OutputConsumer::parse_optional(input)?,
+        })
+    }
+}
+impl ToTokens for ConsumedNumber {
+    fn to_tokens(&self, output: &mut TokenStream) {
+        self.number.to_tokens(output);
+        self.consumer.to_tokens(output);
+    }
+}
+impl Language for ConsumedNumber {
+    fn check(&self) -> syn::Result<()> {
+        self.number.check()?;
+        self.consumer.as_ref().map_or(Ok(()), cq_stage::OutputConsumer::check)
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        Number::check_rewrite(&source.number, &target.number)
+    }
+    fn output_consumer(&self) -> Option<&cq_stage::OutputConsumer> {
+        self.consumer.as_ref()
+    }
+}
+
+fn output_consumer() -> cq_stage::OutputConsumer {
+    syn::parse_quote!(output_consumer {
+        "outer"; head ["group", "witness", "amount"]; value_reads ["group", "amount"];
+    })
+}
+
+#[test]
+fn consumer_requirement_roundtrips_and_rejects_malformed_identities() {
+    let demand = output_consumer();
+    let pipeline: cq_stage::Pipeline =
+        syn::parse2(quote!(pipeline { arbitrary } observe { receiver } #demand)).unwrap();
+    let printed = pipeline.to_token_stream();
+    let reparsed: cq_stage::Pipeline = syn::parse2(printed.clone()).unwrap();
+    assert_eq!(reparsed.output_consumer, Some(demand));
+    assert_eq!(reparsed.to_token_stream().to_string(), printed.to_string());
+    for malformed in [
+        quote!(output_consumer { ""; head ["a"]; value_reads ["a"]; }),
+        quote!(output_consumer { "fold"; head ["a", "a"]; value_reads ["a"]; }),
+        quote!(output_consumer { "fold"; head ["a"]; value_reads ["a", "a"]; }),
+        quote!(output_consumer { "fold"; head ["a"]; value_reads ["missing"]; }),
+    ] {
+        assert!(syn::parse2::<cq_stage::OutputConsumer>(malformed).is_err());
+    }
+}
+
+#[test]
+fn intermediate_passes_forward_consumer_requirement_without_context_facts() {
+    let demand = output_consumer();
+    let output = rewrite::<Number>(
+        quote!(arguments { opaque }; pipeline { renamed::selection(options), terminal } #demand; 1),
+        |source, args| {
+            assert_eq!(args.to_string(), "opaque");
+            Ok(source.clone())
+        },
+    );
+    assert_eq!(output.to_string(), quote!(
+        renamed::selection! {
+            arguments { options }; pipeline { terminal } #demand; 1
+        }
+    ).to_string());
+    let delegated = cq_stage::delegate(quote!(
+        arguments { other::owner }; pipeline { terminal } #demand; 1
+    ));
+    assert_eq!(delegated.to_string(), quote!(
+        other::owner! { pipeline { terminal } #demand; 1 }
+    ).to_string());
+}
+
+#[test]
+fn selection_binds_original_consumer_once_before_any_terminal() {
+    let demand = output_consumer();
+    for terminal in [quote!(pull), quote!(renamed::tasks)] {
+        let output = cq_stage::pass_with_output_consumer::<Number, ConsumedNumber>(
+            quote!(pipeline { #terminal } #demand; 1),
+            |_| Ok(Default::default()),
+            |number, _, consumer| Ok(ConsumedNumber {
+                number: number.clone(),
+                consumer: consumer.cloned(),
+            }),
+        );
+        assert_eq!(output.to_string(), quote!(
+            #terminal! { pipeline {}; 1 #demand }
+        ).to_string());
+        let invocation: syn::Macro = syn::parse2(output).unwrap();
+        let result = pass::<ConsumedNumber, syn::Expr>(invocation.tokens, |source, _| {
+            assert_eq!(source.consumer.as_ref(), Some(&demand));
+            assert!(source.context().is_empty());
+            Ok(syn::parse_quote!(1))
+        });
+        assert_eq!(result.to_string(), "1");
+    }
+}
+
+#[test]
+fn consumer_provenance_rejects_dropped_changed_and_unsolicited_bindings() {
+    let demand = output_consumer();
+    for changed in [
+        None,
+        Some(cq_stage::OutputConsumer { value_reads: vec!["group".into()], ..demand.clone() }),
+        Some(cq_stage::OutputConsumer { original_consumer: "other".into(), ..demand.clone() }),
+    ] {
+        let output = cq_stage::pass_with_output_consumer::<Number, ConsumedNumber>(
+            quote!(pipeline { terminal } #demand; 1),
+            |_| Ok(Default::default()),
+            |number, _, _| Ok(ConsumedNumber { number: number.clone(), consumer: changed }),
+        );
+        assert!(diagnostic_message(output).contains("ST-Consumer"));
+    }
+    let output = pass::<Number, ConsumedNumber>(
+        quote!(pipeline { terminal } #demand; 1),
+        |number, _| Ok(ConsumedNumber { number: number.clone(), consumer: Some(demand.clone()) }),
+    );
+    assert!(diagnostic_message(output).contains("ST-Consumer"));
+    let output = rewrite::<ConsumedNumber>(
+        quote!(pipeline { terminal }; 1 #demand),
+        |source, _| {
+            let mut target = source.clone();
+            target.consumer.as_mut().unwrap().value_reads.clear();
+            Ok(target)
+        },
+    );
+    assert!(diagnostic_message(output).contains("ST-Consumer"));
+    let output = cq_stage::pass_with_output_consumer::<ConsumedNumber, ConsumedNumber>(
+        quote!(pipeline { terminal } #demand; 1 #demand),
+        |_| Ok(Default::default()),
+        |source, _, _| Ok(source.clone()),
+    );
+    assert!(diagnostic_message(output).contains("ST-Consumer"));
+}
+
+#[test]
+fn consumer_requirements_do_not_authorize_restricted_context_or_skip_selection() {
+    let demand = output_consumer();
+    for envelope in [
+        quote!(),
+        quote!(context {};),
+        quote!(context { consumer = canonical, host_set R discharged };),
+    ] {
+        let output = cq_stage::pass_with_output_consumer::<Facts, ConsumedNumber>(
+            quote!(#envelope pipeline { printer } #demand; { consumer = canonical }),
+            |_| Ok(Default::default()),
+            |_, _, _| panic!("inexact context reached consumer selection"),
+        );
+        assert!(diagnostic_message(output).contains("CTX-Entry"));
+    }
+    let output = pass::<Number, syn::Expr>(
+        quote!(pipeline {} #demand; 1),
+        |_, _| Ok(syn::parse_quote!(1)),
+    );
+    assert!(diagnostic_message(output).contains("ST-Consumer"));
+}

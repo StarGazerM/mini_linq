@@ -120,7 +120,10 @@ pub fn compile(source: &cq_lang_structures::Program) -> syn::Result<Program> {
         },
         graded: None,
         evidence: Default::default(),
-        representation: Default::default(),
+        representation: cq_lang_sequence::Representation {
+            blocks: cq_lang_sequence::blocks::Execution::record(source),
+            ..Default::default()
+        },
     };
     cq_lang_sequence::contract::check(&program)?;
     Ok(program)

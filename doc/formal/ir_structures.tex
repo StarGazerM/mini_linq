@@ -320,8 +320,10 @@ add payload overflow/carrier and summary-enclosure checks.
  \mathsf{ready}(U)\prec\mathsf{read}(U)\prec\mathsf{releaseOwners}(U)}
  {\alpha_U[0:S.\mathsf{liveCount}]=\alpha_S[0:S.\mathsf{liveCount}]}
 \Rule{STR-CarrierRead}{O\text{ original provider/domain/consumer obligations}\quad
- R\text{ recorded representation, publication and read packets}\quad
- \mathsf{checkReadFacts}(O,R)}
+ R\text{ recorded representation, publication and read packets}\\
+ \mathsf{checkReadFacts}(O,R)\quad
+ \mathsf{roles}(R)=\mathsf{roles}(O)\quad
+ \mathsf{valueWitness}(r)\Rightarrow\mathsf{injectiveGlobalCode}(r)}
  {\mathsf{authorizedFields}(R)=\mathsf{demandedFields}(O)\quad
   \mathsf{preserveOtherCarriers}(R)}
 \end{mathpar}
@@ -840,3 +842,136 @@ are checked by rustc, rather than by a provider-name whitelist. External
 admissible covering operator of \code{s} not yet recorded (including total
 unfiltered builds); it records positional-host advice and undergoes the same
 contract and correspondence checks.
+
+\subsection{Authored CPU blocked scan bindings}
+
+The optional \code{blocks} packet belongs to the existing encoded contract.
+It adds source geometry and schema-slot obligations, scan representation
+references, exact predicate decisions, and consumer reads. It does not own
+another family or domain table: every column refers to an encoded declaration
+and representation identity. The explicit selection spelling is
+\code{blocks(R \{ block\_rows 1024; summary none; columns [a: bytes u64]; \})}.
+All source columns must appear exactly once. Family and native carrier are
+authored provider premises, never inferred from a Rust type or expression.
+Logical type and code-domain identities come from the actual declaration
+table. The native carrier is a rustc/provider obligation. The runtime checks
+the immutable table binding, aligned lengths, geometry, domain and snapshot.
+
+\begin{mathpar}
+\Rule{STR-Blocks}{
+ \mathsf{scan}(o)=R \quad
+ \mathsf{schemaSlots}(R)=\mathsf{slots}(B) \quad
+ \mathsf{logicalIds}(R)=\mathsf{logicalIds}(B)\\
+ \mathsf{serves}(P,o) \quad
+ \mathsf{repr}(c)=(P,R,o,c,s,d,\mathsf{S1},f,w) \quad
+ f\in\{\mathsf{Plain},\mathsf{Bytes}\}\\
+ b>0 \quad b\bmod1024=0 \quad b\leq 2^{32}-1 \quad
+ \mathsf{widths}(\mathsf{Plain},w)=\{w\} \quad
+ \mathsf{widths}(\mathsf{Bytes},w)=\{0,1,2,w\}\cap[0,w]
+}{
+ B,o \vdash \mathsf{blockedScan}(R,s)
+}
+\end{mathpar}
+The abstraction concatenates decoded blocks in original occurrence order.
+Summary capability means an enclosing min/max for that same immutable source.
+Geometry and permissible physical widths are checked independently of the
+encoder; the actual residual width remains runtime header data. Domain
+namespaces reify explicit binder identities, scoped by this source provider:
+logical-only $i$ maps to $2i+1$, code-domain $d$ to $2d+2$, with the declared
+dictionary version or zero. This is not a cross-query dictionary equivalence.
+
+\begin{mathpar}
+\Rule{STR-PreservedOp}{
+ \mathsf{injective}(E) \quad
+ (op\in\{\mathord{<},\mathord{\leq},\mathord{>},\mathord{\geq}\}
+     \Rightarrow \mathsf{monotone}(E)) \quad
+ \mathsf{sameDomain}(c,x)
+}{
+ op(\mathsf{dec}(c),x)
+ \iff \mathsf{translated}_{op}(c,\mathsf{translate}(x))
+}
+\Rule{STR-BlockPredicate}{
+ \mathsf{physical}(p)=\sigma_\theta(i) \quad
+ \mathsf{record}(p).\mathsf{columns}=\mathsf{FV}(\theta) \quad
+ \mathsf{lineage}(p)=\mathsf{originalLineage}(p)\\
+ \mathsf{ops}(\theta)\subseteq\mathsf{preserves}(P) \quad
+ \mathsf{translation}=\mathsf{S1Ordinal} \quad
+ \mathsf{prune}=\mathsf{minmax}\Rightarrow
+    (\mathsf{enclosingSummary}(P)\land\mathsf{unaryExactTemplate}(\theta))
+}{
+ p\vdash(\mathsf{prune},\mathsf{test},\mathsf{strategy})
+}
+\end{mathpar}
+Equality includes inequality and membership; order requires monotonicity.
+Plain and Bytes advertise both laws. Missing dictionary literals remain Empty
+for equality and insertion ranks for order under RT-Translate; integers from
+different code domains are not comparable merely because their widths agree.
+The record names the original Physical predicate, including every conjunct,
+disjunction arm and cross-column comparison. Window and Point are checked
+exact templates; Formula retains the entire algebra, with pruning disabled
+and an explicit physical decode-to-global-code test. Each demanded column is
+read once for the live row before evaluating the full formula. Necessary unary
+envelopes cannot discharge a correlated formula. Window and Point admit both
+encoded residual testing and explicitly selected physical decode-to-code tests.
+Adding a frame base reconstructs a global ordinal, not an authored Rust value.
+
+\paragraph{Reads, ownership and the checkpoint boundary.}
+Each opaque Bind/Guard records exactly its original free-variable demand,
+excluding already-owned computed fields. Owned reads construct scoped values;
+borrowed temporary reads are permitted only for Guard, never escaping into a
+Bind or final answer. Genuine final reads name the actual answer and exact
+head demand; a Physical return alone does not establish final publication.
+An outer compiler may instead transport a checked consumer requirement
+$(c,H,V)$: original consumer identity, ordered head-variable identities, and
+the subset read for logical values by its checked Context. Structures binds
+this requirement once, independently of representation choices. Its head
+must match the Physical head, including captures hoisted outside row headings.
+It neither implies canonicality nor discharges the original set boundary.
+
+For such an external consumer, base fields in $H\setminus V$ receive a
+\code{PreserveCarrier}/\code{Ordinal} packet naming $c$. These are global
+injective \emph{value codes}: $E(x)=E(y)\iff x=y$ under the original source,
+domain, snapshot and S1 equality law. Neither occurrence positions nor
+block-relative residuals satisfy this obligation, and no primary-key premise
+is required. Already-owned computed fields retain their original carrier;
+captures remain host values and require no row read. Logical demands in $V$
+belong to the separate \code{OpaqueRustRead} role, never
+\code{FinalHostAnswer}. At this checkpoint external consumers may read
+computed values or captures only: an encoded base-value demand is rejected
+until a checked borrowing/ownership protocol can serve the outer fold.
+An owned reconstruction cannot be passed to a consumer expecting a borrowed
+source field. Internal Bind/Guard reads still use their authorized opaque
+Rust reads, including arithmetic that computes an outer measure.
+
+The checker derives both exact role packets directly from $(c,H,V)$ and
+Physical row/capture identities, checks field lineage and injectivity, and
+rejects extra, missing or reassigned fields. Correspondence preserves the
+original requirement, rejecting simultaneous edits to it and its selected
+packets. The printer emits the selected actions; it does not infer consumers
+or reconstruct ignored values.
+
+Canonical reads name the canonical result with purpose
+\code{PreserveCarrier} and action \code{Ordinal}, covering every noncomputed
+logical heading field. They authorize no inverse codec. Canonical equality is
+equality of the full logical heading (ordinal keys plus owned computed values),
+not equality of occurrence positions; equal witnesses at different positions
+still deduplicate by value. Comparator rows are explicitly selected for this
+boundary, with one position retained after dedup.
+
+The first executable checkpoint carries \code{Repr::Positions} through Rename,
+Project, every declarative predicate, Bind and Guard, and comparator canonical
+rows. A Group may consume owned computed operands. A group key or aggregate
+argument that reads an encoded base field is rejected before printing; it
+requires a future explicit relational carrier/group protocol, not an opaque
+read or an inverse-codec fallback. Computed-only grouping remains supported.
+Any blocked occurrence reaching a join, index, noncanonical
+retained store, fused scope or restricted Rename (source atom literals) is
+rejected by the Structures checker before printing. A blocked source also
+rejects runtime \code{host\_set} certification through the borrowed-row
+protocol; an already-discharged uniqueness premise remains admissible.
+This is an explicit checkpoint boundary, not a
+claim of complete blocked join/index support. Unknown and unadvised hosts keep
+the prior Structures decisions. Correspondence checks Physical preservation;
+the language checker derives source, predicate, canonical and consumer
+coverage independently, without invoking selection or requiring its preferred
+Plain/Bytes, pruning or code-test choice.

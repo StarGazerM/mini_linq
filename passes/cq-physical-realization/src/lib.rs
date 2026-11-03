@@ -579,6 +579,9 @@ impl Printer<'_> {
     /// host carrier is read in its verified order.
     pub(crate) fn distinct(&mut self, operator: &Ident, rows: TokenStream) -> TokenStream {
         let name = symbol_name(operator);
+        if let Some(rows) = self.blocked_canon_rows(&name, rows.clone(), matches!(self.canon_target, CanonTarget::Parallel)) {
+            return rows;
+        }
         match self.analysis.canonical[&name].clone() {
             structures::CanonSource::Rows(provider)
                 if self.physical_analysis.modes[&name] == physical::ModeKind::Let =>
@@ -621,17 +624,28 @@ impl Printer<'_> {
                 vec![result.into()],
             );
         }
+        let consumer = symbol_name(&head.relation);
+        let reads = &self.encoded.blocks.reads;
+        let output_carrier = reads.get(&format!("output:{consumer}:carrier"));
+        let output_read = reads.get(&format!("output:{consumer}:read"));
+        let final_read = reads.get(&consumer);
+        let blocked_columns = (final_read.is_some() || output_carrier.is_some() || output_read.is_some()).then(|| {
+            self.carried(result).iter().filter(|column| {
+                [final_read, output_carrier, output_read].into_iter().flatten()
+                    .any(|read| read.fields.contains_key(*column))
+                    || self.infos[result].computed.contains(*column)
+            }).cloned().collect::<Vec<_>>()
+        });
+        let heading = blocked_columns.as_deref().unwrap_or_else(|| self.carried(result));
         let rows = if self.carries_positions(result) {
-            let pattern = self.bind_columns(result, self.carried(result), false);
-            let values = self
-                .carried(result)
-                .iter()
-                .map(|column| self.access(result, column));
+            let pattern = self.bind_columns(result, heading, false);
+            let values = heading.iter()
+                .map(|column| self.blocked_read(&symbol_name(&head.relation), result, column)
+                    .unwrap_or_else(|| self.access(result, column)));
             quote!(::core::iter::Iterator::map(#rows, move |#pattern| (#(#values,)*)))
         } else {
             rows
         };
-        let heading = self.carried(result);
         let variables: Vec<Option<&Ident>> = head.args.iter().map(cq::rust::variable).collect();
         let identity = variables.len() == heading.len()
             && variables
@@ -682,7 +696,13 @@ impl Printer<'_> {
                 rows
             };
         }
-        let shadows = self.shadows(result);
+        let mut shadows = self.shadows(result);
+        if let Some(read) = self.encoded.blocks.reads.get(&consumer) {
+            shadows.extend(read.fields.keys().map(|column| {
+                let ident = self.ident(result, column);
+                quote!(#[allow(unused_variables)] let #ident = &#ident;)
+            }));
+        }
         let temporaries = (0..head.args.len())
             .filter(|&i| variables[i].is_none())
             .map(|i| format_ident!("__cq_h{i}"));

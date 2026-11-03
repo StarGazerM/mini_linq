@@ -1,7 +1,8 @@
 //! Versioned S1 byte format and checked, borrowed scan descriptors.
 //! No GPU codec ids or FastLanes layouts are aliases of this registry.
 use super::{
-    BlockHeader, BlockRows, CodecId, FamilyId, MinMax, Predicate, Preserved, VECTOR_ROWS, Width,
+    BlockHeader, BlockRows, Classification, CodecId, FamilyId, MinMax, Predicate, Preserved,
+    PruneMode, TestMode, VECTOR_ROWS, Width,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -307,11 +308,9 @@ impl<'a> CheckedScanView<'a> {
         }
     }
     fn residual(self, h: &BlockHeader, row: usize) -> u64 {
-        let width = h.width as usize;
-        let start = h.offset as usize + row * width;
-        let mut bytes = [0; 8];
-        bytes[..width].copy_from_slice(&self.payload[start..start + width]);
-        u64::from_le_bytes(bytes)
+        let mut residual = 0;
+        super::visit_codes(self.payload, h, row, 1, |_, code| residual = code);
+        residual
     }
     pub fn check_predicate(
         self,
@@ -325,6 +324,45 @@ impl<'a> CheckedScanView<'a> {
             return Err(FormatError::Predicate);
         }
         Ok(())
+    }
+
+    /// Bounded counterpart of `filter_mask`, preserving existing live lanes.
+    /// Domain, range and summary capability are checked before payload access.
+    pub fn intersect_mask(
+        self,
+        domain: DomainId,
+        start: usize,
+        out: &mut [u8],
+        predicate: &Predicate,
+        prune: PruneMode,
+        test: TestMode,
+    ) -> Result<Classification, FormatError> {
+        self.check_predicate(domain, predicate)?;
+        if start > self.metadata.live_count
+            || out.len() > self.metadata.live_count - start
+            || out.len() > VECTOR_ROWS
+            || (start % VECTOR_ROWS != 0 && !(out.is_empty() && start == self.metadata.live_count))
+        {
+            return Err(FormatError::Position);
+        }
+        if prune == PruneMode::MinMax
+            && self.metadata.block_summaries.is_none()
+            && self.metadata.vector_summaries.is_none()
+        {
+            return Err(FormatError::SummaryCount);
+        }
+        Ok(super::intersect_vector(
+            self.metadata.headers,
+            self.payload,
+            self.metadata.block_summaries,
+            self.metadata.vector_summaries,
+            self.metadata.format.block_rows,
+            start,
+            out,
+            predicate,
+            prune,
+            test,
+        ))
     }
     /// Filter only the live prefix without allocating block-local predicate
     /// storage. An empty prefix returns after validating domain and output size.
@@ -341,16 +379,20 @@ impl<'a> CheckedScanView<'a> {
         if out.is_empty() {
             return Ok(());
         }
-        let mut row = 0;
-        for h in self.metadata.headers {
-            let translated = predicate.translate(h);
-            for local in 0..(h.rows as usize).min(out.len() - row) {
-                out[row] = translated.matches(self.residual(h, local)) as u8;
-                row += 1;
-            }
-            if row == out.len() {
-                break;
-            }
+        out.fill(1);
+        for (vector, selected) in out.chunks_mut(VECTOR_ROWS).enumerate() {
+            super::intersect_vector(
+                self.metadata.headers,
+                self.payload,
+                None,
+                None,
+                self.metadata.format.block_rows,
+                vector * VECTOR_ROWS,
+                selected,
+                predicate,
+                PruneMode::None,
+                TestMode::Encoded,
+            );
         }
         Ok(())
     }

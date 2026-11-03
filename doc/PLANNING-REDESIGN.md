@@ -777,8 +777,61 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   per-block headers, aligned payload and optional same-input-pass extrema;
   Bytes uses at most 16-bit residuals, otherwise native-width plain storage.
   RT-ScanCodec/RT-ScanSummary/RT-Translate cover decoding, enclosure and encoded
-  predicates. This adds no compiler selection; loader/ScanTable cutover and
-  STR-Blocks/BE-Blocks remain later slices.
+  predicates. S2 adds direct columnar `ScanTable` loaders without compiler
+  selection. The approved S3 checkpoint first authors blocked scans only on
+  `tpch_q06`, comparing row hosts, blocked Plain and blocked Bytes with
+  summaries off in pull and Tasks. Default selection remains unchanged.
+  Its initial legal boundary is a unary scan/predicate/projection/Rust-read
+  spine and grouping of owned computed fields. Blocked sources at join/index
+  boundaries or grouping directly on encoded base fields must fail the
+  Structures checker, not a printer. **Open:** join/index integration and
+  encoded-base grouping/output-domain propagation, before authoring those
+  kernels after a winning Q06 checkpoint; broader default promotion requires
+  paired end-to-end evidence and a same-source layout control.
+  Restricted source renames (atom literals) also await a source-predicate
+  record, and undischarged `host_set` verification awaits a carrier-aware
+  verifier; both reject in the initial checker, while discharged premises
+  remain legal. No unsupported boundary silently falls back to decoded rows.
+  Aggregate continuations derive their value demand from the checked outer
+  key/measure specification. That requirement is transported to Structures;
+  ignored witness fields publish injective value codes, not decoded values
+  falsely labelled final answers. This retains full value-based deduplication:
+  it is not a RowId/key-premise shortcut and does not assert
+  `consumer = canonical`. Continuations that read encoded base values await
+  the same grouping/ownership cutover and reject at this checkpoint.
+  The lowercase-alias gap in the workload's canonical-name primary-key
+  evidence mapping is separate and unchanged.
+  SF1 load-order census at 1024 rows finds no disqualified static-predicate
+  blocks in the 29 CPU kernels; H01 has six fully qualified lineitem blocks
+  and D72/D85's `ps_availqty > 0` qualifies all 782 partsupp blocks.
+  This is data-property evidence, not a scan speedup or a summary default.
+  **Q06 checkpoint: measured negative for default/serial.** Five interleaved
+  process pairs per comparison, five exact warmups and 21 exact samples per
+  process, SF1 versus `4dd291be`: row host 23.063 ms, blocked Bytes 25.427 ms;
+  paired time ratio **1.112 [1.097, 1.130]**. Blocked Plain is
+  **1.746 [1.728, 1.771]** versus row host. At 24 Tasks workers, Bytes wins:
+  10.320 -> 7.560 ms, **0.766 [0.719, 0.843]**; Plain is inconclusive,
+  **1.049 [0.928, 1.151]**. Same-source linker-shuffle Bytes controls give
+  **0.960 [0.936, 0.986]** serial and **1.016 [0.901, 1.158]** parallel.
+  Every one of 2,520 timed samples and 600 warmups is exact; all process major
+  faults are zero. Serial process minor faults fall 73,391 -> 46,493 and peak
+  RSS 296,156 -> 184,764 KiB, but smaller storage does not overcome the serial
+  execution cost. **Stop the staged rollout:** keep the authored mechanism
+  and tests, retain existing defaults, and do not author the other six kernels.
+  All 46 expanded targets are verified; 45 emissions are identical and Q06's
+  four intended hunks are classified. Untimed checks cover 62 CPU executions
+  (all 29 default/par plus four blocked Q06 routes) and 17 library kernels.
+  Core/package, quick, compile-TPC-H, formal and reviewed API gates pass in
+  this pre-consolidation worktree; merge-time default-member validation remains
+  Main's consolidated-workspace gate. Complete samples, controls, source/binary
+  identities, faults, counter caveats and per-command gate times:
+  `experiments/storage-bench/results/p5-s3-q06.json`.
+  **Next-step proposal only (not implemented):** author Bytes on Q06's existing
+  Tasks/par route, retaining the serial row host and explicit representation
+  facts rather than a query-name-specific compiler rule. After join/index
+  integration, evaluate and author the Tasks routes for H12/H14/H19 under the
+  same exactness, paired-measurement and layout-control requirements. The
+  present `par` route and other kernels are unchanged by this proposal.
 - **P6 GPU storage** (compression for transfer/capacity first; resident
   scan codecs only where measured). Slice A adds an opt-in shared S1
   Plain/Bytes format and recorded read contracts, not automatic selection.

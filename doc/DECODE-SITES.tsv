@@ -1,4 +1,7 @@
 path	marker	class	reason
+passes/cq-print/src/blocks.rs	// DECODE R: selected logical field is read by the recorded local or external opaque Rust consumer.	R	selected logical field is read by the recorded local or external opaque Rust consumer.
+passes/cq-print/src/blocks.rs	// DECODE P: selected logical field is published to the genuine final-answer consumer.	P	selected logical field is published to the genuine final-answer consumer.
+runtime/cq-storage/src/scan.rs	// DECODE ?: ScanTable::read_value is a generic field inverse; caller records must authorize the named opaque Rust or final-answer consumer.	?	ScanTable::read_value is a generic field inverse; caller records must authorize the named opaque Rust or final-answer consumer.
 experiments/gpu/sequence-runtime/tests/providers.rs	// DECODE P: diagnostic scalar-bounded upload publishes logical host values for exact assertions.	P	diagnostic scalar-bounded upload publishes logical host values for exact assertions.
 experiments/gpu/compress/src/lib.rs	// DECODE ?: source-key ordinal inversion serves answer decoding and generic DomainMap callers; require caller read evidence.	?	source-key ordinal inversion serves answer decoding and generic DomainMap callers; require caller read evidence.
 experiments/gpu/datalog-runtime/src/layout.rs	// DECODE ?: Scalar inverse lacks a caller-level opaque-read/publication requirement.	?	Scalar inverse lacks a caller-level opaque-read/publication requirement.

@@ -287,6 +287,7 @@ fn analyze_in(
     if let Some(proof) = previous {
         return Ok(proof);
     }
+    crate::blocks::check(program)?;
     let representation = &program.representation;
     if !representation.identity.is_disjoint(&representation.encoded) {
         return fail(
@@ -452,6 +453,7 @@ fn analyze_in(
     }
     publication::derive(program, &mut checker.analysis, &publication_facts)?;
     checker.analysis.task_execution = crate::task_execution::analyze(program, &checker.analysis);
+    crate::blocks::check_task_covers(program, &checker.analysis)?;
     program.evidence.check(program, &checker.analysis)?;
     Ok(context.remember(CheckedProof {
         prefix: prefix.clone(),

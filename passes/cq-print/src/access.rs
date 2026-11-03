@@ -158,6 +158,9 @@ impl<'a> Context<'a> {
 
     /// Apply the recorded host rename to an optionally borrowed tile iterator.
     pub fn host_scan_from(&self, result: &str, source: Option<TokenStream>) -> TokenStream {
+        if self.encoded.blocks.scans.contains_key(result) {
+            return self.blocked_rows(result, source);
+        }
         if let Operator::Rename(rename) = &self.physical[result].operator {
             // Literal predicates belong only to this row source. Retained rows
             // and indices consume its projected tuples through ordinary builds.

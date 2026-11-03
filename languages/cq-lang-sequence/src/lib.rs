@@ -30,6 +30,7 @@ use syn::punctuated::Punctuated;
 use syn::{Ident, LitInt, Token, braced, bracketed, parenthesized};
 
 pub mod bounds;
+pub mod blocks;
 pub mod contract;
 mod evidence;
 pub mod gpu;
@@ -76,6 +77,7 @@ mod kw {
     syn::custom_keyword!(representation);
     syn::custom_keyword!(identity);
     syn::custom_keyword!(encoded);
+    syn::custom_keyword!(blocks);
 }
 
 /// A complete Structures program and its sequence refinement.
@@ -100,6 +102,7 @@ pub struct Program {
 pub struct Representation {
     pub identity: BTreeSet<String>,
     pub encoded: BTreeSet<String>,
+    pub blocks: blocks::Execution,
 }
 
 impl Parse for Representation {
@@ -109,6 +112,10 @@ impl Parse for Representation {
         braced!(body in input);
         let mut result = Self::default();
         while !body.is_empty() {
+            if body.peek(kw::blocks) {
+                result.blocks = body.parse()?;
+                continue;
+            }
             let columns = if body.peek(kw::identity) {
                 body.parse::<kw::identity>()?;
                 &mut result.identity
@@ -129,7 +136,7 @@ impl Parse for Representation {
 
 impl ToTokens for Representation {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        if self.identity.is_empty() && self.encoded.is_empty() {
+        if self.identity.is_empty() && self.encoded.is_empty() && self.blocks.is_empty() {
             return;
         }
         let identity = self
@@ -140,8 +147,10 @@ impl ToTokens for Representation {
             .encoded
             .iter()
             .map(|name| Ident::new(name, Span::call_site()));
+        let blocks = &self.blocks;
         tokens.extend(quote! { representation {
             identity [#(#identity),*]; encoded [#(#encoded),*];
+            #blocks
         } });
     }
 }

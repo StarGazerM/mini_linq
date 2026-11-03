@@ -66,9 +66,16 @@ pub(crate) fn advise(
         if let Some(name) = unstored_input(&planned.program, &definition.term) {
             crate::push(checker, &mut planned, Advice::Store(name))?;
         }
+        let n = if let Some(tile) = blocked_tile_rows(&planned.program, &definition.term) {
+            width.div_ceil(tile).checked_mul(tile).ok_or_else(|| {
+                syn::Error::new_spanned(&definition.name, "BE-Blocks: source tile width overflows usize")
+            })?
+        } else {
+            width
+        };
         let step = Advice::Partition {
             name: definition.name.clone(),
-            n: width,
+            n,
             items: (items > 1 && expands(&planned.program, &definition.term)).then_some(items),
         };
         crate::push(checker, &mut planned, step)?;
@@ -147,9 +154,23 @@ pub(crate) fn widths(level: &LevelNode) -> Vec<usize> {
     widths
 }
 
+/// Source vector geometry is a Sequence execution fact, not a machine-width
+/// guess. Alignment is selected here and subsequently checked independently.
+fn blocked_tile_rows(program: &Program, term: &Term) -> Option<usize> {
+    match term {
+        Term::Rows(name) => program.representation.blocks.scans.get(&cq_lang_sequence::structures::symbol_name(name)).map(|scan| scan.tile_rows),
+        Term::Ref(name) => producer(program, name).and_then(|term| blocked_tile_rows(program, term)),
+        Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner) | Term::Lookup { inner, .. } | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } => blocked_tile_rows(program, inner),
+        Term::Choose(arms) => arms.iter().filter_map(|(_, term)| blocked_tile_rows(program, term)).max(),
+        Term::Union(arms) => arms.iter().filter_map(|term| blocked_tile_rows(program, term)).max(),
+        Term::Tile { .. } | Term::PartitionK { .. } => None,
+    }
+}
+
 fn unstored_input(program: &Program, term: &Term) -> Option<syn::Ident> {
     match term {
         Term::Ref(name) => match producer(program, name)? {
+            Term::Rows(source) if program.representation.blocks.scans.contains_key(&cq_lang_sequence::structures::symbol_name(source)) => None,
             Term::Rows(_) => Some(name.clone()),
             Term::Store { .. } => None,
             term => unstored_input(program, term),

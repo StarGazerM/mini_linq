@@ -396,7 +396,24 @@ fn translate_mode(
                 let positional = host_result.filter(|result| {
                     context.carries_positions(result) || context.join_filter_ids(result).is_some()
                 });
-                if let Some(result) = positional {
+                if let Some(result) = host_result.filter(|result| context.encoded.blocks.scans.contains_key(*result)) {
+                    let host = cq_print::Context::positional_host(
+                        &context.physical_analysis.hosts[result],
+                    );
+                    let range = quote!({
+                        let __cq_start = #binding * #n;
+                        __cq_start..__cq_start.saturating_add(#n).min(#host.len())
+                    });
+                    let rows = context.profile_stream(result, context.blocked_rows(result, Some(range)));
+                    partitions.push(TaskTile {
+                        producer: execution[&(term as *const Term)].id.clone(),
+                        binding,
+                        prepare: quote!(),
+                        parts: quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+                            #host.len().div_ceil(#n), |i| i)),
+                    });
+                    output.rows = quote!(::core::iter::once(#rows));
+                } else if let Some(result) = positional {
                     let host = cq_print::Context::positional_host(
                         &context.physical_analysis.hosts[result],
                     );
@@ -681,9 +698,13 @@ fn translate_mode(
                     .context_mut()
                     .materialize_keysets(result, output.rows.clone());
                 immutable_sources.insert(owner.to_owned());
-                let scan = emitter.context().host_scan(result);
-                emitter.publish_length(
-                    owner,
+                let length = if emitter.analysis.representation.blocks.scans.contains_key(result) {
+                    let host = cq_print::Context::positional_host(
+                        &emitter.context().physical_analysis.hosts[result],
+                    );
+                    quote!(#host.len())
+                } else {
+                    let scan = emitter.context().host_scan(result);
                     quote!({
                         let __cq_length_rows = #scan;
                         let (__cq_minimum, __cq_maximum) = __cq_length_rows.size_hint();
@@ -692,8 +713,9 @@ fn translate_mode(
                         } else {
                             __cq_length_rows.count()
                         }
-                    }),
-                );
+                    })
+                };
+                emitter.publish_length(owner, length);
                 emitter.mark_target_published(owner);
             } else if matches!(term, Term::Store { .. })
                 && output.depth == 0

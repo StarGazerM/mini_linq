@@ -135,6 +135,37 @@ route, but grouping still requires P4 encoded index keys. Generic row-loading
 `?` primitives remain available and still require caller-use authorization.
 No compiler selection or workload default is changed by this runtime slice.
 
+## P5 S3 authored CPU read boundary
+
+Blocked CPU scans distinguish physical residual decoding to a retained ordinal
+carrier from reconstruction of an authored Rust value. Encoded predicates and
+canonical keys use ordinal carriers; these are not dictionary string resolution.
+Structures records each original predicate and the exact fields of each consumer.
+Sequence records its bounded scan phases and the point of each demanded read.
+
+`ScanTable::read_value` is a generic mixed-purpose inverse (**?**); its callers
+must supply an explicitly recorded `OpaqueRust` or `FinalAnswer` authorization.
+The blocked printer's two corresponding emission sites are **R** and **P**.
+Opaque Rust reads become owned locals scoped to that consumer, not references
+to temporary decoded values stored in a downstream carrier. Canonical key reads
+remain **PreserveCarrier** and do not invoke this inverse.
+
+The first authored workload is Q06. Its price/discount arithmetic is an R
+consumer after the exact predicates, and its answer is the computed aggregate.
+The separate retail H06 numeric guards remain opaque; this work does not
+recognize their Rust comparisons. Join/index boundaries and grouping directly
+on encoded base fields are checked unsupported boundaries of the initial Q06
+checkpoint, not permission for a decoded-row fallback. The existing CSV-index
+V sites are not retired, no semantic predicate-reconstruction exception is
+added, and the historical audit totals above remain historical.
+
+The aggregate continuation supplies derived value demand to the inner hole.
+Its ignored Q06 key witnesses therefore publish injective ordinal value codes
+under PreserveCarrier, not `read_value` calls labelled as final answers.
+This is neither RowId identity nor a relaxation of the hole's set boundary:
+duplicate equal witnesses at different positions retain value-based deduplication.
+There is no new authored output mode or `consumer = canonical` premise.
+
 ## Violations ranked by likely cost
 
 **[INFERENCE]** This ranking is an investigation order, not measured site timings. Whole-relation materialization and string allocation rank above scalar reconstruction; actual invocation counts/selectivity can reverse the order. Existing storage evidence (§12) motivates prioritizing encoded execution, but does not establish a speedup for any individual site below. Diagnostic-only paths are ranked last regardless of their small-fixture implementation cost.

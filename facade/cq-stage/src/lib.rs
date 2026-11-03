@@ -68,6 +68,11 @@
 //! Lower/select arguments introduce facts only into a fact-free source; matching
 //! arguments never replace an envelope. Fact-free expansions retain their
 //! original token protocol, and pass arguments remain opaque.
+//!
+//! An `output_consumer { ... }` continuation requirement is separate from those
+//! facts. It records original output identities and the values read by an outer
+//! checked context. Ordinary passes forward it opaquely; selection binds it once
+//! through [`pass_with_output_consumer`]. It never authorizes removing dedup.
 
 use std::collections::BTreeSet;
 
@@ -85,6 +90,9 @@ mod kw {
     syn::custom_keyword!(host_set);
     syn::custom_keyword!(discharged);
     syn::custom_keyword!(observe);
+    syn::custom_keyword!(output_consumer);
+    syn::custom_keyword!(head);
+    syn::custom_keyword!(value_reads);
 }
 
 /// Public contract implemented by each IR language. Rust expressions terminate
@@ -95,6 +103,10 @@ pub trait Language: Parse + ToTokens {
     /// Restricted facts recorded in this program, not ambient Rust assumptions.
     fn context(&self) -> Context {
         Context::default()
+    }
+    /// Original output demand bound by the owning selection boundary.
+    fn output_consumer(&self) -> Option<&OutputConsumer> {
+        None
     }
     fn terminal() -> bool {
         false
@@ -206,6 +218,79 @@ impl ToTokens for Context {
     }
 }
 
+/// Value demand of an enclosing checked consumer, not an optimization premise.
+/// `head` preserves the complete original output order, including ignored
+/// witnesses; `value_reads` names only fields whose logical values are read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputConsumer {
+    pub original_consumer: String,
+    pub head: Vec<String>,
+    pub value_reads: Vec<String>,
+}
+
+impl OutputConsumer {
+    pub fn check(&self) -> syn::Result<()> {
+        let fail = |message| syn::Error::new(proc_macro2::Span::call_site(), message);
+        if self.original_consumer.is_empty() || self.head.iter().any(String::is_empty) {
+            return Err(fail("ST-Consumer: output identities must not be empty"));
+        }
+        let head: BTreeSet<_> = self.head.iter().collect();
+        let reads: BTreeSet<_> = self.value_reads.iter().collect();
+        if head.len() != self.head.len() || reads.len() != self.value_reads.len() {
+            return Err(fail("ST-Consumer: duplicate output identity"));
+        }
+        if !reads.is_subset(&head) {
+            return Err(fail("ST-Consumer: value reads must name original head fields"));
+        }
+        Ok(())
+    }
+
+    pub fn parse_optional(input: ParseStream<'_>) -> syn::Result<Option<Self>> {
+        if input.peek(kw::output_consumer) {
+            input.parse().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl Parse for OutputConsumer {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<kw::output_consumer>()?;
+        let body;
+        braced!(body in input);
+        let original_consumer: syn::LitStr = body.parse()?;
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::head>()?;
+        let head;
+        syn::bracketed!(head in body);
+        let head = head.parse_terminated(|input| input.parse::<syn::LitStr>(), Token![,])?
+            .into_iter().map(|field| field.value()).collect();
+        body.parse::<Token![;]>()?;
+        body.parse::<kw::value_reads>()?;
+        let reads;
+        syn::bracketed!(reads in body);
+        let value_reads = reads.parse_terminated(|input| input.parse::<syn::LitStr>(), Token![,])?
+            .into_iter().map(|field| field.value()).collect();
+        body.parse::<Token![;]>()?;
+        if !body.is_empty() {
+            return Err(body.error("ST-Consumer: unexpected output consumer fields"));
+        }
+        let consumer = Self { original_consumer: original_consumer.value(), head, value_reads };
+        consumer.check()?;
+        Ok(consumer)
+    }
+}
+
+impl ToTokens for OutputConsumer {
+    fn to_tokens(&self, output: &mut TokenStream) {
+        let Self { original_consumer, head, value_reads } = self;
+        output.extend(quote!(output_consumer {
+            #original_consumer; head [#(#head),*]; value_reads [#(#value_reads),*];
+        }));
+    }
+}
+
 /// A macro path with argument tokens whose interpretation belongs to that pass.
 #[derive(Clone, Debug)]
 pub struct Invocation {
@@ -243,6 +328,8 @@ pub struct Pipeline {
     pub passes: Vec<Invocation>,
     /// Diagnostic receiver invoked with the final checked payload, not a continuation.
     pub observer: Option<syn::Path>,
+    /// Pending checked outer-consumer requirement, consumed only by selection.
+    pub output_consumer: Option<OutputConsumer>,
 }
 impl Parse for Pipeline {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -265,7 +352,8 @@ impl Parse for Pipeline {
         } else {
             None
         };
-        Ok(Self { passes, observer })
+        let output_consumer = OutputConsumer::parse_optional(input)?;
+        Ok(Self { passes, observer, output_consumer })
     }
 }
 impl ToTokens for Pipeline {
@@ -275,6 +363,7 @@ impl ToTokens for Pipeline {
         if let Some(receiver) = &self.observer {
             output.extend(quote!(observe { #receiver }));
         }
+        self.output_consumer.to_tokens(output);
     }
 }
 impl Pipeline {
@@ -362,7 +451,7 @@ pub fn pass<In: Language, Out: Language>(
     input: TokenStream,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), f, |_, _| Ok(()))
+    run(input, |_| Ok(Context::default()), false, |source, args, _| f(source, args), |_, _| Ok(()))
 }
 
 /// Introduce facts named by a lower/select argument packet into a fact-free source.
@@ -378,7 +467,17 @@ pub fn pass_with_context<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, f, |_, _| Ok(()))
+    run(input, authorize, false, |source, args, _| f(source, args), |_, _| Ok(()))
+}
+
+/// Bind a pending outer-consumer requirement into the selected target exactly
+/// once. This does not introduce a canonical-consumer or host-set fact.
+pub fn pass_with_output_consumer<In: Language, Out: Language>(
+    input: TokenStream,
+    authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
+    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>) -> syn::Result<Out>,
+) -> TokenStream {
+    run(input, authorize, true, f, |_, _| Ok(()))
 }
 
 /// Run an L → L pass and the language's exported correspondence check.
@@ -386,7 +485,7 @@ pub fn rewrite<L: Language>(
     input: TokenStream,
     f: impl FnOnce(&L, TokenStream) -> syn::Result<L>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), f, L::check_rewrite)
+    run(input, |_| Ok(Context::default()), false, |source, args, _| f(source, args), L::check_rewrite)
 }
 
 /// Delegate an invocation's checked packet to a target-owned macro path.
@@ -435,11 +534,12 @@ fn error_expression(errors: syn::Error) -> TokenStream {
 fn run<In: Language, Out: Language>(
     input: TokenStream,
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
-    f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
+    bind_consumer: bool,
+    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>) -> syn::Result<Out>,
     correspondence: impl FnOnce(&In, &Out) -> syn::Result<()>,
 ) -> TokenStream {
     let result = (|| {
-        let input: Input<In> = syn::parse2(input)?;
+        let mut input: Input<In> = syn::parse2(input)?;
         let source_context = input.program.context();
         if input
             .context
@@ -465,7 +565,35 @@ fn run<In: Language, Out: Language>(
             ));
         }
         input.program.check()?;
-        let target = f(&input.program, input.args)?;
+        let consumer = if bind_consumer {
+            input.pipeline.output_consumer.take()
+        } else {
+            None
+        };
+        let target = f(&input.program, input.args, consumer.as_ref())?;
+        if bind_consumer {
+            if input.program.output_consumer().is_some()
+                || target.output_consumer() != consumer.as_ref()
+            {
+                return Err(syn::Error::new_spanned(
+                    &target,
+                    "ST-Consumer: selection must bind exactly the original consumer requirement",
+                ));
+            }
+        } else if target.output_consumer().is_some()
+            && target.output_consumer() != input.program.output_consumer()
+        {
+            return Err(syn::Error::new_spanned(
+                &target,
+                "ST-Consumer: only selection may bind original consumer requirements",
+            ));
+        }
+        if Out::terminal() && input.pipeline.output_consumer.is_some() {
+            return Err(syn::Error::new_spanned(
+                &target,
+                "ST-Consumer: output requirement must be bound before the terminal",
+            ));
+        }
         target.check()?;
         correspondence(&input.program, &target)?;
         let target_context = target.context();
@@ -751,6 +879,6 @@ impl Configuration {
         } else {
             None
         };
-        Ok(Pipeline { passes, observer })
+        Ok(Pipeline { passes, observer, output_consumer: None })
     }
 }

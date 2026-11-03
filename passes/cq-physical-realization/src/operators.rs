@@ -389,6 +389,10 @@ impl<'a> Printer<'a> {
             &definition.operator
         {
             let input_name = symbol_name(&select.input);
+            if self.encoded.blocks.predicates.contains_key(name) {
+                let rows = self.scan(&select.input)?;
+                return Ok(self.blocked_filter_rows(name, rows));
+            }
             if self.carries_positions(&input_name) || self.partitioned {
                 let rows = self.scan(&select.input)?;
                 let columns = cq_print::columns_used(&select.condition)
@@ -413,8 +417,11 @@ impl<'a> Printer<'a> {
                     &guard.condition,
                     guard.environment.as_ref(),
                 );
-                let aliases =
-                    self.rust_aliases(&input_name, &guard.condition, guard.environment.as_ref());
+                let aliases = if self.encoded.blocks.reads.contains_key(name) {
+                    self.blocked_rust_aliases(name, &input_name, &guard.condition, guard.environment.as_ref())
+                } else {
+                    self.rust_aliases(&input_name, &guard.condition, guard.environment.as_ref())
+                };
                 let condition = guard.test();
                 let rows = quote!(::core::iter::Iterator::filter(#rows, move |#pattern| {
                     #(#aliases)*
@@ -505,8 +512,11 @@ impl<'a> Printer<'a> {
                 used.extend(self.carried(name).iter().cloned());
                 let pattern =
                     self.bind_columns(&input_name, &used.into_iter().collect::<Vec<_>>(), false);
-                let shadows =
-                    self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref());
+                let shadows = if self.encoded.blocks.reads.contains_key(name) {
+                    self.blocked_rust_aliases(name, &input_name, &bind.expression, bind.environment.as_ref())
+                } else {
+                    self.rust_aliases(&input_name, &bind.expression, bind.environment.as_ref())
+                };
                 let binding = &bind.pattern;
                 let annotation = &bind.annotation;
                 let value = match self.binding_functions.get(name) {

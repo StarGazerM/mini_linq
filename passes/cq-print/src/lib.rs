@@ -41,6 +41,7 @@ use structures::syntax::symbol_name;
 use syn::{Expr, Ident, Stmt};
 
 pub mod access;
+mod blocks;
 mod columns;
 pub use structures::demand::{columns_used, columns_used_rust};
 pub mod expressions;
@@ -93,6 +94,9 @@ type PartitionedSource<'p> = (
 pub struct Context<'a> {
     pub profile: Option<profile::Profile>,
     pub analysis: &'a structures::Analysis,
+    pub encoded: &'a structures::encoded::Contract,
+    pub blocked_runs: BTreeMap<String, Vec<String>>,
+    pub blocked_routing: BTreeMap<String, BTreeMap<String, structures::encoded::RepresentationId>>,
     providers: &'a structures::Structures,
     pub physical_analysis: &'a physical::Analysis,
     pub infos: BTreeMap<String, physical::Row>,
@@ -290,12 +294,21 @@ impl<'a> Context<'a> {
                 },
             );
         }
-        let positional_bases = positional_bases(analysis);
+        let mut positional_bases = positional_bases(analysis);
+        positional_bases.extend(module.encoded.blocks.scans.values().map(|scan| {
+            module.encoded.obligations.sources[&scan.source].relation.clone()
+        }));
         for base in positional_bases {
             let host = &hosts[&base].value;
             let id = Self::positional_host(&base);
-            statements.push(syn::parse_quote!(let #id = { use ::cq_storage::PositionalRows as _; #host.positional_handle() };));
-            statements.push(syn::parse_quote!(::cq_storage::require::positional(#id);));
+            if module.encoded.blocks.scans.values().any(|scan| {
+                module.encoded.obligations.sources[&scan.source].relation == base
+            }) {
+                statements.push(syn::parse_quote!(let #id = #host;));
+            } else {
+                statements.push(syn::parse_quote!(let #id = { use ::cq_storage::PositionalRows as _; #host.positional_handle() };));
+                statements.push(syn::parse_quote!(::cq_storage::require::positional(#id);));
+            }
         }
         // Marker identity is a schema contract, not a spelling convention.
         // Prove it even when an alias hides a builtin marker's const argument.
@@ -420,6 +433,9 @@ impl<'a> Context<'a> {
             physical_analysis: &analysis.physical,
             physical_definitions: &module.physical.program.definitions,
             analysis,
+            encoded: &module.encoded,
+            blocked_runs: BTreeMap::new(),
+            blocked_routing: BTreeMap::new(),
             providers: &module.structures,
             infos: analysis.physical.rows.clone(),
             physical: module
@@ -448,6 +464,7 @@ impl<'a> Context<'a> {
                 Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
             }),
         };
+        context.prepare_blocked_sources();
         context.prepare_join_filters();
         context
     }

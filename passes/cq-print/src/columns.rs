@@ -137,6 +137,12 @@ impl Context<'_> {
                         .unwrap()
                         .0
                 }
+                Operator::Bind(b) if self.carries_positions(occurrence) => {
+                    self.physical.get_key_value(&symbol_name(&b.input)).unwrap().0
+                }
+                Operator::Guard(g) if self.carries_positions(occurrence) => {
+                    self.physical.get_key_value(&symbol_name(&g.input)).unwrap().0
+                }
                 _ => break,
             };
         }

@@ -125,6 +125,8 @@ pub struct Emitter<'a> {
 impl<'a> Emitter<'a> {
     pub fn new(program: &'a Program, analysis: &'a Analysis) -> Self {
         let mut context = Context::new(&program.structures, &analysis.structures);
+        context.blocked_runs = program.representation.blocks.runs.clone();
+        context.blocked_routing = program.representation.blocks.routing.clone();
         context.certify_host_sets(&program.structures);
         let mut partial_groups = BTreeMap::new();
         for definition in &program.sequence.definitions {
@@ -245,6 +247,11 @@ impl<'a> Emitter<'a> {
                 }
                 if let Some(host) = self.context().hosts.get(name) {
                     let host = &host.value;
+                    if self.program.structures.encoded.blocks.scans.values().any(|scan| {
+                        self.program.structures.encoded.obligations.sources[&scan.source].relation == *name
+                    }) {
+                        return Ok(quote!(#host.len()));
+                    }
                     return Ok(quote!({
                         let __cq_input_rows = ::cq_storage::rows::Rows::rows(#host);
                         let (__cq_lower, __cq_upper) = __cq_input_rows.size_hint();
@@ -557,10 +564,11 @@ impl<'a> Emitter<'a> {
         })?;
         self.register(result);
         let columns: Vec<_> = keys.iter().map(symbol_name).collect();
-        let pattern = self.context().bind_columns(result, &columns, false);
+        let pattern = self.context().bind_columns(result, &columns, self.context().blocked_routing.contains_key(result));
         let key: Vec<_> = columns
             .iter()
-            .map(|column| self.context().access(result, column))
+            .map(|column| self.context().blocked_route_key(result, column)
+                .unwrap_or_else(|| self.context().access(result, column)))
             .collect();
         let key = cq_print::group(&key);
         let rows = input.rows;
@@ -946,6 +954,15 @@ impl<'a> Emitter<'a> {
     /// index or an `exists` rows record is built from the candidates by its
     /// own build (at publication); a host carrier is read in verified order.
     pub fn canon(&mut self, mut input: Value) -> syn::Result<Value> {
+        if let Some(result) = input.result.as_deref()
+            && let Some(rows) = self.context().blocked_canon_rows(
+                result, input.rows.clone(), matches!(self.adapters.canon_target(), CanonTarget::Parallel),
+            )
+        {
+            input.rows = rows;
+            input.stored = false;
+            return Ok(input);
+        }
         let canonical = input
             .result
             .as_ref()

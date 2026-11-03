@@ -526,3 +526,221 @@ fn filters_preserve_distinct_scalar_key_mappings_and_markers() {
     assert_ne!(filters[0].key, filters[1].key);
     assert_ne!(filters[0].marker, filters[1].marker);
 }
+
+fn block_source() -> physical::Program {
+    syn::parse_quote! { physical {
+        relation R(a: OpaqueAlias [17], b: OtherSpelling [17]);
+        r = pipe rename R@0 { a -> x, b -> y };
+        p = pipe range select r if (x >= 3);
+        g = pipe guard p if (opaque(y));
+        v = pipe bind g with value: u64 = (compute(x));
+        out = let canon project v keep {x, value};
+        return out as answer(x, value);
+    }}
+}
+
+fn block_advice() -> proc_macro2::TokenStream {
+    quote!(blocks(R {
+        block_rows 1024; summary none;
+        columns [a: bytes u64, b: plain u64];
+    }))
+}
+
+#[test]
+fn blocks_are_authored_complete_printable_and_preserve_physical() {
+    let source = block_source();
+    let ordinary = cq_structure_selection::compile(&source).unwrap();
+    assert_eq!(ordinary.encoded, Default::default());
+    let target = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+    cq_structure_selection::check(&source, &target).unwrap();
+    assert_eq!(target.physical, source);
+    assert_eq!(syn::parse2::<ir::Program>(target.to_token_stream()).unwrap(), target);
+    let facts = ir::contract::check(&target).unwrap();
+    for result in ["r", "p", "g", "v", "out"] {
+        assert!(matches!(facts.repr[result], ir::Repr::Positions { .. }));
+    }
+    let blocks = &target.encoded.blocks;
+    assert_eq!(blocks.scans["r"].columns.len(), 2);
+    assert_eq!(blocks.predicates["p"].strategy, ir::blocks::Strategy::Window);
+    assert_eq!(blocks.reads["g"].fields.keys().map(String::as_str).collect::<Vec<_>>(), ["y"]);
+    assert_eq!(blocks.reads["v"].fields.keys().map(String::as_str).collect::<Vec<_>>(), ["x"]);
+    assert_eq!(blocks.reads["canon:out"].purpose, ir::encoded::ReadPurpose::PreserveCarrier);
+    assert_eq!(blocks.reads["canon:out"].fields["x"].action, ir::blocks::ReadAction::Ordinal);
+}
+
+#[test]
+fn blocks_reject_partial_schema_and_unknown_hosts_without_type_recognition() {
+    for advice in [
+        quote!(blocks(R { block_rows 1024; summary none; columns [a: bytes u64]; })),
+        quote!(blocks(Other { block_rows 1024; summary none; columns [a: bytes u64, b: plain u64]; })),
+        quote!(blocks(R { block_rows 0; summary none; columns [a: bytes u64, b: plain u64]; })),
+    ] {
+        assert!(cq_structure_selection::compile_with(&block_source(), advice).is_err());
+    }
+    let mut source = block_source();
+    source.program.declarations[0].columns[0].ty = syn::parse_quote!(UnrelatedRustTokens);
+    let selected = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+    assert_eq!(selected.encoded.blocks.sources.values().next().unwrap().columns["a"].logical, physical::syntax::LogicalTypeId(17));
+}
+
+#[test]
+fn blocks_keep_exact_disjunction_and_cross_column_predicates() {
+    for condition in [
+        quote!(x != 3),
+        quote!(x < y),
+        quote!((x < 3 and y > 9) or (x > 7 and y < 2)),
+    ] {
+        let source: physical::Program = syn::parse2(quote! { physical {
+            relation R(a: Alias [17], b: Alias [17]);
+            r = pipe rename R@0 { a -> x, b -> y };
+            p = pipe select r if (#condition);
+            return canon p as answer(x,y);
+        }}).unwrap();
+        let target = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+        assert_eq!(target.physical, source);
+        let predicate = &target.encoded.blocks.predicates["p"];
+        assert_eq!(predicate.strategy, ir::blocks::Strategy::Formula);
+        assert_eq!(predicate.test, ir::blocks::Test::DecodeCodes);
+        assert_eq!(predicate.prune, ir::blocks::Prune::None);
+        let mut forged = target.clone();
+        forged.encoded.blocks.predicates.get_mut("p").unwrap().strategy = ir::blocks::Strategy::Point;
+        assert!(ir::contract::check(&forged).is_err());
+        let mut forged = target.clone();
+        forged.encoded.blocks.predicates.get_mut("p").unwrap().test = ir::blocks::Test::Encoded;
+        assert!(ir::contract::check(&forged).is_err());
+    }
+}
+
+#[test]
+fn blocks_canonical_key_demand_cannot_be_replaced_by_positions() {
+    let mut target = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
+    target.encoded.blocks.reads.get_mut("canon:out").unwrap().fields.clear();
+    assert!(ir::contract::check(&target).is_err());
+    let mut target = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
+    target.encoded.blocks.reads.get_mut("v").unwrap().fields.get_mut("x").unwrap().action = ir::blocks::ReadAction::BorrowedScoped;
+    assert!(ir::contract::check(&target).is_err());
+}
+
+#[test]
+fn blocks_join_and_index_boundaries_reject_before_printing() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a: Alias [17], b: Alias [17]);
+        relation S(c: Alias [17]);
+        r = pipe rename R@0 {a -> x, b -> y};
+        s = let rename S@1 {c -> x};
+        j = pipe probe first [x] r,s;
+        return canon j as answer(x,y);
+    }};
+    cq_structure_selection::compile(&source).unwrap();
+    assert!(cq_structure_selection::compile_with(&source, block_advice()).is_err());
+    // A forged target with complete source declarations still fails the language
+    // checker: changing the consumer is not a printer fallback.
+    let mut target = cq_structure_selection::compile(&source).unwrap();
+    let selected = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
+    target.encoded = selected.encoded;
+    target.encoded.blocks.predicates.clear();
+    target.encoded.blocks.reads.clear();
+    target.structures.entries.push(syn::parse_quote!(
+        r repr = positions { R lineage { x -> a, y -> b } } owned [];
+    ));
+    assert!(ir::contract::check(&target).is_err());
+}
+
+#[test]
+fn blocks_base_group_keys_and_aggregates_reject_before_printing() {
+    for (group, head) in [
+        (quote!(group valuations by [x] { n: usize = count(); }), quote!(answer(x,n))),
+        (quote!(group valuations by [] { n: u64 = sum(y); }), quote!(answer(n))),
+    ] {
+        let source: physical::Program = syn::parse2(quote! { physical {
+            relation R(a: Alias [17], b: Alias [17]);
+            r = pipe rename R@0 {a -> x, b -> y};
+            valuations = let canon project r keep {x,y};
+            grouped = pipe #group;
+            return dedup grouped as #head;
+        }}).unwrap();
+        cq_structure_selection::compile(&source).unwrap();
+        assert!(cq_structure_selection::compile_with(&source, block_advice()).is_err());
+    }
+}
+
+#[test]
+fn blocks_groups_accept_owned_computed_operands() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a: Alias [17], b: Alias [17]);
+        r = pipe rename R@0 {a -> x, b -> y};
+        v = pipe bind r with value: u64 = (compute(x));
+        valuations = let canon project v keep {x,y,value};
+        grouped = pipe group valuations by [] { total: u64 = sum(value); };
+        return grouped as answer(total);
+    }};
+    let selected = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+    cq_structure_selection::check(&source, &selected).unwrap();
+    assert_eq!(selected.encoded.blocks.reads["v"].fields.len(), 1);
+    assert!(!selected.encoded.blocks.reads.contains_key("grouped"));
+}
+
+#[test]
+fn blocks_restricted_source_literals_reject_before_printing() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a: Alias [17], b: Alias [17]);
+        r = let canon rename R@0 {a -> x} constants {b = 7};
+        return r as answer(x);
+    }};
+    cq_structure_selection::compile(&source).unwrap();
+    assert!(cq_structure_selection::compile_with(&source, block_advice()).is_err());
+}
+
+#[test]
+fn blocks_host_set_requires_an_already_discharged_premise() {
+    let mut source = block_source();
+    source.program.host_sets.push(syn::parse_quote!(host_set R;));
+    cq_structure_selection::compile(&source).unwrap();
+    assert!(cq_structure_selection::compile_with(&source, block_advice()).is_err());
+    source.program.host_sets[0] = syn::parse_quote!(host_set R discharged;);
+    let selected = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+    cq_structure_selection::check(&source, &selected).unwrap();
+}
+
+#[test]
+fn blocks_external_consumer_preserves_witness_values_and_owned_computations() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a: Alias [17], b: Alias [17]);
+        capture { let group: u64 = 0; }
+        r = pipe rename R@0 {a -> x, b -> y};
+        v = pipe bind r with value: u64 = (compute(y));
+        out = let canon project v keep {x,y,value};
+        return out as rows(group,x,y,value);
+    }};
+    let demand = ir::OutputConsumer {
+        original_consumer: "aggregate".into(),
+        head: ["group", "x", "y", "value"].map(String::from).into(),
+        value_reads: ["group", "value"].map(String::from).into(),
+    };
+    let selected = cq_structure_selection::compile_with_consumer(&source, block_advice(), Some(&demand)).unwrap();
+    assert_eq!(selected.physical, source);
+    assert!(selected.physical.program.host_sets.is_empty());
+    assert!(selected.physical.program.consumer_canonical.is_none());
+    let reads = &selected.encoded.blocks.reads;
+    assert!(!reads.contains_key("rows"));
+    let witnesses = &reads["output:rows:carrier"];
+    assert_eq!(witnesses.purpose, ir::encoded::ReadPurpose::PreserveCarrier);
+    assert_eq!(witnesses.consumer, ir::encoded::Consumer::Relational("aggregate".into()));
+    assert_eq!(witnesses.fields.keys().map(String::as_str).collect::<Vec<_>>(), ["x", "y"]);
+    assert_eq!(witnesses.fields["x"].action, ir::blocks::ReadAction::Ordinal);
+    let logical = &reads["output:rows:read"];
+    assert_eq!(logical.purpose, ir::encoded::ReadPurpose::OpaqueRustRead);
+    assert_eq!(logical.consumer, ir::encoded::Consumer::OpaqueRust("aggregate".into()));
+    assert!(logical.fields.is_empty());
+    assert_eq!(reads["v"].fields.keys().map(String::as_str).collect::<Vec<_>>(), ["y"]);
+    assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+
+    // Reading a base key requires a borrowing contract, not an ordinal
+    // substitution or an owned temporary passed to a borrowed-value consumer.
+    let mut reads_key = demand.clone();
+    reads_key.value_reads.push("x".into());
+    assert!(cq_structure_selection::compile_with_consumer(&source, block_advice(), Some(&reads_key)).is_err());
+    let mut forged = selected.clone();
+    forged.consumer = Some(reads_key);
+    assert!(ir::contract::check(&forged).is_err());
+}

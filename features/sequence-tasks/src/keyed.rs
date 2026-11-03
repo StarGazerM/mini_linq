@@ -67,10 +67,16 @@ pub(crate) fn partition(
             "Tasks key partition lacks row provenance",
         )
     })?;
-    let pattern = emitter.context().pattern(result);
+    let pattern = if emitter.context().blocked_routing.contains_key(result) {
+        let columns: Vec<_> = keys.iter().map(symbol_name).collect();
+        emitter.context().bind_columns(result, &columns, true)
+    } else {
+        emitter.context().pattern(result)
+    };
     let keys = keys
         .iter()
-        .map(|key| emitter.context().access(result, &symbol_name(key)))
+        .map(|key| emitter.context().blocked_route_key(result, &symbol_name(key))
+            .unwrap_or_else(|| emitter.context().access(result, &symbol_name(key))))
         .collect::<Vec<_>>();
     let key = cq_print::group(&keys);
     let context = emitter.context();
@@ -90,7 +96,17 @@ pub(crate) fn partition(
             |i| __cq_route_rows[i * #grain..((i + 1) * #grain).min(__cq_route_rows.len())]
                 .iter().cloned()))
     } else if let Some(result) = borrowed_host {
-        if context.carries_positions(result) || context.join_filter_ids(result).is_some() {
+        if let Some(scan) = emitter.analysis.representation.blocks.scans.get(result) {
+            let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);
+            let vector = scan.tile_rows;
+            let range = quote!({
+                let __cq_start = __cq_chunk * #vector;
+                __cq_start..__cq_start.saturating_add(#vector).min(#host.len())
+            });
+            let rows = context.profile_stream(result, context.blocked_rows(result, Some(range)));
+            quote!(::cq_sequence_tasks::combine::IndexedTiles::new(
+                #host.len().div_ceil(#vector), |__cq_chunk| #rows))
+        } else if context.carries_positions(result) || context.join_filter_ids(result).is_some() {
             let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);
             let ids = quote!(::cq_storage::PositionalRows::position_range(
                 #host, __cq_chunk * #grain..(__cq_chunk + 1) * #grain));

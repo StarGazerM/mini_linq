@@ -135,6 +135,24 @@ fn check<T: OrdinalDecode + std::fmt::Debug, F: Family + EncodedPoint + EncodedW
                         .filter_map(|(i, &v)| (v != 0).then_some(i))
                         .collect();
                     assert_eq!(selected, expected, "mask {p:?}");
+                    for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+                        for prune in [PruneMode::None, PruneMode::MinMax] {
+                            if prune == PruneMode::MinMax && !summary {
+                                continue;
+                            }
+                            let mut selected = Vec::new();
+                            let mut tile = [1; VECTOR_ROWS];
+                            for start in (0..values.len()).step_by(VECTOR_ROWS) {
+                                let len = VECTOR_ROWS.min(values.len() - start);
+                                tile[..len].fill(1);
+                                col.intersect_mask(start, &mut tile[..len], &p, prune, test);
+                                selected.extend(tile[..len].iter().enumerate().filter_map(
+                                    |(local, &live)| (live != 0).then_some(start + local),
+                                ));
+                            }
+                            assert_eq!(selected, expected, "bounded {p:?} {prune:?} {test:?}");
+                        }
+                    }
                 }
             }
         }
@@ -258,4 +276,142 @@ fn membership_translation_borrows_keys_and_checks_block_frame() {
             }
         }
     }
+}
+
+fn bounded_laws<F: Family + EncodedPoint + EncodedWindow>() {
+    for count in [0, 1, 1024, 1027, 4099] {
+        let values: Vec<i64> = (0..count).map(|i| i as i64 / 1024 * 1000 + i as i64 % 17).collect();
+        for summaries in [false, true] {
+            let table = ScanTable::new((
+                ScanColumn::<i64, F>::new(&values, BlockRows::new(2048).unwrap(), summaries),
+                ScanColumn::<i64, F>::new(&values, BlockRows::new(2048).unwrap(), summaries),
+            ));
+            let membership = Predicate::Membership(vec![0i64.ordinal(), 7i64.ordinal(), 1007i64.ordinal(), 4002i64.ordinal()]);
+            let window = Predicate::Window { lo: Included(7i64.ordinal()), hi: Unbounded };
+            for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+                for prune in [PruneMode::None, PruneMode::MinMax] {
+                    if prune == PruneMode::MinMax && !summaries {
+                        continue;
+                    }
+                    let expected: Vec<_> = values.iter().enumerate().filter_map(|(i, value)| {
+                        (membership.matches(value.ordinal()) && window.matches(value.ordinal())).then_some(i)
+                    }).collect();
+                    let actual: Vec<_> = table.scan_positions(0..count, |tile| {
+                        tile.intersect::<0>(&membership, prune, test);
+                        tile.intersect::<1>(&window, prune, test);
+                    }).map(ScanPosition::index).collect();
+                    assert_eq!(actual, expected);
+
+                    let mut mask = ScanMask::default();
+                    let mut empty = table.tile(count, &mut mask);
+                    assert!(empty.is_empty());
+                    empty.intersect::<0>(&membership, prune, test);
+                    assert_eq!(empty.positions().count(), 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_plain_and_bytes_intersect_without_losing_occurrences() {
+    assert_eq!(std::mem::size_of::<ScanMask>(), VECTOR_ROWS);
+    bounded_laws::<Plain>();
+    bounded_laws::<Bytes>();
+}
+
+#[test]
+fn lazy_ranges_and_carrier_filters_preserve_order_and_multiplicity() {
+    use std::cell::Cell;
+    let values: Vec<u64> = (0..2051).map(|i| i % 3).collect();
+    let table = ScanTable::new((
+        ScanColumn::<u64, Bytes>::new(&values, BlockRows::new(1024).unwrap(), false),
+    ));
+    let calls = Cell::new(0);
+    let mut scan = table.scan_positions(1024..2051, |tile| {
+        calls.set(calls.get() + 1);
+        tile.intersect::<0>(&Predicate::Point(1), PruneMode::None, TestMode::Encoded);
+    });
+    assert_eq!(calls.get(), 0);
+    let first = scan.next().unwrap();
+    assert_eq!(first.index(), 1024);
+    assert_eq!(calls.get(), 1);
+    drop(scan);
+    assert_eq!(calls.get(), 1, "early stop must not prepare the next vector");
+
+    let last = table.scan_positions(2048..2051, |_| {}).next().unwrap();
+    let input = [(last, "late"), (first, "first"), (first, "duplicate"), (last, "again")];
+    let filtered: Vec<_> = table.filter_rows(input, |item| item.0, |tile| {
+        tile.retain(|position| table.read_ordinal::<0>(position) == 1);
+    }).collect();
+    assert_eq!(filtered, vec![(first, "first"), (first, "duplicate")]);
+    assert_eq!(table.scan_positions(0..1024, |_| {}).count(), 1024);
+    assert_eq!(table.scan_positions(1024..2048, |_| {}).count(), 1024);
+    assert_eq!(table.scan_positions(2048..2051, |_| {}).count(), 3);
+}
+
+#[test]
+#[should_panic(expected = "scan position belongs to another table")]
+fn table_positions_cannot_cross_snapshots() {
+    let a = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
+    let b = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
+    let position = a.scan_positions(0..1, |_| {}).next().unwrap();
+    b.read_ordinal::<0>(position);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct NeverMaterialize(u64);
+impl OrderKey for NeverMaterialize {
+    type Ordinal = u64;
+    fn ordinal(&self) -> u64 { self.0 }
+}
+impl OrdinalDecode for NeverMaterialize {
+    const WIDTH: Width = Width::W64;
+    fn from_ordinal(_: u64) -> Self {
+        panic!("an undemanded field was materialized")
+    }
+}
+
+#[test]
+fn only_authorized_demanded_fields_are_materialized() {
+    let table = ScanTable::new((
+        ScanColumn::<NeverMaterialize, Bytes>::new(
+            &[NeverMaterialize(1), NeverMaterialize(2)], BlockRows::new(1024).unwrap(), false,
+        ),
+        ScanColumn::<i64, Plain>::new(&[-8, 12], BlockRows::new(1024).unwrap(), false),
+    ));
+    let position = table.scan_positions(0..2, |tile| {
+        tile.intersect::<0>(&Predicate::Point(2), PruneMode::None, TestMode::DecodeToCode);
+    }).next().unwrap();
+    assert_eq!(table.read_ordinal::<0>(position), 2);
+    assert_eq!(
+        table.read_value::<1>(position, LogicalRead::OpaqueRust { consumer: "arithmetic" }),
+        12,
+    );
+    assert_eq!(
+        table.read_value::<1>(position, LogicalRead::FinalAnswer { consumer: "answer" }),
+        12,
+    );
+}
+
+#[test]
+fn explicit_slot_domains_bind_without_reencoding() {
+    use cq_storage::scan::format::{Domain, DomainId, FormatError};
+    let column = ScanColumn::<i64, Bytes>::new(&[-1, 7], BlockRows::new(1024).unwrap(), false);
+    let payload = column.payload().as_ptr();
+    let snapshot = column.snapshot();
+    let domain = Domain {
+        id: DomainId { namespace: 11, version: 3 },
+        carrier: Width::W64,
+        equality: true,
+        order: true,
+    };
+    let table = ScanTable::new((column,)).bind_domains(&[domain]).unwrap();
+    let _: &ScanColumn<i64, Bytes> = table.column::<0>();
+    assert_eq!(table.column::<0>().declared_domain(), Some(domain));
+    assert_eq!(table.column::<0>().payload().as_ptr(), payload);
+    assert_eq!(table.column::<0>().snapshot(), snapshot);
+    assert!(table.column::<0>().checked_view(domain, 2).is_ok());
+    let bad = Domain { carrier: Width::W32, ..domain };
+    assert!(matches!(table.bind_domains(&[bad]), Err(FormatError::Domain)));
 }

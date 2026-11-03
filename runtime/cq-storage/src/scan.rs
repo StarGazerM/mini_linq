@@ -8,6 +8,32 @@ use std::{marker::PhantomData, num::NonZeroU32, ops::Bound};
 
 pub const VECTOR_ROWS: usize = 1024;
 
+/// Summary use and physical testing are independent, explicitly selected facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PruneMode {
+    None,
+    MinMax,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestMode {
+    Encoded,
+    /// Reconstruct the ordinal carrier, never an authored value or string.
+    DecodeToCode,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Classification {
+    Disqualified,
+    Qualified,
+    Ambivalent,
+}
+/// The checked compiler read record names the consumer of a logical value.
+/// Carrier reads require no such reconstruction authorization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogicalRead {
+    OpaqueRust { consumer: &'static str },
+    FinalAnswer { consumer: &'static str },
+}
+
 #[path = "scan_format.rs"]
 pub mod format;
 
@@ -335,6 +361,73 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
         self.snapshot
     }
 
+    /// Bind an explicit provider declaration at publication without touching
+    /// payload or changing occurrence identity.
+    pub fn bind_domain(mut self, domain: format::Domain) -> Result<Self, format::FormatError> {
+        if domain.carrier != T::WIDTH
+            || domain.id.namespace == 0
+            || !domain.equality
+            || self.declared_domain.is_some_and(|bound| bound != domain)
+        {
+            return Err(format::FormatError::Domain);
+        }
+        self.declared_domain = Some(domain);
+        Ok(self)
+    }
+
+    pub fn declared_domain(&self) -> Option<format::Domain> {
+        self.declared_domain
+    }
+
+    /// Read exactly one field's physical carrier, not its logical value.
+    pub fn read_ordinal(&self, position: usize) -> u64 {
+        assert!(position < self.rows, "scan position outside column");
+        let h = &self.headers[position / self.block_rows.get()];
+        let mut ordinal = 0;
+        self.visit_codes(h, position % self.block_rows.get(), 1, |_, code| {
+            ordinal = h.base + code;
+        });
+        ordinal
+    }
+
+    /// Intersect a bounded vector in-place. No other vector's payload is read.
+    /// `MinMax` requires an authored summary capability; `None` never reads it.
+    pub fn intersect_mask(
+        &self,
+        start: usize,
+        out: &mut [u8],
+        predicate: &Predicate,
+        prune: PruneMode,
+        test: TestMode,
+    ) -> Classification
+    where
+        F: EncodedPoint + EncodedWindow,
+    {
+        assert!(start <= self.rows && out.len() <= self.rows - start);
+        assert!(
+            out.len() <= VECTOR_ROWS
+                && (start % VECTOR_ROWS == 0 || (out.is_empty() && start == self.rows))
+        );
+        if let Some(domain) = self.declared_domain {
+            assert!(
+                !matches!(predicate, Predicate::Window { .. }) || domain.order,
+                "ordered scan predicate requires an ordered domain"
+            );
+        }
+        intersect_vector(
+            &self.headers,
+            self.payload(),
+            self.summary.as_deref(),
+            self.vector_summary.as_deref(),
+            self.block_rows,
+            start,
+            out,
+            predicate,
+            prune,
+            test,
+        )
+    }
+
     /// Check the encode-time declared ordinal domain, without inspecting a Rust type.
     pub fn checked_view(
         &self,
@@ -371,38 +464,9 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
         h: &BlockHeader,
         start: usize,
         len: usize,
-        mut visit: impl FnMut(usize, u64),
+        visit: impl FnMut(usize, u64),
     ) {
-        let begin = h.offset as usize + start * h.width as usize;
-        let bytes = &self.payload()[begin..begin + len * h.width as usize];
-        macro_rules! visit_width {
-            ($width:literal, $ty:ty) => {
-                for (i, chunk) in bytes.chunks_exact($width).enumerate() {
-                    visit(i, <$ty>::from_le_bytes(chunk.try_into().unwrap()) as u64);
-                }
-            };
-        }
-        match h.width {
-            Width::W0 => {
-                for i in 0..len {
-                    visit(i, 0);
-                }
-            }
-            Width::W8 => {
-                for (i, &code) in bytes.iter().enumerate() {
-                    visit(i, code as u64);
-                }
-            }
-            Width::W16 => {
-                visit_width!(2, u16);
-            }
-            Width::W32 => {
-                visit_width!(4, u32);
-            }
-            Width::W64 => {
-                visit_width!(8, u64);
-            }
-        }
+        visit_codes(self.payload(), h, start, len, visit);
     }
     /// Decode at most one vector into caller-owned storage; returns its length.
     pub fn decode_vector(&self, block: usize, vector: usize, out: &mut [T]) -> usize {
@@ -444,34 +508,8 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
     }
 
     fn block_mask(&self, h: &BlockHeader, predicate: &TranslatedPredicate<'_>, out: &mut [u8]) {
-        let bytes = &self.payload()
-            [h.offset as usize..h.offset as usize + h.rows as usize * h.width as usize];
-        macro_rules! range {
-            ($width:literal, $ty:ty, $lo:expr, $hi:expr) => {{
-                let lo = $lo as $ty;
-                let hi = $hi as $ty;
-                for (selected, code) in out.iter_mut().zip(bytes.chunks_exact($width)) {
-                    let code = <$ty>::from_le_bytes(code.try_into().unwrap());
-                    *selected = ((code >= lo) & (code <= hi)) as u8;
-                }
-            }};
-        }
-        match predicate {
-            TranslatedPredicate::Range(CodeConstraint::Empty) => out.fill(0),
-            TranslatedPredicate::Range(CodeConstraint::All) => out.fill(1),
-            TranslatedPredicate::Range(CodeConstraint::Range { lo, hi }) => match h.width {
-                Width::W0 => out.fill((*lo == 0) as u8),
-                Width::W8 => range!(1, u8, *lo, *hi),
-                Width::W16 => range!(2, u16, *lo, *hi),
-                Width::W32 => range!(4, u32, *lo, *hi),
-                Width::W64 => range!(8, u64, *lo, *hi),
-            },
-            TranslatedPredicate::Membership { keys, base, .. } => {
-                self.visit_codes(h, 0, h.rows as usize, |i, code| {
-                    out[i] = keys.contains(&(*base + code)) as u8
-                });
-            }
-        }
+        out.fill(1);
+        intersect_codes(self.payload(), h, 0, predicate, out);
     }
 
     /// Exact ascending occurrence positions without reconstructing logical values.
@@ -543,6 +581,25 @@ pub enum Predicate {
     Membership(Vec<u64>),
 }
 impl Predicate {
+    pub fn matches(&self, ordinal: u64) -> bool {
+        match self {
+            Self::Membership(keys) => keys.contains(&ordinal),
+            _ => self.range().is_some_and(|(lo, hi)| lo <= ordinal && ordinal <= hi),
+        }
+    }
+
+    pub fn classify(&self, bounds: MinMax) -> Classification {
+        if !self.intersects(bounds.lo, bounds.hi) {
+            Classification::Disqualified
+        } else if match self {
+            Self::Membership(keys) => bounds.lo == bounds.hi && keys.contains(&bounds.lo),
+            _ => self.range().is_some_and(|(lo, hi)| lo <= bounds.lo && bounds.hi <= hi),
+        } {
+            Classification::Qualified
+        } else {
+            Classification::Ambivalent
+        }
+    }
     fn range(&self) -> Option<(u64, u64)> {
         match self {
             Self::Point(c) => Some((*c, *c)),
@@ -630,9 +687,167 @@ impl TranslatedPredicate<'_> {
     }
 }
 
+/// The single S1 width decoder shared by whole-column, vector and point reads.
+fn visit_codes(
+    payload: &[u8],
+    h: &BlockHeader,
+    start: usize,
+    len: usize,
+    mut visit: impl FnMut(usize, u64),
+) {
+    let begin = h.offset as usize + start * h.width as usize;
+    let bytes = &payload[begin..begin + len * h.width as usize];
+    macro_rules! visit_width {
+        ($width:literal, $ty:ty) => {
+            for (i, chunk) in bytes.chunks_exact($width).enumerate() {
+                visit(i, <$ty>::from_le_bytes(chunk.try_into().unwrap()) as u64);
+            }
+        };
+    }
+    match h.width {
+        Width::W0 => {
+            for i in 0..len {
+                visit(i, 0);
+            }
+        }
+        Width::W8 => {
+            for (i, &code) in bytes.iter().enumerate() {
+                visit(i, code as u64);
+            }
+        }
+        Width::W16 => visit_width!(2, u16),
+        Width::W32 => visit_width!(4, u32),
+        Width::W64 => visit_width!(8, u64),
+    }
+}
+
+/// S1's range kernel, shared with the compatibility whole-column mask API.
+fn intersect_codes(
+    payload: &[u8],
+    h: &BlockHeader,
+    start: usize,
+    predicate: &TranslatedPredicate<'_>,
+    out: &mut [u8],
+) {
+    macro_rules! range {
+        ($width:literal, $ty:ty, $lo:expr, $hi:expr) => {{
+            let lo = $lo as $ty;
+            let hi = $hi as $ty;
+            let begin = h.offset as usize + start * $width;
+            let bytes = &payload[begin..begin + out.len() * $width];
+            for (selected, code) in out.iter_mut().zip(bytes.chunks_exact($width)) {
+                let code = <$ty>::from_le_bytes(code.try_into().unwrap());
+                *selected &= ((code >= lo) & (code <= hi)) as u8;
+            }
+        }};
+    }
+    match predicate {
+        TranslatedPredicate::Range(CodeConstraint::Empty) => out.fill(0),
+        TranslatedPredicate::Range(CodeConstraint::All) => {}
+        TranslatedPredicate::Range(CodeConstraint::Range { lo, hi }) => match h.width {
+            Width::W0 => {
+                if *lo != 0 {
+                    out.fill(0);
+                }
+            }
+            Width::W8 => range!(1, u8, *lo, *hi),
+            Width::W16 => range!(2, u16, *lo, *hi),
+            Width::W32 => range!(4, u32, *lo, *hi),
+            Width::W64 => range!(8, u64, *lo, *hi),
+        },
+        TranslatedPredicate::Membership { keys, base, .. } => {
+            visit_codes(payload, h, start, out.len(), |i, code| {
+                out[i] &= keys.contains(&(*base + code)) as u8;
+            });
+        }
+    }
+}
+
+fn intersect_vector(
+    headers: &[BlockHeader],
+    payload: &[u8],
+    summaries: Option<&[MinMax]>,
+    vector_summaries: Option<&[MinMax]>,
+    block_rows: BlockRows,
+    start: usize,
+    out: &mut [u8],
+    predicate: &Predicate,
+    prune: PruneMode,
+    test: TestMode,
+) -> Classification {
+    if out.is_empty() || !out.iter().any(|&live| live != 0) {
+        return Classification::Disqualified;
+    }
+    let block = start / block_rows.get();
+    if prune == PruneMode::MinMax {
+        let bounds = if let Some(summaries) = vector_summaries {
+            summaries[start / VECTOR_ROWS]
+        } else {
+            summaries.expect("MinMax scan requires declared summaries")[block]
+        };
+        match predicate.classify(bounds) {
+            Classification::Disqualified => {
+                out.fill(0);
+                return Classification::Disqualified;
+            }
+            Classification::Qualified => return Classification::Qualified,
+            Classification::Ambivalent => {}
+        }
+    }
+    let h = &headers[block];
+    let local = start % block_rows.get();
+    match test {
+        TestMode::Encoded => intersect_codes(payload, h, local, &predicate.translate(h), out),
+        TestMode::DecodeToCode => match predicate {
+            Predicate::Membership(keys) => {
+                visit_codes(payload, h, local, out.len(), |i, code| {
+                    out[i] &= keys.contains(&(h.base + code)) as u8;
+                });
+            }
+            _ => match predicate.range() {
+                None => out.fill(0),
+                Some((lo, hi)) => {
+                    visit_codes(payload, h, local, out.len(), |i, code| {
+                        let ordinal = h.base + code;
+                        out[i] &= ((lo <= ordinal) & (ordinal <= hi)) as u8;
+                    });
+                }
+            },
+        },
+    }
+    Classification::Ambivalent
+}
+
 /// Tuple metadata used to enforce a shared row count and block partition.
 pub trait ScanColumns {
     fn layout(&self) -> (usize, BlockRows);
+    fn bind_domains(self, domains: &[format::Domain]) -> Result<Self, format::FormatError>
+    where
+        Self: Sized;
+}
+
+/// Authored schema-slot access carries both the logical field type and its
+/// selected family. It does not supply a borrowed logical row adapter.
+pub trait ScanSlot<const SLOT: usize>: ScanColumns {
+    type Value: OrdinalDecode;
+    type Family: Family;
+    fn column(&self) -> &ScanColumn<Self::Value, Self::Family>;
+}
+
+macro_rules! scan_slots {
+    ([$($ty:ident $family:ident $slot:tt),+];) => {};
+    ([$($ty:ident $family:ident $slot:tt),+]; $value:ident $selected:ident $index:tt $(, $rest:ident $other:ident $next:tt)*) => {
+        impl<$($ty: OrdinalDecode, $family: Family),+> ScanSlot<$index>
+            for ($(ScanColumn<$ty, $family>,)+)
+        {
+            type Value = $value;
+            type Family = $selected;
+            fn column(&self) -> &ScanColumn<Self::Value, Self::Family> {
+                &self.$index
+            }
+        }
+        scan_slots!([$($ty $family $slot),+]; $($rest $other $next),*);
+    };
 }
 
 macro_rules! scan_columns {
@@ -649,7 +864,17 @@ macro_rules! scan_columns {
                 )*
                 (rows, block_rows)
             }
+            fn bind_domains(self, domains: &[format::Domain]) -> Result<Self, format::FormatError> {
+                if domains.len() != 1 $(+ { let _ = $slot; 1 })* {
+                    return Err(format::FormatError::Domain);
+                }
+                Ok((
+                    self.$index.bind_domain(domains[$index])?,
+                    $(self.$slot.bind_domain(domains[$slot])?,)*
+                ))
+            }
         }
+        scan_slots!([$first $family $index $(, $ty $other $slot)*]; $first $family $index $(, $ty $other $slot)*);
     };
 }
 
@@ -671,6 +896,7 @@ pub struct ScanTable<C> {
     columns: C,
     rows: usize,
     block_rows: BlockRows,
+    snapshot: format::SnapshotId,
 }
 
 impl<C: ScanColumns> ScanTable<C> {
@@ -680,6 +906,7 @@ impl<C: ScanColumns> ScanTable<C> {
             columns,
             rows,
             block_rows,
+            snapshot: format::SnapshotId::fresh(),
         }
     }
 
@@ -701,5 +928,369 @@ impl<C: ScanColumns> ScanTable<C> {
 
     pub fn into_columns(self) -> C {
         self.columns
+    }
+
+    pub fn snapshot(&self) -> format::SnapshotId {
+        self.snapshot
+    }
+
+    /// Bind once at loader publication. Domain declarations remain attached to
+    /// the same immutable columns and positions, without copying their payload.
+    pub fn bind_domains(mut self, domains: &[format::Domain]) -> Result<Self, format::FormatError> {
+        self.columns = self.columns.bind_domains(domains)?;
+        Ok(self)
+    }
+
+    pub fn column<const SLOT: usize>(
+        &self,
+    ) -> &ScanColumn<<C as ScanSlot<SLOT>>::Value, <C as ScanSlot<SLOT>>::Family>
+    where
+        C: ScanSlot<SLOT>,
+    {
+        <C as ScanSlot<SLOT>>::column(&self.columns)
+    }
+
+    pub fn encode_operand<const SLOT: usize>(&self, value: &<C as ScanSlot<SLOT>>::Value) -> u64
+    where
+        C: ScanSlot<SLOT>,
+    {
+        value.ordinal()
+    }
+
+    fn check_position(&self, position: ScanPosition<'_>) {
+        assert_eq!(position.snapshot, self.snapshot, "scan position belongs to another table");
+        assert!(position.index < self.rows, "scan position outside table");
+    }
+
+    pub fn read_ordinal<const SLOT: usize>(&self, position: ScanPosition<'_>) -> u64
+    where
+        C: ScanSlot<SLOT>,
+    {
+        self.check_position(position);
+        self.column::<SLOT>().read_ordinal(position.index)
+    }
+
+    /// Reconstruct only the demanded field at its authorized consumer boundary.
+    pub fn read_value<const SLOT: usize>(
+        &self,
+        position: ScanPosition<'_>,
+        authorization: LogicalRead,
+    ) -> <C as ScanSlot<SLOT>>::Value
+    where
+        C: ScanSlot<SLOT>,
+    {
+        let consumer = match authorization {
+            LogicalRead::OpaqueRust { consumer } | LogicalRead::FinalAnswer { consumer } => consumer,
+        };
+        assert!(!consumer.is_empty(), "logical read requires its recorded consumer");
+        // DECODE ?: ScanTable::read_value is a generic field inverse; caller records must authorize the named opaque Rust or final-answer consumer.
+        <C as ScanSlot<SLOT>>::Value::from_ordinal(self.read_ordinal::<SLOT>(position))
+    }
+
+    pub fn tile<'table, 'mask>(
+        &'table self,
+        start: usize,
+        mask: &'mask mut ScanMask,
+    ) -> ScanTile<'table, 'mask, C> {
+        assert!(start <= self.rows && (start % VECTOR_ROWS == 0 || start == self.rows));
+        let len = VECTOR_ROWS.min(self.rows - start);
+        mask.bytes[..len].fill(1);
+        ScanTile { table: self, mask, start, len }
+    }
+
+    /// Lazy source scan, retaining one reusable vector mask and its source.
+    /// Tasks pass disjoint aligned ranges; the last range may end at table len.
+    pub fn scan_positions<F>(
+        &self,
+        range: std::ops::Range<usize>,
+        configure: F,
+    ) -> ScanPositions<'_, C, F>
+    where
+        F: FnMut(&mut ScanTile<'_, '_, C>),
+    {
+        assert!(range.start <= range.end && range.end <= self.rows);
+        assert!(range.start % VECTOR_ROWS == 0 || range.start == self.rows);
+        assert!(range.end % VECTOR_ROWS == 0 || range.end == self.rows);
+        ScanPositions {
+            table: self,
+            configure,
+            mask: ScanMask::default(),
+            next: range.start,
+            end: range.end,
+            start: range.start,
+            cursor: 0,
+            len: 0,
+        }
+    }
+
+    /// Preserve the incoming occurrence order and multiplicity. Cache only one
+    /// vector's exact predicate mask; opaque iterator boundaries remain lazy.
+    pub fn filter_positions<'table, I, F>(
+        &'table self,
+        input: I,
+        configure: F,
+    ) -> FilterRows<'table, C, I::IntoIter, impl FnMut(&ScanPosition<'table>) -> ScanPosition<'table>, F>
+    where
+        I: IntoIterator<Item = ScanPosition<'table>>,
+        F: FnMut(&mut ScanTile<'_, '_, C>),
+    {
+        self.filter_rows(input, |position| *position, configure)
+    }
+
+    /// Filter carrier tuples without losing fields computed at earlier opaque
+    /// boundaries. The projection extracts an existing source occurrence only.
+    pub fn filter_rows<'table, I, P, F>(
+        &'table self,
+        input: I,
+        position: P,
+        configure: F,
+    ) -> FilterRows<'table, C, I::IntoIter, P, F>
+    where
+        I: IntoIterator,
+        P: FnMut(&I::Item) -> ScanPosition<'table>,
+        F: FnMut(&mut ScanTile<'_, '_, C>),
+    {
+        FilterRows {
+            table: self,
+            input: input.into_iter(),
+            position,
+            configure,
+            mask: ScanMask::default(),
+            start: None,
+        }
+    }
+}
+
+/// A base occurrence issued by a retained table, distinct from logical Rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScanPosition<'table> {
+    snapshot: format::SnapshotId,
+    index: usize,
+    source: PhantomData<&'table ()>,
+}
+impl ScanPosition<'_> {
+    pub fn index(self) -> usize {
+        self.index
+    }
+    pub fn snapshot(self) -> format::SnapshotId {
+        self.snapshot
+    }
+}
+
+/// Exactly one byte per vector lane; no relation-sized staging or position Vec.
+pub struct ScanMask {
+    bytes: [u8; VECTOR_ROWS],
+}
+impl Default for ScanMask {
+    fn default() -> Self {
+        Self { bytes: [0; VECTOR_ROWS] }
+    }
+}
+
+pub struct ScanTile<'table, 'mask, C> {
+    table: &'table ScanTable<C>,
+    mask: &'mask mut ScanMask,
+    start: usize,
+    len: usize,
+}
+impl<'table, C: ScanColumns> ScanTile<'table, '_, C> {
+    pub fn start(&self) -> usize {
+        self.start
+    }
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    pub fn mask(&self) -> &[u8] {
+        &self.mask.bytes[..self.len]
+    }
+    pub fn intersect<const SLOT: usize>(
+        &mut self,
+        predicate: &Predicate,
+        prune: PruneMode,
+        test: TestMode,
+    ) -> Classification
+    where
+        C: ScanSlot<SLOT>,
+        <C as ScanSlot<SLOT>>::Family: EncodedPoint + EncodedWindow,
+    {
+        self.table.column::<SLOT>().intersect_mask(
+            self.start,
+            &mut self.mask.bytes[..self.len],
+            predicate,
+            prune,
+            test,
+        )
+    }
+    /// Exact cross-column/disjunctive carrier predicate on currently live lanes.
+    pub fn retain(&mut self, mut predicate: impl FnMut(ScanPosition<'table>) -> bool) {
+        for (local, live) in self.mask.bytes[..self.len].iter_mut().enumerate() {
+            if *live != 0 {
+                *live = predicate(ScanPosition {
+                    snapshot: self.table.snapshot,
+                    index: self.start + local,
+                    source: PhantomData,
+                }) as u8;
+            }
+        }
+    }
+    pub fn positions(&self) -> impl Iterator<Item = ScanPosition<'table>> + '_ {
+        self.mask.bytes[..self.len].iter().enumerate().filter_map(|(local, &live)| {
+            (live != 0).then_some(ScanPosition {
+                snapshot: self.table.snapshot,
+                index: self.start + local,
+                source: PhantomData,
+            })
+        })
+    }
+}
+
+pub struct ScanPositions<'table, C, F> {
+    table: &'table ScanTable<C>,
+    configure: F,
+    mask: ScanMask,
+    next: usize,
+    end: usize,
+    start: usize,
+    cursor: usize,
+    len: usize,
+}
+impl<'table, C: ScanColumns, F: FnMut(&mut ScanTile<'_, '_, C>)> Iterator
+    for ScanPositions<'table, C, F>
+{
+    type Item = ScanPosition<'table>;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            while self.cursor < self.len {
+                let local = self.cursor;
+                self.cursor += 1;
+                if self.mask.bytes[local] != 0 {
+                    return Some(ScanPosition {
+                        snapshot: self.table.snapshot,
+                        index: self.start + local,
+                        source: PhantomData,
+                    });
+                }
+            }
+            if self.next == self.end {
+                return None;
+            }
+            self.start = self.next;
+            self.len = VECTOR_ROWS.min(self.end - self.next);
+            self.next += self.len;
+            self.cursor = 0;
+            let mut tile = self.table.tile(self.start, &mut self.mask);
+            (self.configure)(&mut tile);
+        }
+    }
+}
+
+pub struct FilterRows<'table, C, I, P, F> {
+    table: &'table ScanTable<C>,
+    input: I,
+    position: P,
+    configure: F,
+    mask: ScanMask,
+    start: Option<usize>,
+}
+impl<'table, C, I, P, F> Iterator for FilterRows<'table, C, I, P, F>
+where
+    C: ScanColumns,
+    I: Iterator,
+    P: FnMut(&I::Item) -> ScanPosition<'table>,
+    F: FnMut(&mut ScanTile<'_, '_, C>),
+{
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        for item in self.input.by_ref() {
+            let position = (self.position)(&item);
+            self.table.check_position(position);
+            let start = position.index / VECTOR_ROWS * VECTOR_ROWS;
+            if self.start != Some(start) {
+                let mut tile = self.table.tile(start, &mut self.mask);
+                (self.configure)(&mut tile);
+                self.start = Some(start);
+            }
+            if self.mask.bytes[position.index - start] != 0 {
+                return Some(item);
+            }
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod bounded_payload_laws {
+    use super::*;
+
+    fn header(rows: u32) -> BlockHeader {
+        BlockHeader {
+            offset: 0,
+            base: 0,
+            rows,
+            width: Width::W64,
+            codec: CodecId::Plain,
+            reserved: [0; 2],
+        }
+    }
+
+    #[test]
+    fn qualification_and_disqualification_never_access_payload() {
+        // Deliberately unavailable payload: any attempted decode would panic.
+        // The enclosing summary alone certifies either decision.
+        let headers = [header(1024)];
+        let summaries = [MinMax { lo: 7, hi: 7 }];
+        for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+            let mut mask = [1; VECTOR_ROWS];
+            mask[4] = 0;
+            assert_eq!(
+                intersect_vector(
+                    &headers, &[], Some(&summaries), None, BlockRows::new(1024).unwrap(),
+                    0, &mut mask, &Predicate::Point(7), PruneMode::MinMax, test,
+                ),
+                Classification::Qualified,
+            );
+            assert_eq!(mask[4], 0);
+            assert_eq!(mask.iter().map(|&live| live as usize).sum::<usize>(), 1023);
+            assert_eq!(
+                intersect_vector(
+                    &headers, &[], Some(&summaries), None, BlockRows::new(1024).unwrap(),
+                    0, &mut mask, &Predicate::Point(8), PruneMode::MinMax, test,
+                ),
+                Classification::Disqualified,
+            );
+            assert!(mask.iter().all(|&live| live == 0));
+        }
+    }
+
+    #[test]
+    fn vector_never_touches_another_vectors_payload_or_omitted_summary() {
+        let headers = [header(2048)];
+        // Only the requested first vector is backed. Header/summary accesses
+        // outside the selected protocol also fail on the empty summary slice.
+        let bytes = vec![0; VECTOR_ROWS * 8];
+        for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+            let mut mask = [1; VECTOR_ROWS];
+            intersect_vector(
+                &headers, &bytes, Some(&[]), Some(&[]), BlockRows::new(2048).unwrap(),
+                0, &mut mask, &Predicate::Point(0), PruneMode::None, test,
+            );
+            assert!(mask.iter().all(|&live| live == 1));
+        }
+    }
+    #[test]
+    fn demanded_point_read_does_not_touch_other_columns() {
+        let needed = ScanColumn::<u64, Plain>::new(&[5, 8], BlockRows::new(1024).unwrap(), false);
+        let mut unused = ScanColumn::<u64, Plain>::new(&[99, 99], BlockRows::new(1024).unwrap(), false);
+        unused.payload = AlignedBytes::default();
+        let table = ScanTable::new((needed, unused));
+        let position = table.scan_positions(0..2, |_| {}).nth(1).unwrap();
+        assert_eq!(table.read_ordinal::<0>(position), 8);
+        assert_eq!(
+            table.read_value::<0>(position, LogicalRead::FinalAnswer { consumer: "answer" }),
+            8,
+        );
     }
 }

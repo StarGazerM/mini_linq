@@ -321,6 +321,7 @@ pub(crate) fn check_grading_in(
         );
     }
     analysis.task_execution = crate::task_execution::analyze(program, &analysis);
+    crate::blocks::check_task_covers(program, &analysis)?;
     Ok(analysis)
 }
 

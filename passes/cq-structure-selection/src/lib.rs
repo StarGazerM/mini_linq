@@ -785,6 +785,7 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         physical: source.clone(),
         structures: selected,
         encoded: Default::default(),
+        consumer: None,
     };
     check(source, &target)?;
     Ok(target)
@@ -804,6 +805,7 @@ mod correspondence;
 pub use correspondence::check;
 
 mod positional;
+mod blocks;
 
 /// Select with comma-separated context facts and/or `positional(R, S)`.
 /// Record facts before choosing representations and checking correspondence.
@@ -811,15 +813,26 @@ pub fn compile_with(
     source: &physical::Program,
     arguments: TokenStream,
 ) -> syn::Result<structures::Program> {
-    if arguments.is_empty() {
-        return compile(source);
-    }
+    compile_with_consumer(source, arguments, None)
+}
+
+/// Bind a transported outer-consumer requirement before selecting any reads.
+/// This requirement is not optimization advice and cannot discharge set demand.
+pub fn compile_with_consumer(
+    source: &physical::Program,
+    arguments: TokenStream,
+    consumer: Option<&structures::OutputConsumer>,
+) -> syn::Result<structures::Program> {
     let arguments: Arguments = syn::parse2(arguments)?;
     let mut recorded = source.clone();
     arguments.facts.apply(&mut recorded)?;
     let mut target = compile(&recorded)?;
+    target.consumer = consumer.cloned();
     if let Some(hosts) = arguments.hosts {
         positional::choose(&mut target, &hosts)?;
+    }
+    if let Some(blocks) = arguments.blocks {
+        blocks::choose(&mut target, &blocks)?;
     }
     check(&recorded, &target)?;
     Ok(target)
@@ -834,6 +847,7 @@ pub fn context(arguments: TokenStream) -> syn::Result<physical::Context> {
 struct Arguments {
     facts: physical::FactPacket,
     hosts: Option<BTreeSet<String>>,
+    blocks: Option<blocks::Advice>,
 }
 
 impl syn::parse::Parse for Arguments {
@@ -844,10 +858,20 @@ impl syn::parse::Parse for Arguments {
                 arguments.facts.parse_fact(input)?;
             } else {
                 let keyword: syn::Ident = input.parse()?;
+                if keyword == "blocks" {
+                    if arguments.blocks.is_some() {
+                        return Err(syn::Error::new_spanned(keyword, "duplicate blocks arguments"));
+                    }
+                    let body;
+                    syn::parenthesized!(body in input);
+                    arguments.blocks = Some(body.parse()?);
+                    if !input.is_empty() { input.parse::<syn::Token![,]>()?; }
+                    continue;
+                }
                 if keyword != "positional" {
                     return Err(syn::Error::new_spanned(
                         keyword,
-                        "expected positional(host, ...), consumer = canonical, or host_set R discharged",
+                        "expected blocks(...), positional(host, ...), consumer = canonical, or host_set R discharged",
                     ));
                 }
                 if arguments.hosts.is_some() {

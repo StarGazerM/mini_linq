@@ -35,8 +35,9 @@ mod kw {
 fn checked_in(
     checker: &mut cq_lang_sequence::contract::Checker,
     source: &Program,
-    target: Program,
+    mut target: Program,
 ) -> syn::Result<Program> {
+    cq_lang_sequence::blocks::record_routing(&mut target)?;
     checker.check_rewrite_in(source, &target)?;
     Ok(target)
 }

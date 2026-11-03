@@ -137,6 +137,7 @@ impl DatalogConfiguration {
         Ok(Pipeline {
             passes,
             observer: None,
+            output_consumer: None,
         })
     }
 }

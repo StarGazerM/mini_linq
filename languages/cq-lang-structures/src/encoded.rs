@@ -247,6 +247,7 @@ pub struct Records {
 pub struct Contract {
     pub obligations: Obligations,
     pub records: Records,
+    pub blocks: crate::blocks::Contract,
 }
 
 fn reject(message: &str) -> syn::Error {
@@ -272,6 +273,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
     let Contract {
         obligations: o,
         records: r,
+        ..
     } = &program.encoded;
     require(
         r.publications.keys().eq(o.publications.keys()),
@@ -344,7 +346,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             )?;
         }
     }
-    let mut used = BTreeSet::new();
+    let mut used = crate::blocks::check(program, facts)?;
     for (id, publication) in &r.publications {
         let expected = &o.publications[id];
         require(
@@ -706,6 +708,10 @@ impl Wire for DomainId {
         self.to_tokens(tokens);
     }
 }
+impl Wire for cq_syntax::LogicalTypeId {
+    fn read(input: ParseStream<'_>) -> syn::Result<Self> { input.parse() }
+    fn emit(&self, tokens: &mut TokenStream) { self.to_tokens(tokens); }
+}
 impl<T: Wire> Wire for Option<T> {
     fn read(input: ParseStream<'_>) -> syn::Result<Self> {
         let body;
@@ -928,8 +934,26 @@ record!(Records {
 });
 record!(Contract {
     obligations,
-    records
+    records,
+    blocks
 });
+mod blocked_wire {
+    use super::*;
+    use crate::blocks::{Column, Source, Scan, Predicate, FieldRead, Read, Contract, Summary, Prune, Test, Translation, Strategy, ReadAction};
+    atoms!(Summary { None, MinMax });
+    atoms!(Prune { None, MinMax });
+    atoms!(Test { Encoded, DecodeCodes });
+    atoms!(Translation { S1Ordinal });
+    atoms!(Strategy { Window, Point, Formula });
+    atoms!(ReadAction { Owned, BorrowedScoped, Ordinal });
+    record!(Column { slot, logical, declaration, widths });
+    record!(Source { block_rows, summary, columns });
+    record!(Scan { source, columns });
+    record!(Predicate { input, source, columns, prune, test, strategy, translation, preserves });
+    record!(FieldRead { representation, action });
+    record!(Read { id, input, consumer, purpose, fields });
+    record!(Contract { sources, scans, predicates, reads });
+}
 impl Wire for Consumer {
     fn read(input: ParseStream<'_>) -> syn::Result<Self> {
         let tag: syn::Ident = input.parse()?;

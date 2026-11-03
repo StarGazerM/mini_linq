@@ -306,3 +306,62 @@ fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
         assert!(cq_lang_sequence::contract::check(&uncertified).is_err());
     }
 }
+
+fn blocked_source() -> cq_lang_structures::Program {
+    let physical = syn::parse_quote!(physical {
+        relation R(a: i64 [1], b: i64 [1]);
+        r = pipe rename R@0 {a -> x, b -> y};
+        p = pipe range select r if (x >= 3);
+        q = pipe range select p if (y < 9);
+        g = pipe guard q if (opaque(x));
+        t = pipe range select g if (y >= 1);
+        return canon t as answer(x,y);
+    });
+    cq_structure_selection::compile_with(&physical, syn::parse_quote!(
+        blocks(R { block_rows 1024; summary none; columns [a: bytes u64, b: plain u64]; })
+    )).unwrap()
+}
+
+#[test]
+fn blocked_execution_roundtrips_and_accepts_lawful_shorter_runs() {
+    let source = blocked_source();
+    let target = accept(&source);
+    assert_eq!(target.representation.blocks.runs["r"], ["p", "q"]);
+    assert_eq!(target.representation.blocks.runs["t"], ["t"]);
+    let printed = syn::parse_quote!(#target);
+    assert_eq!(syn::parse2::<Program>(printed).unwrap(), target);
+    let mut separate = target.clone();
+    separate.representation.blocks.runs.remove("r");
+    separate.representation.blocks.runs.insert("p".into(), vec!["p".into()]);
+    separate.representation.blocks.runs.insert("q".into(), vec!["q".into()]);
+    check(&source, &separate).unwrap();
+    let mut alternative = source;
+    for predicate in alternative.encoded.blocks.predicates.values_mut() {
+        predicate.test = cq_lang_structures::blocks::Test::DecodeCodes;
+        predicate.prune = cq_lang_structures::blocks::Prune::None;
+        predicate.strategy = cq_lang_structures::blocks::Strategy::Formula;
+    }
+    accept(&alternative);
+}
+
+#[test]
+fn blocked_execution_rejects_forged_phases_scratch_and_opaque_crossing() {
+    let source = blocked_source();
+    let target = accept(&source);
+    let mut changed = target.clone();
+    changed.representation.blocks.predicates.get_mut("p").unwrap().swap(0,1);
+    assert!(check(&source, &changed).is_err());
+    let mut changed = target.clone();
+    changed.representation.blocks.scans.get_mut("r").unwrap().scratch_rows = 2048;
+    assert!(check(&source, &changed).is_err());
+    let mut changed = target.clone();
+    changed.representation.blocks.runs.get_mut("r").unwrap().push("t".into());
+    changed.representation.blocks.runs.remove("t");
+    assert!(check(&source, &changed).is_err());
+    let mut changed = target.clone();
+    changed.representation.blocks.runs.get_mut("r").unwrap().pop();
+    assert!(check(&source, &changed).is_err());
+    let mut changed = target;
+    changed.representation.blocks.reads.remove("g");
+    assert!(check(&source, &changed).is_err());
+}

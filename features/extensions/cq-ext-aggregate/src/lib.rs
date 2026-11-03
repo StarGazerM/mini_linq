@@ -20,8 +20,15 @@
 //! `mini_linq::compile!`. Unowned quotations continue unchanged. The row query
 //! resumes the remaining pipeline without context facts, so the core CK-Return
 //! obligation (inferred key or recorded canonical index) returns a set under any
-//! terminal and the fold adds no second distinct boundary. General grouping records `HashState`. A constant
-//! group folds directly into an optional accumulator, including owned measures.
+//! terminal and the fold adds no second distinct boundary.
+//! The checked keys and measure operands separately derive an output-consumer
+//! requirement: the complete head retains its value identity, while only those
+//! operands demand logical values. The queue forwards this typed requirement to
+//! selection without adding a canonical-consumer fact. Ignored witness fields
+//! may retain injective value codes, never row-position identity; duplicates of
+//! the complete value tuple must still collapse before count or sum.
+//! General grouping records `HashState`. A constant group folds directly into an
+//! optional accumulator, including owned measures.
 //! Authored leaf inputs are evaluated once in the fold context and borrowed by
 //! its row query; key and measure clones close their lifetimes before return.
 //! Finite immutable hosts, Leibniz equality and pure Rust expressions are premises.

@@ -2620,3 +2620,107 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
         }
     });
 }
+
+#[test]
+fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
+    let physical = syn::parse_quote!(physical {
+        relation R(a:i64 [1], b:i64 [1]);
+        r = pipe rename R@0 {a -> x,b -> y};
+        p = pipe range select r if (x >= 3);
+        q = pipe range select p if (y < 4);
+        g = pipe guard q if (observe(x));
+        v = pipe bind g with value:i64 = (*x * 10 + *y);
+        out = let canon project v keep {x,value};
+        return out as answer(x,value);
+    });
+    let structures = cq_structure_selection::compile_with(&physical, quote::quote!(
+        blocks(R { block_rows 1024; summary minmax; columns [a:bytes u64,b:plain u64]; })
+    )).unwrap();
+    let lowered = cq_sequence_lowering::compile(&structures).unwrap();
+    let representation = lowered.representation.clone();
+    let program: Program = syn::parse_quote! {
+        #structures
+        sequence {
+            parts = store flatten map v map g map q map p tile 1024 rows r;
+            collected = store parts;
+            out = store canon map out collected;
+            answer_stream = store out;
+            output count;
+        }
+        graded tasks { parts at pool; collected at host; out at host; answer_stream at host; }
+        #representation
+    };
+    let facts = check_grading(&program,&machine()).unwrap();
+    assert!(facts.task_execution.definitions["parts"].iter().any(|node| node.borrowed_host.as_deref() == Some("r")));
+    let expression = translate(&program,&facts).unwrap();
+    let mut forged = program.clone();
+    forged.sequence.definitions[0].term = syn::parse_quote!(store flatten map v map g map q map p tile 17 rows r);
+    assert!(check_grading(&forged,&machine()).is_err());
+    let selected = cq_sequence_tasks::select_providers(&lowered,&cq_sequence_tasks::catalog()).unwrap();
+    let planned = cq_sequence_plan::decompose(&selected,&machine(),&cq_sequence_tasks::catalog()).unwrap().program;
+    let planned_facts = check_grading(&planned,&machine()).unwrap();
+    assert!(planned_facts.task_execution.definitions.values().flatten().any(|node| node.borrowed_host.as_deref() == Some("r"))
+        || (planned.representation.blocks.routing.contains_key("r")
+            && planned_facts.publications.values().any(|publication| matches!(publication, cq_lang_sequence::Publication::BorrowHost { result, .. } if result == "r"))));
+    let planned_expression = translate(&planned,&planned_facts).unwrap();
+    let mut routed = program.clone();
+    routed.sequence.definitions[0].term = syn::parse_quote!(
+        store flatten map v map g map q map p partition_k[x](64) source
+    );
+    routed.sequence.definitions.insert(0, cq_lang_sequence::Definition {
+        name: syn::parse_quote!(source),
+        term: syn::parse_quote!(store rows r),
+    });
+    routed.graded.as_mut().unwrap().grades.insert(0, syn::parse_quote!(source at host;));
+    cq_lang_sequence::blocks::record_routing(&mut routed).unwrap();
+    let routed_facts = check_grading(&routed, &machine()).unwrap();
+    let routed_expression = translate(&routed, &routed_facts).unwrap();
+    let printed = routed.to_token_stream();
+    assert_eq!(syn::parse2::<Program>(printed).unwrap(), routed);
+    let mut missing_read = routed.clone();
+    missing_read.representation.blocks.routing.clear();
+    assert!(check_grading(&missing_read, &machine()).is_err());
+    let mut wrong_field = routed;
+    let other = wrong_field.structures.encoded.blocks.scans["r"].columns["b"];
+    wrong_field.representation.blocks.routing.get_mut("r").unwrap().insert("x".into(), other);
+    assert!(check_grading(&wrong_field, &machine()).is_err());
+    run_partition_fixture(quote::quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn observe(_: &i64) -> bool { CALLS.fetch_add(1,Ordering::Relaxed); true }
+        fn main() {
+            let domain = Domain {id:DomainId {namespace:3,version:0},carrier:Width::W64,equality:true,order:true};
+            for workers in [1,4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap();
+                for count in [0usize,1,1024,1027,4099] {
+                    let a:Vec<i64> = (0..count).map(|i| (i/2 % 19) as i64).collect();
+                    let b:Vec<i64> = (0..count).map(|i| (i/2 % 7) as i64).collect();
+                    let R = ScanTable::new((
+                        ScanColumn::<i64,Bytes>::new(&a,BlockRows::new(1024).unwrap(),true),
+                        ScanColumn::<i64,Plain>::new(&b,BlockRows::new(1024).unwrap(),true),
+                    )).bind_domains(&[domain,domain]).unwrap();
+                    let survivors:Vec<_> = a.iter().copied().zip(b.iter().copied()).filter(|&(x,y)| x>=3 && y<4).collect();
+                    let mut expected:Vec<_> = survivors.iter().map(|&(x,y)| (x,x*10+y)).collect();
+                    expected.sort(); expected.dedup();
+                    CALLS.store(0,Ordering::Relaxed);
+                    let mut actual:Vec<_> = pool.install(|| (#expression).collect());
+                    actual.sort();
+                    assert_eq!(actual,expected);
+                    assert_eq!(CALLS.load(Ordering::Relaxed),survivors.len(), "each disjoint source range is scanned once");
+                    CALLS.store(0,Ordering::Relaxed);
+                    let mut planned:Vec<_> = pool.install(|| (#planned_expression).collect());
+                    planned.sort();
+                    assert_eq!(planned,expected);
+                    assert_eq!(CALLS.load(Ordering::Relaxed),survivors.len(), "automatic cover also borrows disjoint source ranges");
+                    CALLS.store(0,Ordering::Relaxed);
+                    let mut routed:Vec<_> = pool.install(|| (#routed_expression).collect());
+                    routed.sort();
+                    assert_eq!(routed,expected);
+                    assert_eq!(CALLS.load(Ordering::Relaxed),survivors.len(), "ordinal routing reads each bounded source range once");
+                }
+            }
+        }
+    });
+}

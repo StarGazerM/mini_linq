@@ -61,6 +61,7 @@
 //!
 pub use cq_lang_physical as physical;
 
+pub mod blocks;
 pub mod encoded;
 pub mod provider;
 pub use provider::{Capability, CodecId, Declaration, Facts, LogicalTypeId, Provider, Providers};
@@ -72,6 +73,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use syn::{Ident, Token, token};
 
 pub use cq_syntax::{CommaList, symbol_name};
+pub use cq_stage::OutputConsumer;
 
 pub mod kw {
     syn::custom_keyword!(structures);
@@ -708,6 +710,9 @@ impl Structures {
 pub struct Program {
     pub physical: physical::Program,
     pub structures: Structures,
+    /// Immutable original value demand bound by the selection stage. This is a
+    /// consumer obligation, never permission to remove the returned set boundary.
+    pub consumer: Option<OutputConsumer>,
     /// Optional encoded facts travel with the program and are always checked.
     /// The empty contract emits no tokens and changes no default selection.
     pub encoded: encoded::Contract,
@@ -717,18 +722,42 @@ impl syn::parse::Parse for Program {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let physical: physical::Program = input.parse()?;
         let structures = Structures::parse_declared(input, &physical.program.declarations)?;
+        let consumer = OutputConsumer::parse_optional(input)?;
         let encoded = encoded::Contract::parse_optional(input)?;
         Ok(Self {
             physical,
             structures,
+            consumer,
             encoded,
         })
+    }
+}
+
+impl Program {
+    fn check_consumer(&self, facts: &Analysis) -> syn::Result<()> {
+        let Some(consumer) = &self.consumer else {
+            return Ok(());
+        };
+        consumer.check()?;
+        let body = &self.physical.program;
+        let head: Vec<_> = body.head.variables().map(symbol_name).collect();
+        if head.len() != body.head.args.len() || consumer.head != head {
+            return error(self, "STR-Consumer: original head identities must match the emitted head exactly");
+        }
+        let returned = &facts.physical.rows[&symbol_name(&body.returned)];
+        if consumer.head.iter().any(|name| {
+            !returned.bindings.contains_key(name) && !body.captures.contains(name)
+        }) {
+            return error(self, "STR-Consumer: head fields must name returned values or original captures");
+        }
+        Ok(())
     }
 }
 
 pub mod contract {
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
         let facts = super::analyze(program)?;
+        program.check_consumer(&facts)?;
         super::encoded::check(program, &facts)?;
         Ok(facts)
     }
@@ -1798,6 +1827,14 @@ pub fn concrete_type(ty: &syn::Type) -> syn::Result<()> {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     contract::check(target)?;
+    if source.consumer != target.consumer {
+        return error(target, "Structures rewrite must preserve original consumer obligations");
+    }
+    if source.encoded.obligations != target.encoded.obligations
+        || source.encoded.blocks.sources != target.encoded.blocks.sources
+    {
+        return error(target, "Structures rewrite must preserve original encoded source obligations");
+    }
     if source.physical != target.physical
         || quote::ToTokens::to_token_stream(&source.physical).to_string()
             != quote::ToTokens::to_token_stream(&target.physical).to_string()
@@ -1846,6 +1883,14 @@ pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
 pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     contract::check(source)?;
     let facts = contract::check(target)?;
+    if source.consumer != target.consumer {
+        return error(target, "catalog retention must preserve original consumer obligations");
+    }
+    if source.encoded.obligations != target.encoded.obligations
+        || source.encoded.blocks.sources != target.encoded.blocks.sources
+    {
+        return error(target, "catalog retention must preserve original encoded source obligations");
+    }
     let mut normalized = target.physical.clone();
     if source.physical.program.definitions.len() != normalized.program.definitions.len() {
         return error(
@@ -1953,6 +1998,9 @@ mod filtered;
 pub use filtered::{reconstructible_constants, required_columns, selection_constants};
 
 impl cq_stage::Language for Program {
+    fn output_consumer(&self) -> Option<&OutputConsumer> {
+        self.consumer.as_ref()
+    }
     fn context(&self) -> cq_stage::Context {
         cq_stage::Language::context(&self.physical)
     }

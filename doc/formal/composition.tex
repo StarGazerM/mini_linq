@@ -200,6 +200,18 @@ not introduce them; only the lower/select packet boundary authorizes
 introduction. Missing or inexact envelopes and unauthorized introductions
 are rejected as \textsc{CTX-Entry} failures.
 
+An enclosing checked context may additionally attach an
+\code{output_consumer} requirement to the remaining pipeline: an original
+consumer identity, the complete ordered head identities, and the subset whose
+logical values it reads. This is not a member of $\Gamma$ and authorizes no
+canonical-consumer or host-set fact. Intermediate passes forward the typed
+requirement without interpreting it. The selection entry binds it once into
+Structures' original consumer obligations and compares that packet exactly
+against the transported requirement; ordinary passes cannot introduce or
+replace it. Structures checks the head against Physical, including host-once
+captures, and its rewrites preserve the original packet. Thus changing both
+selected reads and the claimed demand does not establish correspondence.
+
 Optional features under \code{features/} share the root development workspace
 for build reuse while depending only on public core APIs: planners, rewrites,
 surface extensions (aggregation,
@@ -233,6 +245,18 @@ Every selected terminal must preserve that canonical return, including its
 multiplicity; a terminal deliberately repeating canonical rows violates the
 printer obligation. The aggregate does not repair such a terminal with a second
 set boundary.
+The context's checked grouping keys and measure operands derive its logical
+value demand; generated Rust is not analyzed for that purpose. Every original
+head field, including ignored witnesses, remains part of the complete set
+identity. An ignored base field may therefore publish an injective value code
+under the independent representation contract, but never a row-position
+identity in place of a value. No primary-key premise is needed for such codes,
+and duplicate complete value tuples still collapse before the fold.
+Read group and measure fields retain their logical-value obligation; a blocked
+representation that cannot honor the fold's borrowing contract is rejected,
+not silently converted to a different publication mode. Host-captured keys and
+owned computed measures retain their original realization. These requirements
+do not change the empty optimization context in \textsc{EXT-SetFold}.
 \begin{mathpar}
 \Rule{EXT-SetFold}{\Gamma_{\rm hole}=\emptyset\quad\textsc{CK-Return}(hole)\quad
  Q:\mathcal P_{\rm fin}(Row)}

@@ -258,10 +258,30 @@ pub fn check(source: &Source, target: &Context) -> syn::Result<()> {
     )
 }
 
+impl Context {
+    /// Derive logical value reads from the checked fold, not its generated Rust.
+    /// All head fields remain part of the inner set's value identity.
+    pub fn output_consumer(&self) -> cq_stage::OutputConsumer {
+        let head: Vec<_> = self.hole.query.head.variables().map(symbol_name).collect();
+        let reads: BTreeSet<_> = self.keys.iter()
+            .chain(self.measures.iter().filter_map(|measure| measure.column.as_ref()))
+            .map(symbol_name)
+            .collect();
+        let value_reads = head.iter().filter(|field| reads.contains(*field)).cloned().collect();
+        cq_stage::OutputConsumer {
+            original_consumer: symbol_name(&self.hole.query.head.relation),
+            head,
+            value_reads,
+        }
+    }
+}
+
 /// Formal rule EXT-SetFold: The hole resumes the remaining pipeline fact-free, so
 /// the core CK-Return obligation (inferred key or recorded `return canon` with its
 /// canonical index) makes the returned rows a set under every checked terminal;
 /// the fold consumes them exactly once without a second distinct boundary.
+/// Logical read demand is transported separately from optimization facts; ignored
+/// witnesses remain in the full dedup key and may use injective value codes.
 /// Formal rule EXT-ConstantGroup: Capture-bound group columns (A-Capture) use an
 /// optional accumulator, preserving empty-input and set-valued aggregate semantics.
 pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<TokenStream> {
@@ -274,26 +294,14 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
         owned,
         hasher,
     } = context;
-    let columns: Vec<_> = hole
-        .query
-        .head
-        .args
-        .iter()
-        .filter_map(rust::variable)
-        .map(|id| {
-            if keys.iter().any(|key| same_symbol(key, id))
-                || measures.iter().any(|m| {
-                    m.column
-                        .as_ref()
-                        .is_some_and(|column| same_symbol(column, id))
-                })
-            {
-                quote!(#id)
-            } else {
-                quote!(_)
-            }
-        })
-        .collect();
+    let consumer = context.output_consumer();
+    let columns: Vec<_> = hole.query.head.variables().map(|id| {
+        if consumer.value_reads.contains(&symbol_name(id)) {
+            quote!(#id)
+        } else {
+            quote!(_)
+        }
+    }).collect();
     let reference = |column: &Ident| {
         if owned.contains(&symbol_name(column)) {
             quote!(&#column)
@@ -324,9 +332,16 @@ pub fn render(context: &Context, pipeline: &cq_stage::Pipeline) -> syn::Result<T
             Operation::Max => quote!(if #column > &#values.#index { #values.#index = ::core::clone::Clone::clone(#column); }),
         }
     });
-    // Fact-free start: no `consumer = canonical` envelope is claimed, because
-    // count and sum observe multiplicity. The core therefore owns the set boundary.
-    let rows = pipeline.clone().start(hole.to_token_stream())?;
+    // Fact-free start: count and sum observe multiplicity, so the core still
+    // owns the complete set boundary. Value demand grants no canonical fact.
+    let mut continuation = pipeline.clone();
+    ensure(
+        continuation.output_consumer.is_none(),
+        hole,
+        "aggregate hole already has an outer-consumer requirement",
+    )?;
+    continuation.output_consumer = Some(consumer);
+    let rows = continuation.start(hole.to_token_stream())?;
     let key_fields = keys.iter().map(|column| {
         let column = reference(column);
         quote!(::core::clone::Clone::clone(#column))
@@ -493,7 +508,7 @@ mod tests {
         // would let the core drop its set boundary (count/sum see multiplicity).
         assert!(!expected.contains("HashSet"));
         assert!(!expected.contains("context"));
-        assert!(!expected.contains("consumer"));
+        assert!(!expected.contains("consumer = canonical"));
         for (pipeline, terminal) in [
             (
                 syn::parse_quote!(pipeline { ::mini_linq::passes::translate_pull }),
@@ -510,7 +525,7 @@ mod tests {
         ] {
             let alternative: String = rendered(pipeline, terminal);
             assert!(!alternative.contains("HashSet"));
-            assert!(!alternative.contains("consumer"));
+            assert!(!alternative.contains("consumer = canonical"));
             if terminal.ends_with("translate_pull") && !terminal.starts_with("::") {
                 // Arguments are opaque to the extension and travel unchanged.
                 assert!(alternative.contains("arguments { option }"));
@@ -518,6 +533,7 @@ mod tests {
                 assert_eq!(alternative, expected);
             }
         }
+        assert!(expected.contains("output_consumer"));
     }
     /// Lower the aggregate's fact-free hole through the core and return the IX
     /// source and Physical target under the given lowering argument packet.
@@ -571,5 +587,49 @@ mod tests {
         // boundary; the aggregate never starts its hole with it (see render).
         let (_, relaxed) = lower_hole(projected, quote!(consumer = canonical));
         assert!(!returned_canon(&relaxed));
+    }
+    #[test]
+    fn consumer_demand_preserves_witnesses_without_reading_their_values() {
+        let source: Source = syn::parse_quote! {
+            by(group); revenue=sum(amount);
+            struct Revenue; relation R(orderkey:i64,linenumber:i32,value:i64);
+            rows(group,orderkey,linenumber,amount) :-
+                R(orderkey,linenumber,value),
+                let group:i32 = 0,
+                let amount:i64 = *value * 2;
+        };
+        let context = compile(&source).unwrap();
+        check(&source, &context).unwrap();
+        let demand = context.output_consumer();
+        assert_eq!(demand.original_consumer, "rows");
+        assert_eq!(demand.head, ["group", "orderkey", "linenumber", "amount"]);
+        assert_eq!(demand.value_reads, ["group", "amount"]);
+        assert_eq!(syn::parse2::<cq_stage::OutputConsumer>(demand.to_token_stream()).unwrap(), demand);
+        let rendered = render(&context, &syn::parse_quote!(pipeline { arbitrary::next })).unwrap();
+        let rendered = rendered.to_string();
+        assert!(rendered.contains("value_reads [\"group\" , \"amount\"]"));
+        assert!(!rendered.contains("consumer = canonical"));
+    }
+
+    #[test]
+    fn grouping_and_every_measure_operand_remain_value_reads() {
+        let source: Source = syn::parse_quote! {
+            by(d); n=count(); total=sum(a); low=min(b); high=max(c);
+            struct G; relation R(d:i32,id:i32,a:i32,b:i32,c:i32);
+            rows(d,id,a,b,c) :- R(d,id,a,b,c);
+        };
+        let context = compile(&source).unwrap();
+        check(&source, &context).unwrap();
+        let demand = context.output_consumer();
+        assert_eq!(demand.head, ["d", "id", "a", "b", "c"]);
+        assert_eq!(demand.value_reads, ["d", "a", "b", "c"]);
+        let mut forged = context.clone();
+        forged.measures[1].column = Some(syn::parse_quote!(id));
+        assert!(check(&source, &forged).is_err());
+        let count_only: Source = syn::parse_quote! {
+            by(d); n=count();
+            struct G; relation R(d:i32,id:i32); rows(d,id) :- R(d,id);
+        };
+        assert_eq!(compile(&count_only).unwrap().output_consumer().value_reads, ["d"]);
     }
 }

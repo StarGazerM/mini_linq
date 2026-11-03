@@ -376,3 +376,66 @@ fn membership_live_prefix_crosses_block_frames_and_can_be_empty() {
         Err(FormatError::Count)
     );
 }
+
+#[test]
+fn checked_bounded_masks_preserve_live_prefix_domain_and_intersection() {
+    let values: Vec<i64> = (0..2061).map(|row| row % 19 - 7).collect();
+    let column = declared::<i64, Bytes>(&values, 2048, domain());
+    for live in [0, 1, 1024, 1027, values.len()] {
+        let view = column.checked_view(domain(), live).unwrap();
+        for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+            for prune in [PruneMode::None, PruneMode::MinMax] {
+                let first = Predicate::Window {
+                    lo: Bound::Included(0i64.ordinal()),
+                    hi: Bound::Unbounded,
+                };
+                let second = Predicate::Membership(vec![0i64.ordinal(), 5i64.ordinal()]);
+                let mut actual = Vec::new();
+                let mut mask = [1; VECTOR_ROWS];
+                for start in (0..live).step_by(VECTOR_ROWS) {
+                    let len = VECTOR_ROWS.min(live - start);
+                    mask[..len].fill(1);
+                    view.intersect_mask(domain().id, start, &mut mask[..len], &first, prune, test).unwrap();
+                    view.intersect_mask(domain().id, start, &mut mask[..len], &second, prune, test).unwrap();
+                    actual.extend(mask[..len].iter().enumerate().filter_map(
+                        |(local, &yes)| (yes != 0).then_some(start + local),
+                    ));
+                }
+                let expected: Vec<_> = values[..live].iter().enumerate().filter_map(|(row, value)| {
+                    (oracle(&first, value.ordinal()) && oracle(&second, value.ordinal())).then_some(row)
+                }).collect();
+                assert_eq!(actual, expected);
+                assert_eq!(
+                    view.intersect_mask(domain().id, live, &mut [], &first, prune, test),
+                    Ok(Classification::Disqualified),
+                );
+            }
+        }
+        let wrong = DomainId { version: domain().id.version + 1, ..domain().id };
+        assert_eq!(
+            view.intersect_mask(wrong, 0, &mut [], &Predicate::Point(0), PruneMode::None, TestMode::Encoded),
+            Err(FormatError::Domain),
+        );
+        assert_eq!(
+            view.intersect_mask(domain().id, live, &mut [1], &Predicate::Point(0), PruneMode::None, TestMode::Encoded),
+            Err(FormatError::Position),
+        );
+    }
+}
+
+#[test]
+fn requested_summary_capability_is_not_an_implicit_fallback() {
+    let mut builder = ScanColumnBuilder::<u64, Bytes>::with_domain(
+        BlockRows::new(1024).unwrap(), false, false, domain(),
+    ).unwrap();
+    builder.extend([1, 2, 3]);
+    let column = builder.finish();
+    let view = column.checked_view(domain(), 3).unwrap();
+    let mut mask = [1; 3];
+    assert_eq!(
+        view.intersect_mask(domain().id, 0, &mut mask, &Predicate::Point(2), PruneMode::MinMax, TestMode::Encoded),
+        Err(FormatError::SummaryCount),
+    );
+    view.intersect_mask(domain().id, 0, &mut mask, &Predicate::Point(2), PruneMode::None, TestMode::Encoded).unwrap();
+    assert_eq!(mask, [0, 1, 0]);
+}

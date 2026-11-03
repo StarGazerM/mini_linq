@@ -152,6 +152,7 @@ fn fixture() -> structures::Program {
             reads: [(ReadId(1), read)].into(),
             copies: BTreeMap::new(),
         },
+        blocks: Default::default(),
     };
     program
 }
@@ -790,4 +791,235 @@ fn optional_encoded_envelope_leaves_following_pipeline_syntax_untouched() {
         let parsed = parser.parse2(quote::quote!(#program sequence {})).unwrap();
         assert_eq!(parsed, program);
     }
+}
+
+fn blocked_fixture() -> structures::Program {
+    use structures::blocks as b;
+    let mut program: structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a: Alias [42], b: Alias [42]);
+            r = pipe rename R@0 { a -> x, b -> y };
+            p = pipe range select r if (x >= 3);
+            g = pipe guard p if (opaque(x));
+            return canon g as answer(x, y);
+        }
+        structures {
+            providers {
+                input = ScanProvider { reads [], build typed };
+                sort = Dedup { reads [distinct], build inferred, shared };
+            }
+            r host scan = @input as ScanProvider [];
+            r host result(p) = @input as ScanProvider [x];
+            g head = @sort as Dedup;
+            r repr = positions { R lineage { x -> a, y -> b } } owned [];
+            p repr = positions { R lineage { x -> a, y -> b } } owned [];
+            g repr = positions { R lineage { x -> a, y -> b } } owned [];
+        }
+    };
+    let source = SourceId(1);
+    program.encoded.obligations.sources.insert(source, Source {
+        relation: "R".into(), occurrence: "r".into(), snapshot: SnapshotId(9),
+    });
+    let mut columns = BTreeMap::new();
+    let mut selected = BTreeMap::new();
+    for (slot, name) in ["a", "b"].into_iter().enumerate() {
+        let declaration = DeclarationId(slot as u64 + 1);
+        let representation = RepresentationId(slot as u64);
+        program.encoded.obligations.declarations.insert(declaration, Declaration {
+            provider: "input".into(), domain: Domain { code: None, dictionary: None },
+            role: Role::ScanColumn, family: Family::Bytes, layout: Layout::S1,
+            carrier: Carrier::U32, identity: false,
+            preserves: [Preservation::Equality, Preservation::Order].into(),
+            buffers: [BufferKind::Payload, BufferKind::Headers, BufferKind::BlockSummaries].into(),
+        });
+        program.encoded.records.representations.insert(representation, Representation {
+            declaration, source, column: name.into(), snapshot: SnapshotId(9),
+        });
+        columns.insert(name.into(), b::Column {
+            slot: slot as u64, logical: cq_syntax::LogicalTypeId(42), declaration,
+            widths: [0, 1, 2, 4].into(),
+        });
+        selected.insert(name.into(), representation);
+    }
+    program.encoded.blocks.sources.insert(source, b::Source {
+        block_rows: 1024, summary: b::Summary::MinMax, columns,
+    });
+    program.encoded.blocks.scans.insert("r".into(), b::Scan { source, columns: selected });
+    program.encoded.blocks.predicates.insert("p".into(), b::Predicate {
+        input: "r".into(), source, columns: [("x".into(), RepresentationId(0))].into(),
+        prune: b::Prune::MinMax, test: b::Test::Encoded, strategy: b::Strategy::Window,
+        translation: b::Translation::S1Ordinal, preserves: [Preservation::Order].into(),
+    });
+    program.encoded.blocks.reads.insert("g".into(), b::Read {
+        id: 1, input: "p".into(), consumer: Consumer::OpaqueRust("g".into()),
+        purpose: ReadPurpose::OpaqueRustRead,
+        fields: [("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Owned })].into(),
+    });
+    program.encoded.blocks.reads.insert("answer".into(), b::Read {
+        id: 2, input: "g".into(), consumer: Consumer::FinalAnswer("answer".into()),
+        purpose: ReadPurpose::FinalHostAnswer,
+        fields: [
+            ("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Owned }),
+            ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Owned }),
+        ].into(),
+    });
+    program.encoded.blocks.reads.insert("canon:g".into(), b::Read {
+        id: 3, input: "g".into(), consumer: Consumer::Relational("g".into()),
+        purpose: ReadPurpose::PreserveCarrier,
+        fields: [
+            ("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Ordinal }),
+            ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Ordinal }),
+        ].into(),
+    });
+    program
+}
+
+#[test]
+fn blocks_independent_authored_contract_roundtrips() {
+    let program = blocked_fixture();
+    check(&program).unwrap();
+    let parsed: structures::Program = syn::parse2(program.to_token_stream()).unwrap();
+    assert_eq!(parsed, program);
+    check(&parsed).unwrap();
+}
+
+#[test]
+fn blocks_mutations_cannot_change_source_predicate_or_read_obligations() {
+    use structures::blocks as b;
+    for mutation in 0..17 {
+        let mut p = blocked_fixture();
+        match mutation {
+            0 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().slot = 1,
+            1 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().logical = cq_syntax::LogicalTypeId(99),
+            2 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().block_rows = 0,
+            3 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().widths.insert(8).then_some(()).unwrap(),
+            4 => p.encoded.records.representations.get_mut(&RepresentationId(0)).unwrap().snapshot = SnapshotId(88),
+            5 => p.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().domain.code = Some(DomainId(77)),
+            6 => p.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().provider = "sort".into(),
+            7 => { p.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().preserves.remove(&Preservation::Order); }
+            8 => { p.encoded.blocks.predicates.remove("p"); }
+            9 => { p.encoded.blocks.predicates.get_mut("p").unwrap().columns.clear(); }
+            10 => p.encoded.blocks.predicates.get_mut("p").unwrap().input = "g".into(),
+            11 => p.encoded.blocks.predicates.get_mut("p").unwrap().strategy = b::Strategy::Point,
+            12 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = b::Summary::None,
+            13 => { p.encoded.blocks.reads.get_mut("g").unwrap().fields.clear(); }
+            14 => p.encoded.blocks.reads.get_mut("answer").unwrap().fields.get_mut("y").unwrap().action = b::ReadAction::BorrowedScoped,
+            15 => p.encoded.blocks.reads.get_mut("g").unwrap().purpose = ReadPurpose::PreserveCarrier,
+            16 => { p.encoded.blocks.scans.get_mut("r").unwrap().columns.remove("b"); }
+            _ => unreachable!(),
+        }
+        assert!(check(&p).is_err(), "blocked mutation {mutation}");
+    }
+}
+
+#[test]
+fn blocks_accept_legal_nonpreferred_physical_code_tests_and_plain() {
+    use structures::blocks as b;
+    let mut program = blocked_fixture();
+    let predicate = program.encoded.blocks.predicates.get_mut("p").unwrap();
+    predicate.prune = b::Prune::None;
+    predicate.test = b::Test::DecodeCodes;
+    predicate.strategy = b::Strategy::Formula;
+    program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = b::Summary::None;
+    for declaration in program.encoded.obligations.declarations.values_mut() {
+        declaration.family = Family::Plain;
+    }
+    for column in program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.values_mut() {
+        column.widths = [4].into();
+    }
+    check(&program).unwrap();
+    program.encoded.blocks.reads.get_mut("g").unwrap().fields.get_mut("x").unwrap().action = b::ReadAction::BorrowedScoped;
+    check(&program).unwrap();
+}
+
+#[test]
+fn blocks_source_obligations_are_immutable_across_rewrites() {
+    let source = blocked_fixture();
+    let mut target = source.clone();
+    target.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().block_rows = 3072;
+    // A separately authored provider may use three vectors per block. It is
+    // not permission for a rewrite to change the original bound source.
+    check(&target).unwrap();
+    assert!(structures::check_rewrite(&source, &target).is_err());
+    assert!(structures::check_retention_rewrite(&source, &target).is_err());
+}
+
+fn blocked_external_fixture() -> structures::Program {
+    use structures::blocks as b;
+    let mut program = blocked_fixture();
+    program.consumer = Some(structures::OutputConsumer {
+        original_consumer: "outer".into(),
+        head: vec!["x".into(), "y".into()],
+        value_reads: vec![],
+    });
+    program.encoded.blocks.reads.remove("answer");
+    program.encoded.blocks.reads.insert("output:answer:carrier".into(), b::Read {
+        id: 2, input: "g".into(), consumer: Consumer::Relational("outer".into()),
+        purpose: ReadPurpose::PreserveCarrier,
+        fields: [
+            ("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Ordinal }),
+            ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Ordinal }),
+        ].into(),
+    });
+    program.encoded.blocks.reads.insert("output:answer:read".into(), b::Read {
+        id: 4, input: "g".into(), consumer: Consumer::OpaqueRust("outer".into()),
+        purpose: ReadPurpose::OpaqueRustRead,
+        fields: BTreeMap::new(),
+    });
+    program
+}
+
+#[test]
+fn blocks_external_consumer_checks_exact_roles_and_injective_value_codes() {
+    use structures::blocks as b;
+    let program = blocked_external_fixture();
+    check(&program).unwrap();
+    let parsed: structures::Program = syn::parse2(program.to_token_stream()).unwrap();
+    assert_eq!(parsed, program);
+    check(&parsed).unwrap();
+    for mutation in 0..9 {
+        let mut forged = program.clone();
+        match mutation {
+            0 => forged.consumer.as_mut().unwrap().value_reads.push("x".into()),
+            1 => forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.get_mut("y").unwrap().action = b::ReadAction::Owned,
+            2 => forged.encoded.blocks.reads.get_mut("output:answer:read").unwrap().purpose = ReadPurpose::FinalHostAnswer,
+            3 => forged.encoded.blocks.reads.get_mut("output:answer:read").unwrap().consumer = Consumer::OpaqueRust("invented".into()),
+            4 => { forged.encoded.obligations.declarations.get_mut(&DeclarationId(2)).unwrap().preserves.remove(&Preservation::Equality); }
+            5 => forged.encoded.obligations.declarations.get_mut(&DeclarationId(2)).unwrap().layout = Layout::ProviderIndex,
+            6 => forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.get_mut("y").unwrap().representation = RepresentationId(0),
+            7 => { forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.clear(); }
+            8 => {
+                forged.consumer.as_mut().unwrap().value_reads.push("x".into());
+                let field = forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.remove("x").unwrap();
+                forged.encoded.blocks.reads.get_mut("output:answer:read").unwrap().fields.insert("x".into(), b::FieldRead { action: b::ReadAction::Owned, ..field });
+            }
+            _ => unreachable!(),
+        }
+        assert!(check(&forged).is_err(), "external consumer mutation {mutation}");
+    }
+}
+
+#[test]
+fn blocks_external_demand_cannot_be_forged_together_with_read_records() {
+    let source = blocked_external_fixture();
+    let mut target = source.clone();
+    target.consumer.as_mut().unwrap().original_consumer = "different_outer".into();
+    target.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().consumer = Consumer::Relational("different_outer".into());
+    target.encoded.blocks.reads.get_mut("output:answer:read").unwrap().consumer = Consumer::OpaqueRust("different_outer".into());
+    // Locally valid for a DIFFERENT original consumer; not a rewrite of this one.
+    check(&target).unwrap();
+    assert!(structures::check_rewrite(&source, &target).is_err());
+    assert!(structures::check_retention_rewrite(&source, &target).is_err());
+}
+
+#[test]
+fn blocks_external_value_codes_accept_plain_nonpreferred_representation() {
+    let mut program = blocked_external_fixture();
+    for declaration in program.encoded.obligations.declarations.values_mut() {
+        declaration.family = Family::Plain;
+    }
+    for column in program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.values_mut() {
+        column.widths = [4].into();
+    }
+    check(&program).unwrap();
 }

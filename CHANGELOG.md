@@ -29,6 +29,22 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   preserving exact reads without rerouting or copying input rows. The KP-1/KP-2
   regression executes exact answers with one and four workers.
 
+- P5's authored CPU blocked-scan checkpoint connects Plain/Bytes ScanTables to
+  checked Structures and printable Sequence execution facts. Pull and Tasks
+  share bounded masks, source-qualified positions and demanded-only reads;
+  canonical ordinal keys are gathered once without semantic reconstruction.
+  Q06 alone adds explicit blocked Plain/Bytes serial/parallel routes, leaving
+  defaults unchanged. Join/index consumers, encoded-base grouping, restricted
+  source renames and undischarged host-set verification remain checked
+  unsupported boundaries of this initial checkpoint, not decoded-row fallbacks.
+  The P5 planning entry records the rollout boundary and measurement evidence.
+  The completed SF1 Q06 comparison retains this as opt-in: Bytes/row is
+  1.112 [1.097, 1.130] serial (slower) and 0.766 [0.719, 0.843] with 24 Tasks
+  workers. Five paired processes per comparison, exact answers in all 2,520
+  samples and 600 warmups, page faults and same-source linker controls are
+  recorded in `experiments/storage-bench/results/p5-s3-q06.json`. Stop the
+  rollout at Q06; no default promotion or other-kernel authorship.
+
 - Non-GPU rejection tests assert failure and applicable formal rule IDs rather
   than diagnostic prose. Behavioral and compile-fail coverage remains independent
   of error-message wording; GPU tests are unchanged.

@@ -121,16 +121,31 @@ pub struct Analysis {
     pub output: Option<(String, OutputProtocol)>,       // the final store and how it is filled
     pub obligations: Vec<Obligation>,                  // provider/codec/canon traits and dispatch failure paths
     pub evidence: Evidence,                           // sourced advice and explicitly trusted keys
-    pub representation: Representation,               // recorded identity/encoded column sets
+    pub representation: Representation,               // recorded column sets and blocked CPU execution
 }
 pub mod contract { pub fn check(p: &Program) -> syn::Result<Analysis>; }   // BE-Alpha…BE-Choose structurally
 pub fn check_grading(p: &Program, m: &Machine) -> syn::Result<Analysis>;   // BE-Scope…BE-Abort against m
 pub fn check_rewrite(s: &Program, t: &Program) -> syn::Result<()>;         // equal support, unchanged Rust payloads and free-variable bindings
 impl cq_stage::Language for Program { … }
 ```
-`Representation { identity: BTreeSet<String>, encoded: BTreeSet<String> }`
-prints as optional trailing `representation { identity [...]; encoded [...]; }`
-after evidence. Unknown columns do not justify device Rust. `LevelNode.host_rust`
+`Representation { identity: BTreeSet<String>, encoded: BTreeSet<String>,
+blocks: blocks::Execution }` prints as optional trailing
+`representation { identity [...]; encoded [...]; blocks { ... } }`
+after evidence. The optional CPU blocks section records source scan geometry,
+native position carriers, bounded scratch, ordered predicate phases, fused
+predicate runs and exact read-consumer identities. It references the
+Structures-owned representations and predicate decisions, rather than selecting
+families or reinterpreting Rust types. `BE-Blocks` checks phase coverage,
+single-consumer fusion paths, aligned disjoint tiles and demanded-read placement
+independently of the producer; a lawful split run is not rejected merely because
+the lowering prefers one reused mask. Pull and Tasks print these checked facts.
+Ordinary programs have no blocks records and retain their prior realization.
+Recorded `route` entries also identify each `PartitionK` source key's
+Structures representation. Routing compares/hashes compatible global ordinal
+carriers, never block-relative residuals or reconstructed logical rows. The
+checker validates exact constructor-key demand independently of the routing
+producer; native blocked source chunks remain bounded and source-borrowed.
+Unknown columns do not justify device Rust. `LevelNode.host_rust`
 is true for host and CPU task execution, false for device/block/lane execution.
 Every Rust expression is pure-total by premise and emitted unchanged; device
 evaluation additionally requires identity representations for all read columns

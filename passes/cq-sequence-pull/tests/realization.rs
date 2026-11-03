@@ -1148,3 +1148,192 @@ fn expansion_counters_measure_children_before_closing_predicates() {
         .join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, true).run(&source.to_string());
 }
+
+#[test]
+fn blocked_predicates_execute_exact_formulas_and_own_only_demanded_fields() {
+    let cases = [
+        (quote!(range), quote!(x >= 3, x < 9), quote!(x >= 3 && x < 9)),
+        (quote!(point), quote!(x = 5), quote!(x == 5)),
+        (quote!(), quote!(x in {1, 5, 9}), quote!([1, 5, 9].contains(&x))),
+        (quote!(), quote!((x < y and x < 4) or (x > 7 and y < 3)), quote!((x < y && x < 4) || (x > 7 && y < 3))),
+    ];
+    let mut checks = Vec::new();
+    for family in [quote!(plain), quote!(bytes)] {
+        for (operator, condition, oracle) in &cases {
+            let physical = syn::parse2(quote!(physical {
+                relation R(a: i64 [1], b: i64 [1], unused: NeverMaterialize [2]);
+                r = pipe rename R@0 {a -> x, b -> y, unused -> dead};
+                p = pipe #operator select r if (#condition);
+                q = pipe range select p if (y >= 0);
+                out = pipe project q keep {x,y};
+                return canon out as answer(x,y);
+            })).unwrap();
+            let selected = cq_structure_selection::compile_with(&physical, quote!(
+                blocks(R { block_rows 1024; summary none; columns [a: #family u64, b: #family u64, unused: plain u64]; })
+            )).unwrap();
+            let expression = sequence_rows(&selected).unwrap();
+            let storage = if family.to_string() == "plain" { quote!(Plain) } else { quote!(Bytes) };
+            checks.push(quote! {
+                {
+                    let R = ScanTable::new((
+                        ScanColumn::<i64, #storage>::new(&a, geometry, false),
+                        ScanColumn::<i64, #storage>::new(&b, geometry, false),
+                        ScanColumn::<NeverMaterialize, Plain>::new(&unused, geometry, false),
+                    )).bind_domains(&[domain(3),domain(3),domain(5)]).unwrap();
+                    let mut expected: Vec<_> = a.iter().copied().zip(b.iter().copied())
+                        .filter(|&(x,y)| (#oracle) && y >= 0).collect();
+                    expected.sort(); expected.dedup();
+                    let actual: Vec<_> = (#expression).collect();
+                    assert_eq!(actual, expected);
+                }
+            });
+        }
+    }
+    let physical = syn::parse_quote!(physical {
+        relation R(a: i64 [1], b: i64 [1], unused: NeverMaterialize [2]);
+        r = pipe rename R@0 {a -> x, b -> y, unused -> dead};
+        p = pipe range select r if (x >= 3);
+        q = pipe range select p if (x < 9);
+        g = pipe guard q if (observe(y, &limit));
+        v = pipe bind g with value: i64 = (*x + *y);
+        out = pipe project v keep {value};
+        return canon out as answer(value);
+    });
+    let selected = cq_structure_selection::compile_with(&physical, quote!(
+        blocks(R { block_rows 1024; summary minmax; columns [a: bytes u64,b: bytes u64,unused: plain u64]; })
+    )).unwrap();
+    let complete = sequence_rows(&selected).unwrap();
+    // Exercise the checked streaming prefix before its mandatory canonical
+    // answer consumer, rather than weakening the complete query's semantics.
+    let sequence = cq_sequence_lowering::compile(&selected).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    let mut context = cq_print::Context::new(&selected, &facts);
+    context.blocked_runs = sequence.representation.blocks.runs.clone();
+    for name in ["r", "p", "q", "g", "v"] { context.register(name); }
+    let mut emitter = cq_physical_realization::RowEmitter::new(context);
+    let mut prefix = emitter.context().host_scan("r");
+    for (name, input) in [("p", "r"), ("q", "p"), ("g", "q"), ("v", "g")] {
+        prefix = emitter.operator(name, Some((input.into(), prefix))).unwrap();
+    }
+    let statements = &emitter.context().statements;
+    let lazy = quote!({ #(#statements)* #prefix });
+    let source = quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        fn observe(value: &i64, limit: &i64) -> bool {
+            CALLS.fetch_add(1,Ordering::Relaxed);
+            value <= limit
+        }
+        #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+        struct NeverMaterialize(u64);
+        impl cq_storage::OrderKey for NeverMaterialize {
+            type Ordinal = u64;
+            fn ordinal(&self) -> u64 { self.0 }
+        }
+        impl OrdinalDecode for NeverMaterialize {
+            const WIDTH: Width = Width::W64;
+            fn from_ordinal(_:u64) -> Self { panic!("unused full-row decode") }
+        }
+        fn domain(namespace:u64) -> Domain {
+            Domain { id: DomainId {namespace,version:0}, carrier:Width::W64,equality:true,order:true }
+        }
+        fn main() {
+            let geometry = BlockRows::new(1024).unwrap();
+            for len in [0usize,1,1024,1027,2051] {
+                let a: Vec<i64> = (0..len).map(|i| (i % 11) as i64).collect();
+                let b: Vec<i64> = (0..len).map(|i| (i % 13) as i64).collect();
+                let unused = vec![NeverMaterialize(7);len];
+                #(#checks)*
+                let R = ScanTable::new((
+                    ScanColumn::<i64,Bytes>::new(&a,geometry,true),
+                    ScanColumn::<i64,Bytes>::new(&b,geometry,true),
+                    ScanColumn::<NeverMaterialize,Plain>::new(&unused,geometry,true),
+                )).bind_domains(&[domain(3),domain(3),domain(5)]).unwrap();
+                let limit = 8i64;
+                CALLS.store(0,Ordering::Relaxed);
+                let first = (#lazy).map(|(_, value)| (value,)).next();
+                let candidates: Vec<_> = a.iter().copied().zip(b.iter().copied()).filter(|&(x,_)| x >= 3 && x < 9).collect();
+                let expected = candidates.iter().position(|&(_,y)| y <= limit);
+                assert_eq!(first, expected.map(|index| { let (x,y) = candidates[index]; (x + y,) }));
+                assert_eq!(CALLS.load(Ordering::Relaxed), expected.map_or(candidates.len(), |index| index+1));
+                CALLS.store(0,Ordering::Relaxed);
+                let all: Vec<_> = (#complete).collect();
+                let mut expected: Vec<_> = candidates.iter().filter(|row| row.1 <= limit).map(|row| (row.0 + row.1,)).collect();
+                expected.sort(); expected.dedup();
+                assert_eq!(all,expected);
+                assert_eq!(CALLS.load(Ordering::Relaxed),candidates.len());
+            }
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
+    let mut checks = Vec::new();
+    for (family, storage) in [(quote!(plain), quote!(Plain)), (quote!(bytes), quote!(Bytes))] {
+        let physical = syn::parse_quote!(physical {
+            relation R(key: NeverMaterialize [2], price: i64 [1]);
+            capture { let group: u64 = 0; }
+            r = pipe rename R@0 {key -> witness, price -> price};
+            v = pipe bind r with amount: i64 = (*price * 2);
+            out = pipe project v keep {witness,amount};
+            return canon out as rows(group,witness,amount);
+        });
+        let demand = structures::OutputConsumer {
+            original_consumer: "outer".into(),
+            head: ["group", "witness", "amount"].map(String::from).into(),
+            value_reads: ["group", "amount"].map(String::from).into(),
+        };
+        let selected = cq_structure_selection::compile_with_consumer(&physical, quote!(
+            blocks(R { block_rows 1024; summary none; columns [key: #family u64, price: #family u64]; })
+        ), Some(&demand)).unwrap();
+        let expression = sequence_rows(&selected).unwrap();
+        let reads = &selected.encoded.blocks.reads;
+        assert!(reads.values().all(|read| read.purpose != structures::encoded::ReadPurpose::FinalHostAnswer));
+        assert!(reads.values().any(|read| read.purpose == structures::encoded::ReadPurpose::OpaqueRustRead));
+        assert!(reads.values().filter_map(|read| read.fields.get("witness"))
+            .all(|field| field.action == structures::blocks::ReadAction::Ordinal));
+        checks.push(quote! {
+            {
+                let R = ScanTable::new((
+                    ScanColumn::<NeverMaterialize, #storage>::new(&keys, geometry, false),
+                    ScanColumn::<i64, #storage>::new(&prices, geometry, false),
+                )).bind_domains(&[domain(5),domain(3)]).unwrap();
+                let mut actual: Vec<_> = (#expression).collect();
+                actual.sort();
+                assert_eq!(actual, vec![(0u64,1u64,14i64),(0,2,16),(0,3,14)]);
+            }
+        });
+    }
+    let source = quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+        struct NeverMaterialize(u64);
+        impl cq_storage::OrderKey for NeverMaterialize {
+            type Ordinal = u64;
+            fn ordinal(&self) -> u64 { self.0 }
+        }
+        impl OrdinalDecode for NeverMaterialize {
+            const WIDTH: Width = Width::W64;
+            fn from_ordinal(_:u64) -> Self { panic!("ignored witness inverse codec") }
+        }
+        fn domain(namespace:u64) -> Domain {
+            Domain { id: DomainId {namespace,version:0}, carrier:Width::W64,equality:true,order:true }
+        }
+        fn main() {
+            let geometry = BlockRows::new(1024).unwrap();
+            // Equal values occur at distinct positions and across block frames.
+            // Dedup must produce three values, not 1027 occurrence identities.
+            let keys: Vec<_> = (0..1027).map(|i| NeverMaterialize(1 + (i % 3) as u64)).collect();
+            let prices: Vec<i64> = (0..1027).map(|i| if i % 3 == 1 { 8 } else { 7 }).collect();
+            #(#checks)*
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
