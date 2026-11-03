@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cq_lang_sequence::gpu::publication::{
-    ColumnBounds, FieldBounds, KeyCodec, KeyField, PublicationRecord, PublicationStorage,
+    ColumnBounds, FieldBounds, FlatRows, KeyCodec, KeyField, PublicationRecord, PublicationStorage,
 };
 use cq_lang_sequence::gpu::realization::{
     Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput, Step, TransferSource,
@@ -64,6 +64,18 @@ fn packed_columns(storage: &PublicationStorage) -> Option<Vec<String>> {
             .map(|field| field.column.clone())
             .collect()
     })
+}
+
+fn flat_rows<'a>(analysis: &'a Analysis, publication: &str) -> &'a FlatRows {
+    let PublicationStorage::FlatRows(rows) = &analysis.gpu_publications[publication].storage else {
+        unreachable!("checked flat publication");
+    };
+    rows
+}
+
+fn flat_slot(rows: &FlatRows, column: &str) -> usize {
+    rows.columns.iter().position(|field| field == column)
+        .expect("checked publication contains its consumer column")
 }
 
 /// Prints the recorded bounds source; no printer state is consulted, so every
@@ -1072,19 +1084,19 @@ impl<'a> Compiler<'a> {
             }
             return Ok(load);
         }
-        let width = self.rows.width;
-        let columns = &self.analysis.structures.physical.headings[&stored.result];
+        let layout = flat_rows(self.analysis, &stored.name);
+        let width = layout.width;
+        let columns = &layout.columns;
         if let Some(provider) = &stored.range {
             let begin = format_ident!("__cq_store_begin_{prior}");
             let offsets = format_ident!("__cq_store_offsets_{prior}");
             let meta = format_ident!("__cq_store_meta_{prior}");
-            let payload_columns = self.lookup_columns(provider)?;
             let copy = columns
                 .iter()
-                .filter(|column| !payload_columns.contains(column))
                 .map(|column| {
                     let slot = self.slot(column)?;
-                    Ok(quote!(__row[#slot] = *#rows.add(__whole_parent * #width + #slot);))
+                    let field = flat_slot(layout, column);
+                    Ok(quote!(__row[#slot] = *#rows.add(__whole_parent * #width + #field);))
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
             if !copy.is_empty() {
@@ -1104,7 +1116,8 @@ impl<'a> Compiler<'a> {
             .iter()
             .map(|column| {
                 let slot = self.slot(column)?;
-                Ok(quote!(__row[#slot] = *#rows.add((#position) as usize * #width + #slot);))
+                let field = flat_slot(layout, column);
+                Ok(quote!(__row[#slot] = *#rows.add((#position) as usize * #width + #field);))
             })
             .collect::<syn::Result<Vec<_>>>()?;
         Ok(quote!(#(#copy)*))
@@ -1351,7 +1364,7 @@ struct Kernel<'c, 'p> {
     virtual_range: Option<String>,
     packed_columns: Option<Vec<String>>,
     arena_packing: Option<&'c crate::arena::Packing>,
-    publication_columns: BTreeSet<usize>,
+    flat_layout: Option<&'c FlatRows>,
     sink: Option<TokenStream>,
     combine: Option<TokenStream>,
     expansion_counters: bool,
@@ -1390,15 +1403,9 @@ impl Kernel<'_, '_> {
                 .map(|column| self.compiler.slot(column))
                 .collect()
         } else {
-            let mut slots = self.publication_columns.clone();
-            if let Some(provider) = &self.virtual_range {
-                // A deferred publication owns the parent and range offsets.
-                // Provider payloads become live only when that range is read.
-                for column in self.compiler.rows.provider(provider)?.1 {
-                    slots.remove(&self.compiler.slot(&column)?);
-                }
-            }
-            Ok(slots)
+            self.flat_layout.into_iter().flat_map(|layout| &layout.columns)
+                .map(|column| self.compiler.slot(column))
+                .collect()
         }
     }
 
@@ -1934,7 +1941,6 @@ impl Kernel<'_, '_> {
                 .collect::<syn::Result<Vec<_>>>()?;
             return Ok(packing.write(&values));
         }
-        let width = self.compiler.rows.width;
         let write = if let Some(columns) = &self.packed_columns {
             let parts = columns
                 .iter()
@@ -1971,9 +1977,13 @@ impl Kernel<'_, '_> {
             } else {
                 TokenStream::new()
             };
-            let slots = self.output_slots()?;
-            let columns = slots.iter().map(|slot| quote! {
-                *__output_rows.add(__destination as usize * #width + #slot) = __row[#slot] as i64;
+            let layout = self.flat_layout.expect("checked flat output layout");
+            let width = layout.width;
+            let columns = layout.columns.iter().enumerate().map(|(field, column)| {
+                let slot = self.compiler.rows.columns[column];
+                quote! {
+                    *__output_rows.add(__destination as usize * #width + #field) = __row[#slot] as i64;
+                }
             });
             quote! {
                 #(#columns)*
@@ -2103,8 +2113,9 @@ fn publish_host(
                     field.base.wrapping_add(offset as i64)
                 }}
             } else {
-                let width = compiler.rows.width;
-                let slot = compiler.slot(column)?;
+                let layout = flat_rows(analysis, &stored.name);
+                let width = layout.width;
+                let slot = flat_slot(layout, column);
                 quote!(__cq_downloaded_codes[__position * #width + #slot])
             };
             // DECODE V: P6 intermediate host fallback resolves symbols and logical values before more engine operators, not final answers.
@@ -2435,10 +2446,11 @@ fn translate_observed(
                         ));
                     }
                     let rows = format_ident!("__cq_store_rows_{index}");
-                    let width = compiler.rows.width;
-                    for column in &analysis.structures.physical.headings[&stored.result] {
+                    let layout = flat_rows(analysis, &stored.name);
+                    let width = layout.width;
+                    for (field, column) in layout.columns.iter().enumerate() {
                         let slot = compiler.slot(column)?;
-                        load.extend(quote!(__row[#slot] = *#rows.add(position * #width + #slot);));
+                        load.extend(quote!(__row[#slot] = *#rows.add(position * #width + #field);));
                     }
                     let length = format_ident!("__cq_store_length_{index}");
                     quote!(#length)
@@ -2605,13 +2617,13 @@ fn translate_observed(
             if let Step::HostUnion(union) = step {
                 let result = &analysis.results[&publication];
                 let record = publication_record(analysis, &publication)?;
-                let width = record
+                let staging = record
                     .union_staging
                     .as_ref()
                     .ok_or_else(|| {
                         error("GPU-PublicationStorage: union lacks recorded flat staging")
-                    })?
-                    .width;
+                    })?;
+                let width = staging.width;
                 let store_rows = format_ident!("__cq_store_rows_{index}");
                 let store_length = format_ident!("__cq_store_length_{index}");
                 let store_begin = format_ident!("__cq_store_begin_{index}");
@@ -2654,7 +2666,7 @@ fn translate_observed(
                             let mut args = Vec::new();
                             let mut writes = Vec::new();
                             for (field, column) in columns.iter().enumerate() {
-                                let slot = compiler.slot(column)?;
+                                let slot = flat_slot(staging, column);
                                 let base = format_ident!("base_{field}");
                                 let shift = format_ident!("shift_{field}");
                                 let bits = format_ident!("bits_{field}");
@@ -2757,7 +2769,7 @@ fn translate_observed(
                     for (field, recipe) in codec.fields().iter().enumerate() {
                         let base = format_ident!("base_{field}");
                         let shift = format_ident!("shift_{field}");
-                        let slot = compiler.slot(&recipe.column)?;
+                        let slot = flat_slot(staging, &recipe.column);
                         fields.push(packing_field(recipe, &base, &shift));
                         params.extend([abi_parameter(base.clone(), syn::parse_quote!(i64)), abi_parameter(shift.clone(), syn::parse_quote!(u32))]);
                         args.extend([abi_argument(base.clone(), quote!(#base)), abi_argument(shift.clone(), quote!(#shift))]);
@@ -3118,19 +3130,10 @@ fn translate_observed(
             } else {
                 None
             },
-            publication_columns: chains
-                .iter()
-                .flat_map(|chain| {
-                    analysis
-                        .structures
-                        .physical
-                        .headings
-                        .get(&chain.result)
-                        .into_iter()
-                        .flatten()
-                })
-                .map(|column| compiler.slot(column))
-                .collect::<syn::Result<_>>()?,
+            flat_layout: match &record.storage {
+                PublicationStorage::FlatRows(layout) => Some(layout),
+                PublicationStorage::PackedKeys(_) => None,
+            },
             sink: None,
             combine: None,
             expansion_counters,
@@ -3142,7 +3145,6 @@ fn translate_observed(
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
         let mut combine_bodies = Vec::new();
-        let width = compiler.rows.width;
         for (chain_index, chain) in chains.iter().enumerate() {
             let domain = format_ident!("__cq_domain_{chain_index}");
             let enabled = format_ident!("__cq_enabled_{chain_index}");
@@ -3201,23 +3203,21 @@ fn translate_observed(
                         #unpack
                     }
                 } else if let Some(provider) = &compiler.stored[prior].range {
+                    let layout = flat_rows(analysis, &compiler.stored[prior].name);
+                    let width = layout.width;
                     if compiler.rows.radix_provider(provider).is_some() {
                         return Err(error(
                             "GPU-RadixProvider: a deferred range publication needs a contiguous range provider",
                         ));
                     }
                     let payload = compiler.payload(provider, &[], quote!(__source_position))?;
-                    let payload_columns = compiler.rows.provider(provider)?.1;
                     let live = generator.live_columns(&chain.operations)?;
                     let mut copy = Vec::new();
-                    for column in &analysis.structures.physical.headings[&compiler.stored[prior].result] {
-                        if payload_columns.contains(column) {
-                            continue;
-                        }
+                    for (field, column) in layout.columns.iter().enumerate() {
                         let slot = compiler.slot(column)?;
                         if live.contains(&slot) {
                             copy.push(quote! {
-                                __row[#slot] = *#rows.add(__parent * #width + #slot);
+                                __row[#slot] = *#rows.add(__parent * #width + #field);
                             });
                         }
                     }
@@ -3231,9 +3231,12 @@ fn translate_observed(
                         #payload
                     }
                 } else {
-                    let copy = (0..width).map(|slot| {
+                    let layout = flat_rows(analysis, &compiler.stored[prior].name);
+                    let width = layout.width;
+                    let copy = layout.columns.iter().enumerate().map(|(field, column)| {
+                        let slot = compiler.rows.columns[column];
                         quote! {
-                            __row[#slot] = *#rows.add(__position as usize * #width + #slot);
+                            __row[#slot] = *#rows.add(__position as usize * #width + #field);
                         }
                     });
                     quote!(#(#copy)*)
@@ -3995,7 +3998,7 @@ fn translate_observed(
                 virtual_range: None,
                 packed_columns: packed_columns(&terminal_record.storage),
                 arena_packing: None,
-                publication_columns: BTreeSet::new(),
+                flat_layout: None,
                 sink: None,
                 combine: None,
                 expansion_counters: false,
@@ -4300,13 +4303,15 @@ mod tests {
             definitions: BTreeMap::new(),
         };
         let slot = compiler.slot("b").unwrap();
+        let layout = FlatRows { columns: vec!["b".into()], width: 1 };
+        let empty = FlatRows { columns: vec![], width: 1 };
         let mut kernel = Kernel {
             compiler: &compiler,
             shared: crate::layout::SharedLayout::new(),
             virtual_range: None,
             packed_columns: None,
             arena_packing: None,
-            publication_columns: BTreeSet::from([slot]),
+            flat_layout: Some(&layout),
             sink: None,
             combine: None,
             expansion_counters: false,
@@ -4324,6 +4329,7 @@ mod tests {
             .rewrite(write)
             .unwrap();
         kernel.virtual_range = Some(compiler.rows.provider_name("r", &["a".into()]).unwrap());
+        kernel.flat_layout = Some(&empty);
         let write = kernel.output_write().unwrap();
         assert!(DeviceRow::uses(write.clone()).unwrap().is_empty());
         DeviceRow::default().rewrite(write).unwrap();
@@ -5001,7 +5007,8 @@ mod tests {
         else {
             unreachable!()
         };
-        flat.columns.reverse();
+        // Physical order is the record's own; a repeated field is not.
+        flat.columns[1] = flat.columns[0].clone();
         rejects(wrong_carrier);
         let mut wrong_stride = records.clone();
         let PublicationStorage::FlatRows(flat) = &mut wrong_stride.get_mut("raw").unwrap().storage
@@ -5683,7 +5690,7 @@ mod tests {
                         virtual_range: None,
                         packed_columns: Some(vec!["a".into()]),
                         arena_packing: None,
-                        publication_columns: BTreeSet::new(),
+                        flat_layout: None,
                         sink: None,
                         combine: None,
                         expansion_counters: false,

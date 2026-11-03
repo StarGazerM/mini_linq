@@ -1808,6 +1808,16 @@ pub(crate) fn check(
                             "union arm realization contradicts its operand publication",
                         ));
                     }
+                    let staging = analysis.gpu_publications[name].union_staging.as_ref()
+                        .ok_or_else(|| error("union lacks its recorded staging layout"))?;
+                    match &analysis.gpu_publications[publication].storage {
+                        cq_lang_sequence::gpu::publication::PublicationStorage::FlatRows(source)
+                            if source == staging => {}
+                        cq_lang_sequence::gpu::publication::PublicationStorage::PackedKeys(source)
+                            if source.codec.fields().iter().all(|field| staging.columns.contains(&field.column))
+                                && staging.columns.iter().all(|column| source.codec.fields().iter().any(|field| &field.column == column)) => {}
+                        _ => return Err(error("union consumer layout differs from its published fields or stride")),
+                    }
                 }
                 let codec = analysis
                     .gpu_publications
@@ -2013,6 +2023,13 @@ impl CheckState {
                     return Err(error(
                         "a provider is looked up before its publication builds it",
                     ));
+                }
+                if let cq_lang_sequence::gpu::publication::PublicationStorage::FlatRows(layout) =
+                    &facts.analysis.gpu_publications[publication].storage
+                {
+                    if provider.columns.keys().any(|column| !layout.columns.contains(column)) {
+                        return Err(error("provider consumer reads an unpublished flat column"));
+                    }
                 }
                 self.provider_bounds(facts, records, result, provider)
             }
@@ -2709,6 +2726,25 @@ mod tests {
                 },
             ],
         );
+    }
+
+    #[test]
+    fn checker_rejects_union_consumers_with_incompatible_flat_slots() {
+        let (program, analysis) = union();
+        let realization = select(&program, &analysis).unwrap();
+        for missing in [false, true] {
+            let mut changed = analysis.clone();
+            let cq_lang_sequence::gpu::publication::PublicationStorage::FlatRows(layout) =
+                &mut changed.gpu_publications.get_mut("left").unwrap().storage else {
+                panic!("flat union input");
+            };
+            if missing {
+                layout.columns.clear();
+            } else {
+                layout.width += 1;
+            }
+            assert!(check(&program, &changed, &realization).is_err());
+        }
     }
 
     fn evaluation(realization: &mut Realization) -> &mut HostEvaluation {

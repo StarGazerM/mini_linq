@@ -816,6 +816,231 @@ fn reject_gpu_launch(p: &Program, analysis: &Analysis) {
     assert!(error.contains("GPU-Launch:"), "{error}");
 }
 
+fn compact_publication_program(union: bool) -> Program {
+    let (union_definition, union_structure, output, body) = if union {
+        (
+            quote!(merged = let canon union j,j;),
+            quote!(merged rows = @sort as ::cq_storage::dedup::Sort; merged canon = rows;),
+            quote!(merged),
+            quote! {
+                joined = store flatten lookup r [a] left;
+                merged = store union [joined,joined];
+                out = store merged;
+            },
+        )
+    } else {
+        (
+            quote!(),
+            quote!(),
+            quote!(j),
+            quote! {
+                joined = store flatten lookup r [a] left;
+                out = store joined;
+            },
+        )
+    };
+    syn::parse2(quote! {
+        physical {
+            relation L(a:i32,parent:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a,parent -> parent};
+            r = let rename R@1 {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
+            #union_definition
+            return #output as answer(a,parent,b);
+        }
+        structures {
+            providers {
+                reader = Reader { reads [exact, range, membership], build inferred };
+                provider = Provider { reads [exact, range, membership], build inferred };
+                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            }
+            l host scan = @reader as Reader [];
+            r host scan = @reader as Reader [];
+            r = @provider as Provider [a];
+            j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
+            #union_structure
+        }
+        sequence {
+            left = store rows l;
+            right = store rows r;
+            #body
+        }
+    })
+    .unwrap()
+}
+
+fn publication_bounds(analysis: &mut Analysis) {
+    for column in analysis.structures.physical.headings.values().flatten() {
+        analysis
+            .gpu_bindings
+            .carriers
+            .insert(column.clone(), syn::parse_quote!(i32));
+        analysis.gpu_bindings.bounds.insert(
+            column.clone(),
+            gpu::bindings::ColumnBounds::Scalar {
+                ty: syn::parse_quote!(i32),
+            },
+        );
+    }
+}
+
+fn publication_rows(record: &gpu::publication::PublicationRecord) -> &gpu::publication::FlatRows {
+    let gpu::publication::PublicationStorage::FlatRows(rows) = &record.storage else {
+        panic!("expected a flat publication");
+    };
+    rows
+}
+
+#[test]
+fn gpu_flat_publications_record_each_heading_without_shared_padding() {
+    let p = compact_publication_program(false);
+    let mut analysis = check_grading(&p, &sequential()).unwrap();
+    publication_bounds(&mut analysis);
+    let mut records = gpu::publication::derive(&p, &analysis).unwrap();
+    for (name, columns) in [
+        ("left", vec!["a", "parent"]),
+        ("right", vec!["a", "b"]),
+        ("joined", vec!["a", "b", "parent"]),
+    ] {
+        let rows = publication_rows(&records[name]);
+        assert_eq!(rows.columns, columns);
+        assert_eq!(rows.width, columns.len());
+    }
+    gpu::publication::check(&p, &analysis, &records).unwrap();
+    // Physical order belongs to the supplied record: checking does not replay
+    // the selector's sorted order.
+    let gpu::publication::PublicationStorage::FlatRows(rows) =
+        &mut records.get_mut("right").unwrap().storage
+    else {
+        unreachable!()
+    };
+    rows.columns.reverse();
+    gpu::publication::check(&p, &analysis, &records).unwrap();
+}
+
+#[test]
+fn gpu_flat_publications_reject_missing_duplicate_unrelated_fields_and_stride() {
+    let p = compact_publication_program(false);
+    let mut analysis = check_grading(&p, &sequential()).unwrap();
+    publication_bounds(&mut analysis);
+    let records = gpu::publication::derive(&p, &analysis).unwrap();
+    for (columns, width) in [
+        (vec!["a"], 1),
+        (vec!["a", "a", "parent"], 3),
+        (vec!["a", "parent", "b"], 3),
+        (vec!["a", "b"], 2),
+        (vec!["a", "parent"], 0),
+        (vec!["a", "parent"], 3),
+        // The joined consumer reads `a` as its lookup key: a producer that
+        // omits it is illegal even though the shared logical carrier has `a`.
+        (vec!["parent"], 1),
+    ] {
+        let mut mutant = records.clone();
+        mutant.get_mut("left").unwrap().storage =
+            gpu::publication::PublicationStorage::FlatRows(gpu::publication::FlatRows {
+                columns: columns.into_iter().map(str::to_owned).collect(),
+                width,
+            });
+        let error = gpu::publication::check(&p, &analysis, &mutant)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("GPU-PublicationStorage:"), "{error}");
+    }
+}
+
+#[test]
+fn gpu_host_union_staging_has_its_own_checked_compact_heading() {
+    let p = compact_publication_program(true);
+    let mut analysis = check_grading(&p, &sequential()).unwrap();
+    publication_bounds(&mut analysis);
+    let records = gpu::publication::derive(&p, &analysis).unwrap();
+    let staging = records["merged"].union_staging.as_ref().unwrap();
+    assert_eq!(staging.columns, ["a", "b", "parent"]);
+    assert_eq!(staging.width, 3);
+    assert_eq!(staging, publication_rows(&records["merged"]));
+    gpu::publication::check(&p, &analysis, &records).unwrap();
+    for (columns, width) in [
+        (vec!["a", "b"], 2),
+        (vec!["a", "b", "parent", "parent"], 4),
+        (vec!["a", "b", "parent", "unrelated"], 4),
+        (vec!["a", "b", "parent"], 4),
+    ] {
+        let mut mutant = records.clone();
+        mutant.get_mut("merged").unwrap().union_staging =
+            Some(gpu::publication::FlatRows {
+                columns: columns.into_iter().map(str::to_owned).collect(),
+                width,
+            });
+        assert!(gpu::publication::check(&p, &analysis, &mutant).is_err());
+    }
+}
+
+#[test]
+fn gpu_deferred_publication_keeps_parent_fields_but_not_provider_payload() {
+    let mut p = compact_publication_program(false);
+    grade(
+        &mut p,
+        quote!(left at host; right at host; joined at device; out at host;),
+    );
+    let mut analysis = check_grading(&p, &gpu()).unwrap();
+    publication_bounds(&mut analysis);
+    let (_, launch) = gpu_launch_fixture(true);
+    let joined = analysis
+        .dispatches
+        .iter_mut()
+        .find(|dispatch| dispatch.inner_stores.iter().any(|store| store == "joined"))
+        .unwrap();
+    joined.gpu = launch.dispatches[0].gpu.clone();
+    let provider = analysis.structures.built["r"][0].1.clone();
+    analysis.gpu_bindings.providers.insert(
+        "r".into(),
+        vec![gpu::bindings::ProviderLayout {
+            provider,
+            abi: gpu::bindings::ProviderAbi::Range,
+            keys: vec!["a".into()],
+            payload: vec!["b".into()],
+            directory: Some(gpu::bindings::DirectoryPolicy::DenseU32 {
+                terminal_entries: 1,
+            }),
+            radix: None,
+        }],
+    );
+    let records = gpu::publication::derive(&p, &analysis).unwrap();
+    let rows = publication_rows(&records["joined"]);
+    assert_eq!(rows.columns, ["a", "parent"]);
+    assert_eq!(rows.width, 2);
+    gpu::publication::check(&p, &analysis, &records).unwrap();
+    for columns in [vec!["a"], vec!["a", "b", "parent"]] {
+        let mut mutant = records.clone();
+        mutant.get_mut("joined").unwrap().storage =
+            gpu::publication::PublicationStorage::FlatRows(gpu::publication::FlatRows {
+                width: columns.len(),
+                columns: columns.into_iter().map(str::to_owned).collect(),
+            });
+        assert!(gpu::publication::check(&p, &analysis, &mutant).is_err());
+    }
+}
+
+#[test]
+fn gpu_grouped_publications_store_only_the_group_result_fields() {
+    let p = grouped_program(
+        quote!(k),
+        quote! {
+            input = store rows r;
+            out = store group grouped canon input;
+        },
+    );
+    let analysis = check_grading(&p, &sequential()).unwrap();
+    let records = gpu::publication::derive(&p, &analysis).unwrap();
+    assert_eq!(publication_rows(&records["input"]).columns, ["k", "value", "witness"]);
+    assert_eq!(
+        publication_rows(&records["out"]).columns,
+        ["high", "k", "low", "n", "total"]
+    );
+    assert_eq!(publication_rows(&records["out"]).width, 5);
+    gpu::publication::check(&p, &analysis, &records).unwrap();
+}
+
 #[test]
 fn gpu_launch_checker_accepts_recorded_positive_implicit_sizes() {
     for deferred in [false, true] {

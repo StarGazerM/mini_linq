@@ -297,7 +297,6 @@ fn row_slot(expression: &syn::Expr) -> Option<usize> {
 /// Scalar locals reuse checked column identifiers, including their macro hygiene;
 /// rebuilding them from column-name strings disconnects generated CQ variables.
 pub struct Rows {
-    pub width: usize,
     pub columns: BTreeMap<String, usize>,
     pub whole_lookups: BTreeMap<String, String>,
     whole_lookup_names: BTreeMap<(String, Vec<String>), String>,
@@ -1171,7 +1170,6 @@ impl Rows {
             })
             .collect();
         Ok(Self {
-            width: columns.len().max(1),
             whole_lookups: analysis
                 .gpu_bindings
                 .realization
@@ -1444,7 +1442,6 @@ impl Rows {
             let rows = format_ident!("__cq_store_rows_{index}");
             let canonical = format_ident!("__cq_canonical_{index}");
             let fields = format_ident!("__cq_fields_{index}");
-            let width = self.width;
             let mut sorted_keys = keys.clone();
             sorted_keys.sort();
             let provider_name = if layouts.len() == 1 {
@@ -1471,7 +1468,13 @@ impl Rows {
                             #canonical.keys().clone(), #length, #canonical.lanes(), #fields[#field], #bounds)? }
                     }
                 } else {
-                    let slot = self.columns[column];
+                    let cq_lang_sequence::gpu::publication::PublicationStorage::FlatRows(layout) =
+                        &analysis.gpu_publications[publication].storage else {
+                        unreachable!("checked flat provider publication");
+                    };
+                    let width = layout.width;
+                    let slot = layout.columns.iter().position(|field| field == column)
+                        .expect("checked provider column belongs to its publication");
                     quote! {
                         unsafe { ::cq_gpu_sequence_runtime::ColumnDescriptor::from_rows(
                             #rows.clone(), #length, #width, #slot, #bounds)? }

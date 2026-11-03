@@ -1963,3 +1963,18 @@ P6 slice C, P7.3 design and P8 `delta=k`; these are not additional merged result
   `experiments/gpu/compare/gpu-tpch-boundary.results.json`; timing: 480.244 s
   rotating + 214.277 s exclusive, lock/launcher 0.082 + 96.389 s. Historical
   biased ratios above are retained as evidence, not corrected by subtraction.
+- GPU compact flat publications (2026-11-03): each flat publication records its
+  own resident fields and dense stride instead of the query-wide carrier; the
+  checker verifies coverage, uniqueness, stride and every union/provider
+  consumer against that record. Generated GPU TPC-H code vs `dbe4c2cb` differs
+  only in recorded stride/offset literals (stores, reads, allocation extents,
+  provider descriptors, union staging, host downloads), 20 removed dead
+  carrier-slot copies, the kernel module hash and line wrapping. The record is
+  printed in each plans.json stage (`gpu_publications`, e.g. H03 Lineitem
+  `flat_rows ["order_key", "ship_date"] width 2`). H03 SF1,
+  local RTX 6000 Ada, all exact: exclusive CPU 5 pairs 1.355 → 0.893 ms,
+  0.660 [0.659, 0.661]; GPU-lock-only 10 rotating pairs 0.710 [0.701, 0.721]
+  (load 11.6–29.8). One full 26-query SF1 pair (GPU lock only, loaded host)
+  is exploratory: geomean 0.985, H03 0.707; others within the ±7% spread also
+  seen on queries whose generated code is unchanged. Evidence:
+  `experiments/gpu/compare/gpu-tpch-compact-publication.results.json`.

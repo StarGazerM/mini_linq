@@ -1649,8 +1649,10 @@ and encoded relational operands follow \textsc{GPU-Capture}.
 \Rule{GPU-GroupProvider}{G.\mathrm{ty}=\text{recorded GPU accumulator provider}\quad
  G\text{ is keyed}}
  {\mathsf{group}_{\rm gpu}(G)=G.\mathrm{ty}::\mathsf{fold}(G)}
-\Rule{GPU-PublicationStorage}{S=\text{recorded flat carrier or packed-key recipe}\quad
+\Rule{GPU-PublicationStorage}{S=\text{recorded compact flat rows or packed-key recipe}\quad
  C=\text{recorded canonical-publication obligation}\quad
+ \text{flat fields are the publication's resident heading, unique, stride }\max(1,|\mathit{fields}|)\quad
+ \text{each consumer reads only published fields at their recorded offsets}\quad
  \text{packed fields cover the complete published heading in recorded order}\quad
  \text{each field names its bounds provenance}}
  {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}

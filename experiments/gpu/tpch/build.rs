@@ -869,7 +869,7 @@ fn compile_stage(
         .collect();
     pipeline.complete = true;
     pipeline.recipe = advice::Recipe::default();
-    let artifact = json!({
+    let mut artifact = json!({
         "pipeline": pipeline,
         "recipe_input": recipe,
         "publication_facts": publication,
@@ -884,6 +884,13 @@ fn compile_stage(
         &planned.program,
         cq_lang_sequence::check_grading(&planned.program, &machine),
     )?;
+    // The checked GPU publication records (storage layout, union staging, set
+    // build, arena), printed as recorded.
+    artifact["gpu_publications"] = json!(analysis
+        .gpu_publications
+        .iter()
+        .map(|(name, record)| (name.clone(), record.to_token_stream().to_string()))
+        .collect::<std::collections::BTreeMap<_, _>>());
     let gpu = if host {
         checked(
             "host translate",

@@ -13,6 +13,17 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU flat publications record a compact per-publication layout: the
+  publication's resident heading (deferred provider payload excluded), unique
+  fields, dense stride. The independent checker validates coverage, stride,
+  union staging and provider-descriptor reads against the producer record;
+  stores, allocation extents, parent copies, union staging, host downloads and
+  provider descriptors print the recorded offsets. The shared five-slot
+  carrier stride is gone (H03 Lineitem 40 B → 16 B, Orders → 24 B). H03 SF1
+  vs `dbe4c2cb`, exclusive CPU: 0.660 [0.659, 0.661] (5 pairs; GPU-lock-only
+  10 pairs 0.710 [0.701, 0.721]). Publication records now print (ToTokens)
+  and GPU TPC-H plans.json stages carry them as `gpu_publications`.
+
 - P7.2 merged advice-only: Structures records `Construction::Ordinary` or
   `Statistics(BuildDemand)` (rows/max-group), with declared `statistics_build`
   support and independently checked publication witnesses. Ordinary builds do

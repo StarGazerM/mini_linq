@@ -2,6 +2,8 @@
 // DESIGN gpu-full-row-set
 use crate::{Analysis, Monoid, Program, Term};
 use cq_lang_structures::physical::symbol_name;
+use proc_macro2::TokenStream;
+use quote::{ToTokens, quote};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use super::bindings::ColumnBounds;
@@ -54,11 +56,12 @@ pub struct PackedKeys {
     pub granularity: Granularity,
 }
 
-/// Slots use the shared carrier order, not just the live result heading.
+/// Ordered resident fields of one publication, densely packed without logical
+/// carrier padding. Deferred provider payloads are not resident fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FlatRows {
     pub columns: Vec<String>,
-    /// The empty carrier retains one sentinel slot.
+    /// Compact stride in scalar slots; an empty row retains one sentinel slot.
     pub width: usize,
 }
 
@@ -127,6 +130,52 @@ pub struct PublicationRecord {
     pub arena: Option<ArenaRows>,
 }
 
+// Printers spell the recorded facts only; they choose and reject nothing.
+impl ToTokens for FlatRows {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let columns = &self.columns;
+        let width = proc_macro2::Literal::usize_unsuffixed(self.width);
+        tokens.extend(quote!(flat_rows [#(#columns),*] width #width));
+    }
+}
+
+impl ToTokens for PublicationStorage {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            Self::FlatRows(rows) => rows.to_tokens(tokens),
+            Self::PackedKeys(PackedKeys { codec, granularity }) => {
+                let columns = codec.fields().iter().map(|field| &field.column);
+                let granularity = match granularity {
+                    Granularity::Rows => quote!(rows),
+                    Granularity::Canonical { provider } => quote!(canonical #provider),
+                };
+                tokens.extend(quote!(packed_keys [#(#columns),*] #granularity));
+            }
+        }
+    }
+}
+
+impl ToTokens for PublicationRecord {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let storage = &self.storage;
+        tokens.extend(quote!(storage #storage;));
+        if let Some(staging) = &self.union_staging {
+            tokens.extend(quote!(union_staging #staging;));
+        }
+        if let Some(set) = &self.set_build {
+            let ratio = proc_macro2::Literal::usize_unsuffixed(set.ratio);
+            let radix_bits = proc_macro2::Literal::u32_unsuffixed(set.radix_bits);
+            let tile = proc_macro2::Literal::u32_unsuffixed(set.merge_tile_rows);
+            let threads = proc_macro2::Literal::u32_unsuffixed(set.block_threads);
+            tokens.extend(quote!(set_build ratio #ratio radix_bits #radix_bits merge_tile_rows #tile block_threads #threads;));
+        }
+        if let Some(arena) = &self.arena {
+            let fields = arena.columns.iter().map(|ArenaColumn { column, carrier }| quote!(#column: #carrier));
+            tokens.extend(quote!(arena [#(#fields),*];));
+        }
+    }
+}
+
 /// Recorded Sequence facts shared by selection and checking. No storage
 /// policy lives here.
 struct Facts<'a> {
@@ -138,7 +187,6 @@ struct Facts<'a> {
     materialized: BTreeSet<String>,
     terminal: String,
     output: Vec<String>,
-    carrier: Vec<String>,
 }
 
 impl<'a> Facts<'a> {
@@ -195,16 +243,6 @@ impl<'a> Facts<'a> {
                     .ok_or_else(|| error("output requires recorded code columns"))
             })
             .collect::<syn::Result<Vec<_>>>()?;
-        let carrier = analysis
-            .structures
-            .physical
-            .headings
-            .values()
-            .flatten()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
         Ok(Self {
             analysis,
             definitions,
@@ -212,7 +250,6 @@ impl<'a> Facts<'a> {
             materialized,
             terminal,
             output,
-            carrier,
         })
     }
 
@@ -223,11 +260,44 @@ impl<'a> Facts<'a> {
             .ok_or_else(|| error("unknown publication"))
     }
 
-    fn flat(&self) -> FlatRows {
-        FlatRows {
-            columns: self.carrier.clone(),
-            width: self.carrier.len().max(1),
+    /// The deferred provider owns these payload fields, not the parent rows.
+    /// This reads the already recorded launch and binding facts; it does not
+    /// choose a provider or a publication representation.
+    fn deferred_payload(&self, name: &str) -> syn::Result<&[String]> {
+        let publication = self.analysis.dispatches.iter().find_map(|dispatch| {
+            dispatch
+                .inner_stores
+                .iter()
+                .rev()
+                .find(|name| matches!(self.definitions.get(*name), Some(Term::Store { .. })))
+                .filter(|publication| publication.as_str() == name)
+                .and_then(|_| dispatch.gpu.as_ref())
+                .map(|execution| &execution.publication)
+        });
+        let Some(super::Publication::DeferredRange { provider, keys }) = publication else {
+            return Ok(&[]);
+        };
+        let layouts = self
+            .analysis
+            .gpu_bindings
+            .providers
+            .get(provider)
+            .or_else(|| {
+                self.analysis.results.get(provider).and_then(|result| {
+                    self.analysis.gpu_bindings.providers.get(result)
+                })
+            })
+            .ok_or_else(|| error("deferred publication lacks its recorded provider layout"))?;
+        let layout = match layouts.as_slice() {
+            [layout] => Some(layout),
+            layouts => layouts.iter().find(|layout| {
+                let mut layout_keys = layout.keys.clone();
+                layout_keys.sort();
+                &layout_keys == keys
+            }),
         }
+        .ok_or_else(|| error("deferred publication lacks its lookup's provider layout"))?;
+        Ok(&layout.payload)
     }
 
     /// GPU-Arena: the terminal dispatch publication of raw candidate rows (no
@@ -388,6 +458,22 @@ impl<'a> Context<'a> {
         }
     }
 
+    fn flat(&self, name: &str, term: &Term) -> syn::Result<FlatRows> {
+        let payload = self.facts.deferred_payload(name)?;
+        let columns: Vec<_> = self
+            .columns(name, term)?
+            .iter()
+            .filter(|column| !payload.contains(column))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Ok(FlatRows {
+            width: columns.len().max(1),
+            columns,
+        })
+    }
+
     fn bounds(&self, column: &str, monoid: Option<&Monoid>) -> syn::Result<FieldBounds> {
         Ok(match monoid {
             None => FieldBounds::Column(
@@ -418,7 +504,7 @@ impl<'a> Context<'a> {
 
 /// Select the target storage once, during GPU grading and after GPU bindings,
 /// including host-only terminal publications which have no device dispatch.
-/// Formal rule GPU-PublicationStorage: upstream records own carrier layout,
+/// Formal rule GPU-PublicationStorage: upstream records own compact flat layout,
 /// ordered FOR recipes with their bounds sources, and equality granularity.
 pub fn derive(
     program: &Program,
@@ -461,7 +547,7 @@ pub fn derive(
                 granularity,
             })
         } else {
-            PublicationStorage::FlatRows(facts.flat())
+            PublicationStorage::FlatRows(context.flat(&name, term)?)
         };
         let arena = facts
             .raw_terminal(&name, term, &storage)
@@ -493,7 +579,10 @@ pub fn derive(
             PublicationRecord {
                 storage,
                 set_build,
-                union_staging: context.host_union(&name, term).map(|_| facts.flat()),
+                union_staging: context
+                    .host_union(&name, term)
+                    .map(|_| context.flat(&name, term))
+                    .transpose()?,
                 arena,
             },
         );
@@ -585,7 +674,6 @@ pub fn check(
             "publication record coverage differs from Sequence stores",
         ));
     }
-    let flat = facts.flat();
     for (name, record) in records {
         let term = facts.term(name)?;
         let terminal = name == &facts.terminal;
@@ -596,7 +684,7 @@ pub fn check(
             && facts.materialized.contains(name)
             && matches!(root(&facts, term), Term::Union(_));
         match &record.union_staging {
-            Some(staging) if host_union && staging == &flat => {}
+            Some(staging) if host_union => check_flat(&facts, name, term, staging)?,
             None if !host_union => {}
             _ => return Err(error("union staging contradicts publication provenance")),
         }
@@ -648,9 +736,7 @@ pub fn check(
         }
         match &record.storage {
             PublicationStorage::FlatRows(rows) => {
-                if rows != &flat {
-                    return Err(error("flat storage contradicts carrier facts"));
-                }
+                check_flat(&facts, name, term, rows)?;
                 if terminal && !grouped {
                     return Err(error(
                         "terminal output adapter requires recorded packed keys",
@@ -703,6 +789,38 @@ pub fn check(
                 return Err(error("deferred ranges cannot publish packed row keys"));
             }
         }
+    }
+    Ok(())
+}
+
+/// Check coverage directly against the publication's observable heading and
+/// recorded deferred payload. Field order is the supplied physical order, not
+/// a replay of the selector's sorted order.
+fn check_flat(facts: &Facts, name: &str, term: &Term, rows: &FlatRows) -> syn::Result<()> {
+    if rows.width != rows.columns.len().max(1) {
+        return Err(error("flat storage has an invalid compact stride"));
+    }
+    let fields: BTreeSet<_> = rows.columns.iter().collect();
+    if fields.len() != rows.columns.len() {
+        return Err(error("flat storage repeats a resident field"));
+    }
+    let heading = if name == facts.terminal || root_fold(facts, term).is_some() {
+        &facts.output
+    } else {
+        facts
+            .analysis
+            .results
+            .get(name)
+            .and_then(|result| facts.analysis.structures.physical.headings.get(result))
+            .ok_or_else(|| error("publication lacks a checked row heading"))?
+    };
+    let payload = facts.deferred_payload(name)?;
+    if fields.iter().any(|column| !heading.contains(column) || payload.contains(column))
+        || heading
+            .iter()
+            .any(|column| !payload.contains(column) && !fields.contains(column))
+    {
+        return Err(error("flat storage contradicts needed resident fields"));
     }
     Ok(())
 }
