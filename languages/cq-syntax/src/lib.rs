@@ -420,20 +420,27 @@ impl Let {
         capture::realize_value(self.capture.as_ref(), &self.expression)
     }
 
+    /// The authored whole-variable type annotation, if this binding has one.
+    /// Destructuring field types and reference binding modes remain inferred.
+    pub fn annotated_binding(&self) -> Option<(&Ident, &syn::Type)> {
+        match (&self.pattern, &self.annotation) {
+            (syn::Pat::Ident(pattern), Some(annotation)) if pattern.by_ref.is_none() => {
+                Some((&pattern.ident, &annotation.ty))
+            }
+            _ => None,
+        }
+    }
+
     /// Carry a whole-variable annotation without interpreting Rust types.
     /// Destructuring field types and binding modes are inferred by rustc.
     pub fn binding_types(&self) -> Vec<(Ident, syn::Type)> {
         rust::bindings(&self.pattern)
             .into_iter()
             .map(|id| {
-                let ty = match (&self.pattern, &self.annotation) {
-                    (syn::Pat::Ident(pattern), Some(annotation))
-                        if pattern.by_ref.is_none() && pattern.ident == id =>
-                    {
-                        annotation.ty.clone()
-                    }
-                    _ => syn::parse_quote!(_),
-                };
+                let ty = self
+                    .annotated_binding()
+                    .filter(|(name, _)| **name == id)
+                    .map_or_else(|| syn::parse_quote!(_), |(_, ty)| ty.clone());
                 (id, ty)
             })
             .collect()

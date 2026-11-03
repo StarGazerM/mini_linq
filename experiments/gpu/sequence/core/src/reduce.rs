@@ -102,6 +102,7 @@ pub fn group(
     codecs: &crate::runs::Codecs,
     captures: &cq_lang_structures::syntax::Captures,
     geometry: &BlockGeometry,
+    rows: &crate::rows::Rows,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let threads = proc_macro2::Literal::u32_unsuffixed(geometry.block_threads);
     let shared = proc_macro2::Literal::u32_unsuffixed(geometry.shared_bytes);
@@ -116,7 +117,6 @@ pub fn group(
             let id = format_ident!("__cq_store_length_{input_index}");
             quote!(#id)
         });
-    let prepare = format_ident!("prepare_{kernel}");
     if let Some(key) = group
         .keys
         .iter()
@@ -266,12 +266,11 @@ pub fn group(
             __cq_group_live.drop_async(__cq_pool.stream())?;
         })
     });
-    Ok((
-        quote! {
-            #[kernel]
-            #[launch_bounds(#threads)]
-            #[launch_contract(domain=1,block=(#threads,1,1))]
-            pub fn #kernel(values:*mut i64,length:usize,#input_parameters #(#params),*) {
+    let abi = crate::emit::CheckedKernel::lower(kernel, quote! {
+        #[kernel]
+        #[launch_bounds(#threads)]
+        #[launch_contract(domain=1,block=(#threads,1,1))]
+    }, quote!(values:*mut i64,length:usize,#input_parameters #(#params),*), quote! {
                 unsafe {
                     let mut position=::cuda_device::thread::index_1d().get() as usize;
                     while position<length {
@@ -282,16 +281,21 @@ pub fn group(
                         position+=::cuda_device::thread::gridDim_x() as usize*#threads;
                     }
                 }
-            }
-        },
+    }, rows, cq_lang_sequence::gpu::realization::Launch::InvocationOccupancy, geometry.shared_bytes)?;
+    let shape = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,#threads,#shared)));
+    let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared)));
+    let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid),
+        quote!(__cq_group_values.ptr(),#length,#input_arguments #(#args),*))?;
+    Ok((
+        abi.definition(),
         quote! {
             let __cq_group_values=unsafe {::cq_gpu_runtime::Buffer::<i64>::uninitialized(__cq_pool.clone(),#length.checked_mul(#width).ok_or("group allocation overflow")?)?};
             #live_buffer
             if #length!=0 {
-                let shape=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,#threads,#shared))?;
+                let shape = #shape?;
                 let grid=::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(#threads),#threads,#shared)?;
-                let prepared=__cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared))?;
-                __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_group_values.ptr(),#length,#input_arguments #(#args),*)?;
+                let prepared = #prepare?;
+                #call?;
             }
             #status
             let __cq_result=unsafe {#fold(
@@ -373,6 +377,7 @@ pub fn global(
     captures: &cq_lang_structures::syntax::Captures,
     geometry: &BlockGeometry,
     combine: &BlockGeometry,
+    rows: &crate::rows::Rows,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let threads = proc_macro2::Literal::u32_unsuffixed(geometry.block_threads);
     let shared = proc_macro2::Literal::u32_unsuffixed(geometry.shared_bytes);
@@ -396,7 +401,6 @@ pub fn global(
             let id = format_ident!("__cq_store_length_{input_index}");
             quote!(#id)
         });
-    let prepare = format_ident!("prepare_{kernel}");
     let mut params = direct
         .as_ref()
         .map(|input| input.parameters.clone())
@@ -543,12 +547,11 @@ pub fn global(
             quote!(__cq_statuses.push(#owner.metadata().clone());),
         )
     };
-    Ok((
-        quote! {
-            #[kernel]
-            #[launch_bounds(#threads)]
-            #[launch_contract(domain=1,block=(#threads,1,1),dynamic_shared_range=(#shared,#shared))]
-            pub fn #kernel(partials:*mut i64,partial_present:*mut u32,error:*mut u32,length:usize,#input_parameters #(#params),*) {
+    let abi = crate::emit::CheckedKernel::lower(kernel, quote! {
+        #[kernel]
+        #[launch_bounds(#threads)]
+        #[launch_contract(domain=1,block=(#threads,1,1),dynamic_shared_range=(#shared,#shared))]
+    }, quote!(partials:*mut i64,partial_present:*mut u32,error:*mut u32,length:usize,#input_parameters #(#params),*), quote! {
                 unsafe {
                     let __tid = ::cuda_device::thread::threadIdx_x() as usize;
                     #(#declare)*
@@ -564,16 +567,20 @@ pub fn global(
                     let present = shared.add(#presence).cast::<u32>();
                     #(#reduce)*
                 }
-            }
-        },
+    }, rows, cq_lang_sequence::gpu::realization::Launch::InvocationOccupancy, geometry.shared_bytes)?;
+    let shape = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,#threads,#shared)));
+    let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared)));
+    let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid),
+        quote!(__cq_global.partials(),__cq_global.present(),__cq_global.error(),#length,#input_arguments #(#args),*))?;
+    Ok((
+        abi.definition(),
         quote! {
-            let shape = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(1,#threads,#shared))?;
+            let shape = #shape?;
             let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(#threads),#threads,#shared)?;
             let __cq_global = ::cq_gpu_sequence_runtime::group::GlobalFold::new(
                 __cq_pool.clone(), grid as usize, &[#(#descriptors),*])?;
-            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,#threads,#shared))?;
-            __cq_module.#kernel(__cq_pool.stream(),&prepared,__cq_global.partials(),__cq_global.present(),
-                __cq_global.error(),#length,#input_arguments #(#args),*)?;
+            let prepared = #prepare?;
+            #call?;
             #status
             let __cq_result = unsafe { __cq_global.finish(__cq_statuses, #combine_geometry)? }.with_decoder(
                 move |values:&[i64],valid:&[u8]| -> ::cq_gpu_sequence_runtime::Result<_> {Ok((#(#decoded,)*))}

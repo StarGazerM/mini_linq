@@ -389,7 +389,7 @@ preparation owned by the target's `gpu::realization::Realization.launches`:
 
 | Decision | Recorded fact / consumer | Status |
 |---|---|---|
-| Grid size | `Partition::{One,Tiles,Spread}` plus `Realization.launches`; invocation occupancy or program-owned one-block/resident envelope keyed by compiled CUDA entry; recorded tile caps and sharing determine each grid within that envelope | exact (GPU-ProgramLaunch; reusable arena kernels avoid repeated preparation queries) |
+| Grid size | `Partition::{One,Tiles,Spread}` plus `Realization.launches`; invocation occupancy or one optional program-owned one-block/resident envelope per fixed kernel specialization; checked final ABI records live parameters, witnesses and preparation entry; recorded tile caps and sharing determine each grid within that envelope | exact implementation, gates not rerun (GPU-ProgramLaunch; cache hits avoid symbol lookup, allocation and repeated preparation queries) |
 | Deferred lookup range | `Publication::DeferredRange { provider, keys }`; grading resolves catalog identity and consumers before BE-Resource; accounting and emission share that record | exact (was independent emitter/resource choices) |
 | Range-offset completion | `OffsetScan::DeviceExclusive`; CUB device-wide scan and parallel overflow check before consumers, with per-pool module/workspace reuse | exact (was serial one-block finalize) |
 | Whole-input fold | `FoldCompletion::BlockPartials`; distributed block partials followed by stream-ordered combine | exact (was one-block finalize) |
@@ -1073,7 +1073,7 @@ An index build over a declared `abi columns` scan retains its host publication
 boundary when no other row work requires a descendant grade: GPU realization
 records a source provider build from resident column descriptors. A different
 index token alone must not introduce an identity-copy device publication.
-Rebuilding row-oriented `range`, `runs`, or `radix` scans still selects
+Rebuilding row-oriented `range`, `radix_relation`, or `radix` scans still selects
 descendant row work. The distinction uses declared ABI facts, and the selected
 grades remain subject to the ordinary independent catalog/grading checks.
 

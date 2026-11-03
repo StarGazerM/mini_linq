@@ -448,12 +448,17 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                 let mut provider = input.provider.clone();
                 let schema = provider.input.as_mut().expect("recorded relation schema");
                 schema.columns = permutation.iter().map(|&index| schema.columns[index].clone()).collect();
+                let key_types = &input.key_types;
+                let active_bits = syn::parse_quote!(
+                    0u32 #(+ <#key_types as ::gpu_datalog_runtime::Scalar>::COLUMN.bits())*
+                );
                 let types = permutation.iter().map(|&index| &input.key_types[index]);
                 let word = &input.word;
                 let offset = &input.offset;
                 provider.ty = syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, #offset, ()>);
                 Materialization {
                     permutation, provider, params: input.params.clone(),
+                    active_bits,
                     permutation_threads: crate::BLOCK_THREADS,
                 }
             });
@@ -702,6 +707,15 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             return Err(error("GPU-NativeAbi: invalid lookup schema"));
         }
         if let Some(materialization) = &lookup.materialization {
+            let key_types = &source.key_types;
+            let word = &source.word;
+            if materialization.active_bits != syn::parse_quote!(
+                0u32 #(+ <#key_types as ::gpu_datalog_runtime::Scalar>::COLUMN.bits())*
+            ) && materialization.active_bits != syn::parse_quote!(
+                <#word as ::gpu_datalog_runtime::Word>::BITS
+            ) {
+                return Err(error("GPU-NativeAbi: active radix window must cover the complete codec widths"));
+            }
             let order = &materialization.permutation;
             let RadixParams {
                 ratio, radix_bits, merge_tile_rows, block_threads,

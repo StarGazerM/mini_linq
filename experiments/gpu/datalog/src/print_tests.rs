@@ -67,9 +67,9 @@ fn program_with_orders(
 fn negative_device_bindings_preserve_fork_declarations() {
     let host = cq_datalog_storage::compile(&syn::parse_quote! {
         struct Negative;
-        relation Edge(x:i32,y:i32) = (edges);
-        relation Blocked(x:i32) = (blocked);
-        relation Result(x:i32,y:i32);
+        relation Edge(x:i16,y:i16) = (edges);
+        relation Blocked(x:i16) = (blocked);
+        relation Result(x:i16,y:i16);
         output Result;
         Result(*x,*y) :- Edge(x,y), !Blocked(x);
         strata { component [Result]; }
@@ -79,7 +79,27 @@ fn negative_device_bindings_preserve_fork_declarations() {
         }
     })
     .unwrap();
-    let device = storage::compile(&host).unwrap();
+    let mut device = storage::compile(&host).unwrap();
+    let records = device.device.as_mut().unwrap();
+    for record in records.layouts.iter_mut()
+        .chain(&mut records.delta_layouts).chain(&mut records.negations)
+    {
+        let word = &record.word;
+        record.active_bits = syn::parse_quote!(<#word as ::gpu_datalog_runtime::Word>::BITS);
+        let state = &record.state;
+        let active_bits = &record.active_bits;
+        let (ratio, radix_bits, merge_tile_rows, block_threads) = (
+            record.ratio, record.radix_bits, record.merge_tile_rows, record.block_threads,
+        );
+        record.state_init = syn::parse_quote!(<#state>::new_set(
+            __cq_gpu_pool.clone(),
+            ::gpu_datalog_runtime::RadixRunParams {
+                ratio: #ratio, radix_bits: #radix_bits,
+                merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
+            }, #active_bits
+        )?);
+    }
+    storage::check(&host, &device).unwrap();
     let mut pipeline = cq_datalog_fork::default_pipeline();
     pipeline.passes.last_mut().unwrap().path =
         syn::parse_quote!(::cq_gpu_sequence::translate_arena);
@@ -115,6 +135,13 @@ fn negative_device_bindings_preserve_fork_declarations() {
         declaration.hosts.is_empty(),
         "device inputs do not declare CPU host reads"
     );
+    let printed = print::compile(&bound).unwrap().to_token_stream().to_string();
+    let records = bound.storage.device.as_ref().unwrap();
+    let canonical = bound.storage.providers[2].canonical;
+    let active_bits = &records.layouts[canonical].active_bits;
+    assert!(printed.contains(&quote!(let __cq_gpu_active_bits = #active_bits;).to_string()));
+    assert!(printed.contains(&quote!(state.params(), run, state.active_bits()).to_string()));
+    assert_eq!(printed.matches("__cq_gpu_active_bits").count(), 2);
 
     // The correspondence checker must still reject a fabricated host capability.
     let mut forged = bound.clone();

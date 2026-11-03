@@ -1315,8 +1315,11 @@ Checkers validate complete adapter coverage and exact provider payload demands.
 Packing bounds name immutable original resident columns or declared Scalar
 carrier metadata; a later uploaded publication cannot change an earlier codec
 recipe. A non-range provider is never silently realized as `RangeProvider`.
-Native materialization is an explicit complete permutation; the provider owns
-its sorting implementation.
+Native materialization records a complete permutation and `Materialization.active_bits`:
+either the complete source codec-width sum or `<W as Word>::BITS`. The checker
+accepts both, and `permuted_provider(pool, order, params, threads, active_bits)`
+consumes the recorded expression verbatim, independently of the source window.
+The provider owns the sorting implementation, not the window choice.
 Native full-key relation reads record `Bindings.relation_inputs` and
 `NativeLookup.radix` (`RadixRelationRead`): complete-key schema, word and
 `u64` offset, explicit parameters and physical field mapping are independently
@@ -1360,10 +1363,14 @@ coverage without recomputing the producer's preferred order list.
 The relation-order batch becomes NEW/delta by the recorded moves; frozen
 negative projections independently deduplicate because projection need not
 be injective. The view uses `republish(&state)` for maintained publication
-and `from_sorted(pool, packing, params, batch)` for initial fresh-view construction.
-Delta replacement uses `with_sorted(batch, params)`, retaining kernels and
-sharing field descriptors; an unchanged batch or unchanged empty publication
-reuses its snapshot without a sort, upload or count readback.
+and `from_sorted(pool, packing, params, batch, active_bits)` for initial fresh-view
+construction. Frozen negative projections pass their recorded state's
+`active_bits()` through adoption. Empty IDB delta views use
+`empty(pool, packing, params, active_bits)` with the canonical state's recorded
+window. Delta replacement uses `with_sorted(batch, params)`, retaining that
+snapshot's window and kernels while sharing field descriptors; an unchanged
+batch or unchanged empty publication reuses its snapshot without a sort, upload
+or count readback. No constructor selects a window from `packing.bits()`.
 `DeviceState.active_bits` is the sum of the recorded storage columns'
 `Scalar::COLUMN.bits()` values, including declared symbol codecs. It covers
 the entire significant low-bit window, never a sampled maximum or directory
@@ -1403,12 +1410,19 @@ These are implementation contracts, not new gate or timing results.
 GPU-ProgramLaunch records query-kernel preparation in
 `gpu::realization::Realization.launches`, separately from publication storage.
 Raw-candidate programs use program-owned launch envelopes: one block for a
-one-part partition, otherwise occupancy-derived residency. Each slot is keyed
-by the CUDA module's opaque compiled entry name, including callable
-specializations. On first use, typed preparation validates function/device
-attributes and resolves handles and occupancy. Later invocations borrow that
-envelope; generated wrappers retain the kernel's exact scalar argument ABI
-without type inspection, handle cloning, or repeated CUDA preparation queries.
+one-part partition, otherwise occupancy-derived residency. Each kernel has one
+`Option<ProgramLaunch>` slot for its fixed compiled specialization; the slots
+never allocate a symbol-keyed collection. On a cache miss only, typed
+preparation resolves the symbol and validates function/device attributes and
+occupancy. A hit performs no symbol-name lookup, comparison or allocation.
+The final checked kernel ABI records live scalar parameter positions, their
+explicit generic-witness dependencies and the matching preparation entry.
+Callable and native-view producers supply those dependencies, including words
+nested inside native-view types. Kernel definitions, preparations and launch
+arguments print that same ABI directly: no generated-kernel reparsing,
+type inspection or method-name rewrite recovers their association.
+Later invocations borrow the envelope and marshal scalars on the stack,
+without handle cloning or repeated CUDA preparation queries.
 The runtime rejects a foreign context or a grid outside the validated envelope.
 Each worker retains its context-qualified module and slots until query-scope
 release. Row-dependent grid caps, root tiles and sharing remain unchanged.

@@ -442,7 +442,7 @@ struct Fine<'a> {
     bound: BTreeSet<String>,
     /// What the seed and the emitted steps provide; see [`schedule`].
     provided: BTreeSet<String>,
-    /// Guards and bindings not yet placed, in query order.
+    /// Guards, bindings and deferred holding atoms not yet placed.
     waiting: Vec<usize>,
     steps: Vec<valuation::Step>,
 }
@@ -468,6 +468,10 @@ impl Fine<'_> {
                 break;
             };
             self.waiting.retain(|&c| c != clause);
+            if self.clauses[clause].is_atom() {
+                self.subatom(clause, self.clauses[clause].atom.as_ref().expect("atom heading"));
+                continue;
+            }
             self.bound
                 .extend(self.clauses[clause].provides.iter().cloned());
             self.provided
@@ -497,6 +501,13 @@ impl Fine<'_> {
 
     /// The clause's subatom over its bound columns.
     fn subatom(&mut self, clause: usize, atom: &cq::Atom) {
+        if !ready(self.clauses, &self.provided, clause) {
+            if !self.waiting.contains(&clause) {
+                self.waiting.push(clause);
+            }
+            return;
+        }
+        self.waiting.retain(|&pending| pending != clause);
         let step = subatom(clause, atom, |v| self.bound.contains(v));
         if let valuation::Step::Atom(subatom, _) = &step {
             self.provided
@@ -557,6 +568,10 @@ fn fine(
                 return true;
             }
             !let_bound.contains(v)
+                && atoms.iter().any(|&clause| {
+                    clauses[clause].provides.contains(*v)
+                        && ready(clauses, &plan.provided, clause)
+                })
         }) else {
             return Err(syn::Error::new_spanned(
                 query,
@@ -564,12 +579,17 @@ fn fine(
             ));
         };
         let variable = remaining.remove(next);
-        let mut holding = atoms
+        let holding: Vec<_> = atoms
             .iter()
             .copied()
-            .filter(|&c| clauses[c].provides.contains(variable));
-        if !plan.bound.contains(variable) {
-            let Some(binder) = holding.next() else {
+            .filter(|&c| clauses[c].provides.contains(variable))
+            .collect();
+        let binder = if !plan.bound.contains(variable) {
+            let Some(binder) = holding
+                .iter()
+                .copied()
+                .find(|&c| ready(clauses, &plan.provided, c))
+            else {
                 return Err(syn::Error::new_spanned(
                     query,
                     format!("`{variable}` is not a variable of the query"),
@@ -578,9 +598,13 @@ fn fine(
             plan.bound.insert(variable.clone());
             plan.subatom(binder, clauses[binder].atom.as_ref().expect("atom heading"));
             plan.place_ready();
-        }
-        for check in holding {
+            Some(binder)
+        } else {
+            None
+        };
+        for check in holding.into_iter().filter(|&c| Some(c) != binder) {
             plan.subatom(check, clauses[check].atom.as_ref().expect("atom heading"));
+            plan.place_ready();
         }
     }
     plan.place_ready();

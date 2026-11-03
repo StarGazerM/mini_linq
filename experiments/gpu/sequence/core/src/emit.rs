@@ -137,202 +137,230 @@ fn set_params(
     })
 }
 
-fn prune_kernel_parameters(
-    kernels: &mut [TokenStream],
-    launches: &mut [TokenStream],
-    rust_functions: &[(syn::Ident, TokenStream, syn::Ident)],
-) -> syn::Result<()> {
-    use syn::visit::Visit;
-    use syn::visit_mut::VisitMut;
-    struct Uses(BTreeSet<String>);
-    impl<'ast> Visit<'ast> for Uses {
-        fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-            if let Some(name) = path.path.get_ident() {
-                self.0.insert(name.to_string());
-            }
-            syn::visit::visit_expr_path(self, path);
-        }
-    }
-    // These are generated ABI parameter types. Discover only identifiers
-    // already present in the recorded witness table, including nested `W`
-    // in `RadixLayoutView<W, u64>`; never classify user type spellings.
-    struct TypeUses(BTreeSet<String>);
-    impl<'ast> Visit<'ast> for TypeUses {
-        fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
-            if let Some(name) = path.path.get_ident() {
-                self.0.insert(name.to_string());
-            }
-            syn::visit::visit_type_path(self, path);
-        }
-    }
-    let mut live = BTreeMap::new();
-    let mut preparations = BTreeMap::new();
-    for tokens in kernels {
-        let mut kernel: syn::ItemFn = syn::parse2(tokens.clone())?;
-        let mut uses = Uses(BTreeSet::new());
-        uses.visit_block(&kernel.block);
-        let mut keep = Vec::new();
-        let mut layouts = Vec::new();
-        let mut type_uses = TypeUses(BTreeSet::new());
-        let mut inputs = syn::punctuated::Punctuated::new();
-        for input in kernel.sig.inputs {
-            let syn::FnArg::Typed(argument) = &input else {
-                return Err(error("generated kernel has a receiver"));
-            };
-            let syn::Pat::Ident(name) = &*argument.pat else {
-                return Err(error("generated kernel parameter is not an identifier"));
-            };
-            let used = uses.0.contains(&name.ident.to_string());
-            keep.push(used);
-            if used {
-                let ty = &argument.ty;
-                layouts.push(quote! {
-                    bytes = bytes.next_multiple_of(::core::mem::align_of::<#ty>())
-                        + ::core::mem::size_of::<#ty>();
-                });
-                type_uses.visit_type(ty);
-                inputs.push(input);
-            }
-        }
-        let mut witnesses = Vec::new();
-        for (ty, bound, argument) in rust_functions {
-            if type_uses.0.contains(&ty.to_string()) {
-                kernel
-                    .sig
-                    .generics
-                    .params
-                    .push(syn::parse2(quote!(#ty: Copy + #bound))?);
-                witnesses.push(argument.clone());
-            }
-        }
-        if !witnesses.is_empty() {
-            preparations.insert(format!("prepare_{}", kernel.sig.ident), witnesses);
-        }
-        kernel.block.stmts.insert(0, syn::parse_quote! {
-            const {
-                let mut bytes = 0usize;
-                #(#layouts)*
-                assert!(bytes < 4096, "BE-Resource: kernel parameter area must be below 4096 bytes");
-            }
-        });
-        live.insert(kernel.sig.ident.to_string(), keep);
-        kernel.sig.inputs = inputs;
-        *tokens = quote!(#kernel);
-    }
-    struct Launches<'a> {
-        live: &'a BTreeMap<String, Vec<bool>>,
-        preparations: &'a BTreeMap<String, Vec<syn::Ident>>,
-    }
-    impl VisitMut for Launches<'_> {
-        fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
-            syn::visit_mut::visit_expr_method_call_mut(self, call);
-            if let Some(witnesses) = self.preparations.get(&call.method.to_string()) {
-                call.method = format_ident!("{}_for", call.method);
-                let mut arguments = syn::punctuated::Punctuated::new();
-                for witness in witnesses {
-                    arguments.push(syn::parse_quote!(&#witness));
-                }
-                arguments.extend(std::mem::take(&mut call.args));
-                call.args = arguments;
-            }
-            if let Some(keep) = self.live.get(&call.method.to_string()) {
-                // The loaded-module ABI prepends stream and prepared launch.
-                call.args = std::mem::take(&mut call.args)
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(index, arg)| (index < 2 || keep[index - 2]).then_some(arg))
-                    .collect();
-            }
-        }
-    }
-    for tokens in launches {
-        let mut block: syn::Block = syn::parse2(quote!({#tokens}))?;
-        Launches {
-            live: &live,
-            preparations: &preparations,
-        }
-        .visit_block_mut(&mut block);
-        let statements = block.stmts;
-        *tokens = quote!(#(#statements)*);
-    }
-    Ok(())
+/// The final generated scalar ABI. Types are opaque payloads: dependencies on
+/// callable/word witnesses come exclusively from the row ABI producer.
+#[derive(Clone)]
+struct AbiParameter {
+    name: syn::Ident,
+    ty: syn::Type,
+    live: bool,
+    witness: Option<usize>,
 }
 
-/// Emit the scalar ABI wrappers of recorded program preparations after unused
-/// kernel parameters have been removed. Kernel signatures and callable witnesses
-/// are generated ABI, not user Rust syntax or inferred logical type semantics.
-fn program_launch_helpers(
-    kernels: &[TokenStream],
-    launches: &mut [TokenStream],
-    module: &syn::Ident,
-    records: &[(syn::Ident, Launch, u32)],
-    rust_functions: &[(syn::Ident, TokenStream, syn::Ident)],
-) -> syn::Result<Vec<TokenStream>> {
-    use syn::visit_mut::VisitMut;
-    let kernels = kernels.iter().map(|tokens| syn::parse2::<syn::ItemFn>(tokens.clone()))
-        .collect::<syn::Result<Vec<_>>>()?;
-    let mut helpers = Vec::new();
-    let mut preparations = BTreeMap::new();
-    let mut calls = BTreeMap::new();
-    for (name, policy, shared) in records {
-        let kernel = kernels.iter().find(|kernel| kernel.sig.ident == *name)
-            .ok_or_else(|| error("program preparation lacks its generated kernel ABI"))?;
-        let generics = &kernel.sig.generics;
-        let types: Vec<_> = generics.type_params().map(|parameter| &parameter.ident).collect();
-        let witnesses: Vec<_> = rust_functions.iter().filter(|(ty, _, _)|
-            types.contains(&ty)).collect();
-        let witness_names: Vec<_> = witnesses.iter().map(|(_, _, witness)| witness).collect();
-        let witness_parameters = witnesses.iter().map(|(ty, _, witness)| quote!(#witness: &#ty));
-        let prepare = format_ident!("__cq_prepare_program_{name}");
-        let prepare_method = if witnesses.is_empty() {
+#[derive(Clone)]
+struct KernelAbi {
+    name: syn::Ident,
+    attributes: TokenStream,
+    body: TokenStream,
+    uses: BTreeSet<String>,
+    parameters: Vec<AbiParameter>,
+    witnesses: Vec<(syn::Ident, TokenStream, syn::Ident)>,
+    preparation: syn::Ident,
+    launch: Launch,
+    shared: u32,
+}
+
+/// Only the ABI checker constructs this printable record. Kernel definitions,
+/// preparations and calls all consume the same record, never generated Rust.
+pub(crate) struct CheckedKernel(KernelAbi);
+
+impl KernelAbi {
+    fn check(self, rows: &Rows) -> syn::Result<CheckedKernel> {
+        let mut names = BTreeSet::new();
+        let mut witnesses = BTreeSet::new();
+        for parameter in &self.parameters {
+            if !names.insert(parameter.name.to_string())
+                || (!parameter.live && self.uses.contains(&parameter.name.to_string()))
+            {
+                return Err(error("GPU-KernelAbi: duplicate or omitted live parameter"));
+            }
+            let expected = parameter.live.then(|| rows.parameter_witnesses.get(&parameter.name.to_string())).flatten();
+            let actual = parameter.witness.and_then(|index| self.witnesses.get(index));
+            if expected != actual.map(|(generic, _, _)| generic) {
+                return Err(error("GPU-KernelAbi: parameter has another preparation witness"));
+            }
+            if let Some((generic, _, argument)) = actual {
+                if !rows.type_witnesses.iter().any(|(ty, _, host)| ty == generic && host == argument) {
+                    return Err(error("GPU-KernelAbi: preparation has another host witness"));
+                }
+            }
+            if let Some(witness) = parameter.witness {
+                if witness >= self.witnesses.len() || !parameter.live {
+                    return Err(error("GPU-KernelAbi: invalid parameter witness"));
+                }
+                witnesses.insert(witness);
+            }
+        }
+        if witnesses.len() != self.witnesses.len() {
+            return Err(error("GPU-KernelAbi: unreferenced preparation witness"));
+        }
+        let expected = if self.witnesses.is_empty() {
+            format_ident!("prepare_{}", self.name)
+        } else {
+            format_ident!("prepare_{}_for", self.name)
+        };
+        if self.preparation != expected {
+            return Err(error("GPU-KernelAbi: preparation does not match witness ABI"));
+        }
+        Ok(CheckedKernel(self))
+    }
+}
+
+impl CheckedKernel {
+    /// Lower declarations and a body separately, before printing any kernel.
+    /// This scans generated value identifiers for liveness, never Rust types,
+    /// generic syntax, generated kernels or host method-call names.
+    pub(crate) fn lower(
+        name: &syn::Ident,
+        attributes: TokenStream,
+        declarations: TokenStream,
+        body: TokenStream,
+        rows: &Rows,
+        launch: Launch,
+        shared: u32,
+    ) -> syn::Result<Self> {
+        use syn::parse::Parser;
+        let declarations = syn::punctuated::Punctuated::<syn::FnArg, syn::Token![,]>
+            ::parse_terminated.parse2(declarations)?;
+        let mut uses = BTreeSet::new();
+        identifiers(body.clone(), &mut uses);
+        let mut parameters = Vec::new();
+        let mut witnesses = Vec::new();
+        for declaration in declarations {
+            let syn::FnArg::Typed(parameter) = declaration else {
+                return Err(error("GPU-KernelAbi: scalar parameter required"));
+            };
+            let syn::Pat::Ident(name) = *parameter.pat else {
+                return Err(error("GPU-KernelAbi: named scalar parameter required"));
+            };
+            let live = uses.contains(&name.ident.to_string());
+            let witness = if live {
+                rows.parameter_witnesses.get(&name.ident.to_string()).map(|generic| -> syn::Result<usize> {
+                    if let Some(index) = witnesses.iter().position(
+                        |(ty, _, _): &(syn::Ident, TokenStream, syn::Ident)| ty == generic,
+                    ) {
+                        return Ok(index);
+                    }
+                    let record = rows.type_witnesses.iter().find(|(ty, _, _)| ty == generic)
+                        .ok_or_else(|| error("GPU-KernelAbi: missing recorded witness"))?;
+                    witnesses.push(record.clone());
+                    Ok(witnesses.len() - 1)
+                }).transpose()?
+            } else {
+                None
+            };
+            parameters.push(AbiParameter { name: name.ident, ty: *parameter.ty, live, witness });
+        }
+        let preparation = if witnesses.is_empty() {
             format_ident!("prepare_{name}")
         } else {
             format_ident!("prepare_{name}_for")
         };
-        let placeholder = format_ident!("__cq_cached_{name}");
+        KernelAbi {
+            name: name.clone(), attributes, body, uses, parameters, witnesses,
+            preparation, launch, shared,
+        }.check(rows)
+    }
+
+    fn generics(&self) -> TokenStream {
+        let parameters = self.0.witnesses.iter().map(|(ty, bound, _)| quote!(#ty: Copy + #bound));
+        if self.0.witnesses.is_empty() { quote!() } else { quote!(<#(#parameters),*>) }
+    }
+
+    pub(crate) fn definition(&self) -> TokenStream {
+        let KernelAbi { name, attributes, body, .. } = &self.0;
+        let generics = self.generics();
+        let parameters = self.0.parameters.iter().filter(|parameter| parameter.live);
+        let declarations = parameters.clone().map(|AbiParameter { name, ty, .. }| quote!(#name: #ty));
+        let layouts = parameters.map(|AbiParameter { ty, .. }| quote! {
+            bytes = bytes.next_multiple_of(::core::mem::align_of::<#ty>())
+                + ::core::mem::size_of::<#ty>();
+        });
+        quote! {
+            #attributes
+            pub fn #name #generics (#(#declarations),*) {
+                const {
+                    let mut bytes = 0usize;
+                    #(#layouts)*
+                    assert!(bytes < 4096, "BE-Resource: kernel parameter area must be below 4096 bytes");
+                }
+                #body
+            }
+        }
+    }
+
+    pub(crate) fn prepare(&self, config: TokenStream) -> TokenStream {
+        let method = &self.0.preparation;
+        let witnesses = self.0.witnesses.iter().map(|(_, _, witness)| witness);
+        quote!(__cq_module.#method(#(&#witnesses,)* #config))
+    }
+
+    fn cached(&self, cache: &syn::Ident) -> TokenStream {
+        let helper = format_ident!("__cq_prepare_program_{}", self.0.name);
+        let witnesses = self.0.witnesses.iter().map(|(_, _, witness)| witness);
+        quote!(#helper(__cq_module, &mut *#cache, #(&#witnesses),*))
+    }
+
+    /// Bind arguments by recorded position. No method-call rewriting or kernel
+    /// reparse is involved; this is the only construction path for launch calls.
+    pub(crate) fn call(
+        &self,
+        stream: TokenStream,
+        prepared: TokenStream,
+        blocks: TokenStream,
+        arguments: TokenStream,
+    ) -> syn::Result<TokenStream> {
+        use syn::parse::Parser;
+        let arguments = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>
+            ::parse_terminated.parse2(arguments)?;
+        if arguments.len() != self.0.parameters.len() {
+            return Err(error("GPU-KernelAbi: launch argument count differs from its record"));
+        }
+        let arguments = arguments.iter().zip(&self.0.parameters)
+            .filter_map(|(argument, parameter)| parameter.live.then_some(argument));
+        let name = &self.0.name;
+        Ok(match self.0.launch {
+            Launch::InvocationOccupancy => quote!(__cq_module.#name(#stream, #prepared, #(#arguments),*)),
+            Launch::ProgramOne | Launch::ProgramOccupancy => {
+                let helper = format_ident!("__cq_launch_program_{name}");
+                quote!(unsafe { #helper(#stream, #prepared, #blocks, #(#arguments),*) })
+            }
+        })
+    }
+
+    fn program_helpers(&self, module: &syn::Ident) -> TokenStream {
+        let KernelAbi { name, preparation, shared, launch, .. } = &self.0;
+        let prepare = format_ident!("__cq_prepare_program_{name}");
         let launcher = format_ident!("__cq_launch_program_{name}");
-        let symbol = if types.is_empty() {
-            quote!(stringify!(#name))
-        } else {
-            let ptx_name = format_ident!("{name}_ptx_name");
-            quote!(#module::#ptx_name::<#(#types),*>())
-        };
-        let resident = match policy {
+        let generics = self.generics();
+        let bounds = self.0.witnesses.iter().map(|(ty, bound, _)| quote!(#ty: Copy + #bound));
+        let witness_parameters = self.0.witnesses.iter().map(|(ty, _, witness)| quote!(#witness: &#ty));
+        let witness_names: Vec<_> = self.0.witnesses.iter().map(|(_, _, witness)| witness).collect();
+        let resident = match launch {
             Launch::ProgramOne => quote! {
-                let prepared=module.#prepare_method(#(#witness_names,)* ::cuda_core::LaunchConfig1D::new(1,256,#shared))?;
+                let prepared = module.#preparation(#(#witness_names,)* ::cuda_core::LaunchConfig1D::new(1,256,#shared))?;
             },
             Launch::ProgramOccupancy => quote! {
-                let probe=module.#prepare_method(#(#witness_names,)* ::cuda_core::LaunchConfig1D::new(1,256,#shared))?;
-                let blocks=::cq_gpu_runtime::launch_grid_for_kernel(probe.function(),usize::MAX,256,#shared)?;
-                let prepared=module.#prepare_method(#(#witness_names,)* ::cuda_core::LaunchConfig1D::new(blocks,256,#shared))?;
+                let probe = module.#preparation(#(#witness_names,)* ::cuda_core::LaunchConfig1D::new(1,256,#shared))?;
+                let blocks = ::cq_gpu_runtime::launch_grid_for_kernel(probe.function(),usize::MAX,256,#shared)?;
+                let prepared = module.#preparation(#(#witness_names,)* ::cuda_core::LaunchConfig1D::new(blocks,256,#shared))?;
             },
-            Launch::InvocationOccupancy => return Err(error("invocation preparation in program cache")),
+            Launch::InvocationOccupancy => return quote!(),
         };
-        let mut prepare_generics = generics.clone();
-        prepare_generics.params.insert(0, syn::parse_quote!('__cq_launch));
-        let parameters = &kernel.sig.inputs;
-        let mut marshal = Vec::new();
-        for parameter in parameters {
-            let syn::FnArg::Typed(parameter) = parameter else {
-                return Err(error("generated kernel has a receiver"));
-            };
-            let syn::Pat::Ident(parameter) = parameter.pat.as_ref() else {
-                return Err(error("generated kernel argument is not named"));
-            };
-            let name = &parameter.ident;
-            marshal.push(quote! {
-                let mut #name=#name;
-                ::cuda_host::push_kernel_scalar(&mut arguments,&mut #name);
-            });
-        }
+        let parameters: Vec<_> = self.0.parameters.iter().filter(|parameter| parameter.live).collect();
+        let declarations = parameters.iter().map(|AbiParameter { name, ty, .. }| quote!(#name: #ty));
+        let marshal = parameters.iter().map(|AbiParameter { name, .. }| quote! {
+            let mut #name = #name;
+            ::cuda_host::push_kernel_scalar(&mut arguments, &mut #name);
+        });
         let count = parameters.len();
-        helpers.push(quote! {
-            fn #prepare #prepare_generics (
+        quote! {
+            fn #prepare <'__cq_launch, #(#bounds),*> (
                 module: &#module::LoadedModule,
                 cache: &'__cq_launch mut ::cq_gpu_runtime::ProgramLaunchCache,
                 #(#witness_parameters,)*
             ) -> ::cq_gpu_runtime::Result<&'__cq_launch ::cq_gpu_runtime::ProgramLaunch> {
-                cache.get_or_prepare(#symbol, || {
+                cache.get_or_prepare(|| {
                     #resident
                     ::cq_gpu_runtime::ProgramLaunch::from_prepared(&prepared)
                 })
@@ -341,48 +369,14 @@ fn program_launch_helpers(
                 stream: &::cuda_core::CudaStream,
                 prepared: &::cq_gpu_runtime::ProgramLaunch,
                 blocks: u32,
-                #parameters
+                #(#declarations),*
             ) -> ::cq_gpu_runtime::Result<()> {
-                let mut arguments=::cuda_host::KernelArgs::<#count>::new();
+                let mut arguments = ::cuda_host::KernelArgs::<#count>::new();
                 #(#marshal)*
-                // The caller obtained this specialization's checked envelope
-                // from its matching prepare helper; this signature is its ABI.
-                unsafe { prepared.launch(stream,blocks,arguments.as_mut_slice()) }
-            }
-        });
-        preparations.insert(placeholder.to_string(), (prepare, witness_names.into_iter().cloned().collect::<Vec<_>>()));
-        let blocks = if *policy == Launch::ProgramOne { quote!(1u32) } else { quote!(__cq_grid) };
-        calls.insert(name.to_string(), (launcher, blocks));
-    }
-    struct Rewrite {
-        preparations: BTreeMap<String, (syn::Ident, Vec<syn::Ident>)>,
-        calls: BTreeMap<String, (syn::Ident, TokenStream)>,
-    }
-    impl VisitMut for Rewrite {
-        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
-            syn::visit_mut::visit_expr_mut(self, expression);
-            let syn::Expr::MethodCall(call) = expression else { return };
-            if let Some((helper, witnesses)) = self.preparations.get(&call.method.to_string()) {
-                let module = &call.receiver;
-                let arguments = &call.args;
-                *expression = syn::parse_quote!(#helper(#module,#arguments,#(&#witnesses),*));
-            } else if let Some((helper, blocks)) = self.calls.get(&call.method.to_string()) {
-                let arguments: Vec<_> = call.args.iter().collect();
-                let stream = arguments[0];
-                let prepared = arguments[1];
-                let parameters = &arguments[2..];
-                *expression = syn::parse_quote!(unsafe { #helper(#stream,#prepared,#blocks,#(#parameters),*) });
+                unsafe { prepared.launch(stream, blocks, arguments.as_mut_slice()) }
             }
         }
     }
-    let mut rewrite = Rewrite { preparations, calls };
-    for launch in launches {
-        let mut block: syn::Block = syn::parse2(quote!({#launch}))?;
-        rewrite.visit_block_mut(&mut block);
-        let statements = block.stmts;
-        *launch = quote!(#(#statements)*);
-    }
-    Ok(helpers)
 }
 
 #[derive(Clone)]
@@ -2503,6 +2497,7 @@ fn translate_observed(
                         &codecs,
                         &compiler.rows.query_captures,
                         geometry,
+                        &compiler.rows,
                     )?
                 }
                 GroupCompletion::GridPartials {
@@ -2532,6 +2527,7 @@ fn translate_observed(
                         &compiler.rows.query_captures,
                         geometry,
                         combine,
+                        &compiler.rows,
                     )?
                 }
             };
@@ -2597,7 +2593,6 @@ fn translate_observed(
                             let kernel = format_ident!(
                                 "__cq_union_decode_{index}_{arm_index}_{module_name}"
                             );
-                            let prepare = format_ident!("prepare_{kernel}");
                             let mut params = Vec::new();
                             let mut args = Vec::new();
                             let mut writes = Vec::new();
@@ -2629,11 +2624,11 @@ fn translate_observed(
                                     *rows.add(position * #width + #slot) = #base.wrapping_add(value as i64);
                                 });
                             }
-                            kernels.push(quote! {
+                            let abi = CheckedKernel::lower(&kernel, quote! {
                                 #[kernel]
                                 #[launch_bounds(256)]
                                 #[launch_contract(domain=1,block=(256,1,1))]
-                                pub fn #kernel(keys:*const u64, rows:*mut i64, length:usize, lanes:usize, #(#params),*) {
+                            }, quote!(keys:*const u64, rows:*mut i64, length:usize, lanes:usize, #(#params),*), quote! {
                                     unsafe {
                                         let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                         while position < length {
@@ -2641,13 +2636,16 @@ fn translate_observed(
                                             position += ::cuda_device::thread::gridDim_x() as usize * #block;
                                         }
                                     }
-                                }
-                            });
+                            }, &compiler.rows, Launch::InvocationOccupancy, 0)?;
+                            kernels.push(abi.definition());
+                            let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new((#length.div_ceil(#block)) as u32,#block,0)));
+                            let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(1u32),
+                                quote!(#owner.keys().ptr(), unsafe { #store_rows.ptr().add(__cq_union_offset * #width) },
+                                    #length, #owner.lanes(), #(#args),*))?;
                             copies.push(quote! {
                                 if #length != 0 {
-                                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new((#length.div_ceil(#block)) as u32,#block,0))?;
-                                    __cq_module.#kernel(__cq_pool.stream(), &prepared, #owner.keys().ptr(),
-                                        unsafe { #store_rows.ptr().add(__cq_union_offset * #width) }, #length, #owner.lanes(), #(#args),*)?;
+                                    let prepared = #prepare?;
+                                    #call?;
                                 }
                                 __cq_union_offset += #length;
                             });
@@ -2709,13 +2707,12 @@ fn translate_observed(
                         });
                     }
                     let kernel = format_ident!("__cq_union_pack_{index}_{module_name}");
-                    let prepare = format_ident!("prepare_{kernel}");
                     let keys = format_ident!("__cq_store_keys_{index}");
-                    kernels.push(quote! {
+                    let abi = CheckedKernel::lower(&kernel, quote! {
                         #[kernel]
                         #[launch_bounds(256)]
                         #[launch_contract(domain=1,block=(256,1,1))]
-                        pub fn #kernel(rows:*const i64,keys:*mut u64,length:usize,lanes:usize,#(#params),*) {
+                    }, quote!(rows:*const i64,keys:*mut u64,length:usize,lanes:usize,#(#params),*), quote! {
                             unsafe {
                                 let mut position = ::cuda_device::thread::index_1d().get() as usize;
                                 while position < length {
@@ -2725,8 +2722,11 @@ fn translate_observed(
                                     position += ::cuda_device::thread::gridDim_x() as usize * #block;
                                 }
                             }
-                        }
-                    });
+                    }, &compiler.rows, Launch::InvocationOccupancy, 0)?;
+                    kernels.push(abi.definition());
+                    let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(#block) as u32,#block,0)));
+                    let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(1u32),
+                        quote!(#store_rows.ptr(),#keys.ptr(),#store_length,__cq_key_lanes,#(#args),*))?;
                     let lanes = key_lanes(codec);
                     launches.push(quote! {
                         let mut __cq_key_bits = 0u32;
@@ -2735,8 +2735,8 @@ fn translate_observed(
                         let __cq_key_lanes = #lanes;
                         let #keys = unsafe { ::cq_gpu_runtime::Buffer::<u64>::uninitialized(__cq_pool.clone(),#store_length * __cq_key_lanes)? };
                         if #store_length != 0 {
-                            let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(#store_length.div_ceil(#block) as u32,#block,0))?;
-                            __cq_module.#kernel(__cq_pool.stream(),&prepared,#store_rows.ptr(),#keys.ptr(),#store_length,__cq_key_lanes,#(#args),*)?;
+                            let prepared = #prepare?;
+                            #call?;
                         }
                     });
                     let owner = format_ident!("__cq_canonical_{index}");
@@ -2942,7 +2942,6 @@ fn translate_observed(
             .map(packing_fields)
             .unwrap_or_default();
         let kernel_name = format_ident!("__cq_sequence_dispatch_{index}_{module_name}");
-        let prepare_name = format_ident!("prepare_{kernel_name}");
         let mut parameters = Vec::new();
         let mut capture_domains = Vec::new();
         for (chain_index, chain) in chains.iter().enumerate() {
@@ -3383,14 +3382,13 @@ fn translate_observed(
         } else {
             (quote!(), quote!())
         };
-        kernels.push(quote! {
+        let dispatch_abi = CheckedKernel::lower(&kernel_name, quote! {
             #[kernel]
             #[launch_bounds(256)]
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
-            pub fn #kernel_name(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
-                __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
-                #resident_parameter __partials:*mut i64,__blocks:u32)
-            {
+        }, quote!(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
+            __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
+            #resident_parameter __partials:*mut i64,__blocks:u32), quote! {
                 unsafe {
                     let __tid=::cuda_device::thread::threadIdx_x() as usize;
                     let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
@@ -3401,23 +3399,21 @@ fn translate_observed(
                     #(#bodies)*
                     #resident_epilogue
                 }
-            }
-        });
+        }, &compiler.rows, launch, shared_u32)?;
+        kernels.push(dispatch_abi.definition());
         let combine_kernel = format_ident!("__cq_sequence_combine_{index}_{module_name}");
-        let prepare_combine = format_ident!("prepare_{combine_kernel}");
         let whole_reduction = matches!(
             execution.fold,
             cq_lang_sequence::gpu::FoldCompletion::BlockPartials { .. }
         );
-        if whole_reduction {
-            kernels.push(quote! {
+        let combine_abi = if whole_reduction {
+            let abi = CheckedKernel::lower(&combine_kernel, quote! {
                 #[kernel]
                 #[launch_bounds(256)]
                 #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
-                pub fn #combine_kernel(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
-                    __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
-                    __partials:*mut i64,__blocks:u32)
-                {
+            }, quote!(#(#parameters,)* __output_rows:*mut i64,__output_begin:*mut u32,
+                __output_offsets:*mut u32,__output_keys:*mut u64,__capacity:u32,__meta:*mut u32,
+                __partials:*mut i64,__blocks:u32), quote! {
                     unsafe {
                         let __tid=::cuda_device::thread::threadIdx_x() as usize;
                         let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
@@ -3426,9 +3422,12 @@ fn translate_observed(
                         let __abort_slot=__shared.add(40).cast::<u32>();
                         #(#combine_bodies)*
                     }
-                }
-            });
-        }
+            }, &compiler.rows, if launch == Launch::InvocationOccupancy {
+                Launch::InvocationOccupancy
+            } else { Launch::ProgramOne }, shared_u32)?;
+            kernels.push(abi.definition());
+            Some(abi)
+        } else { None };
         let store_rows = format_ident!("__cq_store_rows_{index}");
         let store_begin = format_ident!("__cq_store_begin_{index}");
         let store_offsets = format_ident!("__cq_store_offsets_{index}");
@@ -3593,42 +3592,46 @@ fn translate_observed(
         };
         let partial_count = if whole_reduction { chains.len() } else { 0 };
         let launch_setup = match launch {
-            Launch::InvocationOccupancy => quote! {
-                let __cq_probe=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(1,256,#shared_u32))?;
-                let __cq_grid=::cq_gpu_runtime::launch_grid_for_kernel(
-                    __cq_probe.function(), #parts, 256, #shared_u32)?;
-                #spread
-                let __cq_prepared=__cq_module.#prepare_name(::cuda_core::LaunchConfig1D::new(__cq_grid,256,#shared_u32))?;
+            Launch::InvocationOccupancy => {
+                let probe = dispatch_abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,256,#shared_u32)));
+                let prepare = dispatch_abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(__cq_grid,256,#shared_u32)));
+                quote! {
+                    let __cq_probe = #probe?;
+                    let __cq_grid=::cq_gpu_runtime::launch_grid_for_kernel(
+                        __cq_probe.function(), #parts, 256, #shared_u32)?;
+                    #spread
+                    let __cq_prepared = #prepare?;
+                }
             },
             Launch::ProgramOne | Launch::ProgramOccupancy => {
                 let slot = program_preparations.len();
                 let cache = format_ident!("__cq_launch_cache_{slot}");
-                let cached = format_ident!("__cq_cached_{kernel_name}");
-                program_preparations.push((kernel_name.clone(),launch,shared_u32));
+                let cached = dispatch_abi.cached(&cache);
+                program_preparations.push(dispatch_abi.program_helpers(&module_name));
                 quote! {
-                    let __cq_prepared=__cq_module.#cached(&mut *#cache)?;
+                    let __cq_prepared = #cached?;
                     let __cq_grid=(#parts).max(1).min(__cq_prepared.resident_blocks() as usize) as u32;
                     #spread
                 }
             }
         };
-        let combine_launch = whole_reduction.then(|| {
+        let combine_launch = if let Some(abi) = &combine_abi {
             let preparation = if launch == Launch::InvocationOccupancy {
-                quote!(let prepared=__cq_module.#prepare_combine(::cuda_core::LaunchConfig1D::new(1,256,#shared_u32))?;)
+                abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,256,#shared_u32)))
             } else {
                 let slot = program_preparations.len();
                 let cache = format_ident!("__cq_launch_cache_{slot}");
-                let cached = format_ident!("__cq_cached_{combine_kernel}");
-                program_preparations.push((combine_kernel.clone(),Launch::ProgramOne,shared_u32));
-                quote!(let prepared=__cq_module.#cached(&mut *#cache)?;)
+                program_preparations.push(abi.program_helpers(&module_name));
+                abi.cached(&cache)
             };
+            let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(1u32),
+                quote!(#(#arguments,)* #pointers #key_pointer, __cq_capacity as u32, #store_meta.ptr(),
+                    __cq_partials.ptr(), __cq_grid))?;
             quote! {
-                #preparation
-                __cq_module.#combine_kernel(__cq_pool.stream(), &prepared, #(#arguments,)*
-                    #pointers #key_pointer, __cq_capacity as u32, #store_meta.ptr(),
-                    __cq_partials.ptr(), __cq_grid)?;
+                let prepared = #preparation?;
+                #call?;
             }
-        });
+        } else { quote!() };
         let count_readback = execution
             .synchronization
             .iter()
@@ -3692,6 +3695,9 @@ fn translate_observed(
                     &__cq_expansions.to_host()?, __cq_required as u64);
             }
         });
+        let dispatch_call = dispatch_abi.call(quote!(__cq_pool.stream()), quote!(&__cq_prepared),
+            quote!(__cq_grid), quote!(#(#arguments,)* #pointers #key_pointer,
+                __cq_capacity as u32, #meta_pointers #partials_pointer, __cq_grid))?;
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -3705,9 +3711,7 @@ fn translate_observed(
                 #key_allocation
                 #meta_allocation
                 #allocate_expansions
-                __cq_module.#kernel_name(__cq_pool.stream(),&__cq_prepared,#(#arguments,)*
-                    #pointers #key_pointer,
-                    __cq_capacity as u32,#meta_pointers #partials_pointer,__cq_grid)?;
+                #dispatch_call?;
                 #combine_launch
                 #count_readback
                 #record_readback
@@ -3834,14 +3838,12 @@ fn translate_observed(
             };
             let write = row.rewrite(generator.output_write()?)?;
             let kernel = format_ident!("__cq_host_output_{module_name}");
-            let prepare = format_ident!("prepare_{kernel}");
-            kernels.push(quote! {
+            let abi = CheckedKernel::lower(&kernel, quote! {
                 #[kernel]
                 #[launch_bounds(256)]
                 #[launch_contract(domain=1,block=(256,1,1))]
-                pub fn #kernel(#(#parameters,)* __output_keys:*mut u64,
-                    __length:usize,__cq_key_lanes:usize)
-                {
+            }, quote!(#(#parameters,)* __output_keys:*mut u64,
+                __length:usize,__cq_key_lanes:usize), quote! {
                     unsafe {
                         let __position = ::cuda_device::thread::index_1d().get() as usize;
                         if __position < __length {
@@ -3851,8 +3853,11 @@ fn translate_observed(
                             #write
                         }
                     }
-                }
-            });
+            }, &compiler.rows, Launch::InvocationOccupancy, 0)?;
+            kernels.push(abi.definition());
+            let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(grid,#block,0)));
+            let call = abi.call(quote!(__cq_pool.stream()), quote!(&prepared), quote!(grid),
+                quote!(#(#arguments,)* __cq_host_output_keys.ptr(),__cq_host_output_length,__cq_key_lanes))?;
             let lanes = key_lanes(codec);
             launches.push(quote! {
                 let __cq_host_output_length = #length;
@@ -3867,9 +3872,8 @@ fn translate_observed(
                 if __cq_host_output_length != 0 {
                     let grid = u32::try_from(__cq_host_output_length.div_ceil(#block))
                         .map_err(|_| "Sequence output exceeds CUDA grid")?;
-                    let prepared = __cq_module.#prepare(::cuda_core::LaunchConfig1D::new(grid,#block,0))?;
-                    __cq_module.#kernel(__cq_pool.stream(), &prepared, #(#arguments,)*
-                        __cq_host_output_keys.ptr(),__cq_host_output_length,__cq_key_lanes)?;
+                    let prepared = #prepare?;
+                    #call?;
                 }
             });
             output = Some(if canonical {
@@ -3893,10 +3897,7 @@ fn translate_observed(
     launches.push(
         output.ok_or_else(|| error("checked GPU output has no recorded publication adapter"))?,
     );
-    prune_kernel_parameters(&mut kernels, &mut launches, &compiler.rows.type_witnesses)?;
-    let program_helpers = program_launch_helpers(
-        &kernels, &mut launches, &module_name, &program_preparations, &compiler.rows.type_witnesses,
-    )?;
+    let program_helpers = &program_preparations;
     let output = launches.pop().expect("output launch");
     let setup = &compiler.rows.setup;
     let build = &compiler.rows.build;
@@ -4398,141 +4399,130 @@ mod tests {
         }
     }
 
+    fn abi_rows() -> Rows {
+        let program = arena_program(false);
+        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        Rows::new(&program, &analysis).unwrap()
+    }
+
     #[test]
     fn parameter_budget_is_checked_by_rustc_layout() {
         let names: Vec<_> = (0..513).map(|index| format_ident!("p{index}")).collect();
-        let mut kernels = vec![quote! {
-            fn oversized(#(#names: *const u64),*) {
-                #(let _ = #names;)*
-            }
-        }];
-        prune_kernel_parameters(&mut kernels, &mut [], &[]).unwrap();
-        let emitted = kernels[0].to_string();
+        let abi = CheckedKernel::lower(&format_ident!("oversized"), quote!(),
+            quote!(#(#names: *const u64),*), quote!(#(let _ = #names;)*),
+            &abi_rows(), Launch::InvocationOccupancy, 0).unwrap();
+        let emitted = abi.definition().to_string();
         assert!(emitted.contains("size_of"));
         assert!(emitted.contains("align_of"));
         assert!(emitted.contains("BE-Resource"));
     }
 
     #[test]
-    fn pruning_preserves_signature_and_launch_order() {
-        let mut kernels = vec![quote! {
-            fn kernel(unused: u32, a: u32, b: *const i64) { let _ = (b, a); }
-        }];
-        let mut launches =
-            vec![quote! { module.kernel(stream, prepared, unused(), first(), second())?; }];
-        prune_kernel_parameters(&mut kernels, &mut launches, &[]).unwrap();
-        let function: syn::ItemFn = syn::parse2(kernels[0].clone()).unwrap();
-        assert_eq!(
-            function.sig.inputs.to_token_stream().to_string(),
-            quote!(a: u32, b: *const i64).to_string()
-        );
-        assert_eq!(
-            launches[0].to_string(),
-            quote!(module.kernel(stream, prepared, first(), second())?;).to_string()
-        );
+    fn recorded_pruning_preserves_signature_and_launch_order() {
+        let abi = CheckedKernel::lower(&format_ident!("kernel"), quote!(),
+            quote!(unused: u32, a: u32, b: *const i64), quote!(let _ = (b, a);),
+            &abi_rows(), Launch::InvocationOccupancy, 0).unwrap();
+        let function: syn::ItemFn = syn::parse2(abi.definition()).unwrap();
+        assert_eq!(function.sig.inputs.to_token_stream().to_string(),
+            quote!(a: u32, b: *const i64).to_string());
+        let call = abi.call(quote!(stream), quote!(prepared), quote!(grid),
+            quote!(unused(), first(), second())).unwrap();
+        assert_eq!(call.to_string(),
+            quote!(__cq_module.kernel(stream, prepared, first(), second())).to_string());
+        assert!(abi.call(quote!(stream), quote!(prepared), quote!(grid), quote!(first())).is_err());
     }
 
-    #[test]
-    fn rust_function_parameters_use_inferred_prepare_witnesses() {
-        let mut kernels = vec![quote! {
-            fn kernel(unused: Unused, evaluate: Evaluate, x: i64) {
-                let _ = evaluate(&x);
-            }
-        }];
-        let mut launches = vec![quote! {
-            let prepared = module.prepare_kernel(config)?;
-            module.kernel(stream, &prepared, unused, evaluate, x)?;
-        }];
-        let functions = vec![
-            (
-                format_ident!("Unused"),
-                quote!(Fn() -> bool),
-                format_ident!("unused"),
-            ),
-            (
-                format_ident!("Evaluate"),
-                quote!(Fn(&i64) -> bool),
-                format_ident!("evaluate"),
-            ),
-        ];
-        prune_kernel_parameters(&mut kernels, &mut launches, &functions).unwrap();
-        let function: syn::ItemFn = syn::parse2(kernels[0].clone()).unwrap();
-        assert_eq!(
-            function.sig.generics.to_token_stream().to_string(),
-            quote!(<Evaluate: Copy + Fn(&i64) -> bool>).to_string()
-        );
-        assert_eq!(
-            launches[0].to_string(),
-            quote! {
-                let prepared = module.prepare_kernel_for(&evaluate, config)?;
-                module.kernel(stream, &prepared, evaluate, x)?;
-            }
-            .to_string()
-        );
-    }
-
-    #[test]
-    fn nested_radix_word_generics_share_the_preparation_witness_abi() {
-        let mut kernels = vec![quote! {
-            fn kernel(view: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word0, u64>,
-                unused: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word1, u64>) {
-                let _ = view.keys.run_count;
-            }
-        }];
-        let witnesses = vec![
-            (format_ident!("Word0"), quote!(::gpu_datalog_runtime::Word), format_ident!("word0")),
-            (format_ident!("Word1"), quote!(::gpu_datalog_runtime::Word), format_ident!("word1")),
-        ];
-        let mut launches = vec![quote! {
-            let prepared = module.__cq_cached_kernel(cache)?;
-            module.kernel(stream, &prepared, view, unused)?;
-        }];
-        prune_kernel_parameters(&mut kernels, &mut launches, &witnesses).unwrap();
-        let function: syn::ItemFn = syn::parse2(kernels[0].clone()).unwrap();
-        assert_eq!(function.sig.generics.to_token_stream().to_string(),
-            quote!(<Word0: Copy + ::gpu_datalog_runtime::Word>).to_string());
-        let helpers = program_launch_helpers(
-            &kernels, &mut launches, &format_ident!("module"),
-            &[(format_ident!("kernel"), Launch::ProgramOccupancy, 64)], &witnesses,
-        ).unwrap();
-        let helpers = quote!(#(#helpers)*).to_string();
-        assert!(helpers.contains("kernel_ptx_name :: < Word0 >"));
-        assert!(!helpers.contains("Word1"));
-        assert_eq!(launches[0].to_string(), quote! {
-            let prepared = __cq_prepare_program_kernel(module, cache, &word0)?;
-            unsafe { __cq_launch_program_kernel(stream, &prepared, __cq_grid, view) }?;
-        }.to_string());
-    }
-
-    #[test]
-    fn program_launch_keeps_the_compiled_callable_identity_and_scalar_abi() {
-        let mut kernels = vec![quote! {
-            fn kernel(unused: Unused, evaluate: Evaluate, x: i64) {
-                let _ = evaluate(&x);
-            }
-        }];
-        let mut launches = vec![quote! {
-            let prepared = module.__cq_cached_kernel(cache)?;
-            module.kernel(stream, &prepared, unused, evaluate, x)?;
-        }];
-        let functions = vec![
+    fn callable_abi(launch: Launch) -> (Rows, CheckedKernel) {
+        let mut rows = abi_rows();
+        rows.type_witnesses = vec![
             (format_ident!("Unused"), quote!(Fn() -> bool), format_ident!("unused")),
             (format_ident!("Evaluate"), quote!(Fn(&i64) -> bool), format_ident!("evaluate")),
         ];
-        prune_kernel_parameters(&mut kernels, &mut launches, &functions).unwrap();
-        let helpers = program_launch_helpers(
-            &kernels, &mut launches, &format_ident!("module"),
-            &[(format_ident!("kernel"), Launch::ProgramOccupancy, 64)], &functions,
-        ).unwrap();
-        let helpers = quote!(#(#helpers)*).to_string();
-        assert!(helpers.contains("kernel_ptx_name :: < Evaluate >"));
+        rows.parameter_witnesses = [
+            ("unused".into(), format_ident!("Unused")),
+            ("evaluate".into(), format_ident!("Evaluate")),
+        ].into();
+        let abi = CheckedKernel::lower(&format_ident!("kernel"), quote!(),
+            quote!(unused: Unused, evaluate: Evaluate, x: i64),
+            quote!(let _ = evaluate(&x);), &rows, launch, 64).unwrap();
+        (rows, abi)
+    }
+
+    #[test]
+    fn callable_preparation_uses_recorded_witnesses() {
+        let (_, abi) = callable_abi(Launch::InvocationOccupancy);
+        assert_eq!(abi.generics().to_string(),
+            quote!(<Evaluate: Copy + Fn(&i64) -> bool>).to_string());
+        assert_eq!(abi.prepare(quote!(config)).to_string(),
+            quote!(__cq_module.prepare_kernel_for(&evaluate, config)).to_string());
+    }
+
+    #[test]
+    fn nested_radix_word_generics_share_the_recorded_preparation_abi() {
+        let mut rows = abi_rows();
+        rows.type_witnesses = vec![
+            (format_ident!("Word0"), quote!(::gpu_datalog_runtime::Word), format_ident!("word0")),
+            (format_ident!("Word1"), quote!(::gpu_datalog_runtime::Word), format_ident!("word1")),
+        ];
+        rows.parameter_witnesses = [
+            ("view".into(), format_ident!("Word0")),
+            ("unused".into(), format_ident!("Word1")),
+        ].into();
+        let abi = CheckedKernel::lower(&format_ident!("kernel"), quote!(),
+            quote!(view: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word0, u64>,
+                unused: ::gpu_datalog_runtime::radix_run::RadixLayoutView<Word1, u64>),
+            quote!(let _ = view.keys.run_count;), &rows, Launch::ProgramOccupancy, 64).unwrap();
+        assert_eq!(abi.generics().to_string(),
+            quote!(<Word0: Copy + ::gpu_datalog_runtime::Word>).to_string());
+        let helpers = abi.program_helpers(&format_ident!("module")).to_string();
+        assert!(helpers.contains("prepare_kernel_for (word0"));
+        assert!(!helpers.contains("Word1"));
+        assert!(!helpers.contains("ptx_name"));
+        assert_eq!(abi.cached(&format_ident!("cache")).to_string(),
+            quote!(__cq_prepare_program_kernel(__cq_module, &mut *cache, &word0)).to_string());
+        let call = abi.call(quote!(stream), quote!(&prepared), quote!(__cq_grid),
+            quote!(view, unused)).unwrap();
+        assert_eq!(call.to_string(),
+            quote!(unsafe { __cq_launch_program_kernel(stream, &prepared, __cq_grid, view) }).to_string());
+    }
+
+    #[test]
+    fn program_launch_resolves_only_on_miss_and_uses_stack_scalar_arguments() {
+        let (_, abi) = callable_abi(Launch::ProgramOccupancy);
+        let helpers = abi.program_helpers(&format_ident!("module")).to_string();
+        assert!(helpers.find("get_or_prepare (||").unwrap()
+            < helpers.find("prepare_kernel_for").unwrap());
+        assert!(!helpers.contains("ptx_name"));
         assert!(helpers.contains("evaluate : Evaluate , x : i64"));
         assert!(helpers.contains("KernelArgs :: < 2usize >"));
         assert!(!helpers.contains("Unused"));
-        assert_eq!(launches[0].to_string(), quote! {
-            let prepared = __cq_prepare_program_kernel(module, cache, &evaluate)?;
-            unsafe { __cq_launch_program_kernel(stream, &prepared, __cq_grid, evaluate, x) }?;
-        }.to_string());
+        let call = abi.call(quote!(stream), quote!(&prepared), quote!(__cq_grid),
+            quote!(unused, evaluate, x)).unwrap();
+        assert_eq!(call.to_string(),
+            quote!(unsafe { __cq_launch_program_kernel(stream, &prepared, __cq_grid, evaluate, x) }).to_string());
+    }
+
+    #[test]
+    fn kernel_abi_checker_rejects_missing_live_parameters_and_witnesses() {
+        let (rows, abi) = callable_abi(Launch::ProgramOccupancy);
+        let mut missing = abi.0.clone();
+        missing.parameters[1].live = false;
+        assert!(missing.check(&rows).is_err());
+        let mut missing = abi.0.clone();
+        missing.witnesses.clear();
+        assert!(missing.check(&rows).is_err());
+        let mut wrong = abi.0.clone();
+        wrong.preparation = format_ident!("prepare_other");
+        assert!(wrong.check(&rows).is_err());
+        let mut extra = abi.0.clone();
+        extra.witnesses.push((format_ident!("Extra"), quote!(Copy), format_ident!("extra")));
+        assert!(extra.check(&rows).is_err());
+        let mut wrong = abi.0.clone();
+        wrong.witnesses[0].2 = format_ident!("unused");
+        assert!(wrong.check(&rows).is_err());
+        let mut missing = abi.0.clone();
+        missing.parameters[1].witness = None;
+        assert!(missing.check(&rows).is_err());
     }
 
     #[test]

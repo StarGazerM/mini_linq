@@ -76,6 +76,8 @@ pub struct Materialization {
     /// The declared materialized provider instance.
     pub provider: cq_lang_structures::Provider,
     pub params: RadixParams,
+    /// Complete codec width or conservative full word width, printed verbatim.
+    pub active_bits: syn::Expr,
     /// Block width of the permutation kernel.
     pub permutation_threads: u32,
 }

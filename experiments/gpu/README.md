@@ -635,9 +635,11 @@ reserved/cached bytes, per-relation accepted/layout/arena ownership footprints,
 and each hole's candidate rows and retry capacities. Layout footprints include
 shared backing allocations and must not be summed as physical pool usage.
 Native CUDA library scratch outside the pool is not included in pool counters.
-`GPU_DATALOG_TRACE_WORK=1` emits separate setup/fixpoint counters for canonical,
-layout and occurrence sorts, merges, grouping readbacks, descriptors and offset
-materialization. Radix `passes` counts planned 8-bit digit equivalents (small
+Enable the `gpu-datalog-runtime/radix-counters` Cargo feature to emit separate
+setup/fixpoint counters for canonical, layout and occurrence sorts, merges,
+grouping readbacks, descriptors and offset materialization. With the feature
+disabled, recording, resetting and tracing are no-op stubs, with no runtime
+enable check. Radix `passes` counts planned 8-bit digit equivalents (small
 tile kernels may fuse them); `bytes` models radix input/output traffic, not
 measured DRAM bandwidth, and excludes gather/compaction/histogram/copies.
 Run counters/profilers separately from timing.

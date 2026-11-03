@@ -308,6 +308,9 @@ pub struct Rows {
     pub parameters: Vec<(Ident, Type, TokenStream)>,
     /// Generated generic bounds and host preparation witnesses (callables/words).
     pub type_witnesses: Vec<(Ident, TokenStream, Ident)>,
+    /// Parameter identity → generic identity, recorded at ABI construction.
+    /// Nested native view types are opaque to the kernel ABI printer.
+    pub parameter_witnesses: BTreeMap<String, Ident>,
     pub output_columns: Vec<String>,
     /// The query's host captures (A-Capture), bound once before input setup.
     pub query_captures: cq_lang_structures::syntax::Captures,
@@ -419,6 +422,9 @@ impl Rows {
         let captures = crate::capture::print(&realization.captures.captures);
         let capture_count = realization.captures.captures.len();
         let mut type_witnesses = captures.rust_functions;
+        let mut parameter_witnesses: BTreeMap<_, _> = type_witnesses.iter()
+            .map(|(generic, _, parameter)| (parameter.to_string(), generic.clone()))
+            .collect();
         let disabled_captures = captures.disabled;
         let mut setup = captures.setup;
         let mut build = TokenStream::new();
@@ -525,6 +531,7 @@ impl Rows {
                 let ty = &read.provider.ty;
                 let schema: Vec<_> = types.iter().map(crate::runs::scalar).collect();
                 let view = format_ident!("__cq_sequence_runs_{name}");
+                parameter_witnesses.insert(view.to_string(), word.clone());
                 setup.extend(quote! {
                     let #id: &#ty = #id;
                     if !__cq_pool.shares_memory(#id.pool()) {
@@ -779,8 +786,10 @@ impl Rows {
                             ratio, radix_bits, merge_tile_rows, block_threads,
                         } = materialization.params;
                         let threads = materialization.permutation_threads;
+                        let active_bits = &materialization.active_bits;
                         let owner = format_ident!("__cq_native_provider_{provider_name}");
                         let provider_view = format_ident!("__cq_native_view_{provider_name}");
+                        parameter_witnesses.insert(provider_view.to_string(), word.clone());
                         build.extend(quote! {
                                 let #owner: #provider = #host.permuted_provider::<(#(#types,)*)>(
                                     &__cq_pool,
@@ -789,6 +798,7 @@ impl Rows {
                                         ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads,
                                     },
                                     #threads,
+                                    #active_bits,
                                 )?;
                                 __cq_run_owners.push(#owner.owner());
                             });
@@ -1160,6 +1170,7 @@ impl Rows {
             support,
             parameters,
             type_witnesses,
+            parameter_witnesses,
             output_columns,
             query_captures: physical.program.captures.clone(),
             capture_types,
@@ -2428,8 +2439,8 @@ mod tests {
             }
             structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
                 d host scan = @radix_relation input { keys 1; columns [i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,),(),u64,u64,()> [];
-                r host scan = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [];
-                r = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u64,u64,()> [b];
+                r host scan = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u128,u64,()> [];
+                r = @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32),(),u128,u64,()> [b];
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }
@@ -2471,10 +2482,11 @@ mod tests {
         wrong_permutation_capture.native.get_mut("r").unwrap().radix.word_capture =
             cq_lang_sequence::gpu::bindings::RadixWordCapture::InputView { host: "absent".into() };
         assert!(crate::bindings::check(&program, &analysis, &wrong_permutation_capture).is_err());
-        struct Permutations(Vec<Vec<usize>>);
+        struct Permutations(Vec<Vec<usize>>, Vec<syn::Expr>);
         impl VisitMut for Permutations {
             fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
                 if call.method == "permuted_provider" {
+                    self.1.push(call.args.iter().nth(4).expect("recorded active window").clone());
                     let Some(syn::Expr::Reference(reference)) = call.args.iter().nth(1) else {
                         panic!("permutation argument must borrow its recorded array")
                     };
@@ -2503,9 +2515,26 @@ mod tests {
         }
         let build = &rows.build;
         let mut block: syn::Block = syn::parse2(quote!({ #build })).unwrap();
-        let mut printed = Permutations(Vec::new());
+        let mut printed = Permutations(Vec::new(), Vec::new());
         printed.visit_block_mut(&mut block);
         assert_eq!(printed.0, vec![materialization.permutation.clone()]);
+        assert_eq!(printed.1, vec![materialization.active_bits.clone()]);
+        let mut full_width = analysis.clone();
+        let full_bits: syn::Expr = syn::parse_quote!(<u128 as ::gpu_datalog_runtime::Word>::BITS);
+        full_width.gpu_bindings.native.get_mut("r").unwrap()
+            .materialization.as_mut().unwrap().active_bits = full_bits.clone();
+        crate::bindings::check(&program, &full_width, &full_width.gpu_bindings).unwrap();
+        let full_rows = Rows::new(&program, &full_width).unwrap();
+        let build = &full_rows.build;
+        let mut block: syn::Block = syn::parse2(quote!({ #build })).unwrap();
+        let mut printed_full = Permutations(Vec::new(), Vec::new());
+        printed_full.visit_block_mut(&mut block);
+        assert_eq!(printed_full.0, printed.0);
+        assert_eq!(printed_full.1, vec![full_bits]);
+        let mut narrow = analysis.clone();
+        narrow.gpu_bindings.native.get_mut("r").unwrap()
+            .materialization.as_mut().unwrap().active_bits = syn::parse_quote!(32u32);
+        assert!(Rows::new(&program, &narrow).is_err());
         let mut invalid = analysis.clone();
         invalid
             .gpu_bindings

@@ -2168,15 +2168,23 @@ impl<K, V, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns> RadixLayout<K
 }
 
 impl<K: ScalarTuple, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
-    pub fn empty(pool: Arc<Pool>, packing: Packing, params: RadixRunParams) -> Result<Self> {
-        Self::publish(&DeviceRadixRun::new_set(pool, params, packing.bits())?, packing)
+    /// Construct an empty set with the caller's recorded sort window.
+    pub fn empty(pool: Arc<Pool>, packing: Packing, params: RadixRunParams, active_bits: u32) -> Result<Self> {
+        if active_bits < packing.bits() {
+            return Err("set active bits do not cover its packing".into());
+        }
+        Self::publish(&DeviceRadixRun::new_set(pool, params, active_bits)?, packing)
     }
 
     /// Adopt a sorted unique full-key batch without re-sorting or group readback.
     pub fn from_sorted(
         pool: Arc<Pool>, packing: Packing, params: RadixRunParams, batch: runs::SortedBatch<W>,
+        active_bits: u32,
     ) -> Result<Self> {
-        let mut state = DeviceRadixRun::new_set(pool, params, packing.bits())?;
+        if active_bits < packing.bits() {
+            return Err("set active bits do not cover its packing".into());
+        }
+        let mut state = DeviceRadixRun::new_set(pool, params, active_bits)?;
         state.replace_sorted(batch)?;
         Self::publish(&state, packing)
     }
@@ -2196,8 +2204,8 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
         }
     }
 
-    /// Replace a delta using retained kernels and field descriptors. An
-    /// unchanged immutable batch returns this publication with no uploads.
+    /// Replace a delta, retaining its recorded active window, kernels and field
+    /// descriptors. An unchanged immutable batch returns this publication with no uploads.
     pub fn with_sorted(&self, batch: runs::SortedBatch<W>, params: RadixRunParams) -> Result<Self> {
         params.validate()?;
         if !self.pool().shares_memory(batch.buffer().pool()) {
@@ -2218,7 +2226,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             params,
             runs: Vec::new(),
             full_key_set: true,
-            active_bits: self.packing().bits(),
+            active_bits: snapshot.active_bits,
             published: Mutex::new(None),
             kernels: ItemKernels {
                 pool: self.pool().clone(),
@@ -2285,7 +2293,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
     /// Bijective full-heading permutation: unique input still requires sorting.
     pub fn permuted_provider<P: ScalarTuple>(
         &self, pool: &Arc<Pool>, order: &[usize], params: RadixRunParams,
-        permutation_threads: u32,
+        permutation_threads: u32, active_bits: u32,
     ) -> Result<RadixLayout<P, (), W, O, ()>> {
         check_execution(self.pool(), pool)?;
         self.require_full_key_set()?;
@@ -2294,7 +2302,10 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
         if permutation_threads != 256 {
             return Err("permutation kernel requires exactly 256 threads per block".into());
         }
-        let mut state = DeviceRadixRun::<W, O, ()>::new_set(pool.clone(), params, packing.bits())?;
+        if active_bits < packing.bits() {
+            return Err("set active bits do not cover its packing".into());
+        }
+        let mut state = DeviceRadixRun::<W, O, ()>::new_set(pool.clone(), params, active_bits)?;
         for run in &self.snapshot().runs {
             let permuted = self.packing().permute_device_on(
                 pool, &run.keys, run.key_count, order, permutation_threads,
@@ -3242,7 +3253,6 @@ mod set_representation_tests {
             let pool = Pool::new(0, 0, 0)?;
             let params = RadixRunParams { radix_bits, ..PARAMS };
             let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), params, 32)?;
-            crate::set_work_counters_enabled(true);
             crate::reset_work_counters();
             for values in [(0..64).collect::<Vec<u64>>(), vec![100, 101]] {
                 let input = Buffer::from_host(pool.clone(), &values)?;
@@ -3269,6 +3279,7 @@ mod set_representation_tests {
             let batch = unsafe { state.fresh(&next, 32)? };
             unsafe { state.append_sorted(batch)?; }
             assert!(state.runs.iter().all(|run| run.offsets.is_none()));
+            #[cfg(feature = "radix-counters")]
             assert!(crate::work_counters().merges > 0);
             assert_eq!(crate::work_counters().offset_materializations, 0);
             assert_eq!(crate::work_counters().offset_bytes, 0);
@@ -3288,7 +3299,6 @@ mod set_representation_tests {
             let high = Buffer::from_host(pool.clone(), &[101_u64])?;
             let interval = retained.probe_intervals(&pool, &low, &high, 1)?.to_host()?;
             assert_eq!(interval[0], IntervalProbe { groups: 66, items: 66 });
-            crate::set_work_counters_enabled(false);
         }
         Ok(())
     }
@@ -3299,7 +3309,6 @@ mod set_representation_tests {
         let mut state = DeviceRadixRun::<u64, u32, ()>::new(pool.clone(), PARAMS)?;
         assert_eq!(state.active_bits(), 64);
         let input = Buffer::from_host(pool.clone(), &[1_u64 << 63, 7, 7, 9])?;
-        crate::set_work_counters_enabled(true);
         crate::reset_work_counters();
         state.publish(&input, &(), 4)?;
         let retained = state.snapshot()?;
@@ -3309,12 +3318,15 @@ mod set_representation_tests {
         let host = state.to_host()?;
         assert_eq!(host[0].keys, [7, 9, 1_u64 << 63]);
         assert_eq!(host[0].offsets, [0, 2, 3, 4]);
-        let work = crate::work_counters();
-        assert_eq!(work.occurrence.radix_bits, 64);
-        assert_eq!(work.occurrence.passes, 8);
-        assert_eq!(work.grouping_readbacks, 1);
-        assert_eq!(work.offset_materializations, 1);
-        assert_eq!(work.offset_bytes, 5 * size_of::<u32>() as u64);
+        #[cfg(feature = "radix-counters")]
+        {
+            let work = crate::work_counters();
+            assert_eq!(work.occurrence.radix_bits, 64);
+            assert_eq!(work.occurrence.passes, 8);
+            assert_eq!(work.grouping_readbacks, 1);
+            assert_eq!(work.offset_materializations, 1);
+            assert_eq!(work.offset_bytes, 5 * size_of::<u32>() as u64);
+        }
         let batch = unsafe { state.sort_unique(&input, 4)? };
         assert!(unsafe { state.append_sorted(batch.clone()) }.is_err());
         assert!(state.replace_sorted(batch).is_err());
@@ -3329,21 +3341,18 @@ mod set_representation_tests {
         let current = state.snapshot()?.probe_keys(&pool, &more, 4)?.to_host()?;
         assert_eq!(current[0].count, 4);
         assert_eq!(current[2].count, 3);
-        crate::set_work_counters_enabled(false);
         Ok(())
     }
 
     #[test]
-    fn work_counters_are_opt_in_and_reset_without_device_access() {
-        crate::set_work_counters_enabled(false);
+    fn work_counters_are_feature_controlled_and_reset_without_device_access() {
         crate::reset_work_counters();
         crate::stats::record_work(|work| work.merges += 1);
+        #[cfg(not(feature = "radix-counters"))]
         assert_eq!(crate::work_counters(), crate::WorkCounters::default());
-        crate::set_work_counters_enabled(true);
-        crate::stats::record_work(|work| work.merges += 1);
+        #[cfg(feature = "radix-counters")]
         assert_eq!(crate::work_counters().merges, 1);
         crate::reset_work_counters();
         assert_eq!(crate::work_counters(), crate::WorkCounters::default());
-        crate::set_work_counters_enabled(false);
     }
 }

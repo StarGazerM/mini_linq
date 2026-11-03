@@ -375,7 +375,7 @@ fn empty_view(provider: &Type, ratio: usize, radix_bits: u32, merge_tile_rows: u
         ::gpu_datalog_runtime::RadixRunParams {
             ratio: #ratio, radix_bits: #radix_bits,
             merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
-        })?)
+        }, __cq_gpu_active_bits)?)
 }
 
 fn active_bits(types: &[&Type]) -> Expr {

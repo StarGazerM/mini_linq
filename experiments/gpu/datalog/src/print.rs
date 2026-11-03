@@ -656,9 +656,13 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         ));
         if let Some(delta) = &relation.delta_host {
             let (ty, init) = (&relation.providers.delta.ty, &relation.providers.delta_init);
+            let active_bits = &device.layouts[relation.providers.canonical].active_bits;
             let runner = program_runner();
             initialize.push(quote!(
-                let mut #delta: #ty = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<#ty> { Ok(#init) })?;
+                let mut #delta: #ty = #runner(#[inline] || -> ::gpu_datalog_runtime::Result<#ty> {
+                    let __cq_gpu_active_bits = #active_bits;
+                    Ok(#init)
+                })?;
             ));
         }
     }
@@ -757,7 +761,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 let state: #state_ty = #state_init;
                 // SAFETY: candidate concatenation used this checked projected packing.
                 let run = unsafe { state.sort_unique(&buffer, buffer.len())? };
-                <#ty>::from_sorted(__cq_gpu_pool.clone(), packing, state.params(), run)?
+                <#ty>::from_sorted(__cq_gpu_pool.clone(), packing, state.params(), run, state.active_bits())?
             };));
         }
         // Each stratum and phase runs as its own non-inlined function. Relation
@@ -864,8 +868,6 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             ::gpu_datalog_runtime::phases::start();
             let __cq_gpu_trace_rounds = ::std::env::var_os("GPU_DATALOG_TRACE_ROUNDS").is_some();
             let __cq_gpu_trace_memory = ::std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some();
-            let __cq_gpu_trace_work = ::std::env::var_os("GPU_DATALOG_TRACE_WORK").is_some();
-            ::gpu_datalog_runtime::set_work_counters_enabled(__cq_gpu_trace_work);
             ::gpu_datalog_runtime::reset_work_counters();
             let mut __cq_gpu_memory_usage = if __cq_gpu_trace_memory {
                 ::std::vec![::gpu_datalog_runtime::MemoryUse::default(); #relation_count]
@@ -873,18 +875,13 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             #(#initialize)*
             #initialized
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "setup")?;
-            if __cq_gpu_trace_work {
-                ::gpu_datalog_runtime::trace_work("setup");
-                ::gpu_datalog_runtime::reset_work_counters();
-            }
+            ::gpu_datalog_runtime::trace_work("setup");
+            ::gpu_datalog_runtime::reset_work_counters();
             #(#strata)*
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "fixpoint")?;
-            if __cq_gpu_trace_work {
-                ::gpu_datalog_runtime::trace_work("fixpoint");
-            }
+            ::gpu_datalog_runtime::trace_work("fixpoint");
             let __cq_gpu_result = #result;
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "output")?;
-            ::gpu_datalog_runtime::set_work_counters_enabled(false);
             Ok(__cq_gpu_result)
         })().expect("GPU Datalog execution failed")
     }))

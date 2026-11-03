@@ -351,9 +351,12 @@ impl<'a> Context<'a> {
                 __cq_provider
             });
             if a.retained {
-                self.statements.push(syn::parse_quote! {
-                    let #fallback: &::cq_storage::dispatch::Lazy<#declared_type, _> = &::cq_storage::dispatch::Lazy::new(move || #build);
-                });
+                let bindings = self.borrow_binding(
+                    &fallback,
+                    Some(quote!(::cq_storage::dispatch::Lazy<#declared_type, _>)),
+                    quote!(::cq_storage::dispatch::Lazy::new(move || #build)),
+                );
+                self.statements.extend(bindings);
                 self.bound = true;
             } else {
                 self.statements.push(syn::parse_quote! {
@@ -405,11 +408,11 @@ impl<'a> Context<'a> {
                     Some(&selected),
                     quote!(#name),
                 );
-                self.statements.push(syn::parse_quote! {
-                    let #name = &<#ty as ::cq_storage::Build<_>>::build(
-                        ::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*),(#(#payload,)*)))
-                    );
-                });
+                let build = quote!(<#ty as ::cq_storage::Build<_>>::build(
+                    ::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*),(#(#payload,)*)))
+                ));
+                let bindings = self.borrow_binding(&name, None, build);
+                self.statements.extend(bindings);
                 self.statements.extend(guards);
                 self.statements
                     .push(syn::parse_quote!(::cq_storage::require::ordered(#name);));

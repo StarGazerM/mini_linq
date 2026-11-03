@@ -86,9 +86,9 @@ fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
     assert!(Arc::ptr_eq(layout.pool(), &pool));
     layout.validate(&[Column::I32, Column::U32])?;
     assert!(layout.validate(&[Column::U32, Column::I32]).is_err());
-    assert!(Layout::from_sorted(pool.clone(), Packing::new(&[32, 32])?, PARAMS, batch.clone()).is_err());
+    assert!(Layout::from_sorted(pool.clone(), Packing::new(&[32, 32])?, PARAMS, batch.clone(), 64).is_err());
     let other = Pool::new(0, 0, 0)?;
-    assert!(Layout::from_sorted(other, packing, PARAMS, batch).is_err());
+    assert!(Layout::from_sorted(other, packing, PARAMS, batch, 64).is_err());
     drop(state);
     let retained = layout.owner();
     let weak = Arc::downgrade(&retained);
@@ -378,7 +378,7 @@ fn wide_layout_erased_device_decode_and_lookup() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     // SAFETY: these uploads are sorted and unique and no writers are retained.
     let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
-    let layout = Layout::from_sorted(pool.clone(), packing, PARAMS, batch)?;
+    let layout = Layout::from_sorted(pool.clone(), packing, PARAMS, batch, 200)?;
     assert_eq!(layout.view().bits, 200);
     let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 4)?;
     let ranges = Buffer::<u64>::zeroed(pool.clone(), rows.len() * 2)?;
@@ -428,12 +428,12 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
     assert_eq!(layout.view().keys.run_count, 2);
     let before = layout.to_rows()?;
     assert_eq!(before, vec![vec![-3, 7], vec![9, 2], vec![10, 7]]);
-    let provider = layout.permuted_provider::<(u32, i32)>(&pool, &[1, 0], params, 256)?;
+    let provider = layout.permuted_provider::<(u32, i32)>(&pool, &[1, 0], params, 256, 64)?;
     assert!(layout
-        .permuted_provider::<(u32, i32)>(&pool, &[1, 0], params, 128)
+        .permuted_provider::<(u32, i32)>(&pool, &[1, 0], params, 128, 64)
         .is_err());
     assert!(layout
-        .permuted_provider::<(i32, u32)>(&pool, &[1, 0], params, 256)
+        .permuted_provider::<(i32, u32)>(&pool, &[1, 0], params, 256, 64)
         .is_err());
     // DECODE P: diagnostic retained layout unpack exposes the unchanged post-permutation answer.
     assert_eq!(
@@ -442,10 +442,10 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
         "permutation leaves source storage unchanged"
     );
     assert!(layout
-        .permuted_provider::<(u32, i32)>(&pool, &[0, 0], params, 256)
+        .permuted_provider::<(u32, i32)>(&pool, &[0, 0], params, 256, 64)
         .is_err());
     assert!(layout
-        .permuted_provider::<(u32, i32)>(&Pool::new(0, 0, 0)?, &[1, 0], params, 256)
+        .permuted_provider::<(u32, i32)>(&Pool::new(0, 0, 0)?, &[1, 0], params, 256, 64)
         .is_err());
     assert_eq!(provider.view().keys.run_count, 2);
     let output = Buffer::<i64>::zeroed(pool.clone(), 6)?;
@@ -476,40 +476,53 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
 }
 
 #[test]
-fn typed_set_layouts_retain_narrow_packing_in_wider_physical_words() -> Result<()> {
+fn typed_set_layouts_preserve_recorded_narrow_and_full_word_windows() -> Result<()> {
     type Layout = RadixLayout<(u32, u64), (), [u64; 3], u64, ()>;
     let pool = Pool::new(0, 0, 0)?;
     let packing = Layout::derive_packing()?;
     assert_eq!(packing.bits(), 96);
-    let empty = Layout::empty(pool.clone(), packing.clone(), PARAMS)?;
-    assert_eq!(empty.snapshot().active_bits(), 96);
     let rows = [[1, u64::MAX as i128], [2, 0], [u32::MAX as i128, 1]];
     let words = rows.iter().map(|row| packing.pack::<[u64; 3]>(row))
         .collect::<Result<Vec<_>>>()?;
     let batch = unsafe {
         SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())?
     };
-    let layout = Layout::from_sorted(pool.clone(), packing.clone(), PARAMS, batch.clone())?;
-    assert_eq!(layout.snapshot().active_bits(), 96);
-    let successor = empty.with_sorted(batch, PARAMS)?;
-    assert_eq!(successor.snapshot().active_bits(), 96);
-    assert_eq!(successor.to_host()?, words);
-    gpu_datalog_runtime::set_work_counters_enabled(true);
-    gpu_datalog_runtime::reset_work_counters();
-    let before = gpu_datalog_runtime::readback_count();
-    let permuted = layout.permuted_provider::<(u64, u32)>(&pool, &[1, 0], PARAMS, 256)?;
-    assert_eq!(gpu_datalog_runtime::readback_count(), before);
-    let work = gpu_datalog_runtime::work_counters();
-    assert_eq!(work.layout.sorts, 1);
-    assert_eq!(work.layout.radix_bits, 96);
-    assert_eq!(work.layout.passes, 12);
-    assert_eq!(work.offset_materializations, 0);
-    assert_eq!(permuted.snapshot().active_bits(), 96);
-    assert_eq!(permuted.to_rows()?, vec![
-        vec![0, 2], vec![1, u32::MAX as i128], vec![u64::MAX as i128, 1],
-    ]);
-    assert_eq!(layout.to_host()?, words);
-    assert_eq!(successor.to_rows()?, rows.map(Vec::from));
-    gpu_datalog_runtime::set_work_counters_enabled(false);
+    for active_bits in [96, 192] {
+        let empty = Layout::empty(pool.clone(), packing.clone(), PARAMS, active_bits)?;
+        assert_eq!(empty.snapshot().active_bits(), active_bits);
+        let layout = Layout::from_sorted(pool.clone(), packing.clone(), PARAMS, batch.clone(), active_bits)?;
+        assert_eq!(layout.snapshot().active_bits(), active_bits);
+        let successor = empty.with_sorted(batch.clone(), PARAMS)?;
+        assert_eq!(successor.snapshot().active_bits(), active_bits);
+        assert_eq!(successor.to_host()?, words);
+        let unchanged = successor.with_sorted(batch.clone(), PARAMS)?;
+        assert_eq!(unchanged.snapshot_id(), successor.snapshot_id());
+        assert_eq!(unchanged.snapshot().active_bits(), active_bits);
+        gpu_datalog_runtime::reset_work_counters();
+        let before = gpu_datalog_runtime::readback_count();
+        let permuted = layout.permuted_provider::<(u64, u32)>(&pool, &[1, 0], PARAMS, 256, active_bits)?;
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        #[cfg(feature = "radix-counters")]
+        {
+            let work = gpu_datalog_runtime::work_counters();
+            assert_eq!(work.layout.sorts, 1);
+            assert_eq!(work.layout.radix_bits, active_bits as u64);
+            assert_eq!(work.layout.passes, active_bits.div_ceil(8) as u64);
+            assert_eq!(work.offset_materializations, 0);
+        }
+        assert_eq!(permuted.snapshot().active_bits(), active_bits);
+        assert_eq!(permuted.to_rows()?, vec![
+            vec![0, 2], vec![1, u32::MAX as i128], vec![u64::MAX as i128, 1],
+        ]);
+        // A materialization's recorded choice is independent of its source.
+        let alternate_bits = if active_bits == 96 { 192 } else { 96 };
+        let alternate = layout.permuted_provider::<(u64, u32)>(&pool, &[1, 0], PARAMS, 256, alternate_bits)?;
+        assert_eq!(alternate.snapshot().active_bits(), alternate_bits);
+        assert_eq!(alternate.to_host()?, permuted.to_host()?);
+        assert_eq!(layout.to_host()?, words);
+        assert_eq!(successor.to_rows()?, rows.map(Vec::from));
+    }
+    assert!(Layout::empty(pool.clone(), packing.clone(), PARAMS, 95).is_err());
+    assert!(Layout::from_sorted(pool, packing, PARAMS, batch, 193).is_err());
     Ok(())
 }

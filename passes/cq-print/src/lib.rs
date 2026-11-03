@@ -118,6 +118,10 @@ pub struct Context<'a> {
     pub carried_witnesses: BTreeMap<String, Vec<String>>,
     pub reprs: BTreeMap<String, Repr>,
     pub statements: Vec<Stmt>,
+    /// Declarations of owners whose lazy choice arms initialize them.
+    deferred_owners: Vec<Stmt>,
+    deferred_depth: usize,
+    next_owner: usize,
     /// Whether a statement binds a value the iterator borrows.
     pub bound: bool,
     /// Shared handles cloned into the move closures that use them.
@@ -131,6 +135,64 @@ pub struct Context<'a> {
 }
 
 impl Context<'_> {
+    /// Keep owners outside every nested lazy choice, but initialize them only
+    /// in the selected arm. Binding sites supply ownership explicitly; no
+    /// generated Rust syntax or type is inspected.
+    pub fn begin_deferred_bindings(&mut self) {
+        self.deferred_depth += 1;
+    }
+
+    pub fn end_deferred_bindings(&mut self) {
+        self.deferred_depth -= 1;
+        if self.deferred_depth == 0 {
+            self.statements.append(&mut self.deferred_owners);
+        }
+    }
+
+    /// Fresh arm-local owner identity, including when alternatives realize the
+    /// same recorded provider. Ordinary scopes retain their existing names.
+    fn owner_ident(&mut self, name: Ident) -> Ident {
+        if self.deferred_depth == 0 {
+            return name;
+        }
+        let id = format_ident!("{}_owner_{}", name, self.next_owner, span = name.span());
+        self.next_owner += 1;
+        id
+    }
+
+    fn bind_owner(
+        &mut self,
+        id: &Ident,
+        ty: Option<TokenStream>,
+        value: TokenStream,
+    ) -> Stmt {
+        let annotation = ty.map(|ty| quote!(: #ty));
+        if self.deferred_depth == 0 {
+            syn::parse_quote!(let #id #annotation = #value;)
+        } else {
+            self.deferred_owners.push(syn::parse_quote!(let #id #annotation;));
+            syn::parse_quote!(#id = #value;)
+        }
+    }
+
+    fn borrow_binding(
+        &mut self,
+        id: &Ident,
+        ty: Option<TokenStream>,
+        value: TokenStream,
+    ) -> Vec<Stmt> {
+        if self.deferred_depth == 0 {
+            let annotation = ty.map(|ty| quote!(: &#ty));
+            vec![syn::parse_quote!(let #id #annotation = &#value;)]
+        } else {
+            let owner = self.owner_ident(id.clone());
+            vec![
+                self.bind_owner(&owner, ty, value),
+                syn::parse_quote!(let #id = &#owner;),
+            ]
+        }
+    }
+
     /// An owned copy of a capture's host value for an answer, group key or fold
     /// argument; the value was evaluated once (IF-Capture).
     pub fn capture_value(&self, name: &str) -> Option<TokenStream> {
@@ -455,6 +517,9 @@ impl<'a> Context<'a> {
             carried_witnesses: columns::carried_witnesses(module, analysis),
             reprs: BTreeMap::new(),
             statements,
+            deferred_owners: Vec::new(),
+            deferred_depth: 0,
+            next_owner: 0,
             bound,
             owned: Vec::new(),
             captured_values,
@@ -710,7 +775,7 @@ impl<'a> Context<'a> {
         });
         let source = if let Some(id) = &selection {
             let ty = &self.analysis.selections[name].provider.ty;
-            statements.push(syn::parse_quote!(let #id: &#ty = &#source;));
+            statements.extend(self.borrow_binding(id, Some(quote!(#ty)), source));
             self.selection_rows(name, id)
         } else {
             source
@@ -745,15 +810,15 @@ impl<'a> Context<'a> {
                     &retained,
                     quote!(::core::iter::Iterator::collect(#counted_source)),
                 );
-                statements.push(syn::parse_quote! { let #rows: &#ty = &#collect; });
+                statements.extend(self.borrow_binding(rows, Some(quote!(#ty)), collect));
                 if accounted {
-                    let allocation = format_ident!(
+                    let allocation = self.owner_ident(format_ident!(
                         "__cq_{}_rows_allocation",
                         name,
                         span = proc_macro2::Span::mixed_site()
-                    );
+                    ));
                     statements.push(
-                        syn::parse_quote!(let #allocation = ::cq_storage::retain_rows(#rows);),
+                        self.bind_owner(&allocation, None, quote!(::cq_storage::retain_rows(#rows))),
                     );
                 }
                 if self.infos[name].computed.is_empty() {
@@ -915,7 +980,7 @@ impl<'a> Context<'a> {
                 })
             };
             let build = self.profile_build(&build_name, build);
-            statements.push(syn::parse_quote! { let #structure = &#build; });
+            statements.extend(self.borrow_binding(&structure, None, build));
             statements.extend(self.provider_guards(
                 name,
                 levels,
@@ -977,7 +1042,7 @@ impl<'a> Context<'a> {
                 statements.push(
                     syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);),
                 );
-                let key_ty = &self.infos[name].types[&key];
+                let key_ty = self.infos[name].types[&key].clone();
                 // Formal rule IF-JoinFilterAbandon: the recorded abandon policy
                 // (Structures `abandon P of B`) is carried out, never derived.
                 let filter_value = match &filter.abandon {
@@ -992,22 +1057,28 @@ impl<'a> Context<'a> {
                     }
                     None => quote!(::core::option::Option::Some(#value)),
                 };
-                statements.push(syn::parse_quote! {
-                    let #id = #filter_value;
-                });
+                if self.deferred_depth == 0 {
+                    statements.push(syn::parse_quote!(let #id = #filter_value;));
+                } else {
+                    let filter_owner = self.owner_ident(format_ident!("{}_value", id));
+                    statements.push(self.bind_owner(&filter_owner, None, filter_value));
+                    statements.push(syn::parse_quote!(let #id = &#filter_owner;));
+                }
                 statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<#key_ty, _>(__cq_filter); }));
-                statements.push(
-                    syn::parse_quote!(let #id = &::cq_storage::JoinFilterPredicate(#id.as_ref());),
-                );
+                statements.extend(self.borrow_binding(
+                    &id,
+                    None,
+                    quote!(::cq_storage::JoinFilterPredicate(#id.as_ref())),
+                ));
             }
             if facts.accounting == structures::provider::Accounting::Keys {
-                let allocation = format_ident!(
+                let allocation = self.owner_ident(format_ident!(
                     "__cq_{}_keys_allocation",
                     structure,
                     span = proc_macro2::Span::mixed_site()
-                );
+                ));
                 statements.push(
-                    syn::parse_quote!(let #allocation = ::cq_storage::retain_keys(#structure);),
+                    self.bind_owner(&allocation, None, quote!(::cq_storage::retain_keys(#structure))),
                 );
             }
             // A type lacking a trait a read uses on it fails at a one-line
@@ -1078,7 +1149,7 @@ impl<'a> Context<'a> {
                     <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
                 }),
             );
-            statements.push(syn::parse_quote!(let #id = &#build;));
+            statements.extend(self.borrow_binding(&id, None, build));
             let types = key
                 .iter()
                 .map(|column| &self.infos[name].types[column])

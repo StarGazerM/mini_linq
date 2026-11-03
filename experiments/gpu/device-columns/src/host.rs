@@ -258,8 +258,8 @@ impl<'data, Row: RowCodec<'data>> DeviceColumns<'data, Row> {
             .iter()
             .map(|column| unsafe { column.view() })
             .collect();
-        let views = Arc::new(Buffer::from_host(pool.clone(), &host_views)?);
-        let metadata = Arc::new(Buffer::from_host(
+        let views = Arc::new(Buffer::from_host_async(pool.clone(), &host_views)?);
+        let metadata = Arc::new(Buffer::from_host_async(
             pool.clone(),
             &[OutputCount {
                 rows: 0,

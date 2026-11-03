@@ -3,6 +3,9 @@ name = "gpu-datalog-runtime"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+radix-counters = []
+
 [dependencies]
 cq-load = { path = "../../../runtime/cq-load" }
 cuda-core.workspace = true

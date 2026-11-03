@@ -92,23 +92,20 @@ impl ProgramLaunch {
     }
 }
 
-/// A program-owned slot keyed only by the CUDA module's opaque compiled entry
-/// name. Different callable specializations never share a preparation.
+/// One program-owned slot for one fixed compiled specialization and context.
+/// The owning generated module discards every slot when its context changes.
 #[derive(Debug, Default)]
-pub struct ProgramLaunchCache(Vec<(&'static str, ProgramLaunch)>);
+pub struct ProgramLaunchCache(Option<ProgramLaunch>);
 
 impl ProgramLaunchCache {
     pub fn get_or_prepare(
         &mut self,
-        entry: &'static str,
         prepare: impl FnOnce() -> Result<ProgramLaunch>,
     ) -> Result<&ProgramLaunch> {
-        if let Some(index) = self.0.iter().position(|(name, _)| *name == entry) {
-            return Ok(&self.0[index].1);
+        if self.0.is_none() {
+            self.0 = Some(prepare()?);
         }
-        let prepared = prepare()?;
-        self.0.push((entry, prepared));
-        Ok(&self.0.last().expect("inserted program launch").1)
+        Ok(self.0.as_ref().expect("initialized program launch"))
     }
 }
 
@@ -165,6 +162,20 @@ pub fn publish_timings(timings: Timings) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn failed_preparation_leaves_the_single_slot_empty() {
+        let mut cache = ProgramLaunchCache::default();
+        let mut attempts = 0;
+        for _ in 0..2 {
+            assert!(cache.get_or_prepare(|| {
+                attempts += 1;
+                Err("preparation failed".into())
+            }).is_err());
+            assert!(cache.0.is_none());
+        }
+        assert_eq!(attempts, 2);
+    }
+
     #[cuda_device::cuda_module]
     mod kernels {
         use cuda_device::{kernel, launch_bounds, launch_contract};
@@ -191,8 +202,7 @@ mod tests {
         function: F,
         blocks: u32,
     ) -> Result<Vec<u32>> {
-        let entry = kernels::map_ptx_name::<F>();
-        let prepared = cache.get_or_prepare(entry, || {
+        let prepared = cache.get_or_prepare(|| {
             *preparations += 1;
             ProgramLaunch::from_prepared(
                 &module.prepare_map_for(&function, cuda_core::LaunchConfig1D::new(4,32,0))?,
@@ -212,10 +222,11 @@ mod tests {
     }
 
     #[test]
-    fn program_launch_reuses_specializations_and_checks_the_grid_envelope() -> Result<()> {
+    fn program_launch_reuses_fixed_specialization_slots_and_checks_the_grid_envelope() -> Result<()> {
         let pool = Pool::new(0,0,0)?;
         let module = unsafe { kernels::load(pool.context())? };
         let mut cache = ProgramLaunchCache::default();
+        let mut second_cache = ProgramLaunchCache::default();
         let mut preparations = 0;
         let first = |x: u32| x + 7;
         let second = |x: u32| x * 3;
@@ -224,7 +235,7 @@ mod tests {
                 (0..257).map(first).collect::<Vec<_>>());
         }
         assert_eq!(preparations,1);
-        assert_eq!(execute(&pool,&module,&mut cache,&mut preparations,second,3)?,
+        assert_eq!(execute(&pool,&module,&mut second_cache,&mut preparations,second,3)?,
             (0..257).map(second).collect::<Vec<_>>());
         assert_eq!(preparations,2);
         assert_eq!(execute(&pool,&module,&mut cache,&mut preparations,first,1)?,
@@ -233,6 +244,11 @@ mod tests {
         assert!(execute(&pool,&module,&mut cache,&mut preparations,first,0).is_err());
         assert!(execute(&pool,&module,&mut cache,&mut preparations,first,5).is_err());
         assert_eq!(preparations,2);
+        assert_eq!(execute(&pool,&module,&mut second_cache,&mut preparations,second,1)?,
+            (0..257).map(second).collect::<Vec<_>>());
+        assert_eq!(preparations,2);
+        assert_eq!(std::mem::size_of::<ProgramLaunchCache>(),
+            std::mem::size_of::<Option<ProgramLaunch>>());
         Ok(())
     }
 }

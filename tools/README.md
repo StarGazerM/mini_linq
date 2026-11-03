@@ -53,6 +53,10 @@ on Cassandra, which compares all 26 complete output tuple sets against `doop-min
 It holds `/tmp/mini_linq-gpu.lock` for the whole run. H05 timing and exactness
 evidence is written to `target/gpu-gate-h05-sf10.json`; a ceiling failure fails
 the batch even when every answer is exact.
+The H05 step selects the executable with `oxide run --bin cq-gpu-tpch`;
+arguments after `--` belong to the executable (output JSON, query, scale, mode),
+not to Cargo. In particular, Cargo's `--release -p` flags cannot follow that
+separator.
 
 Builds, tests and timings share one machine through two lock files:
 

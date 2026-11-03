@@ -788,6 +788,51 @@ fn a_nested_domain_block_in_an_unseeded_hoisted_arm_follows_its_generator() {
 }
 
 #[test]
+fn a_nested_domain_block_waits_for_both_unseeded_columns() {
+    // Fine splitting must not emit the nested domain block after only one
+    // of its two prefix suppliers has provided a column.
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(x: i32, y: i32); relation S(x: i32);
+        relation V(y: i32); relation T(x: i32, y: i32);
+        relation U(x: i32, y: i32); relation answer(x: i32, y: i32);
+        answer(x,y) :- R(x,y), { S(x), V(y), { where x == 1, where y == 2 } | { T(x,y) } } | { U(x,y) };
+    };
+    let normal = cq::normal::normalize(&source).unwrap();
+    let written = cq_order::compile_written(&normal).unwrap();
+    let reference = cq_relational_lowering::compile(&written).unwrap();
+    for heuristic in [
+        cq_order::Heuristic::Filtered,
+        cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+        cq_order::Heuristic::Elimination,
+        cq_order::Heuristic::Written,
+    ] {
+        for split in [cq_order::Split::Coarse, cq_order::Split::Fine] {
+            let order = cq_order::Options { heuristic, split };
+            let ordered = cq_order::compile(&normal, &order)
+                .unwrap_or_else(|error| panic!("{heuristic:?}/{split:?}: {error}"));
+            cq_order::check(&normal, &ordered, &order).unwrap();
+            for semijoins in [cq_reduce::Reductions::None, cq_reduce::Reductions::Masks] {
+                let options = cq_reduce::Options { semijoins };
+                let reduced = cq_reduce::compile(&ordered, &options).unwrap();
+                cq_reduce::check(&ordered, &reduced, &options).unwrap();
+                let target = cq_relational_lowering::compile(&reduced).unwrap_or_else(|error| {
+                    panic!("{heuristic:?}/{split:?}/{semijoins:?}: {error}")
+                });
+                cq_relational_lowering::check(&reduced, &target).unwrap();
+                for seed in 0..16 {
+                    let database = cq_testkit::databases::binary_database(&source, seed);
+                    assert_eq!(
+                        oracle::evaluate_ra(&target, &database).output,
+                        oracle::evaluate_ra(&reference, &database).output,
+                        "{heuristic:?}/{split:?}/{semijoins:?}/{seed}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_predicate_after_a_domain_needing_block_restricts_earlier_atoms() {
     use cq_lang_vo::Step;
     // `where x < 5` is written after a hoisted block whose arm `where x == 1`

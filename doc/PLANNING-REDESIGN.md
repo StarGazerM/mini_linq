@@ -721,9 +721,10 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   including legal nonpreferred full-width/redundant-sort choices.
   Provider identity, ratio and directory settings are unchanged: no slower
   alternative provider or nonzero directory is promoted by these sort changes.
-  `GPU_DATALOG_TRACE_WORK` separates canonical/layout/occurrence planned radix
-  passes and modeled bytes, merges, group readbacks and metadata materialization;
-  these counters and Nsight captures run separately from paired timing.
+  The `gpu-datalog-runtime/radix-counters` Cargo feature separates
+  canonical/layout/occurrence planned radix passes and modeled bytes, merges,
+  group readbacks and metadata materialization; disabled builds use no-op stubs.
+  These counters and Nsight captures run separately from paired timing.
   **Measured retention, 2026-11-02, versus `1b1540bc`:** five interleaved
   exact-answer pairs per dataset give current/baseline fixpoint ratios
   xalan **0.96599 [0.95611,0.98067]**, batik
@@ -932,11 +933,13 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   `historical-batik.json`, `main-all-*-attribution.json`, `program-launch.json`).
   **Retained 2026-11-02: GPU-ProgramLaunch**, rebased against main `20101707`
   after the DOOP codec repair. `Realization.launches` owns preparation:
-  one-block or occupancy-derived program envelope, keyed by the CUDA module's
-  opaque compiled entry identity (including callable specialization).
-  The generated wrapper retains the exact scalar ABI; context and grid-envelope
-  checks replace repeated driver validation. Module/entry slots are owned by
-  the query scope and worker context. Grid caps, sharing and all count/failure
+  one-block or occupancy-derived program envelope. The subsequent DriftWatch6
+  cutover gives each fixed kernel specialization one optional slot, resolves
+  symbols only on cache misses, and prints definitions/calls from a checked
+  final ABI recording live scalar positions, witnesses and preparation entry.
+  Context and grid-envelope checks replace repeated driver validation.
+  Module/entry slots belong to the query scope and worker context. This cutover
+  adds no new measurement evidence. Grid caps, sharing and all count/failure
   readbacks are unchanged. Five interleaved pairs, both locks, phase-only
   fixpoint, no counters/profiler, exact counts in every sample:
 

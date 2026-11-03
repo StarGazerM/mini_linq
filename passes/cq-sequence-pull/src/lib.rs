@@ -1216,7 +1216,13 @@ impl<'a> Emitter<'a> {
                 let __cq_build_clock = #profile.start_scope(#build);
                 #(#statements)*
                 ::core::mem::drop(__cq_build_clock);
-                #profile.scope(#query, || #rows)
+                // Deferred choice owners are initialized while evaluating the
+                // answer. Keep that evaluation in their declaring scope rather
+                // than capturing uninitialized bindings in a timing closure.
+                let __cq_query_clock = #profile.start_scope(#query);
+                let __cq_answer = #rows;
+                ::core::mem::drop(__cq_query_clock);
+                __cq_answer
             }))?
         } else {
             syn::parse2(quote!({ #registration #(#statements)* #rows }))?
@@ -1449,6 +1455,7 @@ fn translate_with_profile(
                     emitter.execution[&(node as *const Term)].staging,
                     Some(cq_lang_sequence::task_execution::Staging::Choice { .. })
                 ));
+                emitter.context_mut().begin_deferred_bindings();
                 let mut values = Vec::with_capacity(arms.len());
                 for (guard, arm) in arms {
                     let condition = emitter.runtime_guard(guard)?;
@@ -1457,6 +1464,7 @@ fn translate_with_profile(
                     let statements = emitter.context_mut().statements.split_off(start);
                     values.push((guard, condition, value, statements));
                 }
+                emitter.context_mut().end_deferred_bindings();
                 let depth = values
                     .iter()
                     .map(|(_, _, value, _)| value.depth)

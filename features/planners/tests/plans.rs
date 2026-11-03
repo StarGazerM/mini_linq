@@ -514,16 +514,17 @@ fn le_retail_and_block_schedule_fixtures() {
                 .unwrap();
         let valuation = compile_valuation(&source, Planner::Le).unwrap();
         let algebra = compile(&source, Planner::Le).unwrap();
-        assert_eq!(
-            format!("{}\n", valuation.to_token_stream()),
-            std::fs::read_to_string(root.join(format!("{stem}.vo"))).unwrap(),
-            "{stem}"
-        );
-        assert_eq!(
-            format!("{}\n", algebra.to_token_stream()),
-            std::fs::read_to_string(root.join(format!("{stem}.ra"))).unwrap(),
-            "{stem}"
-        );
+        let mut expected_valuation: vo::Program =
+            syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.vo"))).unwrap())
+                .unwrap();
+        // Authored fixtures may omit declaration-local identities. Compare the
+        // recorded plans after the same source normalization, not token spelling.
+        expected_valuation.cq = cq::normal::normalize(&expected_valuation.cq).unwrap();
+        let expected_algebra: ra::Program =
+            syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.ra"))).unwrap())
+                .unwrap();
+        assert_eq!(valuation, expected_valuation, "{stem}");
+        assert_eq!(algebra, expected_algebra, "{stem}");
         check_valuation(&source, &valuation, Planner::Le).unwrap();
         check(&source, &algebra).unwrap();
     }

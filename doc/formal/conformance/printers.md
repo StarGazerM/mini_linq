@@ -24,7 +24,7 @@ codec/domain obligations.
 |---|---|---|---|---|---|---|
 | GPU-Launch | `doc/formal/backend_ir.tex` GPU-Launch | `languages/cq-lang-sequence/src/gpu.rs` `derive`; `languages/cq-lang-sequence/src/resources.rs` `dispatch_shape`; `experiments/gpu/sequence/core/src/emit.rs` | Checked dispatch and GPU machine policy. | Records execution before BE-Resource; accounting and emission consume the same publication kind. The checker validates partition, share and metadata records by legality predicates, never by rerunning their selection. Host references stop at completed stores rather than following already-published ancestry. | **exact** (was no-rule; duplicate resource derivation removed after H05 integration) | Launch decisions are checked once |
 | GPU-LAUNCH-OCCUPANCY | `doc/formal/backend_ir.tex` GPU-LAUNCH-OCCUPANCY | `experiments/gpu/printer-runtime/src/lib.rs` `launch_grid_for_kernel`; `experiments/gpu/datalog-runtime/src/runs.rs`; `experiments/gpu/datalog-runtime/src/pack.rs` | Domain tile count and prepared kernel. | Queries actual device SM count and kernel resident blocks; caps launch by tiles. | **exact** (was no-rule) | No literal device grid |
-| GPU-ProgramLaunch | `doc/formal/backend_ir.tex` GPU-ProgramLaunch | `experiments/gpu/sequence/core/src/realize.rs` `select`, `check`; `experiments/gpu/sequence/core/src/emit.rs` `program_launch_helpers`; `experiments/gpu/printer-runtime/src/lib.rs` `ProgramLaunch` | One preparation per dispatch; one-block preparation has one root part; concrete entry, context and ordinary 1-D envelope agree. | The checker validates coverage and one-part legality independently. Program slots use the CUDA module's opaque specialization name; typed preparation validates the envelope once. Wrappers preserve the generated kernel's exact scalar ABI. Context replacement and query-scope release discard slots. Runtime rejects foreign contexts or grids outside the envelope, without attribute/occupancy queries. Grid caps and readbacks are unchanged. | **exact** | No Rust-type inspection, launch-policy selection or hidden synchronization |
+| GPU-ProgramLaunch | `doc/formal/backend_ir.tex` GPU-ProgramLaunch | `experiments/gpu/sequence/core/src/realize.rs` `select`, `check`; `experiments/gpu/sequence/core/src/emit.rs` `KernelAbi::check`, `CheckedKernel`; `experiments/gpu/printer-runtime/src/lib.rs` `ProgramLaunch` | One preparation per dispatch; one-block preparation has one root part; concrete entry, context and ordinary 1-D envelope agree. | The checker validates coverage and one-part legality independently. Each kernel has one optional preparation for its fixed specialization. Symbols resolve only on a miss; hits neither allocate nor compare names. The checked final ABI records live scalar positions, parameter-to-witness dependencies and the preparation entry; definitions and calls print it directly without kernel reparsing or method rewrites. Context replacement and query-scope release discard slots. Runtime rejects foreign contexts or grids outside the envelope without attribute/occupancy queries. Grid caps and readbacks are unchanged. | **exact** implementation; gates not rerun | No Rust-type inspection, launch-policy selection or hidden synchronization |
 | GPU-OffsetScan | `doc/formal/backend_ir.tex` GPU-OffsetScan | `experiments/gpu/sequence-runtime/src/offsets.rs` `scan` | Initialized range lengths plus zero sentinel. | CUB device-wide exclusive scan, parallel wrap checks, recorded total/failure readback before consumption. | **exact** (was no-rule) | Deferred ranges do not force one block |
 | GPU-FoldCompletion | `doc/formal/backend_ir.tex` GPU-FoldCompletion | `experiments/gpu/sequence/core/src/emit.rs` `partition_rows` | Recorded whole fold and monoid laws. | Block partials followed by a one-part combine kernel; empty input publishes identity. | **exact** (was no-rule) | Only combined results are published |
 | ST-Total (`rules.tsv:174`) | `doc/formal/backend.tex:95-102` | `languages/cq-lang-structures/src/stage.rs:4-35,145-196` | \(S=(o_1,\ldots,o_m)\); every \(o_i\in\mathcal T_{\rm stage}\); admissibleKeys(S); totalInputs(S). The written \(\mathcal T_{\rm stage}\) excludes Probe/Merge. | `total()` includes Probe/Merge; traversal subsequently permits recorded expansion, certified full-key membership probes, and Smallest forcing reads. The latter two are extra cases beyond the written stage-step set. This is an explicit implementation extension, not evidence that those cases are unsafe. | **weaker** than the literal operator-set premise | Every lookahead step is justified as total |
@@ -169,17 +169,18 @@ view. Device read/build records are unchanged.
 runtime; validation checks the sentinel instead of inventing allocation size.
 Sparse codes still use the recorded dense policy, with explicit resource demand.
 
-GPU-NativeAbi consumes the declared token's `abi range|runs|columns`,
-`contiguous_range` and `bounds resident_columns`. Native run/column Host scans
+GPU-NativeAbi consumes the declared token's `abi range|radix_relation|columns|radix`,
+`contiguous_range` and `bounds resident_columns`. Native radix-relation/column Host scans
 carry `input { keys n; columns [Logical => Storage codec [0] Codec, ...] }`;
 source ids may be omitted for declaration-local interning. `codec_id: None`
 explicitly denotes identity representation. Catalog templates may
 omit the instance schema. Structures checks key count, required Host schemas and
 ABI/contiguous/bounds consistency; the binder copies input facts to Built
 instances. Every Rust spelling is opaque, including `Symbol` and provider
-constructors. Placement treats a scanned Host provider as native, so a rebuilt
-index over it is device row work, exactly when its token declares an `abi`;
-catalog read levels do not confer nativeness. This is an implementation claim,
+constructors. Placement treats a scanned Host provider as native row work exactly
+when its token declares an `abi` other than `columns`. Columns scans retain a host
+publication boundary for descriptor-based index builds unless other row work
+requires a descendant grade; catalog read levels do not confer nativeness. This is an implementation claim,
 not fresh gate evidence.
 
 The GPU `decompose` argument grammar is
@@ -199,6 +200,11 @@ uses prepared integer IDs and needs no symbol codec authorization.
 Closed symbolic answer binders take their logical identity from the authored
 answer slot even though hoisting removes them from row layouts. Carrier and
 arena metadata therefore retain the declared codec's u32 representation.
+Row carriers resolve each recorded `LogicalTypeId` to its declaration's opaque
+Rust payload, or retain the row's authored payload when no identity is recorded.
+Neither producer nor checker recognizes `_` or any other Rust type syntax to
+choose a carrier. Capture annotations come from the syntax layer's authored
+whole-variable binding annotation, not a test of the generated type payload.
 
 ### Resolved: task ownership, carrier publications and pull choice
 

@@ -34,8 +34,8 @@ step crates nice -n 10 cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin
 	-p gpu-datalog-runtime -p cq-gpu-datalog-core -p cq-gpu-datalog \
 	-p cq-gpu-sequence-core -p cq-gpu-sequence -p cq-gpu-tpch
 # Exactness-only crate tests do not enforce the benchmark's recorded ceiling.
-step tpch-h05-sf10-ceiling nice -n 10 cargo +1.99.1 oxide run --arch sm_89 --materialize-cubin -- \
-	--release -p cq-gpu-tpch -- "$root/target/gpu-gate-h05-sf10.json" \
+step tpch-h05-sf10-ceiling nice -n 10 cargo +1.99.1 oxide run --arch sm_89 --materialize-cubin \
+	--bin cq-gpu-tpch -- "$root/target/gpu-gate-h05-sf10.json" \
 	--query h05 --scale sf10 --mode advised
 step doop-build nice -n 10 cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release \
 	--bin doop-gpu --bin srd-doop-gpu

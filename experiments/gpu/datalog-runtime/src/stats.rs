@@ -37,8 +37,8 @@ pub struct SortWork {
     pub bytes: u64,
 }
 
-/// Opt-in per-host-thread submission accounting. Reading/resetting these
-/// counters never reads device memory, synchronizes a stream, or emits output.
+/// Feature-gated per-host-thread submission accounting (`radix-counters`).
+/// Reading/resetting never reads device memory, synchronizes, or emits output.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WorkCounters {
     /// Unknown-unique full-heading sorts (with compaction unless zero-bit).
@@ -59,8 +59,8 @@ pub struct WorkCounters {
     pub offset_bytes: u64,
 }
 
+#[cfg(feature = "radix-counters")]
 thread_local! {
-    static WORK_ENABLED: Cell<bool> = const { Cell::new(false) };
     static WORK: Cell<WorkCounters> = const { Cell::new(WorkCounters {
         canonical: SortWork { sorts: 0, passes: 0, radix_bits: 0, bytes: 0 },
         layout: SortWork { sorts: 0, passes: 0, radix_bits: 0, bytes: 0 },
@@ -71,27 +71,38 @@ thread_local! {
     }) };
 }
 
-pub fn set_work_counters_enabled(enabled: bool) {
-    WORK_ENABLED.with(|value| value.set(enabled));
-}
-
+#[cfg(feature = "radix-counters")]
 pub fn work_counters() -> WorkCounters {
     WORK.with(Cell::get)
 }
 
+#[cfg(feature = "radix-counters")]
 pub fn reset_work_counters() {
     WORK.with(|value| value.set(WorkCounters::default()));
 }
 
+#[cfg(feature = "radix-counters")]
 pub(crate) fn record_work(record: impl FnOnce(&mut WorkCounters)) {
-    if WORK_ENABLED.with(Cell::get) {
-        WORK.with(|value| {
-            let mut counters = value.get();
-            record(&mut counters);
-            value.set(counters);
-        });
-    }
+    WORK.with(|value| {
+        let mut counters = value.get();
+        record(&mut counters);
+        value.set(counters);
+    });
 }
+
+#[cfg(not(feature = "radix-counters"))]
+#[inline(always)]
+pub fn work_counters() -> WorkCounters {
+    WorkCounters::default()
+}
+
+#[cfg(not(feature = "radix-counters"))]
+#[inline(always)]
+pub fn reset_work_counters() {}
+
+#[cfg(not(feature = "radix-counters"))]
+#[inline(always)]
+pub(crate) fn record_work(_: impl FnOnce(&mut WorkCounters)) {}
 
 pub(crate) enum SortKind {
     Canonical,
@@ -99,6 +110,7 @@ pub(crate) enum SortKind {
     Occurrence,
 }
 
+#[cfg(feature = "radix-counters")]
 pub(crate) fn record_sort(kind: SortKind, rows: usize, bits: u32, indexed: bool) {
     if rows == 0 {
         return;
@@ -116,6 +128,10 @@ pub(crate) fn record_sort(kind: SortKind, rows: usize, bits: u32, indexed: bool)
         work.bytes += rows as u64 * passes * 2 * if indexed { 12 } else { 8 };
     });
 }
+
+#[cfg(not(feature = "radix-counters"))]
+#[inline(always)]
+pub(crate) fn record_sort(_: SortKind, _: usize, _: u32, _: bool) {}
 
 /// Per-relation ownership footprints; shared layout owners are not additive.
 #[derive(Clone, Copy, Default)]
@@ -152,6 +168,7 @@ pub fn trace_memory(pool: &crate::Pool, stage: &str, relations: &[MemoryUse]) {
 /// Explicit opt-in evidence output. Counters are host submission plans:
 /// `passes` are eight-bit digit equivalents, not nsys kernel launches, and
 /// `bytes` are modeled radix traffic, not measured DRAM bytes.
+#[cfg(feature = "radix-counters")]
 pub fn trace_work(stage: &str) {
     let work = work_counters();
     for (kind, sort) in [
@@ -166,3 +183,7 @@ pub fn trace_work(stage: &str) {
         work.merges, work.grouping_readbacks, work.descriptor_materializations,
         work.descriptor_bytes, work.offset_materializations, work.offset_bytes);
 }
+
+#[cfg(not(feature = "radix-counters"))]
+#[inline(always)]
+pub fn trace_work(_: &str) {}

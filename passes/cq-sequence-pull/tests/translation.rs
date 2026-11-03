@@ -363,6 +363,94 @@ fn worker_choices_stream_flat_and_nested_alternatives() {
 }
 
 #[test]
+fn runtime_choices_keep_recorded_selection_owners_alive() {
+    let physical = syn::parse_quote! { physical {
+        relation R(a:i64);
+        r = pipe rename R@0 {a -> a};
+        s = let range select r if (a > 1);
+        out = let canon project s keep {a};
+        return out as answer(a);
+    }};
+    let mut structures =
+        cq_structure_selection::compile_with(&physical, quote!(positional(R))).unwrap();
+    // Use an authored scalar marker so the standalone rustc fixture needs
+    // only cq-storage, not cq-load's column marker implementation.
+    for entry in &mut structures.structures.entries {
+        if let cq_lang_structures::Structure::Read { marker, .. } = &mut entry.structure {
+            *marker = syn::parse_quote!(First);
+        }
+    }
+    let mut checks = Vec::new();
+    for bound in [1usize, 2] {
+        for rows in [
+            quote!(choose [
+                workers < #bound => map s rows r,
+                else => map s rows r
+            ]),
+            quote!(flatten choose [
+                workers < #bound => tile 1 map s rows r,
+                else => choose [
+                    workers < #bound => tile 2 map s rows r,
+                    else => tile 3 map s rows r
+                ]
+            ]),
+        ] {
+            let program: Program = syn::parse_quote! {
+                #structures
+                sequence { answer = store canon map out #rows; }
+            };
+            let analysis = contract::check(&program).unwrap();
+            assert!(analysis.structures.selections.contains_key("s"));
+            for output in [
+                cq_sequence_pull::translate(&program, &analysis).unwrap(),
+                cq_sequence_pull::translate_profile(&program, &analysis).unwrap(),
+                cq_sequence_pull::translate_with(
+                    &program,
+                    &analysis,
+                    syn::parse_quote!(1usize),
+                    cq_sequence_pull::CanonTarget::Sequential,
+                    |_, _, _, _, _, _| Ok(()),
+                ).unwrap(),
+                cq_sequence_pull::translate_profile_with(
+                    &program,
+                    &analysis,
+                    syn::parse_quote!(1usize),
+                    cq_sequence_pull::CanonTarget::Sequential,
+                    |_, _, _, _, _, _| Ok(()),
+                ).unwrap(),
+            ] {
+                let printed = output.to_token_stream().to_string();
+                assert!(printed.contains("let __cq_s_selection_owner_"), "{printed}");
+                assert!(printed.contains("cq_storage :: sequence :: Choice :: Left"), "{printed}");
+                checks.push(quote!({
+                    let R = vec![(3i64,), (1,), (2,), (3,)];
+                    assert_eq!(
+                        (#output).into_iter().collect::<Vec<_>>(),
+                        vec![(&2i64,), (&3i64,)]
+                    );
+                }));
+            }
+        }
+    }
+    let source = quote! {
+        #[derive(Clone, Copy, Default)]
+        struct First;
+        impl<'a> ::cq_storage::Column<&'a Vec<(i64,)>> for First {
+            type Key = i64;
+            fn key(self, host: &'a Vec<(i64,)>, id: ::cq_storage::RowId) -> i64 {
+                host[id.offset()].0
+            }
+        }
+        impl<'a> ::cq_storage::ColumnSlot<&'a Vec<(i64,)>, 0> for First {}
+        fn main() { #(#checks)* }
+    };
+    let storage = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-storage/src/lib.rs");
+    // This fixture also executes the explicitly profiled translations.
+    cq_testkit::rustc::Runtime::new(&storage, true).run(&source.to_string());
+}
+
+#[test]
 fn translation_requires_host_grades_but_does_not_recheck_the_program() {
     let program = simple(quote!(out = store canon rows r;));
     let mut analysis = contract::check(&program).unwrap();

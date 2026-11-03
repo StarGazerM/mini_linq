@@ -22,26 +22,31 @@ fn capture_types(program: &Program) -> Vec<(String, syn::Type)> {
         .captures
         .items
         .iter()
-        .flat_map(cq_lang_structures::syntax::Capture::binding_types)
-        .filter(|(_, ty)| !matches!(ty, syn::Type::Infer(_)))
-        .map(|(binder, ty)| (symbol_name(&binder), ty))
+        .filter_map(|capture| match capture {
+            cq_lang_structures::syntax::Capture::Let(binding) => binding
+                .annotated_binding()
+                .map(|(binder, ty)| (symbol_name(binder), ty.clone())),
+            cq_lang_structures::syntax::Capture::Domain(capture) => {
+                Some((symbol_name(&capture.name), capture.ty.clone()))
+            }
+            cq_lang_structures::syntax::Capture::Guard(_) => None,
+        })
         .collect()
 }
 
-/// A variable-only head supplies Rust's expected type for an inferred binder.
-/// Keep this context with the carrier facts: standalone scalar metadata has no
-/// expression from which Rust could recover an `if let` binder's type.
-fn head_types(program: &Program) -> Vec<(String, &syn::Type)> {
-    let physical = &program.structures.physical.program;
-    physical
+/// Resolve recorded logical identities to their declaration payloads. Rust types
+/// remain opaque: inference syntax does not participate in carrier selection.
+fn logical_types(
+    program: &Program,
+) -> BTreeMap<cq_lang_structures::syntax::LogicalTypeId, &syn::Type> {
+    program
+        .structures
+        .physical
+        .program
         .declarations
         .iter()
-        .filter(|declaration| declaration.name == physical.head.relation)
-        .flat_map(|declaration| physical.head.args.iter().zip(&declaration.columns))
-        .filter_map(|(argument, column)| {
-            cq_lang_structures::syntax::rust::variable(argument)
-                .map(|name| (symbol_name(name), &column.ty))
-        })
+        .flat_map(|declaration| &declaration.columns)
+        .filter_map(|column| column.logical_type_id.map(|id| (id, &column.ty)))
         .collect()
 }
 
@@ -64,15 +69,14 @@ pub(crate) fn carriers(
     let codecs =
         crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
     let mut carriers = BTreeMap::new();
-    let head = head_types(program);
+    let logicals = logical_types(program);
     for row in analysis.structures.physical.rows.values() {
         for (column, ty) in &row.types {
-            let ty = if matches!(ty, syn::Type::Infer(_)) {
-                head.iter()
-                    .find(|(name, _)| name == column)
-                    .map_or(ty, |(_, ty)| *ty)
-            } else {
-                ty
+            let ty = match row.logical_type_ids.get(column) {
+                Some(id) => logicals.get(id).copied().ok_or_else(|| {
+                    error("GPU-Representation: logical identity lacks a declaration")
+                })?,
+                None => ty,
             };
             carriers.insert(column.clone(), device_carrier(&codecs, column, ty));
         }
@@ -90,30 +94,21 @@ fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) ->
     let codecs =
         crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
     let mut typed: BTreeMap<&String, Vec<&syn::Type>> = BTreeMap::new();
+    let logicals = logical_types(program);
     for row in analysis.structures.physical.rows.values() {
         for (column, ty) in &row.types {
+            let ty = match row.logical_type_ids.get(column) {
+                Some(id) => logicals.get(id).copied().ok_or_else(|| {
+                    error("GPU-Representation: logical identity lacks a declaration")
+                })?,
+                None => ty,
+            };
             typed.entry(column).or_default().push(ty);
         }
     }
     let captures = capture_types(program);
     for (column, ty) in &captures {
         typed.entry(column).or_default().push(ty);
-    }
-    // The checker consumes the authored head constraints independently of the
-    // producer. Every available expected type must justify the inferred field.
-    let head = head_types(program);
-    for (column, logicals) in &mut typed {
-        if logicals.iter().any(|ty| matches!(ty, syn::Type::Infer(_))) {
-            let expected: Vec<_> = head
-                .iter()
-                .filter(|(name, _)| name == *column)
-                .map(|(_, ty)| *ty)
-                .collect();
-            if !expected.is_empty() {
-                logicals.retain(|ty| !matches!(ty, syn::Type::Infer(_)));
-                logicals.extend(expected);
-            }
-        }
     }
     if records.carriers.len() != typed.len() {
         return Err(error("GPU-Representation: incomplete carrier records"));
@@ -407,6 +402,15 @@ mod tests {
             wrong.carriers.insert("b".into(), ty);
             assert!(check_carriers(&program, &analysis, &wrong).is_err());
         }
+        // A different opaque row payload must not override its recorded identity.
+        let mut opaque = analysis.clone();
+        for row in opaque.structures.physical.rows.values_mut() {
+            if let Some(ty) = row.types.get_mut("b") {
+                *ty = syn::parse_quote!(OpaqueCarrier);
+            }
+        }
+        assert_eq!(carriers(&program, &opaque).unwrap()["b"], syn::parse_quote!(i32));
+        check_carriers(&program, &opaque, records).unwrap();
     }
 
     #[test]

@@ -822,7 +822,7 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
         let retained_bytes = batch.allocated_bytes();
         let before = gpu_datalog_runtime::readback_count();
         let delta = RadixLayout::<(u64,), (), u64, u64, ()>::from_sorted(
-            pool.clone(), packing.clone(), params, batch.clone(),
+            pool.clone(), packing.clone(), params, batch.clone(), state.active_bits(),
         )?;
         assert_eq!(gpu_datalog_runtime::readback_count(), before);
         let directory_bytes = if radix_bits == 0 { 0 } else { ((1usize << radix_bits) + 1) * 8 };
@@ -878,7 +878,7 @@ fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -
     )?;
     let occurrences = Layout::publish(&state, packing.clone())?;
     assert!(occurrences.validate(&[Column::U64]).is_err());
-    assert!(occurrences.permuted_provider::<(u64,)>(&pool, &[0], PARAMS, 256).is_err());
+    assert!(occurrences.permuted_provider::<(u64,)>(&pool, &[0], PARAMS, 256, 64).is_err());
     let batch = unsafe { state.sort_unique(&input, 3) }?;
     assert!(unsafe { state.append_sorted(batch.clone()) }.is_err());
     assert!(state.replace_sorted(batch.clone()).is_err());
@@ -909,7 +909,7 @@ fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -
 
 fn active_window<W: Word>(bits: u32) -> Result {
     use gpu_datalog_runtime::{
-        readback_count, reset_work_counters, set_work_counters_enabled, work_counters,
+        readback_count, reset_work_counters, work_counters,
     };
     let pool = pool()?;
     let state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, bits)?;
@@ -931,7 +931,6 @@ fn active_window<W: Word>(bits: u32) -> Result {
         let expected = values.iter().copied().collect::<BTreeSet<_>>()
             .into_iter().collect::<Vec<_>>();
         let input = Buffer::from_host(pool.clone(), &values)?;
-        set_work_counters_enabled(true);
         reset_work_counters();
         let before = readback_count();
         // SAFETY: every generated word was masked to the declared window.
@@ -941,16 +940,20 @@ fn active_window<W: Word>(bits: u32) -> Result {
             assert_eq!(readback_count(), before);
         }
         assert_eq!(batch.buffer().to_host()?, expected);
-        assert_eq!(narrow.canonical.sorts, u64::from(rows != 0));
-        assert_eq!(narrow.canonical.passes, if rows == 0 { 0 } else { bits.div_ceil(8) as u64 });
-        assert_eq!(narrow.canonical.bytes,
-            rows as u64 * narrow.canonical.passes * 2 * if W::BITS == 64 { 8 } else { 12 });
+        #[cfg(feature = "radix-counters")]
+        {
+            assert_eq!(narrow.canonical.sorts, u64::from(rows != 0));
+            assert_eq!(narrow.canonical.passes, if rows == 0 { 0 } else { bits.div_ceil(8) as u64 });
+            assert_eq!(narrow.canonical.bytes,
+                rows as u64 * narrow.canonical.passes * 2 * if W::BITS == 64 { 8 } else { 12 });
+        }
         reset_work_counters();
         let full = unsafe { baseline.sort_unique(&input, rows)? };
         let conservative = work_counters();
         assert_eq!(full.buffer().to_host()?, expected);
         assert!(narrow.canonical.passes <= conservative.canonical.passes);
         assert!(narrow.canonical.bytes <= conservative.canonical.bytes);
+        #[cfg(feature = "radix-counters")]
         if bits < W::BITS && rows != 0 {
             assert!(narrow.canonical.passes < conservative.canonical.passes);
         }
@@ -964,9 +967,9 @@ fn active_window<W: Word>(bits: u32) -> Result {
         assert_eq!(sorted.buffer().to_host()?, expected);
         let known = work_counters();
         assert_eq!(known.canonical.sorts, 0);
+        #[cfg(feature = "radix-counters")]
         assert_eq!(known.layout.sorts, u64::from(!unique.is_empty()));
         assert_eq!(known.layout.passes, narrow.canonical.passes);
-        set_work_counters_enabled(false);
     }
     Ok(())
 }

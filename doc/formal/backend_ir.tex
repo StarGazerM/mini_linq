@@ -969,7 +969,15 @@ identities irrespective of generated Rust names. BE-CarrierPublication extends
 BE-Publication to translation carrier storage: a non-borrowable task driver
 retains its input once, and a runtime choice runs only its selected arm.
 Choices use allocation-free sum iterators at every dimension, preserving part
-boundaries without collecting the selected stream. These records are printable analysis.
+boundaries without collecting the selected stream. Owners of recorded selections,
+retained rows, indices, filters and keysets are declared in the enclosing scope
+with distinct identities per arm and initialized only inside the selected branch;
+the arm's iterator borrows that enclosing storage. Nested choices share the same
+owner scope. Profiled target-hook evaluation uses inline timing guards, so owner
+declarations and their deferred initialization stay in that same lexical scope;
+no timing closure captures an uninitialized owner. Binding sites carry ownership
+explicitly, without inspecting emitted Rust syntax or provider types. These
+records are printable analysis.
 Only retained driver inputs contribute symbolic carrier-copy traffic to cost;
 summing conditional publications gives a conservative bound, not a claim that
 unselected arms execute. Ordinary pull erases choices without worker or statistic
@@ -1330,13 +1338,16 @@ publishes count and failure and re-zeroes them, so a launch attempt neither
 allocates nor clears metadata.
 GPU-ProgramLaunch records either invocation occupancy (capped by root parts),
 program one-block preparation, or a program resident launch envelope. One-block
-preparation requires the one-part partition. Each program slot is keyed by the
-CUDA module's opaque compiled entry name, so callable specializations never
-share a preparation. On first use in that module, a typed preparation validates
-function/device attributes and fixes the ordinary one-dimensional envelope;
-the cache retains the function and configuration, not a Rust type tag.
-Generated wrappers keep the kernel's exact scalar argument signature. A launch
-checks its context and positive grid against the envelope without CUDA queries;
+preparation requires the one-part partition. Each kernel owns one optional
+preparation for its fixed compiled specialization, without a symbol-keyed
+collection. Only a cache miss resolves the symbol and validates function/device
+attributes and the ordinary one-dimensional envelope. The cache retains the
+function and configuration, not a Rust type tag. The checked final kernel ABI
+records live scalar positions, explicit parameter-to-witness dependencies and
+the preparation entry. Definitions, preparations and calls print that record
+directly, without inspecting types or reparsing generated kernels or calls.
+A launch checks its context and positive grid against the envelope without
+symbol lookup, allocation or CUDA queries;
 the recorded part cap and spread/share policy determine that grid as before.
 The module and slots live on their worker thread until query-scope release;
 context replacement discards them. No count/failure readback, replay, launch
@@ -1533,8 +1544,8 @@ enable expression; generated names and kernel argument offsets carry no meaning.
 The invocation-local cache is shared across capacity retries.
 Query-level capture items are a separate ordered record: bindings evaluate once
 in invocation scope and answer gates short-circuit before later captures,
-input evaluation or device work. A false gate returns an empty row publication
-or a validated empty arena batch. Query inputs bind once after the gates;
+input evaluation or query kernels. A false gate returns an empty row publication
+or an empty arena batch with asynchronous metadata uploads. Query inputs bind once after the gates;
 host upload evaluators reuse those input and capture bindings rather than
 evaluating their expressions again. A relational
 constraint with no row operands is one closed Boolean capture; it does not
@@ -1551,7 +1562,9 @@ Native ABI is a declared provider-token fact. Input instances record the ordered
 logical/storage column schema and optional codec explicitly; every Rust type is
 opaque. Neither constructor paths nor generic arguments confer native residency,
 and neither do catalog read levels: placement treats a scanned Host provider as
-native exactly when its token declares an ABI.
+native row work exactly when its token declares an ABI other than Columns.
+Columns scans retain a host publication boundary for descriptor-based index builds
+unless other row work requires a descendant grade.
 Host row subplans record separate collection adapters by Structures entry:
 device-native range/run/radix rows use a host vector, and their keyed builds
 use a host sorted run with the same key layout. The binding checker validates
@@ -1569,7 +1582,7 @@ unrecorded columns are unknown. Encoded or unknown Rust reads execute at host,
 and encoded relational operands follow \textsc{GPU-Capture}.
 \begin{mathpar}
 \Rule{GPU-NativeAbi}{p.\mathrm{token}=t\quad \Delta(t).\mathrm{abi}=a\quad
- a\in\{\mathrm{range},\mathrm{runs},\mathrm{columns},\mathrm{radix}\}\quad
+ a\in\{\mathrm{range},\mathrm{radix\_relation},\mathrm{columns},\mathrm{radix}\}\quad
  I=p.\mathrm{input}\quad I\ne\bot\Longrightarrow I.\mathrm{keys}\leq |I.\mathrm{columns}|}
  {\mathrm{abi}(p)=a\quad\mathrm{schema}(p)=I\quad
  \mathrm{encoded}(I_i)\iff I_i.\mathrm{codecId}\ne\varnothing}

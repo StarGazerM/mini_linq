@@ -50,6 +50,10 @@ literal equality in constraint form) or one of its E-Domain implied domains,
 uses only columns of that occurrence, and precedes every other step of the
 scope. It binds nothing; it filters the occurrence's own relation, so
 $\sigma_P(R)\bowtie p=\sigma_P(R\bowtie p)$ since $\vars(P)\subseteq\vars(R)$.
+Let $B$ be the visible bindings and $P\subseteq B$ the columns provided by
+the scope's finite seed or preceding steps. A hoisted arm without a finite
+domain starts with $P=\emptyset$, even when its free columns are visible in $B$.
+Every step extends $P$ by its provided columns.
 \begin{mathpar}
 \Rule{D-Constraint}{\vars(C)\subseteq B}
  {\mathsf{requires}(C)=\vars(C),\quad\mathsf{provides}(C)=\emptyset}
@@ -60,12 +64,12 @@ $\sigma_P(R)\bowtie p=\sigma_P(R\bowtie p)$ since $\vars(P)\subseteq\vars(R)$.
 
 \Rule{WF-BlockPlacement}{b.placement\in\{\mathsf{hoisted},\mathsf{correlated}\}\\
  b.placement=\mathsf{hoisted}\Longrightarrow\neg\mathsf{Rust}(b)\\
- b.placement=\mathsf{hoisted}\land\mathsf{needsDomain}(b)\Longrightarrow F_b\subseteq B
+ b.placement=\mathsf{hoisted}\land\mathsf{needsDomain}(b)\Longrightarrow F_b\subseteq P
   \text{ at }b\text{ and at every reduction naming }b\\
  b.placement=\mathsf{correlated}\Longrightarrow F_b\subseteq B\\
  \mathsf{RepeatedReadsAgree}(b.placement)\quad
  \mathsf{ReductionOperands}(t)\cap\mathsf{CorrelatedBlocks}(t)=\emptyset}
- {\mathsf{BlockPlacement}(b,B,t)\Downarrow\ok}
+ {\mathsf{BlockPlacement}(b,B,P,t)\Downarrow\ok}
 
 \Rule{WF-Restrict}{\mathsf{restrict}\ R@i\ \mathsf{where}\ P\quad c_i=R(\bar x)\text{ positive}\\
  \emptyset\ne\vars(P)\subseteq\bar x\quad
