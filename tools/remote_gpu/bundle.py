@@ -192,6 +192,11 @@ def main():
         for source in tools.iterdir():
             if source.suffix in ('.py', '.sh'):
                 shutil.copy2(source, stage / 'tools' / source.name)
+        # Exactness oracles run the prebuilt DuckDB CLI (cq-testkit duckdb.rs).
+        duckdb = os.environ.get('DUCKDB_CLI') or shutil.which('duckdb')
+        if not duckdb:
+            raise RuntimeError('DuckDB CLI not found: set DUCKDB_CLI or put duckdb on PATH')
+        shutil.copy2(Path(duckdb).resolve(), stage / 'bin' / 'duckdb')
         # Prepare the downloader locally as well; the pod never pip-installs.
         # typer-slim does not pull click, which the hf CLI imports.
         subprocess.run(['python3', '-m', 'pip', 'install', '--disable-pip-version-check',

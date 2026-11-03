@@ -106,6 +106,7 @@ def main():
     env['CUDA_VISIBLE_DEVICES'] = selected
     env['BUNDLE_DIR'] = str(bundle)
     env.setdefault('BUNDLE_DIRS', json.dumps([str(bundle)]))
+    env['DUCKDB_CLI'] = str(bundle / 'bin' / 'duckdb')
     env.pop('CUDA_HOME', None)
     env.pop('CUDA_OXIDE_PTX_DIR', None)
     failed = False
