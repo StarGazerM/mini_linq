@@ -1233,7 +1233,7 @@ cargo oxide test --arch sm_89 -- --release -p cq-gpu-tpch -- --nocapture
 The binary visits both SF1 and SF10 and writes
 [`compare/gpu_tpch.results.json`](compare/gpu_tpch.results.json). For accepted
 translations it performs one warmup plus five measured iterations. The shared
-`tools/bench-check` helper fully compares the first measured sample of each
+`testkit/bench-check` helper fully compares the first measured sample of each
 binary/configuration against `answer.retail_<query>.tsv` and its `.count`;
 later samples check exact answer counts and up to 1,000 seeded actual tuples
 for reference membership (all if smaller). References are indexed outside the

@@ -200,7 +200,7 @@ An odd run count of at least three may be requested. Each timed execution
 constructs a fresh query, builds required indexes, runs and fully materializes
 its typed output. Load time, string formatting, answer-set normalization,
 comparison, file I/O and result destruction are outside the query timer.
-The shared tools/bench-check helper checks the first measured sample of each
+The shared testkit/bench-check helper checks the first measured sample of each
 binary/configuration fully against the retained DuckDB reference. Later samples
 check exact logical answer counts and up to 1,000 seeded actual tuples for
 reference membership (all if smaller). Warmup exactness does not replace the
@@ -330,7 +330,7 @@ quantity as our inclusive pipeline spans.
 
 The runner warms both workers, fully checks each binary/configuration's first
 measured sample, then checks exact counts and up to 1,000 seeded actual tuples
-against the reference in later samples using tools/bench-check. It reports the
+against the reference in later samples using testkit/bench-check. It reports the
 median of eleven executions and the measured overhead against a separate release
 worker without counters. It does not subtract estimated overhead or scale the
 operator times to make them agree with an uninstrumented measurement. Dated

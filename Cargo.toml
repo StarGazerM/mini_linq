@@ -126,7 +126,7 @@ members = [
     "features/workloads/e2e/corpus",
     "features/workloads/pipeline-passes",
     "features/workloads/xtask",
-    "tools/bench-check",
+    "testkit/bench-check",
     "tools/fixtures/correspondence-performance",
 ]
 # Keep dev-dependency instrumentation opt-in through explicit package gates.
@@ -243,7 +243,7 @@ default-members = [
     "features/workloads/e2e/corpus",
     "features/workloads/pipeline-passes",
     "features/workloads/xtask",
-    "tools/bench-check",
+    "testkit/bench-check",
     "tools/fixtures/correspondence-performance",
 ]
 exclude = ["experiments/gpu", "experiments/mac", "tools/fixtures/external", "tools/fixtures/external-siblings", "tools/fixtures/in-tree-only", "tools/fixtures/pass-macros"]

@@ -13,6 +13,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Move the shared `bench-check` library/CLI from `tools/bench-check` to
+  `testkit/bench-check`, keeping feature consumers within the core dependency
+  roots and including the external-consumer check in tooling gates.
+
 - GPU flat publications record a compact per-publication layout: the
   publication's resident heading (deferred provider payload excluded), unique
   fields, dense stride. The independent checker validates coverage, stride,

@@ -119,7 +119,7 @@ def compiler_fingerprint():
     """Hash compiler/runtime inputs once per invocation, including new sources."""
     paths = [ROOT / name for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain']
              if (ROOT / name).is_file()]
-    for root in ['facade', 'features', 'languages', 'passes', 'runtime', 'testkit', '.cargo', 'tools/bench-check']:
+    for root in ['facade', 'features', 'languages', 'passes', 'runtime', 'testkit', '.cargo']:
         for directory, children, files in os.walk(ROOT / root):
             children[:] = sorted(child for child in children if child not in ['target', '.git'])
             paths.extend(Path(directory) / name for name in files
@@ -150,7 +150,7 @@ def invoke(args, log, env=ENV, timeout=None):
 
 def build():
     dependencies = {
-        'bench-check': 'tools/bench-check',
+        'bench-check': 'testkit/bench-check',
         'mini-linq': 'facade/mini-linq', 'cq-load': 'runtime/cq-load',
         'cq-storage': 'runtime/cq-storage', 'cq-planners': 'features/planners',
         'cq-rewrites': 'features/rewrites', 'cq-join-filters': 'features/join-filters',
@@ -219,7 +219,7 @@ def build_stamp(name):
     paths = [WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs',
              WORK / 'xtask/src/tpch/comparison.rs', CACHE_ROOT / 'adaptive-worker.rs',
              WORK / 'src/queries/retail/tpch' / (name + '.rs'), Path(__file__),
-             ROOT / 'tools/bench-check/Cargo.toml', ROOT / 'tools/bench-check/src/lib.rs']
+             ROOT / 'testkit/bench-check/Cargo.toml', ROOT / 'testkit/bench-check/src/lib.rs']
     stamp = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     if isolated():
         stamp['compiler_runtime_sha256'] = compiler_fingerprint()
@@ -267,7 +267,7 @@ def prepare():
             'verification_only': verification_only(), 'runs': 0 if verification_only() else RUNS} if isolated() else {}),
         **({'compiler_runtime_sha256': compiler_fingerprint(),
             'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()} if isolated() else {}),
-        'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs', WORK / 'xtask/src/tpch/comparison.rs', ROOT / 'tools/bench-check/Cargo.toml', ROOT / 'tools/bench-check/src/lib.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
+        'source_sha256': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in [SOURCE, WORK / 'src/tpch_runtime.rs', WORK / 'xtask/src/tpch/worker.rs', WORK / 'xtask/src/tpch/comparison.rs', ROOT / 'testkit/bench-check/Cargo.toml', ROOT / 'testkit/bench-check/src/lib.rs'] + [WORK / 'src/queries/retail/tpch' / (n + '.rs') for n in NAMES]},
     })
 
 

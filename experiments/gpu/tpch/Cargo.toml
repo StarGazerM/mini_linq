@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bench-check = { path = "../../../tools/bench-check" }
+bench-check = { path = "../../../testkit/bench-check" }
 cq-load = { path = "../../../runtime/cq-load", default-features = false }
 cq-gpu-runtime = { path = "../printer-runtime" }
 cq-gpu-sequence-runtime = { path = "../sequence-runtime" }

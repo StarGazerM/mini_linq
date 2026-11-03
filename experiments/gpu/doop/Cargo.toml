@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-bench-check = { path = "../../../tools/bench-check" }
+bench-check = { path = "../../../testkit/bench-check" }
 doop-shared = { path = "../../../features/datalog/doop/shared" }
 doop-mini = { path = "../../../features/datalog/doop/engines/mini" }
 cq-datalog = { path = "../../../features/datalog/facade/cq-datalog" }

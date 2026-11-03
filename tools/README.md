@@ -99,8 +99,9 @@ are produced by the planner from recorded evidence together with the other
 join-planning decisions, never imported or authored in isolation and measured.
 
 Verification follows what a change can break: docs-only changes run nothing;
-test tooling runs its own unit tests; an oracle/infrastructure swap checks only
-that the oracle is unchanged; compiler/runtime changes run the track gate above.
+test tooling runs its own unit tests and `python3 tools/check_external.py`;
+an oracle/infrastructure swap checks only that the oracle is unchanged;
+compiler/runtime changes run the track gate above.
 Every agent and track report states its gate time: total wall-clock spent
 on gates, tests and benchmarks since the previous report, per command, plus time
 waiting on the GPU/timing locks, measured (runner timing columns or
@@ -123,7 +124,7 @@ a successful gate; uncertainty is never treated as an unaffected target.
 
 ### Timing-sample answer validation
 
-Timing uses the shared host-only `tools/bench-check` library/CLI; Python
+Timing uses the shared host-only `testkit/bench-check` library/CLI; Python
 controllers use the transport in `tools/bench_check.py`. Build the CLI with
 `cargo build --release -p bench-check` under the build locks above. Remote
 benchmark bundles include it; `BENCH_CHECK_BIN` selects an explicit executable.

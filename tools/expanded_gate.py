@@ -497,7 +497,7 @@ def harness(tree, directory, target, source, deps):
     # Historical baselines predate the native timing checker. Resolve the
     # dependency only when the included worker actually uses it.
     if "bench_check::" in (tree / "features/workloads/xtask/src/tpch/worker.rs").read_text():
-        manifest += f'bench-check = {{ path = {json.dumps(str(tree / "tools/bench-check"))} }}\n'
+        manifest += f'bench-check = {{ path = {json.dumps(str(tree / "testkit/bench-check"))} }}\n'
     # Mirrors the bench harness manifest (xtask/src/tpch/compile.rs): the
     # included worker reads getrusage through libc on unix.
     manifest += 'serde_json="1"\nrayon="1"\n[target.\'cfg(unix)\'.dependencies]\nlibc="0.2"\n'
