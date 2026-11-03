@@ -8,6 +8,18 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Latest paired measurement (2026-11-02/03, `44bf82bc` vs `c1b75718`;
+[summary](../experiments/gpu/compare/bench-2026-11-02.md), raw samples in
+[`bench-2026-11-02.results.json`](../experiments/gpu/compare/bench-2026-11-02.results.json)).**
+Five interleaved fresh-process pairs, every sample exact. Geometric-mean
+current/reference ratios: CPU TPC-H SF1 `default` **0.908 [0.902, 0.917]** and `par`
+**0.820 [0.800, 0.840]** (28 kernels). `retail_h07_block` does not compile on
+`44bf82bc` (`sharded::Index::from_positions`, E0599). Regressions whose CI lies
+above 1: `default` `retail_h06` 1.026 [1.017, 1.043] and `retail_h20` 1.024
+[1.015, 1.035]. CPU DOOP xalan: `mini` 8.97 s, 0.975 [0.969, 0.982]; `mini-par`
+(24 threads) 2.04 s, 0.913 [0.891, 0.969]. GPU suites are pending a RunPod
+session (local GPU occupied by a foreign tenant).
+
 ## Where we are
 
 - Contract 7: `if`/`let`/`for` embed unchanged opaque Rust, pure and total by
@@ -469,7 +481,8 @@ approval.
   admission, per-layout exclusive publication, `self_dedup per_task` through
   the checked push-terminal rewrite (Structures `print_push`, because the
   Sequence back end has no supplied-consumer entry; see `translate` and
-  `Emitter::finish` in `passes/cq-sequence-pull/src/lib.rs`). DOOP at 15 threads ≈ 0.8 s (cassandra), 2.3 s (xalan);
+  `Emitter::finish` in `passes/cq-sequence-pull/src/lib.rs`). Historical: DOOP at 15 threads ≈ 0.8 s (cassandra), 2.3 s (xalan)
+  (superseded for xalan by the 2026-11-02 paired record above: `mini-par` 2.04 s at 24 threads);
   all six apps exact vs Ascent sequentially and at 15 threads.
 - Schedule: Round records per-hole read sets, wave partitions, per-hole
   policy, derived publication placement and a progress mode

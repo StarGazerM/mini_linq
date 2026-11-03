@@ -1666,3 +1666,22 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
   the same keys as the timed tree (all 46 cached, 0 unexplained). All 52 GPU
   SF1 modules are identical to the timed tree (modulo kernel module names),
   so no pair was re-timed.
+- Fresh paired timing, `44bf82bc` vs `c1b75718` (the last full timing
+  anchor; later entries time subsets vs `c395fe83`/`17a14b93`/`20101707`),
+  2026-11-02/03. Summary
+  [`bench-2026-11-02.md`](../experiments/gpu/compare/bench-2026-11-02.md), raw
+  samples and CIs in `bench-2026-11-02.results.json`. Five interleaved
+  fresh-process pairs, exact answers every sample, paired bootstrap 95% CI
+  of median ratios (cur/ref). CPU TPC-H SF1 (28 of 29 kernels, DuckDB-exact):
+  `default` geomean 0.908 [0.902, 0.917], best h19 0.288, h04 0.535, q19
+  0.707; `par` 0.820 [0.800, 0.840], best h19 0.199, h04 0.231, q06 0.235.
+  CIs above 1: `default` h06 1.026 [1.017, 1.043], h20 1.024 [1.015, 1.035]
+  (not investigated here). `retail_h07_block` fails to compile on `44bf82bc`
+  (E0599 `cq_storage::sharded::Index::from_positions`, emitted by
+  `cq-print/src/positional.rs:393` for `par`). CPU DOOP xalan (Ascent-exact):
+  `mini` 0.975 [0.969, 0.982], `mini-par` 0.913 [0.891, 0.969]. GPU suites
+  (TPC-H advised SF1/SF10, `doop-gpu` xalan/batik) are pending a RunPod
+  session (`pod_bench_2026_11_02.py`). Local GPU timing was blocked by a
+  foreign vLLM tenant. Live SRDatalog and `srd-doop-gpu` are not part of the
+  pod run (no SRD toolchain or prepared corpus there), so the Oct 26 SRD
+  fullclock ranges remain the only, historical, SRD reference.

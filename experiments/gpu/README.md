@@ -1045,6 +1045,14 @@ Complete sorted exports matched **43/43** relations for both xalan and batik;
 both binaries matched the CPU's **26/26** complete Cassandra output sets.
 The comparison checked duplicate-free exported counts as well as tuple hashes.
 
+**Fresh paired run (2026-11-02/03, `44bf82bc` vs `c1b75718`):** see
+[`compare/bench-2026-11-02.md`](compare/bench-2026-11-02.md). Its CPU suites are
+complete. The GPU TPC-H advised SF1/SF10 and `doop-gpu` xalan/batik pairs are
+pending a RunPod session ([`compare/pod_bench_2026_11_02.py`](compare/pod_bench_2026_11_02.py)),
+because a foreign tenant occupied the local GPU. Live SRDatalog and `srd-doop-gpu`
+are not part of that run (the pod has no SRD toolchain or prepared corpus), so
+the numbers above and the SRD ranges below remain the latest GPU DOOP records.
+
 For context only, the older SRDatalog fullclock reference ranges are
 **1.008194–1.021628 s xalan / 1.818340–2.101104 s batik**, retained in
 [`srd_query_xalan_batik.results.json`](compare/srd_query_xalan_batik.results.json)
