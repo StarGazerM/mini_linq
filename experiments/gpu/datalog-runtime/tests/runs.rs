@@ -83,7 +83,7 @@ fn assert_run_bound<W: Word>(state: &DeviceRadixRun<W, u64, ()>) {
 
 /// Ascent-shaped admission: fresh against accepted runs, then publication.
 fn admit<W: Word>(state: &mut DeviceRadixRun<W, u64, ()>, input: &Buffer<W>, rows: usize) -> Result<SortedBatch<W>> {
-    let fresh = state.fresh(input, rows)?;
+    let fresh = unsafe { state.fresh(input, rows) }?;
     // SAFETY: fresh is sorted, unique and absent from every accepted run.
     unsafe { state.append_sorted(fresh.clone())? };
     Ok(fresh)
@@ -100,7 +100,7 @@ fn admit_against_cpu<W: Word>(
     let expected_delta: Vec<_> = batch.difference(accepted).copied().collect();
     let before = state.len();
     assert_eq!(
-        state.fresh(&input, values.len())?.len(),
+        unsafe { state.fresh(&input, values.len()) }?.len(),
         expected_delta.len()
     );
     assert_eq!(state.len(), before, "fresh must not publish rows");
@@ -121,7 +121,7 @@ fn admit_against_cpu<W: Word>(
 
 fn random_batches<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, <W as Word>::BITS)?;
     let mut accepted = BTreeSet::new();
     let mut random = Random(0xa523_4b19_c018_762d);
     let mut retained = Vec::new();
@@ -160,7 +160,7 @@ fn random_batches<W: Word>() -> Result {
 
 fn known_unique_sort<W: Word>() -> Result {
     let pool = pool()?;
-    let state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+    let state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, <W as Word>::BITS)?;
     for rows in [0, 1, 17, 257, 4097] {
         let mut values: Vec<_> = (0..rows).rev().map(|row| word::<W>(row as u64)).collect();
         if rows > 1 {
@@ -218,7 +218,7 @@ fn random_duplicate_batches_four_lanes() -> Result {
 
 fn empty_single_and_extremes<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, <W as Word>::BITS)?;
     let mut accepted = BTreeSet::new();
     assert_eq!(state.len(), 0);
     assert!(host_keys(&state)?.is_empty());
@@ -271,7 +271,7 @@ fn empty_single_and_extremes_wide_lanes() -> Result {
 
 fn million_rows<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, <W as Word>::BITS)?;
     let mut random = Random(0x6b73_d147_590a_821f);
     let values: Vec<_> = (0..1_000_000)
         .map(|_| word::<W>(random.next() % 600_001))
@@ -305,7 +305,7 @@ fn million_rows_u128() -> Result {
 
 fn append_disjoint_runs<W: Word>() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, <W as Word>::BITS)?;
     let mut accepted = BTreeSet::new();
     for batch in 0..128 {
         // Runs interleave numerically; they are not adjacent sorted chunks.
@@ -352,7 +352,7 @@ fn recorded_ratio_changes_compaction_without_changing_rows() -> Result {
         assert!(DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), bad).is_err());
     }
     for (ratio, expected_runs) in [(2, 2), (4, 2), (8, 1)] {
-        let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), RadixRunParams { ratio, ..PARAMS })?;
+        let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), RadixRunParams { ratio, ..PARAMS }, <u64 as Word>::BITS)?;
         let first = Buffer::from_host(pool.clone(), &[0u64, 1, 2, 3, 4, 5])?;
         let second = Buffer::from_host(pool.clone(), &[6u64])?;
         admit(&mut state, &first, 6)?;
@@ -370,11 +370,10 @@ fn recorded_ratio_changes_compaction_without_changing_rows() -> Result {
 fn recorded_merge_tile_preserves_wide_union() -> Result {
     let pool = pool()?;
     for merge_tile_rows in [1, 7, 32, 129] {
-        let mut state = DeviceRadixRun::<[u64; 3], u64, ()>::new(pool.clone(),
-        RadixRunParams {
+        let mut state = DeviceRadixRun::<[u64; 3], u64, ()>::new_set(pool.clone(), RadixRunParams {
             merge_tile_rows,
             ..PARAMS
-        },)?;
+        }, <[u64; 3] as Word>::BITS)?;
         for parity in [0, 1] {
             let rows = (0..137)
                 .map(|i| word::<[u64; 3]>(i * 2 + parity))
@@ -452,7 +451,7 @@ fn merge_wide_tile_boundaries<W: Word>() -> Result {
                 let mut expected = first.clone();
                 expected.extend_from_slice(&second);
                 expected.sort_unstable();
-                let mut state = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+                let mut state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, <W as Word>::BITS)?;
                 let first_buffer = Buffer::from_host(pool.clone(), &first)?;
                 let second_buffer = Buffer::from_host(pool.clone(), &second)?;
                 // SAFETY: both sequences increase in the selected lane; their
@@ -641,8 +640,8 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
     let packing = Packing::new(widths)?;
     let order = [2, 0, 1];
     let layout = packing.permute(&order)?;
-    let mut canonical = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
-    let mut permuted = DeviceRadixRun::<W, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut canonical = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, packing.bits())?;
+    let mut permuted = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, layout.bits())?;
     let mut rows = BTreeSet::new();
     let mut random = Random(0xd9e2_051b_c76a_438f);
     for batch in 0..12 {
@@ -774,7 +773,7 @@ fn throughput_10m_candidates_against_50m_accepted() -> Result {
     const ACCEPTED: usize = 50_000_000;
     const CANDIDATES: usize = 10_000_000;
     let pool = pool()?;
-    let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, <u64 as Word>::BITS)?;
     let seed: Vec<_> = (0..ACCEPTED as u64).map(|row| row * 2).collect();
     let buffer = Buffer::from_host(pool.clone(), &seed)?;
     drop(seed);
@@ -802,10 +801,10 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
         let pool = pool()?;
         let params = RadixRunParams { radix_bits, ..PARAMS };
         let packing = Packing::with_columns(&[gpu_datalog_runtime::Column::U64])?;
-        let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), params)?;
+        let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), params, <u64 as Word>::BITS)?;
         for values in [(0..64).collect::<Vec<_>>(), vec![100, 101, 102, 103]] {
             let input = Buffer::from_host(pool.clone(), &values)?;
-            let batch = state.fresh(&input, values.len())?;
+            let batch = unsafe { state.fresh(&input, values.len()) }?;
             let before = gpu_datalog_runtime::readback_count();
             unsafe { state.append_sorted(batch)?; }
             assert_eq!(gpu_datalog_runtime::readback_count(), before);
@@ -815,7 +814,7 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
         let original = old.to_host()?;
         let snapshot = state.snapshot()?;
         let input = Buffer::from_host(pool.clone(), &[103, 7, 200, 200, 101, 201, 7])?;
-        let batch = state.fresh(&input, 7)?;
+        let batch = unsafe { state.fresh(&input, 7) }?;
         assert_eq!(batch.buffer().to_host()?, vec![200, 201]);
         assert!(Arc::ptr_eq(&snapshot, &state.snapshot()?));
         assert_eq!(host_keys(&state)?, original);
@@ -827,7 +826,7 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
         )?;
         assert_eq!(gpu_datalog_runtime::readback_count(), before);
         let directory_bytes = if radix_bits == 0 { 0 } else { ((1usize << radix_bits) + 1) * 8 };
-        assert_eq!(delta.allocated_bytes(), retained_bytes + 3 * 8 + directory_bytes
+        assert_eq!(delta.allocated_bytes(), retained_bytes + directory_bytes
             + std::mem::size_of::<gpu_datalog_runtime::radix_run::RadixRunView<u64, u64>>()
             + std::mem::size_of::<gpu_datalog_runtime::PackedField>() + 8);
         unsafe { state.append_sorted(batch)?; }
@@ -838,7 +837,7 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
         for run in state.to_host()? {
             assert_eq!(run.offsets, (0..=run.keys.len() as u64).collect::<Vec<_>>());
         }
-        let duplicate = state.fresh(&input, 7)?;
+        let duplicate = unsafe { state.fresh(&input, 7) }?;
         assert!(duplicate.is_empty());
         state.replace_sorted(duplicate)?;
         assert!(state.is_empty());
@@ -851,16 +850,16 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
 #[test]
 fn empty_heading_and_projection_have_their_own_unique_admission() -> Result {
     let pool = pool()?;
-    let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, 0)?;
     let candidates = Buffer::from_host(pool.clone(), &[0, 0, 0])?;
-    let batch = state.fresh(&candidates, 3)?;
+    let batch = unsafe { state.fresh(&candidates, 3) }?;
     assert_eq!(batch.len(), 1);
     unsafe { state.append_sorted(batch)?; }
-    assert!(state.fresh(&candidates, 3)?.is_empty());
+    assert!(unsafe { state.fresh(&candidates, 3) }?.is_empty());
     // Projecting distinct complete rows can collapse them to one negative key.
-    let projected = state.sort_unique(&candidates, 3)?;
+    let projected = unsafe { state.sort_unique(&candidates, 3) }?;
     assert_eq!(projected.buffer().to_host()?, vec![0]);
-    let empty = state.sort_unique(&candidates, 0)?;
+    let empty = unsafe { state.sort_unique(&candidates, 0) }?;
     state.replace_sorted(empty)?;
     assert_eq!(state.len(), 0);
     assert_eq!(state.live_bytes(), 0);
@@ -880,8 +879,10 @@ fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -
     let occurrences = Layout::publish(&state, packing.clone())?;
     assert!(occurrences.validate(&[Column::U64]).is_err());
     assert!(occurrences.permuted_provider::<(u64,)>(&pool, &[0], PARAMS, 256).is_err());
-    let batch = state.sort_unique(&input, 3)?;
+    let batch = unsafe { state.sort_unique(&input, 3) }?;
     assert!(unsafe { state.append_sorted(batch.clone()) }.is_err());
+    assert!(state.replace_sorted(batch.clone()).is_err());
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, packing.bits())?;
     state.replace_sorted(batch.clone())?;
     let set = Layout::publish(&state, packing)?;
     set.validate(&[Column::U64])?;
@@ -894,7 +895,7 @@ fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -
     assert_ne!(replacement.snapshot_id(), occurrences.snapshot_id());
     assert_eq!(replacement.fields_ptr(), occurrences.fields_ptr());
     replacement.validate(&[Column::U64])?;
-    let empty = state.sort_unique(&input, 0)?;
+    let empty = unsafe { state.sort_unique(&input, 0) }?;
     let cleared = replacement.with_sorted(empty.clone(), PARAMS)?;
     assert!(cleared.is_empty());
     assert_eq!(cleared.fields_ptr(), replacement.fields_ptr());
@@ -903,5 +904,127 @@ fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -
     assert_eq!(set.to_host()?, vec![7, 9]);
     assert_eq!(replacement.to_host()?, vec![7, 9]);
     assert_eq!(batch.buffer().to_host()?, vec![7, 9]);
+    Ok(())
+}
+
+fn active_window<W: Word>(bits: u32) -> Result {
+    use gpu_datalog_runtime::{
+        readback_count, reset_work_counters, set_work_counters_enabled, work_counters,
+    };
+    let pool = pool()?;
+    let state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, bits)?;
+    let baseline = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, W::BITS)?;
+    assert_eq!(state.active_bits(), bits);
+    assert_eq!(state.snapshot()?.active_bits(), bits);
+    for rows in [0, 1, 17, 4097] {
+        let values = (0..rows).map(|row| {
+            let mut word = W::zero();
+            for lane in 0..bits.div_ceil(64) {
+                let lane_bits = (bits - lane * 64).min(64);
+                let value = ((row % 257) as u64)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .rotate_left(lane * 11);
+                word.set_lane(lane, value & (u64::MAX >> (64 - lane_bits)));
+            }
+            word
+        }).collect::<Vec<_>>();
+        let expected = values.iter().copied().collect::<BTreeSet<_>>()
+            .into_iter().collect::<Vec<_>>();
+        let input = Buffer::from_host(pool.clone(), &values)?;
+        set_work_counters_enabled(true);
+        reset_work_counters();
+        let before = readback_count();
+        // SAFETY: every generated word was masked to the declared window.
+        let batch = unsafe { state.sort_unique(&input, rows)? };
+        let narrow = work_counters();
+        if bits == 0 || rows == 0 {
+            assert_eq!(readback_count(), before);
+        }
+        assert_eq!(batch.buffer().to_host()?, expected);
+        assert_eq!(narrow.canonical.sorts, u64::from(rows != 0));
+        assert_eq!(narrow.canonical.passes, if rows == 0 { 0 } else { bits.div_ceil(8) as u64 });
+        assert_eq!(narrow.canonical.bytes,
+            rows as u64 * narrow.canonical.passes * 2 * if W::BITS == 64 { 8 } else { 12 });
+        reset_work_counters();
+        let full = unsafe { baseline.sort_unique(&input, rows)? };
+        let conservative = work_counters();
+        assert_eq!(full.buffer().to_host()?, expected);
+        assert!(narrow.canonical.passes <= conservative.canonical.passes);
+        assert!(narrow.canonical.bytes <= conservative.canonical.bytes);
+        if bits < W::BITS && rows != 0 {
+            assert!(narrow.canonical.passes < conservative.canonical.passes);
+        }
+        let unique = expected.iter().rev().copied().collect::<Vec<_>>();
+        let input = Buffer::from_host(pool.clone(), &unique)?;
+        reset_work_counters();
+        let before = readback_count();
+        // SAFETY: BTreeSet established uniqueness without changing packing.
+        let sorted = unsafe { state.sort_known_unique(&input, unique.len())? };
+        assert_eq!(readback_count(), before);
+        assert_eq!(sorted.buffer().to_host()?, expected);
+        let known = work_counters();
+        assert_eq!(known.canonical.sorts, 0);
+        assert_eq!(known.layout.sorts, u64::from(!unique.is_empty()));
+        assert_eq!(known.layout.passes, narrow.canonical.passes);
+        set_work_counters_enabled(false);
+    }
+    Ok(())
+}
+
+#[test]
+fn declared_active_windows_preserve_scalar_and_physical_wide_words() -> Result {
+    for bits in [0, 1, 32, 64] {
+        active_window::<u64>(bits)?;
+        active_window::<[u64; 1]>(bits)?;
+    }
+    for bits in [0, 1, 32, 65, 96, 128] {
+        active_window::<u128>(bits)?;
+    }
+    for bits in [0, 1, 32, 65, 96, 129, 160, 192] {
+        active_window::<[u64; 3]>(bits)?;
+        active_window::<[u64; 5]>(bits)?;
+    }
+    active_window::<[u64; 4]>(256)
+}
+
+fn distinct_lanes<W: Word>(bits: u32) -> Result {
+    let pool = pool()?;
+    let state = DeviceRadixRun::<W, u64, ()>::new_set(pool.clone(), PARAMS, bits)?;
+    let mut values = vec![W::zero()];
+    for bit in [0, 31, 63, 64, 95, 127, 128, 159, 191, 192, 255, 256, 319] {
+        if bit < bits {
+            let mut word = W::zero();
+            word.set_lane(bit / 64, 1 << (bit % 64));
+            values.push(word);
+        }
+    }
+    let expected = values.clone();
+    values.reverse();
+    values.extend(expected.iter().copied());
+    let input = Buffer::from_host(pool, &values)?;
+    let sorted = unsafe { state.sort_unique(&input, values.len())? };
+    assert_eq!(sorted.buffer().to_host()?, expected);
+    Ok(())
+}
+
+#[test]
+fn declared_windows_do_not_drop_distinct_high_or_middle_lanes() -> Result {
+    distinct_lanes::<u128>(96)?;
+    distinct_lanes::<u128>(128)?;
+    distinct_lanes::<[u64; 3]>(65)?;
+    distinct_lanes::<[u64; 3]>(96)?;
+    distinct_lanes::<[u64; 3]>(192)?;
+    distinct_lanes::<[u64; 5]>(129)?;
+    distinct_lanes::<[u64; 5]>(320)
+}
+
+#[test]
+fn invalid_declared_windows_are_rejected_before_sorting() -> Result {
+    let pool = pool()?;
+    for bits in [65, 96, u32::MAX] {
+        assert!(DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, bits).is_err());
+    }
+    assert!(DeviceRadixRun::<u128, u32, ()>::new_set(pool.clone(), PARAMS, 129).is_err());
+    assert!(DeviceRadixRun::<[u64; 3], u32, ()>::new_set(pool, PARAMS, 193).is_err());
     Ok(())
 }

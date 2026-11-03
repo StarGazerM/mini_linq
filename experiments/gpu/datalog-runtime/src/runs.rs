@@ -111,6 +111,7 @@ pub(crate) struct SetOps<'a> {
     pub pool: &'a Arc<Pool>,
     pub module: &'a run_kernels::LoadedModule,
     pub params: crate::RadixRunParams,
+    pub active_bits: u32,
 }
 impl SetOps<'_> {
     /// Formal rule DL-SortKnownUnique: certified injective full-key permutations
@@ -120,11 +121,20 @@ impl SetOps<'_> {
         {
             return Err("invalid sort input pool or live length".into());
         }
-        // SAFETY: kernels initialize the returned prefix before publication.
-        let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
-        if rows == 0 {
-            return unsafe { SortedBatch::from_sorted(output, 0) };
+        if self.active_bits > W::BITS {
+            return Err("sort active bits exceed the key word".into());
         }
+        crate::stats::record_sort(
+            if known_unique { crate::stats::SortKind::Layout } else { crate::stats::SortKind::Canonical },
+            rows, self.active_bits, W::BITS != 64,
+        );
+        if rows == 0 || self.active_bits == 0 {
+            // Zero-bit packing has exactly one possible value. This decision
+            // depends only on the recorded width, never the candidate values.
+            let rows = rows.min(1);
+            return unsafe { SortedBatch::from_sorted(Buffer::zeroed(self.pool.clone(), rows)?, rows) };
+        }
+        // SAFETY: kernels initialize the returned prefix before publication.
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
         let mut compaction = if known_unique {
@@ -140,29 +150,26 @@ impl SetOps<'_> {
             ))
         };
         if W::BITS == 64 {
-            let sorted = stable_keys(&self.pool, &launch, input.ptr().cast(), rows, 64)?;
+            let sorted = stable_keys(&self.pool, &launch, input, rows, self.active_bits)?;
             if let Some((count, compact)) = &mut compaction {
+                let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
                 rccl_cub::thrust_integration::device_unique_copy_by(
                     &launch,
-                    DeviceSliceRead::new(sorted.get().cu_deviceptr() as *const u64),
+                    DeviceSliceRead::new(sorted.ptr().cast::<u64>() as *const u64),
                     DeviceSliceWrite::new(output.ptr().cast::<u64>()),
                     count.get_mut(),
                     |a: u64, b: u64| a == b,
                     rows,
                     compact,
                 )?;
-            } else {
-                // SAFETY: radix sort initialized all rows; output is disjoint.
-                unsafe {
-                    cuda_core::simt::memory::memcpy_dtod_async(
-                        output.cu_deviceptr(),
-                        sorted.get().cu_deviceptr(),
-                        rows * 8,
-                        self.pool.stream().cu_stream(),
-                    )?;
-                }
+                let rows = read_count(&self.pool, count.get())?;
+                return unsafe { SortedBatch::from_sorted(output, rows) };
             }
-        } else {
+            // Adopt the actual sorted buffer: no post-sort copy or spare output.
+            return unsafe { SortedBatch::from_sorted(sorted, rows) };
+        }
+        let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
+        {
             // The permutation owner lives until this branch has enqueued its consumer.
             let permutation = stable_order(
                 &self.pool,
@@ -171,6 +178,7 @@ impl SetOps<'_> {
                 input,
                 rows,
                 self.params.block_threads,
+                self.active_bits,
             )?;
             let order = permutation.get().cu_deviceptr() as *const u32;
             if let Some((count, compact)) = &mut compaction {
@@ -223,6 +231,10 @@ impl SetOps<'_> {
     pub(crate) fn subtract<W: Word>(&self, unique: &SortedBatch<W>, accepted: &[RunView<W>]) -> Result<SortedBatch<W>> {
         let rows = unique.len();
         let descriptors = Buffer::from_host_async(self.pool.clone(), accepted)?;
+        crate::stats::record_work(|work| {
+            work.descriptor_materializations += 1;
+            work.descriptor_bytes += (accepted.len() * std::mem::size_of::<RunView<W>>()) as u64;
+        });
         // SAFETY: the flag kernel and stable select initialize these outputs.
         let flags = unsafe { Buffer::<u32>::uninitialized(self.pool.clone(), rows)? };
         let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
@@ -273,6 +285,7 @@ impl SetOps<'_> {
             .len()
             .checked_add(second.len())
             .ok_or("merged length overflow")?;
+        crate::stats::record_work(|work| work.merges += 1);
         // SAFETY: merge writes every output element before publication.
         let mut output = Output(unsafe { Buffer::uninitialized(self.pool.clone(), rows)? });
         if W::BITS > 128 {
@@ -499,10 +512,13 @@ impl RowSortScratch {
         input: *const u64,
         rows: usize,
         bits: u32,
+        physical_lanes: u32,
         ms_first: bool,
         block_threads: u32,
     ) -> Result<*const u32> {
-        if rows > u32::MAX as usize || bits == 0 || block_threads != 256 {
+        if rows > u32::MAX as usize || bits == 0 || bits.div_ceil(64) > physical_lanes
+            || block_threads != 256
+        {
             return Err("invalid stable row sort dimensions or launch width".into());
         }
         let lanes = bits.div_ceil(64);
@@ -532,7 +548,7 @@ impl RowSortScratch {
                 input,
                 rows as u32,
                 lane,
-                lanes,
+                physical_lanes,
                 ms_first,
                 values.ptr() as *mut u64,
                 order.ptr() as *mut u32,
@@ -575,6 +591,7 @@ pub(crate) fn stable_order<W: Word>(
     input: &Buffer<W>,
     rows: usize,
     block_threads: u32,
+    active_bits: u32,
 ) -> Result<Native<u32>> {
     stable_row_order(
         pool,
@@ -582,14 +599,16 @@ pub(crate) fn stable_order<W: Word>(
         launch,
         input.ptr().cast(),
         rows,
-        W::BITS,
+        active_bits,
+        W::BITS / 64,
         W::MS_FIRST,
         block_threads,
     )
 }
 
 /// Stable row ordering shared by typed words and runtime-sized encoded rows.
-/// `bits` records all significant bits; padding above it must be zero.
+/// `bits` records significant bits; padding above it must be zero.
+/// `physical_lanes` is the row stride, independent of the active lane count.
 pub(crate) fn stable_row_order(
     pool: &Arc<Pool>,
     module: &run_kernels::LoadedModule,
@@ -597,6 +616,7 @@ pub(crate) fn stable_row_order(
     input: *const u64,
     rows: usize,
     bits: u32,
+    physical_lanes: u32,
     ms_first: bool,
     block_threads: u32,
 ) -> Result<Native<u32>> {
@@ -608,6 +628,7 @@ pub(crate) fn stable_row_order(
         input,
         rows,
         bits,
+        physical_lanes,
         ms_first,
         block_threads,
     )?;
@@ -618,21 +639,52 @@ pub(crate) fn stable_row_order(
     })
 }
 
-/// Direct stable scalar sort: no row-index permutation or gather is needed.
-pub(crate) fn stable_keys(
+/// Affine pooled output reinterpreted as scalar lanes only after checking that
+/// the sealed Word type occupies exactly one u64 (u64 or [u64; 1]).
+struct ScalarOutput<W: Word>(Buffer<W>);
+impl<W: Word> rccl_cub::DeviceRange for ScalarOutput<W> {
+    fn len(&self) -> usize { self.0.len() }
+}
+// SAFETY: only stable_keys constructs this wrapper, after checking its layout.
+unsafe impl<W: Word> cuda_host::KernelSliceArg for ScalarOutput<W> {
+    type Elem = u64;
+    fn cu_deviceptr(&self) -> u64 { self.0.cu_deviceptr() }
+    fn len(&self) -> usize { self.0.len() }
+}
+unsafe impl<W: Word> cuda_host::KernelSliceArgMut for ScalarOutput<W> {}
+
+/// Direct stable scalar sort with a pooled output that can be adopted whole.
+fn stable_keys<W: Word>(
     pool: &Arc<Pool>,
     launch: &rccl_cub::cuda::Launch<'_, '_>,
-    input: *const u64,
+    input: &Buffer<W>,
     rows: usize,
     bits: u32,
-) -> Result<Native<u64>> {
-    let mut scratch = KeySortScratch::new(pool, launch, rows)?;
-    let current = scratch.sort(pool, launch, input, rows, bits)?;
-    Ok(if current as u64 == scratch.first.get().cu_deviceptr() {
-        scratch.first
-    } else {
-        scratch.alternate
-    })
+) -> Result<Buffer<W>> {
+    if W::BITS != 64 || bits > 64 {
+        return Err("scalar radix sort requires one physical lane".into());
+    }
+    let mut first = ScalarOutput(unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? });
+    let mut alternate = ScalarOutput(unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? });
+    unsafe {
+        cuda_core::simt::memory::memcpy_dtod_async(
+            first.0.cu_deviceptr(), input.cu_deviceptr(), rows * 8,
+            pool.stream().cu_stream(),
+        )?;
+    }
+    let mut controls = RadixScratch {
+        workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, rows)?,
+        pool: pool.clone(),
+    };
+    let first_is_current = {
+        let mut buffers = rccl_cub::DoubleBuffer::new(&mut first, &mut alternate)
+            .ok_or("unequal scalar radix buffers")?;
+        rccl_cub::device_radix_sort_keys_buffer(
+            launch, &mut buffers, 0..bits, &mut controls.workspace,
+        )?;
+        buffers.current_is_first()
+    };
+    Ok(if first_is_current { first.0 } else { alternate.0 })
 }
 
 /// Stable merge-path co-rank: how many `first` rows precede output `diagonal`

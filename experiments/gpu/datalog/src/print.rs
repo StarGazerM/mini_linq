@@ -20,17 +20,8 @@ fn device(program: &Program) -> &storage::DeviceStorage {
         .as_ref()
         .expect("checked device records")
 }
-/// `order[destination] = source position` taking rows from the `source`
-/// layout's column order into the `target` layout's column order.
-fn reorder(source: &[usize], target: &[usize]) -> Vec<usize> {
-    let mut at = vec![0; source.len()];
-    for (position, &column) in source.iter().enumerate() {
-        at[column] = position;
-    }
-    target.iter().map(|&column| at[column]).collect()
-}
-fn identity(order: &[usize]) -> bool {
-    order.iter().copied().eq(0..order.len())
+fn admitted_name(relation: usize, order: usize) -> Ident {
+    format_ident!("__cq_gpu_admitted_{}_{}", relation, order)
 }
 
 /// The Storage negative projection a component's key set realizes.
@@ -178,35 +169,44 @@ fn admission(
     let threads = device(program).layouts[canonical].permutation_threads;
     let state = local("layout", canonical);
     let packing = local("packing", index);
-    let order = &context.layouts[canonical].columns;
-    let ordered = (!identity(order)).then(|| quote!(
-        let #candidates = #packing.permute_device(&#candidates, #candidates.len(), &[#(#order),*], #threads)?;
-    ));
-    quote!(#ordered let #fresh = #state.fresh(&#candidates, #candidates.len())?;)
+    let record = &device(program).relations[index];
+    let order = &record.admitted_orders[0].columns;
+    let ordered = match record.candidate_order.to_string().as_str() {
+        "canonical" => quote!(),
+        "permutation" => quote!(
+            let #candidates = #packing.permute_device(&#candidates, #candidates.len(), &[#(#order),*], #threads)?;
+        ),
+        _ => unreachable!("checked candidate order certificate"),
+    };
+    quote!(#ordered
+        // SAFETY: declared packing initializes exactly the recorded codec bit window.
+        let #fresh = unsafe { #state.fresh(&#candidates, #candidates.len())? };
+    )
 }
 
-/// The fresh canonical-order run in another column order: shared when the
-/// order is the canonical one, otherwise permuted and sorted by `sorter`.
-fn reordered(
-    program: &Program,
-    context: &RoundContext,
-    index: usize,
-    fresh: &Ident,
-    columns: &[usize],
-    sorter: &Ident,
-) -> TokenStream {
-    let canonical = context.relations[index].providers.canonical;
+/// Materialize each recorded admitted order once; full and delta views share it.
+fn admitted_orders(program: &Program, index: usize, fresh: &Ident) -> TokenStream {
+    let canonical = program.context.relations[index].providers.canonical;
     let threads = device(program).layouts[canonical].permutation_threads;
-    let order = reorder(&context.layouts[canonical].columns, columns);
-    if identity(&order) {
-        return quote!(#fresh.clone());
-    }
+    let state = local("layout", canonical);
     let packing = local("layout_packing", canonical);
-    quote!({
-        let permuted = #packing.permute_device(#fresh.buffer(), #fresh.len(), &[#(#order),*], #threads)?;
-        // SAFETY: a column permutation of the unique fresh run is unique.
-        unsafe { #sorter.sort_known_unique(&permuted, #fresh.len())? }
-    })
+    let orders = device(program).relations[index].admitted_orders.iter().enumerate().map(|(i, order)| {
+        let name = admitted_name(index, i);
+        let permutation = &order.permutation;
+        let build = match order.certificate.to_string().as_str() {
+            "sorted_unique" => quote!(#fresh.clone()),
+            "unique_permutation" => quote!({
+                let permuted = #packing.permute_device(
+                    #fresh.buffer(), #fresh.len(), &[#(#permutation),*], #threads)?;
+                // SAFETY: the checked full-heading bijection preserves uniqueness
+                // and the same declared active bit width, but not ordering.
+                unsafe { #state.sort_known_unique(&permuted, #fresh.len())? }
+            }),
+            _ => unreachable!("checked admitted input certificate"),
+        };
+        quote!(let #name = #build;)
+    });
+    quote!(#(#orders)*)
 }
 
 /// Bulk `full_layouts` maintenance: append the fresh rows to each layout's
@@ -216,16 +216,15 @@ fn full_layouts(
     program: &Program,
     context: &RoundContext,
     index: usize,
-    fresh: &Ident,
     layouts: &[usize],
 ) -> TokenStream {
     let updates = layouts.iter().map(|&j| {
         let layout = &context.layouts[j];
         let state = local("layout", j);
         let host = &layout.host;
-        let run = reordered(program, context, index, fresh, &layout.columns, &state);
+        let run = admitted_name(index, device(program).layouts[j].admitted_order.expect("checked admitted order"));
         quote!({
-            let run = #run;
+            let run = #run.clone();
             // SAFETY: fresh rows are absent from the canonical layout, and every
             // full layout holds exactly the canonical rows in its own order.
             unsafe { #state.append_sorted(run)?; }
@@ -252,21 +251,22 @@ fn admit_publish(
     let fresh = local("fresh", i);
     let buffer = format_ident!("__cq_gpu_candidate_rows");
     let admit = admission(program, context, i, &buffer, &fresh);
+    let orders = admitted_orders(program, i, &fresh);
     let relation_name = relation.declaration.name.to_string();
     let canonical = local("layout", relation.providers.canonical);
     let mut operations = Vec::new();
     for operation in &transaction.operations {
         operations.push(match operation.kind.to_string().as_str() {
-            "full_layouts" => full_layouts(program, context, i, &fresh, &operation.layouts),
+            "full_layouts" => full_layouts(program, context, i, &operation.layouts),
             "delta_swap" => {
                 let delta = relation.delta_host.as_ref().expect("checked delta");
                 let next = &relation.next;
                 let ty = &relation.providers.next.ty;
-                let run = reordered(program, context, i, &fresh, &(0..relation.declaration.arity()).collect::<Vec<_>>(), &canonical);
+                let run = admitted_name(i, record.relation_order);
                 // Recorded `fresh_run` NEW: the fresh rows in relation order,
                 // built directly; publishing it as the next delta is a move.
                 quote!(
-                    let #next: #ty = #delta.with_sorted(#run, #canonical.params())?;
+                    let #next: #ty = #delta.with_sorted(#run.clone(), #canonical.params())?;
                     #delta = #next;
                 )
             }
@@ -275,8 +275,8 @@ fn admit_publish(
                     let layout = &context.delta_layouts[j];
                     let state = local("delta_layout", j);
                     let host = &layout.host;
-                    let run = reordered(program, context, i, &fresh, &layout.columns, &state);
-                    quote!(#host = #host.with_sorted(#run, #state.params())?;)
+                    let run = admitted_name(i, device(program).delta_layouts[j].admitted_order.expect("checked admitted order"));
+                    quote!(#host = #host.with_sorted(#run.clone(), #state.params())?;)
                 });
                 quote!(#(#rebuilds)*)
             }
@@ -295,6 +295,7 @@ fn admit_publish(
             }
             #fresh
         };
+        #orders
         #(#operations)*
     }))
 }
@@ -681,6 +682,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let upload = format_ident!("__cq_gpu_upload");
         let fresh = local("fresh", index);
         let admit = admission(program, context, index, &upload, &fresh);
+        let orders = admitted_orders(program, index, &fresh);
         let layouts = context
             .layouts
             .iter()
@@ -688,7 +690,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             .filter(|(_, layout)| layout.relation == index)
             .map(|(j, _)| j)
             .collect::<Vec<_>>();
-        let publish = full_layouts(program, context, index, &fresh, &layouts);
+        let publish = full_layouts(program, context, index, &layouts);
         let runner = program_runner();
         initialize.push(quote!(
             #runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> {
@@ -698,6 +700,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                     .collect::<::gpu_datalog_runtime::Result<::std::vec::Vec<_>>>()?;
                 let #upload = ::gpu_datalog_runtime::Buffer::from_host_async(__cq_gpu_pool.clone(), &words)?;
                 #admit
+                #orders
                 #publish
                 Ok(())
             })?;
@@ -752,7 +755,8 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 let packing = #packing;
                 let buffer = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &packing, &[batch])?;
                 let state: #state_ty = #state_init;
-                let run = state.sort_unique(&buffer, buffer.len())?;
+                // SAFETY: candidate concatenation used this checked projected packing.
+                let run = unsafe { state.sort_unique(&buffer, buffer.len())? };
                 <#ty>::from_sorted(__cq_gpu_pool.clone(), packing, state.params(), run)?
             };));
         }
@@ -821,7 +825,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let relation = &context.relations[output.relation];
         let canonical = &context.layouts[relation.providers.canonical];
         let host = &canonical.host;
-        let at = reorder(&canonical.columns, &(0..relation.declaration.arity()).collect::<Vec<_>>());
+        let at = &device.relations[output.relation].output_permutation;
         let fields = relation.declaration.columns.iter().zip(at).map(|(declared, position)| {
             let ty = &declared.ty;
             match symbols.codec(declared.logical_type_id) {
@@ -860,16 +864,27 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             ::gpu_datalog_runtime::phases::start();
             let __cq_gpu_trace_rounds = ::std::env::var_os("GPU_DATALOG_TRACE_ROUNDS").is_some();
             let __cq_gpu_trace_memory = ::std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some();
+            let __cq_gpu_trace_work = ::std::env::var_os("GPU_DATALOG_TRACE_WORK").is_some();
+            ::gpu_datalog_runtime::set_work_counters_enabled(__cq_gpu_trace_work);
+            ::gpu_datalog_runtime::reset_work_counters();
             let mut __cq_gpu_memory_usage = if __cq_gpu_trace_memory {
                 ::std::vec![::gpu_datalog_runtime::MemoryUse::default(); #relation_count]
             } else { ::std::vec::Vec::new() };
             #(#initialize)*
             #initialized
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "setup")?;
+            if __cq_gpu_trace_work {
+                ::gpu_datalog_runtime::trace_work("setup");
+                ::gpu_datalog_runtime::reset_work_counters();
+            }
             #(#strata)*
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "fixpoint")?;
+            if __cq_gpu_trace_work {
+                ::gpu_datalog_runtime::trace_work("fixpoint");
+            }
             let __cq_gpu_result = #result;
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "output")?;
+            ::gpu_datalog_runtime::set_work_counters_enabled(false);
             Ok(__cq_gpu_result)
         })().expect("GPU Datalog execution failed")
     }))

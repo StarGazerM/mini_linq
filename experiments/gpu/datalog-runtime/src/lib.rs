@@ -25,7 +25,10 @@ pub use radix_run::{
     SourceItemColumns, SourceLane,
 };
 pub use runs::SortedBatch;
-pub use stats::{readback_count, record_readback, trace_kernels, trace_memory, MemoryUse};
+pub use stats::{
+    readback_count, record_readback, reset_work_counters, set_work_counters_enabled,
+    trace_kernels, trace_memory, trace_work, work_counters, MemoryUse, SortWork, WorkCounters,
+};
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
 // DL-WaveLanes Sync audit: lane workers receive cloned input layouts, run holes

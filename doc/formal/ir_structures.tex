@@ -543,6 +543,13 @@ size are caller parameters; grids follow \textsc{GPU-LAUNCH-OCCUPANCY}.
  \pi\text{ a stable permutation or merge source map}}
  {\forall i.\ C_i'[j]=C_i[\pi(j)]\quad (C_1'[j],\ldots,C_m'[j])=I[\pi(j)]}
 \end{mathpar}
+Full-key set construction has a distinct witness: every complete key occurs
+once, so its descriptor records implicit offsets $O[i]=i$ and stores no offset
+lane or item-source map. Occurrence construction, including \code{C=()},
+retains materialized group offsets. A shared offset accessor consumes the
+descriptor's recorded representation; it does not inspect keys or infer
+uniqueness. Diagnostic host downloads alone may materialize the unit offsets.
+
 
 A \code{RadixLayout<K,V,W,O,C>} is the typed relational view of one
 immutable publication: a checked most-significant-first packing of $K$ into

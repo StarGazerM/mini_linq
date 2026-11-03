@@ -215,7 +215,7 @@ mod tests {
         let offsets = (0..=rows.len() as u64).collect::<Vec<_>>();
         let run = RadixRunView {
             keys: words.as_ptr(), offsets: offsets.as_ptr(), directory: std::ptr::null(),
-            keys_len: rows.len() as u64, items: rows.len() as u64, radix_bits: 0, reserved: 0,
+            keys_len: rows.len() as u64, items: rows.len() as u64, radix_bits: 0, unit_offsets: 0,
         };
         let runs = [run];
         let view = RadixLayoutView {

@@ -1425,6 +1425,20 @@ still deduplicate.
 \Rule{DL-SortKnownUnique}{x_0\ldots x_{n-1}\text{ initialized and pairwise distinct}}
  {\mathrm{sort}(x)\text{ is sorted, unique, of length }n}
 \end{mathpar}
+Device Storage additionally records the complete significant low-bit width
+$b=\sum_i w_i$ from declared scalar/codec metadata, with zero padding outside
+$[0,b)$. Stable radix passes restricted to that window induce exactly the
+same full-key order; directory resolution is not a sort-width bound.
+A recorded conservative full-word window is also legal; the checker accepts
+its trait-metadata provenance without requiring the narrower default.
+Native scalar keys need no index permutation; wide keys retain their physical
+lane stride even when the last active lane is partial.
+Each admitted physical order records a canonical-input permutation and a
+\code{sorted\_unique} or \code{unique\_permutation} certificate.
+The former adopts the canonical sorted batch; the latter sorts one bijective
+image without compaction. Full and delta consumers reference that same
+immutable ordered batch. Independent checks establish provenance and
+permutation coverage, not equality to the producer's preferred recipe list.
 Live counts may be read back to size sorts and to test termination; such
 readbacks are recorded realization cost, not semantic steps.
 
@@ -1467,6 +1481,13 @@ the exact-directory \code{radix\_bits} (default zero, legally configurable),
 ratio and launch geometry. \code{DeviceRadixRun<W, u64, ()>} carries no
 logical schema metadata. The offset choice is conservative for total
 publication size, not inferred from the current delta.
+The \code{new\_set(pool,params,active\_bits)} constructor consumes the recorded
+window. \code{offset\_layout: implicit\_unit} records $O[i]=i$ without an
+allocated offset lane, and \code{item\_sources: none} records the absence of
+payload columns. These facts follow explicit full-key-set construction,
+never merely \code{C=()}. Occurrence construction retains materialized offsets.
+The relation's output permutation is a checked canonical-field source map;
+the printer does not reconstruct it from schemas.
 Input schemas copy the recorded source ids; checking compares ids and never re-interns types.
 Later symbol codec lookup uses \code{Option<LogicalTypeId>}, not \code{Type}.
 The device record also carries GPU provider declarations keyed by the Storage

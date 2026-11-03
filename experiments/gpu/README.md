@@ -412,14 +412,16 @@ deduplicate, since projection need not be injective. Recorded delta moves
 are unchanged. Maintained views use `republish(&state)`; initial construction
 uses `from_sorted(pool, packing, params, batch)`, and delta replacement uses
 `with_sorted(batch, params)` to retain kernels and field descriptors.
-Explicit output uses `to_rows`. Full-key views also require the state/snapshot's
-construction-only set witness: occurrence publication clears it, while set
-append/replacement establishes or preserves it; unit item columns alone are
-not a uniqueness certificate.
+Explicit output uses `to_rows`. Full-key views require the state/snapshot's
+construction-only set witness, established by `new_set` and preserved by set
+append/replacement. Occurrence publication into that state is rejected;
+unit item columns alone are not a uniqueness certificate.
 
-Each `DeviceState` records `offset: u64`, `construction: full_key_set`,
-`read: key_prefix`, ratio, `radix_bits`, merge-tile rows, block threads and
-permutation threads. `radix_bits` defaults to zero (no directory) but legal
+Each `DeviceState` records `offset: u64`, `offset_layout: implicit_unit`,
+`item_sources: none`, `construction: full_key_set`, complete-codec `active_bits`,
+`sort: native_keys_or_lanes`, certified `admitted_order`, `read: key_prefix`,
+ratio, `radix_bits`, merge-tile rows, block threads and permutation threads.
+`radix_bits` defaults to zero (no directory) but legal
 configured values are accepted. `RadixRunParams` consumes explicit settings:
 ratio is at least two, merge tiles contain at least one row, and compiled
 run/permutation kernels require 256 threads. Unsupported geometry is rejected
@@ -633,6 +635,30 @@ reserved/cached bytes, per-relation accepted/layout/arena ownership footprints,
 and each hole's candidate rows and retry capacities. Layout footprints include
 shared backing allocations and must not be summed as physical pool usage.
 Native CUDA library scratch outside the pool is not included in pool counters.
+`GPU_DATALOG_TRACE_WORK=1` emits separate setup/fixpoint counters for canonical,
+layout and occurrence sorts, merges, grouping readbacks, descriptors and offset
+materialization. Radix `passes` counts planned 8-bit digit equivalents (small
+tile kernels may fuse them); `bytes` models radix input/output traffic, not
+measured DRAM bandwidth, and excludes gather/compaction/histogram/copies.
+Run counters/profilers separately from timing.
+
+Device Storage records each complete-codec active-bit expression, the
+`native_keys_or_lanes` sort form, implicit-unit set offsets, and certified
+admitted-row permutations. Canonical sorted/unique input is adopted; each
+other admitted order is sorted once and shared by full/delta views.
+Widths come from declared scalar/codec metadata, never observed row maxima.
+The ordinary occurrence API keeps materialized group offsets; a full-key
+`new_set(pool, params, active_bits)` publication carries an explicit set witness.
+
+Slice E's 2026-11-02 matched five-pair measurements versus `1b1540bc`,
+same-source linker-shuffle controls, radix-work counters and exact exports are
+recorded in [`compare/p4-gpu-e.results.json`](compare/p4-gpu-e.results.json).
+The combined change is retained at fixpoint ratios 0.96599/0.95177/0.96163
+for xalan/batik/Cassandra; sort counts stay unchanged while active radix
+passes shrink and unit-offset materialization disappears. All 104 TPC-H
+advised/automatic SF1/SF10 cases are exact. Its separate advised H05 SF10
+performance ceiling already fails on pristine baseline (951.291 ms versus
+current 952.262 ms); those executable nonzero exits remain recorded.
 
 For kernel attribution, build with `CQ_GPU_SEQUENCE_DUMP=/existing/directory`.
 The Sequence printer writes each checked program under its exact kernel module

@@ -467,14 +467,15 @@ impl RadixRunParams {
 pub struct RadixRunView<W: Word, O: OffsetWord> {
     /// `keys_len` strictly increasing distinct keys.
     pub keys: *const W,
-    /// `keys_len + 1` group offsets; the last is `items`.
+    /// `keys_len + 1` group offsets, or null for implicit unit offsets.
     pub offsets: *const O,
     /// `2^radix_bits + 1` slot lower bounds, or null when `radix_bits == 0`.
     pub directory: *const O,
     pub keys_len: u64,
     pub items: u64,
     pub radix_bits: u32,
-    pub reserved: u32,
+    /// 0 = materialized offsets; 1 = unit offsets (offset(slot) == slot).
+    pub unit_offsets: u32,
 }
 // SAFETY: this C-layout descriptor contains only device pointers and integers.
 unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixRunView<W, O> {}
@@ -581,7 +582,7 @@ unsafe impl DeviceCopy for IntervalProbe {}
 
 struct Segment<W: Word, O: OffsetWord, C> {
     keys: Arc<Buffer<W>>,
-    offsets: Buffer<O>,
+    offsets: Option<Buffer<O>>,
     directory: Buffer<O>,
     items: C,
     key_count: usize,
@@ -593,7 +594,7 @@ impl<W: Word, O: OffsetWord, C> Segment<W, O, C> {
     fn view(&self) -> RadixRunView<W, O> {
         RadixRunView {
             keys: self.keys.ptr(),
-            offsets: self.offsets.ptr(),
+            offsets: self.offsets.as_ref().map_or(std::ptr::null(), |offsets| offsets.ptr()),
             directory: if self.radix_bits == 0 {
                 std::ptr::null()
             } else {
@@ -602,7 +603,7 @@ impl<W: Word, O: OffsetWord, C> Segment<W, O, C> {
             keys_len: self.key_count as u64,
             items: self.item_count as u64,
             radix_bits: self.radix_bits,
-            reserved: 0,
+            unit_offsets: u32::from(self.offsets.is_none()),
         }
     }
 }
@@ -632,6 +633,8 @@ pub struct DeviceRadixRun<W: Word, O: OffsetWord, C: DeviceItemColumns> {
     /// Construction witness, not inferred from C=(): set admission guarantees
     /// unit offsets and disjoint complete keys across all accepted runs.
     full_key_set: bool,
+    /// Caller-recorded sort window; occurrences always use the full word.
+    active_bits: u32,
     /// The current publication's descriptors, uploaded once on first read and
     /// replaced only when a publication changes the runs.
     published: Mutex<Option<Arc<RadixSnapshot<W, O, C>>>>,
@@ -654,7 +657,8 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             pool,
             params,
             runs: Vec::new(),
-            full_key_set: C::COLUMNS == 0,
+            full_key_set: false,
+            active_bits: W::BITS,
             published: Mutex::new(None),
             order,
         })
@@ -679,6 +683,9 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     }
     pub fn params(&self) -> RadixRunParams {
         self.params
+    }
+    pub fn active_bits(&self) -> u32 {
+        self.active_bits
     }
     pub fn run_count(&self) -> usize {
         self.runs.len()
@@ -705,6 +712,9 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     /// Reads of every snapshot include all unmerged runs. Empty deltas are no-ops;
     /// a failed build or merge leaves the published runs unchanged.
     pub fn publish(&mut self, keys: &Buffer<W>, items: &C, rows: usize) -> Result<()> {
+        if self.full_key_set {
+            return Err("occurrence publication requires an occurrence constructor".into());
+        }
         let Some(segment) = self.group(keys, items, rows)? else {
             return Ok(());
         };
@@ -745,11 +755,16 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             count: Buffer::from_host_async(self.pool.clone(), &[items])?,
             items,
             full_key_set: self.full_key_set,
+            active_bits: self.active_bits,
             runs: self.runs.clone(),
             module: self.kernels.module.clone(),
             order: self.order.clone(),
             pool: self.pool.clone(),
             block_threads: self.params.block_threads,
+        });
+        crate::stats::record_work(|work| {
+            work.descriptor_materializations += 1;
+            work.descriptor_bytes += snapshot.descriptor_bytes() as u64;
         });
         *published = Some(snapshot.clone());
         Ok(snapshot)
@@ -762,7 +777,10 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             .map(|run| {
                 Ok(HostRadixRun {
                     keys: run.keys.to_host_prefix(run.key_count)?,
-                    offsets: run.offsets.to_host_prefix(run.key_count + 1)?,
+                    offsets: match &run.offsets {
+                        Some(offsets) => offsets.to_host_prefix(run.key_count + 1)?,
+                        None => (0..=run.key_count).map(|slot| O::from_u64(slot as u64)).collect(),
+                    },
                     directory: if run.radix_bits == 0 {
                         Vec::new()
                     } else {
@@ -797,6 +815,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             return Ok(None);
         }
         let pool = &self.pool;
+        crate::stats::record_sort(crate::stats::SortKind::Occurrence, rows, W::BITS, true);
         let module = &self.kernels.module;
         let cub = rccl_cub::cuda::Program::load(pool.context())?;
         let launch = cub.on(pool.stream())?;
@@ -807,6 +826,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             keys,
             rows,
             self.params.block_threads,
+            W::BITS,
         )?;
         let order = permutation.get().cu_deviceptr() as *const u32;
         // SAFETY: the flag kernel initializes all rows + 1 entries.
@@ -823,6 +843,10 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         )?;
         // SAFETY: stable selections initialize the prefixes read below.
         let offsets = unsafe { Buffer::<O>::uninitialized(pool.clone(), rows + 1)? };
+        crate::stats::record_work(|work| {
+            work.offset_materializations += 1;
+            work.offset_bytes += ((rows + 1) * size_of::<O>()) as u64;
+        });
         let distinct = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
         let mut offset_count = Native::<u64>::new(pool, 1)?;
         let mut key_count = Native::<u64>::new(pool, 1)?;
@@ -857,10 +881,11 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         )?;
         let items = items.gather(&self.kernels, order, rows)?;
         let key_count = runs::read_count(pool, offset_count.get())? - 1;
+        crate::stats::record_work(|work| work.grouping_readbacks += 1);
         let directory = self.directory(&distinct, key_count)?;
         Ok(Some(Segment {
             keys: Arc::new(distinct),
-            offsets,
+            offsets: Some(offsets),
             directory,
             items,
             key_count,
@@ -878,6 +903,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             return Err("merged radix run items exceed the offset carrier".into());
         }
         let slots = left.key_count + right.key_count;
+        crate::stats::record_work(|work| work.merges += 1);
         let pool = &self.pool;
         let module = &self.kernels.module;
         // SAFETY: the merge-path kernel initializes all slots and the terminal entry.
@@ -901,6 +927,10 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let launch = cub.on(pool.stream())?;
         // SAFETY: stable selections initialize the prefixes read below.
         let offsets = unsafe { Buffer::<O>::uninitialized(pool.clone(), slots + 1)? };
+        crate::stats::record_work(|work| {
+            work.offset_materializations += 1;
+            work.offset_bytes += ((slots + 1) * size_of::<O>()) as u64;
+        });
         let distinct = unsafe { Buffer::<W>::uninitialized(pool.clone(), slots)? };
         let mut offset_count = Native::<u64>::new(pool, 1)?;
         let mut key_count = Native::<u64>::new(pool, 1)?;
@@ -970,10 +1000,11 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             total,
         )?;
         let key_count = runs::read_count(pool, offset_count.get())? - 1;
+        crate::stats::record_work(|work| work.grouping_readbacks += 1);
         let directory = self.directory(&distinct, key_count)?;
         Ok(Segment {
             keys: Arc::new(distinct),
-            offsets,
+            offsets: Some(offsets),
             directory,
             items,
             key_count,
@@ -1009,8 +1040,24 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
 /// Formal rule DL-DeviceRuns: fresh is read-only unique-minus-committed;
 /// admitted complete keys are disjoint, with unit offsets in the radix engine.
 impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
+    /// Construct an explicit full-key set with a caller-recorded packing width.
+    /// `active_bits == W::BITS` is the conservative full-width mode.
+    /// Narrow sort inputs must satisfy each unsafe sort method's padding contract.
+    pub fn new_set(pool: Arc<Pool>, params: RadixRunParams, active_bits: u32) -> Result<Self> {
+        if active_bits > W::BITS {
+            return Err("set active bits exceed the key word".into());
+        }
+        let mut state = Self::new(pool, params)?;
+        state.full_key_set = true;
+        state.active_bits = active_bits;
+        Ok(state)
+    }
+
     fn set_ops(&self) -> runs::SetOps<'_> {
-        runs::SetOps { pool: &self.pool, module: &self.order, params: self.params }
+        runs::SetOps {
+            pool: &self.pool, module: &self.order, params: self.params,
+            active_bits: self.active_bits,
+        }
     }
 
     /// Full-key set cardinality. Set publications have one unit item per key.
@@ -1018,11 +1065,12 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         self.item_count()
     }
 
-    /// Initialized keys, unit offsets and radix directories of current runs.
+    /// Initialized keys, materialized offsets (if any), and radix directories.
     pub fn live_bytes(&self) -> usize {
         self.runs.iter().map(|run| {
             run.key_count * size_of::<W>()
-                + (run.key_count + 1 + run.directory.len()) * size_of::<O>()
+                + (run.offsets.as_ref().map_or(0, |_| run.key_count + 1)
+                    + run.directory.len()) * size_of::<O>()
         }).sum::<usize>() + self.published.lock().expect("radix publication cache")
             .as_ref().map_or(0, |snapshot| {
                 snapshot.descriptors.len() * size_of::<RadixRunView<W, O>>()
@@ -1033,7 +1081,7 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
     /// Current backing allocations; older retained snapshots are separate owners.
     pub fn allocated_bytes(&self) -> usize {
         self.runs.iter().map(|run| {
-            run.keys.allocated_bytes() + run.offsets.allocated_bytes()
+            run.keys.allocated_bytes() + run.offsets.as_ref().map_or(0, Buffer::allocated_bytes)
                 + run.directory.allocated_bytes()
         }).sum::<usize>() + self.published.lock().expect("radix publication cache")
             .as_ref().map_or(0, |snapshot| {
@@ -1044,8 +1092,14 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
 
     /// Read-only unique(candidates) minus every committed key, in sorted order.
     /// Only unique/fresh counts cross the existing admission barrier.
-    pub fn fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
-        let unique = self.sort_unique(candidates, rows)?;
+    /// # Safety
+    /// The input prefix is ready on this stream and has zero padding above
+    /// `active_bits()`, under the same full-heading packing as accepted keys.
+    pub unsafe fn fresh(&self, candidates: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+        if !self.full_key_set {
+            return Err("set admission requires a full-key set constructor".into());
+        }
+        let unique = unsafe { self.sort_unique(candidates, rows)? };
         if unique.is_empty() || self.is_empty() {
             return Ok(unique);
         }
@@ -1056,13 +1110,17 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
     }
 
     /// Sort and deduplicate complete keys without changing committed state.
-    pub fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
+    /// # Safety
+    /// The initialized input prefix is ready on this stream, with zero padding
+    /// above `active_bits()`. No input alias may mutate it until sorting finishes.
+    pub unsafe fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
         self.set_ops().sort(input, rows, false)
     }
 
     /// Sort an injective permutation without compaction or count readback.
     /// # Safety
-    /// The initialized input prefix must contain pairwise distinct keys.
+    /// The initialized input prefix must contain pairwise distinct keys, with
+    /// zero padding above `active_bits()`, ready and immutable during this sort.
     pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
         self.set_ops().sort(input, rows, true)
     }
@@ -1073,17 +1131,8 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         }
         let rows = batch.len();
         let keys = batch.shared_buffer()?;
-        // SAFETY: the kernel initializes the terminal offset as well as every unit offset.
-        let offsets = unsafe { Buffer::<O>::uninitialized(self.pool.clone(), rows + 1)? };
-        let module = &self.kernels.module;
-        let initial = module.prepare_unit_offsets::<O>(self.kernels.shape())?;
-        let config = self.launch_config(initial.function(), rows + 1)?;
-        module.unit_offsets::<O>(
-            self.pool.stream(), &module.prepare_unit_offsets::<O>(config)?,
-            rows as u64, offsets.ptr(),
-        )?;
         let directory = self.directory(&keys, rows)?;
-        Ok(Segment { keys: Arc::new(keys), offsets, directory, items: (), key_count: rows,
+        Ok(Segment { keys: Arc::new(keys), offsets: None, directory, items: (), key_count: rows,
             item_count: rows, radix_bits: self.params.radix_bits })
     }
 
@@ -1122,6 +1171,9 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
 
     /// Replace a delta publication by adopting its immutable unique batch.
     pub fn replace_sorted(&mut self, batch: runs::SortedBatch<W>) -> Result<()> {
+        if !self.full_key_set {
+            return Err("set replacement requires a full-key set constructor".into());
+        }
         if !self.pool.shares_memory(batch.buffer().pool()) {
             return Err("set batch memory differs".into());
         }
@@ -1147,6 +1199,7 @@ pub struct RadixSnapshot<W: Word, O: OffsetWord, C> {
     count: Buffer<u64>,
     items: u64,
     full_key_set: bool,
+    active_bits: u32,
     runs: Vec<Arc<Segment<W, O, C>>>,
     module: radix_kernels::LoadedModule,
     order: runs::run_kernels::LoadedModule,
@@ -1180,6 +1233,9 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
     }
     pub fn item_count(&self) -> usize {
         self.items as usize
+    }
+    pub fn active_bits(&self) -> u32 {
+        self.active_bits
     }
     /// Resident logical occurrence count (one `u64`), readable by count-gated
     /// device consumers after publication readiness, without a host download.
@@ -1601,6 +1657,7 @@ mod set_scratch_tests {
             wide_input.ptr(),
             4097,
             129,
+            3,
             false,
             256,
         )?;
@@ -1634,6 +1691,7 @@ mod set_scratch_tests {
                 wide_input.ptr(),
                 4097,
                 129,
+                3,
                 false,
                 256,
             )?,
@@ -1690,6 +1748,7 @@ impl RadixLayout<EncodedRow, (), PackedRow, u64, ()> {
         params: RadixRunParams,
     ) -> Result<Self> {
         let lanes = Self::check_set(pool, input, rows, key_bits, params)?;
+        crate::stats::record_sort(crate::stats::SortKind::Canonical, rows, key_bits, lanes != 1);
         // Empty headings need at most one physical key, regardless of multiplicity.
         let capacity = if key_bits == 0 { rows.min(1) } else { rows };
         let keys =
@@ -1761,6 +1820,7 @@ impl RadixLayout<EncodedRow, (), PackedRow, u64, ()> {
                             input.ptr(),
                             rows,
                             key_bits,
+                            lanes as u32,
                             false,
                             params.block_threads,
                         )?;
@@ -2109,14 +2169,14 @@ impl<K, V, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns> RadixLayout<K
 
 impl<K: ScalarTuple, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
     pub fn empty(pool: Arc<Pool>, packing: Packing, params: RadixRunParams) -> Result<Self> {
-        Self::publish(&DeviceRadixRun::new(pool, params)?, packing)
+        Self::publish(&DeviceRadixRun::new_set(pool, params, packing.bits())?, packing)
     }
 
     /// Adopt a sorted unique full-key batch without re-sorting or group readback.
     pub fn from_sorted(
         pool: Arc<Pool>, packing: Packing, params: RadixRunParams, batch: runs::SortedBatch<W>,
     ) -> Result<Self> {
-        let mut state = DeviceRadixRun::new(pool, params)?;
+        let mut state = DeviceRadixRun::new_set(pool, params, packing.bits())?;
         state.replace_sorted(batch)?;
         Self::publish(&state, packing)
     }
@@ -2158,6 +2218,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             params,
             runs: Vec::new(),
             full_key_set: true,
+            active_bits: self.packing().bits(),
             published: Mutex::new(None),
             kernels: ItemKernels {
                 pool: self.pool().clone(),
@@ -2204,7 +2265,8 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
     pub fn live_bytes(&self) -> usize {
         self.snapshot().runs.iter().map(|run| {
             run.key_count * size_of::<W>()
-                + (run.key_count + 1 + run.directory.len()) * size_of::<O>()
+                + (run.offsets.as_ref().map_or(0, |_| run.key_count + 1)
+                    + run.directory.len()) * size_of::<O>()
         }).sum::<usize>() + self.snapshot().descriptors.len() * size_of::<RadixRunView<W, O>>()
             + self.publication.fields.len() * size_of::<PackedField>() + size_of::<u64>()
     }
@@ -2213,7 +2275,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
     pub fn allocated_bytes(&self) -> usize {
         let snapshot = self.snapshot();
         snapshot.runs.iter().map(|run| {
-            run.keys.allocated_bytes() + run.offsets.allocated_bytes()
+            run.keys.allocated_bytes() + run.offsets.as_ref().map_or(0, Buffer::allocated_bytes)
                 + run.directory.allocated_bytes()
         }).sum::<usize>() + snapshot.descriptors.allocated_bytes()
             + snapshot.columns.allocated_bytes() + snapshot.count.allocated_bytes()
@@ -2232,7 +2294,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
         if permutation_threads != 256 {
             return Err("permutation kernel requires exactly 256 threads per block".into());
         }
-        let mut state = DeviceRadixRun::<W, O, ()>::new(pool.clone(), params)?;
+        let mut state = DeviceRadixRun::<W, O, ()>::new_set(pool.clone(), params, packing.bits())?;
         for run in &self.snapshot().runs {
             let permuted = self.packing().permute_device_on(
                 pool, &run.keys, run.key_count, order, permutation_threads,
@@ -2440,7 +2502,11 @@ pub mod device {
     /// `run` must be live and `slot` at most its key count.
     #[inline(always)]
     pub unsafe fn offset<W: Word, O: OffsetWord>(run: RadixRunView<W, O>, slot: u64) -> u64 {
-        unsafe { (*run.offsets.add(slot as usize)).to_u64() }
+        if run.unit_offsets != 0 {
+            slot
+        } else {
+            unsafe { (*run.offsets.add(slot as usize)).to_u64() }
+        }
     }
 
     /// The run's half-open item group for `key`, empty at `(items, items)` if absent.
@@ -2829,18 +2895,6 @@ mod radix_kernels {
         }
     }
 
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn unit_offsets<O: OffsetWord>(rows: u64, offsets: *mut O) {
-        let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
-        while row <= rows {
-            unsafe { *offsets.add(row as usize) = O::from_u64(row); }
-            row += stride;
-        }
-    }
-
     /// Mark group starts of the permuted keys; entry `rows` is the terminal.
     #[kernel]
     #[launch_bounds(256)]
@@ -3168,5 +3222,128 @@ mod radix_kernels {
             }
             probe += stride;
         }
+    }
+}
+
+#[cfg(test)]
+mod set_representation_tests {
+    use super::*;
+
+    const PARAMS: RadixRunParams = RadixRunParams {
+        ratio: 4,
+        radix_bits: 0,
+        merge_tile_rows: 32,
+        block_threads: 256,
+    };
+
+    #[test]
+    fn implicit_offsets_survive_merges_and_retained_snapshots() -> Result<()> {
+        for radix_bits in [0, 4] {
+            let pool = Pool::new(0, 0, 0)?;
+            let params = RadixRunParams { radix_bits, ..PARAMS };
+            let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), params, 32)?;
+            crate::set_work_counters_enabled(true);
+            crate::reset_work_counters();
+            for values in [(0..64).collect::<Vec<u64>>(), vec![100, 101]] {
+                let input = Buffer::from_host(pool.clone(), &values)?;
+                let batch = unsafe { state.fresh(&input, values.len())? };
+                unsafe { state.append_sorted(batch)?; }
+            }
+            assert_eq!(state.run_count(), 2);
+            assert!(state.runs.iter().all(|run| run.offsets.is_none()));
+            let live = state.runs.iter().map(|run| {
+                run.key_count * size_of::<u64>() + run.directory.len() * size_of::<u32>()
+            }).sum::<usize>();
+            assert_eq!(state.live_bytes(), live);
+            let retained = state.snapshot()?;
+            let descriptors = retained.descriptors.to_host()?;
+            assert!(descriptors.iter().all(|run| run.unit_offsets == 1 && run.offsets.is_null()));
+            assert_eq!(state.live_bytes(), live + retained.descriptor_bytes());
+            assert_eq!(state.allocated_bytes(), state.runs.iter().map(|run| {
+                run.keys.allocated_bytes() + run.directory.allocated_bytes()
+            }).sum::<usize>() + retained.descriptor_bytes());
+            for diagnostic in state.to_host()? {
+                assert_eq!(diagnostic.offsets, (0..=diagnostic.keys.len() as u32).collect::<Vec<_>>());
+            }
+            let next = Buffer::from_host(pool.clone(), &(200..232).collect::<Vec<u64>>())?;
+            let batch = unsafe { state.fresh(&next, 32)? };
+            unsafe { state.append_sorted(batch)?; }
+            assert!(state.runs.iter().all(|run| run.offsets.is_none()));
+            assert!(crate::work_counters().merges > 0);
+            assert_eq!(crate::work_counters().offset_materializations, 0);
+            assert_eq!(crate::work_counters().offset_bytes, 0);
+            assert_eq!(crate::work_counters().grouping_readbacks, 0);
+            let current = state.snapshot()?;
+            let probes = Buffer::from_host(pool.clone(), &[7_u64, 100, 200, 999])?;
+            assert!(state.publish(&probes, &(), 4).is_err());
+            assert!(Arc::ptr_eq(&current, &state.snapshot()?));
+            drop(state);
+            let old = retained.probe_keys(&pool, &probes, 4)?.to_host()?;
+            assert_eq!(old.iter().map(|probe| probe.count).collect::<Vec<_>>(), [1, 1, 0, 0]);
+            assert_eq!((old[0].begin, old[0].end), (7, 8));
+            assert_eq!((old[2].begin, old[2].end), (66, 66));
+            let new = current.probe_keys(&pool, &probes, 4)?.to_host()?;
+            assert_eq!(new.iter().map(|probe| probe.count).collect::<Vec<_>>(), [1, 1, 1, 0]);
+            let low = Buffer::from_host(pool.clone(), &[0_u64])?;
+            let high = Buffer::from_host(pool.clone(), &[101_u64])?;
+            let interval = retained.probe_intervals(&pool, &low, &high, 1)?.to_host()?;
+            assert_eq!(interval[0], IntervalProbe { groups: 66, items: 66 });
+            crate::set_work_counters_enabled(false);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unit_item_occurrences_keep_materialized_group_offsets() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let mut state = DeviceRadixRun::<u64, u32, ()>::new(pool.clone(), PARAMS)?;
+        assert_eq!(state.active_bits(), 64);
+        let input = Buffer::from_host(pool.clone(), &[1_u64 << 63, 7, 7, 9])?;
+        crate::set_work_counters_enabled(true);
+        crate::reset_work_counters();
+        state.publish(&input, &(), 4)?;
+        let retained = state.snapshot()?;
+        let descriptor = retained.descriptors.to_host()?[0];
+        assert_eq!(descriptor.unit_offsets, 0);
+        assert!(!descriptor.offsets.is_null());
+        let host = state.to_host()?;
+        assert_eq!(host[0].keys, [7, 9, 1_u64 << 63]);
+        assert_eq!(host[0].offsets, [0, 2, 3, 4]);
+        let work = crate::work_counters();
+        assert_eq!(work.occurrence.radix_bits, 64);
+        assert_eq!(work.occurrence.passes, 8);
+        assert_eq!(work.grouping_readbacks, 1);
+        assert_eq!(work.offset_materializations, 1);
+        assert_eq!(work.offset_bytes, 5 * size_of::<u32>() as u64);
+        let batch = unsafe { state.sort_unique(&input, 4)? };
+        assert!(unsafe { state.append_sorted(batch.clone()) }.is_err());
+        assert!(state.replace_sorted(batch).is_err());
+        let more = Buffer::from_host(pool.clone(), &[7_u64, 7, 9, 9])?;
+        state.publish(&more, &(), 4)?;
+        assert_eq!(state.item_count(), 8);
+        assert_eq!(state.to_host()?[0].offsets, [0, 4, 7, 8]);
+        assert!(state.runs.iter().all(|run| run.offsets.is_some()));
+        let old = retained.probe_keys(&pool, &more, 4)?.to_host()?;
+        assert_eq!(old[0].count, 2);
+        assert_eq!(old[2].count, 1);
+        let current = state.snapshot()?.probe_keys(&pool, &more, 4)?.to_host()?;
+        assert_eq!(current[0].count, 4);
+        assert_eq!(current[2].count, 3);
+        crate::set_work_counters_enabled(false);
+        Ok(())
+    }
+
+    #[test]
+    fn work_counters_are_opt_in_and_reset_without_device_access() {
+        crate::set_work_counters_enabled(false);
+        crate::reset_work_counters();
+        crate::stats::record_work(|work| work.merges += 1);
+        assert_eq!(crate::work_counters(), crate::WorkCounters::default());
+        crate::set_work_counters_enabled(true);
+        crate::stats::record_work(|work| work.merges += 1);
+        assert_eq!(crate::work_counters().merges, 1);
+        crate::reset_work_counters();
+        assert_eq!(crate::work_counters(), crate::WorkCounters::default());
+        crate::set_work_counters_enabled(false);
     }
 }

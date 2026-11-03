@@ -1,7 +1,7 @@
 //! Device realizations of the existing checked Datalog storage records.
 use cq_datalog_support::ensure;
 use cq_lang_datalog_storage::{
-    self as storage, DeviceRelation, DeviceScratch, DeviceState, DeviceStorage, Hasher,
+    self as storage, DeviceAdmittedOrder, DeviceRelation, DeviceScratch, DeviceState, DeviceStorage, Hasher,
     LayoutProtocol, Program, Provider, Providers, SymbolCodec, provider,
 };
 use cq_lang_structures::provider::{CodecId, InputColumn, InputSchema, intern_codecs};
@@ -378,6 +378,10 @@ fn empty_view(provider: &Type, ratio: usize, radix_bits: u32, merge_tile_rows: u
         })?)
 }
 
+fn active_bits(types: &[&Type]) -> Expr {
+    syn::parse_quote!(0u32 #(+ <#types as ::gpu_datalog_runtime::Scalar>::COLUMN.bits())*)
+}
+
 /// A full-key set in recorded physical order, with encoded-prefix reads.
 fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result<DeviceState> {
     let types = input
@@ -386,6 +390,7 @@ fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result
         .map(|column| &column.storage)
         .collect::<Vec<_>>();
     let word = word_type(types.iter().copied())?;
+    let active_bits = active_bits(&types);
     let state: Type = syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>);
     let radix_bits = 0u32;
     let (merge_tile_rows, block_threads, permutation_threads) = (32u32, 256u32, 256u32);
@@ -393,15 +398,20 @@ fn device_state(provider: Type, input: InputSchema, ratio: usize) -> syn::Result
         token: Ident::new(RADIX_RELATION, proc_macro2::Span::call_site()),
         input,
         packing: syn::parse_quote!(<#provider>::derive_packing()?),
-        state_init: syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
+        state_init: syn::parse_quote!(<#state>::new_set(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
             ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
-        })?),
+        }, #active_bits)?),
         init: syn::parse_quote!(<#provider>::publish(&__cq_gpu_state, __cq_gpu_packing.clone())?),
         provider,
         word,
         offset: syn::parse_quote!(u64),
+        offset_layout: syn::parse_quote!(implicit_unit),
+        item_sources: syn::parse_quote!(none),
         construction: syn::parse_quote!(full_key_set),
         read: syn::parse_quote!(key_prefix),
+        active_bits,
+        sort: syn::parse_quote!(native_keys_or_lanes),
+        admitted_order: None,
         state,
         ratio,
         radix_bits,
@@ -430,9 +440,36 @@ fn device_relation(input: InputSchema) -> syn::Result<DeviceRelation> {
             __cq_gpu_pool.clone()
         )),
         next: syn::parse_quote!(fresh_run),
+        admitted_orders: Vec::new(),
+        relation_order: 0,
+        candidate_order: syn::parse_quote!(canonical),
+        output_permutation: Vec::new(),
         input,
     };
     Ok(relation)
+}
+
+fn admitted_order(
+    record: &mut DeviceRelation,
+    canonical: &[usize],
+    columns: &[usize],
+) -> usize {
+    if let Some(index) = record.admitted_orders.iter().position(|order| order.columns == columns) {
+        return index;
+    }
+    let permutation = columns.iter().map(|column| {
+        canonical.iter().position(|source| source == column).expect("checked complete heading")
+    }).collect();
+    let certificate = if canonical == columns {
+        syn::parse_quote!(sorted_unique)
+    } else {
+        syn::parse_quote!(unique_permutation)
+    };
+    let index = record.admitted_orders.len();
+    record.admitted_orders.push(DeviceAdmittedOrder {
+        columns: columns.to_vec(), permutation, certificate,
+    });
+    index
 }
 
 /// Realize a default Storage program on the device: every layout becomes a
@@ -499,7 +536,7 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
             states.push(device_state(layout.provider.ty.clone(), input, ratio)?);
         }
     }
-    let [layouts, delta_layouts] = states;
+    let [mut layouts, mut delta_layouts] = states;
     let negations = source
         .negations
         .iter()
@@ -522,6 +559,29 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
     for (negative, state) in target.negations.iter_mut().zip(&negations) {
         negative.provider = instance(RADIX_RELATION, state.provider.clone());
         negative.hasher = Hasher::None;
+    }
+    for (index, record) in relations.iter_mut().enumerate() {
+        let canonical = &target.layouts[target.providers[index].canonical].columns;
+        admitted_order(record, canonical, canonical);
+        let relation_order = (0..declarations[index].arity()).collect::<Vec<_>>();
+        record.candidate_order = if canonical == &relation_order {
+            syn::parse_quote!(canonical)
+        } else {
+            syn::parse_quote!(permutation)
+        };
+        record.output_permutation = relation_order.iter().map(|column| {
+            canonical.iter().position(|source| source == column).expect("checked complete heading")
+        }).collect();
+        if declarations[index].value.is_none() {
+            record.relation_order = admitted_order(record, canonical, &relation_order);
+        }
+        for (layout, state) in target.layouts.iter().zip(&mut layouts)
+            .chain(target.delta_layouts.iter().zip(&mut delta_layouts))
+        {
+            if analysis.positions[&cq_syntax::symbol_name(&layout.relation)] == index {
+                state.admitted_order = Some(admitted_order(record, canonical, &layout.columns));
+            }
+        }
     }
     target.device = Some(DeviceStorage {
         providers: vec![cq_gpu_sequence_core::providers::declaration(RADIX_RELATION)],
@@ -679,6 +739,52 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             program,
             "inconsistent relation storage ABI or initializer",
         )?;
+        let canonical = &program.layouts[providers.canonical].columns;
+        let identity = (0..declaration.arity()).collect::<Vec<_>>();
+        ensure(
+            relation.output_permutation.len() == canonical.len()
+                && relation.output_permutation.iter().enumerate().all(|(column, &position)| {
+                    canonical.get(position) == Some(&column)
+                }),
+            program,
+            "output item-source map must reconstruct relation order from canonical fields",
+        )?;
+        ensure(
+            relation.admitted_orders.first().is_some_and(|order| {
+                order.columns == *canonical && order.certificate == "sorted_unique"
+            })
+                && match relation.candidate_order.to_string().as_str() {
+                    "canonical" => canonical == &identity,
+                    "permutation" => true,
+                    _ => false,
+                },
+            program,
+            "admission order certificate disagrees with canonical provenance",
+        )?;
+        for order in &relation.admitted_orders {
+            ensure(
+                order.columns.len() == canonical.len()
+                    && order.permutation.len() == canonical.len()
+                    && order.permutation.iter().enumerate().all(|(destination, &source)| {
+                        canonical.get(source) == order.columns.get(destination)
+                            && !order.permutation[..destination].contains(&source)
+                    })
+                    && match order.certificate.to_string().as_str() {
+                        "sorted_unique" => order.columns == *canonical,
+                        "unique_permutation" => true,
+                        _ => false,
+                    },
+                program,
+                "admitted order requires a complete injective canonical permutation",
+            )?;
+        }
+        ensure(
+            relation.admitted_orders.get(relation.relation_order).is_some_and(|order| {
+                declaration.value.is_some() || order.columns == identity
+            }),
+            program,
+            "relation delta has no certified relation-order input",
+        )?;
         if declaration.value.is_none() {
             let word = &relation.word;
             let ty: Type = syn::parse_quote!(
@@ -728,13 +834,21 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         )?;
         check_input(&state.input, &logical, logical.len(), &symbols, program)?;
         check_state(state, advice.ratio, program)?;
+        let relation = &advice.relations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
+        ensure(
+            state.admitted_order.and_then(|index| relation.admitted_orders.get(index))
+                .is_some_and(|order| order.columns == layout.columns),
+            program,
+            "layout admitted-order reference has stale or foreign columns",
+        )?;
     }
     for (negative, state) in program.negations.iter().zip(&advice.negations) {
         let declaration = &declarations[negative.relation];
         ensure(
             negative.provider.token == RADIX_RELATION
                 && negative.provider.ty == state.provider
-                && negative.hasher == Hasher::None,
+                && negative.hasher == Hasher::None
+                && state.admitted_order.is_none(),
             program,
             "every negative key set must use its recorded device provider without a hasher",
         )?;
@@ -790,8 +904,11 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
             && record.ratio >= 2
             && record.radix_bits <= 32
             && record.offset == syn::parse_quote!(u64)
+            && record.offset_layout == "implicit_unit"
+            && record.item_sources == "none"
             && record.construction == "full_key_set"
             && record.read == "key_prefix"
+            && record.sort == "native_keys_or_lanes"
             && record.merge_tile_rows >= 1
             && record.block_threads == 256
             && record.permutation_threads == 256,
@@ -808,6 +925,13 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
     let provider = &record.provider;
     let word = &record.word;
     let state = &record.state;
+    let active_bits = &record.active_bits;
+    ensure(
+        *active_bits == self::active_bits(&types)
+            || *active_bits == syn::parse_quote!(<#word as ::gpu_datalog_runtime::Word>::BITS),
+        program,
+        "active radix window must cover the complete declared codec widths",
+    )?;
     let (ratio, merge_tile_rows, block_threads) =
         (record.ratio, record.merge_tile_rows, record.block_threads);
     ensure(
@@ -817,9 +941,9 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
             && *state == syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
             && record.packing == syn::parse_quote!(<#provider>::derive_packing()?)
             && record.state_init
-                == syn::parse_quote!(<#state>::new(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
+                == syn::parse_quote!(<#state>::new_set(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
             ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
-        })?) && record.init
+        }, #active_bits)?) && record.init
             == syn::parse_quote!(<#provider>::publish(&__cq_gpu_state, __cq_gpu_packing.clone())?),
         program,
         "device state ABI and initializers disagree with its recorded schema or parameters",
@@ -1086,6 +1210,51 @@ mod tests {
     }
 
     #[test]
+    fn admitted_order_certificates_share_full_and_delta_sorting() {
+        let mut source = source();
+        let reach = 2;
+        source.certificates.clear();
+        let mut extra = source.layouts[source.providers[reach].canonical].clone();
+        extra.columns.reverse();
+        extra.key = 0;
+        let ty: Type = syn::parse_quote!(i32);
+        (extra.provider, extra.hasher, extra.protocol) = default_layout(&[&ty, &ty], 0);
+        source.layouts.push(extra.clone());
+        extra.maintenance = syn::parse_quote!(replace_each_run);
+        source.delta_layouts.push(extra);
+        let target = compile(&source).unwrap();
+        let device = target.device.as_ref().unwrap();
+        let orders = &device.relations[reach].admitted_orders;
+        assert!(orders.iter().any(|order| order.certificate == "unique_permutation"));
+        for (index, order) in orders.iter().enumerate() {
+            assert!(!orders[..index].iter().any(|prior| prior.columns == order.columns));
+        }
+        for (layout, state) in target.layouts.iter().zip(&device.layouts) {
+            for (delta, delta_state) in target.delta_layouts.iter().zip(&device.delta_layouts) {
+                if layout.relation == delta.relation && layout.columns == delta.columns {
+                    assert_eq!(state.admitted_order, delta_state.admitted_order);
+                }
+            }
+        }
+        // A legal, deliberately redundant sort is not the producer's preference.
+        // The checker validates its certificate rather than replaying selection.
+        let mut alternative = target.clone();
+        let device = alternative.device.as_mut().unwrap();
+        let canonical = alternative.providers[reach].canonical;
+        let mut redundant = device.relations[reach].admitted_orders[0].clone();
+        redundant.certificate = syn::parse_quote!(unique_permutation);
+        let index = device.relations[reach].admitted_orders.len();
+        device.relations[reach].admitted_orders.push(redundant);
+        device.layouts[canonical].admitted_order = Some(index);
+        check(&source, &alternative).unwrap();
+        let mut stale = target.clone();
+        let order = stale.device.as_mut().unwrap().relations[reach].admitted_orders
+            .iter_mut().find(|order| order.certificate == "unique_permutation").unwrap();
+        order.certificate = syn::parse_quote!(sorted_unique);
+        assert!(check_device(&stale).is_err());
+    }
+
+    #[test]
     fn scalar_aliases_are_resolved_by_rustc() {
         let ty: Type = syn::parse_quote!(MyScalar);
         let word = word_type([&ty]).unwrap();
@@ -1209,16 +1378,34 @@ mod tests {
             record.merge_tile_rows,
             record.block_threads,
         );
-        record.state_init = syn::parse_quote!(<#state>::new(
+        let active_bits = &record.active_bits;
+        record.state_init = syn::parse_quote!(<#state>::new_set(
             __cq_gpu_pool.clone(),
             ::gpu_datalog_runtime::RadixRunParams {
                 ratio: #ratio, radix_bits: #radix_bits,
                 merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
-            }
+            }, #active_bits
         )?);
         record.init = syn::parse_quote!(<#provider>::publish(
             &__cq_gpu_state, __cq_gpu_packing.clone()
         )?);
+    }
+
+    #[test]
+    fn independent_checker_accepts_recorded_full_word_window() {
+        let source = source();
+        let mut target = compile(&source).unwrap();
+        let device = target.device.as_mut().unwrap();
+        for record in device.layouts.iter_mut()
+            .chain(&mut device.delta_layouts).chain(&mut device.negations)
+        {
+            let word = &record.word;
+            record.active_bits = syn::parse_quote!(<#word as ::gpu_datalog_runtime::Word>::BITS);
+            refresh_state_initializers(record);
+        }
+        check(&source, &target).unwrap();
+        let roundtrip: Program = syn::parse2(quote!(#target)).unwrap();
+        check_device(&roundtrip).unwrap();
     }
 
     #[test]
@@ -1433,6 +1620,19 @@ mod tests {
             |d| d.layouts[0].packing = syn::parse_quote!(custom()),
             |d| d.delta_layouts[0].init = syn::parse_quote!(custom()),
             |d| d.negations[0].state = syn::parse_quote!(Custom),
+            |d| d.layouts[0].active_bits = syn::parse_quote!(32u32),
+            |d| d.layouts[0].sort = syn::parse_quote!(inspect_values),
+            |d| d.layouts[0].offset_layout = syn::parse_quote!(materialized),
+            |d| d.layouts[0].item_sources = syn::parse_quote!(allocated),
+            |d| d.layouts[0].admitted_order = None,
+            |d| d.layouts[0].admitted_order = Some(usize::MAX),
+            |d| d.negations[0].admitted_order = Some(0),
+            |d| d.relations[0].admitted_orders.clear(),
+            |d| d.relations[0].admitted_orders[0].certificate = syn::parse_quote!(unchecked),
+            |d| d.relations[0].admitted_orders[0].permutation.clear(),
+            |d| d.relations[0].candidate_order = syn::parse_quote!(inspect_values),
+            |d| d.relations[0].output_permutation.clear(),
+            |d| d.relations[2].relation_order = usize::MAX,
             |d| d.scratch.release = syn::parse_quote!(never),
             |d| {
                 d.negations.pop();

@@ -705,10 +705,53 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   comparison with matched `oxide run` materialization.
   Nsight shows unchanged sort/unique-mark counts and added unit-offset work;
   Cassandra's module load/unload calls fall 158→6, not its GPU sort cost.
-  Slice E should specialize recorded active-bit/key-only sorts and suppress
-  redundant unit-offset/layout materialization before automatic ranking.
   Raw evidence, profile scope and per-command gate times:
   `experiments/gpu/compare/p4-gpu-d.results.json`.
+  **Slice E implementation:** `DeviceState.active_bits` records complete
+  declared codec widths (the conservative full-word alternative remains legal).
+  Explicit `new_set` consumes the bit window; native scalar sets sort keys
+  directly, and known-unique scalar output adopts the sorted buffer without
+  another copy. Wide sorting retains physical stride independently of active
+  width. `DeviceRelation.admitted_orders` records canonical sorted/unique
+  adoption or an injective full-heading permutation; each ordered batch is
+  constructed once and shared by its full/delta references. Output field maps
+  are recorded too. Full-key descriptors carry implicit unit offsets and no
+  item-source map; ordinary occurrences retain materialized grouping offsets.
+  Checkers validate provenance and complete bit/field coverage independently,
+  including legal nonpreferred full-width/redundant-sort choices.
+  Provider identity, ratio and directory settings are unchanged: no slower
+  alternative provider or nonzero directory is promoted by these sort changes.
+  `GPU_DATALOG_TRACE_WORK` separates canonical/layout/occurrence planned radix
+  passes and modeled bytes, merges, group readbacks and metadata materialization;
+  these counters and Nsight captures run separately from paired timing.
+  **Measured retention, 2026-11-02, versus `1b1540bc`:** five interleaved
+  exact-answer pairs per dataset give current/baseline fixpoint ratios
+  xalan **0.96599 [0.95611,0.98067]**, batik
+  **0.95177 [0.95017,0.95347]**, Cassandra
+  **0.96163 [0.93628,0.98586]**. Same-source linker-shuffle controls (five
+  pairs each) give **1.00607 [0.99821,1.01438]**,
+  **1.00501 [1.00249,1.00727]**, **1.00701 [0.99843,1.01614]** respectively.
+  Every optimization CI is below one and disjoint below its control CI;
+  retain the combined change, without attributing its wall-time gain to a
+  subtracted profile bucket or promoting another provider/directory default.
+  Fixpoint planned eight-bit radix passes fall **18,952→16,032**,
+  **30,632→25,660**, **15,760→13,284**; modeled radix bytes fall
+  **109.290→107.737 GB**, **108.785→104.723 GB**, **2.743→2.468 GB**.
+  Sort counts and merges are unchanged in this corpus; the new certificates
+  make sharing explicit but do not claim fewer sorts here. Fixpoint unit-offset
+  materializations **4,183/6,999/3,062→0**; group readbacks stay zero.
+  Separate diagnostic-process pool peaks fall **7.927→6.526 GB**,
+  **8.377→5.240 GB**, **0.358→0.189 GB** (native CUDA scratch excluded).
+  GPU suites/Cassandra 26/26, xalan/batik 43/43 duplicate-free exports on every
+  primary/control sample, root, quick (15), formal and API (29 unchanged)
+  pass; all **46 CPU expansions remain identical**. TPC-H advised+automatic
+  is **104/104 exact** at SF1/SF10. Its separate H05 advised SF10 ceiling
+  failure is **pre-existing**: pristine baseline **951.291 ms**, current
+  **952.262 ms**, versus **10.35 ms**. Both commands correctly exit nonzero;
+  the baseline diagnostic is not a paired H05 performance comparison.
+  Source/binary/data identities, Nsight attribution, counters, sampled VRAM,
+  page faults and per-command gate times:
+  `experiments/gpu/compare/p4-gpu-e.results.json`.
 - **P5 Scan columns (CPU).** Measured rules only (§12.4): plain default;
   byte truncation for scans; bit-packing only for bandwidth-bound parallel
   scans; encoded execution on dictionary codes first. Block format, codec trait, summaries built with

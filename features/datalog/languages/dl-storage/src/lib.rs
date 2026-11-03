@@ -94,6 +94,23 @@ pub struct DeviceRelation {
     /// from admission's fresh rows, so `next_init` is only its declared empty
     /// value and is never printed.
     pub next: Ident,
+    /// One certified admitted-row order per publication, shared by all views.
+    pub admitted_orders: Vec<DeviceAdmittedOrder>,
+    /// Relation-order delta references this certified order.
+    pub relation_order: usize,
+    /// Candidate relation order is `canonical` or requires `permutation`.
+    pub candidate_order: Ident,
+    /// Relation output field to canonical packed field, without device reordering.
+    pub output_permutation: Vec<usize>,
+}
+/// A construction certificate rooted in canonical admission's sorted unique batch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceAdmittedOrder {
+    pub columns: Vec<usize>,
+    /// Destination position to canonical input position, recorded once.
+    pub permutation: Vec<usize>,
+    /// `sorted_unique` adopts canonical order; `unique_permutation` sorts once.
+    pub certificate: Ident,
 }
 /// The maintained backing state of one device provider and its empty view.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,10 +121,20 @@ pub struct DeviceState {
     pub provider: Type,
     pub word: Type,
     pub offset: Type,
+    /// Full-key set positions are unit offsets, not a materialized offset lane.
+    pub offset_layout: Ident,
+    /// Full-row keys carry no item columns and need no item-source map.
+    pub item_sources: Ident,
     /// Ordinary full-key set construction and encoded key-prefix reads.
     pub construction: Ident,
     pub read: Ident,
     pub packing: Expr,
+    /// Significant low-bit window, derived only from the declared codec schema.
+    pub active_bits: Expr,
+    /// Native scalar keys or stable lane pairs, never value-inspected selection.
+    pub sort: Ident,
+    /// Index into the relation's admitted_orders; negative projections have none.
+    pub admitted_order: Option<usize>,
     pub state: Type,
     /// Resolved maintenance and auxiliary launch parameters, consumed verbatim.
     pub ratio: usize,
@@ -144,7 +171,16 @@ record!(DeviceRelation {
     candidates_init: Expr,
     arena: Type,
     arena_init: Expr,
-    next: Ident
+    next: Ident,
+    admitted_orders: Vec<DeviceAdmittedOrder>,
+    relation_order: usize,
+    candidate_order: Ident,
+    output_permutation: Vec<usize>
+});
+record!(DeviceAdmittedOrder {
+    columns: Vec<usize>,
+    permutation: Vec<usize>,
+    certificate: Ident
 });
 record!(DeviceState {
     input: InputSchema,
@@ -152,9 +188,14 @@ record!(DeviceState {
     provider: Type,
     word: Type,
     offset: Type,
+    offset_layout: Ident,
+    item_sources: Ident,
     construction: Ident,
     read: Ident,
     packing: Expr,
+    active_bits: Expr,
+    sort: Ident,
+    admitted_order: Option<usize>,
     state: Type,
     ratio: usize,
     radix_bits: u32,

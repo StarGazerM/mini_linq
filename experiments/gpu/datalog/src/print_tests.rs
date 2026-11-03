@@ -9,7 +9,15 @@ fn program_with_symbols(
     ty: syn::Type,
     symbols: proc_macro2::TokenStream,
 ) -> cq_lang_datalog_round::Program {
-    let host = cq_datalog_storage::compile(&syn::parse_quote! {
+    program_with_orders(ty, symbols, false)
+}
+
+fn program_with_orders(
+    ty: syn::Type,
+    symbols: proc_macro2::TokenStream,
+    extra_order: bool,
+) -> cq_lang_datalog_round::Program {
+    let mut host = cq_datalog_storage::compile(&syn::parse_quote! {
         struct Paths;
         relation Edge(x:#ty,y:#ty) = (edges);
         relation Reach(x:#ty,y:#ty);
@@ -24,6 +32,14 @@ fn program_with_symbols(
         }
     })
     .unwrap();
+    if extra_order {
+        host.certificates.clear();
+        let mut extra = host.layouts[host.providers[1].canonical].clone();
+        extra.columns.reverse();
+        host.layouts.push(extra.clone());
+        extra.maintenance = syn::parse_quote!(replace_each_run);
+        host.delta_layouts.push(extra);
+    }
     let device = storage::compile_with(&host, symbols).unwrap();
     let mut pipeline = cq_datalog_fork::default_pipeline();
     let terminal = pipeline.passes.last_mut().unwrap();
@@ -225,6 +241,26 @@ fn key_sets_and_layouts_print_recorded_device_records() {
 }
 
 #[test]
+fn admitted_orders_are_printed_once_per_publication_and_reused() {
+    let program = program_with_orders(syn::parse_quote!(i32), quote!(), true);
+    let device = program.storage.device.as_ref().unwrap();
+    let source = print::compile(&program).unwrap().to_token_stream().to_string();
+    assert!(source.contains("new_set"));
+    assert!(source.contains("sort_known_unique"));
+    for (relation, record) in device.relations.iter().enumerate() {
+        let sites = source.matches(&format!("let __cq_gpu_admitted_{relation}_0 =")).count();
+        for order in 1..record.admitted_orders.len() {
+            assert_eq!(
+                source.matches(&format!("let __cq_gpu_admitted_{relation}_{order} =")).count(),
+                sites,
+                "an admitted order is constructed once, not once per consumer",
+            );
+        }
+    }
+    assert!(source.contains("trace_work"));
+}
+
+#[test]
 fn printer_rejects_tampered_device_facts() {
     let source = program();
     let changes: &[fn(&mut cq_lang_datalog_storage::DeviceStorage)] = &[
@@ -237,6 +273,12 @@ fn printer_rejects_tampered_device_facts() {
         |device| device.layouts[0].merge_tile_rows = 0,
         |device| device.layouts[0].block_threads = 512,
         |device| device.layouts[0].permutation_threads = 128,
+        |device| device.layouts[0].active_bits = syn::parse_quote!(1u32),
+        |device| device.layouts[0].offset_layout = syn::parse_quote!(materialized),
+        |device| device.layouts[0].item_sources = syn::parse_quote!(allocated),
+        |device| device.layouts[0].admitted_order = None,
+        |device| device.relations[0].admitted_orders[0].certificate = syn::parse_quote!(unchecked),
+        |device| device.relations[0].output_permutation.clear(),
         |device| device.layouts[0].input.columns[0].storage = syn::parse_quote!(f32),
         |device| device.layouts[0].token = syn::parse_quote!(unknown),
     ];

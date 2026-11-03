@@ -72,7 +72,7 @@ fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
     // SAFETY: uploads initialize sorted unique prefixes and no writer is kept.
     let empty = unsafe { SortedBatch::from_sorted(Buffer::<u64>::from_host_async(pool.clone(), &[])?, 0)? };
     let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host_async(pool.clone(), &words)?, 2)? };
-    let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), PARAMS)?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, packing.bits())?;
     unsafe {
         state.append_sorted(empty.clone())?;
         state.append_sorted(batch.clone())?;
@@ -120,7 +120,7 @@ fn republished_layouts_share_fields_and_reuse_unchanged_runs() -> Result<()> {
     let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host_async(pool.clone(), &words)?, 2)? };
     // Ratio two retains the 2-row run when the 1-row run is published.
     let params = RadixRunParams { ratio: 2, ..PARAMS };
-    let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), params)?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), params, packing.bits())?;
     unsafe { state.append_sorted(batch)?; }
     let layout = Layout::publish(&state, packing.clone())?;
     // The unchanged state republishes the same retained descriptors.
@@ -141,13 +141,13 @@ fn republished_layouts_share_fields_and_reuse_unchanged_runs() -> Result<()> {
     unsafe { state.append_sorted(empty()?)?; }
     let next = grown.republish(&state)?;
     assert_eq!(next.view().keys.runs, grown.view().keys.runs);
-    let empty_state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), PARAMS)?;
+    let empty_state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, packing.bits())?;
     let empty_delta = Layout::publish(&empty_state, packing.clone())?;
     let next_empty = empty_delta.republish(&empty_state)?;
     assert_eq!(next_empty.view().keys.runs, empty_delta.view().keys.runs);
     assert_eq!(next_empty.len(), 0);
     assert!(Layout::publish(&state, Packing::new(&[32, 32])?).is_err());
-    let other_state = DeviceRadixRun::<u64, u64, ()>::new(Pool::new(0, 0, 0)?, PARAMS)?;
+    let other_state = DeviceRadixRun::<u64, u64, ()>::new_set(Pool::new(0, 0, 0)?, PARAMS, packing.bits())?;
     assert!(layout.republish(&other_state).is_err());
     assert_eq!(grown.to_rows()?, vec![vec![-3, 7], vec![9, 2], vec![12, 8]]);
     Ok(())
@@ -280,8 +280,8 @@ fn concatenate_case<K: ScalarTuple, W: Word + 'static>(packing: Packing) -> Resu
     } else {
         assert!(concatenate_batches::<u64>(pool.clone(), &packing, &batches).is_err());
     }
-    let mut accepted = DeviceRadixRun::<W, u64, ()>::new(pool, PARAMS)?;
-    let fresh = accepted.fresh(&output, output.len())?;
+    let mut accepted = DeviceRadixRun::<W, u64, ()>::new_set(pool, PARAMS, packing.bits())?;
+    let fresh = unsafe { accepted.fresh(&output, output.len()) }?;
     // SAFETY: fresh is sorted, unique and absent from the empty accepted state.
     unsafe { accepted.append_sorted(fresh)? };
     let snapshot = RadixLayout::<K, (), W, u64, ()>::publish(&accepted, packing)?;
@@ -418,7 +418,7 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
     let first = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words[..2])?, 2)? };
     let second = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words[2..])?, 1)? };
     let empty = unsafe { SortedBatch::from_sorted(Buffer::<u64>::from_host(pool.clone(), &[])?, 0)? };
-    let mut state = DeviceRadixRun::<u64, u64, ()>::new(pool.clone(), params)?;
+    let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), params, packing.bits())?;
     unsafe {
         state.append_sorted(first)?;
         state.append_sorted(empty)?;
@@ -472,5 +472,44 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
     // Prefix intervals are local to each retained run, not one flat allocation.
     assert_eq!(ranges.to_host()?, vec![0, 1, 1, 2, 0, 1]);
     drop(owner);
+    Ok(())
+}
+
+#[test]
+fn typed_set_layouts_retain_narrow_packing_in_wider_physical_words() -> Result<()> {
+    type Layout = RadixLayout<(u32, u64), (), [u64; 3], u64, ()>;
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Layout::derive_packing()?;
+    assert_eq!(packing.bits(), 96);
+    let empty = Layout::empty(pool.clone(), packing.clone(), PARAMS)?;
+    assert_eq!(empty.snapshot().active_bits(), 96);
+    let rows = [[1, u64::MAX as i128], [2, 0], [u32::MAX as i128, 1]];
+    let words = rows.iter().map(|row| packing.pack::<[u64; 3]>(row))
+        .collect::<Result<Vec<_>>>()?;
+    let batch = unsafe {
+        SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())?
+    };
+    let layout = Layout::from_sorted(pool.clone(), packing.clone(), PARAMS, batch.clone())?;
+    assert_eq!(layout.snapshot().active_bits(), 96);
+    let successor = empty.with_sorted(batch, PARAMS)?;
+    assert_eq!(successor.snapshot().active_bits(), 96);
+    assert_eq!(successor.to_host()?, words);
+    gpu_datalog_runtime::set_work_counters_enabled(true);
+    gpu_datalog_runtime::reset_work_counters();
+    let before = gpu_datalog_runtime::readback_count();
+    let permuted = layout.permuted_provider::<(u64, u32)>(&pool, &[1, 0], PARAMS, 256)?;
+    assert_eq!(gpu_datalog_runtime::readback_count(), before);
+    let work = gpu_datalog_runtime::work_counters();
+    assert_eq!(work.layout.sorts, 1);
+    assert_eq!(work.layout.radix_bits, 96);
+    assert_eq!(work.layout.passes, 12);
+    assert_eq!(work.offset_materializations, 0);
+    assert_eq!(permuted.snapshot().active_bits(), 96);
+    assert_eq!(permuted.to_rows()?, vec![
+        vec![0, 2], vec![1, u32::MAX as i128], vec![u64::MAX as i128, 1],
+    ]);
+    assert_eq!(layout.to_host()?, words);
+    assert_eq!(successor.to_rows()?, rows.map(Vec::from));
+    gpu_datalog_runtime::set_work_counters_enabled(false);
     Ok(())
 }

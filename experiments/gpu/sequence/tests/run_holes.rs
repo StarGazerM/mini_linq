@@ -25,11 +25,12 @@ fn runs(pool: &Arc<Pool>, packing: &Packing, rows: &[Vec<Vec<i128>>]) -> Result<
 fn relation<K: ScalarTuple, W: Word + 'static>(
     pool: Arc<Pool>, packing: Packing, batches: Vec<SortedBatch<W>>,
 ) -> Result<RadixLayout<K, (), W, u64, ()>> {
-    let mut index = DeviceRadixRun::<W,u64,()>::new(pool, RadixRunParams {
+    let mut index = DeviceRadixRun::<W,u64,()>::new_set(pool, RadixRunParams {
         ratio: 4, radix_bits: 0, merge_tile_rows: 32, block_threads: 256,
-    })?;
+    }, packing.bits())?;
     for batch in batches {
-        let fresh = index.fresh(batch.buffer(), batch.len())?;
+        // SAFETY: fixture keys were encoded with this declared packing.
+        let fresh = unsafe { index.fresh(batch.buffer(), batch.len())? };
         // SAFETY: read-only fresh excluded every committed full key.
         unsafe { index.append_sorted(fresh)?; }
     }

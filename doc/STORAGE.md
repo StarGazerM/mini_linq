@@ -1267,8 +1267,12 @@ Admission and publication are separate: the canonical
 committed complete keys without changing accepted state, returning a
 `SortedBatch`. `append_sorted` publishes that batch into every full layout,
 canonical included; each appended batch must be sorted, unique and disjoint
-from accepted keys. Secondary permutations derive from the same admitted
-batch: they preserve uniqueness and cardinality but must restore sort order.
+from accepted keys. `DeviceRelation.admitted_orders` records a complete
+canonical-to-layout permutation and either `sorted_unique` (adopt) or
+`unique_permutation` (sort without compaction). Each full/delta `DeviceState`
+references that order; one sorted batch is shared by every consumer of the
+same recorded order. The checker validates provenance, bijection and field
+coverage without recomputing the producer's preferred order list.
 The relation-order batch becomes NEW/delta by the recorded moves; frozen
 negative projections independently deduplicate because projection need not
 be injective. The view uses `republish(&state)` for maintained publication
@@ -1276,10 +1280,25 @@ and `from_sorted(pool, packing, params, batch)` for initial fresh-view construct
 Delta replacement uses `with_sorted(batch, params)`, retaining kernels and
 sharing field descriptors; an unchanged batch or unchanged empty publication
 reuses its snapshot without a sort, upload or count readback.
+`DeviceState.active_bits` is the sum of the recorded storage columns'
+`Scalar::COLUMN.bits()` values, including declared symbol codecs. It covers
+the entire significant low-bit window, never a sampled maximum or directory
+prefix. `sort: native_keys_or_lanes` uses direct native scalar keys or stable
+lane ordering with physical stride distinct from the active window.
+A recorded conservative `<W as Word>::BITS` window is also legal; checking
+does not require the producer's narrower preference.
+`new_set(pool, params, active_bits)` consumes this window; unsafe raw-key
+sort input must have zero padding outside it. `offset_layout: implicit_unit`
+and `item_sources: none` are full-row set facts: the run descriptor denotes
+arithmetic unit offsets rather than allocating an offset lane. Occurrence
+builds retain materialized group offsets and share an item-source map only
+when item columns exist. Output field reconstruction uses the recorded
+`output_permutation`, not a printer-derived item map.
+
 Explicit output materialization uses `to_rows`.
 State and snapshots carry a construction-only `full_key_set` witness:
-ordinary occurrence publication clears it, and set append/replacement
-establishes or preserves it. Full-key layout validation and permutation require
+`new_set` establishes it and set append/replacement preserves it.
+Occurrence publication into a set state is rejected. Full-key validation and permutation require
 that witness; `C=()` alone does not prove uniqueness.
 
 Each `DeviceState` records `offset: u64`, `construction: full_key_set`,

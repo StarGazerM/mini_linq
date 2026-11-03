@@ -13,6 +13,25 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P4-GPU slice E records complete-codec active-bit sort windows and admitted
+  input certificates in device Storage. Full/delta consumers share one sorted
+  batch per recorded physical order; canonical-order input is adopted without
+  sorting. Independent checks reject stale permutations, omitted significant
+  bits and false sortedness claims. Full-key sets use explicit implicit-unit
+  offsets and no item-source map; occurrences retain materialized group offsets.
+  Opt-in phase work counters distinguish canonical/layout radix work, modeled
+  traffic, merges, group readbacks and metadata materialization. Directory and
+  provider defaults remain conservative; performance evidence is recorded in
+  the P4-GPU plan entry.
+  Five exact pairs versus `1b1540bc` retain the combined change: fixpoint ratios
+  xalan 0.96599, batik 0.95177, Cassandra 0.96163; each 95% CI is below one
+  and below its same-source linker-shuffle control CI. Planned radix passes
+  drop 15–16%; sort/merge counts stay unchanged and unit-offset allocations
+  disappear. GPU/CPU/API gates and all 104 advised/automatic TPC-H exactness
+  cases pass. The separate H05 performance ceiling fails on pristine baseline
+  too (951.291 ms versus current 952.262 ms). Full evidence:
+  `experiments/gpu/compare/p4-gpu-e.results.json`.
+
 - P4-GPU slice D cuts Datalog EDB/full/delta/negative layouts over to ordinary
   complete-key `RadixLayout<_, (), W, u64, ()>` sets backed by
   `DeviceRadixRun<W, u64, ()>`, with `radix_relation` /
