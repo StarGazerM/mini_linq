@@ -767,10 +767,15 @@ that the build is total, and that the scan reaches \code{j} through an
 exclusive pipe spine whose every result carries $k$: renames, projections,
 declarative selections and left operands of eager probes and semijoins.
 The recorded single-level key layout, not the provider's Rust type name,
-establishes eligibility. The printer requires \code{Keys}: \code{distinct_keys}
-enumerates exactly the stored distinct key tuples and \code{key_count} gives
-their count. Custom and routed providers discharge this law through the same
-trait obligation as built-in providers.
+establishes eligibility. Recorded \code{Keys} support describes the exact stored
+key layout. With neither realization flag, projected \code{Build} consumes
+\code{Keys::distinct\_keys} only after activation, the recorded default.
+Source \code{run\_filter} and realization \code{borrowed\_filter} are distinct
+provider facts. Explicit borrowing requires a scalar complete stored layout and
+\code{RunFilterSource}. Explicit \code{attached\_filter} instead requires an
+incremental \code{BuildSidecar} builder attached through the exact
+\code{BuildWithSidecar} provider; the two realization facts are mutually
+exclusive. Rust discharges these capabilities, not provider-name recognition.
 Rows of the scan with $k\notin\pi_k(b)$ produce, along that spine, only rows
 with the same $k$, which \code{j} drops; so the filter keeps a superset of the
 rows \code{j} can keep ($R\ltimes b\subseteq\sigma_F(R)\subseteq R$). A key bound
@@ -780,7 +785,8 @@ left operands are rejected. An anti join cannot cover
 a filter. Removing the exact operator leaves an invalid entry: a conservative
 filter can never be the only check of the constraint.
 
-For the keys $S$ supplied by \code{Build}, the capability laws are
+For the projected scalar keys $S$ supplied by distinct-key enumeration,
+observed by attached construction or borrowed at publication, the capability laws are
 \[
  \begin{aligned}
  T:\code{ConservativeMembership<K>} &: \quad k\in S\implies T.\mathsf{test}(k),\\
@@ -794,8 +800,12 @@ never permitted. A conservative \code{may_contain_in(lo,hi)} may return false on
 when the closed interval contains no build key. Its default retains every
 block; the exact-to-conservative blanket uses this default. Missing host block
 metadata also retains the block. Exact keyset reads retain their separate
-\code{ExactIntervalMembership} capability. Rustc checks capabilities through
-\code{require::conservative::<K,T>}; semantic provider laws remain premises.
+\code{ExactIntervalMembership} capability. For sidecars rustc checks
+\code{require::conservative::<K,T>}; borrowed \code{RunFilterView} implements
+\code{ReadPredicate} only, avoiding overlap with the exact-membership blanket.
+\code{RunFilterPredicate} wraps an optional borrowed view and preserves identity
+when inactive. All three paths obey the same no-false-negative read law;
+semantic provider laws remain premises.
 External structures may supply stronger block summaries without changing the
 covering obligation. False positives are eliminated by the unchanged probe.
 For a positional static read directly over the rename/project spine, realization
@@ -811,7 +821,8 @@ conditions and relational readers can reduce the surviving count further.
  \mathsf{exclusiveSpine}_k(s,l)\quad
  \mathsf{totalBuild}(b)\quad
  \mathsf{marker}(s,k)=C\\
- T:\code{Build}\quad T:\code{ConservativeMembership}(k)\quad
+ \mathsf{recordedProjectedBorrowedOrAttachedBuild}(P,T,K,k)\quad
+ \mathsf{conservativeReadLaw}(F,k)\quad
  \pi_k(b)\subseteq\{x\mid F.\mathsf{test}(x)\}
 }{
  s\;\mathsf{joinFilter}(F,b,k,j,C)\text{ is admissible}
@@ -821,9 +832,11 @@ Here $\mathsf{exclusiveSpine}_k$ contains only one-use pipe renames,
 projections, declarative selections and left operands of eager probes and
 semijoins, each carrying $k$, without canon or fused scopes; the scan's
 lineage maps $k$ to a host column.
-The selected provider enumerates its exact distinct keys through \code{Keys}
-for filter construction. Any lawful implementation can satisfy this premise;
-retyping must preserve the declaration and its Rust trait obligation.
+The selected source provider declares exact distinct-key enumeration through
+\code{Keys}; the default projected realization consumes it only after activation.
+Explicit borrowed and attached realizations satisfy their respective capabilities
+without that enumeration. Any lawful implementation can satisfy these premises;
+retyping must preserve the declarations and Rust trait obligations.
 A routed token (STR-Routed) preserves exact key enumeration as well: each
 complete key routes to exactly one native index, and enumerating all its native
 keys gives the same global key support, including the one-index identity

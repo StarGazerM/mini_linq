@@ -18,6 +18,18 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
             ));
         }
     }
+    // Positional selection is a constructor contract, not a Membership read
+    // obligation. Recheck its recorded token even when planning skips PL-Select.
+    for selection in analysis.structures.selections.values() {
+        if !catalog.providers.iter().any(|entry| {
+            entry.covers(&selection.provider) && !entry.levels.is_empty()
+        }) {
+            return Err(syn::Error::new_spanned(
+                &selection.provider,
+                "PL-Catalog: recorded positional selection constructor is not admitted by the target catalog",
+            ));
+        }
+    }
     for obligation in &analysis.obligations {
         let available = match obligation {
             Obligation::Provider {

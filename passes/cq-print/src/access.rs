@@ -319,7 +319,6 @@ impl<'a> Context<'a> {
             let payload = a.payload.iter().map(|c| self.access(result, c));
             let capture = self.carries_positions(result).then(|| quote!(move));
             let pairs = quote!(::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*), (#(#payload,)*))));
-            let ty = ty.ty.clone();
             let build_name = format!("{result}.fallback.{}", columns.join("_"));
             self.profile_label(
                 &build_name,
@@ -328,8 +327,8 @@ impl<'a> Context<'a> {
                 vec![result.into()],
             );
             let pairs = self.profile_inserting(&build_name, pairs);
-            let construct = quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs));
-            let declared_type = ty;
+            let construct = self.provider_build(ty, pairs);
+            let declared_type = &ty.ty;
             let build = self.profile_build(&build_name, construct);
             let mut guards = Vec::new();
             for ((name, selected, key), selected_provider) in &self.analysis.fallbacks {
@@ -391,7 +390,6 @@ impl<'a> Context<'a> {
                     cq_lang_structures::ReaderRef::Result(reader.into()),
                     columns,
                 );
-                let ty = &provider.ty;
                 let rows = self.profile_stream(result, self.host_scan(result));
                 let pattern = self.bind_columns(result, self.carried(result), false);
                 let key = columns.iter().map(|c| self.access(result, c));
@@ -408,9 +406,10 @@ impl<'a> Context<'a> {
                     Some(&selected),
                     quote!(#name),
                 );
-                let build = quote!(<#ty as ::cq_storage::Build<_>>::build(
-                    ::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*),(#(#payload,)*)))
+                let pairs = quote!(::core::iter::Iterator::map(
+                    #rows, #capture |#pattern| ((#(#key,)*),(#(#payload,)*))
                 ));
+                let build = self.provider_build(provider, pairs);
                 let bindings = self.borrow_binding(&name, None, build);
                 self.statements.extend(bindings);
                 self.statements.extend(guards);

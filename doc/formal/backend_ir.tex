@@ -650,6 +650,7 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
  k=\mathsf{first}\{k\in K_e\mid \mathsf{needs}(e)\subseteq\mathsf{facts}(k).\mathsf{reads},
  \ \mathsf{suppliesLiveSupport}(k,e),\
  (\mathsf{canon}(e)\Rightarrow\mathsf{facts}(k).\mathsf{packedBits}=\bot),\
+ (\mathsf{selection}(e)\Rightarrow\mathsf{tokens}(k)=\mathsf{tokens}(e)),\
  \mathsf{levels}(k)\ne\varnothing\}}
  {\mathsf{select}(s,K):\
  e.\mathsf{provider}\gets k\ (\text{recorded spelling kept iff }\mathsf{tokens}(k)=\mathsf{tokens}(e))\quad\text{by checked retention, index construction and retype}}
@@ -684,6 +685,12 @@ Catalog levels describe where a provider may be read, not where its owner is
 constructed. Building an index from host rows does not certify a host read.
 Placement must select a supported read level; authored unsupported grades are
 rejected rather than silently reinterpreted.
+Positional \code{Selection} entries retain their recorded constructor token
+and concrete spelling. Their \code{from\_positions} construction contract is
+not a generic \code{Membership} read obligation; a membership-capable hash
+index cannot replace it. PL-Select rejects an absent constructor token rather
+than falling back to catalog order, and PL-Catalog independently checks that
+the recorded constructor remains admitted even when selection is skipped.
 The explicit \(\mathsf{Resident}\) catalog capability certifies that a native
 input handle already denotes immutable target-resident storage. It permits
 that handle's recorded descendant reads without constructing a host fallback
@@ -1075,6 +1082,25 @@ Statistic guards use typed publication references, never free-form provenance
 labels; absent scalars take the recorded else arm. All alternatives have the
 same checked construction. P7.1 admits host reads only; no device visibility,
 transfer or synchronization is inferred by a printer.
+P7.2 CPU accessors implement this optional scalar ABI without forcing a lazy
+hash or multi-run materialization (\textsc{RT-BuildStats}). Recorded
+\code{run\_filter} sources support explicitly selected \code{borrowed\_filter}
+views; explicit \code{attached\_filter} realizations attach \code{BuildSidecar}
+builders through \code{BuildWithSidecar} at the owning exact construction.
+With neither realization fact, the recorded default builds projected
+\code{Keys::distinct\_keys} only after activation. Exact source finalization
+precedes an authored statistics guard. Default filters retain ordinary builds
+and exact \code{Keys::key\_count} activation. Pull and Tasks consume the same completed
+publication. Activation retains its recorded population and percentage with
+overflow-safe comparison; the printer invents no threshold or per-worker build.
+Structures records ordinary or demanded-statistics construction
+(\textsc{STR-Construction}); provider-declared accumulation support and
+matching publication witnesses justify the row/max demand bits.
+The printer consumes this protocol directly. Ordinary builds use \code{Build};
+demanded builds use \code{BuildWithStatistics}, and sidecar builds carry the
+same mask. Unrequested accumulated scalars remain absent while cheap lengths
+remain available. Lazy demanded-initializer dispatch is outside the ordinary
+\code{OnceCell} closure, preserving its capture and hot-loop register shape.
 
 \begin{mathpar}
 \Rule{PL-Evidence}{E\text{ is syntactically well-formed advice}\quad

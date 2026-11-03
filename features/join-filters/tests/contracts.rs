@@ -174,6 +174,10 @@ fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
         let changed = retype(&before, quote!(b => #provider supports [keys])).unwrap();
         assert_eq!(changed.physical, before.physical);
         let facts = ir::contract::check(&changed).unwrap();
+        for filter in facts.join_filters.values().flatten() {
+            assert!(!facts.facts(&filter.provider).borrowed_filter);
+            assert!(!facts.facts(&filter.provider).attached_filter);
+        }
         assert_eq!(facts.join_filters, expected);
         assert_eq!(ir::join_filter_candidates(&changed, &facts, "j").len(), 1);
         assert_eq!(changed, syn::parse2(changed.to_token_stream()).unwrap());

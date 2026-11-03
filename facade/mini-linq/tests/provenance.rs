@@ -470,6 +470,7 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
         "a join filter must enumerate a retyped single-level provider"
     );
     custom.structures.declare(&[custom_index]).unwrap();
+    cq_lang_structures::record_join_filter_abandon(&mut custom).unwrap();
     cq_lang_structures::check_rewrite(&selected, &custom).unwrap();
     cq_structure_selection::check(&smallest, &custom).unwrap();
     let sequence = cq_sequence_lowering::compile(&custom).unwrap();
@@ -478,6 +479,7 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
     let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
     let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
     let emitted = quote!(#expression).to_string();
+    assert!(!emitted.contains("BuildWithSidecar"));
     assert!(emitted.contains("Keys :: distinct_keys"));
     assert!(emitted.contains("Keys :: key_count"));
     let written = realize(&reference, "");
@@ -535,10 +537,19 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
         impl<K, V> Clone for CustomIndex<'_, K, V> {
             fn clone(&self) -> Self { Self(self.0.clone()) }
         }
-        impl<'a, K: 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a>
+        impl<'a, K: Eq + ::std::hash::Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a>
             ::cq_storage::Build<I> for CustomIndex<'a, K, V>
         {
             fn build(source: I) -> Self { Self(::cq_storage::Build::build(source)) }
+        }
+        impl<'a, K: Eq + ::std::hash::Hash + 'a, V: Copy + 'a,
+            I: Iterator<Item = (K, V)> + 'a, S: ::cq_storage::SidecarBuilder<K>>
+            ::cq_storage::BuildWithSidecar<I, S> for CustomIndex<'a, K, V>
+        {
+            fn build_with_sidecar<const ROWS: bool, const MAX_GROUP: bool>(source: I, sidecar: S) -> (Self, S::Output) {
+                let (index, filter) = ::cq_storage::BuildWithSidecar::build_with_sidecar::<ROWS, MAX_GROUP>(source, sidecar);
+                (Self(index), filter)
+            }
         }
         impl<'a, K: Eq + ::std::hash::Hash, V: Copy> ::cq_storage::IndexRead
             for CustomIndex<'a, K, V>

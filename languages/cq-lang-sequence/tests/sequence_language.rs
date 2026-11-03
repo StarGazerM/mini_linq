@@ -584,7 +584,7 @@ fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
             out = let canon probe first [a] probe,selected;
             return out as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; filter = Filter { reads [exact, range, membership], build inferred }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; filter = Filter { reads [exact, range, membership], build inferred }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             b = @hash_index as ::cq_storage::HashIndex<'_, _, _> [a] supports [keys];

@@ -3,6 +3,8 @@
 //! the checked inclusive span is at most 1,048,576 bits. On 64-bit hosts the
 //! bitmap and per-word usize prefixes together use at most 256 KiB.
 //! No occupancy assumption is made: every rank lookup first tests presence.
+//! Direct builds publish maximum group size; selected builds may omit it
+//! without changing the stored occurrences, directories, or length metadata.
 
 use crate::{Build, ExactMembership, IndexRead, KeyCodec, NoDense, rows::Rows};
 
@@ -51,15 +53,23 @@ pub(crate) struct RunRows<K, V, C = Vec<V>> {
     pub(crate) keys: Vec<K>,
     pub(crate) offsets: RunOffsets,
     pub(crate) items: C,
+    pub(crate) max_group: Option<usize>,
     row: std::marker::PhantomData<fn() -> V>,
 }
 
 impl<K: Ord + Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
-    pub(crate) fn from_pairs(source: impl IntoIterator<Item = (K, V)>) -> Self {
+    pub(crate) fn from_pairs(
+        source: impl IntoIterator<Item = (K, V)>,
+        max_group: bool,
+    ) -> Self {
         crate::count!(index_builds);
         let mut pairs: Vec<_> = source.into_iter().collect();
         pairs.sort_by_key(|pair| pair.0);
-        Self::from_sorted_pairs(pairs)
+        if max_group {
+            Self::from_sorted_pairs::<true>(pairs)
+        } else {
+            Self::from_sorted_pairs::<false>(pairs)
+        }
     }
 
     /// Cache an order-preserving numeric key when sorting indirect keys.
@@ -68,6 +78,7 @@ impl<K: Ord + Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
     pub(crate) fn from_pairs_cached_key(
         source: impl IntoIterator<Item = (K, V)>,
         mut encode: impl FnMut(&K) -> u64,
+        max_group: bool,
     ) -> Self {
         crate::count!(index_builds);
         let mut pairs: Vec<_> = source.into_iter().collect();
@@ -82,17 +93,27 @@ impl<K: Ord + Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
                 pairs.sort_by_cached_key(|pair| encode(&pair.0));
             }
         }
-        Self::from_sorted_pairs(pairs)
+        if max_group {
+            Self::from_sorted_pairs::<true>(pairs)
+        } else {
+            Self::from_sorted_pairs::<false>(pairs)
+        }
     }
 
-    fn from_sorted_pairs(pairs: Vec<(K, V)>) -> Self {
+    fn from_sorted_pairs<const MAX_GROUP: bool>(pairs: Vec<(K, V)>) -> Self {
         let distinct =
             usize::from(!pairs.is_empty()) + pairs.windows(2).filter(|p| p[0].0 != p[1].0).count();
         let mut keys = Vec::with_capacity(distinct);
         let mut offsets = RunOffsets::with_capacity(distinct + 1, pairs.len());
         let mut items = C::with_capacity(pairs.len());
+        let mut max_group = 0;
+        let mut group_start = 0;
         for (key, item) in pairs {
             if keys.last() != Some(&key) {
+                if MAX_GROUP {
+                    max_group = max_group.max(items.len() - group_start);
+                    group_start = items.len();
+                }
                 keys.push(key);
                 offsets.push(items.len());
             }
@@ -100,12 +121,16 @@ impl<K: Ord + Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
             crate::count!(rows_copied);
         }
         offsets.push(items.len());
+        if MAX_GROUP {
+            max_group = max_group.max(items.len() - group_start);
+        }
         #[cfg(feature = "counters")]
         crate::counters::build_cardinality(keys.len());
         Self {
             keys,
             offsets,
             items,
+            max_group: MAX_GROUP.then_some(max_group),
             row: std::marker::PhantomData,
         }
     }
@@ -142,7 +167,18 @@ impl<K: Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
     /// Merge-path partitions the two key directories, never materializing row
     /// tuples. Equal keys choose the older (left) run first; payload columns
     /// are copied by whole group, preserving occurrence order.
-    pub(crate) fn merge(left: &Self, right: &Self) -> Self
+    pub(crate) fn merge(left: &Self, right: &Self, max_group: bool) -> Self
+    where
+        K: Ord,
+    {
+        if max_group {
+            Self::merge_with_statistics::<true>(left, right)
+        } else {
+            Self::merge_with_statistics::<false>(left, right)
+        }
+    }
+
+    fn merge_with_statistics<const MAX_GROUP: bool>(left: &Self, right: &Self) -> Self
     where
         K: Ord,
     {
@@ -152,9 +188,12 @@ impl<K: Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
             keys: Vec::with_capacity(total),
             offsets: RunOffsets::with_capacity(total + 1, item_count),
             items: C::with_capacity(item_count),
+            max_group: None,
             row: std::marker::PhantomData,
         };
         const TILE: usize = 1024;
+        let mut max_group = 0;
+        let mut group_start = 0;
         for diagonal in (0..total).step_by(TILE) {
             let (mut a, mut b) = merge_path(&left.keys, &right.keys, diagonal);
             for _ in diagonal..(diagonal + TILE).min(total) {
@@ -171,6 +210,10 @@ impl<K: Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
                 };
                 let key = source.keys[slot];
                 if result.keys.last() != Some(&key) {
+                    if MAX_GROUP {
+                        max_group = max_group.max(result.items.len() - group_start);
+                        group_start = result.items.len();
+                    }
                     result.keys.push(key);
                     result.offsets.push(result.items.len());
                 }
@@ -181,6 +224,10 @@ impl<K: Copy, V: Copy, C: crate::ItemColumns<Row = V>> RunRows<K, V, C> {
             }
         }
         result.offsets.push(result.items.len());
+        if MAX_GROUP {
+            max_group = max_group.max(result.items.len() - group_start);
+            result.max_group = Some(max_group);
+        }
         result
     }
 }
@@ -212,13 +259,57 @@ pub struct SortedRun<K, V, C = NoDense> {
     codec: C,
 }
 
+impl<K, V, C> SortedRun<K, V, C> {
+    /// Formal rule RT-BuildStats:
+    /// Published occurrence count; reading metadata never enumerates payloads.
+    pub fn stat_rows(&self) -> Option<u64> {
+        Some(self.rows.items.len() as u64)
+    }
+
+    /// Distinct full grouping keys, not distinct projected scalar keys.
+    pub fn stat_keys(&self) -> Option<u64> {
+        Some(self.rows.keys.len() as u64)
+    }
+
+    /// Available only when requested at build time; never scans the groups.
+    pub fn stat_max_group(&self) -> Option<u64> {
+        self.rows.max_group.map(|count| count as u64)
+    }
+
+    pub fn stat_runs(&self) -> Option<u64> {
+        Some(u64::from(!self.rows.keys.is_empty()))
+    }
+
+    /// Full-key endpoints; `None` denotes a proven empty publication.
+    /// These are not extrema of arbitrary composite-key components.
+    pub fn key_bounds(&self) -> Option<(&K, &K)> {
+        self.rows.keys.first().zip(self.rows.keys.last())
+    }
+}
+
+impl<K, V, C> crate::run_filter::RunFilterSource for SortedRun<K, V, C> {
+    type Key = K;
+
+    fn key_runs(&self) -> impl Iterator<Item = &[K]> {
+        std::iter::once(self.rows.keys.as_slice())
+    }
+}
+
 impl<K: Ord + Copy, V: Copy, C: KeyCodec<K>> SortedRun<K, V, C> {
     /// Formal rule STR-SortedRun:
     /// Stable sorting preserves each key's input occurrence order and its
     /// multiplicity. Unique keys and adjacent offsets partition all items;
     /// presence plus rank selects precisely the same range as binary search.
     pub fn from_pairs(source: impl IntoIterator<Item = (K, V)>, codec: C) -> Self {
-        let rows = RunRows::from_pairs(source);
+        Self::from_pairs_with_statistics(source, codec, true)
+    }
+
+    fn from_pairs_with_statistics(
+        source: impl IntoIterator<Item = (K, V)>,
+        codec: C,
+        max_group: bool,
+    ) -> Self {
+        let rows = RunRows::from_pairs(source, max_group);
         let rank = Self::rank_directory(&rows.keys, codec);
         Self { rows, rank, codec }
     }
@@ -323,7 +414,33 @@ impl<K: Ord + Copy, V: Copy, C: KeyCodec<K> + Default, I: Iterator<Item = (K, V)
     for SortedRun<K, V, C>
 {
     fn build(source: I) -> Self {
-        Self::from_pairs(source, C::default())
+        Self::from_pairs_with_statistics(source, C::default(), false)
+    }
+}
+
+impl<K: Ord + Copy, V: Copy, C: KeyCodec<K> + Default, I: Iterator<Item = (K, V)>>
+    crate::BuildWithStatistics<I> for SortedRun<K, V, C>
+{
+    fn build_with_statistics<const ROWS: bool, const MAX_GROUP: bool>(source: I) -> Self {
+        Self::from_pairs_with_statistics(source, C::default(), MAX_GROUP)
+    }
+}
+
+impl<K, V, C, I, S> crate::BuildWithSidecar<I, S> for SortedRun<K, V, C>
+where
+    K: Ord + Copy,
+    V: Copy,
+    C: KeyCodec<K> + Default,
+    I: Iterator<Item = (K, V)>,
+    S: crate::SidecarBuilder<K>,
+{
+    fn build_with_sidecar<const ROWS: bool, const MAX_GROUP: bool>(source: I, mut sidecar: S) -> (Self, S::Output) {
+        let run = Self::from_pairs_with_statistics(
+            source.inspect(|(key, _)| sidecar.observe(key)),
+            C::default(),
+            MAX_GROUP,
+        );
+        (run, sidecar.finish())
     }
 }
 
@@ -393,6 +510,108 @@ impl<K: Copy, V: Copy, C> Rows for &SortedRun<K, V, C> {
 mod tests {
     use super::*;
     use crate::I64Codec;
+
+    #[test]
+    fn published_statistics_match_occurrence_oracle() {
+        for seed in 0_u64..48 {
+            let mut input: Vec<_> = (0..seed * 11)
+                .map(|i| (((i * 73 + seed) % 29) as i64 - 14, i))
+                .collect();
+            if seed != 0 {
+                input.extend([(i64::MIN, 0), (i64::MAX, 0)]);
+                input.extend((0..seed * 5).map(|i| (7, i)));
+            }
+            let mut oracle = std::collections::BTreeMap::<i64, u64>::new();
+            for &(key, _) in &input {
+                *oracle.entry(key).or_default() += 1;
+            }
+            for dense in [false, true] {
+                let (rows, keys, maximum, runs, bounds) = if dense {
+                    let run = SortedRun::from_pairs(input.iter().copied(), I64Codec);
+                    (run.stat_rows(), run.stat_keys(), run.stat_max_group(), run.stat_runs(),
+                     run.key_bounds().map(|(&lo, &hi)| (lo, hi)))
+                } else {
+                    let run = SortedRun::from_pairs(input.iter().copied(), NoDense);
+                    (run.stat_rows(), run.stat_keys(), run.stat_max_group(), run.stat_runs(),
+                     run.key_bounds().map(|(&lo, &hi)| (lo, hi)))
+                };
+                assert_eq!(rows, Some(input.len() as u64));
+                assert_eq!(keys, Some(oracle.len() as u64));
+                assert_eq!(maximum, Some(oracle.values().copied().max().unwrap_or(0)));
+                assert_eq!(runs, Some(u64::from(!input.is_empty())));
+                assert_eq!(bounds, oracle.first_key_value().zip(oracle.last_key_value())
+                    .map(|((&lo, _), (&hi, _))| (lo, hi)));
+            }
+        }
+    }
+
+    #[test]
+    fn selected_statistics_preserve_occurrences_and_direct_lengths() {
+        use crate::BuildWithStatistics;
+
+        fn check<C: KeyCodec<i64> + Default>(input: &[(i64, u64)]) {
+            let mut expected = input.to_vec();
+            expected.sort_by_key(|pair| pair.0);
+            let mut oracle = std::collections::BTreeMap::<i64, Vec<u64>>::new();
+            for &(key, item) in input {
+                oracle.entry(key).or_default().push(item);
+            }
+            for requested in [false, true] {
+                let run = if requested {
+                    SortedRun::<_, _, C>::build_with_statistics::<true, true>(input.iter().copied())
+                } else {
+                    SortedRun::<_, _, C>::build_with_statistics::<true, false>(input.iter().copied())
+                };
+                let maximum = requested.then(|| {
+                    oracle.values().map(|items| items.len() as u64).max().unwrap_or(0)
+                });
+                assert_eq!(run.stat_rows(), Some(input.len() as u64));
+                assert_eq!(run.stat_keys(), Some(oracle.len() as u64));
+                assert_eq!(run.stat_max_group(), maximum);
+                assert_eq!(run.stat_runs(), Some(u64::from(!input.is_empty())));
+                assert_eq!(run.key_bounds(), oracle.first_key_value().zip(oracle.last_key_value())
+                    .map(|((lo, _), (hi, _))| (lo, hi)));
+                assert_eq!((&run).rows().collect::<Vec<_>>(), expected);
+                assert_eq!(run.items(), expected.iter().map(|pair| pair.1).collect::<Vec<_>>());
+                for (&key, items) in &oracle {
+                    assert_eq!((&run).lookup(&key).collect::<Vec<_>>(), *items);
+                    let (begin, end) = run.range(&key);
+                    assert_eq!(&run.items()[begin..end], items);
+                }
+                assert_eq!(run.stat_max_group(), maximum);
+            }
+        }
+
+        for input in [
+            vec![],
+            vec![(2, 7), (1, 9), (2, 7), (1, 9), (2, 3)],
+            vec![(i64::MAX, 1), (i64::MIN, 2), (i64::MAX, 1)],
+            (0..2049).map(|i| (((i * 73) % 31) as i64 - 15, i)).collect(),
+        ] {
+            check::<NoDense>(&input);
+            check::<I64Codec>(&input);
+        }
+    }
+
+    #[test]
+    fn merged_group_maximum_includes_duplicates_across_merge_tiles() {
+        for requested in [false, true] {
+            let left = RunRows::<_, _>::from_pairs((0..2050).map(|key| (key, key)), requested);
+            let right = RunRows::<_, _>::from_pairs(
+                (0..2050).flat_map(|key| (0..if key == 1023 { 17 } else { 2 }).map(move |v| (key, v))),
+                requested,
+            );
+            let merged = RunRows::merge(&left, &right, requested);
+            assert_eq!(merged.keys.len(), 2050);
+            assert_eq!(merged.max_group, requested.then_some(18));
+            assert_eq!(merged.items.len(), 2050 * 3 + 15);
+            let mut expected: Vec<_> = left.rows().chain(right.rows()).collect();
+            expected.sort_by_key(|pair| pair.0);
+            assert_eq!(merged.rows().collect::<Vec<_>>(), expected);
+            let empty = RunRows::<i32, i32>::from_pairs([], requested);
+            assert_eq!(RunRows::merge(&empty, &empty, requested).max_group, requested.then_some(0));
+        }
+    }
 
     #[test]
     fn offset_width_preserves_terminal_positions_at_the_u32_boundary() {

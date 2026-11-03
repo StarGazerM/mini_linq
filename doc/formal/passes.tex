@@ -1183,13 +1183,15 @@ ordering policy.
 \textsc{SEL-JoinFilter} records a scalar filter for every admissible
 (\textsc{STR-JoinFilter}) covering probe or semijoin into a statically filtered,
 total single-level build, one per scalar column of its key, at the scan its
-exclusive spine reaches; this is the bitmap a build side pushes to the deepest
-probe-side scan. A scan may therefore carry filters from several builds.
+exclusive spine reaches. A scan may carry filters from several builds.
 Every eligible payload-index build whose selected token declares
-\code{join\_filter} (payload-directory key enumeration; a routed token
-inherits its inner's fact) selects token \code{join\_filter\_membership}, whose
-declaration spells the exact \code{DenseMembership<K,67108864>} once (the
-positional key set likewise selects token \code{positional\_keyset}). A membership-only build already answers
+\code{join\_filter} defaults to \code{join\_filter\_membership}, spelling
+\code{DenseMembership<K,67108864>}, with conditional projected-key construction.
+Explicit borrowed advice requires source \code{run\_filter} and the scalar
+complete stored key layout; its token declares \code{borrowed\_filter}.
+Explicit attached advice declares \code{attached\_filter}; these realization
+facts are mutually exclusive and neither is selected by source retyping.
+A membership-only build already answers
 the same exact key test and receives no redundant supplementary filter.
 The dense provider requires \code{K: OrderKey} (\textsc{STR-AdaptiveMembership});
 a key without it is a rustc error at the one typed build, never a hash
@@ -1202,11 +1204,25 @@ Sharing requires the same scan occurrence, build version, scalar key, source-ind
 layout, filter type and column marker; covering-operator identity alone does not
 require another filter. First-witness order supplies scan-local identities, also
 used to distinguish profile labels.
-\textsc{IF-JoinFilter} requires recorded \code{keys} support on the selected index
-layout and constructs each distinct checked provider from that index's
-\code{Keys::distinct_keys}, projected to the filtered key column, through one
-typed \code{<T as Build<\_>>::build} on $(k,())$ pairs. Rust proves the marker's
-\code{ColumnSlot} and \code{require::conservative::<K,T>} obligations, then realization
+\textsc{IF-JoinFilter} consumes recorded source and realization facts.
+With neither realization fact, \code{Build} consumes projected
+\code{Keys::distinct\_keys} only after activation. Exact source finalization uses
+a unit sidecar only for an authored optional-statistic guard. Default filters
+retain ordinary construction and \code{Keys::key\_count} activation. Explicit borrowed \code{RunFilterView} references completed ordered keys.
+Explicit \code{attached\_filter} uses a \code{BuildSidecar} incremental builder
+through \code{BuildWithSidecar::build_with_sidecar::<ROWS,MAX\_GROUP>(source,builder)}.
+That result publishes index and filter together; recursive tuple builders
+attach multiple filters without a post-build \code{distinct\_keys} scan.
+The Structures \textsc{STR-Construction} record supplies the row/max mask.
+Its checker verifies provider-declared \code{statistics\_build} support and
+matching immutable publication witnesses, without replaying selection.
+Ordinary records emit \code{Build::build}; demanded records emit
+\code{BuildWithStatistics}. Printers never select a protocol from accessor
+declarations. Unrequested accumulated scalars are absent; cheap lengths remain.
+Rust proves the marker's \code{ColumnSlot} and the constructed filter's
+\code{require::conservative::<K,T>} obligations. Borrowed views instead implement
+\code{ReadPredicate}, with optional \code{RunFilterPredicate} preserving identity;
+they do not implement \code{ConservativeMembership}. Realization then
 filters positions before fetching payloads: the first filter through the
 block-skipping read, the others on its surviving positions, in decision order.
 Host block bounds use the provider's conservative \code{any_in}; an absent bound
@@ -1217,30 +1233,34 @@ host publication ordered ahead of that build) applies only the filters already
 built: an omitted filter is the trivial conservative filter that passes every
 key, so the covering exact operators still decide membership.
 \textsc{SEL-JoinFilterAbandon} records every filter's abandon policy
-\code{abandon 35 of }$B$ from the final positional bases, where $B$ is its
-build's positional lineage base; a filter whose build has none records no
-policy and is always built. The Structures checker verifies the recorded
-base and percentage without rerunning selection.
-\textsc{IF-JoinFilterAbandon} carries out the recorded policy at runtime: a
-build whose \code{Keys::key_count} exceeds the recorded percentage of the rows
-of $B$ constructs no filter (the creation threshold of dynamic predicate
-transfer, RPT+), and its abandoned filters pass every key, which the
-one-sided conservative law permits. The printer derives no policy. Only the
-covering exact operators decide membership either way.
+\code{abandon 35 of }$B$\code{ using stat\_keys} from final positional bases,
+where $B$ is its build's positional lineage base. The accessor names the selected
+provider's declared exact Keys statistic. The checker validates this declaration,
+base and percentage without rerunning selection; no base means no abandon policy.
+\textsc{IF-JoinFilterAbandon} carries out the recorded policy at runtime:
+the recorded accessor returns \code{Option<u64>}; absence selects identity,
+not a \code{Keys::key\_count} recount. Present build keys are compared with the
+recorded population using \code{u128} products of \code{u64} counts.
+An abandoned filter passes every key and skips default projected construction.
+Explicit attached construction observes keys before activation; abandonment
+does not promise to recover that construction cost. The projected route2 default
+targets timing neutrality; initial attached-default and direct-bitmap repair
+regressions were not promoted, and no final timing acceptance is claimed.
+The printer derives no policy; only exact covering operators decide membership.
 \begin{mathpar}
 \Rule{SEL-JoinFilter}{
  \mathsf{eligibleCoveredScan}(s,b,k,j)\quad
  \mathsf{filteredBuild}(b)\quad\neg\mathsf{membershipOnly}(b)\quad
  \mathsf{facts}(b).\mathsf{join\_filter}\quad
  \mathsf{positionalHost}(s)\\
- T=\code{DenseMembership<K,67108864>}
+ T=\mathsf{recordedBorrowedOrSidecar}(b,k)
 }{
  \mathsf{select}(s,b,k,j)=
  \mathsf{joinFilter}(T,b,k,j,\mathsf{marker}(s,k))
 }
 
 \Rule{IF-JoinFilter}{
- F_i=\mathsf{buildFilter}_{T_i}(\pi_{k_i}\mathsf{keys}(\mathsf{index}_{b_i}))\quad
+ F_i=\mathsf{recordedViewOrAttachedSidecar}_{T_i}(\mathsf{index}_{b_i})\quad
  \mathsf{STR\text{-}JoinFilter}(s,F_i,b_i,k_i,j_i)\quad
  \mathsf{builtBefore}(b_i,s)\ (1\le i\le n)\\
  \mathsf{keepBlock}(B)=
@@ -1253,14 +1273,15 @@ covering exact operators decide membership either way.
 
 \Rule{SEL-JoinFilterAbandon}{
  \mathsf{joinFilter}(F,b,\ldots)\quad\mathsf{lineageBase}(b)=B\quad
- B\in\mathsf{positionalBases}
+ B\in\mathsf{positionalBases}\quad a=\mathsf{declaredExactKeysAccessor}(b)
 }{
- \mathsf{abandon}(F)=(35,B)
+ \mathsf{abandon}(F)=(35,B,a)
 }
 
 \Rule{IF-JoinFilterAbandon}{
- \mathsf{abandon}(F)=(p,B)\quad
- 100\,|\mathsf{keys}(\mathsf{index}_b)| > p\,|B|
+ \mathsf{abandon}(F)=(p,B,a)\quad
+ \bigl(a(\mathsf{index}_b)=\mathsf{None}\ \lor\
+ (a(\mathsf{index}_b)=\mathsf{Some}(n)\land 100n>p|B|)\bigr)
 }{
  F=\top\quad(\forall x.\ F.\mathsf{test}(x))
 }

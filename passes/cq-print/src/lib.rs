@@ -834,6 +834,9 @@ impl<'a> Context<'a> {
         for (ordinal, (levels, provider)) in structures.iter().enumerate() {
             let ty = &provider.ty;
             let facts = self.analysis.facts(provider);
+            let construction = provider.construction;
+            let statistics_builder = matches!(construction, structures::stats::Construction::Statistics(_));
+            let structures::stats::BuildDemand { rows: requested_rows, max_group } = construction.demand();
             let columns: Vec<String> = levels.concat();
             let payload_columns = self.built_payload(name, levels);
             let stored_columns: Vec<_> = levels
@@ -895,10 +898,63 @@ impl<'a> Context<'a> {
             // a typed provider is built through its recorded spelling.
             // The token declares which construction it uses.
             let bare = facts.build == structures::provider::Build::Inferred;
+            // STR-JoinFilter records authored attached/borrowed/statistic choices.
+            // Default projected filters retain main's ordinary build boundary.
+            let selected_filters: Vec<_> = self.analysis.join_filters.iter()
+                .flat_map(|(scan, filters)| filters.iter().enumerate()
+                    .map(move |(index, filter)| (scan.clone(), index, filter.clone())))
+                .filter(|(_, _, filter)| {
+                    if symbol_name(&filter.build) != name || levels.len() != 1 { return false; }
+                    let covering = symbol_name(&filter.covering);
+                    let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) =
+                        &self.physical[&covering].operator else { unreachable!("checked cover") };
+                    let mut covered: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
+                    let mut stored = columns.clone();
+                    covered.sort();
+                    stored.sort();
+                    covered == stored
+                }).collect();
+            let mut attached_builder = quote!(());
+            let mut attached_pattern = quote!(());
+            let mut attached_owners = BTreeMap::new();
+            for (scan, index, filter) in selected_filters.iter().rev() {
+                if !self.analysis.facts(&filter.provider).attached_filter { continue; }
+                let key = symbol_name(filter.key.columns.first().expect("checked scalar"));
+                let component = syn::Index::from(self.stored_key(name, &levels[0])
+                    .iter().position(|column| *column == key).expect("checked projection"));
+                let projection = if self.owned_key(name, &levels[0]) {
+                    quote!(&__cq_key.#component)
+                } else {
+                    quote!(__cq_key.#component)
+                };
+                let filter_ty = &filter.provider.ty;
+                let scalar_type = &self.infos[name].types[&key];
+                let owned = self.owned_key(name, &levels[0]);
+                let key_types = self.stored_key(name, &levels[0]).into_iter().map(|column| {
+                    let ty = &self.infos[name].types[&column];
+                    if owned { quote!(#ty) } else { quote!(&#ty) }
+                });
+                let builder = quote!(::cq_storage::ProjectedSidecar::new(
+                    <#filter_ty as ::cq_storage::BuildSidecar<#scalar_type>>::sidecar_builder(),
+                    |__cq_key: &(#(#key_types,)*)| #projection
+                ));
+                let attached = self.owner_ident(format_ident!(
+                    "{}_attached", self.join_filter_ident(scan, *index)
+                ));
+                attached_owners.insert((scan.clone(), *index), attached.clone());
+                attached_builder = quote!((#builder, #attached_builder));
+                attached_pattern = quote!((#attached, #attached_pattern));
+            }
+            let finalize_filters = selected_filters.iter().any(|(_, _, filter)| {
+                let facts = self.analysis.facts(&filter.provider);
+                facts.attached_filter || (!facts.borrowed_filter
+                    && filter.abandon.as_ref().is_some_and(|policy| policy.statistic.is_some()))
+            });
             let routed = parts
                 .as_ref()
                 .and_then(|(_, _, providers, _)| providers.get(&ordinal));
             let build = if let Some(inner) = routed {
+                let inner_statistics_builder = matches!(inner.construction, structures::stats::Construction::Statistics(_));
                 let inner = &inner.ty;
                 // Each shard builds the recorded inner provider; the outer
                 // provider is inferred from it, retaining the recorded routing
@@ -918,14 +974,32 @@ impl<'a> Context<'a> {
                     })
                     .collect::<Vec<_>>();
                 let key_types = stored_key.iter().map(|_| quote!(_)).collect::<Vec<_>>();
+                let owned = self.owned_key(name, &levels[0]);
+                let observer_key_types = stored_key.iter().map(|column| {
+                    let ty = &self.infos[name].types[column];
+                    if owned { quote!(#ty) } else { quote!(&#ty) }
+                });
+                let observer_key = quote!((#(#observer_key_types,)*));
                 let part_rows = self.profile_inserting(
                     &build_name,
                     quote!(__cq_part.iter().cloned().map(|#pattern| #nested)),
                 );
-                let part_build = quote!({
+                let attached_part_build = quote!({
                     let __cq_build_source = #part_rows;
-                    <#inner as ::cq_storage::Build<_>>::build(__cq_build_source)
+                    <#inner as ::cq_storage::BuildWithSidecar<_, _>>::build_with_sidecar::<#requested_rows, #max_group>(
+                        __cq_build_source, __cq_sidecar
+                    ).0
                 });
+                let part_build = if inner_statistics_builder {
+                    quote!(<#inner as ::cq_storage::BuildWithStatistics<_>>::build_with_statistics::<#requested_rows, #max_group>(
+                        #part_rows
+                    ))
+                } else {
+                    quote!({
+                        let __cq_build_source = #part_rows;
+                        <#inner as ::cq_storage::Build<_>>::build(__cq_build_source)
+                    })
+                };
                 let router = quote!(|__cq_key: &(#(#key_types,)*), __cq_count| {
                     ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)
                 });
@@ -945,15 +1019,43 @@ impl<'a> Context<'a> {
                         &build_name,
                         quote!((#parts).source().map(|#pattern| #nested)),
                     );
+                    if finalize_filters {
+                        quote!({
+                            let __cq_router = #router;
+                            match (#parts).routed() {
+                                ::core::option::Option::None => {
+                                    let (__cq_index, __cq_filter) =
+                                        <#inner as ::cq_storage::BuildWithSidecar<_, _>>::build_with_sidecar::<#requested_rows, #max_group>(
+                                            #singleton_rows, #attached_builder
+                                        );
+                                    (::cq_storage::sharded::Sharded::<_, _>::from_parts_with_router(
+                                        ::std::vec![__cq_index], __cq_router,
+                                    ), __cq_filter)
+                                }
+                                ::core::option::Option::Some(__cq_parts) =>
+                                    ::cq_storage::sharded::Sharded::<_, _>::build_from_parts_with_router_and_sidecar::<_, #observer_key, _>(
+                                        __cq_parts, |__cq_part, __cq_sidecar| #attached_part_build,
+                                        __cq_router, || #attached_builder,
+                                    ),
+                            }
+                        })
+                    } else {
+                    let singleton_build = if inner_statistics_builder {
+                        quote!(<#inner as ::cq_storage::BuildWithStatistics<_>>::build_with_statistics::<#requested_rows, #max_group>(
+                            #singleton_rows
+                        ))
+                    } else {
+                        quote!({
+                            let __cq_build_source = #singleton_rows;
+                            <#inner as ::cq_storage::Build<_>>::build(__cq_build_source)
+                        })
+                    };
                     quote!({
                         let __cq_router = #router;
                         match (#parts).routed() {
                             ::core::option::Option::None =>
                                 ::cq_storage::sharded::Sharded::<_, _>::from_parts_with_router(
-                                    ::std::vec![{
-                                        let __cq_build_source = #singleton_rows;
-                                        <#inner as ::cq_storage::Build<_>>::build(__cq_build_source)
-                                    }],
+                                    ::std::vec![#singleton_build],
                                     __cq_router,
                                 ),
                             ::core::option::Option::Some(__cq_parts) =>
@@ -964,6 +1066,12 @@ impl<'a> Context<'a> {
                                 ),
                         }
                     })
+                    }
+                } else if finalize_filters {
+                    quote!(::cq_storage::sharded::Sharded::<_, _>::build_from_parts_with_router_and_sidecar::<_, #observer_key, _>(
+                        &(#parts), |__cq_part, __cq_sidecar| #attached_part_build,
+                        #router, || #attached_builder,
+                    ))
                 } else {
                     quote!(::cq_storage::sharded::Sharded::<_, _>::build_from_parts_with_router(
                         &(#parts),
@@ -971,6 +1079,14 @@ impl<'a> Context<'a> {
                         #router,
                     ))
                 }
+            } else if finalize_filters {
+                quote!(<#ty as ::cq_storage::BuildWithSidecar<_, _>>::build_with_sidecar::<#requested_rows, #max_group>(
+                    #pairs, #attached_builder
+                ))
+            } else if statistics_builder {
+                quote!(<#ty as ::cq_storage::BuildWithStatistics<_>>::build_with_statistics::<#requested_rows, #max_group>(
+                    #pairs
+                ))
             } else if bare {
                 quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
             } else {
@@ -979,8 +1095,41 @@ impl<'a> Context<'a> {
                     <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
                 })
             };
+            let build = if routed.is_some() {
+                if let Some(access) = selected_filters.iter().find_map(|(_, _, filter)|
+                    filter.abandon.as_ref().and_then(|policy| policy.statistic.as_ref()))
+                {
+                    let accessor = &access.accessor;
+                    if finalize_filters {
+                        quote!({
+                            let (__cq_index, __cq_filters) = #build;
+                            (__cq_index.with_disjoint_key_count(|__cq_part| __cq_part.#accessor()), __cq_filters)
+                        })
+                    } else {
+                        quote!((#build).with_disjoint_key_count(|__cq_part| __cq_part.#accessor()))
+                    }
+                } else { build }
+            } else { build };
             let build = self.profile_build(&build_name, build);
-            statements.extend(self.borrow_binding(&structure, None, build));
+            if finalize_filters {
+                let owned = self.owner_ident(format_ident!("{}_publication", structure));
+                if self.deferred_depth == 0 {
+                    statements.push(syn::parse_quote! {
+                        let (#owned, #attached_pattern) = #build;
+                    });
+                } else {
+                    self.deferred_owners.push(syn::parse_quote!(let #owned;));
+                    for attached in attached_owners.values() {
+                        self.deferred_owners.push(syn::parse_quote!(let #attached;));
+                    }
+                    statements.push(syn::parse_quote! {
+                        (#owned, #attached_pattern) = #build;
+                    });
+                }
+                statements.push(syn::parse_quote! { let #structure = &#owned; });
+            } else {
+                statements.extend(self.borrow_binding(&structure, None, build));
+            }
             statements.extend(self.provider_guards(
                 name,
                 levels,
@@ -988,72 +1137,74 @@ impl<'a> Context<'a> {
                 None,
                 quote!(#structure),
             ));
-            let join_filters = self.analysis.join_filters.clone();
-            for (scan, index, filter) in join_filters.iter().flat_map(|(scan, filters)| {
-                filters
-                    .iter()
-                    .enumerate()
-                    .map(move |(index, f)| (scan, index, f))
-            }) {
-                let covering = symbol_name(&filter.covering);
-                let (Operator::Probe(_, k) | Operator::Semi(_, k)) =
-                    &self.physical[&covering].operator
-                else {
-                    unreachable!("checked covering operator")
-                };
-                let mut covered: Vec<_> = k.columns.iter().map(symbol_name).collect();
-                covered.sort();
-                let mut stored = columns.clone();
-                stored.sort();
-                if symbol_name(&filter.build) != name || covered != stored || levels.len() != 1 {
-                    continue;
-                }
+            for (scan, index, filter) in &selected_filters {
                 let key = symbol_name(filter.key.columns.first().expect("checked key"));
                 let component = syn::Index::from(
-                    self.stored_key(name, &levels[0])
-                        .iter()
-                        .position(|c| *c == key)
-                        .expect("checked non-constant key"),
+                    self.stored_key(name, &levels[0]).iter()
+                        .position(|column| *column == key).expect("checked projection"),
                 );
-                let id = self.join_filter_ident(scan, index);
-                let pairs = quote!(::core::iter::Iterator::map(
-                    ::cq_storage::Keys::distinct_keys(#structure), |__cq_key| (*__cq_key.#component, ())
-                ));
-                let filter_name = format!("{name}.filter.{scan}.{key}.{index}");
-                self.profile_label(
-                    &filter_name,
-                    "JOIN_FILTER_BUILD",
-                    &key,
-                    vec![build_name.clone()],
-                );
-                let pairs = self.profile_inserting(&filter_name, pairs);
-                let ty = &filter.provider.ty;
-                let bare = self.analysis.facts(&filter.provider).build
-                    == structures::provider::Build::Inferred;
-                let value = if bare {
-                    quote!({ use ::cq_storage::Build as _; #ty::build(#pairs) })
+                let id = self.join_filter_ident(scan, *index);
+                let value = if self.analysis.facts(&filter.provider).borrowed_filter {
+                    let projection = if self.owned_key(name, &levels[0]) {
+                        quote!(&__cq_key.#component)
+                    } else {
+                        quote!(__cq_key.#component)
+                    };
+                    let filter_ty = &filter.provider.ty;
+                    quote!(<#filter_ty>::new(#structure, |__cq_key| #projection))
+                } else if self.analysis.facts(&filter.provider).attached_filter {
+                    let attached = &attached_owners[&(scan.clone(), *index)];
+                    quote!(#attached)
                 } else {
-                    quote!({
-                        let __cq_build_source = #pairs;
-                        <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
-                    })
+                    // The recorded compatibility realization keeps the original
+                    // conditional projected build, including its abandonment cost.
+                    let projected = if self.owned_key(name, &levels[0]) {
+                        quote!(__cq_key.#component)
+                    } else {
+                        quote!(*__cq_key.#component)
+                    };
+                    let pairs = quote!(::core::iter::Iterator::map(
+                        ::cq_storage::Keys::distinct_keys(#structure),
+                        |__cq_key| (#projected, ())
+                    ));
+                    let filter_name = format!("{name}.filter.{scan}.{key}.{index}");
+                    self.profile_label(&filter_name, "JOIN_FILTER_BUILD", &key, vec![build_name.clone()]);
+                    let pairs = self.profile_inserting(&filter_name, pairs);
+                    let filter_ty = &filter.provider.ty;
+                    let value = if self.analysis.facts(&filter.provider).build == structures::provider::Build::Inferred {
+                        quote!({ use ::cq_storage::Build as _; #filter_ty::build(#pairs) })
+                    } else {
+                        quote!({
+                            let __cq_build_source = #pairs;
+                            <#filter_ty as ::cq_storage::Build<_>>::build(__cq_build_source)
+                        })
+                    };
+                    self.profile_build(&filter_name, value)
                 };
-                let value = self.profile_build(&filter_name, value);
-                statements.push(
-                    syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);),
-                );
+                if !self.analysis.facts(&filter.provider).borrowed_filter {
+                    statements.push(syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);));
+                }
                 let key_ty = self.infos[name].types[&key].clone();
                 // Formal rule IF-JoinFilterAbandon: the recorded abandon policy
-                // (Structures `abandon P of B`) is carried out, never derived.
+                // (Structures `abandon P of B using accessor`) is only emitted.
                 let filter_value = match &filter.abandon {
                     Some(abandon) => {
                         let host = Self::positional_host(&symbol_name(&abandon.base));
                         let percent = &abandon.percent;
-                        quote!(::cq_storage::selective_build(
-                            ::cq_storage::Keys::key_count(#structure),
-                            ::cq_storage::PositionalRows::len(#host),
-                            #percent,
-                        ).then(|| #value))
+                        if let Some(access) = &abandon.statistic {
+                            let accessor = &access.accessor;
+                            quote!(#structure.#accessor().is_some_and(|__cq_kept|
+                                ::cq_storage::selective_build_statistic(
+                                    __cq_kept, ::cq_storage::PositionalRows::len(#host), #percent,
+                                )
+                            ).then(|| #value))
+                        } else {
+                            quote!(::cq_storage::selective_build(
+                                ::cq_storage::Keys::key_count(#structure),
+                                ::cq_storage::PositionalRows::len(#host),
+                                #percent,
+                            ).then(|| #value))
+                        }
                     }
                     None => quote!(::core::option::Option::Some(#value)),
                 };
@@ -1064,12 +1215,20 @@ impl<'a> Context<'a> {
                     statements.push(self.bind_owner(&filter_owner, None, filter_value));
                     statements.push(syn::parse_quote!(let #id = &#filter_owner;));
                 }
-                statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<#key_ty, _>(__cq_filter); }));
-                statements.extend(self.borrow_binding(
-                    &id,
-                    None,
-                    quote!(::cq_storage::JoinFilterPredicate(#id.as_ref())),
-                ));
+                if self.analysis.facts(&filter.provider).borrowed_filter {
+                    statements.extend(self.borrow_binding(
+                        &id,
+                        None,
+                        quote!(::cq_storage::RunFilterPredicate(#id.as_ref())),
+                    ));
+                } else {
+                    statements.push(syn::parse_quote!(if let ::core::option::Option::Some(__cq_filter) = &#id { ::cq_storage::require::conservative::<#key_ty, _>(__cq_filter); }));
+                    statements.extend(self.borrow_binding(
+                        &id,
+                        None,
+                        quote!(::cq_storage::JoinFilterPredicate(#id.as_ref())),
+                    ));
+                }
             }
             if facts.accounting == structures::provider::Accounting::Keys {
                 let allocation = self.owner_ident(format_ident!(
@@ -1113,6 +1272,25 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Print the checked Structures construction protocol, without discovering
+    /// statistics or interpreting provider declarations.
+
+    fn provider_build(
+        &self,
+        provider: &structures::Provider,
+        pairs: TokenStream,
+    ) -> TokenStream {
+        let ty = &provider.ty;
+        if let structures::stats::Construction::Statistics(demand) = provider.construction {
+            let structures::stats::BuildDemand { rows: requested_rows, max_group } = demand;
+            quote!(<#ty as ::cq_storage::BuildWithStatistics<_>>::build_with_statistics::<#requested_rows, #max_group>(
+                #pairs
+            ))
+        } else {
+            quote!(<#ty as ::cq_storage::Build<_>>::build(#pairs))
+        }
+    }
+
     /// Publish the recorded supplementary keysets without retaining source rows.
     /// Borrowed host publications need these before positional membership reads,
     /// just as tuple-backed and partitioned publications do.
@@ -1124,7 +1302,7 @@ impl<'a> Context<'a> {
                 continue;
             }
             let id = self.keyset_ident(name, key);
-            let ty = &set.provider.ty;
+            let provider = &set.provider;
             let values = key.iter().map(|c| self.ident(name, c)).collect::<Vec<_>>();
             let key_value = if matches!(set.ownership, structures::KeyOwnership::Owned(_)) {
                 let value = values[0];
@@ -1142,13 +1320,17 @@ impl<'a> Context<'a> {
             );
             let pairs = quote!(::core::iter::Iterator::map(#source, |#[allow(unused_variables)] #pattern| ::cq_storage::require::key((#key_value, ()))));
             let pairs = self.profile_inserting(&build_name, pairs);
-            let build = self.profile_build(
-                &build_name,
-                quote!({
-                    let __cq_build_source = #pairs;
-                    <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
-                }),
-            );
+            let construct = match provider.construction {
+                structures::stats::Construction::Ordinary => {
+                    let ty = &provider.ty;
+                    quote!({
+                        let __cq_build_source = #pairs;
+                        <#ty as ::cq_storage::Build<_>>::build(__cq_build_source)
+                    })
+                }
+                structures::stats::Construction::Statistics(_) => self.provider_build(provider, pairs),
+            };
+            let build = self.profile_build(&build_name, construct);
             statements.extend(self.borrow_binding(&id, None, build));
             let types = key
                 .iter()

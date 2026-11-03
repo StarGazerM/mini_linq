@@ -184,6 +184,7 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
                 inner: Some(Box::new(inner)),
                 input: None,
                 radix: None,
+                construction: cq_lang_sequence::structures::stats::Construction::Ordinary,
             },
             levels: levels.clone(),
         });

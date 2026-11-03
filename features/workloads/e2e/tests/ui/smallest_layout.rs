@@ -20,7 +20,7 @@ fn main() {
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; keyset = ::cq_storage::dispatch::KeySet<_> { reads [membership], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             r0 host scan = @host_scan as ::core::iter::Map<_, _> [];
             r rows = @vec as ::std::vec::Vec<_>;

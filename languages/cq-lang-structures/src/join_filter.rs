@@ -19,22 +19,33 @@ pub struct JoinFilter {
     pub abandon: Option<Abandon>,
 }
 
-/// Formal rule IF-JoinFilterAbandon, recorded: construct no filter from a
-/// build keeping more than `percent`% of the rows of `base`, the positional
-/// base of the build's occurrence lineage (its population). Absent, the
-/// filter is always built.
+/// Formal rule IF-JoinFilterAbandon: default projected filters preserve the
+/// existing exact key-count threshold. Authored `using` records select optional
+/// statistic reads; unavailable statistics select identity without forcing work.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Abandon {
     pub abandon_token: kw::abandon,
     pub percent: syn::LitInt,
     pub of_token: kw::of,
     pub base: Ident,
+    #[parse(parse_statistic)]
+    pub statistic: Option<StatisticAccessor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct StatisticAccessor {
+    pub using_token: kw::using,
+    pub accessor: Ident,
 }
 
 impl Abandon {
     pub fn percent(&self) -> usize {
         self.percent.base10_parse().expect("checked percent")
     }
+}
+
+fn parse_statistic(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<StatisticAccessor>> {
+    if input.peek(kw::using) { input.parse().map(Some) } else { Ok(None) }
 }
 
 fn parse_abandon(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<Abandon>> {
@@ -75,6 +86,24 @@ pub fn record_join_filter_abandon(program: &mut Program) -> syn::Result<()> {
         if positional.contains(&origin.base) {
             let base = Ident::new(&origin.base, proc_macro2::Span::call_site());
             filter.abandon = Some(syn::parse_quote!(abandon #percent of #base));
+            let realization = facts.facts(&filter.provider);
+            if realization.borrowed_filter || realization.attached_filter {
+                let build = symbol_name(&filter.build);
+                let Some(definition) = program.physical.program.definitions.iter()
+                    .find(|definition| definition.name == filter.covering) else { continue };
+                let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &definition.operator else { continue };
+                let Some((provider, _)) = facts.built_on(&build, &names(&keyed.columns)) else { continue };
+                let declarations = facts.facts(provider);
+                if let Some(statistic) = declarations.statistics.iter().find(|statistic|
+                    statistic.field == stats::Field::Keys
+                        && statistic.precision == stats::Precision::Exact
+                        && statistic.placement == stats::Placement::Host
+                        && statistic.computation == stats::Computation::Build)
+                {
+                    let accessor = &statistic.accessor;
+                    filter.abandon = Some(syn::parse_quote!(abandon #percent of #base using #accessor));
+                }
+            }
         }
     }
     Ok(())
@@ -132,9 +161,11 @@ pub struct JoinFilterCandidate {
 /// Every admissible filter of `covering`, one per scalar key column:
 /// an eager probe or semijoin into a total single-level exact provider with
 /// declared distinct-key enumeration. Key enumeration is the provider's
-/// `cq_storage::Keys` obligation, checked by rustc. Automatic selection may
-/// apply a narrower cost policy; explicit providers retain this
-/// representation-independent contract. The left operand reaches a scan through an
+/// `cq_storage::Keys` obligation, checked by rustc. The default projects these
+/// keys only after activation; explicit attached advice observes exact construction,
+/// and explicit borrowed advice requires a complete scalar run layout without
+/// key allocation. These recorded facts, never provider names, select realization.
+/// The left operand reaches a scan through an
 /// exclusive pipe spine of selections, projections and eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
 pub fn join_filter_candidates(
@@ -270,7 +301,7 @@ pub fn join_filter_candidates(
     result
 }
 
-/// Formal rule STR-JoinFilter: A conservative scan filter is covered by an exact probe or semijoin on a key containing it, along an exclusive pipe spine.
+/// Formal rule STR-JoinFilter: A conservative scan filter is covered by an exact probe or semijoin on a key containing it, along an exclusive pipe spine; projected construction is the default, while explicit borrowed and attached realizations are mutually exclusive and borrowing requires a complete scalar run key.
 pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Result<()> {
     for (scan, filters) in &facts.join_filters {
         for filter in filters {
@@ -299,8 +330,39 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                 );
             }
             concrete_type(&filter.marker)?;
+            if facts.facts(&filter.provider).borrowed_filter {
+                let build = symbol_name(&filter.build);
+                let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &program
+                    .physical.program.definitions.iter()
+                    .find(|definition| symbol_name(&definition.name) == covering)
+                    .expect("checked covering operator").operator else { unreachable!() };
+                let columns = names(&keyed.columns);
+                let Some((provider, _)) = facts.built_on(&build, &columns) else {
+                    return error(filter, "STR-JoinFilter: borrowed filter requires its selected run");
+                };
+                if columns != [key.clone()] || !facts.facts(provider).run_filter {
+                    return error(filter, "STR-JoinFilter: borrowed filter requires a declared run view on its complete scalar key");
+                }
+            }
             if let Some(abandon) = &filter.abandon {
                 let percent: usize = abandon.percent.base10_parse()?;
+                let build = symbol_name(&filter.build);
+                let definition = program.physical.program.definitions.iter()
+                    .find(|definition| definition.name == filter.covering).expect("checked cover");
+                let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &definition.operator else { unreachable!() };
+                let Some((provider, _)) = facts.built_on(&build, &names(&keyed.columns)) else {
+                    return error(abandon, "STR-JoinFilter: activation requires selected build");
+                };
+                if let Some(access) = &abandon.statistic {
+                    if !facts.facts(provider).statistics.iter().any(|statistic|
+                        statistic.field == stats::Field::Keys
+                            && statistic.precision == stats::Precision::Exact
+                            && statistic.placement == stats::Placement::Host
+                            && statistic.computation == stats::Computation::Build
+                            && statistic.accessor == access.accessor) {
+                        return error(abandon, "STR-JoinFilter: activation requires declared exact optional key statistic");
+                    }
+                }
                 let population = facts
                     .lineage
                     .get(&symbol_name(&filter.build))

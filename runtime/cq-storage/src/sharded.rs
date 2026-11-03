@@ -51,6 +51,7 @@ pub struct Sharded<I, F = FullKey> {
     shards: Vec<I>,
     router: F,
     release: fn(&mut Vec<I>),
+    published_keys: Option<u64>,
 }
 
 /// A checked provider cover over an immutable input.
@@ -153,6 +154,7 @@ impl<I, F> Sharded<I, F> {
             shards,
             router,
             release: Vec::clear,
+            published_keys: None,
         }
     }
 
@@ -220,6 +222,59 @@ impl<I, F> Sharded<I, F> {
         .with_parallel_release()
     }
 
+    /// Attach selected sidecars to the same pass that builds each routed part.
+    ///
+    /// Each part owns only an unfinished builder. After the synchronous join,
+    /// partial states merge and finish once, publishing one immutable filter
+    /// shared by all readers of this build. No row loop takes a shared lock,
+    /// and neither projected keys nor finished shard filters are collected.
+    /// The factory must create equivalent empty builders for every part.
+    pub fn build_from_parts_with_router_and_sidecar<'a, R: Sync, K, B>(
+        parts: &'a [Vec<R>],
+        build: impl Fn(&'a [R], &mut B) -> I + Sync + Send,
+        router: F,
+        sidecar: impl Fn() -> B + Sync,
+    ) -> (Self, B::Output)
+    where
+        I: Send,
+        B: crate::sidecar::MergeSidecarBuilder<K> + Send,
+    {
+        assert!(
+            !parts.is_empty(),
+            "routed provider needs positive partition count"
+        );
+        if parts.len() == 1 {
+            let mut builder = sidecar();
+            let index = build(&parts[0], &mut builder);
+            return (
+                Self::from_parts_with_router(vec![index], router),
+                builder.finish(),
+            );
+        }
+        #[cfg(any(feature = "counters", feature = "operator-timing"))]
+        let context = crate::counters::TaskContext::capture();
+        let built = map_index(parts.len(), &|index| {
+            let construct = || {
+                let mut builder = sidecar();
+                let index = build(&parts[index], &mut builder);
+                (index, builder)
+            };
+            #[cfg(any(feature = "counters", feature = "operator-timing"))]
+            {
+                context.run(construct)
+            }
+            #[cfg(not(any(feature = "counters", feature = "operator-timing")))]
+            {
+                construct()
+            }
+        });
+        let (shards, filter) = finish_sidecar_parts::<K, _, _>(built);
+        (
+            Self::from_parts_with_router(shards, router).with_parallel_release(),
+            filter,
+        )
+    }
+
     fn with_parallel_release(mut self) -> Self
     where
         I: Send,
@@ -230,6 +285,24 @@ impl<I, F> Sharded<I, F> {
     /// Number of independently built indexes fixed by the plan.
     pub fn shard_count(&self) -> usize {
         self.shards.len()
+    }
+
+    /// Record exact full-key cardinality at the immutable publication boundary.
+    ///
+    /// The caller must establish disjoint full keys across shards, as supplied
+    /// by the checked key-partition cover. `read` must inspect only already
+    /// available metadata, never finalize lazy storage or enumerate keys.
+    /// Missing per-shard metadata or overflow leaves the global count unknown.
+    pub fn with_disjoint_key_count(mut self, read: impl Fn(&I) -> Option<u64>) -> Self {
+        self.published_keys = self.shards.iter().try_fold(0u64, |total, shard| {
+            total.checked_add(read(shard)?)
+        });
+        self
+    }
+
+    /// O(1) read of the optional count recorded with this immutable publication.
+    pub fn stat_keys(&self) -> Option<u64> {
+        self.published_keys
     }
 
     #[inline]
@@ -243,6 +316,26 @@ impl<I, F> Sharded<I, F> {
             &self.shards[self.router.route(key, self.shards.len())]
         }
     }
+}
+
+/// Keep collection attached to the owning Vec iterator so its allocation can
+/// be reused. In particular `(I, ()) -> I` has exactly the same element layout;
+/// unit observers must not allocate a second array of shard handles.
+fn finish_sidecar_parts<K, I, B: crate::sidecar::MergeSidecarBuilder<K>>(
+    built: Vec<(I, B)>,
+) -> (Vec<I>, B::Output) {
+    let mut builder: Option<B> = None;
+    let shards = built
+        .into_iter()
+        .map(|(index, partial)| {
+            match &mut builder {
+                Some(builder) => builder.merge(partial),
+                None => builder = Some(partial),
+            }
+            index
+        })
+        .collect();
+    (shards, builder.expect("positive partition count").finish())
 }
 
 impl<I, F> Drop for Sharded<I, F> {
@@ -340,6 +433,17 @@ impl<I: crate::Keys, F> crate::Keys for Sharded<I, F> {
     }
 }
 
+// Hash routing loses global ordering, but each immutable run slice retains its
+// own order. The borrowed filter searches every slice and ORs its answers;
+// it never treats shard concatenation as a sorted directory.
+impl<I: crate::RunFilterSource, F> crate::RunFilterSource for Sharded<I, F> {
+    type Key = I::Key;
+
+    fn key_runs(&self) -> impl Iterator<Item = &[Self::Key]> {
+        self.shards.iter().flat_map(crate::RunFilterSource::key_runs)
+    }
+}
+
 impl<I, F, K: ?Sized> ExactMembership<K> for Sharded<I, F>
 where
     I: ExactMembership<K>,
@@ -391,6 +495,8 @@ pub fn route_index<K: Hash + ?Sized>(key: &K, count: usize) -> usize {
 /// Unlike the serial lazy `HashIndex`, this provider has no Rc/RefCell state.
 pub struct Index<K, V> {
     buckets: HashMap<K, Bucket<V>>,
+    rows: Option<u64>,
+    max_group: Option<u64>,
     #[cfg(feature = "counters")]
     _allocation: crate::counters_memory::Allocation,
 }
@@ -410,6 +516,22 @@ impl<K: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for Index<K, V> {
 }
 
 impl<K, V> Index<K, V> {
+    /// Stored occurrences when requested, finalized eagerly with the buckets.
+    pub fn stat_rows(&self) -> Option<u64> {
+        self.rows
+    }
+
+    /// Distinct full grouping keys.
+    pub fn stat_keys(&self) -> Option<u64> {
+        Some(self.buckets.len() as u64)
+    }
+
+    /// Largest occurrence bucket when requested, or zero for an empty build.
+    /// Returns `None` when max-group maintenance was not requested.
+    pub fn stat_max_group(&self) -> Option<u64> {
+        self.max_group
+    }
+
     /// Exact distinct build keys, used by conservative covering join filters.
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.buckets.keys()
@@ -464,19 +586,43 @@ impl<K, V> Keys for Index<K, V> {
 
 impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
     fn build(source: S) -> Self {
+        Self::build_specialized::<false, false>(source)
+    }
+}
+
+impl<K: Eq + Hash, V, I: Iterator<Item = (K, V)>> crate::BuildWithStatistics<I> for Index<K, V> {
+    fn build_with_statistics<const ROWS: bool, const MAX_GROUP: bool>(source: I) -> Self {
+        Self::build_specialized::<ROWS, MAX_GROUP>(source)
+    }
+}
+
+impl<K: Eq + Hash, V> Index<K, V> {
+    fn build_specialized<const ROWS: bool, const MAX_GROUP: bool>(source: impl Iterator<Item = (K, V)>) -> Self {
         crate::count!(index_builds);
         let mut buckets: HashMap<K, Bucket<V>> = HashMap::default();
+        let mut rows = 0;
+        let mut max_group = 0;
         for (key, value) in source {
             crate::count!(rows_copied);
+            if ROWS {
+                rows += 1;
+            }
             match buckets.entry(key) {
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().tail.push(value);
+                    let bucket = entry.get_mut();
+                    bucket.tail.push(value);
+                    if MAX_GROUP {
+                        max_group = max_group.max(bucket.tail.len() as u64 + 1);
+                    }
                 }
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(Bucket {
                         first: value,
                         tail: Vec::new(),
                     });
+                    if MAX_GROUP {
+                        max_group = max_group.max(1);
+                    }
                 }
             }
         }
@@ -492,9 +638,25 @@ impl<K: Eq + Hash, V, S: Iterator<Item = (K, V)>> Build<S> for Index<K, V> {
         };
         Self {
             buckets,
+            rows: ROWS.then_some(rows),
+            max_group: MAX_GROUP.then_some(max_group),
             #[cfg(feature = "counters")]
             _allocation: allocation,
         }
+    }
+}
+
+impl<K, V, I, S> crate::BuildWithSidecar<I, S> for Index<K, V>
+where
+    K: Eq + Hash,
+    I: Iterator<Item = (K, V)>,
+    S: crate::SidecarBuilder<K>,
+{
+    fn build_with_sidecar<const ROWS: bool, const MAX_GROUP: bool>(source: I, mut sidecar: S) -> (Self, S::Output) {
+        let index = crate::BuildWithStatistics::build_with_statistics::<ROWS, MAX_GROUP>(
+            source.inspect(|(key, _)| sidecar.observe(key)),
+        );
+        (index, sidecar.finish())
     }
 }
 
@@ -532,6 +694,114 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BuildWithStatistics;
+
+    #[test]
+    fn unit_sidecar_publication_reuses_the_shard_allocation() {
+        for count in [1usize, 2, 17, 257] {
+            let built: Vec<_> = (0..count).map(|index| (index, ())).collect();
+            let allocation = built.as_ptr().cast::<usize>();
+            let capacity = built.capacity();
+            let (shards, ()) = finish_sidecar_parts::<u64, _, _>(built);
+            assert_eq!(shards.as_ptr(), allocation);
+            assert_eq!(shards.capacity(), capacity);
+            assert!(shards.into_iter().eq(0..count));
+        }
+    }
+
+    #[test]
+    fn eager_statistics_follow_independent_demands() {
+        for input in [vec![], vec![(1, 10), (1, 10), (2, 20)]] {
+            for rows in [false, true] {
+                for max_group in [false, true] {
+                    let index = match (rows, max_group) {
+                        (false, false) => Index::build_with_statistics::<false, false>(input.iter().copied()),
+                        (false, true) => Index::build_with_statistics::<false, true>(input.iter().copied()),
+                        (true, false) => Index::build_with_statistics::<true, false>(input.iter().copied()),
+                        (true, true) => Index::build_with_statistics::<true, true>(input.iter().copied()),
+                    };
+                    assert_eq!(index.stat_rows(), rows.then_some(input.len() as u64));
+                    assert_eq!(index.stat_keys(), Some(if input.is_empty() { 0 } else { 2 }));
+                    assert_eq!(index.stat_max_group(), max_group.then_some(if input.is_empty() { 0 } else { 2 }));
+                    assert_eq!(
+                        (&index).lookup(&1).collect::<Vec<_>>(),
+                        input.iter().filter_map(|&(key, value)| (key == 1).then_some(value)).collect::<Vec<_>>(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unrequested_maximum_preserves_eager_rows_keys_and_occurrences() {
+        for rows in [vec![], vec![(1, 10), (1, 10), (2, 20), (1, 11)]] {
+            let polls = std::cell::Cell::new(0);
+            let mut input = rows.iter().copied();
+            let index = Index::build_with_statistics::<true, false>(
+                std::iter::from_fn(|| {
+                    polls.set(polls.get() + 1);
+                    input.next()
+                }),
+            );
+            assert_eq!(polls.get(), rows.len() + 1);
+            for _ in 0..3 {
+                assert_eq!(index.stat_rows(), Some(rows.len() as u64));
+                assert_eq!(index.stat_keys(), Some(if rows.is_empty() { 0 } else { 2 }));
+                assert_eq!(index.stat_max_group(), None);
+            }
+            for key in [1, 2, 9] {
+                assert_eq!(
+                    (&index).lookup(&key).collect::<Vec<_>>(),
+                    rows.iter()
+                        .filter_map(|&(stored, value)| (stored == key).then_some(value))
+                        .collect::<Vec<_>>()
+                );
+            }
+            assert_eq!(polls.get(), rows.len() + 1);
+        }
+    }
+
+    #[test]
+    fn eager_statistics_match_collision_and_skew_occurrence_oracle() {
+        #[derive(PartialEq, Eq)]
+        struct Collision(u64);
+        impl Hash for Collision {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                0u64.hash(state);
+            }
+        }
+        for size in [0, 1, 2, 31, 257, 4096] {
+            let rows: Vec<_> = (0..size)
+                .map(|i| (if i % 4 == 0 { i % 17 } else { 0 }, i % 3))
+                .collect();
+            let mut oracle = std::collections::BTreeMap::<_, u64>::new();
+            for &(key, _) in &rows {
+                *oracle.entry(key).or_default() += 1;
+            }
+            let polls = std::cell::Cell::new(0);
+            let index = Index::build_with_statistics::<true, true>(
+                rows.iter().map(|&(key, value)| {
+                    polls.set(polls.get() + 1);
+                    (Collision(key), value)
+                }),
+            );
+            // Construction remains eager; immutable reads do no further work.
+            assert_eq!(polls.get(), rows.len());
+            for _ in 0..3 {
+                assert_eq!(index.stat_rows(), Some(rows.len() as u64));
+                assert_eq!(index.stat_keys(), Some(oracle.len() as u64));
+                assert_eq!(
+                    index.stat_max_group(),
+                    Some(oracle.values().copied().max().unwrap_or(0))
+                );
+            }
+            for (key, count) in oracle {
+                assert_eq!((&index).lookup(&Collision(key)).count() as u64, count);
+            }
+            assert_eq!((&index).lookup(&Collision(u64::MAX)).next(), None);
+            assert_eq!(polls.get(), rows.len());
+        }
+    }
 
     fn assert_distinct_keys<I: crate::Keys<Key = u64>>(index: &I, expected: &[u64]) {
         let mut keys = crate::Keys::distinct_keys(index)
@@ -804,6 +1074,117 @@ mod tests {
                     }
                 });
         }
+    }
+
+    #[test]
+    fn disjoint_key_count_is_optional_cached_and_never_recounts() {
+        use std::cell::Cell;
+        let reads = Cell::new(0);
+        let index = Sharded::from_parts(vec![Some(2u64), Some(3), Some(0)]);
+        assert_eq!(index.stat_keys(), None);
+        let index = index.with_disjoint_key_count(|keys| {
+            reads.set(reads.get() + 1);
+            *keys
+        });
+        assert_eq!(reads.get(), 3);
+        for _ in 0..20 {
+            assert_eq!(index.stat_keys(), Some(5));
+        }
+        assert_eq!(reads.get(), 3);
+        let unknown = Sharded::from_parts(vec![Some(2u64), None]);
+        assert_eq!(unknown.with_disjoint_key_count(|keys| *keys).stat_keys(), None);
+        let overflow = Sharded::from_parts(vec![Some(u64::MAX), Some(1)]);
+        assert_eq!(overflow.with_disjoint_key_count(|keys| *keys).stat_keys(), None);
+        let empty = Sharded::from_parts(vec![Some(0u64), Some(0)]);
+        assert_eq!(empty.with_disjoint_key_count(|keys| *keys).stat_keys(), Some(0));
+    }
+
+    #[test]
+    fn borrowed_sharded_multirun_preserves_unknown_global_statistics() {
+        let mut first = crate::RadixRun::from_pairs((0u64..256).map(|key| (key, key)));
+        first.merge([(7, 1000), (300, 2000)]);
+        let second = crate::RadixRun::from_pairs([(600u64, 3000u64)]);
+        let index = Sharded::from_parts_with_router(
+            vec![first, second],
+            |key: &u64, _: usize| usize::from(*key >= 512),
+        )
+        .with_disjoint_key_count(crate::RadixRun::stat_keys);
+        assert_eq!(index.stat_keys(), None);
+        assert_eq!(index.shards[0].stat_keys(), None);
+        assert_eq!(index.shards[0].stat_runs(), Some(2));
+        let filter = crate::RunFilterView::new(&index, |key| key);
+        assert!(filter.test(&7));
+        assert!(filter.test(&300));
+        assert!(filter.test(&600));
+        assert!(!filter.test(&599));
+        assert!(filter.any_in(&299, &301));
+        assert!(filter.any_in(&599, &601));
+        assert!(!filter.any_in(&301, &599));
+        assert_eq!((&index).lookup(&7).collect::<Vec<_>>(), [7, 1000]);
+        assert_eq!(index.stat_keys(), None);
+        assert_eq!(index.shards[0].stat_keys(), None);
+        assert_eq!(index.shards[0].stat_max_group(), None);
+        assert_eq!(index.shards[0].stat_runs(), Some(2));
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn attached_filter_counts_only_the_exact_build_pass() {
+        use crate::{AdaptiveMembership, BuildSidecar, BuildWithSidecar};
+        crate::counters::reset();
+        let rows = [(1u64, 7u64), (1, 8), (9, 3)];
+        let mut parts = vec![Vec::new(); 7];
+        for row in rows {
+            parts[route_index(&row.0, 7)].push(row);
+        }
+        let (index, filter) = Sharded::build_from_parts_with_router_and_sidecar(
+            &parts,
+            |part, builder| Index::build_with_sidecar::<true, true>(part.iter().copied(), builder).0,
+            FullKey,
+            AdaptiveMembership::<u64, 64>::sidecar_builder,
+        );
+        let index = index.with_disjoint_key_count(Index::stat_keys);
+        assert_eq!(index.stat_keys(), Some(2));
+        let counts = crate::counters::snapshot();
+        assert_eq!(counts.index_builds, 8); // Seven exact shards, one completed filter.
+        assert_eq!(counts.rows_copied, 3);
+        assert_eq!(counts.rows_enumerated, 0);
+        assert_eq!(counts.cursor_steps, 0);
+        for (key, _) in rows {
+            assert!(filter.contains(&key));
+        }
+        assert!(!filter.contains(&2));
+        assert_eq!((&index).lookup(&1).collect::<Vec<_>>(), [7, 8]);
+    }
+
+    #[cfg(feature = "counters")]
+    #[test]
+    fn borrowed_routed_filter_does_not_build_or_collect_again() {
+        crate::counters::reset();
+        let rows = [(1u64, 7u64), (1, 8), (9, 3)];
+        let mut parts = vec![Vec::new(); 7];
+        for row in rows {
+            parts[route_index(&row.0, 7)].push(row);
+        }
+        let index = Sharded::<crate::SortedRun<u64, u64>>::build_parts(parts)
+            .with_disjoint_key_count(crate::SortedRun::stat_keys);
+        assert_eq!(index.stat_keys(), Some(2));
+        let before = crate::counters::snapshot();
+        assert_eq!(before.index_builds, 7);
+        assert_eq!(before.rows_copied, 3);
+        let filter = crate::RunFilterView::new(&index, |key| key);
+        for _ in 0..10 {
+            assert!(filter.test(&1));
+            assert!(!filter.test(&2));
+            assert!(filter.any_in(&8, &10));
+            assert!(!filter.any_in(&2, &8));
+        }
+        let after = crate::counters::snapshot();
+        assert_eq!(after.index_builds, before.index_builds);
+        assert_eq!(after.rows_copied, before.rows_copied);
+        assert_eq!(after.rows_enumerated, 0);
+        assert_eq!(after.cursor_steps, 0);
+        assert_eq!(after.distinct_insertions, 0);
     }
     #[cfg(feature = "counters")]
     #[test]

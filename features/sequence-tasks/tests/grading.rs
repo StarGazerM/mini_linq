@@ -476,7 +476,7 @@ fn segment_program() -> Program {
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     let provider: Program = syn::parse_quote! {
         #physical
-        structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
+        structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
         sequence { input = store rows l; result = store input; }
     };
     // Keep the same provider override convention as the conformance fixtures.
@@ -919,7 +919,7 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     let authored: Program = syn::parse_quote! {
         #physical
-        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared }; }
+        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host required build single, keys: keys distinct_keys exact hash_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host required build single ] }; }
             r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
         }
         sequence { result = rows l; }
@@ -1037,7 +1037,7 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             result = let canon probe first [b] joined,s;
             return result as answer(a,b,c);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r host result(joined) = @reader as Reader [a];
@@ -1568,7 +1568,7 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
     let authored: Program = syn::parse_quote! {
         #physical
-        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared }; }
+        structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host required build single, keys: keys distinct_keys exact hash_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host required build single ] }; }
             r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
         }
         sequence { result = rows l; }
@@ -2123,9 +2123,10 @@ fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
             let mut declared = vec![opaque.clone()];
             declared.extend(declarations());
             candidate.structures.structures.declare(&declared).unwrap();
+            cq_lang_sequence::structures::record_join_filter_abandon(&mut candidate.structures).unwrap();
             // Structure checks validate the covering relation, key and declared
-            // support, not the opaque provider spelling. Emitted Keys/lookup
-            // obligations are Rust's.
+            // support, not the opaque provider spelling. Construction-attached
+            // sidecar and lookup obligations are Rust's; no scalar ABI is guessed.
             cq_lang_sequence::contract::check(&candidate).unwrap();
         }
     }
@@ -2226,6 +2227,7 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
                 )),
                 input: None,
                 radix: None,
+                construction: cq_lang_sequence::structures::stats::Construction::Ordinary,
                 ty: syn::parse_quote!(
                     ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _>
                 ),

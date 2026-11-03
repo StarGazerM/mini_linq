@@ -67,6 +67,68 @@ ABI is a read-only, constant-time \code{Option<u64>}: absence is not zero
 and neither availability nor a read may force lazy work. Code bounds are not
 numeric count operands. No statistic is selected automatically by this contract.
 
+\paragraph{CPU runtime publication laws.}
+\textsc{RT-BuildStats} requires every present scalar to equal its stored
+occurrence oracle: rows count occurrences, keys count complete grouping keys,
+and maximum group counts the largest bucket (zero for completed empty data).
+The \code{stat\_rows}, \code{stat\_keys}, \code{stat\_max\_group} accessors,
+and run providers' \code{stat\_runs}, read metadata in constant time.
+An unfinalized lazy hash returns absence, not zero. Multi-run global keys and
+maxima remain absent unless already established by an existing materialization;
+neither access nor availability may trigger that work.
+Structures records ordinary versus statistics construction and a demand mask.
+Provider \code{statistics\_build} declares the accumulation fields; selected
+publications supply each demanded bit's immutable build/layout witness.
+The checker validates these witnesses without rerunning selection.
+The printer emits ordinary \code{Build::build}, or the recorded
+\code{BuildWithStatistics} call, never deriving protocol support from accessors.
+\code{BuildWithStatistics} and \code{BuildWithSidecar} take independent
+\code{ROWS,MAX\_GROUP} const-generic method parameters while preserving the
+normal lazy boundary. Demanded initializer dispatch occurs outside the
+ordinary \code{OnceCell} closure, preserving its hot-loop register allocation.
+Ordinary \code{Build} requests no accumulation; cheap lengths remain available.
+Explicit direct \code{from\_pairs} constructors retain their documented defaults.
+\begin{mathpar}
+\Rule{STR-Construction}{
+ d=\mathsf{recordedDemand}(b,p,L)\quad
+ \forall f\in d:\ \mathsf{supportsAccumulation}(p,f)\land
+ \mathsf{selectedPublication}(b,p,L,f)\quad
+ \forall f:\ \mathsf{supportsAccumulation}(p,f)\land
+ \mathsf{selectedPublication}(b,p,L,f)\implies f\in d
+}{\mathsf{construction}(b,p,L)=
+ \begin{cases}\mathsf{Ordinary}&d=\varnothing\\
+ \mathsf{Statistics}(d)&d\ne\varnothing\end{cases}}
+\end{mathpar}
+\begin{mathpar}
+\Rule{RT-BuildStats}{
+ \mathsf{stat}(x,f)=\mathsf{Some}(n)
+}{n=\mathsf{oracle}_{f}(\alpha(x))}
+\end{mathpar}
+\textsc{RT-RunFilter} governs borrowed ordered scalar run views. Point tests
+are exact; an interval test uses lower-bound search and OR across all runs.
+The selected scalar must be the complete stored layout; arbitrary composite
+projections are not licensed by lexicographic order.
+\begin{mathpar}
+\Rule{RT-RunFilter}{
+ F=\mathsf{borrowedRunView}(x)\quad K=\mathsf{scalarKeys}(x)
+}{
+ F.\mathsf{test}(k)\iff k\in K\quad
+ F.\mathsf{anyIn}(l,h)\iff \exists k\in K.\ l\le k\le h
+}
+\end{mathpar}
+The provider token fact \code{run\_filter} declares the source capability;
+\code{borrowed\_filter} and \code{attached\_filter} declare mutually exclusive,
+explicitly advised realizations. With neither fact, the default conditionally
+builds projected \code{Keys::distinct\_keys} through \code{Build} after activation.
+Default activation retains ordinary construction and exact
+\code{Keys::key\_count}. Only authored optional-statistic policies finalize the
+source with a unit sidecar before reading metadata; scalar accessors never force work.
+For explicit attachment, \code{BuildSidecar} supplies an incremental builder
+and \code{BuildWithSidecar} returns the completed index and filter together.
+Tuple builders observe the same construction without projected-key staging.
+Conservative filters may admit false positives but never false negatives;
+every exact covering operator remains.
+
 \paragraph{Lookup witnesses.}
 Either representation may append \code{witness \{ b [K] at s as Type \}}.
 This cursor is not a column and does not contribute to coverage.

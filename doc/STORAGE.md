@@ -608,6 +608,69 @@ reason to write a new layout (a fifth copy reason, alongside §2's four).
 | Codec choice by measured size (K checkpointer, B sampling) | applies to *scan columns*, not to run components that must stay byte-addressable; offsets/keys may use delta-FOR only in scan-only copies | role fact (§8) decides |
 | Exact statistics for planning (K stats; PL-Evidence) | a run knows key count, row count and max group size exactly at build; publish them as evidence for runtime `choose` (BE-Choose) and grading | published lengths/evidence facts |
 
+P7.2 supplies the CPU runtime implementation, subject to integrated gates.
+`RT-BuildStats` governs O(1) `Option<u64>` accessors: `stat_rows` counts stored
+occurrences, `stat_keys` counts distinct complete stored keys, and
+`stat_max_group`, when requested, counts the largest occurrence bucket (zero for
+a completed empty build). Runs also publish `stat_runs`. Lazy HashIndex reads return `None` before
+finalization and never force it. Multi-run RadixRun rows/run count stay cheap;
+global keys/maxima are `None` unless an existing materialization has established
+them. Segment sums/maxima do not certify overlapping global groups.
+`STR-Construction` records `Ordinary` or `Statistics { rows, max_group }` on
+each Structures provider instance. Omitted `construct` syntax canonically spells
+ordinary construction; explicit demand is written
+`@provider construct statistics [rows, max_group] as Type`. Provider declarations
+state accumulation support as `statistics_build [rows, max_group]`, independently
+of cheap statistic accessor declarations. `stats::record_constructions` selects
+the protocol from matching immutable publications and that declared support.
+The checker verifies each demand bit and its publication witness directly; it
+does not rerun selection. Printers consume the checked protocol, never infer
+`BuildWithStatistics` support from a MaxGroup accessor.
+Ordinary construction emits plain `Build::build` and requests no accumulated
+statistics. Demanded construction emits
+`BuildWithStatistics::build_with_statistics::<ROWS, MAX_GROUP>(source)`;
+`BuildWithSidecar` receives the same recorded mask. Existing lazy boundaries
+remain intact. Demanded initializer dispatch occurs outside the ordinary
+`OnceCell` closure, preserving the baseline hot-loop capture/register shape.
+Unrequested accumulated scalars return `None`; cheap row/key lengths stay
+available. Explicit direct `from_pairs` constructors retain their documented
+statistics-enabled behavior; the ordinary `Build` trait does not.
+
+`RT-RunFilter` exposes `RunFilterSource` / `RunFilterView` over existing sorted
+key arrays: exact point lookup and lower-bound interval tests, OR across runs,
+without key collection or payload enumeration. Explicit borrowed advice requires
+a scalar complete stored layout; a nonleading composite projection is not an
+ordered scalar run. The source token declares `run_filter`; the selected view
+token declares `borrowed_filter`. Explicit attached advice instead declares
+`attached_filter` and uses a `BuildSidecar` incremental builder through
+`BuildWithSidecar::build_with_sidecar::<ROWS, MAX_GROUP>(source, builder)`, publishing `(index,
+filter)` together. The two realization facts are mutually exclusive. Several
+attached builders compose as tuples; Tasks shares the completed publication.
+Routed sidecar finalization merges builders through an owning `Vec::IntoIter`
+map/collect. The unit-sidecar case reuses the original shard allocation rather
+than allocating a second vector of index handles; a pointer/capacity regression
+test checks that reuse independently of query timing.
+The built-in attached token spells `AttachedDenseMembership`, retaining direct
+bitmap construction without changing the default `DenseMembership` probe shape.
+With neither authored realization fact, default construction and activation
+retain main's projected `Build`, `Keys::key_count`, and conditional filter build.
+No built-in P7.2 heuristic substitutes optional statistics or a unit-sidecar build.
+Authored `abandon P of B using ACCESSOR` instead records an optional-statistic
+policy. The checker validates the selected provider's exact Keys accessor;
+`None` selects identity and the statistic read never forces construction.
+An authored projected statistic guard finalizes its exact source with a unit
+sidecar at the recorded boundary. Borrowed and attached realizations remain
+explicit advice. Both count ABIs compare widened u128 products without overflow.
+No filter may replace its exact covering join. The activation-enabled candidate
+lost on H05/H21/d72 despite the H09 repair; its 20 paired ratios are retained in
+PLANNING-REDESIGN P7 for the design-only P7.3 cost model, not default promotion.
+Authored routed statistic publication records optional exact key counts through
+`with_disjoint_key_count`; default routed builds do not perform that reduction.
+The borrowed adapter implements `ReadPredicate` only, not
+`ConservativeMembership` (whose blanket implementation would overlap for
+downstream-local key types). `RunFilterPredicate` wraps the optional borrowed
+view and preserves identity when inactive.
+
 P7.1 implements the publication/evidence contract, not runtime population or
 automatic policy: `STR-BuildStats` records provider-declared scalar ABI,
 field/unit/precision, construction and aggregation provenance, immutable
@@ -1460,8 +1523,8 @@ one direct call; there are no autoref dispatch tiers and no silent fallbacks.
   record `dense_membership` (requires `OrderKey`), wider keys hash
   `adaptive_membership`; a dense key without `OrderKey` is a rustc error, not a
   hash fallback.
-- **Join filters.** Positional selection and the `join_filter` advice record
-  `join_filter_membership` dense filters and the abandon policy `abandon 35 of <base>`
-  (SEL-JoinFilterAbandon); every recorded filter is built, subject only to the
-  recorded policy. A filter that regresses is removed by not selecting it, not
-  by a runtime eligibility check.
+- **Join filters.** Positional selection records scalar complete-layout borrowed
+  run views or attached sidecars, with `abandon 35 of <base> using stat_keys`
+  where a positional base exists (SEL-JoinFilterAbandon). The declared optional
+  exact Keys accessor controls activation, never a recount or sidecar construction.
+  Missing counts retain identity; deselection removes the construction cost.

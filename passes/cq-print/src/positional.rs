@@ -55,7 +55,7 @@ impl Context<'_> {
             quote!(::core::iter::Iterator::filter(#ids, move |&__cq_id| ::cq_storage::test_position(#host, <#marker>::default(), #id, __cq_id)))
         })
     }
-    /// Formal rule IF-JoinFilter: Filter scan positions conservatively by every already-built recorded filter and retain each covering exact operator unchanged.
+    /// Formal rule IF-JoinFilter: Consume recorded conditional projected-key construction by default, explicit borrowed source/view facts or explicit attached BuildSidecar construction through BuildWithSidecar; filter ready scan positions while preserving every exact covering operator.
     pub fn join_filter_ids(&self, name: &str) -> Option<TokenStream> {
         let (base, filters) = self.join_filters_of(name)?;
         let host = Self::positional_host(&base);

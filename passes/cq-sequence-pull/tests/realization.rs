@@ -61,6 +61,7 @@ fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() 
         rows_r = build r provider #token layout #(#layout)* columns [] domains [] stat #statistic;
     );
     selected.structures.publications.0.push(publication.clone());
+    structures::stats::record_constructions(&mut selected).unwrap();
     let mut program = cq_sequence_lowering::compile(&selected).unwrap();
     let reference = publication.reference();
     let guard: Guard = syn::parse_quote!(stat r (#reference) < 10);
@@ -125,6 +126,78 @@ fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() 
     let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+fn selected_construction_publishes_real_rows_and_group_maxima() {
+    use cq_lang_sequence::{Guard, Term};
+    for field in [structures::stats::Field::Rows, structures::stats::Field::MaxGroup] {
+        let physical = syn::parse_quote!(physical {
+            relation L(a:i32); relation R(a:i32,b:i32);
+            l = pipe rename L@0 {a -> a};
+            r = let rename R@1 {a -> a,b -> b};
+            j = let canon probe first [a] l,r;
+            return j as answer(a,b);
+        });
+        let selected = cq_structure_selection::compile(&physical).unwrap();
+        let mut selected = cq_structure_selection::retype(&selected, quote!(
+            r => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]
+        )).unwrap();
+        let declaration = selected.structures.providers.declarations.iter()
+            .find(|declaration| declaration.token == "sorted_run").unwrap();
+        let statistic = declaration.facts.statistics.iter()
+            .find(|statistic| statistic.field == field).unwrap();
+        let projection = if field == structures::stats::Field::Rows {
+            quote!(columns [] domains [])
+        } else {
+            quote!(columns [a] domains [a: identity integers 0])
+        };
+        let publication: structures::stats::Publication = syn::parse_quote!(
+            selected_stat = build r provider sorted_run layout [a]
+                #projection stat #statistic;
+        );
+        selected.structures.publications.0.push(publication.clone());
+        structures::stats::record_constructions(&mut selected).unwrap();
+        let mut program = cq_sequence_lowering::compile(&selected).unwrap();
+        let reference = publication.reference();
+        let guard: Guard = syn::parse_quote!(stat r (#reference) < 3);
+        let last = program.sequence.definitions.last_mut().unwrap();
+        let original = last.term.clone();
+        last.term = syn::parse_quote!(flatten choose [
+            #guard => tile 1 #original,
+            else => tile 2 #original
+        ]);
+        let facts = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+        let expression = cq_sequence_pull::translate_with(
+            &program, &facts, syn::parse_quote!(1usize),
+            cq_sequence_pull::CanonTarget::Sequential,
+            |term, _, _, output, _, _| {
+                if let Term::Tile { n, .. } = term {
+                    let rows = &output.rows;
+                    output.rows = quote!({ selected_cover.set(#n); #rows });
+                }
+                Ok(())
+            },
+        ).unwrap();
+        let populated_cover = if field == structures::stats::Field::Rows { 2usize } else { 1usize };
+        let source = quote! {
+            fn main() {
+                let L = [(1i32,), (2,)];
+                let populated = [(1i32, 4i32), (1, 4), (2, 5)];
+                for R in [&populated[..], &[][..]] {
+                    let selected_cover = std::cell::Cell::new(0usize);
+                    let mut rows: Vec<_> = (#expression).into_iter()
+                        .map(|(a,b)| (*a,*b)).collect();
+                    rows.sort();
+                    assert_eq!(rows, if R.is_empty() { vec![] } else { vec![(1,4), (2,5)] });
+                    assert_eq!(selected_cover.get(), if R.is_empty() { 1 } else { #populated_cover });
+                }
+            }
+        };
+        let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../runtime/cq-storage/src/lib.rs");
+        cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+    }
 }
 
 #[test]
@@ -248,6 +321,83 @@ fn equal_support_choice_reheads_before_a_downstream_projection() {
     let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+fn attached_sidecar_and_index_survive_the_selected_lazy_choice_arm() {
+    let physical = syn::parse_quote!(physical {
+        relation L(a:i64,b:i64); relation R(c:i64,d:i64);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z};
+        s = pipe range select r if (z > 1);
+        b = let project s keep {x,z};
+        j = pipe probe first [x] l,b;
+        out = let canon project j keep {x,y,z};
+        return out as answer(x,y,z);
+    });
+    let mut selected = cq_structure_selection::compile(&physical).unwrap();
+    let declaration = structures::provider::base::declaration("attached_join_filter_membership");
+    let provider = declaration.instance();
+    selected.structures.providers.declare(&declaration);
+    selected.structures.entries.push(syn::parse_quote!(
+        l join_filter = #provider build b [x] covering j marker ::cq_load::ColumnAt<0>;
+    ));
+    structures::record_join_filter_abandon(&mut selected).unwrap();
+    let facts = structures::contract::check(&selected).unwrap();
+    assert!(facts.join_filters["l"][0].abandon.is_none());
+    let mut context = cq_print::Context::new(&selected, &facts);
+    context.register("b");
+    context.begin_deferred_bindings();
+    let mut arms = Vec::new();
+    for _ in 0..2 {
+        let start = context.statements.len();
+        let built = context.materialize("b", quote!({
+            builds.set(builds.get() + 1);
+            R.iter().filter(|row| row.1 > 1).map(|(x,z)| (x,z))
+        }));
+        let cq_print::Repr::Let { structures, .. } = built else {
+            panic!("fixture requires ordinary payload storage");
+        };
+        let index = &structures[0].1;
+        let filter = context.join_filter_ident("l", 0);
+        let statements = context.statements.split_off(start);
+        arms.push(quote!({ #(#statements)* (#index, #filter) }));
+    }
+    context.end_deferred_bindings();
+    let statements = &context.statements;
+    let left = &arms[0];
+    let right = &arms[1];
+    let source = quote! {
+        fn main() {
+            let L = [(1i64,10i64), (2,20), (8,80)];
+            let R = [(1i64,2i64), (1,3), (2,4), (8,0)];
+            for select_left in [true, false] {
+                let builds = std::cell::Cell::new(0usize);
+                #(#statements)*
+                let (index, filter) = if select_left { #left } else { #right };
+                assert_eq!(builds.get(), 1);
+                assert!(!cq_storage::ReadPredicate::test(filter, &8i64));
+                let mut actual = Vec::new();
+                for (x,y) in &L {
+                    if cq_storage::ReadPredicate::test(filter, x) {
+                        for (z,) in cq_storage::IndexRead::lookup(index, &(x,)) {
+                            actual.push((*x,*y,*z));
+                        }
+                    }
+                }
+                actual.sort();
+                assert_eq!(actual, vec![(1,10,2), (1,10,3), (2,20,4)]);
+            }
+        }
+    };
+    cq_testkit::rustc::Runtime::with_dependencies(vec![
+        cq_testkit::rustc::linked_dependency::<cq_storage::sharded::FullKey>(
+            "cq_storage", "cq_storage::sharded::FullKey",
+        ),
+        cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
+            "cq_load", "cq_load::ColumnAt<0>",
+        ),
+    ]).run(&source.to_string());
 }
 
 #[test]
@@ -818,7 +968,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         p = pipe probe first [x] l,r;
         j = let canon project p keep {x,y};
         return j as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];

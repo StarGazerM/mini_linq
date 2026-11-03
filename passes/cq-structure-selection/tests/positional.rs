@@ -272,6 +272,84 @@ fn join_filters_preserve_coverage_and_lineage() {
 }
 
 #[test]
+fn borrowed_run_filter_is_a_checked_recorded_scalar_realization() {
+    let original = join_filter_plan(false);
+    let selected = cq_structure_selection::retype(&original, quote!(
+        b => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]
+    )).unwrap();
+    let default_facts = ir::contract::check(&selected).unwrap();
+    let default_filter = &default_facts.join_filters["l"][0];
+    assert!(!default_facts.facts(&default_filter.provider).borrowed_filter);
+    assert!(!default_facts.facts(&default_filter.provider).attached_filter);
+    assert!(default_filter.abandon.as_ref().unwrap().statistic.is_none());
+    let selected = cq_structure_selection::retype(&selected, quote!(
+        l join_filter => @borrowed_run_filter as ::cq_storage::RunFilterView<'_, _, _>
+    )).unwrap();
+    let facts = ir::contract::check(&selected).unwrap();
+    let filter = &facts.join_filters["l"][0];
+    assert!(facts.facts(&filter.provider).borrowed_filter);
+    assert_eq!(filter.abandon.as_ref().unwrap().statistic.as_ref().unwrap().accessor, "stat_keys");
+    assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+    for invalid_accessor in [false, true] {
+        let mut bad = selected.clone();
+        for entry in &mut bad.structures.entries {
+            if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+                if invalid_accessor {
+                    filter.abandon.as_mut().unwrap().statistic.as_mut().unwrap().accessor = syn::parse_quote!(stat_rows);
+                } else {
+                    filter.key = syn::parse_quote!([z]);
+                }
+            }
+        }
+        assert!(ir::contract::check(&bad).is_err());
+    }
+    for mutation in 0..3 {
+        let mut bad = selected.clone();
+        let provider = bad.structures.providers.declarations.iter_mut()
+            .find(|provider| provider.token == "sorted_run").unwrap();
+        let statistic = provider.facts.statistics.iter_mut()
+            .find(|statistic| statistic.field == ir::stats::Field::Keys).unwrap();
+        match mutation {
+            0 => statistic.placement = ir::stats::Placement::Cuda,
+            1 => statistic.precision = ir::stats::Precision::Estimate,
+            _ => statistic.computation = ir::stats::Computation::Additional,
+        }
+        physical::contract::check(&bad.physical).unwrap();
+        assert!(ir::contract::check(&bad).is_err());
+    }
+    assert!(cq_structure_selection::retype(&selected, quote!(
+        b => @hash_index as ::cq_storage::HashIndex<'_, _, _> supports [keys]
+    )).is_err());
+    let projected = cq_structure_selection::retype(&selected, quote!(
+        l join_filter => @join_filter_membership as ::cq_storage::DenseMembership<_, 67108864>
+    )).unwrap();
+    let changed = cq_structure_selection::retype(&projected, quote!(
+        b => @hash_index as ::cq_storage::HashIndex<'_, _, _> supports [keys]
+    )).unwrap();
+    let changed_facts = ir::contract::check(&changed).unwrap();
+    assert!(!changed_facts.facts(&changed_facts.join_filters["l"][0].provider).borrowed_filter);
+}
+
+#[test]
+fn attached_join_filter_requires_explicit_unambiguous_realization() {
+    let original = join_filter_plan(false);
+    let selected = cq_structure_selection::retype(&original, quote!(
+        l join_filter => @attached_join_filter_membership as ::cq_storage::AttachedDenseMembership<_, 67108864>
+    )).unwrap();
+    let facts = ir::contract::check(&selected).unwrap();
+    let filter = &facts.join_filters["l"][0];
+    assert!(facts.facts(&filter.provider).attached_filter);
+    assert!(!facts.facts(&filter.provider).borrowed_filter);
+    assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+    let mut bad = selected.clone();
+    let provider = bad.structures.providers.declarations.iter_mut()
+        .find(|provider| provider.token == "attached_join_filter_membership").unwrap();
+    provider.facts.borrowed_filter = true;
+    let error = ir::contract::check(&bad).err().expect("conflicting realization flags");
+    assert!(error.to_string().contains("borrowed_filter and attached_filter are mutually exclusive"));
+}
+
+#[test]
 fn membership_provider_selection_is_type_blind_and_has_no_redundant_filter() {
     for key_type in [
         quote!(i64),

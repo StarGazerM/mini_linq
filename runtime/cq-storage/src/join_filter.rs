@@ -51,15 +51,22 @@ impl<K, P: ConservativeMembership<K>> ReadPredicate<K> for JoinFilterPredicate<'
     }
 }
 
-/// Formal rule IF-JoinFilterAbandon: whether a build keeping `kept` of its
-/// source occurrence's `population` rows is selective enough to construct its
-/// recorded filters. Structures records the abandon threshold `percent` (35,
-/// the creation threshold of dynamic predicate transfer, RPT+) with the base
-/// whose length is the population; a build keeping more abandons its filters
-/// before construction. A filter recorded without a threshold is always built.
+/// Formal rule IF-JoinFilterAbandon: evaluate the recorded compatibility
+/// activation threshold on exact full-layout keys and source occurrences.
+/// This is cost advice, not join selectivity. Default projected filters build
+/// only after activation. Explicit attached sidecars build with the exact index
+/// before this guard; explicit borrowed views allocate no key staging.
+/// Optional unavailable counts select identity before calling this function.
+/// Widened products handle the full scalar ABI without overflow.
 #[inline]
 pub fn selective_build(kept: usize, population: usize, percent: usize) -> bool {
-    kept * 100 <= population * percent
+    (kept as u128) * 100 <= (population as u128) * (percent as u128)
+}
+
+/// Evaluate an authored optional-statistic policy without truncating its ABI.
+#[inline]
+pub fn selective_build_statistic(kept: u64, population: usize, percent: usize) -> bool {
+    (kept as u128) * 100 <= (population as u128) * (percent as u128)
 }
 
 #[cfg(test)]
@@ -73,5 +80,9 @@ mod tests {
         assert!(selective_build(0, 0, 35));
         assert!(!selective_build(1, 0, 35));
         assert!(selective_build(7, 20, 35));
+        assert!(selective_build(usize::MAX, usize::MAX, 100));
+        assert!(!selective_build(usize::MAX, usize::MAX, 35));
+        assert_eq!(selective_build_statistic(u64::MAX, usize::MAX, 100), usize::BITS == 64);
+        assert!(!selective_build_statistic(u64::MAX, usize::MAX, 35));
     }
 }

@@ -4,10 +4,19 @@ use std::{collections::BTreeSet, num::NonZeroUsize};
 
 type FilterAlias = BloomFilter<2>;
 struct ConservativeOnly;
-impl<I: Iterator<Item = (i64, ())>> cq_storage::Build<I> for ConservativeOnly {
-    fn build(source: I) -> Self {
-        source.for_each(drop);
+impl cq_storage::BuildSidecar<i64> for ConservativeOnly {
+    type Builder = Self;
+
+    fn sidecar_builder() -> Self::Builder {
         Self
+    }
+}
+impl cq_storage::SidecarBuilder<i64> for ConservativeOnly {
+    type Output = Self;
+
+    fn observe(&mut self, _: &i64) {}
+    fn finish(self) -> Self::Output {
+        self
     }
 }
 impl cq_storage::ConservativeMembership<i64> for ConservativeOnly {
@@ -16,13 +25,50 @@ impl cq_storage::ConservativeMembership<i64> for ConservativeOnly {
     }
 }
 
+#[test]
+fn selected_run_filter_borrows_nonclone_keys_and_ignores_unneeded_columns() {
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Key(i64);
+    struct Unused;
+    type Summary = (cq_load::NoBounds<Key>, MinMax<i64>, cq_load::NoBounds<Unused>);
+    let left = ZoneRows::from_rows::<Summary>(
+        vec![(Key(1), 7_i64, Unused), (Key(3), 8, Unused), (Key(9), 9, Unused)],
+        NonZeroUsize::new(2).unwrap(),
+    );
+    let right = ZoneRows::from_rows::<Summary>(
+        vec![(Key(1), 2_i64, Unused), (Key(1), 3, Unused), (Key(9), 0, Unused)],
+        NonZeroUsize::new(2).unwrap(),
+    );
+    let actual: BTreeSet<_> = mini_linq::passes::select! {
+        pipeline {
+            cq_rewrites::join_filter(l),
+            cq_rewrites::retype(b => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]),
+            cq_rewrites::retype(l join_filter => @borrowed_run_filter as ::cq_storage::RunFilterView<'_, _, _>),
+            mini_linq::passes::sequence,
+            mini_linq::passes::sequential,
+            mini_linq::passes::translate_pull
+        };
+        physical {
+            relation L(a:Key,b:i64,unused:Unused) = (&left);
+            relation R(c:Key,d:i64,unused:Unused) = (&right);
+            l = pipe rename L@0 {a -> x,b -> y,unused -> ignored_left};
+            r = pipe rename R@1 {c -> x,d -> z,unused -> ignored_right};
+            s = pipe range select r if (z > 1);
+            b = let project s keep {x,z};
+            j = pipe probe first [x] l,b;
+            out = let canon project j keep {y,z}; return out as answer(y,z);
+        }
+    }.into_iter().map(|(y,z)| (*y,*z)).collect();
+    assert_eq!(actual, BTreeSet::from([(7,2),(7,3)]));
+}
+
 macro_rules! run {
     ($left:ident, $right:ident, $token:ident = $filter:ty, $build:ident, $($passes:path),+) => {
         mini_linq::passes::select! {
             pipeline {
                 cq_rewrites::join_filter(l),
                 cq_rewrites::retype(
-                    providers { $token = $filter { reads [membership], build $build }; }
+                    providers { $token = $filter { reads [membership], build $build, attached_filter }; }
                     l join_filter => @$token as $filter
                 ),
                 $($passes),+
@@ -137,14 +183,29 @@ thread_local! {
 }
 
 struct CountedFilter;
-impl<I: Iterator<Item = (i64, ())>> cq_storage::Build<I> for CountedFilter {
-    fn build(source: I) -> Self {
-        let keys = source.count();
+impl cq_storage::BuildSidecar<i64> for CountedFilter {
+    type Builder = Self;
+
+    fn sidecar_builder() -> Self::Builder {
         FILTER_WORK.with(|work| {
             let (builds, inserted, probes) = work.get();
-            work.set((builds + 1, inserted + keys, probes));
+            work.set((builds + 1, inserted, probes));
         });
         Self
+    }
+}
+impl cq_storage::SidecarBuilder<i64> for CountedFilter {
+    type Output = Self;
+
+    fn observe(&mut self, _: &i64) {
+        FILTER_WORK.with(|work| {
+            let (builds, inserted, probes) = work.get();
+            work.set((builds, inserted + 1, probes));
+        });
+    }
+
+    fn finish(self) -> Self::Output {
+        self
     }
 }
 impl cq_storage::ConservativeMembership<i64> for CountedFilter {
@@ -165,7 +226,7 @@ macro_rules! counted_plan {
             pipeline {
                 $(cq_rewrites::join_filter($scan),)+
                 cq_rewrites::retype(
-                    providers { counted_filter = CountedFilter { reads [membership], build inferred }; }
+                    providers { counted_filter = CountedFilter { reads [membership], build inferred, attached_filter }; }
                     join_filter => @counted_filter as CountedFilter
                 ),
                 mini_linq::passes::sequence,

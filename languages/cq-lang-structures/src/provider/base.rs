@@ -8,16 +8,34 @@ use crate::{Declaration, Provider, Providers};
 pub fn declarations() -> Vec<Declaration> {
     let providers: Providers = syn::parse_quote!(providers {
         hash_index = ::cq_storage::HashIndex<'_, _, _> {
-            reads [exact, membership], supports [keys], build typed, join_filter
+            reads [exact, membership], supports [keys], build typed, join_filter,
+            statistics_build [rows, max_group], statistics [
+                rows: rows occurrences exact hash_finalize stat_rows host optional build single,
+                keys: keys distinct_keys exact hash_finalize stat_keys host optional build single,
+                max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single
+            ]
         };
         trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
         sorted_run = ::cq_storage::SortedRun<_, _> {
             reads [exact, range, membership], supports [retain, expand, keys], build typed,
-            join_filter, shared
+            join_filter, run_filter, shared,
+            statistics_build [rows, max_group], statistics [
+                rows: rows occurrences exact run_finalize stat_rows host required build single,
+                keys: keys distinct_keys exact run_finalize stat_keys host required build single,
+                max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single,
+                runs: runs runs exact run_finalize stat_runs host required build single
+            ]
         };
         radix_run = ::cq_storage::RadixRun<_, _> {
-            reads [exact, range, membership], supports [retain, expand, keys], build typed, shared,
-            items 2 [rows ::std::vec::Vec<_>, columns ::cq_storage::TupleColumns<_>]
+            reads [exact, range, membership], supports [retain, expand, keys], build typed,
+            join_filter, run_filter, shared,
+            items 2 [rows ::std::vec::Vec<_>, columns ::cq_storage::TupleColumns<_>],
+            statistics_build [rows, max_group], statistics [
+                rows: rows occurrences exact run_finalize stat_rows host required build overlapping,
+                keys: keys distinct_keys exact run_finalize stat_keys host optional build single,
+                max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host optional build single,
+                runs: runs runs exact run_finalize stat_runs host required build overlapping
+            ]
         };
         hash_set = ::cq_storage::HashSet<_> {
             reads [membership], build typed, accounting keys, shared
@@ -55,6 +73,12 @@ pub fn declarations() -> Vec<Declaration> {
         join_filter_membership = ::cq_storage::DenseMembership<_, 67108864> {
             reads [membership], build typed, shared
         };
+        attached_join_filter_membership = ::cq_storage::AttachedDenseMembership<_, 67108864> {
+            reads [membership], build typed, attached_filter, shared
+        };
+        borrowed_run_filter = ::cq_storage::RunFilterView<'_, _, _> {
+            reads [membership], borrowed_filter, shared
+        };
         dense_membership = ::cq_storage::DenseMembership<_, 16777216> {
             reads [membership], build typed, shared
         };
@@ -62,7 +86,12 @@ pub fn declarations() -> Vec<Declaration> {
         packed = ::cq_storage::dedup::Packed { reads [distinct], build inferred, shared };
         exists = ::cq_storage::Exists { reads [distinct], build inferred, shared };
         sharded_index = ::cq_storage::sharded::Index<_, _> {
-            reads [exact, membership], supports [keys], build typed, join_filter, shared
+            reads [exact, membership], supports [keys], build typed, join_filter, shared,
+            statistics_build [rows, max_group], statistics [
+                rows: rows occurrences exact hash_finalize stat_rows host required build single,
+                keys: keys distinct_keys exact hash_finalize stat_keys host required build single,
+                max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host required build single
+            ]
         };
         sharded = ::cq_storage::sharded::Sharded<_> {
             reads [], build typed, routed 0, shared
@@ -92,6 +121,7 @@ pub fn instance(token: &str, ty: syn::Type) -> Provider {
         inner: None,
         input: None,
         radix: None,
+        construction: crate::stats::Construction::Ordinary,
         ty,
     }
 }

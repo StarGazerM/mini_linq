@@ -52,6 +52,9 @@ pub mod kw {
     syn::custom_keyword!(nested);
     syn::custom_keyword!(routed);
     syn::custom_keyword!(join_filter);
+    syn::custom_keyword!(run_filter);
+    syn::custom_keyword!(borrowed_filter);
+    syn::custom_keyword!(attached_filter);
     syn::custom_keyword!(shared);
     syn::custom_keyword!(packed_bits);
     syn::custom_keyword!(exact);
@@ -80,6 +83,7 @@ pub mod kw {
     syn::custom_keyword!(eager);
     syn::custom_keyword!(lazy);
     syn::custom_keyword!(statistics);
+    syn::custom_keyword!(statistics_build);
 }
 
 /// Declared provider capabilities, discharged against Structures and Sequence obligations.
@@ -442,6 +446,13 @@ pub struct Facts {
     pub composition: Option<Composition>,
     /// Payload-directory key enumeration eligible as a supplementary join filter source.
     pub join_filter: bool,
+    /// Immutable ordered key slices support a borrowed point/interval filter.
+    pub run_filter: bool,
+    /// This filter realization borrows the covering run.
+    pub borrowed_filter: bool,
+    /// This filter realization attaches a sidecar to the covering build.
+    /// With neither realization flag, build projected keys after activation.
+    pub attached_filter: bool,
     /// Reads may be captured by pool and task readers (the instance is `Sync`).
     pub shared: bool,
     /// Packed equality-key width limit, checked against codec bounds at setup.
@@ -455,6 +466,8 @@ pub struct Facts {
     pub choice: Option<ChoiceSlot>,
     /// Optional statistic ABI declarations; declaring a field never selects it.
     pub statistics: Vec<stats::StatDeclaration>,
+    /// Fields whose publication requires explicit BuildWithStatistics demand.
+    pub statistics_build: stats::BuildDemand,
 }
 
 impl Facts {
@@ -493,6 +506,14 @@ impl Facts {
                 .copied()
                 .collect(),
             join_filter: inner.join_filter,
+            run_filter: inner.run_filter,
+            statistics: inner.statistics.iter()
+                .filter(|statistic| statistic.field == stats::Field::Keys)
+                .cloned().map(|mut statistic| {
+                    statistic.availability = stats::Availability::Optional;
+                    statistic.aggregation = stats::Aggregation::Disjoint;
+                    statistic
+                }).collect(),
             ..self.clone()
         }
     }
@@ -514,6 +535,7 @@ impl Declaration {
             inner: None,
             input: None,
             radix: None,
+            construction: stats::Construction::Ordinary,
             ty: self.ty.clone(),
         }
     }
@@ -553,6 +575,7 @@ impl Declaration {
             inner: Some(Box::new(inner)),
             input: None,
             radix: None,
+            construction: stats::Construction::Ordinary,
             ty,
         })
     }
@@ -565,6 +588,7 @@ pub struct Provider {
     pub inner: Option<Box<Provider>>,
     pub input: Option<InputSchema>,
     pub radix: Option<RadixAdvice>,
+    pub construction: stats::Construction,
     /// Printed spelling only.
     pub ty: syn::Type,
 }
@@ -612,12 +636,14 @@ impl syn::parse::Parse for Provider {
         } else {
             None
         };
+        let construction = input.parse()?;
         input.parse::<Token![as]>()?;
         Ok(Self {
             token,
             inner,
             input: schema,
             radix,
+            construction,
             ty: input.parse()?,
         })
     }
@@ -629,9 +655,10 @@ impl ToTokens for Provider {
         let ty = &self.ty;
         let input = &self.input;
         let radix = &self.radix;
+        let construction = &self.construction;
         tokens.extend(match &self.inner {
-            Some(inner) => quote::quote!(@#token(#inner) #input #radix as #ty),
-            None => quote::quote!(@#token #input #radix as #ty),
+            Some(inner) => quote::quote!(@#token(#inner) #input #radix #construction as #ty),
+            None => quote::quote!(@#token #input #radix #construction as #ty),
         });
     }
 }
@@ -836,6 +863,9 @@ impl syn::parse::Parse for Declaration {
             accounting: Accounting::None,
             composition: None,
             join_filter: false,
+            run_filter: false,
+            borrowed_filter: false,
+            attached_filter: false,
             shared: false,
             packed_bits: None,
             abi: None,
@@ -844,6 +874,7 @@ impl syn::parse::Parse for Declaration {
             items: None,
             choice: None,
             statistics: Vec::new(),
+            statistics_build: stats::BuildDemand::default(),
         };
         let mut seen = BTreeSet::new();
         while !body.is_empty() {
@@ -909,6 +940,15 @@ impl syn::parse::Parse for Declaration {
             } else if lookahead.peek(kw::join_filter) {
                 body.parse::<kw::join_filter>()?;
                 facts.join_filter = true;
+            } else if lookahead.peek(kw::run_filter) {
+                body.parse::<kw::run_filter>()?;
+                facts.run_filter = true;
+            } else if lookahead.peek(kw::borrowed_filter) {
+                body.parse::<kw::borrowed_filter>()?;
+                facts.borrowed_filter = true;
+            } else if lookahead.peek(kw::attached_filter) {
+                body.parse::<kw::attached_filter>()?;
+                facts.attached_filter = true;
             } else if lookahead.peek(kw::shared) {
                 body.parse::<kw::shared>()?;
                 facts.shared = true;
@@ -964,6 +1004,9 @@ impl syn::parse::Parse for Declaration {
                     return Err(list.error("expected `eager Argument, lazy Argument`"));
                 }
                 facts.choice = Some(ChoiceSlot { index, eager, lazy });
+            } else if lookahead.peek(kw::statistics_build) {
+                body.parse::<kw::statistics_build>()?;
+                facts.statistics_build = body.parse()?;
             } else if lookahead.peek(kw::statistics) {
                 body.parse::<kw::statistics>()?;
                 let list;
@@ -992,6 +1035,9 @@ impl ToTokens for Declaration {
             accounting,
             composition,
             join_filter,
+            run_filter,
+            borrowed_filter,
+            attached_filter,
             shared,
             packed_bits,
             abi,
@@ -1000,6 +1046,7 @@ impl ToTokens for Declaration {
             items,
             choice,
             statistics,
+            statistics_build,
         } = &self.facts;
         let reads = reads
             .iter()
@@ -1036,6 +1083,15 @@ impl ToTokens for Declaration {
         if *join_filter {
             facts.push(quote::quote!(join_filter));
         }
+        if *run_filter {
+            facts.push(quote::quote!(run_filter));
+        }
+        if *borrowed_filter {
+            facts.push(quote::quote!(borrowed_filter));
+        }
+        if *attached_filter {
+            facts.push(quote::quote!(attached_filter));
+        }
         if *shared {
             facts.push(quote::quote!(shared));
         }
@@ -1070,6 +1126,9 @@ impl ToTokens for Declaration {
             let index = syn::Index::from(*index);
             facts.push(quote::quote!(choice #index [eager #eager, lazy #lazy]));
         }
+        if !statistics_build.is_empty() {
+            facts.push(quote::quote!(statistics_build #statistics_build));
+        }
         if !statistics.is_empty() {
             facts.push(quote::quote!(statistics [#(#statistics),*]));
         }
@@ -1090,7 +1149,23 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
         }
         concrete_type(&declaration.ty)?;
         let facts = &declaration.facts;
+        if facts.borrowed_filter && facts.attached_filter {
+            return error(
+                &declaration.token,
+                "borrowed_filter and attached_filter are mutually exclusive",
+            );
+        }
         stats::check_declarations(&facts.statistics)?;
+        for (field, requested) in [
+            (stats::Field::Rows, facts.statistics_build.rows),
+            (stats::Field::MaxGroup, facts.statistics_build.max_group),
+        ] {
+            if requested && !facts.statistics.iter().any(|statistic| {
+                statistic.field == field && statistic.computation == stats::Computation::Build
+            }) {
+                return error(&declaration.token, "STR-Construction: demanded field lacks a build statistic declaration");
+            }
+        }
         if facts
             .statistics
             .iter()
@@ -1140,6 +1215,7 @@ pub(crate) fn check(structures: &Structures) -> syn::Result<()> {
                 inner: None,
                 input: None,
                 radix: None,
+                construction: stats::Construction::Ordinary,
                 ty: syn::parse_quote!(_),
             })?;
         }

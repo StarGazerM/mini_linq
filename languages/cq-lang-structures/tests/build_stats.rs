@@ -116,6 +116,73 @@ fn declarations_alone_do_not_select_statistics() {
     );
 }
 
+fn build_provider(program: &mut structures::Program) -> &mut structures::Provider {
+    program.structures.entries.iter_mut().find_map(|entry| match &mut entry.structure {
+        structures::Structure::Built { keyed, .. } if entry.name == "r" => Some(&mut keyed.provider),
+        _ => None,
+    }).unwrap()
+}
+
+#[test]
+fn construction_is_selected_from_declared_support_and_publication_demand() {
+    for (rows, max_group) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut selected = program();
+        let declaration = &mut selected.structures.providers.declarations[1];
+        declaration.facts.statistics_build = BuildDemand { rows: true, max_group: true };
+        let maximum: StatDeclaration = syn::parse_quote!(
+            maximum: max_group max_bucket_occurrences exact run_finalize max_stat host optional build single
+        );
+        declaration.facts.statistics.push(maximum.clone());
+        if !rows {
+            selected.structures.publications.0.retain(|publication| publication.statistic.field != Field::Rows);
+        }
+        if max_group {
+            selected.structures.publications.0.push(syn::parse_quote!(
+                maximum_r = build r provider index layout [x,y] columns [x,y]
+                    domains [x: identity integers 0,y: dictionary names 7] stat #maximum;
+            ));
+        }
+        if rows || max_group {
+            rejected(&selected);
+        }
+        record_constructions(&mut selected).unwrap();
+        let expected = if rows || max_group {
+            Construction::Statistics(BuildDemand { rows, max_group })
+        } else {
+            Construction::Ordinary
+        };
+        assert_eq!(build_provider(&mut selected).construction, expected);
+        assert_eq!(syn::parse2::<structures::Program>(selected.to_token_stream()).unwrap(), selected);
+        let mut stale = selected.clone();
+        build_provider(&mut stale).construction = Construction::Statistics(BuildDemand {
+            rows: !rows, max_group,
+        });
+        rejected(&stale);
+        if rows || max_group {
+            let mut unsupported = selected.clone();
+            unsupported.structures.providers.declarations[1].facts.statistics_build = BuildDemand::default();
+            rejected(&unsupported);
+            let mut missing = selected.clone();
+            missing.structures.publications.0.clear();
+            rejected(&missing);
+        }
+    }
+}
+
+#[test]
+fn ordinary_protocol_does_not_require_a_statistic_builder_for_cheap_accessors() {
+    let mut selected = program();
+    record_constructions(&mut selected).unwrap();
+    assert_eq!(build_provider(&mut selected).construction, Construction::Ordinary);
+    let provider: structures::Provider = syn::parse_quote!(@index construct ordinary as Index);
+    assert_eq!(provider.construction, Construction::Ordinary);
+    assert!(syn::parse_str::<BuildDemand>("[rows, rows]").is_err());
+    assert!(syn::parse_str::<BuildDemand>("[keys]").is_err());
+    let mut empty = program();
+    build_provider(&mut empty).construction = Construction::Statistics(BuildDemand::default());
+    rejected(&empty);
+}
+
 #[test]
 fn publication_rejects_wrong_build_provider_and_ordered_layout() {
     for mutation in 0..4 {

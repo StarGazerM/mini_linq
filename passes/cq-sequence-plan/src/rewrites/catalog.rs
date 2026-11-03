@@ -358,7 +358,9 @@ fn select(
                     // and radix advice; a bare catalog token cannot build them.
                     && (facts.abi != Some(structures::provider::NativeAbi::RadixRelation)
                         || recorded(&candidate))
-                    && if kind == "canon" {
+                    && if kind == "selection" {
+                        recorded(&candidate)
+                    } else if kind == "canon" {
                         // Packed bounds are runtime codec facts, never inferred from Rust types.
                         facts.packed_bits.is_none() && facts.reads(&Capability::Distinct)
                     } else {
@@ -384,6 +386,12 @@ fn select(
                 (provider, supports)
             });
         let Some((provider, supports)) = selected else {
+            if kind == "selection" {
+                return Err(syn::Error::new_spanned(
+                    &entry.name,
+                    "PL-Select: recorded positional selection constructor is not admitted by the target catalog",
+                ));
+            }
             if admitted.is_some_and(|names| names.contains(&name)) {
                 continue;
             }

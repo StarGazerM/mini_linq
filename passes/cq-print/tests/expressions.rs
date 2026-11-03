@@ -101,6 +101,7 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
                     inner: None,
                     input: None,
                     radix: None,
+                    construction: cq_lang_structures::stats::Construction::Ordinary,
                     ty: provider.clone(),
                 };
             }
@@ -183,6 +184,29 @@ fn raw_membership_fallback_dispatches_build_with_inferred_provider_output() {
 }
 
 #[test]
+fn lazy_host_fallback_omits_unrequested_maximum_without_forcing_build() {
+    use quote::quote;
+    let physical = syn::parse_quote! { physical {
+        relation L(a: i64); relation R(a: i64, b: i64);
+        l = pipe rename L@0 {a -> x};
+        r = pipe rename R@1 {a -> x, b -> y};
+        joined = pipe probe first [x] l,r;
+        return canon joined as answer(x,y);
+    }};
+    let program = cq_structure_selection::compile(&physical).unwrap();
+    let facts = cq_lang_structures::contract::check(&program).unwrap();
+    let mut context = cq_print::Context::new(&program, &facts);
+    context.register("r");
+    context.prepare_host("r");
+    let statements = &context.statements;
+    let printed = quote!(#(#statements)*).to_string();
+    assert!(printed.contains(":: cq_storage :: dispatch :: Lazy"), "{printed}");
+    assert!(printed.contains("as :: cq_storage :: Build < _ > > :: build"), "{printed}");
+    assert!(!printed.contains("BuildWithStatistics"), "{printed}");
+    assert!(!printed.contains("BuildWithSidecar"), "{printed}");
+}
+
+#[test]
 fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates() {
     use quote::quote;
     let source = syn::parse_quote! { physical {
@@ -229,20 +253,45 @@ fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates()
     context.materialize("selected", quote!(source_rows));
     let statements = &context.statements;
     let printed = quote!(#(#statements)*).to_string();
-    assert!(
-        printed.contains(
-            "< :: cq_storage :: DenseMembership < _ , 67108864 > as :: cq_storage :: Build < _ > > :: build"
-        ),
-        "{printed}"
-    );
-    assert!(printed.contains("distinct_keys"));
-    // Every recorded filter is built; the recorded abandon policy is printed.
-    assert!(!printed.contains("JoinFilterKey"));
+    assert!(printed.contains("as :: cq_storage :: Build < _ > > :: build"), "{printed}");
+    assert!(printed.contains("Keys :: distinct_keys"), "{printed}");
+    assert!(!printed.contains("BuildSidecar"), "{printed}");
+    assert!(!printed.contains("BuildWithSidecar"));
+    assert!(!printed.contains("stat_keys"));
+    // Default projection and exact key-count activation retain main's spelling.
+    assert!(printed.contains(". then"), "{printed}");
     assert!(
         printed.contains(":: cq_storage :: selective_build"),
         "{printed}"
     );
     assert!(!printed.contains("NoDense"));
+    let borrowed = cq_structure_selection::retype(&program, quote!(
+        selected => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]
+    )).unwrap();
+    let borrowed = cq_structure_selection::retype(&borrowed, quote!(
+        l join_filter => @borrowed_run_filter as ::cq_storage::RunFilterView<'_, _, _>
+    )).unwrap();
+    let borrowed_facts = cq_lang_structures::contract::check(&borrowed).unwrap();
+    let mut borrowed_context = cq_print::Context::new(&borrowed, &borrowed_facts);
+    borrowed_context.register("selected");
+    borrowed_context.materialize("selected", quote!(source_rows));
+    let statements = &borrowed_context.statements;
+    let printed = quote!(#(#statements)*).to_string();
+    assert!(printed.contains("RunFilterView") && printed.contains(":: new"), "{printed}");
+    assert!(!printed.contains("distinct_keys"), "{printed}");
+    assert!(!printed.contains("BuildSidecar"), "{printed}");
+    let attached = cq_structure_selection::retype(&program, quote!(
+        l join_filter => @attached_join_filter_membership as ::cq_storage::AttachedDenseMembership<_, 67108864>
+    )).unwrap();
+    let attached_facts = cq_lang_structures::contract::check(&attached).unwrap();
+    let mut attached_context = cq_print::Context::new(&attached, &attached_facts);
+    attached_context.register("selected");
+    attached_context.materialize("selected", quote!(source_rows));
+    let statements = &attached_context.statements;
+    let printed = quote!(#(#statements)*).to_string();
+    assert!(printed.contains("BuildWithSidecar"), "{printed}");
+    assert!(printed.contains("BuildSidecar") && printed.contains("sidecar_builder"), "{printed}");
+    assert!(!printed.contains("distinct_keys"), "{printed}");
 }
 
 #[test]
@@ -302,6 +351,7 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
             assert!(printed.contains("route_index"));
             assert!(printed.contains(&inner.ty.to_token_stream().to_string()));
             assert!(printed.contains("as :: cq_storage :: Build < _ > > :: build"));
+            assert!(!printed.contains("BuildWithStatistics"), "{printed}");
             assert_eq!(
                 printed.matches("let __cq_build_source").count(),
                 if borrowed_singleton { 2 } else { 1 },
@@ -325,6 +375,48 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn scalar_accumulation_requires_selected_publications() {
+    use quote::quote;
+    let original = cq_structure_selection::retype(&membership_plan(), quote!(
+        selected => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]
+    )).unwrap();
+    for (selected_rows, selected_maximum) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut program = original.clone();
+        if selected_rows {
+            program.structures.publications.0.push(syn::parse_quote!(
+                rows_selected = build selected provider sorted_run layout [x]
+                    columns [] domains []
+                    stat rows: rows occurrences exact run_finalize
+                        stat_rows host required build single;
+            ));
+        }
+        if selected_maximum {
+            program.structures.publications.0.push(syn::parse_quote!(
+                maximum_selected = build selected provider sorted_run layout [x]
+                    columns [x] domains [x: identity integers 0]
+                    stat max_group: max_group max_bucket_occurrences exact run_finalize
+                        stat_max_group host required build single;
+            ));
+        }
+        cq_lang_structures::stats::record_constructions(&mut program).unwrap();
+        let facts = cq_lang_structures::contract::check(&program).unwrap();
+        let mut context = cq_print::Context::new(&program, &facts);
+        context.register("selected");
+        context.materialize("selected", quote!(source_rows));
+        let statements = &context.statements;
+        let printed = quote!(#(#statements)*).to_string();
+        if selected_rows || selected_maximum {
+            assert!(printed.contains("as :: cq_storage :: BuildWithStatistics < _ > > :: build_with_statistics"), "{printed}");
+            assert!(printed.contains(&format!("build_with_statistics :: < {selected_rows} , {selected_maximum} >")), "{printed}");
+        } else {
+            assert!(printed.contains("as :: cq_storage :: Build < _ > > :: build"), "{printed}");
+            assert!(!printed.contains("BuildWithStatistics"), "{printed}");
+        }
+        assert!(!printed.contains("BuildWithSidecar"), "{printed}");
     }
 }
 

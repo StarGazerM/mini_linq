@@ -46,14 +46,32 @@ Arbitrary Eq + Hash keys and oversized spans retain exact hash membership;
 contains-only fallback does not need Ord or a sorted interval index.
 Membership-only builds do not also construct the redundant scan filter.
 Automatic supplementary scan-filter selection retains its separate opt-in
-policy: only recorded payload-index families (HashIndex, SortedRun, and their
-routed forms) supply them, not HashSet merely because it can enumerate keys.
-This is a selection cost policy, not a validity restriction: explicitly selected
-custom single-level providers remain legal when they satisfy the covering
-probe and `Keys` contracts. Selection records `dense_membership`, whose
-`OrderKey` bound is checked by rustc, and records abandonment as `abandon P of B`
-when the build has a positional lineage base. The runtime applies the recorded
-percentage to that base's occurrence count; it does not choose a scalar policy.
+policy: recorded payload-index provider facts supply them, not HashSet merely
+because it can enumerate keys. This is a selection cost policy, not a validity
+restriction: explicitly selected custom single-level providers remain legal
+when they satisfy the exact covering probe and recorded layout contracts.
+The recorded default conditionally builds projected `Keys::distinct_keys` after
+activation. A source declaring `run_filter` permits explicit `borrowed_filter`
+advice only for a scalar complete stored layout; source retyping does not select
+it automatically. Explicit `attached_filter` advice uses incremental
+`BuildSidecar` builders through `BuildWithSidecar`, without projected-key staging.
+The built-in attached token spells `AttachedDenseMembership`; the default retains
+`DenseMembership` and its original probe shape. Rustc checks the `OrderKey` bound.
+Default selection retains main's `abandon P of B` policy, exact
+`Keys::key_count` activation and ordinary Build. P7.2 optional-statistic
+activation is authored-only: `abandon P of B using ACCESSOR` is checked against
+the selected provider's exact Keys declaration. An unavailable value selects
+identity without recounting; widened products avoid overflow. Authored attached
+construction precedes activation, and borrowed views allocate no key staging.
+The activation-enabled candidate lost on H05/H21/d72; its twenty paired ratios
+and layout controls are recorded in doc/PLANNING-REDESIGN.md P7, not promoted.
+`STR-Construction` records ordinary versus statistic construction with independent
+row/max-group demand bits, checked against `statistics_build` support and matching
+immutable publications. Printers consume that record, never discover protocol
+support from accessors. Ordinary Build accumulates no statistics; authored
+`BuildWithStatistics` and `BuildWithSidecar` carry the recorded mask. Lazy demanded
+initializer dispatch stays outside the ordinary OnceCell closure. Existing cheap
+lengths and explicitly invoked direct constructors retain their behavior.
 Identity-only filters do not make a previously unknown source population known.
 The runtime exposes an explicit identity fact for absent filters. Scalar and
 chunked block reads enumerate positions directly for identity predicates,

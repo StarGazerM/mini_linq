@@ -1190,6 +1190,7 @@ dependencies = [
  "cq-lang-cq",
  "cq-lang-sequence",
  "cq-lang-structures",
+ "cq-load",
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",

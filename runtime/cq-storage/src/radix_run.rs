@@ -2,6 +2,8 @@
 //! The representation shares grouping/cursors with other run providers, not their
 //! search algorithms. Payload lookup checks exact equality in the spline window;
 //! dense-domain membership can use a bounded, lazily initialized presence bitmap.
+//! Maximum group size is maintained only when requested at build time. An
+//! unrequested maximum stays unavailable through maintenance and lazy reads.
 
 use crate::radix_spline::{RadixSpline, RadixSplineMetadata, RadixSplinePoint, RadixSplineView};
 use crate::rows::Rows;
@@ -201,6 +203,9 @@ pub struct RadixRun<K, V, C = Vec<V>> {
     runs: Vec<Segment<K, V, C>>,
     ratio: usize,
     key_count: OnceLock<usize>,
+    max_group: Option<OnceLock<usize>>,
+    row_count: usize,
+    bounds: Option<(usize, usize)>,
     compact: OnceLock<Vec<V>>,
 }
 
@@ -208,6 +213,58 @@ struct Segment<K, V, C> {
     rows: RunRows<K, V, C>,
     directory: RadixSpline,
     state: RadixRunReadState,
+}
+
+impl<K, V, C> RadixRun<K, V, C> {
+    pub fn stat_rows(&self) -> Option<u64> {
+        Some(self.row_count as u64)
+    }
+
+    /// Global distinct keys are unavailable until an existing read finalizes them.
+    pub fn stat_keys(&self) -> Option<u64> {
+        match self.runs.as_slice() {
+            [] => Some(0),
+            [run] => Some(run.rows.keys.len() as u64),
+            _ => self.key_count.get().map(|&count| count as u64),
+        }
+    }
+
+    /// Local maxima cannot be combined when a key occurs in several runs.
+    /// Unrequested maxima remain unavailable, even after contiguous reads.
+    pub fn stat_max_group(&self) -> Option<u64> {
+        let max_group = self.max_group.as_ref()?;
+        match self.runs.as_slice() {
+            [] => Some(0),
+            [run] => run.rows.max_group.map(|count| count as u64),
+            _ => max_group.get().map(|&count| count as u64),
+        }
+    }
+
+    pub fn stat_runs(&self) -> Option<u64> {
+        Some(self.runs.len() as u64)
+    }
+
+    /// Borrow the full-key extrema; `None` denotes a proven empty publication.
+    pub fn key_bounds(&self) -> Option<(&K, &K)> {
+        let (first, last) = self.bounds?;
+        self.runs[first].rows.keys.first().zip(self.runs[last].rows.keys.last())
+    }
+}
+
+impl<K, V, C> crate::run_filter::RunFilterSource for RadixRun<K, V, C> {
+    type Key = K;
+
+    fn key_runs(&self) -> impl Iterator<Item = &[K]> {
+        self.runs.iter().map(|run| run.rows.keys.as_slice())
+    }
+}
+
+impl<K, V> crate::run_filter::RunFilterSource for RadixRunView<'_, K, V> {
+    type Key = K;
+
+    fn key_runs(&self) -> impl Iterator<Item = &[K]> {
+        std::iter::once(self.keys)
+    }
 }
 
 impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> Segment<K, V, C> {
@@ -293,8 +350,17 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixR
     /// Build the explicitly selected payload-column layout with a run ratio.
     /// For example, `C = (Vec<A>, Vec<B>)` stores `(A,B)` as independent columns.
     pub fn from_column_rows(source: impl IntoIterator<Item = (K, V)>, ratio: usize) -> Self {
+        Self::from_column_rows_with_statistics(source, ratio, true)
+    }
+
+    fn from_column_rows_with_statistics(
+        source: impl IntoIterator<Item = (K, V)>,
+        ratio: usize,
+        max_group: bool,
+    ) -> Self {
         assert!(ratio >= 2, "run ratio must be at least two");
-        let rows = RunRows::<K, V, C>::from_pairs_cached_key(source, OrderKey::ordinal);
+        let rows = RunRows::<K, V, C>::from_pairs_cached_key(source, OrderKey::ordinal, max_group);
+        let row_count = rows.items.len();
         let runs = if rows.items.is_empty() {
             Vec::new()
         } else {
@@ -304,6 +370,9 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixR
             runs,
             ratio,
             key_count: OnceLock::new(),
+            max_group: max_group.then(OnceLock::new),
+            row_count,
+            bounds: (row_count != 0).then_some((0, 0)),
             compact: OnceLock::new(),
         }
     }
@@ -418,9 +487,14 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixR
             let mut runs = self.runs.iter();
             match (runs.next(), runs.next()) {
                 (Some(left), Some(right)) => {
-                    let mut rows = RunRows::merge(&left.rows, &right.rows);
+                    let requested = self.max_group.is_some();
+                    let mut rows = RunRows::merge(&left.rows, &right.rows, requested);
                     for run in runs {
-                        rows = RunRows::merge(&rows, &run.rows);
+                        rows = RunRows::merge(&rows, &run.rows, requested);
+                    }
+                    let _ = self.key_count.set(rows.keys.len());
+                    if let Some(max_group) = &self.max_group {
+                        let _ = max_group.set(rows.max_group.expect("requested maximum group size"));
                     }
                     rows.items.into_rows()
                 }
@@ -568,7 +642,37 @@ impl<
 > Build<I> for RadixRun<K, V, C>
 {
     fn build(source: I) -> Self {
-        Self::from_column_rows(source, 4)
+        Self::from_column_rows_with_statistics(source, 4, false)
+    }
+}
+
+impl<K, V, C, I> crate::BuildWithStatistics<I> for RadixRun<K, V, C>
+where
+    K: OrderKey<Ordinal = u64> + Copy,
+    V: Copy,
+    C: ItemColumns<Row = V>,
+    I: Iterator<Item = (K, V)>,
+{
+    fn build_with_statistics<const ROWS: bool, const MAX_GROUP: bool>(source: I) -> Self {
+        Self::from_column_rows_with_statistics(source, 4, MAX_GROUP)
+    }
+}
+
+impl<K, V, C, I, S> crate::BuildWithSidecar<I, S> for RadixRun<K, V, C>
+where
+    K: OrderKey<Ordinal = u64> + Copy,
+    V: Copy,
+    C: ItemColumns<Row = V>,
+    I: Iterator<Item = (K, V)>,
+    S: crate::SidecarBuilder<K>,
+{
+    fn build_with_sidecar<const ROWS: bool, const MAX_GROUP: bool>(source: I, mut sidecar: S) -> (Self, S::Output) {
+        let run = Self::from_column_rows_with_statistics(
+            source.inspect(|(key, _)| sidecar.observe(key)),
+            4,
+            MAX_GROUP,
+        );
+        (run, sidecar.finish())
     }
 }
 
@@ -623,12 +727,18 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixR
     /// disjointness is required). The grouped delta is appended as a run and
     /// adjacent runs are stably merged by merge-path while the geometric ratio
     /// is violated; direct reads include all unmerged runs.
+    /// The build's maximum-group request is preserved for deltas and merges.
     pub fn merge(&mut self, delta: impl IntoIterator<Item = (K, V)>) {
-        let rows = RunRows::<K, V, C>::from_pairs_cached_key(delta, OrderKey::ordinal);
+        let requested = self.max_group.is_some();
+        let rows = RunRows::<K, V, C>::from_pairs_cached_key(delta, OrderKey::ordinal, requested);
         if rows.items.is_empty() {
             return;
         }
         self.key_count.take();
+        if let Some(max_group) = &mut self.max_group {
+            max_group.take();
+        }
+        self.row_count += rows.items.len();
         self.compact.take();
         self.runs.push(Segment::new(rows));
         while self.runs.len() >= 2 {
@@ -638,15 +748,276 @@ impl<K: OrderKey<Ordinal = u64> + Copy, V: Copy, C: ItemColumns<Row = V>> RadixR
             }
             let newer = self.runs.pop().expect("two runs");
             let older = self.runs.pop().expect("two runs");
-            self.runs
-                .push(Segment::new(RunRows::merge(&older.rows, &newer.rows)));
+            self.runs.push(Segment::new(RunRows::merge(
+                &older.rows,
+                &newer.rows,
+                requested,
+            )));
         }
+        // Only endpoint metadata is reduced at publication; no key/payload scan.
+        let first = (0..self.runs.len())
+            .min_by_key(|&i| self.runs[i].rows.keys.first());
+        let last = (0..self.runs.len())
+            .max_by_key(|&i| self.runs[i].rows.keys.last());
+        self.bounds = first.zip(last);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn published_statistics_preserve_lazy_boundaries_and_empty_delta() {
+        let mut run = RadixRun::from_pairs((0_u64..256).map(|key| (key, key)));
+        run.merge([(7, 1000), (u64::MAX, 2000)]);
+        assert_eq!(run.stat_rows(), Some(258));
+        assert_eq!(run.stat_runs(), Some(2));
+        assert_eq!(run.stat_keys(), None);
+        assert_eq!(run.stat_max_group(), None);
+        assert_eq!(run.key_bounds(), Some((&0, &u64::MAX)));
+        let view = crate::RunFilterView::new(&run, |key| key);
+        assert!(view.test(&7));
+        assert!(view.any_in(&u64::MAX, &u64::MAX));
+        assert!(!view.any_in(&300, &(u64::MAX - 1)));
+        assert!(run.key_count.get().is_none());
+        assert!(run.compact.get().is_none());
+        assert!(run.runs.iter().all(|segment| segment.state.membership.as_ref()
+            .is_none_or(|membership| membership.bits.get().is_none())));
+        assert_eq!(run.len(), 257);
+        assert_eq!(run.stat_keys(), Some(257));
+        assert_eq!(run.stat_max_group(), None);
+        assert_eq!(run.items().len(), 258);
+        assert_eq!(run.stat_max_group(), Some(2));
+        run.merge([]);
+        assert_eq!(run.stat_keys(), Some(257));
+        assert_eq!(run.stat_max_group(), Some(2));
+        assert!(run.compact.get().is_some());
+        run.merge([(7, 3000)]);
+        assert_eq!(run.stat_rows(), Some(259));
+        assert_eq!(run.stat_keys(), None);
+        assert_eq!(run.stat_max_group(), None);
+        assert!(run.compact.get().is_none());
+        assert_eq!(run.items().len(), 259);
+        assert_eq!(run.stat_keys(), Some(257));
+        assert_eq!(run.stat_max_group(), Some(3));
+    }
+
+    #[test]
+    fn selected_statistics_preserve_empty_single_run_and_columnar_occurrences() {
+        use crate::BuildWithStatistics;
+
+        fn check<C: ItemColumns<Row = (u64, u64)>>(input: &[(u64, (u64, u64))]) {
+            let mut expected = input.to_vec();
+            expected.sort_by_key(|pair| pair.0);
+            let mut oracle = std::collections::BTreeMap::<u64, Vec<(u64, u64)>>::new();
+            for &(key, item) in input {
+                oracle.entry(key).or_default().push(item);
+            }
+            for requested in [false, true] {
+                let run = if requested {
+                    RadixRun::<_, _, C>::build_with_statistics::<true, true>(input.iter().copied())
+                } else {
+                    RadixRun::<_, _, C>::build_with_statistics::<true, false>(input.iter().copied())
+                };
+                let maximum = requested.then(|| {
+                    oracle.values().map(|items| items.len() as u64).max().unwrap_or(0)
+                });
+                assert_eq!(run.stat_rows(), Some(input.len() as u64));
+                assert_eq!(run.stat_keys(), Some(oracle.len() as u64));
+                assert_eq!(run.stat_runs(), Some(u64::from(!input.is_empty())));
+                assert_eq!(run.stat_max_group(), maximum);
+                assert_eq!(run.key_bounds(), oracle.first_key_value().zip(oracle.last_key_value())
+                    .map(|((lo, _), (hi, _))| (lo, hi)));
+                assert_eq!(run.max_group.is_some(), requested);
+                assert!(run.runs.iter().all(|segment| segment.rows.max_group.is_some() == requested));
+                assert_eq!((&run).rows().collect::<Vec<_>>(), expected);
+                for (&key, items) in &oracle {
+                    assert_eq!(run.count(&key), items.len());
+                    assert_eq!((&run).lookup(&key).collect::<Vec<_>>(), *items);
+                }
+                assert!(run.compact.get().is_none());
+                assert_eq!(run.items(), expected.iter().map(|pair| pair.1).collect::<Vec<_>>());
+                assert_eq!(run.stat_max_group(), maximum);
+            }
+        }
+
+        for input in [
+            vec![],
+            vec![(u64::MAX, (7, 8))],
+            vec![(2, (7, 8)), (1, (9, 10)), (2, (7, 8)), (1, (9, 10)), (2, (3, 4))],
+            (0..2049).map(|i| ((i * 73) % 31, (i, i + 1))).collect(),
+        ] {
+            check::<Vec<(u64, u64)>>(&input);
+            check::<(Vec<u64>, Vec<u64>)>(&input);
+        }
+    }
+
+    #[test]
+    fn disabled_statistics_stay_absent_through_lazy_and_maintenance_merges() {
+        use crate::BuildWithStatistics;
+
+        let mut input: Vec<_> = (0_u64..256).map(|key| (key, key)).collect();
+        let mut run = RadixRun::<_, _>::build_with_statistics::<true, false>(input.iter().copied());
+        let delta = [(7, 1000), (u64::MAX, 2000)];
+        run.merge(delta);
+        input.extend(delta);
+        assert_eq!(run.stat_rows(), Some(258));
+        assert_eq!(run.stat_runs(), Some(2));
+        assert_eq!(run.stat_keys(), None);
+        assert_eq!(run.stat_max_group(), None);
+        assert_eq!(run.key_bounds(), Some((&0, &u64::MAX)));
+        assert!(run.max_group.is_none());
+        assert!(run.runs.iter().all(|segment| segment.rows.max_group.is_none()));
+        let view = crate::RunFilterView::new(&run, |key| key);
+        assert!(view.test(&7));
+        assert!(view.any_in(&u64::MAX, &u64::MAX));
+        assert!(!view.any_in(&300, &(u64::MAX - 1)));
+        assert_eq!((&run).lookup(&7).collect::<Vec<_>>(), [7, 1000]);
+        assert_eq!(run.count(&7), 2);
+        assert_eq!(run.range(&7), (7, 9));
+        assert!(run.key_count.get().is_none());
+        assert!(run.compact.get().is_none());
+        assert!(run.runs.iter().all(|segment| segment.state.membership.as_ref()
+            .is_none_or(|membership| membership.bits.get().is_none())));
+        assert_eq!(run.len(), 257);
+        assert_eq!(run.stat_keys(), Some(257));
+        assert_eq!(run.stat_max_group(), None);
+        let mut expected = input.clone();
+        expected.sort_by_key(|pair| pair.0);
+        assert_eq!(run.items(), expected.iter().map(|pair| pair.1).collect::<Vec<_>>());
+        assert_eq!(run.stat_max_group(), None);
+        run.merge([]);
+        assert_eq!(run.stat_keys(), Some(257));
+        assert_eq!(run.stat_max_group(), None);
+        assert!(run.compact.get().is_some());
+        run.merge([(7, 3000)]);
+        input.push((7, 3000));
+        assert_eq!(run.stat_keys(), None);
+        assert_eq!(run.stat_max_group(), None);
+        assert!(run.compact.get().is_none());
+        assert_eq!((&run).lookup(&7).collect::<Vec<_>>(), [7, 1000, 3000]);
+        assert_eq!(run.items().len(), input.len());
+        assert_eq!(run.stat_max_group(), None);
+        let delta: Vec<_> = (0..2049).map(|i| ((i * 73) % 31, i + 4000)).collect();
+        run.merge(delta.iter().copied());
+        input.extend(delta);
+        expected = input;
+        expected.sort_by_key(|pair| pair.0);
+        assert_eq!(run.run_count(), 1);
+        assert_eq!(run.stat_rows(), Some(expected.len() as u64));
+        assert_eq!(run.stat_keys(), Some(257));
+        assert_eq!(run.stat_max_group(), None);
+        assert!(run.max_group.is_none());
+        assert!(run.runs[0].rows.max_group.is_none());
+        assert!(run.compact.get().is_none());
+        assert_eq!((&run).rows().collect::<Vec<_>>(), expected);
+        assert_eq!(run.items(), expected.iter().map(|pair| pair.1).collect::<Vec<_>>());
+        assert_eq!(run.stat_max_group(), None);
+    }
+
+    #[test]
+    fn run_statistics_match_occurrence_oracle_across_merge_publications() {
+        for ratio in [2, 4, 8] {
+            for batch_size in [1, 17, 128, 1024] {
+                let mut run = RadixRun::<i64, usize>::with_ratio([], ratio);
+                assert_eq!(run.stat_rows(), Some(0));
+                assert_eq!(run.stat_keys(), Some(0));
+                assert_eq!(run.stat_max_group(), Some(0));
+                assert_eq!(run.stat_runs(), Some(0));
+                assert_eq!(run.key_bounds(), None);
+                let input: Vec<_> = (0..1024).map(|i| {
+                    let key = match i {
+                        0 => i64::MIN,
+                        1 => i64::MAX,
+                        _ if i % 3 == 0 => 7,
+                        _ => ((i * 73) % 127) as i64 - 63,
+                    };
+                    (key, i)
+                }).collect();
+                let mut oracle = std::collections::BTreeMap::<i64, u64>::new();
+                let mut occurrences = 0_u64;
+                for batch in input.chunks(batch_size) {
+                    run.merge(batch.iter().copied());
+                    for &(key, _) in batch {
+                        *oracle.entry(key).or_default() += 1;
+                        occurrences += 1;
+                    }
+                    assert_eq!(run.stat_rows(), Some(occurrences));
+                    assert_eq!(run.stat_runs(), Some(run.runs.len() as u64));
+                    assert_eq!(run.key_bounds(), oracle.first_key_value().zip(oracle.last_key_value())
+                        .map(|((lo, _), (hi, _))| (lo, hi)));
+                    let single = run.runs.len() == 1;
+                    assert_eq!(run.stat_keys(), single.then_some(oracle.len() as u64));
+                    assert_eq!(run.stat_max_group(), single.then(|| *oracle.values().max().unwrap()));
+                    assert!(run.compact.get().is_none());
+                }
+                run.items();
+                assert_eq!(run.stat_keys(), Some(oracle.len() as u64));
+                assert_eq!(run.stat_max_group(), oracle.values().copied().max());
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_statistics_preserve_columnar_occurrences_across_merge_publications() {
+        use crate::BuildWithStatistics;
+
+        let input: Vec<_> = (0_u64..4097)
+            .map(|i| (((i * 73) % 2053), (i, i + 7)))
+            .collect();
+        for batch_size in [1, 97, 1024, input.len()] {
+            let mut run = RadixRun::<_, _, (Vec<u64>, Vec<u64>)>::build_with_statistics::<true, false>(
+                std::iter::empty(),
+            );
+            assert_eq!(run.stat_max_group(), None);
+            run.merge([]);
+            assert_eq!(run.stat_max_group(), None);
+            let mut published = 0;
+            for batch in input.chunks(batch_size) {
+                run.merge(batch.iter().copied());
+                published += batch.len();
+                assert_eq!(run.stat_rows(), Some(published as u64));
+                assert_eq!(run.stat_max_group(), None);
+                assert!(run.runs.iter().all(|segment| segment.rows.max_group.is_none()));
+                assert!(run.key_count.get().is_none());
+                assert!(run.compact.get().is_none());
+                let mut expected = input[..published].to_vec();
+                expected.sort_by_key(|pair| pair.0);
+                assert_eq!((&run).rows().collect::<Vec<_>>(), expected);
+            }
+            let mut expected = input.clone();
+            expected.sort_by_key(|pair| pair.0);
+            assert_eq!(run.items(), expected.iter().map(|pair| pair.1).collect::<Vec<_>>());
+            assert_eq!(run.stat_keys(), Some(2053));
+            assert_eq!(run.stat_max_group(), None);
+            assert!(run.max_group.is_none());
+        }
+    }
+
+    #[test]
+    fn metadata_and_borrowed_filters_never_read_unselected_payload_columns() {
+        let mut run = RadixRun::<u64, (u64, u64), ObservedColumns>::from_column_rows(
+            (0..128).map(|key| (key, (key, key + 1000))), 4,
+        );
+        run.merge([(7, (7, 2000)), (u64::MAX, (0, 3000))]);
+        let view = crate::RunFilterView::new(&run, |key| key);
+        for key in 0..130 {
+            assert_eq!(view.test(&key), key < 128);
+            assert_eq!(view.any_in(&key, &key), key < 128);
+        }
+        assert_eq!(run.stat_rows(), Some(130));
+        assert_eq!(run.stat_keys(), None);
+        assert_eq!(run.stat_max_group(), None);
+        assert_eq!(run.key_bounds(), Some((&0, &u64::MAX)));
+        let selected: Vec<_> = run.column_groups(&7)
+            .flat_map(|(columns, range)| columns.columns.0[range].iter().copied())
+            .collect();
+        assert_eq!(selected, [7, 7]);
+        assert!(run.runs.iter().all(|segment| segment.rows.items.reads.get() == 0));
+        assert!(run.compact.get().is_none());
+        assert!(run.key_count.get().is_none());
+    }
 
     #[test]
     fn retained_single_run_expansion_searches_the_directory_once() {

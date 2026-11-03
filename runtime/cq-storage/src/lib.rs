@@ -101,7 +101,7 @@ pub mod scan;
 pub use item_columns::{ColumnRow, ItemColumns, TupleColumns};
 mod join_filter;
 mod key;
-pub use join_filter::{JoinFilterPredicate, NoJoinFilter, selective_build};
+pub use join_filter::{JoinFilterPredicate, NoJoinFilter, selective_build, selective_build_statistic};
 mod host;
 mod instrument;
 mod membership;
@@ -115,6 +115,13 @@ pub mod sequence;
 mod set_buckets;
 pub mod sharded;
 mod sorted_run;
+mod run_filter;
+mod sidecar;
+pub use run_filter::{RunFilterPredicate, RunFilterSource, RunFilterView};
+pub use sidecar::{
+    BuildSidecar, BuildWithSidecar, BuildWithStatistics, MergeSidecarBuilder, ProjectedSidecar,
+    SidecarBuilder, SidecarInput,
+};
 pub use sharded::Sharded;
 mod trie;
 
@@ -319,7 +326,10 @@ pub mod fetch;
 pub mod positional;
 pub mod selection;
 pub mod stage;
-pub use adaptive::{AdaptiveKeySet, AdaptiveMembership, DenseMembership};
+pub use adaptive::{
+    AdaptiveKeySet, AdaptiveMembership, AdaptiveMembershipBuilder, AttachedDenseMembership,
+    AttachedDenseMembershipBuilder, DenseMembership,
+};
 pub use fetch::Fetch;
 pub use positional::{
     BlockId, BlockRead, Column, ColumnSlot, ExactIntervalMembership, Membership, Point,

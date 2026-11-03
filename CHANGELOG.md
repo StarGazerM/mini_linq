@@ -228,6 +228,37 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   materialized-cubin release path. It attempts both CQ and Datalog lanes and
   reports each outcome instead of letting the first failure hide the second.
 
+- P7 construction and authored filter publication preserve deferred choice
+  ownership: exact indexes, attached sidecars and filter predicates are owned
+  outside lazy alternatives and initialized only by the selected arm. A runtime
+  regression checks both choices, one build, and exact answers after the choice.
+- GPU Datalog input bindings now instantiate their declared Structures providers
+  through the shared CPU/GPU declaration producer, preserving the construction
+  record instead of inventing a printer default. Scan argument printing reads
+  recorded Round provider types directly; host-only tests cover ordinary input
+  construction and rejection of unrequested statistic construction.
+- P7.2 implementation, subject to integrated gates: CPU run/hash providers expose
+  O(1) optional build statistics (`RT-BuildStats`) without forcing lazy work.
+  Structures now records ordinary versus statistics construction with a demand
+  mask (`STR-Construction`), checked against provider-declared `statistics_build`
+  support and matching immutable publications. Printers no longer infer a
+  constructor from a MaxGroup accessor. No-consumer construction emits plain
+  `Build::build`; the runtime's ordinary Build does not accumulate statistics.
+  `BuildWithStatistics` and `BuildWithSidecar` carry the recorded row/max mask.
+  Lazy hash demanded-initializer selection is outside the ordinary OnceCell
+  closure, avoiding the H09 hot-loop register-allocation regression identified
+  with expanded code, counters, CPU perf and an isolated diagnostic. Cheap
+  lengths and explicit direct-constructor behavior remain unchanged.
+  Routed unit-sidecar finalization reuses its original shard-handle allocation;
+  the allocation-identity regression checks the absence of a second vector.
+  Borrowed run filters provide exact point and interval tests (`RT-RunFilter`);
+  `run_filter` source capability and mutually exclusive `borrowed_filter` /
+  `attached_filter` realizations are declared token facts. P7.2 optional-statistic
+  activation and unit-sidecar publication are authored-advice-only: the built-in
+  default retains main's ordinary Build, exact key-count threshold and projected
+  filter construction. The activation-enabled candidate's 20 paired measurements
+  are recorded in PLANNING-REDESIGN P7; H05/H21/d72 losses prohibit promotion.
+  Automatic activation, device and committed-round publication remain unselected.
 - P7.1 records provider statistic declarations and immutable build publications
   with typed units, precision, producer/accessor ABI, availability and domain
   epochs (`STR-BuildStats`). Sequence statistic guards check publication

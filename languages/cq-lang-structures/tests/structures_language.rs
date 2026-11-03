@@ -139,9 +139,7 @@ fn declarations() -> Vec<structures::Declaration> {
         host_scan = ::core::iter::Map<_, _> { reads [], build typed };
         vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
         sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
-        hash_index = ::cq_storage::HashIndex<'_, _, _> {
-            reads [exact, membership], supports [keys], build typed, join_filter
-        };
+        hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] };
         adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared };
         alias = Alias { reads [exact, range, membership], supports [retain, expand, keys], build inferred };
         cursor_alias = CursorAlias<_, _> {
@@ -222,7 +220,7 @@ fn constant_occurrences_use_ordinary_storage() {
         r = let rename R@1 {a -> x,c -> y} constants {b = 7};
         j = let canon probe first [x] l,r;
         return j as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -1468,10 +1466,7 @@ fn reject_providers(
 #[test]
 fn providers_table_round_trips_every_fact() {
     let providers: structures::Providers = syn::parse_quote!(providers {
-        sorted_run = ::cq_storage::SortedRun<_, _> {
-            reads [exact, range, membership], supports [retain, expand, keys], build typed,
-            join_filter, shared
-        };
+        sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] };
         trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
         sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
         sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
@@ -1561,10 +1556,7 @@ fn str_routed_restricts_inner_facts_to_exact_membership_and_keys() {
     let program = provider_program(quote::quote!(structures {
         providers {
             sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
-            sorted_run = ::cq_storage::SortedRun<_, _> {
-                reads [exact, range, membership], supports [retain, expand, keys], build typed,
-                join_filter, shared
-            };
+            sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] };
             vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
             host_scan = ::core::iter::Map<_, _> { reads [], build typed };
             sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };

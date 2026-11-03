@@ -328,3 +328,80 @@ fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Pr
         .to_string(),
     );
 }
+
+fn retained_positional_selection() -> Program {
+    let physical = syn::parse_quote! {
+        physical {
+            relation R(a:i64,b:i64);
+            raw = pipe rename R@0 {a -> a,b -> b};
+            selected = let range select raw if (a >= 1);
+            answer = let canon project selected keep {a,b};
+            return answer as answer(a,b);
+        }
+    };
+    let structures =
+        cq_structure_selection::compile_with(&physical, quote::quote!(positional(R))).unwrap();
+    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    assert!(facts.structures.selections.contains_key("selected"));
+    source
+}
+
+#[test]
+fn positional_selection_keeps_its_recorded_constructor_through_tasks_catalog() {
+    let source = retained_positional_selection();
+    let before = cq_lang_sequence::contract::check(&source).unwrap();
+    let recorded = &before.structures.selections["selected"].provider;
+    let catalog = cq_sequence_tasks::catalog();
+    let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
+    let facts = cq_lang_sequence::contract::check(&target).unwrap();
+    assert_eq!(&facts.structures.selections["selected"].provider, recorded);
+    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let planned =
+        cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
+    let facts =
+        cq_lang_sequence::check_grading(&planned.program, &cq_sequence_tasks::machine()).unwrap();
+    let expression = cq_sequence_tasks::translate(&planned.program, &facts).unwrap();
+    let rendered = quote::ToTokens::to_token_stream(&expression).to_string();
+    let ty = &recorded.ty;
+    let constructor = quote::quote!(<#ty>::from_positions).to_string();
+    assert!(rendered.contains(&constructor), "{rendered}");
+    assert_eq!(rendered.matches("from_positions").count(), 1);
+
+    let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
+        cq_testkit::rustc::linked_dependency::<cq_storage::sharded::FullKey>(
+            "cq_storage",
+            "cq_storage::sharded::FullKey",
+        ),
+        cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
+            "cq_load",
+            "cq_load::ColumnAt<0>",
+        ),
+    ]);
+    for setup in [
+        quote::quote! { let R: Vec<(i64,i64)> = vec![]; },
+        quote::quote! { let R = vec![(-1i64,9i64),(1,2),(1,2),(2,3),(0,8)]; },
+    ] {
+        cq_sequence_conformance::assert_conformant_with_runtime(
+            &source,
+            &[Target::Sequential, Target::Tasks],
+            &setup,
+            &runtime,
+            &cq_lang_sequence::Catalog::default(),
+        );
+    }
+}
+
+#[test]
+fn membership_catalog_entry_cannot_replace_a_positional_constructor() {
+    let source = retained_positional_selection();
+    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    let recorded = &facts.structures.selections["selected"].provider;
+    let mut catalog = cq_sequence_tasks::catalog();
+    catalog.providers.retain(|entry| !entry.covers(recorded));
+    let error = cq_sequence_tasks::select_providers(&source, &catalog).unwrap_err();
+    assert!(error.to_string().contains("positional selection constructor"));
+    let error =
+        cq_sequence_plan::decompose(&source, &cq_sequence_tasks::machine(), &catalog).unwrap_err();
+    assert!(error.to_string().contains("positional selection constructor"));
+}

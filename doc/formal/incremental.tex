@@ -235,6 +235,13 @@ mapped from upstream evidence. It is not Sequence's separately authored
 build/layout/domain identities; publication across committed Datalog rounds
 requires a separate versioned maintenance record and is not inferred from a
 relation name by the P7.1 host contract.
+P7.2 adds CPU \textsc{RT-BuildStats} and \textsc{RT-RunFilter} laws, not a
+committed-round publication protocol. Borrowed views belong to their immutable
+index lifetime; attached sidecars publish only with the completed index.
+Merge invalidates unavailable global key/group metadata rather than summing
+overlapping segments or retaining stale values. Old snapshot borrows must
+continue to describe their own data. Binding these publications to full,
+delta and committed-round identities remains the separate P7.5 obligation.
 \begin{mathpar}
 \Rule{DL-Fanout}{r_j=R(\bar t)\ \text{the }j\text{-th positive read of the variant}\quad
  B_j\text{ bound before }r_j}

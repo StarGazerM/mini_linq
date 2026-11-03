@@ -381,6 +381,7 @@ pub fn sorted_indexes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
         ));
     }
     target.structures.declare(&providers::declarations())?;
+    ir::record_join_filter_abandon(&mut target)?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

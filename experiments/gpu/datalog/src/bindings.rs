@@ -1,10 +1,92 @@
 //! Checked construction of complete GPU Round invocations before translation.
 use cq_datalog_support::ensure;
-use cq_lang_datalog_round::{self as round, Hole, HoleInterface, Program};
+use cq_lang_datalog_round::{self as round, Hole, HoleInterface, InputSource, Program, storage};
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::collections::{BTreeMap, BTreeSet};
-use syn::Ident;
+use syn::{Ident, Type};
+
+/// Produce input records with the shared Structures declaration constructor.
+/// Statistics demand, when selected, belongs to Structures refinement; native
+/// input bindings do not invent publication demands.
+pub(crate) fn input_providers(
+    program: &Program,
+) -> syn::Result<BTreeMap<String, cq_lang_structures::Provider>> {
+    let context = &program.context;
+    let device = program.storage.device.as_ref()
+        .ok_or_else(|| syn::Error::new_spanned(program, "missing device storage records"))?;
+    let provider = |source: &storage::Provider,
+                    input: &cq_lang_structures::provider::InputSchema,
+                    word: &Type,
+                    state: &storage::DeviceState| -> syn::Result<cq_lang_structures::Provider> {
+        let declaration = device.providers.iter()
+            .find(|declaration| declaration.token == source.token)
+            .ok_or_else(|| syn::Error::new_spanned(&source.token, "undeclared device input provider"))?;
+        let mut instance = declaration.instance();
+        instance.input = Some(input.clone());
+        instance.radix = Some(cq_lang_structures::provider::RadixAdvice {
+            word: word.clone(),
+            offset: state.offset.clone(),
+            ratio: state.ratio,
+            radix_bits: state.radix_bits,
+            merge_tile: state.merge_tile_rows,
+        });
+        instance.ty = source.ty.clone();
+        Ok(instance)
+    };
+    let mut inputs = BTreeMap::new();
+    for (relation, state) in context.relations.iter().zip(&device.relations) {
+        if let Some(delta) = &relation.delta {
+            inputs.insert(
+                delta.to_string(),
+                provider(&relation.providers.delta, &state.input, &state.word,
+                    &device.layouts[relation.providers.canonical])?,
+            );
+        }
+    }
+    for (layout, state) in context
+        .layouts
+        .iter()
+        .zip(&device.layouts)
+        .chain(context.delta_layouts.iter().zip(&device.delta_layouts))
+    {
+        inputs.insert(
+            layout.name.to_string(),
+            provider(&layout.provider, &state.input, &state.word, state)?,
+        );
+    }
+    for (component, stratum) in context.strata.iter().enumerate() {
+        for key in &stratum.keys {
+            ensure(
+                !key.columns.is_empty(),
+                program,
+                "GPU Datalog does not support unit-valued existential negation keys",
+            )?;
+            let state = &device.negations[crate::print::negation(program, component, key)?];
+            inputs.insert(key.name.to_string(), provider(&key.provider, &state.input, &state.word, state)?);
+        }
+        for rule in stratum.seeds.iter().chain(&stratum.steps) {
+            if let Some(scan) = &rule.scan {
+                let input = match scan.source {
+                    InputSource::Delta(index) => provider(
+                        &context.relations[index].providers.delta,
+                        &device.relations[index].input,
+                        &device.relations[index].word,
+                        &device.layouts[context.relations[index].providers.canonical],
+                    ),
+                    InputSource::Layout(index) => provider(
+                        &context.layouts[index].provider,
+                        &device.layouts[index].input,
+                        &device.layouts[index].word,
+                        &device.layouts[index],
+                    ),
+                }?;
+                inputs.insert(scan.binding.to_string(), input);
+            }
+        }
+    }
+    Ok(inputs)
+}
 
 /// The recorded device provider of each component's negative key set, as a
 /// `radix_relation` token instance (declared by device storage).
@@ -84,7 +166,7 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     round::contract::check(source)?;
     crate::storage::check_device(&source.storage)?;
     let mut target = source.clone();
-    let inputs = crate::print::input_providers(&target)?;
+    let inputs = input_providers(&target)?;
     for hole in &mut target.holes {
         ensure(
             hole.interface == HoleInterface::Batch,
@@ -139,7 +221,7 @@ pub fn check(program: &Program) -> syn::Result<()> {
             )?;
         }
     }
-    let inputs = crate::print::input_providers(program)?;
+    let inputs = input_providers(program)?;
     for hole in &program.holes {
         let owner = hole
             .binding

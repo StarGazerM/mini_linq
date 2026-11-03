@@ -283,7 +283,13 @@ fn lookup_witness_and_expansion_are_refused() {
                     host_scan = ::core::iter::Map<_, _> {{ reads [], build typed }};
                     sorted_run = ::cq_storage::SortedRun<_, _> {{
                         reads [exact, range, membership], supports [retain, expand, keys],
-                        build typed, join_filter, shared
+                        build typed, join_filter, run_filter, shared,
+                        statistics_build [rows, max_group], statistics [
+                            rows: rows occurrences exact run_finalize stat_rows host required build single,
+                            keys: keys distinct_keys exact run_finalize stat_keys host required build single,
+                            max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single,
+                            runs: runs runs exact run_finalize stat_runs host required build single
+                        ]
                     }};
                     sort = ::cq_storage::dedup::Sort {{ reads [distinct], build inferred, shared }};
                 }}

@@ -472,11 +472,11 @@ mini_linq::passes::sequence! {
                 out = let canon project joined keep {k,p,v};
                 return out as answer(k,p,v);
             }
-            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; radix_run = ::cq_storage::RadixRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, shared }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; radix_run = ::cq_storage::RadixRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, items 2 [rows ::std::vec::Vec<_>, columns ::cq_storage::TupleColumns<_>], statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build overlapping, keys: keys distinct_keys exact run_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host optional build single, runs: runs runs exact run_finalize stat_runs host required build overlapping ] }; dense_membership = ::cq_storage::DenseMembership<_, 16777216> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                 l host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r host scan = @host_scan as ::core::iter::Map<_,_> [];
-                r = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [keys];
-                l join_filter = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<i64,::cq_storage::I64Codec,64>  build r [k] covering joined marker MarkerAlias;
+                r = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [keys] items rows;
+                l join_filter = @dense_membership as ::cq_storage::DenseMembership<i64,64> build r [k] covering joined marker MarkerAlias;
                 out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
             }
         }.map(|(k,p,v)| (*k,*p,*v)).collect::<Vec<_>>().into_iter()

@@ -370,7 +370,7 @@ fn positional_source(
     }
 }
 
-/// Formal rule SEL-JoinFilter: Choose an exact key set for each eligible covered scalar key column of a filtered build, at its scan.
+/// Formal rule SEL-JoinFilter: Choose a projected exact key set for each eligible covered scalar key column of a filtered build, at its scan; source retyping preserves this default, while borrowed and attached realizations require explicit advice.
 fn choose_join_filters(
     target: &mut structures::Program,
     bases: &BTreeSet<String>,

@@ -17,6 +17,7 @@ use syn::parse::{Parse, ParseStream};
 
 mod kw {
     syn::custom_keyword!(publications);
+    syn::custom_keyword!(construct);
 }
 
 macro_rules! words {
@@ -513,6 +514,175 @@ pub(crate) fn check(program: &Program, analysis: &mut Analysis) -> syn::Result<(
         {
             return error(publication, "STR-BuildStats: duplicate publication name");
         }
+    }
+    for entry in &program.structures.entries {
+        let Some((provider, _)) = entry.structure.provider() else {
+            continue;
+        };
+        let levels = match &entry.structure {
+            Structure::Built { keyed, .. } => Some(keyed.levels.as_slice()),
+            _ => None,
+        };
+        check_construction(program, &entry.name, levels, provider)?;
+    }
+    Ok(())
+}
+
+/// Construction work explicitly supported by a provider and requested by a
+/// selected immutable publication. Cheap accessors need not declare a bit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuildDemand {
+    pub rows: bool,
+    pub max_group: bool,
+}
+
+impl BuildDemand {
+    pub fn is_empty(self) -> bool {
+        !self.rows && !self.max_group
+    }
+
+    fn contains(self, field: Field) -> bool {
+        match field {
+            Field::Rows => self.rows,
+            Field::MaxGroup => self.max_group,
+            _ => false,
+        }
+    }
+}
+
+impl Parse for BuildDemand {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let body;
+        syn::bracketed!(body in input);
+        let mut demand = Self::default();
+        for field in CommaList::<Ident>::parse_terminated(&body)? {
+            let bit = match field.to_string().as_str() {
+                "rows" => &mut demand.rows,
+                "max_group" => &mut demand.max_group,
+                _ => return error(&field, "STR-Construction: unsupported demand field"),
+            };
+            if *bit {
+                return error(&field, "STR-Construction: duplicate demand field");
+            }
+            *bit = true;
+        }
+        Ok(demand)
+    }
+}
+
+impl ToTokens for BuildDemand {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        let rows = self.rows.then(|| quote::quote!(rows));
+        let maximum = self.max_group.then(|| quote::quote!(max_group));
+        let fields = rows.into_iter().chain(maximum);
+        tokens.extend(quote::quote!([#(#fields),*]));
+    }
+}
+
+/// The Structures-owned construction decision. Omitted `construct` syntax is
+/// the canonical spelling of Ordinary, not an inference from provider types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Construction {
+    #[default]
+    Ordinary,
+    Statistics(BuildDemand),
+}
+
+impl Construction {
+    pub fn demand(self) -> BuildDemand {
+        match self {
+            Self::Ordinary => BuildDemand::default(),
+            Self::Statistics(demand) => demand,
+        }
+    }
+}
+
+impl Parse for Construction {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if !input.peek(kw::construct) {
+            return Ok(Self::Ordinary);
+        }
+        input.parse::<kw::construct>()?;
+        let protocol: Ident = input.parse()?;
+        match protocol.to_string().as_str() {
+            "ordinary" => Ok(Self::Ordinary),
+            "statistics" => Ok(Self::Statistics(input.parse()?)),
+            _ => error(&protocol, "STR-Construction: unknown construction protocol"),
+        }
+    }
+}
+
+impl ToTokens for Construction {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        if let Self::Statistics(demand) = self {
+            tokens.extend(quote::quote!(construct statistics #demand));
+        }
+    }
+}
+
+/// Select construction from publication demand and declared protocol support.
+/// This producer is explicit; neither checking nor printing calls it.
+pub fn record_constructions(program: &mut Program) -> syn::Result<()> {
+    for entry in &mut program.structures.entries {
+        let Structure::Built { keyed, .. } = &mut entry.structure else {
+            continue;
+        };
+        let facts = program.structures.providers.facts(&keyed.provider)
+            .ok_or_else(|| syn::Error::new_spanned(&keyed.provider, "undeclared build provider"))?;
+        let mut demand = BuildDemand::default();
+        for publication in &program.structures.publications.0 {
+            if publication.build == entry.name
+                && publication.provider == keyed.provider.token
+                && publication.layout == keyed.levels
+                && facts.statistics_build.contains(publication.statistic.field)
+            {
+                match publication.statistic.field {
+                    Field::Rows => demand.rows = true,
+                    Field::MaxGroup => demand.max_group = true,
+                    _ => {}
+                }
+            }
+        }
+        keyed.provider.construction = if demand.is_empty() {
+            Construction::Ordinary
+        } else {
+            Construction::Statistics(demand)
+        };
+    }
+    contract::check(program)?;
+    Ok(())
+}
+
+/// Formal rule STR-Construction: check each submitted demand's witnesses.
+/// No producer is rerun, and no Rust syntax or provider spelling is examined.
+pub(crate) fn check_construction(
+    program: &Program,
+    build: &Ident,
+    levels: Option<&[Level]>,
+    provider: &Provider,
+) -> syn::Result<()> {
+    let facts = program.structures.providers.facts(provider)
+        .ok_or_else(|| syn::Error::new_spanned(provider, "undeclared build provider"))?;
+    let demand = provider.construction.demand();
+    if matches!(provider.construction, Construction::Statistics(_)) && demand.is_empty() {
+        return error(provider, "STR-Construction: empty statistic construction");
+    }
+    for (field, requested) in [(Field::Rows, demand.rows), (Field::MaxGroup, demand.max_group)] {
+        let supported = facts.statistics_build.contains(field);
+        let witness = program.structures.publications.0.iter().any(|publication| {
+            publication.build == *build
+                && publication.provider == provider.token
+                && levels.is_some_and(|levels| publication.layout == levels)
+                && publication.statistic.field == field
+        });
+        if requested && (!supported || !witness) || supported && witness && !requested {
+            return error(provider, "STR-Construction: demand lacks matching support/publication or publication lacks demanded construction");
+        }
+    }
+    if let Some(inner) = &provider.inner {
+        // Routed/nested publication does not independently authorize work on
+        // an inner instance: its own immutable publication would be required.
+        check_construction(program, build, None, inner)?;
     }
     Ok(())
 }

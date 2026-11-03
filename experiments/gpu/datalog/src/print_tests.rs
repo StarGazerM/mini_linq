@@ -64,6 +64,56 @@ fn program_with_orders(
 }
 
 #[test]
+fn device_input_packets_record_shared_construction_and_reject_unrequested_statistics() {
+    struct Packet {
+        providers: cq_lang_structures::Providers,
+        inputs: Vec<(syn::Ident, cq_lang_structures::Provider)>,
+    }
+    impl syn::parse::Parse for Packet {
+        fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+            let providers = input.parse()?;
+            let mut inputs = Vec::new();
+            while !input.is_empty() {
+                let name = input.parse()?;
+                input.parse::<syn::Token![=>]>()?;
+                let provider = input.parse()?;
+                input.parse::<syn::Token![;]>()?;
+                inputs.push((name, provider));
+            }
+            Ok(Self { providers, inputs })
+        }
+    }
+    let program = program();
+    let mut checked = 0;
+    for (index, hole) in program.holes.iter().enumerate() {
+        let owner = hole.binding.unwrap();
+        let mut packet: Packet =
+            syn::parse2(hole.pipeline.passes[owner].arguments.clone()).unwrap();
+        for (_, provider) in &packet.inputs {
+            let declared = packet.providers.get(&provider.token).unwrap().instance();
+            assert_eq!(provider.construction, declared.construction);
+            assert_eq!(provider.construction, cq_lang_structures::stats::Construction::Ordinary);
+            assert_eq!(
+                syn::parse2::<cq_lang_structures::Provider>(quote!(#provider)).unwrap(),
+                *provider,
+            );
+            checked += 1;
+        }
+        if let Some((_, provider)) = packet.inputs.first_mut() {
+            provider.construction = cq_lang_structures::stats::Construction::Statistics(
+                cq_lang_structures::stats::BuildDemand { rows: true, max_group: false },
+            );
+            let declarations = &packet.providers;
+            let entries = packet.inputs.iter().map(|(name, provider)| quote!(#name => #provider;));
+            let mut forged = program.clone();
+            forged.holes[index].pipeline.passes[owner].arguments = quote!(#declarations #(#entries)*);
+            assert!(crate::bindings::check(&forged).is_err());
+        }
+    }
+    assert!(checked > 0);
+}
+
+#[test]
 fn negative_device_bindings_preserve_fork_declarations() {
     let host = cq_datalog_storage::compile(&syn::parse_quote! {
         struct Negative;
@@ -383,7 +433,7 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             result = pipe project joined keep {x,z};
             return result as answer(x,z);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; }
             d host scan = @host_scan as ::core::iter::Map<_,_> [];
             e host scan = @host_scan as ::core::iter::Map<_,_> [];
             e host result(joined) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [y];

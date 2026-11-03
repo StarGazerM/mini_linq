@@ -40,84 +40,6 @@ pub(crate) fn negation(program: &Program, component: usize, key: &KeySet) -> syn
         .ok_or_else(|| syn::Error::new_spanned(key, "negative key set has no Storage projection"))
 }
 
-/// The recorded provider of every input name a hole may declare.
-pub(crate) fn input_providers(
-    program: &Program,
-) -> syn::Result<BTreeMap<String, cq_lang_structures::Provider>> {
-    let context = &program.context;
-    let device = device(program);
-    let provider = |source: &storage::Provider,
-                    input: &cq_lang_structures::provider::InputSchema,
-                    word: &Type,
-                    state: &storage::DeviceState| {
-        cq_lang_structures::Provider {
-            token: source.token.clone(),
-            inner: None,
-            input: Some(input.clone()),
-            radix: Some(cq_lang_structures::provider::RadixAdvice {
-                word: word.clone(),
-                offset: state.offset.clone(),
-                ratio: state.ratio,
-                radix_bits: state.radix_bits,
-                merge_tile: state.merge_tile_rows,
-            }),
-            ty: source.ty.clone(),
-        }
-    };
-    let mut inputs = BTreeMap::new();
-    for (relation, state) in context.relations.iter().zip(&device.relations) {
-        if let Some(delta) = &relation.delta {
-            inputs.insert(
-                delta.to_string(),
-                provider(&relation.providers.delta, &state.input, &state.word,
-                    &device.layouts[relation.providers.canonical]),
-            );
-        }
-    }
-    for (layout, state) in context
-        .layouts
-        .iter()
-        .zip(&device.layouts)
-        .chain(context.delta_layouts.iter().zip(&device.delta_layouts))
-    {
-        inputs.insert(
-            layout.name.to_string(),
-            provider(&layout.provider, &state.input, &state.word, state),
-        );
-    }
-    for (component, stratum) in context.strata.iter().enumerate() {
-        for key in &stratum.keys {
-            ensure(
-                !key.columns.is_empty(),
-                program,
-                "GPU Datalog does not support unit-valued existential negation keys",
-            )?;
-            let state = &device.negations[negation(program, component, key)?];
-            inputs.insert(key.name.to_string(), provider(&key.provider, &state.input, &state.word, state));
-        }
-        for rule in stratum.seeds.iter().chain(&stratum.steps) {
-            if let Some(scan) = &rule.scan {
-                let input = match scan.source {
-                    InputSource::Delta(index) => provider(
-                        &context.relations[index].providers.delta,
-                        &device.relations[index].input,
-                        &device.relations[index].word,
-                        &device.layouts[context.relations[index].providers.canonical],
-                    ),
-                    InputSource::Layout(index) => provider(
-                        &context.layouts[index].provider,
-                        &device.layouts[index].input,
-                        &device.layouts[index].word,
-                        &device.layouts[index],
-                    ),
-                };
-                inputs.insert(scan.binding.to_string(), input);
-            }
-        }
-    }
-    Ok(inputs)
-}
-
 fn memory_snapshot(
     context: &RoundContext,
     indices: &[usize],
@@ -503,7 +425,6 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         )?;
     }
     let symbols = crate::storage::Symbols::from_program(&program.storage)?;
-    let input_providers = input_providers(program)?;
     // Hosts a hole may read through its CQ declarations, with their providers.
     let mut hosts = BTreeMap::<String, Type>::new();
     for relation in &context.relations {
@@ -525,7 +446,11 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             owners[rule.hole] = rule.head;
             if let Some(scan) = &rule.scan {
-                scans.insert(rule.hole, scan.binding.clone());
+                let ty = match scan.source {
+                    InputSource::Delta(relation) => &context.relations[relation].providers.delta.ty,
+                    InputSource::Layout(layout) => &context.layouts[layout].provider.ty,
+                };
+                scans.insert(rule.hole, (&scan.binding, ty));
             }
         }
     }
@@ -559,8 +484,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         }
         let function = format_ident!("__cq_gpu_hole_{}", index);
         let (scan_parameter, scan_argument) = match scans.get(&index) {
-            Some(binding) => {
-                let ty = &input_providers[&binding.to_string()].ty;
+            Some((binding, ty)) => {
                 (quote!(#binding: &#ty,), quote!(#binding,))
             }
             None => (quote!(), quote!()),

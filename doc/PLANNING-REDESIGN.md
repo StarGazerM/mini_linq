@@ -983,6 +983,74 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   cannot become the explicit `trusted_key` semantic premise. No automatic
   statistics, filter activation policy, runtime population, device transfer or
   committed-round publication is selected by this slice.
+  **P7.2 implementation (subject to integrated gates):** CPU run/hash builds
+  publish cheap optional occurrence/key/group statistics (`RT-BuildStats`);
+  run views borrow ordered keys for exact point/interval tests (`RT-RunFilter`).
+  Provider fact `run_filter` records source capability; explicit advice selects
+  mutually exclusive `borrowed_filter` or `attached_filter` realizations.
+  Borrowing requires a scalar complete stored layout; attached builders use
+  `BuildSidecar` through `BuildWithSidecar`. Neither is selected automatically.
+  P7.2's built-in optional-statistic activation and unit-sidecar publication
+  are not selected by default. Existing main projected filters retain ordinary
+  Build, exact Keys::key_count activation and conditional projected construction.
+  Borrowed/attached filters and optional-statistic guards require authored advice.
+  **P7-next construction repair:** the content rebase onto `4dd291be` reproduced
+  H09 default/radix regressions of 1.12260/1.11745; linker-shuffled P7.2 remained
+  slower. Identical counters and CPU perf/assembly locate the cause in optional
+  initializer dispatch inside the no-demand HashIndex closure: it changes the
+  hot loop's register allocation. A diagnostic isolating dispatch restored the
+  baseline loop and was neutral within its five-pair confidence intervals.
+  `STR-Construction` now records ordinary versus statistic-demand construction
+  on the Structures provider instance, with explicit `statistics_build` support
+  and independently checked publication witnesses. Printers consume that
+  record, not the presence of a MaxGroup accessor. No consumer selects ordinary
+  `Build::build`; requested row/max work uses `BuildWithStatistics`, with lazy
+  initializer selection outside the ordinary `OnceCell` closure. Cheap lengths
+  remain available; ordinary runtime Build no longer accumulates statistics.
+  **P7.3 cost-model evidence, not an accepted default:** after the H09 repair,
+  five interleaved pairs per changed default/radix kernel (SF1, complete exact
+  answers each sample, bootstrap 95% intervals, zero major faults) still showed
+  H05/H21/d72 losses with P7.2 publication/activation on. Consequently the merge
+  candidate has no P7.2 default activation; its default/radix expansions must
+  match main `907b9b0d`. The construction/statistic/filter runtime and records
+  remain available through authored advice only. Measurements below describe
+  the rejected activation-enabled candidate, not the advice-only merge candidate.
+
+  | Kernel/configuration | P7.2/main ratio [95% CI] | Same-source main shuffle ratio [95% CI] |
+  |---|---|---|
+  | retail_d19/default | 0.99815 [0.98350, 1.01633] | 0.99782 [0.98422, 1.00630] |
+  | retail_d19/radix | 1.02360 [1.00526, 1.03997] | 1.03528 [1.01012, 1.05870] |
+  | retail_d27/default | 1.01967 [0.98736, 1.05443] | 1.04087 [1.01716, 1.06349] |
+  | retail_d27/radix | 1.02159 [1.01428, 1.02906] | 1.00244 [0.97777, 1.02666] |
+  | retail_d72_inner/default | 1.02808 [1.01368, 1.04304] | 1.01667 [1.00704, 1.02688] |
+  | retail_d72_inner/radix | 1.03425 [1.01830, 1.05325] | 1.00000 [0.98900, 1.01129] |
+  | retail_d85/default | 1.01524 [0.98481, 1.04566] | 0.98497 [0.95532, 1.01896] |
+  | retail_d85/radix | 1.01190 [0.99306, 1.03074] | 1.02820 [0.99117, 1.06524] |
+  | retail_h03/default | 0.99133 [0.98508, 0.99769] | 1.00043 [0.95487, 1.05127] |
+  | retail_h03/radix | 0.99873 [0.95572, 1.03320] | 0.97729 [0.95907, 0.99787] |
+  | retail_h05/default | 1.07615 [1.03944, 1.11287] | 0.99716 [0.97321, 1.01847] |
+  | retail_h05/radix | 1.00163 [0.99155, 1.01172] | 1.00590 [0.98029, 1.03152] |
+  | retail_h07/default | 1.00227 [0.94393, 1.06294] | 1.01840 [0.94447, 1.08904] |
+  | retail_h07/radix | 1.02797 [0.99917, 1.06101] | 0.95865 [0.90951, 0.99081] |
+  | retail_h07_block/default | 1.03213 [0.95455, 1.10229] | 1.01807 [0.93746, 1.08214] |
+  | retail_h07_block/radix | 0.97314 [0.92929, 1.01698] | 1.00011 [0.97986, 1.02046] |
+  | retail_h08/default | 0.99708 [0.96937, 1.02413] | 0.99728 [0.94012, 1.03916] |
+  | retail_h08/radix | 0.98945 [0.92413, 1.06299] | 0.99473 [0.97958, 1.00611] |
+  | retail_h21_positive/default | 1.03748 [1.02133, 1.05363] | 0.97741 [0.96072, 0.99333] |
+  | retail_h21_positive/radix | 0.99672 [0.98799, 1.00589] | 1.00806 [0.98650, 1.03194] |
+
+  Exact raw pairs/page faults: `target/p7-repair/paired-final-raw.json`;
+  controls use pinned LLD `--shuffle-sections=*=7`. No small speedup is claimed.
+  **P7.3 automatic activation remains design-only:** demand-driven publications,
+  recorded conservative activation/model evidence and identity on unknown,
+  Structures-owned policy and Sequence-owned readiness. Design and GPU runs:
+  `/data/design-notes/p7-next.md`. P7.4 device publication and P7.5 committed-round
+  identities remain separate; this is not completion of all P7.
+  **Advice-only acceptance:** expanded gate versus `907b9b0d` passes 46/46
+  targets with zero hunks and complete execution evidence. SF0.1/SF1 each pass
+  58 default/radix exact-answer and repeated-counter cases; 17 library oracles,
+  behavioral/package/quick/formal gates and 29 public-API snapshots pass.
+  No GPU execution or automatic-activation performance gain is claimed.
 - **P8 Remaining items.** Placement spine (only when a branching machine
   appears), delta=k SRDatalog plans. Masks as full reducer: measured below.
   **Key-partition routing projection: no target in the measured CPU suite**

@@ -110,6 +110,7 @@ pub mod kw {
     syn::custom_keyword!(build);
     syn::custom_keyword!(covering);
     syn::custom_keyword!(abandon);
+    syn::custom_keyword!(using);
     syn::custom_keyword!(of);
     syn::custom_keyword!(repr);
     syn::custom_keyword!(positions);

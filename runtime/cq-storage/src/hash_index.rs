@@ -1,6 +1,6 @@
 //! Deferred hash buckets with independently owned lookup cursors.
 use std::{
-    cell::{OnceCell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     collections::{BTreeMap, HashSet},
     hash::{BuildHasher, Hash},
     rc::Rc,
@@ -117,6 +117,10 @@ struct State<'a, K, V> {
     allocation: RefCell<crate::counters_memory::Allocation>,
     source: RefCell<Option<Source<'a, K, V>>>,
     buckets: OnceCell<Buckets<K, V>>,
+    /// Consulted only on initialization, never on an initialized lookup.
+    initialize: Option<fn(&HashIndex<'a, K, V>) -> Buckets<K, V>>,
+    rows: Cell<Option<u64>>,
+    max_group: Cell<Option<u64>>,
 }
 // Keys retain compact table slots; payloads occupy a contiguous arena. A
 // singleton needs no allocation or reference-counted handle of its own.
@@ -222,8 +226,38 @@ impl<K, V> Clone for HashIndex<'_, K, V> {
         }
     }
 }
-impl<'a, K: 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I> for HashIndex<'a, K, V> {
+impl<K, V> HashIndex<'_, K, V> {
+    /// Stored occurrences when requested, available only after the deferred build
+    /// completes. Reading the publication never forces the source.
+    pub fn stat_rows(&self) -> Option<u64> {
+        self.state.buckets.get().and_then(|_| self.state.rows.get())
+    }
+
+    /// Distinct full keys, without forcing the deferred source.
+    pub fn stat_keys(&self) -> Option<u64> {
+        self.state
+            .buckets
+            .get()
+            .map(|buckets| buckets.values.len() as u64)
+    }
+
+    /// Largest occurrence bucket when requested; an initialized empty build
+    /// publishes zero. Never forces the deferred source.
+    pub fn stat_max_group(&self) -> Option<u64> {
+        self.state.buckets.get().and_then(|_| self.state.max_group.get())
+    }
+}
+impl<'a, K: Eq + Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I>
+    for HashIndex<'a, K, V>
+{
     fn build(source: I) -> Self {
+        <Self as crate::BuildWithStatistics<I>>::build_with_statistics::<false, false>(source)
+    }
+}
+impl<'a, K: Eq + Hash + 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a>
+    crate::BuildWithStatistics<I> for HashIndex<'a, K, V>
+{
+    fn build_with_statistics<const ROWS: bool, const MAX_GROUP: bool>(source: I) -> Self {
         Self {
             state: Rc::new(State {
                 #[cfg(any(feature = "counters", feature = "operator-timing"))]
@@ -232,8 +266,36 @@ impl<'a, K: 'a, V: Copy + 'a, I: Iterator<Item = (K, V)> + 'a> Build<I> for Hash
                 allocation: RefCell::new(crate::counters_memory::Allocation::default()),
                 source: RefCell::new(Some(Box::new(source))),
                 buckets: OnceCell::new(),
+                initialize: if ROWS || MAX_GROUP {
+                    Some(Self::initialize_demanded_without_observer::<ROWS, MAX_GROUP>)
+                } else {
+                    None
+                },
+                rows: Cell::new(None),
+                max_group: Cell::new(None),
             }),
         }
+    }
+}
+impl<'a, K, V, I, S> crate::BuildWithSidecar<I, S> for HashIndex<'a, K, V>
+where
+    K: Eq + Hash + 'a,
+    V: Copy + 'a,
+    I: Iterator<Item = (K, V)> + 'a,
+    S: crate::SidecarBuilder<K>,
+{
+    fn build_with_sidecar<const ROWS: bool, const MAX_GROUP: bool>(
+        source: I,
+        mut sidecar: S,
+    ) -> (Self, S::Output) {
+        let index =
+            <Self as crate::BuildWithStatistics<I>>::build_with_statistics::<ROWS, MAX_GROUP>(source);
+        // This eager attachment observes the same single initialization that
+        // publishes the provider's buckets. No boxed or per-row dynamic observer.
+        index.state.buckets.get_or_init(|| {
+            index.initialize_demanded::<ROWS, MAX_GROUP>(|key| sidecar.observe(key))
+        });
+        (index, sidecar.finish())
     }
 }
 impl<K: Eq + Hash, V: Copy> IndexRead for HashIndex<'_, K, V> {
@@ -285,7 +347,15 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         crate::instrument::cursor!(self.buckets().index.table.iter().map(|(key, _)| key))
     }
+    // Keep demanded initialization outside the ordinary OnceCell closure:
+    // its capture/register shape is shared by every no-statistics build.
     fn buckets(&self) -> &Buckets<K, V> {
+        if let Some(buckets) = self.state.buckets.get() {
+            return buckets;
+        }
+        if let Some(initialize) = self.state.initialize {
+            return self.state.buckets.get_or_init(|| initialize(self));
+        }
         self.state.buckets.get_or_init(|| {
             #[cfg(any(feature = "counters", feature = "operator-timing"))]
             let _profile = self.state.profile.as_ref().map(|p| p.start());
@@ -335,6 +405,81 @@ impl<K: Eq + Hash, V> HashIndex<'_, K, V> {
             }
             Buckets { index, values }
         })
+    }
+
+    fn initialize_demanded_without_observer<const ROWS: bool, const MAX_GROUP: bool>(
+        &self,
+    ) -> Buckets<K, V> {
+        self.initialize_demanded::<ROWS, MAX_GROUP>(|_| {})
+    }
+
+    // Separate demanded/sidecar construction keeps publication metadata outside
+    // the baseline Buckets return value. The observer is static, not boxed.
+    fn initialize_demanded<const ROWS: bool, const MAX_GROUP: bool>(
+        &self,
+        mut observe: impl FnMut(&K),
+    ) -> Buckets<K, V> {
+        #[cfg(any(feature = "counters", feature = "operator-timing"))]
+        let _profile = self.state.profile.as_ref().map(|p| p.start());
+        crate::count!(index_builds);
+        let mut source = self
+            .state
+            .source
+            .borrow_mut()
+            .take()
+            .expect("the source is consumed only by this initialization");
+        let mut index = Directory::new();
+        let mut values: Vec<Bucket<V>> = Vec::new();
+        let mut rows = 0usize;
+        let mut max_group = 0;
+        while let Some((key, value)) = source.next() {
+            crate::count!(rows_copied);
+            rows += 1;
+            observe(&key);
+            let (slot, fresh) = index.entry(key);
+            if fresh {
+                values.push(Bucket {
+                    first: value,
+                    tail: None,
+                });
+                if MAX_GROUP {
+                    max_group = max_group.max(1);
+                }
+            } else {
+                let tail = values[slot].tail.get_or_insert_with(Default::default);
+                // No cursor can see these buckets until initialization finishes.
+                Rc::get_mut(tail)
+                    .expect("unpublished bucket is uniquely owned")
+                    .push(value);
+                if MAX_GROUP {
+                    max_group = max_group.max(tail.len() as u64 + 1);
+                }
+            }
+            if rows == UNIQUE_PREFIX && values.len() == rows {
+                let rest = source.size_hint().0;
+                index.reserve(rest);
+                values.reserve_exact(rest);
+            }
+        }
+        #[cfg(feature = "counters")]
+        {
+            for bucket in &mut values {
+                if let Some(tail) = &mut bucket.tail {
+                    Rc::get_mut(tail).expect("unpublished tail").account();
+                }
+            }
+            *self.state.allocation.borrow_mut() = crate::counters_memory::Allocation::new(
+                index.table.allocation_size()
+                    + values.capacity() * std::mem::size_of::<Bucket<V>>(),
+            );
+        }
+        if ROWS {
+            self.state.rows.set(Some(rows as u64));
+        }
+        if MAX_GROUP {
+            self.state.max_group.set(Some(max_group));
+        }
+        Buckets { index, values }
     }
 }
 
@@ -510,6 +655,144 @@ where
 #[cfg(test)]
 mod tests {
     const PROBE_BATCH: usize = 128;
+
+    #[test]
+    fn ordinary_builds_preserve_answers_without_accumulated_statistics() {
+        use crate::{BuildWithStatistics, I64Codec, RadixRun, SortedRun};
+        let rows = [(1_i64, 10_i64), (1, 11), (3, 30)];
+        let polls = Cell::new(0);
+        let hash = HashIndex::build(rows.into_iter().inspect(|_| polls.set(polls.get() + 1)));
+        assert_eq!(hash.stat_rows(), None);
+        assert_eq!(polls.get(), 0);
+        assert_eq!(hash.lookup(&1).collect::<Vec<_>>(), [10, 11]);
+        assert_eq!(polls.get(), rows.len());
+        assert_eq!(hash.stat_rows(), None);
+        assert_eq!(hash.stat_max_group(), None);
+        assert_eq!(hash.stat_keys(), Some(2));
+        let sorted = SortedRun::<_, _, I64Codec>::build(rows.into_iter());
+        let radix = RadixRun::<_, _>::build(rows.into_iter());
+        let sharded = crate::sharded::Index::build(rows.into_iter());
+        assert_eq!(sorted.stat_max_group(), None);
+        assert_eq!(radix.stat_max_group(), None);
+        assert_eq!(sharded.stat_max_group(), None);
+        assert_eq!((&sorted).lookup(&1).collect::<Vec<_>>(), [10, 11]);
+        assert_eq!((&radix).lookup(&1).collect::<Vec<_>>(), [10, 11]);
+        assert_eq!((&sharded).lookup(&1).collect::<Vec<_>>(), [10, 11]);
+        let demanded = HashIndex::build_with_statistics::<true, true>(rows.into_iter());
+        assert_eq!(demanded.lookup(&1).collect::<Vec<_>>(), [10, 11]);
+        assert_eq!(demanded.stat_rows(), Some(3));
+        assert_eq!(demanded.stat_max_group(), Some(2));
+    }
+
+    #[test]
+    fn selected_sidecars_observe_each_source_occurrence_during_one_eager_build() {
+        use crate::BuildWithSidecar;
+
+        struct Observed(Vec<i32>);
+        impl crate::SidecarBuilder<i32> for Observed {
+            type Output = Vec<i32>;
+
+            fn observe(&mut self, key: &i32) {
+                self.0.push(*key);
+            }
+
+            fn finish(self) -> Self::Output {
+                self.0
+            }
+        }
+
+        fn check<const ROWS: bool, const MAX_GROUP: bool>() {
+            for rows in [vec![], vec![(2, 10), (1, 20), (2, 10), (2, 30)]] {
+                let polls = Cell::new(0);
+                let source = || {
+                    rows.iter().copied().inspect(|_| {
+                        polls.set(polls.get() + 1);
+                    })
+                };
+                let expected: Vec<_> = rows.iter().map(|&(key, _)| key).collect();
+                let (lazy_provider, observed) = HashIndex::build_with_sidecar::<ROWS, MAX_GROUP>(
+                    source(),
+                    Observed(Vec::new()),
+                );
+                assert_eq!(observed, expected);
+                assert_eq!(polls.get(), rows.len());
+                assert_eq!(lazy_provider.stat_rows(), ROWS.then_some(rows.len() as u64));
+                assert_eq!(
+                    lazy_provider.stat_keys(),
+                    Some(if rows.is_empty() { 0 } else { 2 })
+                );
+                assert_eq!(
+                    lazy_provider.stat_max_group(),
+                    MAX_GROUP.then_some(if rows.is_empty() { 0 } else { 3 })
+                );
+                let (eager_provider, observed) =
+                    crate::sharded::Index::build_with_sidecar::<ROWS, MAX_GROUP>(
+                        source(),
+                        Observed(Vec::new()),
+                    );
+                assert_eq!(observed, expected);
+                assert_eq!(polls.get(), rows.len() * 2);
+                assert_eq!(eager_provider.stat_rows(), ROWS.then_some(rows.len() as u64));
+                assert_eq!(eager_provider.stat_keys(), lazy_provider.stat_keys());
+                assert_eq!(eager_provider.stat_max_group(), lazy_provider.stat_max_group());
+                for key in [1, 2, 9] {
+                    let expected: Vec<_> = rows
+                        .iter()
+                        .filter_map(|&(stored, value)| (stored == key).then_some(value))
+                        .collect();
+                    assert_eq!(lazy_provider.lookup(&key).collect::<Vec<_>>(), expected);
+                    assert_eq!((&eager_provider).lookup(&key).collect::<Vec<_>>(), expected);
+                }
+                assert_eq!(polls.get(), rows.len() * 2);
+            }
+        }
+        check::<false, false>();
+        check::<false, true>();
+        check::<true, false>();
+        check::<true, true>();
+    }
+
+    #[test]
+    fn published_statistics_match_occurrence_oracle() {
+        for size in [0, 1, 2, 31, 257, 4096] {
+            let rows: Vec<_> = (0..size)
+                .map(|i| (if i % 4 == 0 { i % 17 } else { 0 }, i % 3))
+                .collect();
+            let mut oracle = BTreeMap::<_, u64>::new();
+            for &(key, _) in &rows {
+                *oracle.entry(key).or_default() += 1;
+            }
+            let polls = Cell::new(0);
+            let index = HashIndex::build_with_statistics::<true, true>(
+                rows.iter().copied().inspect(|_| {
+                    polls.set(polls.get() + 1);
+                }),
+            );
+            let shared = index.clone();
+            for _ in 0..3 {
+                assert_eq!(index.stat_rows(), None);
+                assert_eq!(shared.stat_keys(), None);
+                assert_eq!(index.stat_max_group(), None);
+            }
+            assert_eq!(polls.get(), 0);
+            // The existing lookup boundary, not publication reads, builds once.
+            assert_eq!(index.lookup(&-1).next(), None);
+            for _ in 0..3 {
+                assert_eq!(shared.stat_rows(), Some(rows.len() as u64));
+                assert_eq!(index.stat_keys(), Some(oracle.len() as u64));
+                assert_eq!(
+                    shared.stat_max_group(),
+                    Some(oracle.values().copied().max().unwrap_or(0))
+                );
+            }
+            assert_eq!(polls.get(), rows.len());
+            for (key, count) in oracle {
+                assert_eq!(shared.lookup(&key).count() as u64, count);
+            }
+            assert_eq!(polls.get(), rows.len());
+        }
+    }
+
     #[test]
     fn batched_probe_preserves_outer_and_multi_match_order() {
         let index = HashIndex::build([(1, 10), (1, 10), (2, 20), (1, 11)].into_iter());
@@ -572,12 +855,18 @@ mod tests {
         let index = HashIndex::build(std::iter::once_with(|| -> (i32, i32) {
             panic!("empty outer must not build the index")
         }));
+        assert_eq!(index.stat_rows(), None);
+        assert_eq!(index.stat_keys(), None);
+        assert_eq!(index.stat_max_group(), None);
         assert_eq!(
-            index
+            (&index)
                 .probe::<PROBE_BATCH, _, _>(std::iter::empty::<i32>(), |row| *row)
                 .next(),
             None
         );
+        assert_eq!(index.stat_rows(), None);
+        assert_eq!(index.stat_keys(), None);
+        assert_eq!(index.stat_max_group(), None);
     }
 
     #[test]
@@ -603,7 +892,7 @@ mod tests {
                 0.hash(state);
             }
         }
-        let index = HashIndex::build((0..200).map(|i| (Collision(i), i)));
+        let index = HashIndex::build((0..400).map(|i| (Collision(i % 200), i)));
         let scalar: Vec<_> = (0..300)
             .flat_map(|i| index.lookup(&Collision(i)).map(move |v| (i, v)))
             .collect();
@@ -615,9 +904,64 @@ mod tests {
         );
         assert!(!index.contains(&Collision(400)));
         assert_eq!(index.keys().count(), 200);
+        assert_eq!(index.stat_rows(), None);
+        assert_eq!(index.stat_keys(), Some(200));
+        assert_eq!(index.stat_max_group(), None);
     }
     use super::*;
     use std::cell::Cell;
+    use crate::BuildWithStatistics;
+
+    #[test]
+    fn statistics_demands_preserve_lazy_polling_and_optional_publications() {
+        fn check<const ROWS: bool, const MAX_GROUP: bool>() {
+            for rows in [vec![], vec![(1, 10), (1, 10), (2, 20), (1, 11)]] {
+                let polls = Cell::new(0);
+                let mut input = rows.iter().copied();
+                let source = std::iter::from_fn(|| {
+                    polls.set(polls.get() + 1);
+                    input.next()
+                });
+                let index = HashIndex::build_with_statistics::<ROWS, MAX_GROUP>(source);
+                let shared = index.clone();
+                for _ in 0..3 {
+                    assert_eq!(index.stat_rows(), None);
+                    assert_eq!(shared.stat_keys(), None);
+                    assert_eq!(index.stat_max_group(), None);
+                }
+                assert_eq!(
+                    (&shared)
+                        .probe::<PROBE_BATCH, _, _>(std::iter::empty::<i32>(), |key| *key)
+                        .next(),
+                    None
+                );
+                assert_eq!(polls.get(), 0);
+                assert_eq!(index.lookup(&9).next(), None);
+                assert_eq!(polls.get(), rows.len() + 1);
+                for _ in 0..3 {
+                    assert_eq!(shared.stat_rows(), ROWS.then_some(rows.len() as u64));
+                    assert_eq!(index.stat_keys(), Some(if rows.is_empty() { 0 } else { 2 }));
+                    assert_eq!(
+                        shared.stat_max_group(),
+                        MAX_GROUP.then_some(if rows.is_empty() { 0 } else { 3 })
+                    );
+                }
+                for key in [1, 2, 9] {
+                    assert_eq!(
+                        shared.lookup(&key).collect::<Vec<_>>(),
+                        rows.iter()
+                            .filter_map(|&(stored, value)| (stored == key).then_some(value))
+                            .collect::<Vec<_>>()
+                    );
+                }
+                assert_eq!(polls.get(), rows.len() + 1);
+            }
+        }
+        check::<false, false>();
+        check::<false, true>();
+        check::<true, false>();
+        check::<true, true>();
+    }
 
     #[test]
     fn cursors_are_independent_fused_and_unconditionally_unpin() {
@@ -669,27 +1013,45 @@ mod tests {
 
     #[test]
     fn distinct_prefix_reserves_the_remaining_rows_once() {
-        let n = UNIQUE_PREFIX * 3;
-        // Repeats after the prefix still extend the buckets of earlier keys.
-        let rows = (0..n).map(|i| (i, i)).chain((0..5).map(|i| (i, n + i)));
-        let index = HashIndex::build(rows);
-        let buckets = index.buckets();
-        assert_eq!(buckets.index.table.len(), n);
-        assert_eq!(buckets.values.capacity(), n + 5);
-        assert!(buckets.index.table.capacity() >= n + 5);
-        assert_eq!(index.lookup(&3).collect::<Vec<_>>(), [3, n + 3]);
-        assert_eq!(index.lookup(&(n - 1)).collect::<Vec<_>>(), [n - 1]);
-        assert_eq!(index.lookup(&n).next(), None);
+        fn check<const ROWS: bool, const MAX_GROUP: bool>() {
+            let n = UNIQUE_PREFIX * 3;
+            // Repeats after the prefix still extend the buckets of earlier keys.
+            let rows = (0..n).map(|i| (i, i)).chain((0..5).map(|i| (i, n + i)));
+            let index = HashIndex::build_with_statistics::<ROWS, MAX_GROUP>(rows);
+            let buckets = index.buckets();
+            assert_eq!(buckets.index.table.len(), n);
+            assert_eq!(buckets.values.capacity(), n + 5);
+            assert!(buckets.index.table.capacity() >= n + 5);
+            assert_eq!(index.stat_rows(), ROWS.then_some((n + 5) as u64));
+            assert_eq!(index.stat_max_group(), MAX_GROUP.then_some(2));
+            assert_eq!(index.lookup(&3).collect::<Vec<_>>(), [3, n + 3]);
+            assert_eq!(index.lookup(&(n - 1)).collect::<Vec<_>>(), [n - 1]);
+            assert_eq!(index.lookup(&n).next(), None);
+        }
+        check::<false, false>();
+        check::<false, true>();
+        check::<true, false>();
+        check::<true, true>();
     }
 
     #[test]
     fn repeated_prefix_keeps_doubling_growth() {
-        let n = UNIQUE_PREFIX * 3;
-        let index = HashIndex::build((0..n).map(|i| (i % 1000, i)));
-        let buckets = index.buckets();
-        assert_eq!(buckets.index.table.len(), 1000);
-        assert!(buckets.index.table.capacity() < UNIQUE_PREFIX);
-        assert!(buckets.values.capacity() < UNIQUE_PREFIX);
-        assert_eq!(index.lookup(&999).count(), n / 1000);
+        fn check<const ROWS: bool, const MAX_GROUP: bool>() {
+            let n = UNIQUE_PREFIX * 3;
+            let index = HashIndex::build_with_statistics::<ROWS, MAX_GROUP>(
+                (0..n).map(|i| (i % 1000, i)),
+            );
+            let buckets = index.buckets();
+            assert_eq!(buckets.index.table.len(), 1000);
+            assert!(buckets.index.table.capacity() < UNIQUE_PREFIX);
+            assert!(buckets.values.capacity() < UNIQUE_PREFIX);
+            assert_eq!(index.stat_rows(), ROWS.then_some(n as u64));
+            assert_eq!(index.stat_max_group(), MAX_GROUP.then_some(n.div_ceil(1000) as u64));
+            assert_eq!(index.lookup(&999).count(), n / 1000);
+        }
+        check::<false, false>();
+        check::<false, true>();
+        check::<true, false>();
+        check::<true, true>();
     }
 }
