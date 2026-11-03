@@ -107,6 +107,8 @@ def main():
     env['BUNDLE_DIR'] = str(bundle)
     env.setdefault('BUNDLE_DIRS', json.dumps([str(bundle)]))
     env['DUCKDB_CLI'] = str(bundle / 'bin' / 'duckdb')
+    # Some GPU tests spawn `duckdb` from PATH (or $DUCKDB) rather than DUCKDB_CLI.
+    env['PATH'] = str(bundle / 'bin') + ':' + env.get('PATH', '/usr/bin:/bin')
     env.pop('CUDA_HOME', None)
     env.pop('CUDA_OXIDE_PTX_DIR', None)
     failed = False
