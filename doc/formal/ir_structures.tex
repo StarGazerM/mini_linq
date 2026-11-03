@@ -542,8 +542,10 @@ size are caller parameters; grids follow \textsc{GPU-LAUNCH-OCCUPANCY}.
  \mathsf{lookup}(k)=I|_{K=k}\quad \alpha(D,O,V)=\mathsf{bag}(I)}
 
 \Rule{GPU-RadixItemColumns}{\mathsf{columns}(I)=(C_1,\ldots,C_m)\quad
- \pi\text{ a stable permutation or merge source map}}
- {\forall i.\ C_i'[j]=C_i[\pi(j)]\quad (C_1'[j],\ldots,C_m'[j])=I[\pi(j)]}
+ \pi\text{ a stable permutation or merge source map}\quad
+ C_i\text{ is native or a retained source-field/row-reference view}}
+ {\forall i.\ \alpha(C_i')[j]=\alpha(C_i)[\pi(j)]\quad
+   (\alpha(C_1')[j],\ldots,\alpha(C_m')[j])=I[\pi(j)]}
 \end{mathpar}
 Full-key set construction has a distinct witness: every complete key occurs
 once, so its descriptor records implicit offsets $O[i]=i$ and stores no offset
@@ -551,19 +553,27 @@ lane or item-source map. Occurrence construction, including \code{C=()},
 retains materialized group offsets. A shared offset accessor consumes the
 descriptor's recorded representation; it does not inspect keys or infer
 uniqueness. Diagnostic host downloads alone may materialize the unit offsets.
+Source-built occurrences use \code{SourceColumns<V>}: one shared row-reference
+map names the original source table and row, and each payload descriptor names
+its field. The first stable gather composes the input selection directly with
+the sort permutation; merges move references and retain source tables, never
+materialize logical payload lanes. Native item buffers remain a separate
+representation. Safe native-column access rejects source descriptors rather
+than interpreting them as native addresses. Only demanded reads reconstruct a
+source field; that read still needs its own consumer authorization.
 
 
 A \code{RadixLayout<K,V,W,O,C>} is the typed relational view of one
 immutable publication: a checked most-significant-first packing of $K$ into
-whole $W$ keys, one item column per field of $V$ in a lane that holds its
-domain, the retained snapshot and its resident occurrence count. Match
+whole $W$ keys, one checked native lane or retained source-field descriptor
+per field of $V$, the retained snapshot and its resident occurrence count. Match
 cursors $(\sigma,j,b,e)$ name snapshot $\sigma$, run $j$ and the run-local
 group $[b,e)$; merged-order ranges are counts, never addresses. Reads launch on
 an execution pool sharing the snapshot's memory, ordered after publication by
 fork readiness and before consumers by join readiness.
 \begin{mathpar}
 \Rule{GPU-RadixLayout}{\mathsf{pack}(K)\text{ checked against }W\quad
- \forall i.\ \mathsf{lane}(C_i)\supseteq\mathsf{dom}(V_i)\quad
+ \forall i.\ \mathsf{representation}(C_i)\models\mathsf{dom}(V_i)\quad
  \sigma=\mathsf{snapshot}(\mathcal L)}
  {\alpha(\mathsf{view}(\sigma))=\alpha(\mathcal L)\quad
   \mathsf{count}(\sigma)=|\alpha(\mathcal L)|\quad

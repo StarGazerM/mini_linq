@@ -13,6 +13,16 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU source-built radix indices pack resident encoded fields directly into
+  scalar order keys and retain payload sources through one stable shared
+  row-reference map. Checked GPU Sequence records own key/payload recipes,
+  source provenance and selection; native item APIs reject encoded descriptors.
+  The two P4 build-time decode violations are retired; demanded relational
+  payload reconstruction remains explicitly tracked under P6.
+  A separate cached-prefix smallest experiment showed no end-to-end DBLP gain
+  (cached/old 1.004 [0.996, 1.022]) and was removed rather than adding an unused
+  policy. Range-first remains the default, and Retain/Expand remains out of scope.
+
 - GPU TPC-H separates final host downloads into `download_ms`, outside build
   and total, restoring the reference benchmark boundary without removing work.
   Checked stage-use facts retain intermediate downloads inside query execution;

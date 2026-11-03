@@ -22,7 +22,7 @@ pub use pack::{Column, Packing, Word};
 pub use radix_run::{
     DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixItemsView, RadixKeysView,
     RadixLayout, RadixLayoutView, RadixMatch, RadixMatches, RadixRunParams, RadixSnapshot,
-    SourceItemColumns, SourceLane,
+    source_items::{OwnedSource, SourceColumns},
 };
 pub use runs::SortedBatch;
 pub use stats::{

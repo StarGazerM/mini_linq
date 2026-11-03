@@ -550,6 +550,21 @@ impl ColumnDescriptor {
             ColumnOwner::Packed(keys) => keys.pool(),
         }
     }
+    /// Retain the original allocation behind an encoded source descriptor.
+    pub fn owned_source(&self) -> Result<gpu_datalog_runtime::OwnedSource> {
+        let owner: Arc<dyn std::any::Any + Send + Sync> = match &self.owner {
+            ColumnOwner::Encoded(column) => column.clone(),
+            ColumnOwner::Rows(rows) => rows.clone(),
+            ColumnOwner::Packed(keys) => keys.clone(),
+        };
+        // SAFETY: each constructor establishes initialized source metadata,
+        // capacity and pool provenance, and `owner` retains that allocation.
+        unsafe {
+            gpu_datalog_runtime::OwnedSource::new(
+                self.pool().clone(), self.source, self.rows, owner,
+            )
+        }
+    }
     pub fn bounds(&self) -> Bounds {
         self.bounds
     }
@@ -798,22 +813,21 @@ impl RangeDescriptor {
 /// publication of the key and value descriptor columns, restricted to the
 /// recorded half-open selection when present. Every column shares `pool`
 /// and the same live row count; keys and lanes follow the caller's recorded
-/// schema (`K`, `C`), checked against the layout's types by the runtime.
+/// scalar schema (`K`, `V`). Payloads retain sources and one occurrence map.
 /// `selection_geometry` is the recorded `selection` family geometry.
-pub fn radix_layout<K, V, W, O, C>(
+pub fn radix_layout<K, V, W, O>(
     pool: &Arc<Pool>,
     params: gpu_datalog_runtime::RadixRunParams,
     keys: &[ColumnDescriptor],
     values: &[ColumnDescriptor],
     selection: Option<&RangeSelection>,
     selection_geometry: Geometry,
-) -> Result<gpu_datalog_runtime::RadixLayout<K, V, W, O, C>>
+) -> Result<gpu_datalog_runtime::RadixLayout<K, V, W, O, gpu_datalog_runtime::SourceColumns<V>>>
 where
     K: gpu_datalog_runtime::ScalarTuple,
     V: gpu_datalog_runtime::ScalarTuple,
     W: gpu_datalog_runtime::Word + 'static,
     O: gpu_datalog_runtime::OffsetWord,
-    C: gpu_datalog_runtime::SourceItemColumns,
 {
     let rows = keys
         .iter()
@@ -836,14 +850,10 @@ where
         Some(selected) => (selected.ptr(), selected.len()),
         None => (std::ptr::null(), rows),
     };
-    let keys = keys.iter().map(ColumnDescriptor::view).collect::<Vec<_>>();
-    let values = values
-        .iter()
-        .map(ColumnDescriptor::view)
-        .collect::<Vec<_>>();
-    // SAFETY: descriptors own their columns, whose live prefixes are ready on
-    // `pool`'s stream (ColumnDescriptor contract); selected positions are
-    // produced on the same stream and index that prefix.
+    let keys = keys.iter().map(ColumnDescriptor::owned_source).collect::<Result<Vec<_>>>()?;
+    let values = values.iter().map(ColumnDescriptor::owned_source).collect::<Result<Vec<_>>>()?;
+    // SAFETY: owned descriptors retain their initialized sources on `pool`'s
+    // stream; selected positions are produced there and index the live prefix.
     unsafe {
         gpu_datalog_runtime::RadixLayout::from_sources(
             pool.clone(),

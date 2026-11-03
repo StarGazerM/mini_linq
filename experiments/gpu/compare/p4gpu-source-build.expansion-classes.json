@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "definitions": {
+    "gpu-symbol": {
+      "kind": "refactor",
+      "description": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged."
+    },
+    "retained-payload": {
+      "kind": "intended",
+      "description": "Two candidate reads follow the checked retained-source payload recipe instead of native item lanes, preserving run/column/occurrence identity."
+    },
+    "retained-provider": {
+      "kind": "intended",
+      "description": "Source-built providers instantiate SourceColumns<V> and checked authored type ascriptions; keys, offsets, selection and build placement remain unchanged."
+    }
+  },
+  "rules": [
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "c0380b2d5fbde4948bd8b73f5cc99886a20770aeb8f8351f11be1d5ce9e853b9",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "retained-payload",
+      "hunk_sha256": "05373dc3ae133e04b12981d6b0aa722564e9d858d1fc01558ad95ca45ec9549d",
+      "reason": "Two candidate reads follow the checked retained-source payload recipe instead of native item lanes, preserving run/column/occurrence identity.",
+      "source": "experiments/gpu/sequence/core/src/rows.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "retained-payload",
+      "hunk_sha256": "6ffe9b3ee3aeec40a30b599d099a7089b95bbef884009daaddef6d9c65ca18d8",
+      "reason": "Two candidate reads follow the checked retained-source payload recipe instead of native item lanes, preserving run/column/occurrence identity.",
+      "source": "experiments/gpu/sequence/core/src/rows.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "d5f853c892192ed0629b64de51cb6bcff88c1a560e189bd2df1c230def9f3a18",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "4e3e322f4b06f133c7104730ffa2627ea5997768a2cd7cdebac9907f86be5caa",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "a8b2770120fee742a474c234dfd1571ad61fb9ad183e8b1a3a2d65930bf7c2da",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "251994c26820e99915a567b545c98adaafd49a3db9f429afe8549fc3d51764a6",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "4d43f1ffde95dd6d03219a83d64333c53cb151ba5f906f0b9f27f63814b9570e",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "b6de25bfbd92a1c5047626014e12bf6c57e83fc45974b8a5b65d8317b9071381",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "a2253d29daafd1fa7ddf06420a0961323c857e8747ac5afb4020545813db489b",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "05e5050cb8c0cbb5d56acd0cb50acc7c5c88d0508316d39e0148bc69bac73303",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "742b74d2fd6af3e2bd014e7914f2c5a4d6333ab520dab0c0d716b9bec55fa5f2",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "1dd7780405cd092830da27757b292ca829a7b32c6050e855f60a3cafaa406806",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "a9c8a03b70361d0611375020aec0d03ad813dda9bfd394ce9fd58c09458706a8",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "1e2b64e3221fde7905e3bfce4373225ffe632b74076f80bf16cea65d5b7f34ce",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "102efcfbe6a4556a85caa2cfc47926c917c881d0ee975cacaff02cd239f97667",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "73d3f2a8a5db6193b6dda945fd2938fc9913129b4e5e36357a2bd1d921f30baf",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "e38a22d9a9ef81f94b0f832cb8ace9efc7693660ac48526a7e0eeebf20937021",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "retained-provider",
+      "hunk_sha256": "936453d6466c5b4fca14a8082ec1fe8924ecbe69d2b015e8138fb170bce1291f",
+      "reason": "Source-built providers instantiate SourceColumns<V> and checked authored type ascriptions; keys, offsets, selection and build placement remain unchanged.",
+      "source": "experiments/gpu/sequence/core/src/rows.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "retained-provider",
+      "hunk_sha256": "970f63985d233e59430c3625cfeec802c55628157465b5bb8b43428f97d7a8c9",
+      "reason": "Source-built providers instantiate SourceColumns<V> and checked authored type ascriptions; keys, offsets, selection and build placement remain unchanged.",
+      "source": "experiments/gpu/sequence/core/src/rows.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "retained-provider",
+      "hunk_sha256": "e00885d50fd86dbe9a1b0a7f815fb71dcc72fb3442a0f0cd8cd493a7af27931a",
+      "reason": "Source-built providers instantiate SourceColumns<V> and checked authored type ascriptions; keys, offsets, selection and build placement remain unchanged.",
+      "source": "experiments/gpu/sequence/core/src/rows.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "956b44f3eca05221f55ead24b5526c72bc14f556bb23f5ae82559af3095212b8",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    },
+    {
+      "target": "triangle-smallest",
+      "class": "gpu-symbol",
+      "hunk_sha256": "ee4c4e34ce8d1b97814cc16189b241923ce56430feffc3e09d47586b8062600f",
+      "reason": "Program fingerprint changes generated CUDA symbol names consistently; ABI, launch geometry and kernel control flow are unchanged.",
+      "source": "experiments/gpu/sequence/core/src/emit.rs"
+    }
+  ]
+}

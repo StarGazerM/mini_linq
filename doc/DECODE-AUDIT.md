@@ -19,6 +19,31 @@ The inventory covers `experiments/gpu/**`, `runtime/cq-load`, `runtime/cq-storag
 
 `DECODE-SITES.tsv` is the authoritative four-column registry: path, exact marker, class, reason. `formal/check.py` requires a one-to-one correspondence between registry rows and flagged comments, validates classes and V plan steps, and prints counts. It checks **marker coverage, not semantic completeness or correctness of classifications**. The file:line entries below identify comment lines in this audit snapshot; exact marker text survives unrelated line movement.
 
+### P4-GPU encoded source-build cutover (2026-11-03)
+
+The two P4 V sites in `datalog-runtime/src/radix_run.rs` are retired:
+`pack_sources` now calls `source_order::order_code`, which translates the
+source frame into the destination scalar order domain before adding residual
+codes; `source_lane` and its native materialization traits are removed.
+Packed global frames, vector FOR frames, Plain fields and Delta restart
+codes preserve the same complete scalar order law without a logical row
+intermediate (GPU-RadixSourceOrder).
+
+Payloads use `SourceColumns<V>`: the first stable gather composes the recorded
+selection directly with the sort permutation into one shared source-table/row
+map. Merges move references, and the result retains the original encoded
+value-source owners. This removes the build-time logical payload copy rather
+than moving that copy to another helper or claiming it is publication.
+
+Demanded source-backed payload reads still serve existing relational consumers:
+`source_items::device::item` and its generated caller remain **V** (P6).
+Their shared inverse and generic `to_host` kernel are **?**; explicit
+diagnostic test publication is **P**. No new opaque-Rust authorization is
+inferred. These implementation/caller markers do not count dynamic decodes,
+and retiring the two P4 build sites does not claim all P6 reads are solved.
+The live registry records the replacement boundaries; historical tables below
+remain historical.
+
 ### P4-GPU slice D inventory cutover (2026-11-02)
 
 The live registry retires the removed `DeviceLayout` host-download,

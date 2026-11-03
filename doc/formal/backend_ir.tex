@@ -1623,8 +1623,10 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  {\mathrm{advice}(p)=(W,O,\rho,r,m)\text{ authored per instance; nothing chooses it}}
 \Rule{GPU-RadixProvider}{\mathrm{layout}(T)=(T,\mathrm{radix},K,P,\bot)\quad
  K_i,P_j\text{ carriers of the recorded column types}\quad
+ B\text{ names the owned source, complete fields and shared stable row map}\quad
+ Q_K,Q_P\text{ cover }K,P\text{ in order with direct order codes and retained sources}\quad
  R=\text{every lookup prefix of }K\text{ and every PH-Smallest side served by }T}
- {\mathrm{radix}(T)=(K,P,\mathrm{advice}(T),R)\text{, checked against its sources}}
+ {\mathrm{radix}(T)=(K,P,\mathrm{advice}(T),R,B,Q_K,Q_P)\text{, independently checked against its sources}}
 \Rule{GPU-RadixCandidates}{[\ell,h]=\text{encoded interval of a bound prefix}\quad
  \mathrm{runs}=\rho_0,\dots,\rho_{n-1}}
  {\mathsf{distinct}(\ell,h)=\bigl|\bigcup_i \{k\in\rho_i\mid \ell\le k\le h\}\bigr|\quad
@@ -1632,9 +1634,17 @@ and encoded relational operands follow \textsc{GPU-Capture}.
 \Rule{GPU-RadixEncodedProbe}{v_1..v_q\text{ bound leading fields}\quad
  v_i\in\mathrm{dom}(f_i)}
  {[\ell,h]=[\mathsf{enc}(v)\cdot 0^{*},\ \mathsf{enc}(v)\cdot 1^{*}]\text{ formed once; whole-word compares, no }h{+}1}
-\Rule{GPU-RadixSourceBuild}{S_K,S_V\text{ resident sources of }K,V\quad
- \pi\text{ recorded selection or identity}}
- {\mathsf{fromSources}=\mathsf{publish}(\mathsf{pack}_K(S_K\circ\pi),\ \mathsf{lanes}_V(S_V\circ\pi))}
+\Rule{GPU-RadixSourceBuild}{S_K,S_V\text{ owned resident sources of }K,V\quad
+ \pi\text{ the source realization's recorded selection or identity}\quad
+ B,Q_K,Q_P\text{ agree with that source owner and every field}}
+ {\mathsf{fromSources}=\mathsf{publish}(\mathsf{packOrder}_K(S_K\circ\pi),\quad
+   \mathsf{retainedSourceRefs}_V(S_V,\pi))\text{; no logical key or payload intermediate}}
+\Rule{GPU-RadixSourceOrder}{1\leq b\leq64\quad
+ S\text{ is a valid owned source in the recorded }b\text{-bit scalar domain}\quad
+ \mathsf{sign}_b=0\text{ (unsigned) or }2^{b-1}\text{ (signed)}\quad
+ \mathsf{ord}_b(x)=\mathsf{bits}_b(x)\mathbin{\mathsf{xor}}\mathsf{sign}_b}
+ {\mathsf{FOR}(B,r)\mapsto(\mathsf{ord}_b(B)+r)\bmod2^b\quad
+ \mathsf{Delta}(B,d,p,r)\mapsto(\mathsf{ord}_b(B)+dp+\sum_{i=1}^{p}r_i)\bmod2^b}
 \Rule{GPU-Smallest}{\mathsf{probe\ smallest}\text{ with sides }(T_j,\mathit{pre}_j)_{j<k}\text{ over }c\quad
  \mathrm{radix}(T_j)\ni(\mathit{pre}_j,\mathrm{Candidates}\ c)}
  {n_j=\mathsf{distinct}_j\quad j^{*}=\min\{j\mid n_j=\min n\}\quad

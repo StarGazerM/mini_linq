@@ -423,9 +423,11 @@ Provider choices are recorded upstream, never by type name.
   the input/merge row counts.
 - **Build.** The shared stable lane radix permutation
   (`runs::stable_order`, RCCL pairs radix sort per lane), a group-start flag
-  kernel, RCCL `device_select_flagged` for offsets (over a counting range)
-  and distinct keys (through the permutation), a per-column gather, and the
-  directory kernel. One group-count readback per build.
+  kernel, RCCL `device_select_flagged` for offsets and distinct keys, and the
+  directory kernel. Native items gather their columns; source-backed items
+  compose the selection and stable permutation into one shared row-reference
+  map, without materializing an intermediate identity map or logical payload.
+  One group-count readback per build.
 - **Publish/merge.** The CPU ratio law: merge the newest runs while
   `older.items / ratio < newer.items`, so run counts equal `RadixRun`'s.
   A merge-path kernel (shared co-rank primitives, one
@@ -452,15 +454,18 @@ Provider choices are recorded upstream, never by type name.
   `RadixLayout<K, V, W, O, C>` owns one snapshot plus the key packing's field
   descriptors. `publish(run, packing)` checks the packing against `K`'s
   scalar schema and `W` (`derive_packing()` builds it), and that each of `V`'s
-  fields is stored in a `C` lane that holds its domain (`LaneKind::holds`:
-  same signedness and at least its width, or unsigned in a strictly wider
-  signed lane; never a narrowing). `republish(run)` returns this layout itself
+  fields is represented by a native `C` lane holding its domain or a retained
+  source-field descriptor with the declared scalar schema. Native lane checks
+  use `LaneKind::holds`; encoded source ownership and selection are explicit.
+  `republish(run)` returns this layout itself
   when the run's cached snapshot is unchanged and otherwise shares the field
   descriptors. `view()` is the key
   field ABI (`RadixLayoutView`: keys view, field descriptors, packed bits and
   the resident count pointer) and carries no item pointers;
-  `item_column::<T>(i)` is narrow access to one value field whose lane must be
-  `T`. `count_ptr()` gives count-gated consumers the resident count without a
+  `item_column::<T>(i)` is narrow native-lane access and rejects retained-source
+  descriptors rather than reinterpreting their addresses. Source-backed reads
+  follow the recorded source field and shared occurrence-row map.
+  `count_ptr()` gives count-gated consumers the resident count without a
   host download, including full-row `radix_set` publications (GPU-RadixSet);
   `logical_count()` is an explicit
   synchronizing diagnostic. `owner()` retains runs, descriptors and fields
@@ -488,16 +493,25 @@ Provider choices are recorded upstream, never by type name.
   registered after the existing tokens so unadvised catalog choices are
   unchanged. Every instance carries authored advice `radix { word W; offset
   O; ratio N; radix_bits N; merge_tile N }` (GPU-RadixAdvice); nothing
-  chooses these. GPU binding records `ProviderAbi::Radix` with the key and
-  value-lane carriers taken from recorded column types (dictionary codes as
-  `u32`), the advice and the read form of each lookup it serves: whole key
-  (Group), leading prefix (Prefix) or PH-Smallest side (Candidates)
-  (GPU-RadixProvider). The build is `RadixLayout::from_sources` over the
-  resident columns (GPU-RadixSourceBuild: key packing and lane-filling
-  kernels, optional recorded selection, the ordinary grouped build). Reads
-  encode the bound prefix once into an inclusive whole-word interval
-  (`device::encode_prefix`, GPU-RadixEncodedProbe) and expand each run's
-  local item interval; payload values are read from item lanes, not decoded.
+  chooses these. GPU binding records `ProviderAbi::Radix` with key/payload
+  scalar carriers from recorded column types (dictionary codes as `u32`),
+  advice and each lookup's read form: whole key (Group), leading prefix
+  (Prefix) or PH-Smallest side (Candidates). `SourceBuild` records the owning
+  source, complete fields and shared stable row-map identity;
+  `KeyRecipe::DirectSourceOrder` and `PayloadRepresentation::RetainedSources`
+  record the field mappings. Independent binding/realization checks validate
+  coverage, order, origin, selection and ownership without rerunning selection.
+  `RadixLayout::from_sources` packs source representations directly into scalar
+  order codes (GPU-RadixSourceOrder) and retains original encoded payload
+  owners through `SourceColumns<V>` (GPU-RadixSourceBuild). FOR frame bases
+  are translated to the destination order domain before residual addition;
+  residuals from different frames are never compared as if they shared a base.
+  Grouping/merging move one shared source-table/row reference per occurrence,
+  not decoded value columns. Reads encode the bound prefix once into an
+  inclusive whole-word interval and expand each run's local item interval.
+  Only a demanded payload field is reconstructed; existing relational
+  consumers remain explicitly classified P6 decode work, not authorized
+  opaque-Rust or final-answer reads.
   `device::distinct` counts the distinct keys of an interval over the union
   of all runs (each key once, in its oldest run; never a per-run sum) and
   `device::distinct_at` enumerates the same keys (GPU-RadixCandidates).
@@ -519,8 +533,9 @@ Provider choices are recorded upstream, never by type name.
   Distinct; the constrained full-key set construction does. Arity
   above 12 item columns has no `DeviceItemColumns` implementation; builds
   above `u32::MAX` rows and offset-carrier overflow at a merge are rejected
-  errors (no widening, no chunked build). FOR-coded sources are decoded once
-  during the build (two registered P4 DECODE V sites).
+  errors (no widening, no chunked build). Source-built keys retain their
+  order-code domain and payloads retain their encoded sources: the two former
+  P4 build-time DECODE V sites are retired, not moved into a helper.
 - **Datalog relation sets (P4-GPU slice D).** EDB, full, delta and frozen
   negative layouts use `RadixLayout<(all physical row columns), (), W, u64, ()>`
   backed by `DeviceRadixRun<W, u64, ()>`. The ordinary `radix_relation` token
@@ -555,13 +570,21 @@ snapshot columns; and schema/lane-domain rejection.
 
 `tests/radix_candidates.rs` runs test kernels that mirror the emitted reads:
 duplicate-heavy multi-run lookups through `encode_prefix`/`interval_items`
-equal `cq_storage::RadixRun` stable groups; `from_sources` over Plain columns,
-with and without a reversed selection, equals the CPU build; `distinct`/
+equal `cq_storage::RadixRun` stable groups; `from_sources` over Plain/FOR
+sources retains encoded payloads and composes reversed/duplicate selections;
+merged snapshots retain original value owners after source handles are dropped.
+Native-lane rejection, empty/keyless/payloadless sources and shared-pool reads
+exercise the representation boundary. `distinct`/
 `distinct_at` over four unmerged runs with repeated keys count and enumerate
 each candidate once; random 2- and 3-way smallest over full-domain signed
 `i64` prefixes and candidates (absent prefixes included) matches a
 candidate-set oracle in counts, first-minimum choice and answers; and fixed
 cases cover ties, all-empty probes and an empty side.
+
+`tests/radix_source_order.rs` compares forward source translation with an
+independent scalar-order oracle across signed widths 8/16/32/64, unsigned
+extrema, different vector frames, constant frames, Delta restart codes,
+cross-word packed fields, reversed selections and strided Plain sources.
 
 ## 9. Grouped runs in the compiler's semantics
 

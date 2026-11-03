@@ -661,6 +661,16 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   once per outer row, it remains 1.54× slower than the default
   `triangle-compiled` `probe first` Range plan on DBLP (paired, both locks).
   The remaining kernel is a latency-bound chain of u128 binary searches.
+  **Cached-prefix experiment rejected (2026-11-03):** a compact scalar
+  prefix/suffix directory did not improve resident DBLP total:
+  cached/old-smallest **1.004 [0.996, 1.022]**, kernel **0.978** but build
+  **1.060**; cached/Range-first **1.387**. Five rotating interleaved
+  triplets used the GPU lock, recorded load/faults, and checked all 2,224,385
+  tuples on every resident call. These GPU-only samples establish no
+  end-to-end speedup; no CPU-exclusive/linker-layout-confirmed small-effect
+  claim is made. The unused policy, runtime cache and tests were removed;
+  neither triangle plan changed. Raw samples:
+  [`p4gpu-cached-smallest.results.json`](../experiments/gpu/compare/p4gpu-cached-smallest.results.json).
   Remaining: a faster smallest
   read (e.g. dense or cached candidate directories, measured) before any
   default use, Retain/Expand (retained L&E witnesses need the GPU target's

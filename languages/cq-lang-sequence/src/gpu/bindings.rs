@@ -51,11 +51,42 @@ pub enum RadixRead {
     Candidates { column: String },
 }
 
-/// Formal rule GPU-RadixProvider: the per-instance facts of a radix index.
-/// `RadixLayout<K, V, W, O, C>` has `K` = `key_types` (one per `keys`
-/// column, most significant first), `V` = `lanes` with `C` one `Buffer`
-/// column per lane (one per `payload` column, in order), `W`/`O` = the
-/// authored word/offset carriers and `params` from the instance's advice.
+/// Owned descriptor fields of one Physical result. The independently checked
+/// source/publication realization supplies its origin and selected live rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceBuild {
+    pub source: String,
+    pub fields: Vec<String>,
+    pub ownership: SourceOwnership,
+    pub row_map: SourceRowMap,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SourceOwnership {
+    RetainedDescriptors,
+}
+
+/// A single stable occurrence map shared by every payload field, composed
+/// with this result's recorded selection (identity for a publication).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceRowMap {
+    pub source: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyRecipe {
+    /// Translate source metadata directly to Scalar order bits, without
+    /// reconstructing logical scalar values.
+    DirectSourceOrder { fields: Vec<usize> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PayloadRepresentation {
+    RetainedSources { fields: Vec<usize>, row_map: SourceRowMap },
+}
+
+/// Formal rule GPU-RadixProvider: scalar schemas and source recipes are
+/// explicit facts. Retained payloads use `SourceColumns<V>`, not native lanes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RadixRealization {
     pub key_types: Vec<syn::Type>,
@@ -65,6 +96,9 @@ pub struct RadixRealization {
     pub params: RadixParams,
     /// Every read of this instance as (sorted lookup keys, form).
     pub reads: Vec<(Vec<String>, RadixRead)>,
+    pub source_build: SourceBuild,
+    pub key_recipe: KeyRecipe,
+    pub payload_representation: PayloadRepresentation,
 }
 
 /// A complete permutation of a full-key relation materialized as a declared

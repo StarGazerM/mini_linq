@@ -923,9 +923,7 @@ impl<'a> Compiler<'a> {
                 .iter()
                 .position(|column| *column == record.column)
                 .ok_or_else(|| error("GPU-Smallest: candidate column is not an item lane"))?;
-            let lane = &radix.lanes[lane_index];
-            let items = &radix.items;
-            let lane_index = lane_index as u32;
+            let candidate = radix.item(lane_index, quote!(__run), quote!(__first));
             let prefix = self.radix_probe(provider, &record.sides[index].prefix, None)?;
             let mut members = TokenStream::new();
             for (other, (provider, keys)) in providers.iter().enumerate() {
@@ -957,8 +955,7 @@ impl<'a> Compiler<'a> {
                     };
                     let __first = ::gpu_datalog_runtime::radix_run::device::offset(
                         ::gpu_datalog_runtime::radix_run::device::run(#view.keys, __run), __slot);
-                    let __candidate = ::gpu_datalog_runtime::radix_run::device::item::<#lane>(
-                        #items, __run, #lane_index, __first) as i64;
+                    let __candidate = #candidate;
                     __row[#column] = __candidate;
                     #members
                 }
@@ -1246,22 +1243,16 @@ impl<'a> Compiler<'a> {
         }
         let (view, payload, _) = self.rows.provider(provider)?;
         if let Some(radix) = self.rows.radix_provider(provider) {
-            // Item lanes hold native values: a positional read, no decode.
-            // Bound key columns stay the parent's carried values.
+            // Bound keys stay carried; unbound fields use the checked payload ABI.
             let run = format_ident!("__cq_run_{provider}");
-            let items = &radix.items;
             let assignments = payload
                 .iter()
-                .zip(&radix.lanes)
                 .enumerate()
-                .filter(|(_, (column, _))| !bound.contains(column))
-                .map(|(index, (column, lane))| {
+                .filter(|(_, column)| !bound.contains(column))
+                .map(|(index, column)| {
                     let slot = self.slot(column)?;
-                    let index = index as u32;
-                    Ok(quote! {
-                        __row[#slot] = ::gpu_datalog_runtime::radix_run::device::item::<#lane>(
-                            #items, #run, #index, (#position) as u64) as i64;
-                    })
+                    let value = radix.item(index, quote!(#run), quote!((#position) as u64));
+                    Ok(quote! { __row[#slot] = #value; })
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
             return Ok(quote!(#(#assignments)*));

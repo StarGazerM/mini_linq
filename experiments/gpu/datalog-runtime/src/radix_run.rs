@@ -26,7 +26,7 @@ use crate::{
     Column, Packing, Result, Word,
 };
 use cuda_core::{DeviceCopy, LaunchConfig1D};
-use gpu_device_columns::{Buffer, OutputCount, Pool, SourceView};
+use gpu_device_columns::{Buffer, OutputCount, Pool};
 use rccl_cub::{DeviceArithmeticRange, DeviceMap, DeviceSliceRead, DeviceSliceWrite};
 use std::{
     any::Any,
@@ -37,6 +37,10 @@ use std::{
         Arc, Mutex,
     },
 };
+
+pub mod source_order;
+pub mod source_items;
+use source_items::{OwnedSource, SourceColumns};
 
 const SIDE: u64 = 1 << 63;
 
@@ -146,6 +150,9 @@ pub trait DeviceItemColumns: sealed::Columns + Sized + Send + Sync + 'static {
     /// Downloaded diagnostic columns.
     type Host;
     const COLUMNS: usize;
+    /// Native byte-addressable capability, independent of logical lane schema.
+    /// Encoded descriptors must never be exposed through a typed native column.
+    fn native_column(column: usize) -> bool { column < Self::COLUMNS }
     /// Every column shares `pool`'s memory and has at least `rows` entries.
     /// Shared memory is an allocation fact; the caller orders initialization.
     fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()>;
@@ -162,7 +169,7 @@ pub trait DeviceItemColumns: sealed::Columns + Sized + Send + Sync + 'static {
         sources: *const O,
         rows: usize,
     ) -> Result<Self>;
-    /// Append each column's device address in layout order.
+    /// Append each column's native-buffer or encoded-descriptor device address.
     fn column_pointers(&self, out: &mut Vec<u64>);
     fn to_host(&self, rows: usize) -> Result<Self::Host>;
 }
@@ -288,6 +295,17 @@ macro_rules! tuple_columns {
         impl<$($C: DeviceItemColumns),+> DeviceItemColumns for ($($C,)+) {
             type Host = ($($C::Host,)+);
             const COLUMNS: usize = 0 $(+ $C::COLUMNS)+;
+            fn native_column(column: usize) -> bool {
+                let mut at = 0;
+                $(
+                    if column >= at && column - at < $C::COLUMNS {
+                        return $C::native_column(column - at);
+                    }
+                    at += $C::COLUMNS;
+                )+
+                let _ = at;
+                false
+            }
             fn check(&self, pool: &Arc<Pool>, rows: usize) -> Result<()> {
                 $(self.$field.check(pool, rows)?;)+
                 Ok(())
@@ -325,106 +343,6 @@ tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8);
 tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9);
 tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10);
 tuple_columns!(A:0, B:1, C:2, D:3, E:4, F:5, G:6, H:7, I:8, J:9, K:10, L:11);
-
-/// An integer item lane filled from a decoded resident source value (its
-/// i64 bit pattern). The recorded value schema guarantees the source column's
-/// domain fits the lane ([`LaneKind::holds`]), so the conversion is exact.
-pub trait SourceLane: ItemLane {
-    fn from_source(value: i64) -> Self;
-}
-macro_rules! source_lanes {
-    ($($ty:ty),*) => {$(
-        impl SourceLane for $ty {
-            #[inline(always)]
-            fn from_source(value: i64) -> Self {
-                value as $ty
-            }
-        }
-    )*};
-}
-source_lanes!(u8, i8, u16, i16, u32, i32, u64, i64);
-
-/// Item layouts that a build fills from resident source columns, one source
-/// per lane in layout order.
-pub trait SourceItemColumns: DeviceItemColumns {
-    #[doc(hidden)]
-    fn from_sources(
-        kernels: &ItemKernels,
-        sources: &[SourceView],
-        positions: *const u32,
-        rows: usize,
-    ) -> Result<Self>;
-}
-
-impl SourceItemColumns for () {
-    fn from_sources(_: &ItemKernels, _: &[SourceView], _: *const u32, _: usize) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl<T: SourceLane> SourceItemColumns for Buffer<T> {
-    fn from_sources(
-        kernels: &ItemKernels,
-        sources: &[SourceView],
-        positions: *const u32,
-        rows: usize,
-    ) -> Result<Self> {
-        let [source] = sources else {
-            return Err("one source column per item lane".into());
-        };
-        // SAFETY: the lane kernel initializes every position before publication.
-        let output = unsafe { Buffer::<T>::uninitialized(kernels.pool.clone(), rows)? };
-        if rows != 0 {
-            let module = &kernels.module;
-            let initial = module.prepare_source_lane::<T>(kernels.shape())?;
-            let config = kernels.config(initial.function(), rows)?;
-            module.source_lane::<T>(
-                kernels.pool.stream(),
-                &module.prepare_source_lane::<T>(config)?,
-                *source,
-                positions,
-                rows as u64,
-                output.ptr(),
-            )?;
-        }
-        Ok(output)
-    }
-}
-
-macro_rules! source_columns {
-    ($($C:ident),+) => {
-        impl<$($C: SourceItemColumns),+> SourceItemColumns for ($($C,)+) {
-            fn from_sources(
-                kernels: &ItemKernels,
-                sources: &[SourceView],
-                positions: *const u32,
-                rows: usize,
-            ) -> Result<Self> {
-                if sources.len() != Self::COLUMNS {
-                    return Err("one source column per item lane".into());
-                }
-                let mut _at = 0;
-                Ok(($({
-                    let part = &sources[_at.._at + $C::COLUMNS];
-                    _at += $C::COLUMNS;
-                    $C::from_sources(kernels, part, positions, rows)?
-                },)+))
-            }
-        }
-    };
-}
-source_columns!(A);
-source_columns!(A, B);
-source_columns!(A, B, C);
-source_columns!(A, B, C, D);
-source_columns!(A, B, C, D, E);
-source_columns!(A, B, C, D, E, F);
-source_columns!(A, B, C, D, E, F, G);
-source_columns!(A, B, C, D, E, F, G, H);
-source_columns!(A, B, C, D, E, F, G, H, I);
-source_columns!(A, B, C, D, E, F, G, H, I, J);
-source_columns!(A, B, C, D, E, F, G, H, I, J, K);
-source_columns!(A, B, C, D, E, F, G, H, I, J, K, L);
 
 /// Caller-recorded provider parameters; the runtime chooses none of them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -500,6 +418,8 @@ pub struct RadixKeysView<W: Word, O: OffsetWord> {
 unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixKeysView<W, O> {}
 
 /// Item column addresses, run-major: `columns[run * column_count + column]`.
+/// The checked item representation determines whether an address names a native
+/// lane or a retained source descriptor; these are never interchangeable.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct RadixItemsView {
@@ -718,6 +638,10 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         let Some(segment) = self.group(keys, items, rows)? else {
             return Ok(());
         };
+        self.publish_segment(segment)
+    }
+
+    fn publish_segment(&mut self, segment: Segment<W, O, C>) -> Result<()> {
         let mut merged = Arc::new(segment);
         let mut keep = self.runs.len();
         while keep > 0 && self.runs[keep - 1].item_count / self.params.ratio < merged.item_count {
@@ -801,10 +725,17 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     }
 
     fn group(&self, keys: &Buffer<W>, items: &C, rows: usize) -> Result<Option<Segment<W, O, C>>> {
+        items.check(&self.pool, rows)?;
+        self.group_with(keys, rows, |kernels, order, rows| items.gather(kernels, order, rows))
+    }
+
+    fn group_with(
+        &self, keys: &Buffer<W>, rows: usize,
+        gather: impl FnOnce(&ItemKernels, *const u32, usize) -> Result<C>,
+    ) -> Result<Option<Segment<W, O, C>>> {
         if !self.pool.shares_memory(keys.pool()) || rows > keys.len() {
             return Err("radix run keys use another pool's memory or exceed their capacity".into());
         }
-        items.check(&self.pool, rows)?;
         if rows > u32::MAX as usize {
             return Err("radix run build exceeds the u32 row domain".into());
         }
@@ -879,7 +810,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             rows,
             &mut workspace,
         )?;
-        let items = items.gather(&self.kernels, order, rows)?;
+        let items = gather(&self.kernels, order, rows)?;
         let key_count = runs::read_count(pool, offset_count.get())? - 1;
         crate::stats::record_work(|work| work.grouping_readbacks += 1);
         let directory = self.directory(&distinct, key_count)?;
@@ -2105,6 +2036,12 @@ impl<K, V, W: Word + 'static, O: OffsetWord, C: DeviceItemColumns> RadixLayout<K
 
     /// Narrow access to value field `column`, whose lane type must be `T`.
     pub fn item_column<T: ItemLane>(&self, column: usize) -> Result<ItemColumn<T>> {
+        if column >= C::COLUMNS {
+            return Err("item column outside the value tuple".into());
+        }
+        if !C::native_column(column) {
+            return Err("retained encoded items require the source-item read API".into());
+        }
         let mut lanes = Vec::with_capacity(C::COLUMNS);
         C::lanes(&mut lanes);
         match lanes.get(column) {
@@ -2318,42 +2255,70 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
     }
 }
 
-impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: SourceItemColumns>
-    RadixLayout<K, V, W, O, C>
+impl<V: ScalarTuple, W: Word, O: OffsetWord> DeviceRadixRun<W, O, SourceColumns<V>> {
+    /// Publish source-backed occurrences using already packed order keys.
+    /// The first stable gather creates the final shared map directly; it never
+    /// fills and copies an intermediate identity/selection row map.
+    ///
+    /// # Safety
+    /// Every key must match the corresponding selected source row. Sources and
+    /// optional `positions[0..rows]` must satisfy `RadixLayout::from_sources`'s
+    /// initialization, live-index and stream-readiness contract.
+    pub unsafe fn publish_sources(
+        &mut self, words: &Buffer<W>, keys: &[OwnedSource], values: &[OwnedSource],
+        positions: *const u32, rows: usize,
+    ) -> Result<()> {
+        SourceColumns::<V>::check_sources(&self.pool, keys, values, positions, rows)?;
+        let segment = self.group_with(words, rows, |kernels, order, rows| unsafe {
+            SourceColumns::from_order(kernels.pool.clone(), values, positions, order, rows)
+        })?;
+        if let Some(segment) = segment {
+            self.publish_segment(segment)?;
+        }
+        Ok(())
+    }
+}
+
+impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord>
+    RadixLayout<K, V, W, O, SourceColumns<V>>
 {
     /// Formal rule GPU-RadixSourceBuild: one publication of `rows` occurrences
     /// read from resident source columns (through `positions` unless null):
-    /// key fields packed by `K`'s packing into whole `W` keys, one item lane
-    /// per value source. Grouping is the ordinary GPU-RadixPublish build; the
-    /// only host synchronization is its group-count download.
+    /// key fields translated directly into whole `W` order keys; value sources
+    /// retain their encoding and one shared stable row map. The ordinary
+    /// GPU-RadixPublish group-count download is the only host synchronization.
     ///
     /// # Safety
     /// Every source must describe initialized values of its schema column at
-    /// every read row, ready on `pool`'s stream and immutable during the
-    /// build; `positions`, unless null, addresses `rows` such device rows.
+    /// every read row, ready on `pool`'s stream and immutable through all snapshot
+    /// readers. `positions`, unless null, addresses `rows` indices below every
+    /// source's live prefix, ready through the enqueued build.
     pub unsafe fn from_sources(
         pool: Arc<Pool>,
         params: RadixRunParams,
-        keys: &[SourceView],
-        values: &[SourceView],
+        keys: &[OwnedSource],
+        values: &[OwnedSource],
         positions: *const u32,
         rows: usize,
     ) -> Result<Self> {
         let packing = Self::derive_packing()?;
         Self::check_schema(&packing)?;
-        if keys.len() != K::COLUMNS.len() || values.len() != C::COLUMNS {
+        if keys.len() != K::COLUMNS.len() || values.len() != V::COLUMNS.len() {
             return Err("radix sources differ from the layout's key and value schema".into());
         }
-        let mut run = DeviceRadixRun::<W, O, C>::new(pool.clone(), params)?;
+        let mut run = DeviceRadixRun::<W, O, SourceColumns<V>>::new(pool.clone(), params)?;
+        SourceColumns::<V>::check_sources(&pool, keys, values, positions, rows)?;
+        // SAFETY: the pack kernel initializes every nonempty key before grouping.
+        let words = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
         if rows != 0 {
             u32::try_from(rows).map_err(|_| "radix source build exceeds the u32 row domain")?;
-            let sources = Buffer::from_host_async(pool.clone(), keys)?;
+            let sources = Buffer::from_host_async(
+                pool.clone(), &keys.iter().map(OwnedSource::view).collect::<Vec<_>>(),
+            )?;
             let fields = Buffer::from_host_async(
                 pool.clone(),
                 &packing.packed_fields().collect::<Vec<_>>(),
             )?;
-            // SAFETY: the pack kernel initializes every key before grouping.
-            let words = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
             let module = &run.kernels.module;
             let initial = module.prepare_pack_sources::<W>(run.kernels.shape())?;
             let config = run.kernels.config(initial.function(), rows)?;
@@ -2367,9 +2332,8 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
                 rows as u64,
                 words.ptr(),
             )?;
-            let items = C::from_sources(&run.kernels, values, positions, rows)?;
-            run.publish(&words, &items, rows)?;
         }
+        unsafe { run.publish_sources(&words, keys, values, positions, rows)?; }
         Self::publish(&run, packing)
     }
 }
@@ -2615,7 +2579,9 @@ pub mod device {
 
     /// Read one item of column `column` at a run position.
     /// # Safety
-    /// `T` must be the column's element type and the position live.
+    /// The checked provider must record a native byte-addressable column, `T`
+    /// must be its element type, and the position must be live. Retained source
+    /// descriptors require `source_items::device::item`, never this function.
     #[inline(always)]
     pub unsafe fn item<T: Copy>(items: RadixItemsView, run: u32, column: u32, position: u64) -> T {
         let address = unsafe {
@@ -2830,12 +2796,12 @@ mod radix_kernels {
         layout::PackedField,
         radix_run::{
             device, IntervalProbe, ItemLane, KeyProbe, OffsetWord, RadixItemColumn, RadixKeysView,
-            RadixMatch, RadixRunView, SourceLane, SIDE,
+            RadixMatch, RadixRunView, SIDE,
         },
         Word,
     };
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-    use gpu_device_columns::{decode_source, SourceView};
+    use gpu_device_columns::SourceView;
 
     /// Pack each read row's key fields (most significant first, sign bit
     /// flipped for signed fields) into one whole key word.
@@ -2862,15 +2828,15 @@ mod radix_kernels {
             let mut index = 0;
             while index < field_count {
                 let field = unsafe { *fields.add(index as usize) };
-                // DECODE V: radix source build reconstructs resident FOR values before key packing; P4 pack encoded order keys directly.
-                let value = unsafe { decode_source(*sources.add(index as usize), source) } as u64;
-                let mask = u64::MAX >> (64 - field.bits);
-                let sign = if field.signed != 0 {
-                    1_u64 << (field.bits - 1)
-                } else {
-                    0
+                let code = unsafe {
+                    crate::radix_run::source_order::order_code(
+                        *sources.add(index as usize),
+                        source,
+                        field.bits,
+                        field.signed != 0,
+                    )
                 };
-                key.insert(field.shift, field.bits, (value & mask) ^ sign);
+                key.insert(field.shift, field.bits, code);
                 index += 1;
             }
             unsafe {
@@ -2880,31 +2846,6 @@ mod radix_kernels {
         }
     }
 
-    /// Fill one item lane with each read row's source value.
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn source_lane<T: SourceLane>(
-        input: SourceView,
-        positions: *const u32,
-        rows: u64,
-        output: *mut T,
-    ) {
-        let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
-        while row < rows {
-            let source = if positions.is_null() {
-                row
-            } else {
-                unsafe { *positions.add(row as usize) as u64 }
-            };
-            unsafe {
-                // DECODE V: radix source build reconstructs resident FOR payloads into native item lanes; P4 retain encoded lanes.
-                *output.add(row as usize) = T::from_source(decode_source(input, source));
-            }
-            row += stride;
-        }
-    }
 
     /// Mark group starts of the permuted keys; entry `rows` is the terminal.
     #[kernel]
