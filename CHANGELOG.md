@@ -13,6 +13,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU TPC-H separates final host downloads into `download_ms`, outside build
+  and total, restoring the reference benchmark boundary without removing work.
+  Checked stage-use facts retain intermediate downloads inside query execution;
+  reports expose the executed accounting paths. The 2026-11-02 GPU TPC-H ratios
+  are boundary-confounded: current included terminal downloads, reference did not.
+
 - P8 measures Masks against the unconditional Tree reducer on all 29 CPU TPC-H
   SF1 default kernels and the 30-scenario planners corpus. Masks stays default:
   Tree's supported-kernel geometric mean is 1.03541x, versus 1.26056x on the

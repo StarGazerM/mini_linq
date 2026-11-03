@@ -1117,8 +1117,7 @@ fn compile_stage(
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
                     let mut timing =
                         cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
-                    timing.build_ms += elapsed;
-                    timing.total_ms += elapsed;
+                    timing.download_ms += elapsed;
                     timing.wall_ms += elapsed;
                     cq_gpu_runtime::publish_timings(timing);
                     result

@@ -6,6 +6,51 @@ use std::fs;
 pub const WARMUP_RUNS: usize = 1;
 pub const MEASURED_RUNS: usize = 5;
 
+/// Populated by the executed accounting paths, rather than a report label.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TimingBoundary {
+    pub stage_phase_sums: usize,
+    pub final_downloads_excluded: usize,
+    pub intermediate_downloads_included: usize,
+}
+
+#[derive(Default)]
+pub struct Measurement {
+    pub timings: cq_gpu_runtime::Timings,
+    pub boundary: TimingBoundary,
+}
+
+impl Measurement {
+    pub fn add_stage(&mut self, timing: cq_gpu_runtime::Timings, final_download: bool) {
+        self.boundary.stage_phase_sums += 1;
+        self.timings.upload_ms += timing.upload_ms;
+        self.timings.build_ms += timing.build_ms;
+        self.timings.kernel_ms += timing.kernel_ms;
+        self.timings.dedup_ms += timing.dedup_ms;
+        self.timings.total_ms += timing.total_ms;
+        self.timings.wall_ms += timing.wall_ms;
+        if final_download {
+            self.timings.download_ms += timing.download_ms;
+            self.boundary.final_downloads_excluded += 1;
+        } else {
+            // A download needed by another stage remains query execution work.
+            self.timings.build_ms += timing.download_ms;
+            self.timings.total_ms += timing.download_ms;
+            self.boundary.intermediate_downloads_included += 1;
+        }
+    }
+
+    pub fn final_download<T>(&mut self, download: impl FnOnce() -> Result<T>) -> Result<T> {
+        let started = std::time::Instant::now();
+        let result = download()?;
+        let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+        self.timings.download_ms += elapsed;
+        self.timings.wall_ms += elapsed;
+        self.boundary.final_downloads_excluded += 1;
+        Ok(result)
+    }
+}
+
 pub fn answer(manifest: &Manifest, query: &str) -> Result<Vec<Vec<String>>> {
     let path = manifest.root.join(format!("answer.retail_{query}.tsv"));
     let mut rows = csv::ReaderBuilder::new()
@@ -47,12 +92,12 @@ fn exact(
 pub fn run(
     manifest: &Manifest,
     query: &str,
-    mut execute: impl FnMut() -> Result<Vec<Vec<String>>>,
+    mut execute: impl FnMut() -> Result<(Vec<Vec<String>>, TimingBoundary)>,
     reference: Option<Vec<Vec<String>>>,
     conformance_only: bool,
 ) -> Result<Value> {
     let expected = answer(manifest, query)?;
-    let mut warmup = execute()?;
+    let (mut warmup, boundary) = execute()?;
     exact(&expected, &mut warmup, query, manifest.sf, 0)?;
     let conformance = if let Some(reference) = reference {
         // This is the external-target cq-testkit API used by H05. The generic
@@ -72,12 +117,16 @@ pub fn run(
     if !conformance_only {
         for iteration in 1..=MEASURED_RUNS {
             cq_gpu_runtime::take_last_timings();
-            let mut actual = execute()?;
+            let (mut actual, measured_boundary) = execute()?;
+            if measured_boundary != boundary {
+                return Err("benchmark timing boundary changed between iterations".into());
+            }
             let timing = cq_gpu_runtime::take_last_timings()
                 .ok_or("GPU translation published no phase timings")?;
             exact(&expected, &mut actual, query, manifest.sf, iteration)?;
             samples.push(json!({"build_ms": timing.build_ms, "kernels_ms": timing.kernel_ms,
-                "dedup_ms": timing.dedup_ms, "total_ms": timing.total_ms, "wall_ms": timing.wall_ms}));
+                "dedup_ms": timing.dedup_ms, "download_ms": timing.download_ms,
+                "total_ms": timing.total_ms, "wall_ms": timing.wall_ms}));
         }
     }
     let median = |key: &str| -> Value {
@@ -93,8 +142,8 @@ pub fn run(
     };
     Ok(
         json!({"status": "ran", "exact": true, "answer_rows": expected.len(), "conformance": conformance,
-        "median_ms": {"total": median("total_ms"), "build": median("build_ms"), "kernels": median("kernels_ms"), "dedup": median("dedup_ms")},
-        "samples": samples}),
+        "median_ms": {"total": median("total_ms"), "build": median("build_ms"), "kernels": median("kernels_ms"), "dedup": median("dedup_ms"), "download": median("download_ms")},
+        "timing_boundary": boundary, "samples": samples}),
     )
 }
 
@@ -157,6 +206,28 @@ pub fn table(results: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_terminal_download_is_outside_query_phases() {
+        let stage = cq_gpu_runtime::Timings {
+            build_ms: 2.0, kernel_ms: 3.0, dedup_ms: 1.0,
+            download_ms: 7.0, total_ms: 6.0, wall_ms: 14.0,
+            ..Default::default()
+        };
+        let mut final_stage = Measurement::default();
+        final_stage.add_stage(stage, true);
+        assert_eq!(final_stage.timings.build_ms, 2.0);
+        assert_eq!(final_stage.timings.total_ms, 6.0);
+        assert_eq!(final_stage.timings.download_ms, 7.0);
+        assert_eq!(final_stage.boundary.final_downloads_excluded, 1);
+        let mut intermediate = Measurement::default();
+        intermediate.add_stage(stage, false);
+        assert_eq!(intermediate.timings.build_ms, 9.0);
+        assert_eq!(intermediate.timings.total_ms, 13.0);
+        assert_eq!(intermediate.timings.download_ms, 0.0);
+        assert_eq!(intermediate.boundary.intermediate_downloads_included, 1);
+        assert_eq!(intermediate.timings.wall_ms, final_stage.timings.wall_ms);
+    }
 
     #[test]
     fn filtered_table_keeps_each_mode_and_needs_no_other_scale() {

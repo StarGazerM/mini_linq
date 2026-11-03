@@ -68,6 +68,8 @@ pub struct Stage {
     pub captures: Vec<Ident>,
     pub program: cq_lang_cq::Program,
     pub evidence: cq_lang_sequence::Evidence,
+    /// Checked use fact: this output is terminal and no later stage consumes it.
+    pub final_download: bool,
 }
 
 pub struct Publication {
@@ -308,6 +310,7 @@ impl Parse for Program {
                         captures,
                         program: cq,
                         evidence,
+                        final_download: false,
                     });
                 }
                 "publish" => {
@@ -387,6 +390,17 @@ impl Parse for Program {
                 .is_some_and(|output| output.columns.len() == terminal.projection.len())
                 && terminal.projection.iter().enumerate()
                     .all(|(index, projection)| matches!(projection, Projection::Column(slot) if *slot == index));
+        }
+        for index in 0..program.stages.len() {
+            let name = &program.stages[index].name;
+            let terminal = program.terminal.iter().any(|output| output.stage == *name);
+            let consumed = program.publications.iter().any(|publication| {
+                publication.stage == *name
+                    && program.stages.iter().any(|stage| {
+                        stage.inputs.iter().any(|(_, producer)| *producer == publication.name)
+                    })
+            });
+            program.stages[index].final_download = terminal && !consumed;
         }
         Ok(program)
     }
@@ -501,6 +515,20 @@ impl Program {
             self.stage_index(&publication.stage)?;
         }
         for (index, stage) in self.stages.iter().enumerate() {
+            let terminal = self.terminal.iter().any(|output| output.stage == stage.name);
+            let mut consumers = 0;
+            for publication in &self.publications {
+                if publication.stage == stage.name {
+                    consumers += self.stages.iter().filter(|consumer| {
+                        consumer.inputs.iter().any(|(_, producer)| *producer == publication.name)
+                    }).count();
+                }
+            }
+            if stage.final_download && (!terminal || consumers != 0)
+                || !stage.final_download && terminal && consumers == 0
+            {
+                return Err(format!("invalid download timing use for stage {}", stage.name).into());
+            }
             let mut bound = BTreeSet::new();
             for (name, producer) in &stage.inputs {
                 if !bound.insert(name.to_string()) {
@@ -840,7 +868,7 @@ impl ToTokens for Program {
             quote!(operand #name: #ty = #kind { #expression };)
         });
         let stages = self.stages.iter().map(|stage| {
-            let Stage { name, inputs, captures, program, evidence } = stage;
+            let Stage { name, inputs, captures, program, evidence, final_download: _ } = stage;
             let inputs = inputs.iter().map(|(input, producer)| quote!(#input = #producer;));
             let facts = &evidence.facts;
             quote!(stage #name { inputs { #(#inputs)* } captures [#(#captures),*]; evidence { #(#facts)* } cq { #program } })
@@ -907,6 +935,10 @@ mod tests {
             );
             assert_eq!(program.stages.len(), roundtrip.stages.len(), "{name}");
         }
+        let mut program = Program::import(simple()).unwrap();
+        assert!(program.stages[0].final_download);
+        program.stages[0].final_download = false;
+        assert!(program.check().is_err());
     }
 
     #[test]
@@ -1028,6 +1060,8 @@ mod tests {
                 .unwrap(),
             Some(0)
         );
+        assert!(!h13.stages[0].final_download);
+        assert!(h13.stages[1].final_download);
         let host = h13.preprocessing_tokens().unwrap().to_string();
         assert_eq!(host.matches("from_dense_keys").count(), 1);
         assert_eq!(host.matches("split_once").count(), 1);

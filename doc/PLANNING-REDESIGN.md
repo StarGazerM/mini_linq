@@ -1817,14 +1817,30 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
   h10 1.553 and h03 1.264. At SF10 they cover 11, led by h09 2.340,
   h21_positive 2.088, h10 1.609 and h03 1.221. SF1 h08 1.048 and d72_inner
   1.025 lack same-source layout controls and remain unconfirmed apparent
-  slowdowns. The 2026-11-02 GPU TPC-H current timing includes final answer
-  download whereas reference excludes it; this known boundary bug is fixed
-  separately and biases cur/ref ratios against current. Not investigated here; the
-  h09, h21_positive and h10 growth is in build. An earlier pod gives SF1 1.169
-  [1.116, 1.217] with the same outliers. `doop-gpu` xalan/batik (second
-  pod, 5 pairs, 26/26 exact) gives fixpoint xalan 0.239 [0.150, 0.599] and
-  batik 0.724 [0.482, 0.836], with no CI above 1. These are low confidence:
-  fresh-process spread was up to 10x on the same binary, cause not
-  established. Live SRDatalog and `srd-doop-gpu` are not part of the
+  slowdowns. Subsequent source inspection found the boundary mismatch at
+  `6a4f52bf`: current charges terminal host download to build/total but
+  reference excludes it. Historical samples cannot separate that component,
+  so those ratios are not confirmed execution regressions. An earlier pod
+  gives SF1 1.169 [1.116, 1.217] with the same outliers.
+  `doop-gpu` xalan/batik (second pod, 5 pairs, 26/26 exact) gives fixpoint
+  xalan 0.239 [0.150, 0.599] and batik 0.724 [0.482, 0.836], with no CI above 1.
+  These are low confidence: fresh-process spread was up to 10x on the same
+  binary, cause not established. Live SRDatalog and `srd-doop-gpu` are not part of the
   pod run (no SRD toolchain or prepared corpus there), so the Oct 26 SRD
   fullclock ranges remain the only, historical, SRD reference.
+
+- GPU TPC-H boundary repair and follow-up (2026-11-03): final host downloads
+  now populate `download_ms`, outside build/total, with checked terminal-use
+  facts and execution-populated boundary metadata. Three exact rotating local
+  full-SF1 pairs, repeated with exclusive CPU timing locks for small effects,
+  give corrected 26-query geomean **0.9475 [0.9461, 0.9489]** against `c1b75718`.
+  H09 0.9740, H21 0.9935, H10 1.0021; H03 remains 1.1408. These are exploratory
+  three-pair results, not five-pair acceptance claims. The H03 adjacent-commit
+  diff (`17a14b93`→`c82e9abf`) removes dead zero stores but retains a five-i64
+  publication stride for two live Lineitem fields; its final lookup kernel is
+  native-instruction-identical. Profiling localizes growth to the publication
+  write pass, not full-width membership. Compact checked publication layouts
+  are a separate change. Evidence:
+  `experiments/gpu/compare/gpu-tpch-boundary.results.json`; timing: 480.244 s
+  rotating + 214.277 s exclusive, lock/launcher 0.082 + 96.389 s. Historical
+  biased ratios above are retained as evidence, not corrected by subtraction.

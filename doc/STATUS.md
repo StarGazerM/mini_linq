@@ -33,6 +33,10 @@ DOOP GPU `doop-gpu` fixpoint (pod, 26/26 exact): xalan 0.239
 [0.150, 0.599], batik 0.724 [0.482, 0.836]. These are low confidence:
 fresh-process spread reached 10x, cause not established. No live SRDatalog
 comparison is possible on the pod.
+The GPU TPC-H ratios above are boundary-confounded, not confirmed execution
+regressions: current charges terminal downloads to build/total and reference
+does not. Separate download accounting restores a comparable boundary; the
+historical samples lack the download field needed for arithmetic correction.
 
 ## Where we are
 

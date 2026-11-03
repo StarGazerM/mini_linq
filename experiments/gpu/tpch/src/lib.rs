@@ -190,7 +190,10 @@ pub fn run(
             "data_root": data_root(),
             "warmup_runs": benchmark::WARMUP_RUNS,
             "measured_runs": benchmark::MEASURED_RUNS,
-            "timing": "Median of per-run stage sums: CUDA phase events for device stages, elapsed execution for host-planned stages; initial input loading, final answer download and comparison excluded",
+            "timing": results.iter().map(|row| json!({
+                "query": row["query"], "mode": row["mode"], "sf": row["sf"],
+                "boundary": row["timing_boundary"],
+            })).collect::<Vec<_>>(),
             "source": "CPU retail_kernel and standalone compile! CQ ASTs imported with include_str; only manifest storage types, date/decimal encodings and dictionary literals adapted",
             "results": results,
             "table_markdown": table,

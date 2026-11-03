@@ -1098,6 +1098,7 @@
    "worst": "batik"
   },
   "gpu_tpch_advised:sf1": {
+   "boundary_mismatch": "At 6a4f52bf terminal host download entered build/total accounting. Historical samples lack separate download time; ratios are not like-for-like execution comparisons.",
    "best": "h12",
    "geomean": {
     "ci95": [
@@ -1126,7 +1127,7 @@
      ],
      "median_base": 1.5348800420761108,
      "median_new": 1.672573035484314,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0897092864807576,
      "resamples": 3125,
      "unit": "ms"
@@ -1138,7 +1139,7 @@
      ],
      "median_base": 1.801408052444458,
      "median_new": 1.8030339469528198,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0009025686912831,
      "resamples": 3125,
      "unit": "ms"
@@ -1150,7 +1151,7 @@
      ],
      "median_base": 2.516832113265991,
      "median_new": 2.5800180112457274,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.025105328896071,
      "resamples": 3125,
      "unit": "ms"
@@ -1162,7 +1163,7 @@
      ],
      "median_base": 1.9612159729003906,
      "median_new": 2.173548956695557,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.108265987392073,
      "resamples": 3125,
      "unit": "ms"
@@ -1174,7 +1175,7 @@
      ],
      "median_base": 38.07344055175781,
      "median_new": 38.114560247802736,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0010800099872514,
      "resamples": 3125,
      "unit": "ms"
@@ -1186,7 +1187,7 @@
      ],
      "median_base": 13.94621500302124,
      "median_new": 11.74754806387329,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.8423466912942587,
      "resamples": 3125,
      "unit": "ms"
@@ -1198,7 +1199,7 @@
      ],
      "median_base": 1.1910400390625,
      "median_new": 1.5052830323562623,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.2638391514873937,
      "resamples": 3125,
      "unit": "ms"
@@ -1210,7 +1211,7 @@
      ],
      "median_base": 0.6098560094833374,
      "median_new": 0.6989299904823303,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.146057396522919,
      "resamples": 3125,
      "unit": "ms"
@@ -1222,7 +1223,7 @@
      ],
      "median_base": 3.6497280597686768,
      "median_new": 3.92568895501709,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0756113580872937,
      "resamples": 3125,
      "unit": "ms"
@@ -1234,7 +1235,7 @@
      ],
      "median_base": 1.3747520446777344,
      "median_new": 1.3344470338974,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9706819779345863,
      "resamples": 3125,
      "unit": "ms"
@@ -1246,7 +1247,7 @@
      ],
      "median_base": 0.10092800110578537,
      "median_new": 0.1224900025677681,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.213637456659654,
      "resamples": 3125,
      "unit": "ms"
@@ -1258,7 +1259,7 @@
      ],
      "median_base": 1.336959958076477,
      "median_new": 1.4719340306854247,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1009559574268317,
      "resamples": 3125,
      "unit": "ms"
@@ -1270,7 +1271,7 @@
      ],
      "median_base": 1.4544320106506348,
      "median_new": 1.5907319648742675,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0937135274976928,
      "resamples": 3125,
      "unit": "ms"
@@ -1282,7 +1283,7 @@
      ],
      "median_base": 1.6356159448623657,
      "median_new": 1.714727972755432,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0483683398548205,
      "resamples": 3125,
      "unit": "ms"
@@ -1294,7 +1295,7 @@
      ],
      "median_base": 2.167680025100708,
      "median_new": 5.470559925384521,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 2.523693470455984,
      "resamples": 3125,
      "unit": "ms"
@@ -1306,7 +1307,7 @@
      ],
      "median_base": 3.0419199466705322,
      "median_new": 4.724754111038208,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.5532144809430588,
      "resamples": 3125,
      "unit": "ms"
@@ -1318,7 +1319,7 @@
      ],
      "median_base": 2.1010239347815514,
      "median_new": 2.0279040206223726,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9651979623131799,
      "resamples": 3125,
      "unit": "ms"
@@ -1330,7 +1331,7 @@
      ],
      "median_base": 3.855072110891342,
      "median_new": 1.7596800290048122,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.4564583951707071,
      "resamples": 3125,
      "unit": "ms"
@@ -1342,7 +1343,7 @@
      ],
      "median_base": 5.753311902284622,
      "median_new": 6.497952103614807,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1294280953261877,
      "resamples": 3125,
      "unit": "ms"
@@ -1354,7 +1355,7 @@
      ],
      "median_base": 1.108587968236208,
      "median_new": 1.063617984020114,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9594348978118151,
      "resamples": 3125,
      "unit": "ms"
@@ -1366,7 +1367,7 @@
      ],
      "median_base": 0.6858240067958832,
      "median_new": 0.6269439905881882,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9141470470204479,
      "resamples": 3125,
      "unit": "ms"
@@ -1378,7 +1379,7 @@
      ],
      "median_base": 8.920479893684387,
      "median_new": 9.455904424190521,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0600219424164847,
      "resamples": 3125,
      "unit": "ms"
@@ -1390,7 +1391,7 @@
      ],
      "median_base": 1.0753920078277588,
      "median_new": 1.0082929921951294,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9376050638797602,
      "resamples": 3125,
      "unit": "ms"
@@ -1402,7 +1403,7 @@
      ],
      "median_base": 4.821568012237549,
      "median_new": 4.787775993347168,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9929914876644664,
      "resamples": 3125,
      "unit": "ms"
@@ -1414,7 +1415,7 @@
      ],
      "median_base": 3.1549758911132812,
      "median_new": 6.5153910224304195,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 2.0651159461416246,
      "resamples": 3125,
      "unit": "ms"
@@ -1426,7 +1427,7 @@
      ],
      "median_base": 0.4944320023059845,
      "median_new": 0.488627995967865,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9882612648229683,
      "resamples": 3125,
      "unit": "ms"
@@ -1450,6 +1451,7 @@
    "worst": "h09"
   },
   "gpu_tpch_advised:sf10": {
+   "boundary_mismatch": "At 6a4f52bf terminal host download entered build/total accounting. Historical samples lack separate download time; ratios are not like-for-like execution comparisons.",
    "best": "h11",
    "geomean": {
     "ci95": [
@@ -1479,7 +1481,7 @@
      ],
      "median_base": 13.935472011566162,
      "median_new": 15.016580918182374,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0775796403393378,
      "resamples": 256,
      "unit": "ms"
@@ -1491,7 +1493,7 @@
      ],
      "median_base": 10.825167655944824,
      "median_new": 10.683924308288574,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9869523177704612,
      "resamples": 256,
      "unit": "ms"
@@ -1503,7 +1505,7 @@
      ],
      "median_base": 16.12343978881836,
      "median_new": 17.6775199776001,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.096386392056334,
      "resamples": 256,
      "unit": "ms"
@@ -1515,7 +1517,7 @@
      ],
      "median_base": 19.71608066558838,
      "median_new": 21.35474032409668,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.083112850180632,
      "resamples": 256,
      "unit": "ms"
@@ -1527,7 +1529,7 @@
      ],
      "median_base": 367.8294219970703,
      "median_new": 368.24128034374996,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.001119699300952,
      "resamples": 256,
      "unit": "ms"
@@ -1539,7 +1541,7 @@
      ],
      "median_base": 135.15398624450683,
      "median_new": 99.3414313981781,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.7350240578066244,
      "resamples": 256,
      "unit": "ms"
@@ -1551,7 +1553,7 @@
      ],
      "median_base": 13.609407901763916,
      "median_new": 16.617892037628174,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.2210591494927805,
      "resamples": 256,
      "unit": "ms"
@@ -1563,7 +1565,7 @@
      ],
      "median_base": 5.846719980239868,
      "median_new": 6.805022870452881,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1639043589314666,
      "resamples": 256,
      "unit": "ms"
@@ -1575,7 +1577,7 @@
      ],
      "median_base": 43.983726501464844,
      "median_new": 44.07814093713379,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.002146576544982,
      "resamples": 256,
      "unit": "ms"
@@ -1587,7 +1589,7 @@
      ],
      "median_base": 8.765583992004395,
      "median_new": 10.23408506439209,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.167530317857567,
      "resamples": 256,
      "unit": "ms"
@@ -1599,7 +1601,7 @@
      ],
      "median_base": 1.0135679841041565,
      "median_new": 1.0394029718971252,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0254891513920528,
      "resamples": 256,
      "unit": "ms"
@@ -1611,7 +1613,7 @@
      ],
      "median_base": 11.605567932128906,
      "median_new": 12.707554958251954,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0949533045317241,
      "resamples": 256,
      "unit": "ms"
@@ -1623,7 +1625,7 @@
      ],
      "median_base": 11.684031963348389,
      "median_new": 12.698551606048584,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0868295846744205,
      "resamples": 256,
      "unit": "ms"
@@ -1635,7 +1637,7 @@
      ],
      "median_base": 20.5546875,
      "median_new": 20.072128889709475,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.976523184296014,
      "resamples": 256,
      "unit": "ms"
@@ -1647,7 +1649,7 @@
      ],
      "median_base": 25.348095893859863,
      "median_new": 59.30607581872559,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 2.3396659089131604,
      "resamples": 256,
      "unit": "ms"
@@ -1659,7 +1661,7 @@
      ],
      "median_base": 28.450559616088867,
      "median_new": 45.76563997521973,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.608602452562625,
      "resamples": 256,
      "unit": "ms"
@@ -1671,7 +1673,7 @@
      ],
      "median_base": 12.78163200430572,
      "median_new": 5.319215947762132,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.41616093672312415,
      "resamples": 256,
      "unit": "ms"
@@ -1683,7 +1685,7 @@
      ],
      "median_base": 28.885439958423376,
      "median_new": 12.220879897475243,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.42308096795705796,
      "resamples": 256,
      "unit": "ms"
@@ -1695,7 +1697,7 @@
      ],
      "median_base": 117.54156637191772,
      "median_new": 106.59273701906204,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9068514254930713,
      "resamples": 256,
      "unit": "ms"
@@ -1707,7 +1709,7 @@
      ],
      "median_base": 6.776095017456472,
      "median_new": 6.616766588442802,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9764866890733955,
      "resamples": 256,
      "unit": "ms"
@@ -1719,7 +1721,7 @@
      ],
      "median_base": 2.639295995235443,
      "median_new": 2.1985760033130646,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.8330160797735522,
      "resamples": 256,
      "unit": "ms"
@@ -1731,7 +1733,7 @@
      ],
      "median_base": 90.19603514671326,
      "median_new": 89.92972588539124,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9970474393814668,
      "resamples": 256,
      "unit": "ms"
@@ -1743,7 +1745,7 @@
      ],
      "median_base": 10.69273567199707,
      "median_new": 8.96804423110962,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.8387043789547514,
      "resamples": 256,
      "unit": "ms"
@@ -1755,7 +1757,7 @@
      ],
      "median_base": 47.85579037666321,
      "median_new": 47.94247877597809,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0018114505816866,
      "resamples": 256,
      "unit": "ms"
@@ -1767,7 +1769,7 @@
      ],
      "median_base": 27.065168380737305,
      "median_new": 56.52039989764404,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 2.088307713535988,
      "resamples": 256,
      "unit": "ms"
@@ -1779,7 +1781,7 @@
      ],
      "median_base": 2.3572800159454346,
      "median_new": 2.68519297265625,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1391064932857793,
      "resamples": 256,
      "unit": "ms"
@@ -1801,6 +1803,7 @@
    "worst": "h09"
   },
   "gpu_tpch_advised:sf1_cross_pod_check": {
+   "boundary_mismatch": "At 6a4f52bf terminal host download entered build/total accounting. Historical samples lack separate download time; ratios are not like-for-like execution comparisons.",
    "best": "h12",
    "geomean": {
     "ci95": [
@@ -1827,7 +1830,7 @@
      ],
      "median_base": 1.562656044960022,
      "median_new": 1.833620009033203,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1733996197993226,
      "resamples": 3125,
      "unit": "ms"
@@ -1839,7 +1842,7 @@
      ],
      "median_base": 1.8664640188217163,
      "median_new": 1.9294309911117553,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0337359690061367,
      "resamples": 3125,
      "unit": "ms"
@@ -1851,7 +1854,7 @@
      ],
      "median_base": 2.4781761169433594,
      "median_new": 2.908742965789795,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1737434421640327,
      "resamples": 3125,
      "unit": "ms"
@@ -1863,7 +1866,7 @@
      ],
      "median_base": 2.0048320293426514,
      "median_new": 2.3185949626617433,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1565033522643635,
      "resamples": 3125,
      "unit": "ms"
@@ -1875,7 +1878,7 @@
      ],
      "median_base": 38.186561584472656,
      "median_new": 38.069678138671875,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9969391471514862,
      "resamples": 3125,
      "unit": "ms"
@@ -1887,7 +1890,7 @@
      ],
      "median_base": 12.960077034118653,
      "median_new": 16.930494437561034,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.3063575465631783,
      "resamples": 3125,
      "unit": "ms"
@@ -1899,7 +1902,7 @@
      ],
      "median_base": 1.224287986755371,
      "median_new": 1.619640006515503,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.3229240375117137,
      "resamples": 3125,
      "unit": "ms"
@@ -1911,7 +1914,7 @@
      ],
      "median_base": 0.6209279894828796,
      "median_new": 0.8865019984931946,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.4277050052639597,
      "resamples": 3125,
      "unit": "ms"
@@ -1923,7 +1926,7 @@
      ],
      "median_base": 3.7331199645996094,
      "median_new": 3.9189361039733885,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0497750249485243,
      "resamples": 3125,
      "unit": "ms"
@@ -1935,7 +1938,7 @@
      ],
      "median_base": 1.4474560022354126,
      "median_new": 1.4490039971847535,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0010694590695333,
      "resamples": 3125,
      "unit": "ms"
@@ -1947,7 +1950,7 @@
      ],
      "median_base": 0.10396800190210342,
      "median_new": 0.13083000186443328,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.2583679542829262,
      "resamples": 3125,
      "unit": "ms"
@@ -1959,7 +1962,7 @@
      ],
      "median_base": 1.3616960048675537,
      "median_new": 1.5502620520324708,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1384788135463892,
      "resamples": 3125,
      "unit": "ms"
@@ -1971,7 +1974,7 @@
      ],
      "median_base": 1.476863980293274,
      "median_new": 1.6864810122833251,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.1419338779922208,
      "resamples": 3125,
      "unit": "ms"
@@ -1983,7 +1986,7 @@
      ],
      "median_base": 1.66486394405365,
      "median_new": 1.8044189904174806,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0838236943398742,
      "resamples": 3125,
      "unit": "ms"
@@ -1995,7 +1998,7 @@
      ],
      "median_base": 2.2611520290374756,
      "median_new": 8.425365908569336,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 3.726138623308684,
      "resamples": 3125,
      "unit": "ms"
@@ -2007,7 +2010,7 @@
      ],
      "median_base": 3.09987211227417,
      "median_new": 5.698025940750123,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.8381487152932448,
      "resamples": 3125,
      "unit": "ms"
@@ -2019,7 +2022,7 @@
      ],
      "median_base": 2.1098239831626415,
      "median_new": 2.034815948456526,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9644482026440527,
      "resamples": 3125,
      "unit": "ms"
@@ -2031,7 +2034,7 @@
      ],
      "median_base": 3.916223980486393,
      "median_new": 1.809599980711937,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.4620777539100778,
      "resamples": 3125,
      "unit": "ms"
@@ -2043,7 +2046,7 @@
      ],
      "median_base": 8.386591672897339,
      "median_new": 9.136512473225594,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0894190190219644,
      "resamples": 3125,
      "unit": "ms"
@@ -2055,7 +2058,7 @@
      ],
      "median_base": 1.2128680107045173,
      "median_new": 1.1847580557394028,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.976823566359223,
      "resamples": 3125,
      "unit": "ms"
@@ -2067,7 +2070,7 @@
      ],
      "median_base": 0.7508159875869751,
      "median_new": 0.6498239785432816,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.8654903322340421,
      "resamples": 3125,
      "unit": "ms"
@@ -2079,7 +2082,7 @@
      ],
      "median_base": 8.959071516990662,
      "median_new": 8.949311554431915,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9989106055755625,
      "resamples": 3125,
      "unit": "ms"
@@ -2091,7 +2094,7 @@
      ],
      "median_base": 1.0915199518203735,
      "median_new": 1.0411920547866822,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9538919128782233,
      "resamples": 3125,
      "unit": "ms"
@@ -2103,7 +2106,7 @@
      ],
      "median_base": 4.882751941680908,
      "median_new": 4.8697919845581055,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 0.9973457678625507,
      "resamples": 3125,
      "unit": "ms"
@@ -2115,7 +2118,7 @@
      ],
      "median_base": 3.2554879188537598,
      "median_new": 9.017989955978393,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 2.7700885952461407,
      "resamples": 3125,
      "unit": "ms"
@@ -2127,7 +2130,7 @@
      ],
      "median_base": 0.5083839893341064,
      "median_new": 0.5230880131626129,
-     "metric": "cq-gpu-tpch median total_ms (stage sums; final answer download excluded on both revisions)",
+     "metric": "cq-gpu-tpch median total_ms (BOUNDARY MISMATCH: current includes terminal host download; reference excludes it; biased against current)",
      "ratio": 1.0289230662983035,
      "resamples": 3125,
      "unit": "ms"

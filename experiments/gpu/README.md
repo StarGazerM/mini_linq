@@ -1052,7 +1052,7 @@ The comparison checked duplicate-free exported counts as well as tuple hashes.
 on a RunPod RTX 6000 Ada ([`compare/pod_bench_2026_11_02.py`](compare/pod_bench_2026_11_02.py)),
 because a foreign tenant occupied the local GPU. Every query was exact. SF1
 geomean was **1.085 [1.033, 1.120]** (5 pairs) and SF10 **1.023 [1.000, 1.054]**
-(4 pairs). Named regressions: h09 2.52/2.34, h21_positive 2.07/2.09, h10
+(4 pairs). Unadjusted increases: h09 2.52/2.34, h21_positive 2.07/2.09, h10
 1.55/1.61, h03 1.26/1.22, h04 1.15/1.16. Improvements: h12 0.456/0.423, h11 SF10
 0.416, h02 SF10 0.735. A second pod session timed `doop-gpu` xalan/batik
 (26/26 exact against `doop-mini`). Fixpoint cur/ref was xalan 0.239 [0.150,
@@ -1062,6 +1062,10 @@ cause not established. Live SRDatalog and `srd-doop-gpu` were not part of the po
 runs (no SRD toolchain or prepared corpus there). The `srd-doop-gpu` numbers above
 and the SRD ranges below remain the latest records for that workload.
 
+These historical ratios use mismatched boundaries: current includes terminal
+host downloads in build/total, while the reference excludes them. They are
+biased against current and do not establish execution regressions. Current
+reports separate final `download_ms` and expose executed stage accounting.
 For context only, the older SRDatalog fullclock reference ranges are
 **1.008194–1.021628 s xalan / 1.818340–2.101104 s batik**, retained in
 [`srd_query_xalan_batik.results.json`](compare/srd_query_xalan_batik.results.json)

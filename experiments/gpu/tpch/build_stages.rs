@@ -95,6 +95,7 @@ pub fn compile(
         let (code, mut artifact) = compile_stage(&kernel, manifest, &pipeline, &publications)?;
         artifact["stage"] = json!(index);
         artifact["cpu_query"] = json!(kernel.cpu_query().to_string());
+        artifact["final_download"] = json!(stage.final_download);
         artifact["dependencies"] = json!(
             kernel
                 .published
@@ -121,16 +122,12 @@ pub fn compile(
         let result = format_ident!("result_{index}");
         modules.push(quote!(mod #module { #code }));
         loads.push(quote!(let #data = #module::load(manifest, pool.clone())?;));
+        let final_download = stage.final_download;
         device.push(quote! {
             cq_gpu_runtime::take_last_timings();
             let #result = #module::execute(&#data, #(&#dependencies),*)?;
             let timing = cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
-            total.upload_ms += timing.upload_ms;
-            total.build_ms += timing.build_ms;
-            total.kernel_ms += timing.kernel_ms;
-            total.dedup_ms += timing.dedup_ms;
-            total.total_ms += timing.total_ms;
-            total.wall_ms += timing.wall_ms;
+            measurement.add_stage(timing, #final_download);
         });
         sequential.push(quote!(let #result = #module::sequential(&#data, #(&#dependencies),*)?;));
     }
@@ -143,7 +140,7 @@ pub fn compile(
         let result = format_ident!("result_{index}");
         // DECODE P: only terminal stage results download logical tuples for final user-answer composition.
         let download = if publication_facts[index].resident() {
-            quote!(#result.to_host()?)
+            quote!(measurement.final_download(|| #result.to_host())?)
         } else {
             quote!(#result)
         };
@@ -199,11 +196,11 @@ pub fn compile(
                     Some(answer)
                 } else { None };
                 crate::benchmark::run(manifest, query, || {
-                    let mut total = cq_gpu_runtime::Timings::default();
+                    let mut measurement = crate::benchmark::Measurement::default();
                     #(#device)*
                     #(#device_terminal)*
-                    cq_gpu_runtime::publish_timings(total);
-                    Ok(answer)
+                    cq_gpu_runtime::publish_timings(measurement.timings);
+                    Ok((answer, measurement.boundary))
                 }, reference, conformance_only)
             }
         },
