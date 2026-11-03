@@ -193,9 +193,10 @@ def main():
             if source.suffix in ('.py', '.sh'):
                 shutil.copy2(source, stage / 'tools' / source.name)
         # Prepare the downloader locally as well; the pod never pip-installs.
+        # typer-slim does not pull click, which the hf CLI imports.
         subprocess.run(['python3', '-m', 'pip', 'install', '--disable-pip-version-check',
                         '--only-binary=:all:', '--target', str(stage / 'hf'),
-                        'huggingface_hub==1.1.5'], check=True)
+                        'huggingface_hub==1.1.5', 'click'], check=True)
         manifest['steps'] = [] if args.no_tests else [
             dict(name='crates', commands=manifest['tests']),
             dict(name='tpch-h05-sf10-ceiling', argv=['bin/cq-gpu-tpch', '{results}/gpu-gate-h05-sf10.json',
