@@ -111,11 +111,12 @@ The DOOP pod also lacks both the live SRD toolchain and the prepared corpus for
   grouped containers use the recorded fast hasher.
 - Join filters (SQL Server bitmaps): eligible probes or semijoins into filtered
   builds push exact key sets to scans reached through their probe spines.
-  Structures records filter candidates and the abandonment policy as
-  `abandon P of B` (default `35` for a positional lineage base). The checker
-  validates the percentage and base; the runtime applies that recorded threshold
-  to retained distinct keys versus base occurrences. Without a recorded policy,
-  filters never abandon. The exact probe still runs.
+  Structures records filter candidates and one activation policy per filter:
+  `policy abandon P of B keys key_count` (default `35` for a positional lineage
+  base) or `policy always`. The checker validates the percentage, base and key
+  source; the runtime applies that recorded threshold to exact distinct keys
+  versus base occurrences. `always` filters never abandon. The exact probe
+  still runs.
 - Probes: Swiss-table `HashIndex`; batched (128) prefetched probes on scan
   spines, scalar elsewhere; no per-row `Rc`.
 - Back end (`doc/formal/backend.tex`): three recorded layers over one

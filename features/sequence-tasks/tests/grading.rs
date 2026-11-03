@@ -2123,7 +2123,7 @@ fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
             let mut declared = vec![opaque.clone()];
             declared.extend(declarations());
             candidate.structures.structures.declare(&declared).unwrap();
-            cq_lang_sequence::structures::record_join_filter_abandon(&mut candidate.structures).unwrap();
+            cq_lang_sequence::structures::record_join_filter_policies(&mut candidate.structures).unwrap();
             // Structure checks validate the covering relation, key and declared
             // support, not the opaque provider spelling. Construction-attached
             // sidecar and lookup obligations are Rust's; no scalar ABI is guessed.

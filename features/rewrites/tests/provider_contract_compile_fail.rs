@@ -476,7 +476,7 @@ mini_linq::passes::sequence! {
                 l host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r = @radix_run as ::cq_storage::RadixRun<_,_> [k] supports [keys] items rows;
-                l join_filter = @dense_membership as ::cq_storage::DenseMembership<i64,64> build r [k] covering joined marker MarkerAlias;
+                l join_filter = @dense_membership as ::cq_storage::DenseMembership<i64,64> build r [k] covering joined marker MarkerAlias policy always;
                 out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
             }
         }.map(|(k,p,v)| (*k,*p,*v)).collect::<Vec<_>>().into_iter()

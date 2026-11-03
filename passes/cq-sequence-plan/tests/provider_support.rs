@@ -65,7 +65,7 @@ fn catalog_retyping_preserves_live_support_obligations() {
         ),
         ("p stage = batch 4 expand;", Support::Expand),
         (
-            "l join_filter = @filter as Filter build r [x] covering s marker ::cq_load::ColumnAt<0>;",
+            "l join_filter = @filter as Filter build r [x] covering s marker ::cq_load::ColumnAt<0> policy always;",
             Support::Keys,
         ),
     ] {

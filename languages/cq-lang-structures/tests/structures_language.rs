@@ -1297,7 +1297,7 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
             r host scan = @scan as Scan [];
             r = @index as ::custom::Index<_,_> [x] supports [keys];
             p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows;
-            l join_filter = @filter as Filter  build r [x] covering p marker ::cq_load::ColumnAt<0>;
+            l join_filter = @filter as Filter  build r [x] covering p marker ::cq_load::ColumnAt<0> policy always;
         }
     };
     let facts = check(&source).unwrap();

@@ -57,14 +57,16 @@ it automatically. Explicit `attached_filter` advice uses incremental
 `BuildSidecar` builders through `BuildWithSidecar`, without projected-key staging.
 The built-in attached token spells `AttachedDenseMembership`; the default retains
 `DenseMembership` and its original probe shape. Rustc checks the `OrderKey` bound.
-Default selection retains main's `abandon P of B` policy, exact
-`Keys::key_count` activation and ordinary Build. P7.2 optional-statistic
-activation is authored-only: `abandon P of B using ACCESSOR` is checked against
-the selected provider's exact Keys declaration. An unavailable value selects
-identity without recounting; widened products avoid overflow. Authored attached
-construction precedes activation, and borrowed views allocate no key staging.
-The activation-enabled candidate lost on H05/H21/d72; its twenty paired ratios
-and layout controls are recorded in doc/PLANNING-REDESIGN.md P7, not promoted.
+Default selection records one policy per filter: main's
+`policy abandon P of B keys key_count` (exact `Keys::key_count` activation and
+ordinary Build), or `policy always` without a positional base. P7.2
+optional-statistic activation is authored-only: `keys ACCESSOR` is checked
+against the selected provider's exact Keys declaration. An unavailable value
+selects identity without recounting; widened products avoid overflow. Authored
+attached construction precedes activation, and borrowed views allocate no key
+staging. The activation-enabled candidate lost on H05/H21/d72; its twenty paired
+ratios and layout controls, and the P7.3 census (no departure from this recorded
+policy), are in doc/PLANNING-REDESIGN.md P7.
 `STR-Construction` records ordinary versus statistic construction with independent
 row/max-group demand bits, checked against `statistics_build` support and matching
 immutable publications. Printers consume that record, never discover protocol

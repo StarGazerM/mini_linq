@@ -948,7 +948,7 @@ impl<'a> Context<'a> {
             let finalize_filters = selected_filters.iter().any(|(_, _, filter)| {
                 let facts = self.analysis.facts(&filter.provider);
                 facts.attached_filter || (!facts.borrowed_filter
-                    && filter.abandon.as_ref().is_some_and(|policy| policy.statistic.is_some()))
+                    && filter.policy.statistic().is_some())
             });
             let routed = parts
                 .as_ref()
@@ -1096,10 +1096,9 @@ impl<'a> Context<'a> {
                 })
             };
             let build = if routed.is_some() {
-                if let Some(access) = selected_filters.iter().find_map(|(_, _, filter)|
-                    filter.abandon.as_ref().and_then(|policy| policy.statistic.as_ref()))
+                if let Some(accessor) = selected_filters.iter().find_map(|(_, _, filter)|
+                    filter.policy.statistic())
                 {
-                    let accessor = &access.accessor;
                     if finalize_filters {
                         quote!({
                             let (__cq_index, __cq_filters) = #build;
@@ -1185,25 +1184,25 @@ impl<'a> Context<'a> {
                     statements.push(syn::parse_quote!(::cq_storage::provider_contract::require_keys(#structure);));
                 }
                 let key_ty = self.infos[name].types[&key].clone();
-                // Formal rule IF-JoinFilterAbandon: the recorded abandon policy
-                // (Structures `abandon P of B using accessor`) is only emitted.
-                let filter_value = match &filter.abandon {
+                // Formal rule IF-JoinFilterAbandon: the recorded policy (Structures
+                // `policy always | abandon P of B keys S`) is only emitted.
+                let filter_value = match filter.policy.abandon() {
                     Some(abandon) => {
                         let host = Self::positional_host(&symbol_name(&abandon.base));
                         let percent = &abandon.percent;
-                        if let Some(access) = &abandon.statistic {
-                            let accessor = &access.accessor;
-                            quote!(#structure.#accessor().is_some_and(|__cq_kept|
-                                ::cq_storage::selective_build_statistic(
-                                    __cq_kept, ::cq_storage::PositionalRows::len(#host), #percent,
-                                )
-                            ).then(|| #value))
-                        } else {
-                            quote!(::cq_storage::selective_build(
+                        match &abandon.keys {
+                            structures::KeySource::Statistic(accessor) => {
+                                quote!(#structure.#accessor().is_some_and(|__cq_kept|
+                                    ::cq_storage::selective_build_statistic(
+                                        __cq_kept, ::cq_storage::PositionalRows::len(#host), #percent,
+                                    )
+                                ).then(|| #value))
+                            }
+                            structures::KeySource::KeyCount(_) => quote!(::cq_storage::selective_build(
                                 ::cq_storage::Keys::key_count(#structure),
                                 ::cq_storage::PositionalRows::len(#host),
                                 #percent,
-                            ).then(|| #value))
+                            ).then(|| #value)),
                         }
                     }
                     None => quote!(::core::option::Option::Some(#value)),

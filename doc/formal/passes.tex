@@ -1232,20 +1232,23 @@ A scan read before some covering provider is built (for example a retained
 host publication ordered ahead of that build) applies only the filters already
 built: an omitted filter is the trivial conservative filter that passes every
 key, so the covering exact operators still decide membership.
-\textsc{SEL-JoinFilterAbandon} records every filter's abandon policy
-\code{abandon 35 of }$B$\code{ using stat\_keys} from final positional bases,
-where $B$ is its build's positional lineage base. The accessor names the selected
-provider's declared exact Keys statistic. The checker validates this declaration,
-base and percentage without rerunning selection; no base means no abandon policy.
-\textsc{IF-JoinFilterAbandon} carries out the recorded policy at runtime:
-the recorded accessor returns \code{Option<u64>}; absence selects identity,
-not a \code{Keys::key\_count} recount. Present build keys are compared with the
-recorded population using \code{u128} products of \code{u64} counts.
-An abandoned filter passes every key and skips default projected construction.
-Explicit attached construction observes keys before activation; abandonment
-does not promise to recover that construction cost. The projected route2 default
-targets timing neutrality; initial attached-default and direct-bitmap repair
-regressions were not promoted, and no final timing acceptance is claimed.
+\textsc{SEL-FilterPolicy} records every filter's one policy from final
+positional bases: \code{policy abandon 35 of }$B$\code{ keys }$S$ when its
+build has a positional lineage base $B$, otherwise \code{policy always}. The key
+source $S$ is \code{key\_count} (\code{Keys::key\_count}, constant cost, which
+completes a deferred build), or the covering provider's declared exact Keys
+statistic accessor when authored advice selected a borrowed or attached
+realization. This measured incumbent is the only automatic policy. The P7.3 cost
+rule may only veto it from recorded evidence, and no recorded evidence supports
+a veto: unknown evidence keeps the incumbent. \textsc{STR-FilterPolicy} checks
+the base, percentage and statistic declaration without rerunning selection.
+\textsc{IF-JoinFilterAbandon} carries out the recorded policy at runtime. A recorded
+accessor returns \code{Option<u64>}, and absence selects identity rather than a
+\code{Keys::key\_count} recount; \code{key\_count} is exact. Present build keys are
+compared with the recorded population using \code{u128} products of \code{u64}
+counts. An abandoned filter passes every key and skips default projected
+construction. Explicit attached construction observes keys before activation,
+and abandonment does not promise to recover that construction cost.
 The printer derives no policy; only exact covering operators decide membership.
 \begin{mathpar}
 \Rule{SEL-JoinFilter}{
@@ -1271,17 +1274,20 @@ The printer derives no policy; only exact covering operators decide membership.
  (\mathsf{staticRead}_{\mathsf{keepBlock}}(s))
 }
 
-\Rule{SEL-JoinFilterAbandon}{
+\Rule{SEL-FilterPolicy}{
  \mathsf{joinFilter}(F,b,\ldots)\quad\mathsf{lineageBase}(b)=B\quad
- B\in\mathsf{positionalBases}\quad a=\mathsf{declaredExactKeysAccessor}(b)
+ B\in\mathsf{positionalBases}\\
+ S=\mathsf{declaredExactKeysAccessor}(b)\ \text{if}\ \mathsf{borrowedOrAttached}(F)\
+ \text{else}\ \mathsf{key\_count}
 }{
- \mathsf{abandon}(F)=(35,B,a)
+ \mathsf{policy}(F)=\mathsf{abandon}(35,B,S)
+ \quad\text{otherwise}\ \mathsf{policy}(F)=\mathsf{always}
 }
 
 \Rule{IF-JoinFilterAbandon}{
- \mathsf{abandon}(F)=(p,B,a)\quad
- \bigl(a(\mathsf{index}_b)=\mathsf{None}\ \lor\
- (a(\mathsf{index}_b)=\mathsf{Some}(n)\land 100n>p|B|)\bigr)
+ \mathsf{policy}(F)=\mathsf{abandon}(p,B,S)\quad
+ \bigl(S(\mathsf{index}_b)=\mathsf{None}\ \lor\
+ (S(\mathsf{index}_b)=\mathsf{Some}(n)\land 100n>p|B|)\bigr)
 }{
  F=\top\quad(\forall x.\ F.\mathsf{test}(x))
 }

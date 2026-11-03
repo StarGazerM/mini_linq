@@ -13,6 +13,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P7.3: every join filter records one mandatory `policy` in Structures:
+  `abandon P of B keys key_count`, `abandon P of B keys ACCESSOR` (authored
+  borrowed/attached advice only), or `always`. It replaces the optional
+  `abandon … [using ACCESSOR]` field. SEL-FilterPolicy produces it,
+  STR-FilterPolicy checks it, and the printer emits it unchanged. The veto-only
+  P7.3 cost rule found no departure in the 29 TPC-H kernels or the DOOP rules,
+  so default/radix code is unchanged. Census:
+  `/data/design-notes/p7-3-design.md`.
+
 - Move the shared `bench-check` library/CLI from `tools/bench-check` to
   `testkit/bench-check`, keeping feature consumers within the core dependency
   roots and including the external-consumer check in tooling gates.

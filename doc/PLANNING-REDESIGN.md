@@ -1058,11 +1058,28 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
 
   Exact raw pairs/page faults: `target/p7-repair/paired-final-raw.json`;
   controls use pinned LLD `--shuffle-sections=*=7`. No small speedup is claimed.
-  **P7.3 automatic activation remains design-only:** demand-driven publications,
-  recorded conservative activation/model evidence and identity on unknown,
-  Structures-owned policy and Sequence-owned readiness. Design and GPU runs:
-  `/data/design-notes/p7-next.md`. P7.4 device publication and P7.5 committed-round
-  identities remain separate; this is not completion of all P7.
+  **P7.3 recorded filter policy (veto-only rule, no automatic activation):**
+  every `JoinFilter` carries one mandatory Structures `policy` record:
+  `abandon 35 of B keys key_count` (main's measured incumbent), `keys ACCESSOR`
+  only under authored borrowed/attached advice, or `always` without a positional
+  base (SEL-FilterPolicy, checked by STR-FilterPolicy). This replaces the optional
+  `abandon` field whose absence implied "always". The approved cost rule may only veto
+  the incumbent from recorded evidence (P3.3e counts, filter ranks, P7.1
+  publications), with margin 25. Unknown evidence keeps the incumbent at compile
+  time, and an unavailable statistic is identity at runtime. **Census**
+  (`/data/design-notes/p7-3-design.md`) uses observed compiler output: 297 filter
+  records across all routes, 24 on the default route in 10 kernels, plus DuckDB
+  SF1 cardinalities.
+  - **No departure anywhere:** 0 of 29 TPC-H kernels in any route and 0 DOOP rules.
+    Datalog selection has no positional hosts, so there are no candidates.
+  - The rule never selects P7.2's optional guard, statistics construction or
+    sidecars, so H05/H21 default and d72 radix keep main's code.
+  - A literal compile-time "unknown ⇒ no filter" reading would have deleted two
+    useful filters: H21 `Lineitem.order_key` (6.0M tests, 5.9% pass) and d85
+    `PartSupp.part_key` (800k tests, 4.4% pass).
+
+  P7.4 device publication and P7.5 committed-round identities remain separate;
+  this is not completion of all P7.
   **Advice-only acceptance:** expanded gate versus `907b9b0d` passes 46/46
   targets with zero hunks and complete execution evidence. SF0.1/SF1 each pass
   58 default/radix exact-answer and repeated-counter cases; 17 library oracles,

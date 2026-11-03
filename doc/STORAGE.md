@@ -653,17 +653,21 @@ test checks that reuse independently of query timing.
 The built-in attached token spells `AttachedDenseMembership`, retaining direct
 bitmap construction without changing the default `DenseMembership` probe shape.
 With neither authored realization fact, default construction and activation
-retain main's projected `Build`, `Keys::key_count`, and conditional filter build.
-No built-in P7.2 heuristic substitutes optional statistics or a unit-sidecar build.
-Authored `abandon P of B using ACCESSOR` instead records an optional-statistic
-policy. The checker validates the selected provider's exact Keys accessor;
-`None` selects identity and the statistic read never forces construction.
+retain main's projected `Build`, `policy abandon P of B keys key_count`
+(`Keys::key_count`), and conditional filter build; a filter without a positional
+base records `policy always`. No built-in heuristic substitutes optional
+statistics or a unit-sidecar build.
+Authored `policy abandon P of B keys ACCESSOR` instead records an
+optional-statistic policy. The checker (STR-FilterPolicy) validates the selected
+provider's exact Keys accessor; `None` selects identity and the statistic read
+never forces construction.
 An authored projected statistic guard finalizes its exact source with a unit
 sidecar at the recorded boundary. Borrowed and attached realizations remain
 explicit advice. Both count ABIs compare widened u128 products without overflow.
 No filter may replace its exact covering join. The activation-enabled candidate
 lost on H05/H21/d72 despite the H09 repair; its 20 paired ratios are retained in
-PLANNING-REDESIGN P7 for the design-only P7.3 cost model, not default promotion.
+PLANNING-REDESIGN P7. The P7.3 veto-only cost rule found no departure from the
+recorded incumbent policy (census in that entry).
 Authored routed statistic publication records optional exact key counts through
 `with_disjoint_key_count`; default routed builds do not perform that reduction.
 The borrowed adapter implements `ReadPredicate` only, not
@@ -1523,8 +1527,9 @@ one direct call; there are no autoref dispatch tiers and no silent fallbacks.
   record `dense_membership` (requires `OrderKey`), wider keys hash
   `adaptive_membership`; a dense key without `OrderKey` is a rustc error, not a
   hash fallback.
-- **Join filters.** Positional selection records scalar complete-layout borrowed
-  run views or attached sidecars, with `abandon 35 of <base> using stat_keys`
-  where a positional base exists (SEL-JoinFilterAbandon). The declared optional
-  exact Keys accessor controls activation, never a recount or sidecar construction.
-  Missing counts retain identity; deselection removes the construction cost.
+- **Join filters.** Positional selection records projected filters; borrowed run
+  views and attached sidecars remain authored advice. Every filter records one
+  `policy` (SEL-FilterPolicy): `abandon 35 of <base> keys key_count` where a
+  positional base exists (`keys stat_keys` under authored borrowed/attached
+  advice), otherwise `always`. The recorded key source controls activation; an
+  optional accessor never recounts, and its missing count retains identity.

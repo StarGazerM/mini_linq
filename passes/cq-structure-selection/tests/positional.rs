@@ -240,6 +240,43 @@ fn join_filter_plan(branch: bool) -> ir::Program {
 }
 
 #[test]
+fn every_join_filter_records_one_checked_policy() {
+    let selected = join_filter_plan(false);
+    let with_policy = |policy: proc_macro2::TokenStream| {
+        let mut program = selected.clone();
+        for entry in &mut program.structures.entries {
+            if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
+                filter.policy = syn::parse2(policy.clone()).unwrap();
+            }
+        }
+        program
+    };
+    let facts = ir::contract::check(&selected).unwrap();
+    let recorded: ir::Policy = syn::parse_quote!(policy abandon 35 of R keys key_count);
+    assert_eq!(facts.join_filters["l"][0].policy, recorded);
+    assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+    for legal in [
+        quote!(policy always),
+        quote!(policy abandon 1 of R keys key_count),
+        quote!(policy abandon 100 of R keys key_count),
+    ] {
+        ir::contract::check(&with_policy(legal)).unwrap();
+    }
+    for illegal in [
+        quote!(policy abandon 0 of R keys key_count),
+        quote!(policy abandon 101 of R keys key_count),
+        quote!(policy abandon 35 of L keys key_count),
+        quote!(policy abandon 35 of R keys stat_rows),
+    ] {
+        assert!(ir::contract::check(&with_policy(illegal)).is_err());
+    }
+    // The policy is mandatory: an entry without one does not parse.
+    assert!(syn::parse_str::<ir::Entry>(
+        "l join_filter = @filter as Filter build b [x] covering j marker ::cq_load::ColumnAt<0>;"
+    ).is_err());
+}
+
+#[test]
 fn join_filters_preserve_coverage_and_lineage() {
     for branch in [false, true] {
         let selected = join_filter_plan(branch);
@@ -281,21 +318,24 @@ fn borrowed_run_filter_is_a_checked_recorded_scalar_realization() {
     let default_filter = &default_facts.join_filters["l"][0];
     assert!(!default_facts.facts(&default_filter.provider).borrowed_filter);
     assert!(!default_facts.facts(&default_filter.provider).attached_filter);
-    assert!(default_filter.abandon.as_ref().unwrap().statistic.is_none());
+    assert!(matches!(default_filter.policy.abandon().unwrap().keys, ir::KeySource::KeyCount(_)));
     let selected = cq_structure_selection::retype(&selected, quote!(
         l join_filter => @borrowed_run_filter as ::cq_storage::RunFilterView<'_, _, _>
     )).unwrap();
     let facts = ir::contract::check(&selected).unwrap();
     let filter = &facts.join_filters["l"][0];
     assert!(facts.facts(&filter.provider).borrowed_filter);
-    assert_eq!(filter.abandon.as_ref().unwrap().statistic.as_ref().unwrap().accessor, "stat_keys");
+    assert_eq!(filter.policy.statistic().unwrap(), "stat_keys");
     assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
     for invalid_accessor in [false, true] {
         let mut bad = selected.clone();
         for entry in &mut bad.structures.entries {
             if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
                 if invalid_accessor {
-                    filter.abandon.as_mut().unwrap().statistic.as_mut().unwrap().accessor = syn::parse_quote!(stat_rows);
+                    let ir::Activation::Abandon(abandon) = &mut filter.policy.activation else {
+                        unreachable!("selected filter records an abandon policy")
+                    };
+                    abandon.keys = ir::KeySource::Statistic(syn::parse_quote!(stat_rows));
                 } else {
                     filter.key = syn::parse_quote!([z]);
                 }

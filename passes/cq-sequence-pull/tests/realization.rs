@@ -340,11 +340,11 @@ fn attached_sidecar_and_index_survive_the_selected_lazy_choice_arm() {
     let provider = declaration.instance();
     selected.structures.providers.declare(&declaration);
     selected.structures.entries.push(syn::parse_quote!(
-        l join_filter = #provider build b [x] covering j marker ::cq_load::ColumnAt<0>;
+        l join_filter = #provider build b [x] covering j marker ::cq_load::ColumnAt<0> policy always;
     ));
-    structures::record_join_filter_abandon(&mut selected).unwrap();
+    structures::record_join_filter_policies(&mut selected).unwrap();
     let facts = structures::contract::check(&selected).unwrap();
-    assert!(facts.join_filters["l"][0].abandon.is_none());
+    assert!(facts.join_filters["l"][0].policy.abandon().is_none());
     let mut context = cq_print::Context::new(&selected, &facts);
     context.register("b");
     context.begin_deferred_bindings();

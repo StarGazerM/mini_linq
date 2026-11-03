@@ -28,7 +28,7 @@ Entry ::= r = Provider [K]... [supports [Support,...]] [items (rows | columns)]
         | r read = positional base H lineage{a -> c, ...}
               column c marker Type predicate Predicate;
         | r join_filter = Provider build s [k]
-              covering j marker Type [abandon N of H];
+              covering j marker Type policy (always | abandon N of H keys (key_count | Accessor));
         | r share = lookup b [K] first s force p;
         | r repr = (tuples | positions {H lineage {a -> c, ...}, ...}
                          owned [O]) [witness {b [K] at s as Type}];
@@ -757,7 +757,7 @@ rewrite or rejection, never a printer fallback.
 
 \paragraph{Covered join filters.}
 An entry \code{s join_filter = Type build b [k] covering j
-marker ::cq_load::ColumnAt<n>;} records a structure's Rust type, the scan
+marker ::cq_load::ColumnAt<n> policy P;} records a structure's Rust type, the scan
 occurrence, the filtered key column, host key column and exact covering
 operator. A scan may carry several entries, one per covering operator and key
 column. The core neither classifies approximate algorithms nor recognizes their names.
@@ -855,6 +855,22 @@ are checked by rustc, rather than by a provider-name whitelist. External
 admissible covering operator of \code{s} not yet recorded (including total
 unfiltered builds); it records positional-host advice and undergoes the same
 contract and correspondence checks.
+Every entry records exactly one activation policy $P$:
+\code{always}, or \code{abandon p of B keys S}, which activates the filter only
+while the covering build's exact key count read through $S$ is at most $p\%$ of
+the positional base $B$. $S$ is \code{key\_count} (\code{Keys::key\_count}) or a
+declared exact optional Keys statistic accessor, whose absence selects identity.
+\textsc{STR-FilterPolicy} checks legality only; which policy is profitable
+belongs to \textsc{SEL-FilterPolicy}, and the checker does not rerun it.
+\begin{mathpar}
+\Rule{STR-FilterPolicy}{
+ P=\mathsf{always}\ \lor\ \bigl(P=\mathsf{abandon}(p,B,S)\quad 1\le p\le 100\quad
+ \mathsf{lineageBase}(b)=B\in\mathsf{positionalBases}\\
+ (S=\mathsf{key\_count}\ \lor\ \mathsf{declaredExactHostBuildKeys}(\mathsf{built}(b,K),S))\bigr)
+}{
+ s\;\mathsf{joinFilter}(F,b,k,j,C)\ \mathsf{policy}\ P\text{ is admissible}
+}
+\end{mathpar}
 
 \subsection{Authored CPU blocked scan bindings}
 

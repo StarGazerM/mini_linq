@@ -588,7 +588,7 @@ fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             b = @hash_index as ::cq_storage::HashIndex<'_, _, _> [a] supports [keys];
-            l join_filter = @filter as Filter  build b [a] covering selected marker ::cq_load::ColumnAt<0>;
+            l join_filter = @filter as Filter  build b [a] covering selected marker ::cq_load::ColumnAt<0> policy always;
             selected = @sharded(@provider as Provider) as ::cq_storage::sharded::Sharded<Provider> [a];
             probe host scan = @reader as Reader [];
             out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;

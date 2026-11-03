@@ -331,7 +331,7 @@ pub(super) fn choose(
         .structures
         .declare(&cq_lang_structures::provider::base::declarations())?;
     choose_join_filters(target, bases)?;
-    structures::record_join_filter_abandon(target)?;
+    structures::record_join_filter_policies(target)?;
     structures::contract::check(target)?;
     Ok(())
 }
@@ -423,7 +423,7 @@ fn choose_join_filters(
             let covering = &d.name;
             let ty = cq_lang_structures::provider::base::declaration("join_filter_membership")
                 .instance();
-            entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;))?);
+            entries.push(syn::parse2(quote!(#scan join_filter = #ty build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index> policy always;))?);
         }
     }
     target.structures.entries.extend(entries);

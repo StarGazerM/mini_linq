@@ -50,8 +50,8 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
 /// Add every admissible covered scalar filter to the named scan occurrence
 /// that is not already recorded, as the `join_filter_membership` token positional
 /// selection records; a later `retype(scan join_filter => @token as T)`
-/// chooses another representation. Every filter's abandon policy is then
-/// recorded (SEL-JoinFilterAbandon). This is explicit positional-host advice,
+/// chooses another representation. Every filter's policy is then
+/// recorded (SEL-FilterPolicy). This is explicit positional-host advice,
 /// including when selection was not given positional hosts. The same
 /// Structures contract checks the result.
 pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
@@ -117,11 +117,12 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         let provider = providers::declaration("join_filter_membership").instance();
         target.structures.entries.push(syn::parse_quote! {
             #scan join_filter = #provider
-                build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>;
+                build #build [#key] covering #covering marker ::cq_load::ColumnAt<#index>
+                policy always;
         });
     }
     target.structures.declare(&providers::declarations())?;
-    ir::record_join_filter_abandon(&mut target)?;
+    ir::record_join_filter_policies(&mut target)?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }
