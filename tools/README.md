@@ -68,8 +68,18 @@ flock /tmp/mini_linq-timing-gate.lock true && flock -s /tmp/mini_linq-timing.loc
 flock /tmp/mini_linq-timing-gate.lock flock -x /tmp/mini_linq-timing.lock CMD
 ```
 
-GPU execution additionally holds `/tmp/mini_linq-gpu.lock`, taken before the
-timing locks. Hold the exclusive lock only for the measurement itself.
+Take the shared lock around ONE command (one cargo build/test, one target's
+verification), never around a runner that executes many commands: a waiting
+measurement holds the gate, so a long shared holder stalls every build behind
+it (2026-11-03: a 30-minute expanded gate under one shared lock queued all
+agents while CPU and GPU sat idle). Multi-command runners re-acquire the shared
+lock per command.
+
+GPU execution holds `/tmp/mini_linq-gpu.lock`. GPU timing holds only the GPU
+lock, not the CPU timing locks: samples interleave A/B in rotating order and
+record load average, which controls for background builds. A GPU claim whose
+CI lies within 5% of 1 is rerun with the CPU exclusive lock taken after the GPU
+lock. CPU timing holds the exclusive lock only for the measurement itself.
 
 Verification follows what a change can break: docs-only changes run nothing;
 test tooling runs its own unit tests; an oracle/infrastructure swap checks only
@@ -658,8 +668,8 @@ partial logs stay on the volume at the printed remote results path.
 For local bundle verification, unpack under `/tmp`, use a private mount
 namespace to bind `source/` over the original worktree, and pass
 `--existing-mirrors --data /data`. Hide/move the original build target directories
-before running, restore them afterward, and take `/tmp/mini_linq-gpu.lock` before
-the exclusive timing locks. On a VRAM-constrained shared workstation,
+before running, restore them afterward, and hold `/tmp/mini_linq-gpu.lock` (GPU
+timing rule above). On a VRAM-constrained shared workstation,
 `RUST_TEST_THREADS=1` serializes the same tests without filtering any out; leave
 the pod's default unchanged. `--allow-sf10-oom` is only for this workstation:
 it first attempts SF10, records an explicit `SKIP-OOM` only for a CUDA
