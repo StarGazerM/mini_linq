@@ -389,6 +389,10 @@ impl<'a> Printer<'a> {
             &definition.operator
         {
             let input_name = symbol_name(&select.input);
+            if self.encoded.blocks.carrier_predicates.contains_key(name) {
+                let rows = self.scan(&select.input)?;
+                return Ok(self.blocked_carrier_filter_rows(name, rows));
+            }
             if self.encoded.blocks.predicates.contains_key(name) {
                 let rows = self.scan(&select.input)?;
                 return Ok(self.blocked_filter_rows(name, rows));
@@ -613,6 +617,9 @@ impl<'a> Printer<'a> {
         let mut outer = self.scan(&keyed.left)?;
         let left = symbol_name(&keyed.left);
         let right = symbol_name(&keyed.right);
+        if self.encoded.blocks.joins.contains_key(name) {
+            return Ok(self.blocked_probe_rows(name, outer));
+        }
         let access = self.keyed(name, &keyed.right, &columns)?;
         let witness = self.forcing_witness(name, &right, &columns);
         let expand = self.analysis.expands.contains(name);

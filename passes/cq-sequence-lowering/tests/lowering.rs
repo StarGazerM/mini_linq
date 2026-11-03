@@ -49,7 +49,7 @@ fn probe_shape_and_structural_checker_reject_mutations() {
             j = pipe probe first [a] l,r;
             out = let canon project j keep {b};
             return out as answer(b);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @provider as Provider [a]; out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
@@ -85,7 +85,7 @@ fn correspondence_accepts_authored_output_names_but_not_another_result() {
             s = let canon rename S@1 {a -> a};
             u = let canon union r,s;
             return u as answer(a);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             r host scan = @reader as Reader []; s host scan = @reader as Reader [];
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; s rows = @sort as ::cq_storage::dedup::Sort; s canon = rows; u rows = @sort as ::cq_storage::dedup::Sort; u canon = rows;
         }
@@ -113,7 +113,7 @@ fn output_name_is_fresh_and_return_canon_is_preserved() {
             relation R(a:i32);
             __sequence_output = pipe rename R@0 {a -> a};
             return canon __sequence_output as answer(a);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             __sequence_output host scan = @reader as Reader [];
             __sequence_output head = @sort as ::cq_storage::dedup::Sort;
         }
@@ -345,14 +345,14 @@ fn blocked_execution_roundtrips_and_accepts_lawful_shorter_runs() {
 }
 
 #[test]
-fn blocked_execution_rejects_forged_phases_scratch_and_opaque_crossing() {
+fn blocked_execution_rejects_forged_sources_runs_and_opaque_crossing() {
     let source = blocked_source();
     let target = accept(&source);
     let mut changed = target.clone();
-    changed.representation.blocks.predicates.get_mut("p").unwrap().swap(0,1);
+    changed.representation.blocks.scans.remove("r");
     assert!(check(&source, &changed).is_err());
     let mut changed = target.clone();
-    changed.representation.blocks.scans.get_mut("r").unwrap().scratch_rows = 2048;
+    changed.representation.blocks.scans.get_mut("r").unwrap().source = cq_lang_structures::encoded::SourceId(u64::MAX);
     assert!(check(&source, &changed).is_err());
     let mut changed = target.clone();
     changed.representation.blocks.runs.get_mut("r").unwrap().push("t".into());
@@ -364,4 +364,40 @@ fn blocked_execution_rejects_forged_phases_scratch_and_opaque_crossing() {
     let mut changed = target;
     changed.representation.blocks.reads.remove("g");
     assert!(check(&source, &changed).is_err());
+}
+
+#[test]
+fn blocked_sum_requires_computed_operand_not_base_field() {
+    let physical = syn::parse_quote!(physical {
+        relation R(a: i64 [1]);
+        r = pipe rename R@0 {a -> x};
+        v = pipe bind r with value: i64 = (compute(x));
+        return canon v as answer(x,value);
+    });
+    let source = cq_structure_selection::compile_with(&physical, syn::parse_quote!(
+        blocks(R { block_rows 1024; summary none; columns [a: plain u64]; })
+    )).unwrap();
+    let target = accept(&source);
+    // Both candidates use precisely the same valid source, heading and producer.
+    // Only the aggregate operand changes from an owned value to a source field.
+    let mut computed = target.clone();
+    let Term::Store { inner, .. } = computed.sequence.definitions.last().unwrap().term.clone() else {
+        panic!("lowering publishes the final result");
+    };
+    let input = *inner;
+    computed.sequence.definitions.last_mut().unwrap().term =
+        syn::parse_quote!(store fold sum value #input);
+    cq_lang_sequence::contract::check(&computed).unwrap();
+    let mut blocked = target;
+    blocked.sequence.definitions.last_mut().unwrap().term =
+        syn::parse_quote!(store fold sum x #input);
+    assert!(cq_lang_sequence::contract::check(&blocked).is_err());
+}
+
+#[test]
+fn obsolete_block_execution_fields_are_not_printable_syntax() {
+    assert!(syn::parse_str::<cq_lang_sequence::blocks::Execution>(
+        r#"blocks { scan "r" (0, 1024, 1024); }"#).is_err());
+    assert!(syn::parse_str::<cq_lang_sequence::blocks::Execution>(
+        r#"blocks { predicate "p" [prune, exact, positions]; }"#).is_err());
 }

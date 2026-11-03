@@ -19,7 +19,7 @@ fn shared_lookup_expands_ranges_in_scalar_order() {
             out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r = @sorted_run as ::cq_storage::SortedRun<_,_> [k] supports [expand];
@@ -52,7 +52,7 @@ fn positional_witness_is_consumed_by_scalar_probe() {
             out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             l repr = positions { L lineage {k -> k} } owned [];

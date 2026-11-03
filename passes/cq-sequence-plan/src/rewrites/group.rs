@@ -95,5 +95,10 @@ pub fn group_without_canon_in(
             );
         }
     }
+    // Structures retains a key recipe, not an unconditional read operation.
+    // Canon execution belongs to Sequence; discard references to removed sites.
+    target.representation.blocks.reads = target.structures.encoded.blocks.reads.keys().cloned()
+        .chain(cq_lang_sequence::blocks::canonical_read_sites(&target, &analysis))
+        .collect();
     super::checked_in(checker, source, target)
 }

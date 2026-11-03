@@ -1,4 +1,4 @@
-structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r0 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
+structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r0 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
  r1 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
  r1 host result(r2) = @adaptive_membership as :: cq_storage :: AdaptiveMembership < _ , 16777216 > [x , y] membership;
  r3 rows = @sort as ::cq_storage::dedup::Sort; r3 canon = rows;

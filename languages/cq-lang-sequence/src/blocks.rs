@@ -2,38 +2,35 @@
 use std::collections::{BTreeMap, BTreeSet};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{Ident, LitInt, LitStr, Token, braced, bracketed, parenthesized};
+use syn::{LitInt, LitStr, Token, braced, bracketed, parenthesized};
 use syn::parse::{Parse, ParseStream};
 use crate::{Program, Term, structures};
 
-mod kw { syn::custom_keyword!(blocks); syn::custom_keyword!(scan); syn::custom_keyword!(predicate); syn::custom_keyword!(read); syn::custom_keyword!(run); syn::custom_keyword!(route); }
+mod kw { syn::custom_keyword!(blocks); syn::custom_keyword!(scan); syn::custom_keyword!(read); syn::custom_keyword!(run); syn::custom_keyword!(route); syn::custom_keyword!(join); syn::custom_keyword!(predicate); }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scan {
     pub source: structures::encoded::SourceId,
-    /// Native source positions; no narrowing to a whole-relation u32 index.
-    pub tile_rows: usize,
-    /// One reusable byte mask per active scan/filter iterator, not per input.
-    pub scratch_rows: usize,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Phase { Prune, Exact, Positions }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Execution {
     pub scans: BTreeMap<String, Scan>,
-    pub predicates: BTreeMap<String, Vec<Phase>>,
     /// One mask per run. Fusion crosses only total single-use positional
     /// predicates/projections, never an opaque read, store or branching use.
     pub runs: BTreeMap<String, Vec<String>>,
     /// Physical consumers are materialization execution points. Their exact
     /// demand and ownership actions remain authoritative Structures records.
     pub reads: BTreeSet<String>,
+    /// Exact index/probe execution sites, referencing Structures boundary facts.
+    pub joins: BTreeSet<String>,
+    /// Carrier-local exact formulas; these never enter a single-source tile run.
+    pub carrier_predicates: BTreeSet<String>,
     /// PartitionK's global-code key reads, by Physical carrier and column.
     /// The constructor records keys/parts; these references authorize its reads.
     pub routing: BTreeMap<String, BTreeMap<String, structures::encoded::RepresentationId>>,
 }
 impl Execution {
-    pub fn is_empty(&self) -> bool { self.scans.is_empty() && self.predicates.is_empty() && self.reads.is_empty() && self.runs.is_empty() && self.routing.is_empty() }
+    pub fn is_empty(&self) -> bool { self.scans.is_empty() && self.reads.is_empty() && self.runs.is_empty() && self.routing.is_empty() && self.joins.is_empty() && self.carrier_predicates.is_empty() }
     pub fn record(source: &structures::Program) -> Self {
         let blocks = &source.encoded.blocks;
         if blocks.scans.is_empty() { return Self::default(); }
@@ -62,10 +59,11 @@ impl Execution {
             }
         }
         Self {
-            scans: blocks.scans.iter().map(|(name, scan)| (name.clone(), Scan { source: scan.source, tile_rows: 1024, scratch_rows: 1024 })).collect(),
-            predicates: blocks.predicates.keys().map(|name| (name.clone(), vec![Phase::Prune, Phase::Exact, Phase::Positions])).collect(),
+            scans: blocks.scans.iter().map(|(name, scan)| (name.clone(), Scan { source: scan.source })).collect(),
             runs,
-            reads: blocks.reads.keys().cloned().collect(),
+            reads: blocks.reads.keys().cloned().chain(blocks.canonical_keys.keys().map(|name| format!("canon:{name}"))).collect(),
+            joins: blocks.joins.keys().cloned().collect(),
+            carrier_predicates: blocks.carrier_predicates.keys().cloned().collect(),
             routing: BTreeMap::new(),
         }
     }
@@ -80,28 +78,23 @@ impl Parse for Execution {
                 body.parse::<kw::scan>()?;
                 let name: LitStr = body.parse()?;
                 let args; parenthesized!(args in body);
-                let source: LitInt = args.parse()?; args.parse::<Token![,]>()?;
-                let tile: LitInt = args.parse()?; args.parse::<Token![,]>()?;
-                let scratch: LitInt = args.parse()?;
+                let source: LitInt = args.parse()?;
                 if !args.is_empty() { return Err(args.error("unexpected scan execution field")); }
-                if result.scans.insert(name.value(), Scan { source: structures::encoded::SourceId(source.base10_parse()?), tile_rows: tile.base10_parse()?, scratch_rows: scratch.base10_parse()? }).is_some() { return Err(syn::Error::new_spanned(name, "duplicate block scan")); }
-            } else if body.peek(kw::predicate) {
-                body.parse::<kw::predicate>()?;
-                let name: LitStr = body.parse()?;
-                let phases; bracketed!(phases in body);
-                let mut values = Vec::new();
-                while !phases.is_empty() {
-                    let phase: Ident = phases.parse()?;
-                    values.push(match phase.to_string().as_str() { "prune" => Phase::Prune, "exact" => Phase::Exact, "positions" => Phase::Positions, _ => return Err(syn::Error::new_spanned(phase, "unknown block phase")) });
-                    if !phases.is_empty() { phases.parse::<Token![,]>()?; }
-                }
-                if result.predicates.insert(name.value(), values).is_some() { return Err(syn::Error::new_spanned(name, "duplicate block predicate")); }
+                if result.scans.insert(name.value(), Scan { source: structures::encoded::SourceId(source.base10_parse()?) }).is_some() { return Err(syn::Error::new_spanned(name, "duplicate block scan")); }
             } else if body.peek(kw::run) {
                 body.parse::<kw::run>()?;
                 let root: LitStr = body.parse()?;
                 let names; bracketed!(names in body);
                 let names = syn::punctuated::Punctuated::<LitStr, Token![,]>::parse_terminated(&names)?.into_iter().map(|name| name.value()).collect();
                 if result.runs.insert(root.value(), names).is_some() { return Err(syn::Error::new_spanned(root, "duplicate block run")); }
+            } else if body.peek(kw::join) {
+                body.parse::<kw::join>()?;
+                let name: LitStr = body.parse()?;
+                if !result.joins.insert(name.value()) { return Err(syn::Error::new_spanned(name, "duplicate blocked join site")); }
+            } else if body.peek(kw::predicate) {
+                body.parse::<kw::predicate>()?;
+                let name: LitStr = body.parse()?;
+                if !result.carrier_predicates.insert(name.value()) { return Err(syn::Error::new_spanned(name, "duplicate carrier predicate site")); }
             } else if body.peek(kw::route) {
                 body.parse::<kw::route>()?;
                 let result_name: LitStr = body.parse()?;
@@ -131,31 +124,36 @@ impl Parse for Execution {
 impl ToTokens for Execution {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         if self.is_empty() { return; }
-        let scans = self.scans.iter().map(|(name, scan)| { let source = scan.source.0; let tile = scan.tile_rows; let scratch = scan.scratch_rows; quote!(scan #name (#source, #tile, #scratch);) });
-        let predicates = self.predicates.iter().map(|(name, phases)| { let phases = phases.iter().map(|phase| match phase { Phase::Prune => quote!(prune), Phase::Exact => quote!(exact), Phase::Positions => quote!(positions) }); quote!(predicate #name [#(#phases),*];) });
+        let scans = self.scans.iter().map(|(name, scan)| { let source = scan.source.0; quote!(scan #name (#source);) });
         let reads = self.reads.iter().map(|name| quote!(read #name;));
         let runs = self.runs.iter().map(|(root, names)| quote!(run #root [#(#names),*];));
+        let joins = self.joins.iter().map(|name| quote!(join #name;));
+        let carrier_predicates = self.carrier_predicates.iter().map(|name| quote!(predicate #name;));
         let routing = self.routing.iter().map(|(result, fields)| {
             let fields = fields.iter().map(|(column, id)| { let id = id.0; quote!(#column = #id) });
             quote!(route #result [#(#fields),*];)
         });
-        tokens.extend(quote!(blocks { #(#scans)* #(#predicates)* #(#runs)* #(#reads)* #(#routing)* }));
+        tokens.extend(quote!(blocks { #(#scans)* #(#runs)* #(#reads)* #(#routing)* #(#joins)* #(#carrier_predicates)* }));
     }
 }
 
-/// Formal rule BE-Blocks: independently check exact phase/consumer coverage,
-/// native occurrence positions, bounded scratch and aligned task source covers.
+/// Formal rule BE-Blocks: independently check source/consumer coverage,
+/// predicate runs and aligned task source covers.
 /// Neither this checker nor correspondence invokes the execution producer.
 pub fn check(program: &Program) -> syn::Result<()> {
     let execution = &program.representation.blocks;
     let blocks = &program.structures.encoded.blocks;
-    let invalid = || syn::Error::new_spanned(program, "BE-Blocks: invalid source cover, phase order or materialization point");
-    if !execution.scans.keys().eq(blocks.scans.keys()) || !execution.predicates.keys().eq(blocks.predicates.keys()) || !execution.reads.iter().eq(blocks.reads.keys()) { return Err(invalid()); }
+    let invalid = || syn::Error::new_spanned(program, "BE-Blocks: invalid source cover, predicate run or materialization point");
+    let ordinary_reads: BTreeSet<_> = blocks.reads.keys().cloned().collect();
+    let canonical_reads: BTreeSet<_> = blocks.canonical_keys.keys().map(|name| format!("canon:{name}")).collect();
+    if !execution.scans.keys().eq(blocks.scans.keys())
+        || !ordinary_reads.is_subset(&execution.reads)
+        || execution.reads.iter().any(|name| !ordinary_reads.contains(name) && !canonical_reads.contains(name)) { return Err(invalid()); }
+    if !execution.joins.iter().eq(blocks.joins.keys()) || !execution.carrier_predicates.iter().eq(blocks.carrier_predicates.keys()) { return Err(invalid()); }
     for (name, scan) in &execution.scans {
         let source = &blocks.scans[name];
-        if scan.source != source.source || scan.tile_rows != 1024 || scan.scratch_rows != scan.tile_rows || blocks.sources[&source.source].block_rows % scan.tile_rows as u64 != 0 { return Err(invalid()); }
+        if scan.source != source.source { return Err(invalid()); }
     }
-    if execution.predicates.values().any(|phases| phases != &[Phase::Prune, Phase::Exact, Phase::Positions]) { return Err(invalid()); }
     let physical = &program.structures.physical.program;
     let definitions: BTreeMap<_, _> = physical.definitions.iter().map(|d| (structures::symbol_name(&d.name), d)).collect();
     let mut uses = BTreeMap::<String, usize>::new();
@@ -186,29 +184,18 @@ pub fn check(program: &Program) -> syn::Result<()> {
     let mut scans = BTreeSet::new();
     let mut predicates = BTreeSet::new();
     let mut consumers = BTreeSet::new();
-    fn visit(term: &Term, execution: &Execution, scans: &mut BTreeSet<String>, predicates: &mut BTreeSet<String>, consumers: &mut BTreeSet<String>) {
+    fn visit(term: &Term, execution: &Execution, blocks: &structures::blocks::Contract, scans: &mut BTreeSet<String>, predicates: &mut BTreeSet<String>, consumers: &mut BTreeSet<String>) {
         match term {
             Term::Rows(name) => { let name = structures::symbol_name(name); if execution.scans.contains_key(&name) { scans.insert(name); } }
-            Term::Map(name, inner) | Term::Compact(name, inner) | Term::Group(name, inner) => { let name = structures::symbol_name(name); if execution.predicates.contains_key(&name) { predicates.insert(name.clone()); } if execution.reads.contains(&name) { consumers.insert(name); } visit(inner, execution, scans, predicates, consumers); }
-            Term::Flatten(inner) | Term::Fold(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => visit(inner, execution, scans, predicates, consumers),
-            Term::Union(arms) => for arm in arms { visit(arm, execution, scans, predicates, consumers); },
-            Term::Choose(arms) => for (_, arm) in arms { visit(arm, execution, scans, predicates, consumers); },
+            Term::Map(name, inner) | Term::Compact(name, inner) | Term::Group(name, inner) => { let name = structures::symbol_name(name); if blocks.predicates.contains_key(&name) || blocks.carrier_predicates.contains_key(&name) { predicates.insert(name.clone()); } if execution.reads.contains(&name) { consumers.insert(name); } visit(inner, execution, blocks, scans, predicates, consumers); }
+            Term::Flatten(inner) | Term::Fold(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => visit(inner, execution, blocks, scans, predicates, consumers),
+            Term::Union(arms) => for arm in arms { visit(arm, execution, blocks, scans, predicates, consumers); },
+            Term::Choose(arms) => for (_, arm) in arms { visit(arm, execution, blocks, scans, predicates, consumers); },
             Term::Ref(_) => {},
         }
     }
-    fn has_canon(term: &Term) -> bool {
-        match term {
-            Term::Canon(_) => true,
-            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Group(_, inner) | Term::Flatten(inner) | Term::Fold(_, inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => has_canon(inner),
-            Term::Union(arms) => arms.iter().any(has_canon),
-            Term::Choose(arms) => arms.iter().any(|(_, arm)| has_canon(arm)),
-            Term::Rows(_) | Term::Ref(_) => false,
-        }
-    }
     for definition in &program.sequence.definitions {
-        visit(&definition.term, execution, &mut scans, &mut predicates, &mut consumers);
-        let canonical = format!("canon:{}", structures::symbol_name(&definition.name));
-        if execution.reads.contains(&canonical) && has_canon(&definition.term) { consumers.insert(canonical); }
+        visit(&definition.term, execution, blocks, &mut scans, &mut predicates, &mut consumers);
     }
     let answer = structures::symbol_name(&physical.head.relation);
     let returned = structures::symbol_name(&physical.returned);
@@ -225,13 +212,86 @@ pub fn check(program: &Program) -> syn::Result<()> {
         };
         if at_output { consumers.insert(name.clone()); }
     }
-    let returned_canon = format!("canon:{}", structures::symbol_name(&physical.returned));
-    if physical.return_canon.is_some() && execution.reads.contains(&returned_canon)
-        && program.sequence.definitions.last().is_some_and(|definition| has_canon(&definition.term))
-    {
-        consumers.insert(returned_canon);
+    let all_predicates: BTreeSet<_> = blocks.predicates.keys().chain(blocks.carrier_predicates.keys()).cloned().collect();
+    if !scans.iter().eq(execution.scans.keys()) || predicates != all_predicates || consumers != ordinary_reads { return Err(invalid()); }
+    Ok(())
+}
+
+    fn result(term: &Term, program: &Program, analysis: &crate::Analysis) -> Option<String> {
+        match term {
+            Term::Rows(name) => Some(structures::symbol_name(name)),
+            Term::Ref(name) => analysis.results.get(&structures::symbol_name(name)).cloned(),
+            Term::Map(name, _) | Term::Compact(name, _) | Term::Group(name, _) => Some(structures::symbol_name(name)),
+            Term::Store { inner, .. } | Term::Canon(inner) | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } => result(inner, program, analysis),
+            Term::Flatten(inner) => {
+                let Term::Lookup { provider, keys, inner } = inner.as_ref() else { return result(inner, program, analysis); };
+                let left = result(inner, program, analysis)?;
+                let right = structures::symbol_name(provider);
+                let mut columns: Vec<_> = keys.iter().map(structures::symbol_name).collect();
+                columns.sort();
+                program.structures.physical.program.definitions.iter().find_map(|definition| {
+                    let structures::physical::Operator::Probe(_, keyed) = &definition.operator else { return None; };
+                    let mut expected: Vec<_> = keyed.columns.iter().map(structures::symbol_name).collect();
+                    expected.sort();
+                    (structures::symbol_name(&keyed.left) == left && structures::symbol_name(&keyed.right) == right && expected == columns).then(|| structures::symbol_name(&definition.name))
+                })
+            }
+            Term::Fold(_, _) | Term::Lookup { .. } | Term::Union(_) | Term::Choose(_) => None,
+        }
     }
-    if !scans.iter().eq(execution.scans.keys()) || !predicates.iter().eq(execution.predicates.keys()) || consumers != execution.reads { return Err(invalid()); }
+/// Actual Canon constructors are the sole owner of canonical execution.
+/// Structures supplies key recipes; this extracts references to recipes used
+/// by the supplied term spine without planning or rewriting that spine.
+pub fn canonical_read_sites(program: &Program, analysis: &crate::Analysis) -> BTreeSet<String> {
+    fn visit(term: &Term, program: &Program, analysis: &crate::Analysis, sites: &mut BTreeSet<String>) {
+        if let Term::Canon(inner) = term {
+            if let Some(input) = result(inner, program, analysis) {
+                if program.structures.encoded.blocks.canonical_keys.contains_key(&input) {
+                    sites.insert(format!("canon:{input}"));
+                }
+            }
+        }
+        match term {
+            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Group(_, inner) | Term::Flatten(inner) | Term::Fold(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => visit(inner, program, analysis, sites),
+            Term::Union(arms) => for arm in arms { visit(arm, program, analysis, sites); },
+            Term::Choose(arms) => for (_, arm) in arms { visit(arm, program, analysis, sites); },
+            Term::Rows(_) | Term::Ref(_) => {}
+        }
+    }
+    let mut sites = BTreeSet::new();
+    for definition in &program.sequence.definitions { visit(&definition.term, program, analysis, &mut sites); }
+    sites
+}
+
+/// Exact join sites are checked against the supplied Sequence lookup spine,
+/// not against a regenerated lowering. Existing BE-Lookup checks own provider
+/// availability and build-before-read; these records authorize carrier access.
+fn check_join_sites(program: &Program, analysis: &crate::Analysis) -> syn::Result<()> {
+    fn visit(term: &Term, program: &Program, analysis: &crate::Analysis, covered: &mut BTreeSet<String>) {
+        if let Term::Lookup { provider, keys, inner } = term {
+            if let Some(left) = result(inner, program, analysis) {
+                let right = structures::symbol_name(provider);
+                let mut columns: Vec<_> = keys.iter().map(structures::symbol_name).collect();
+                columns.sort();
+                for (name, join) in &program.structures.encoded.blocks.joins {
+                    if join.left == left && join.right == right && join.keys.iter().map(|key| &key.column).eq(columns.iter()) {
+                        covered.insert(name.clone());
+                    }
+                }
+            }
+        }
+        match term {
+            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Group(_, inner) | Term::Flatten(inner) | Term::Fold(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => visit(inner, program, analysis, covered),
+            Term::Union(arms) => for arm in arms { visit(arm, program, analysis, covered); },
+            Term::Choose(arms) => for (_, arm) in arms { visit(arm, program, analysis, covered); },
+            Term::Rows(_) | Term::Ref(_) => {}
+        }
+    }
+    let mut covered = BTreeSet::new();
+    for definition in &program.sequence.definitions { visit(&definition.term, program, analysis, &mut covered); }
+    if covered != program.representation.blocks.joins {
+        return Err(syn::Error::new_spanned(program, "BE-Blocks: missing exact blocked join execution site"));
+    }
     Ok(())
 }
 
@@ -240,6 +300,12 @@ pub fn check(program: &Program) -> syn::Result<()> {
 pub fn check_task_covers(program: &Program, analysis: &crate::Analysis) -> syn::Result<()> {
     if program.representation.blocks.is_empty() { return Ok(()); }
     check_routing(program, &analysis.structures)?;
+    check_join_sites(program, analysis)?;
+    let expected_reads: BTreeSet<_> = program.structures.encoded.blocks.reads.keys().cloned()
+        .chain(canonical_read_sites(program, analysis)).collect();
+    if expected_reads != program.representation.blocks.reads {
+        return Err(syn::Error::new_spanned(program, "BE-Blocks: canonical read sites do not match actual Canon constructors"));
+    }
     let terms = analysis.task_execution.terms(program);
     fn unstored_source(term: &Term, program: &Program) -> bool {
         match term {
@@ -259,7 +325,8 @@ pub fn check_task_covers(program: &Program, analysis: &crate::Analysis) -> syn::
             }
             if let Some(source) = producer.borrowed_host.as_ref() {
                 if let Some(scan) = program.representation.blocks.scans.get(source) {
-                    if *n == 0 || *n % scan.tile_rows != 0 { return Err(syn::Error::new_spanned(program, "BE-Blocks: task range must align to source blocks")); }
+                    let vector_rows = program.structures.encoded.blocks.sources[&scan.source].vector_rows;
+                    if vector_rows == 0 || *n == 0 || *n % vector_rows != 0 { return Err(syn::Error::new_spanned(program, "BE-Blocks: task range must align to source vectors")); }
                 }
             }
         }

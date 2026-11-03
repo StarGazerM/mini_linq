@@ -12,7 +12,8 @@ pub const VECTOR_ROWS: usize = 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PruneMode {
     None,
-    MinMax,
+    BlockMinMax,
+    VectorMinMax,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TestMode {
@@ -391,7 +392,7 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
     }
 
     /// Intersect a bounded vector in-place. No other vector's payload is read.
-    /// `MinMax` requires an authored summary capability; `None` never reads it.
+    /// Each pruning mode requires its declared buffer; `None` never reads summaries.
     pub fn intersect_mask(
         &self,
         start: usize,
@@ -779,12 +780,12 @@ fn intersect_vector(
         return Classification::Disqualified;
     }
     let block = start / block_rows.get();
-    if prune == PruneMode::MinMax {
-        let bounds = if let Some(summaries) = vector_summaries {
-            summaries[start / VECTOR_ROWS]
-        } else {
-            summaries.expect("MinMax scan requires declared summaries")[block]
-        };
+    let bounds = match prune {
+        PruneMode::None => None,
+        PruneMode::BlockMinMax => Some(summaries.expect("declared block summaries")[block]),
+        PruneMode::VectorMinMax => Some(vector_summaries.expect("declared vector summaries")[start / VECTOR_ROWS]),
+    };
+    if let Some(bounds) = bounds {
         match predicate.classify(bounds) {
             Classification::Disqualified => {
                 out.fill(0);
@@ -990,10 +991,12 @@ impl<C: ScanColumns> ScanTable<C> {
     pub fn tile<'table, 'mask>(
         &'table self,
         start: usize,
+        vector_rows: usize,
         mask: &'mask mut ScanMask,
     ) -> ScanTile<'table, 'mask, C> {
-        assert!(start <= self.rows && (start % VECTOR_ROWS == 0 || start == self.rows));
-        let len = VECTOR_ROWS.min(self.rows - start);
+        assert_eq!(vector_rows, VECTOR_ROWS, "supported provider vector geometry");
+        assert!(start <= self.rows && (start % vector_rows == 0 || start == self.rows));
+        let len = vector_rows.min(self.rows - start);
         mask.bytes[..len].fill(1);
         ScanTile { table: self, mask, start, len }
     }
@@ -1003,16 +1006,19 @@ impl<C: ScanColumns> ScanTable<C> {
     pub fn scan_positions<F>(
         &self,
         range: std::ops::Range<usize>,
+        vector_rows: usize,
         configure: F,
     ) -> ScanPositions<'_, C, F>
     where
         F: FnMut(&mut ScanTile<'_, '_, C>),
     {
+        assert_eq!(vector_rows, VECTOR_ROWS, "supported provider vector geometry");
         assert!(range.start <= range.end && range.end <= self.rows);
-        assert!(range.start % VECTOR_ROWS == 0 || range.start == self.rows);
-        assert!(range.end % VECTOR_ROWS == 0 || range.end == self.rows);
+        assert!(range.start % vector_rows == 0 || range.start == self.rows);
+        assert!(range.end % vector_rows == 0 || range.end == self.rows);
         ScanPositions {
             table: self,
+            vector_rows,
             configure,
             mask: ScanMask::default(),
             next: range.start,
@@ -1028,13 +1034,14 @@ impl<C: ScanColumns> ScanTable<C> {
     pub fn filter_positions<'table, I, F>(
         &'table self,
         input: I,
+        vector_rows: usize,
         configure: F,
     ) -> FilterRows<'table, C, I::IntoIter, impl FnMut(&ScanPosition<'table>) -> ScanPosition<'table>, F>
     where
         I: IntoIterator<Item = ScanPosition<'table>>,
         F: FnMut(&mut ScanTile<'_, '_, C>),
     {
-        self.filter_rows(input, |position| *position, configure)
+        self.filter_rows(input, vector_rows, |position| *position, configure)
     }
 
     /// Filter carrier tuples without losing fields computed at earlier opaque
@@ -1042,6 +1049,7 @@ impl<C: ScanColumns> ScanTable<C> {
     pub fn filter_rows<'table, I, P, F>(
         &'table self,
         input: I,
+        vector_rows: usize,
         position: P,
         configure: F,
     ) -> FilterRows<'table, C, I::IntoIter, P, F>
@@ -1050,8 +1058,10 @@ impl<C: ScanColumns> ScanTable<C> {
         P: FnMut(&I::Item) -> ScanPosition<'table>,
         F: FnMut(&mut ScanTile<'_, '_, C>),
     {
+        assert_eq!(vector_rows, VECTOR_ROWS, "supported provider vector geometry");
         FilterRows {
             table: self,
+            vector_rows,
             input: input.into_iter(),
             position,
             configure,
@@ -1149,6 +1159,7 @@ impl<'table, C: ScanColumns> ScanTile<'table, '_, C> {
 
 pub struct ScanPositions<'table, C, F> {
     table: &'table ScanTable<C>,
+    vector_rows: usize,
     configure: F,
     mask: ScanMask,
     next: usize,
@@ -1178,10 +1189,10 @@ impl<'table, C: ScanColumns, F: FnMut(&mut ScanTile<'_, '_, C>)> Iterator
                 return None;
             }
             self.start = self.next;
-            self.len = VECTOR_ROWS.min(self.end - self.next);
+            self.len = self.vector_rows.min(self.end - self.next);
             self.next += self.len;
             self.cursor = 0;
-            let mut tile = self.table.tile(self.start, &mut self.mask);
+            let mut tile = self.table.tile(self.start, self.vector_rows, &mut self.mask);
             (self.configure)(&mut tile);
         }
     }
@@ -1189,6 +1200,7 @@ impl<'table, C: ScanColumns, F: FnMut(&mut ScanTile<'_, '_, C>)> Iterator
 
 pub struct FilterRows<'table, C, I, P, F> {
     table: &'table ScanTable<C>,
+    vector_rows: usize,
     input: I,
     position: P,
     configure: F,
@@ -1207,9 +1219,9 @@ where
         for item in self.input.by_ref() {
             let position = (self.position)(&item);
             self.table.check_position(position);
-            let start = position.index / VECTOR_ROWS * VECTOR_ROWS;
+            let start = position.index / self.vector_rows * self.vector_rows;
             if self.start != Some(start) {
-                let mut tile = self.table.tile(start, &mut self.mask);
+                let mut tile = self.table.tile(start, self.vector_rows, &mut self.mask);
                 (self.configure)(&mut tile);
                 self.start = Some(start);
             }
@@ -1224,6 +1236,62 @@ where
 #[cfg(test)]
 mod bounded_payload_laws {
     use super::*;
+
+    #[test]
+    fn declared_granularity_controls_classification_and_payload_reads() {
+        let mut builder = ScanColumnBuilder::<u64, Plain>::with_summaries(
+            BlockRows::new(2048).unwrap(), true, true,
+        );
+        builder.extend(std::iter::repeat_n(7, VECTOR_ROWS));
+        builder.extend(std::iter::repeat_n(9, VECTOR_ROWS));
+        let mut column = builder.finish();
+        for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+            for (point, vector_class, live) in [
+                (7, Classification::Qualified, 1),
+                (9, Classification::Disqualified, 0),
+            ] {
+                for (mode, class) in [
+                    (PruneMode::None, Classification::Ambivalent),
+                    (PruneMode::BlockMinMax, Classification::Ambivalent),
+                    (PruneMode::VectorMinMax, vector_class),
+                ] {
+                    let mut mask = [1; VECTOR_ROWS];
+                    assert_eq!(column.intersect_mask(0, &mut mask, &Predicate::Point(point), mode, test), class);
+                    assert!(mask.iter().all(|&lane| lane == live));
+                }
+            }
+        }
+        // Both buffers remain present; only selected vector bounds skip reads.
+        column.payload = AlignedBytes::default();
+        for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+            for point in [7, 9] {
+                let mut mask = [1; VECTOR_ROWS];
+                column.intersect_mask(0, &mut mask, &Predicate::Point(point), PruneMode::VectorMinMax, test);
+                for mode in [PruneMode::None, PruneMode::BlockMinMax] {
+                    assert!(std::panic::catch_unwind(|| {
+                        let mut mask = [1; VECTOR_ROWS];
+                        column.intersect_mask(0, &mut mask, &Predicate::Point(point), mode, test);
+                    }).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_rejects_unrecorded_vector_geometry() {
+        let table = ScanTable::new((ScanColumn::<u64, Plain>::new(
+            &[7], BlockRows::new(1024).unwrap(), false,
+        ),));
+        for vector_rows in [0, 512, 2048] {
+            assert!(std::panic::catch_unwind(|| {
+                table.scan_positions(0..1, vector_rows, |_| {});
+            }).is_err());
+            assert!(std::panic::catch_unwind(|| {
+                table.filter_positions(std::iter::empty(), vector_rows, |_| {});
+            }).is_err());
+        }
+        assert_eq!(table.scan_positions(0..1, VECTOR_ROWS, |_| {}).count(), 1);
+    }
 
     fn header(rows: u32) -> BlockHeader {
         BlockHeader {
@@ -1248,7 +1316,7 @@ mod bounded_payload_laws {
             assert_eq!(
                 intersect_vector(
                     &headers, &[], Some(&summaries), None, BlockRows::new(1024).unwrap(),
-                    0, &mut mask, &Predicate::Point(7), PruneMode::MinMax, test,
+                    0, &mut mask, &Predicate::Point(7), PruneMode::BlockMinMax, test,
                 ),
                 Classification::Qualified,
             );
@@ -1257,7 +1325,7 @@ mod bounded_payload_laws {
             assert_eq!(
                 intersect_vector(
                     &headers, &[], Some(&summaries), None, BlockRows::new(1024).unwrap(),
-                    0, &mut mask, &Predicate::Point(8), PruneMode::MinMax, test,
+                    0, &mut mask, &Predicate::Point(8), PruneMode::BlockMinMax, test,
                 ),
                 Classification::Disqualified,
             );
@@ -1286,7 +1354,7 @@ mod bounded_payload_laws {
         let mut unused = ScanColumn::<u64, Plain>::new(&[99, 99], BlockRows::new(1024).unwrap(), false);
         unused.payload = AlignedBytes::default();
         let table = ScanTable::new((needed, unused));
-        let position = table.scan_positions(0..2, |_| {}).nth(1).unwrap();
+        let position = table.scan_positions(0..2, VECTOR_ROWS, |_| {}).nth(1).unwrap();
         assert_eq!(table.read_ordinal::<0>(position), 8);
         assert_eq!(
             table.read_value::<0>(position, LogicalRead::FinalAnswer { consumer: "answer" }),

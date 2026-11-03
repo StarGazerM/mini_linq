@@ -252,6 +252,31 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
     rows.push(vec![99, 1, 99, 1000, 1234, 7, 0, 0]); // Missing part.
     parts.push(parts[0].clone());
     for rows in [rows.clone(), rows.into_iter().rev().collect(), Vec::new()] {
+        let sql = format!(
+            r#"WITH lineitem AS (
+            SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,
+                CAST(c3 / 100.0 AS DECIMAL(18,2)) AS l_quantity,
+                CAST(c4 / 100.0 AS DECIMAL(18,2)) AS l_extendedprice,
+                CAST(c5 / 100.0 AS DECIMAL(18,2)) AS l_discount,
+                CASE c6 WHEN 0 THEN 'AIR' WHEN 1 THEN 'AIR REG' ELSE 'RAIL' END AS l_shipmode,
+                CASE c7 WHEN 0 THEN 'DELIVER IN PERSON' ELSE 'TAKE BACK RETURN' END AS l_shipinstruct
+                FROM "mini-linq/raw/0"),
+            part AS (SELECT c0 AS p_partkey,
+                CASE c1 WHEN 0 THEN 'Brand#12' WHEN 1 THEN 'Brand#23'
+                    WHEN 2 THEN 'Brand#34' ELSE 'Brand#99' END AS p_brand,
+                CASE c2 WHEN 0 THEN 'SM CASE' WHEN 1 THEN 'SM BOX' WHEN 2 THEN 'SM PACK'
+                    WHEN 3 THEN 'SM PKG' WHEN 4 THEN 'MED BAG' WHEN 5 THEN 'MED BOX'
+                    WHEN 6 THEN 'MED PKG' WHEN 7 THEN 'MED PACK' WHEN 8 THEN 'LG CASE'
+                    WHEN 9 THEN 'LG BOX' WHEN 10 THEN 'LG PACK' ELSE 'LG PKG' END AS p_container,
+                c3 AS p_size FROM "mini-linq/raw/1") {}"#,
+            h19::SQL
+        );
+        let expected = evaluate_sql(
+            &[raw("Lineitem", 8, rows.clone()), raw("Part", 4, parts.clone())],
+            &sql,
+        )
+        .expect("DuckDB H19 oracle");
+        for &config in h19::CONFIGS {
         let data = h19::Data::from_strings(
             rows.iter()
                 .map(|r| {
@@ -278,32 +303,8 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
                     )
                 })
                 .collect(),
+            config,
         );
-        let sql = format!(
-            r#"WITH lineitem AS (
-            SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,
-                CAST(c3 / 100.0 AS DECIMAL(18,2)) AS l_quantity,
-                CAST(c4 / 100.0 AS DECIMAL(18,2)) AS l_extendedprice,
-                CAST(c5 / 100.0 AS DECIMAL(18,2)) AS l_discount,
-                CASE c6 WHEN 0 THEN 'AIR' WHEN 1 THEN 'AIR REG' ELSE 'RAIL' END AS l_shipmode,
-                CASE c7 WHEN 0 THEN 'DELIVER IN PERSON' ELSE 'TAKE BACK RETURN' END AS l_shipinstruct
-                FROM "mini-linq/raw/0"),
-            part AS (SELECT c0 AS p_partkey,
-                CASE c1 WHEN 0 THEN 'Brand#12' WHEN 1 THEN 'Brand#23'
-                    WHEN 2 THEN 'Brand#34' ELSE 'Brand#99' END AS p_brand,
-                CASE c2 WHEN 0 THEN 'SM CASE' WHEN 1 THEN 'SM BOX' WHEN 2 THEN 'SM PACK'
-                    WHEN 3 THEN 'SM PKG' WHEN 4 THEN 'MED BAG' WHEN 5 THEN 'MED BOX'
-                    WHEN 6 THEN 'MED PKG' WHEN 7 THEN 'MED PACK' WHEN 8 THEN 'LG CASE'
-                    WHEN 9 THEN 'LG BOX' WHEN 10 THEN 'LG PACK' ELSE 'LG PKG' END AS p_container,
-                c3 AS p_size FROM "mini-linq/raw/1") {}"#,
-            h19::SQL
-        );
-        let expected = evaluate_sql(
-            &[raw("Lineitem", 8, rows), raw("Part", 4, parts.clone())],
-            &sql,
-        )
-        .expect("DuckDB H19 oracle");
-        for &config in h19::CONFIGS {
             let actual = h19::run(&data, config)
                 .into_iter()
                 .map(|(revenue,)| vec![integer(revenue)])

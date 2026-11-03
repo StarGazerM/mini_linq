@@ -564,8 +564,8 @@ fn blocks_are_authored_complete_printable_and_preserve_physical() {
     assert_eq!(blocks.predicates["p"].strategy, ir::blocks::Strategy::Window);
     assert_eq!(blocks.reads["g"].fields.keys().map(String::as_str).collect::<Vec<_>>(), ["y"]);
     assert_eq!(blocks.reads["v"].fields.keys().map(String::as_str).collect::<Vec<_>>(), ["x"]);
-    assert_eq!(blocks.reads["canon:out"].purpose, ir::encoded::ReadPurpose::PreserveCarrier);
-    assert_eq!(blocks.reads["canon:out"].fields["x"].action, ir::blocks::ReadAction::Ordinal);
+    assert!(!blocks.reads.contains_key("canon:out"));
+    assert_eq!(blocks.canonical_keys["out"].fields["x"].action, ir::blocks::ReadAction::Ordinal);
 }
 
 #[test]
@@ -612,9 +612,26 @@ fn blocks_keep_exact_disjunction_and_cross_column_predicates() {
 }
 
 #[test]
+fn blocks_reject_closed_only_formula_leaves_with_a_valid_control() {
+    for (condition, admitted) in [
+        (quote!(x >= 0, x < 2), true),
+        (quote!(x >= 0, 1 < 2), false),
+    ] {
+        let source: physical::Program = syn::parse2(quote! { physical {
+            relation R(a: Alias [17], b: Alias [17]);
+            r = pipe rename R@0 { a -> x, b -> y };
+            p = pipe select r if (#condition);
+            return canon p as answer(x,y);
+        }}).unwrap();
+        cq_structure_selection::compile(&source).unwrap();
+        assert_eq!(cq_structure_selection::compile_with(&source, block_advice()).is_ok(), admitted);
+    }
+}
+
+#[test]
 fn blocks_canonical_key_demand_cannot_be_replaced_by_positions() {
     let mut target = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
-    target.encoded.blocks.reads.get_mut("canon:out").unwrap().fields.clear();
+    target.encoded.blocks.canonical_keys.get_mut("out").unwrap().fields.clear();
     assert!(ir::contract::check(&target).is_err());
     let mut target = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
     target.encoded.blocks.reads.get_mut("v").unwrap().fields.get_mut("x").unwrap().action = ir::blocks::ReadAction::BorrowedScoped;
@@ -622,7 +639,7 @@ fn blocks_canonical_key_demand_cannot_be_replaced_by_positions() {
 }
 
 #[test]
-fn blocks_join_and_index_boundaries_reject_before_printing() {
+fn blocks_mixed_join_requires_explicit_positional_host_capability() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a: Alias [17], b: Alias [17]);
         relation S(c: Alias [17]);
@@ -743,4 +760,179 @@ fn blocks_external_consumer_preserves_witness_values_and_owned_computations() {
     let mut forged = selected.clone();
     forged.consumer = Some(reads_key);
     assert!(ir::contract::check(&forged).is_err());
+}
+
+fn blocked_join_source(retained: bool) -> physical::Program {
+    let mode = if retained { quote!(let) } else { quote!(pipe) };
+    syn::parse2(quote! { physical {
+        relation L(a: LeftAlias [17], b: LeftValue [17]);
+        relation R(c: RightAlias [17], d: RightValue [17]);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = #mode rename R@1 {c -> x,d -> z};
+        j = pipe probe first [x] l,r;
+        p = pipe select j if ((y < 3 and z > 9) or (y > 7 and z < 2));
+        v = pipe bind p with value: u64 = (compute(y,z));
+        out = let canon project v keep {x,y,z,value};
+        return out as answer(x,y,z,value);
+    }}).unwrap()
+}
+
+fn blocked_join_advice(left: bool, right: bool) -> proc_macro2::TokenStream {
+    let left = left.then(|| quote!(L { block_rows 1024; summary none; columns [a: bytes u64,b: plain u64]; },));
+    let right = right.then(|| quote!(R { block_rows 2048; summary none; columns [c: plain u64,d: bytes u64]; },));
+    quote!(positional(L,R), blocks(#left #right))
+}
+
+#[test]
+fn blocks_join_both_sides_and_mixed_hosts_cover_original_demand() {
+    use ir::blocks::{IndexKind, Operand};
+    for retained in [false, true] {
+        for (left, right) in [(true, false), (false, true), (true, true)] {
+            let source = blocked_join_source(retained);
+            let selected = cq_structure_selection::compile_with(&source, blocked_join_advice(left, right)).unwrap();
+            assert_eq!(selected.physical, source);
+            ir::contract::check(&selected).unwrap();
+            assert_eq!(syn::parse2::<ir::Program>(selected.to_token_stream()).unwrap(), selected);
+            let blocks = &selected.encoded.blocks;
+            let join = &blocks.joins["j"];
+            assert_eq!(join.binding.kind, if retained { IndexKind::Built } else { IndexKind::Host });
+            assert_eq!(join.payload.positions, ["r"]);
+            assert_eq!(join.positions.iter().map(|p| p.occurrence.as_str()).collect::<Vec<_>>(), ["l", "r"]);
+            assert_eq!(matches!(join.keys[0].left, Operand::Blocked { .. }), left);
+            assert_eq!(matches!(join.keys[0].right, Operand::Blocked { .. }), right);
+            assert!(!blocks.predicates.contains_key("p"));
+            assert_eq!(blocks.carrier_predicates["p"].operands.len(), 2);
+            let read = &blocks.reads["v"];
+            assert_eq!(read.fields.len(), usize::from(left) + usize::from(right));
+            assert_eq!(read.ordinary.len(), 2 - read.fields.len());
+            assert_eq!(blocks.canonical_keys["out"].fields.len() + blocks.canonical_keys["out"].ordinary.len(), 4);
+            assert!(matches!(blocks.canonical_keys["out"].ordinary["value"], Operand::Owned { .. }));
+        }
+    }
+}
+
+#[test]
+fn blocks_mixed_host_bridges_reject_forged_identity_slots_and_capabilities() {
+    use ir::blocks::Operand;
+    let selected = cq_structure_selection::compile_with(&blocked_join_source(false), blocked_join_advice(true, false)).unwrap();
+    for mutate in [
+        (|p: &mut ir::Program| { p.encoded.blocks.positional_hosts.clear(); }) as fn(&mut ir::Program),
+        |p| {
+            if let Operand::Host { slot, .. } = &mut p.encoded.blocks.joins.get_mut("j").unwrap().keys[0].right { *slot = 1; }
+        },
+        |p| {
+            if let Operand::Host { position, .. } = &mut p.encoded.blocks.joins.get_mut("j").unwrap().keys[0].right { *position = 1; }
+        },
+        |p| {
+            if let Operand::Host { logical, .. } = &mut p.encoded.blocks.joins.get_mut("j").unwrap().keys[0].right { *logical = physical::syntax::LogicalTypeId(99); }
+        },
+        |p| {
+            if let Operand::Host { occurrence, .. } = &mut p.encoded.blocks.joins.get_mut("j").unwrap().keys[0].right { *occurrence = "l".into(); }
+        },
+        |p| { p.encoded.blocks.reads.get_mut("v").unwrap().ordinary.clear(); },
+        |p| {
+            p.encoded.blocks.carrier_predicates.get_mut("p").unwrap().operands.remove("z");
+        },
+    ] {
+        let mut invalid = selected.clone();
+        mutate(&mut invalid);
+        assert!(ir::contract::check(&invalid).is_err());
+    }
+    // Changing Rust spellings cannot establish or destroy a bridge.
+    let mut renamed = blocked_join_source(false);
+    for declaration in &mut renamed.program.declarations {
+        for column in &mut declaration.columns { column.ty = syn::parse_quote!(UnrecognizableType); }
+    }
+    cq_structure_selection::compile_with(&renamed, blocked_join_advice(true, false)).unwrap();
+}
+
+#[test]
+fn blocks_join_domains_and_correlated_domains_are_checked_independently() {
+    for (column, condition) in [
+        (quote!(c: Alias [18], d: Alias [17]), quote!(y < z)),
+        (quote!(c: Alias [17], d: Alias [18]), quote!(y < z)),
+    ] {
+        let source: physical::Program = syn::parse2(quote! { physical {
+            relation L(a: Alias [17],b: Alias [17]); relation R(#column);
+            l = pipe rename L@0 {a -> x,b -> y};
+            r = pipe rename R@1 {c -> x,d -> z};
+            j = pipe probe first [x] l,r;
+            p = pipe select j if (#condition);
+            return canon p as answer(x,y,z);
+        }}).unwrap();
+        assert!(cq_structure_selection::compile_with(&source, blocked_join_advice(true, true)).is_err());
+        assert!(cq_structure_selection::compile_with(&source, blocked_join_advice(true, false)).is_err());
+    }
+    let mut selected = cq_structure_selection::compile_with(&blocked_join_source(false), blocked_join_advice(true, true)).unwrap();
+    let id = selected.encoded.blocks.scans["r"].columns["c"];
+    let declaration = selected.encoded.records.representations[&id].declaration;
+    selected.encoded.obligations.declarations.get_mut(&declaration).unwrap().domain.dictionary = Some(ir::encoded::Dictionary { identity: "other".into(), version: 2 });
+    assert!(ir::contract::check(&selected).is_err());
+}
+
+#[test]
+fn blocks_repeated_relations_keep_distinct_occurrence_positions() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a: Alias [17],b: Alias [17]);
+        l = pipe rename R@0 {a -> x,b -> y};
+        r = let rename R@1 {a -> x,b -> z};
+        j = pipe probe first [x] l,r;
+        p = pipe select j if (y < z);
+        return canon p as answer(x,y,z);
+    }};
+    let selected = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+    let facts = ir::contract::check(&selected).unwrap();
+    let join = &selected.encoded.blocks.joins["j"];
+    assert_eq!(join.positions[0].occurrence, "l");
+    assert_eq!(join.positions[1].occurrence, "r");
+    assert_ne!(selected.encoded.blocks.scans["l"].source, selected.encoded.blocks.scans["r"].source);
+    assert_eq!(ir::blocks::position_slot(&source.program.definitions, &facts, "p", "r"), Some(1));
+}
+
+#[test]
+fn blocks_retained_computed_payload_and_reused_index_are_recorded_once() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation L(a: Alias [17],b: Alias [17]); relation R(c: Alias [17],d: Alias [17]);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z};
+        v = pipe bind r with owned: u64 = (compute(z));
+        b = let project v keep {x,z,owned};
+        j = pipe probe first [x] l,b;
+        k = pipe project j keep {x,y};
+        q = pipe probe first [x] k,b;
+        return canon q as answer(x,y,z,owned);
+    }};
+    let selected = cq_structure_selection::compile_with(&source, blocked_join_advice(true, true)).unwrap();
+    let facts = ir::contract::check(&selected).unwrap();
+    let blocks = &selected.encoded.blocks;
+    assert_eq!(blocks.joins["j"].binding, blocks.joins["q"].binding);
+    assert_eq!(blocks.joins["j"].payload, blocks.joins["q"].payload);
+    assert_eq!(blocks.joins["j"].payload.positions, ["r"]);
+    assert_eq!(blocks.joins["j"].payload.owned, ["owned"]);
+    assert_eq!(facts.built["b"].len(), 1);
+    assert!(matches!(facts.repr["b"], ir::Repr::Positions { .. }));
+    let mut invalid = selected;
+    invalid.encoded.blocks.joins.get_mut("q").unwrap().payload.owned.clear();
+    assert!(ir::contract::check(&invalid).is_err());
+}
+
+#[test]
+fn blocks_retyping_retargets_only_selected_join_provider_bindings() {
+    for retained in [false, true] {
+        let source = cq_structure_selection::compile_with(&blocked_join_source(retained), blocked_join_advice(true, true)).unwrap();
+        let target = cq_structure_selection::retype(&source, quote!(
+            providers { alternate = AlternateIndex { reads [exact, range, membership], build inferred }; }
+            result(r) => @alternate as AlternateIndex
+        )).unwrap();
+        let facts = ir::contract::check(&target).unwrap();
+        assert_eq!(target.encoded.blocks.joins["j"].binding.provider, "alternate");
+        assert_eq!(target.encoded.blocks.joins["j"].binding.kind, source.encoded.blocks.joins["j"].binding.kind);
+        assert_eq!(target.encoded.blocks.joins["j"].keys, source.encoded.blocks.joins["j"].keys);
+        assert_eq!(target.encoded.blocks.joins["j"].payload, source.encoded.blocks.joins["j"].payload);
+        assert_eq!(target.encoded.blocks.canonical_keys, source.encoded.blocks.canonical_keys);
+        assert_eq!(facts.repr, ir::contract::check(&source).unwrap().repr);
+        let mut stale = target;
+        stale.encoded.blocks.joins.get_mut("j").unwrap().binding = source.encoded.blocks.joins["j"].binding.clone();
+        assert!(ir::contract::check(&stale).is_err());
+    }
 }

@@ -68,7 +68,7 @@ macro_rules! query {
                 out = let canon project observed keep {x,y};
                 return out as answer(x,y);
             }
-            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; $($providers)* sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; $($providers)* sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 l host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r host scan = @host_scan as ::core::iter::Map<_,_> [];
                 $($reads)*

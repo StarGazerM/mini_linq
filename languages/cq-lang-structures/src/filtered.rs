@@ -387,7 +387,7 @@ mod tests {
                 projected = let canon project selected keep {a};
                 return projected as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 r host scan = @reader as Reader [];
                 selected rows = @rows as Rows;
                 projected rows = @sort as ::cq_storage::dedup::Sort; projected canon = rows;

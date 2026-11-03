@@ -1230,7 +1230,7 @@ mod tests {
                 out = let canon probe first [a] probe,selected;
                 return out as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 r host scan = @reader as Reader [];
                 r canon = host;
                 selected = @sharded(@provider as Provider) as ::cq_storage::sharded::Sharded<Provider> [a];
@@ -1379,7 +1379,7 @@ mod tests {
                 j = let canon probe first [a] l,r;
                 return j as answer(a,b);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 l host scan = @reader as Reader [];
                 r host scan = @reader as Reader [];
                 r = @provider as Provider [a];

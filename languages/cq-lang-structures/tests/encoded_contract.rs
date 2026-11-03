@@ -806,11 +806,11 @@ fn blocked_fixture() -> structures::Program {
         structures {
             providers {
                 input = ScanProvider { reads [], build typed };
-                sort = Dedup { reads [distinct], build inferred, shared };
+                by_value = Dedup { reads [distinct, comparator_rows], build inferred, shared };
             }
             r host scan = @input as ScanProvider [];
             r host result(p) = @input as ScanProvider [x];
-            g head = @sort as Dedup;
+            g head = @by_value as Dedup;
             r repr = positions { R lineage { x -> a, y -> b } } owned [];
             p repr = positions { R lineage { x -> a, y -> b } } owned [];
             g repr = positions { R lineage { x -> a, y -> b } } owned [];
@@ -842,18 +842,19 @@ fn blocked_fixture() -> structures::Program {
         selected.insert(name.into(), representation);
     }
     program.encoded.blocks.sources.insert(source, b::Source {
-        block_rows: 1024, summary: b::Summary::MinMax, columns,
+        block_rows: 1024, vector_rows: 1024, summary: b::Summary::BlockMinMax, columns,
     });
     program.encoded.blocks.scans.insert("r".into(), b::Scan { source, columns: selected });
     program.encoded.blocks.predicates.insert("p".into(), b::Predicate {
         input: "r".into(), source, columns: [("x".into(), RepresentationId(0))].into(),
-        prune: b::Prune::MinMax, test: b::Test::Encoded, strategy: b::Strategy::Window,
+        prune: b::Prune::BlockMinMax, test: b::Test::Encoded, strategy: b::Strategy::Window,
         translation: b::Translation::S1Ordinal, preserves: [Preservation::Order].into(),
     });
     program.encoded.blocks.reads.insert("g".into(), b::Read {
         id: 1, input: "p".into(), consumer: Consumer::OpaqueRust("g".into()),
         purpose: ReadPurpose::OpaqueRustRead,
         fields: [("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Owned })].into(),
+        ordinary: BTreeMap::new(),
     });
     program.encoded.blocks.reads.insert("answer".into(), b::Read {
         id: 2, input: "g".into(), consumer: Consumer::FinalAnswer("answer".into()),
@@ -862,16 +863,57 @@ fn blocked_fixture() -> structures::Program {
             ("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Owned }),
             ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Owned }),
         ].into(),
+        ordinary: BTreeMap::new(),
     });
-    program.encoded.blocks.reads.insert("canon:g".into(), b::Read {
-        id: 3, input: "g".into(), consumer: Consumer::Relational("g".into()),
-        purpose: ReadPurpose::PreserveCarrier,
+    program.encoded.blocks.canonical_keys.insert("g".into(), b::CanonicalKeys {
+        input: "g".into(),
         fields: [
             ("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Ordinal }),
             ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Ordinal }),
         ].into(),
+        ordinary: BTreeMap::new(),
     });
     program
+}
+
+#[test]
+fn blocked_canonicalization_requires_capability_not_provider_spelling() {
+    let mut program = blocked_fixture();
+    check(&program).unwrap();
+    for declaration in &mut program.structures.providers.declarations {
+        declaration.facts.reads.retain(|capability| capability != &structures::Capability::ComparatorRows);
+    }
+    assert!(check(&program).is_err());
+}
+
+#[test]
+fn blocked_formulas_reject_column_free_leaves_before_printing() {
+    use structures::blocks as b;
+    let mut program = blocked_fixture();
+    program.structures.entries.remove(1);
+    program.physical.program.definitions[1].operator = syn::parse_quote!(select r if (x >= 3, x < 9));
+    let predicate = program.encoded.blocks.predicates.get_mut("p").unwrap();
+    predicate.strategy = b::Strategy::Formula;
+    predicate.test = b::Test::DecodeCodes;
+    predicate.prune = b::Prune::None;
+    check(&program).unwrap();
+    program.physical.program.definitions[1].operator = syn::parse_quote!(select r if (x >= 3, 1 < 2));
+    assert!(check(&program).is_err());
+}
+
+#[test]
+fn blocked_summary_granularity_and_provider_geometry_are_checked() {
+    use structures::blocks as b;
+    let mut program = blocked_fixture();
+    program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = b::Summary::VectorMinMax;
+    program.encoded.blocks.predicates.get_mut("p").unwrap().prune = b::Prune::VectorMinMax;
+    assert!(check(&program).is_err());
+    for declaration in program.encoded.obligations.declarations.values_mut() {
+        declaration.buffers.insert(BufferKind::VectorSummaries);
+    }
+    check(&program).unwrap();
+    program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().vector_rows = 2048;
+    assert!(check(&program).is_err());
 }
 
 #[test]
@@ -960,11 +1002,13 @@ fn blocked_external_fixture() -> structures::Program {
             ("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Ordinal }),
             ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Ordinal }),
         ].into(),
+        ordinary: BTreeMap::new(),
     });
     program.encoded.blocks.reads.insert("output:answer:read".into(), b::Read {
         id: 4, input: "g".into(), consumer: Consumer::OpaqueRust("outer".into()),
         purpose: ReadPurpose::OpaqueRustRead,
         fields: BTreeMap::new(),
+        ordinary: BTreeMap::new(),
     });
     program
 }
@@ -1022,4 +1066,171 @@ fn blocks_external_value_codes_accept_plain_nonpreferred_representation() {
         column.widths = [4].into();
     }
     check(&program).unwrap();
+}
+
+/// Independently authored self-join records: no Structures selector is involved.
+fn blocked_join_fixture() -> structures::Program {
+    use structures::blocks as b;
+    let mut program: structures::Program = syn::parse_quote! {
+        physical {
+            relation R(a: Alias [42], b: Alias [42]);
+            r = pipe rename R@0 {a -> x, b -> y};
+            s = pipe rename R@1 {a -> x, b -> z};
+            j = pipe probe first [x] r,s;
+            p = pipe select j if ((y < 3 and z > 9) or (y > 7 and z < 2));
+            return canon p as answer(x,y,z);
+        }
+        structures {
+            providers {
+                input = ScanProvider { reads [], build typed };
+                exact = ArbitraryExactProvider { reads [exact], build inferred };
+                by_value = Dedup { reads [distinct, comparator_rows], build inferred, shared };
+            }
+            r host scan = @input as ScanProvider [];
+            s host scan = @input as ScanProvider [];
+            s host result(j) = @exact as ArbitraryExactProvider [x];
+            p head = @by_value as Dedup;
+            r repr = positions { R lineage {x -> a,y -> b} } owned [];
+            s repr = positions { R lineage {x -> a,z -> b} } owned [];
+            j repr = positions { R lineage {x -> a,y -> b}, R lineage {x -> a,z -> b} } owned [];
+            p repr = positions { R lineage {x -> a,y -> b}, R lineage {x -> a,z -> b} } owned [];
+        }
+    };
+    let base = blocked_fixture();
+    program.encoded = base.encoded;
+    program.encoded.blocks.predicates.clear();
+    program.encoded.blocks.reads.clear();
+    program.encoded.blocks.canonical_keys.clear();
+    program.encoded.obligations.sources.insert(SourceId(2), Source {
+        relation: "R".into(), occurrence: "s".into(), snapshot: SnapshotId(10),
+    });
+    let binding = program.encoded.blocks.sources[&SourceId(1)].clone();
+    program.encoded.blocks.sources.insert(SourceId(2), binding);
+    for (id, column, declaration) in [(2, "a", 1), (3, "b", 2)] {
+        program.encoded.records.representations.insert(RepresentationId(id), Representation {
+            declaration: DeclarationId(declaration), source: SourceId(2),
+            column: column.into(), snapshot: SnapshotId(10),
+        });
+    }
+    program.encoded.blocks.scans.insert("s".into(), b::Scan {
+        source: SourceId(2), columns: [("a".into(), RepresentationId(2)), ("b".into(), RepresentationId(3))].into(),
+    });
+    program.encoded.blocks.joins.insert("j".into(), b::Join {
+        left: "r".into(), right: "s".into(),
+        binding: b::IndexBinding { kind: b::IndexKind::Host, provider: "exact".into(), levels: vec![vec!["x".into()]] },
+        keys: vec![b::JoinKey { column: "x".into(),
+            left: b::Operand::Blocked { representation: RepresentationId(0), position: 0 },
+            right: b::Operand::Blocked { representation: RepresentationId(2), position: 0 } }],
+        positions: vec![
+            b::JoinPosition { side: b::Side::Left, occurrence: "r".into(), input: 0, output: 0 },
+            b::JoinPosition { side: b::Side::Right, occurrence: "s".into(), input: 0, output: 1 },
+        ],
+        owned: vec![], payload: b::Payload { positions: vec!["s".into()], owned: vec![] },
+    });
+    program.encoded.blocks.carrier_predicates.insert("p".into(), b::CarrierPredicate {
+        input: "j".into(),
+        operands: [
+            ("y".into(), b::Operand::Blocked { representation: RepresentationId(1), position: 0 }),
+            ("z".into(), b::Operand::Blocked { representation: RepresentationId(3), position: 1 }),
+        ].into(),
+        preserves: [Preservation::Order].into(),
+    });
+    let reads = |action| [("x", 0), ("y", 1), ("z", 3)].into_iter().map(|(column, id)| {
+        (column.into(), b::FieldRead { representation: RepresentationId(id), action })
+    }).collect();
+    program.encoded.blocks.canonical_keys.insert("p".into(), b::CanonicalKeys {
+        input: "p".into(), fields: reads(b::ReadAction::Ordinal), ordinary: BTreeMap::new(),
+    });
+    program.encoded.blocks.reads.insert("answer".into(), b::Read {
+        id: 2, input: "p".into(), consumer: Consumer::FinalAnswer("answer".into()),
+        purpose: ReadPurpose::FinalHostAnswer, ordinary: BTreeMap::new(), fields: reads(b::ReadAction::Owned),
+    });
+    program
+}
+
+#[test]
+fn blocked_join_independent_records_preserve_occurrences_and_exact_formula() {
+    let program = blocked_join_fixture();
+    let facts = check(&program).unwrap();
+    assert_eq!(structures::blocks::position_slot(&program.physical.program.definitions, &facts, "p", "r"), Some(0));
+    assert_eq!(structures::blocks::position_slot(&program.physical.program.definitions, &facts, "p", "s"), Some(1));
+    assert_eq!(syn::parse2::<structures::Program>(program.to_token_stream()).unwrap(), program);
+    assert!(program.encoded.blocks.predicates.is_empty(), "correlation is not a tile predicate");
+    assert!(!program.encoded.blocks.reads.keys().any(|key| key.starts_with("canon:")));
+    assert_eq!(program.encoded.blocks.canonical_keys["p"].input, "p");
+}
+
+#[test]
+fn blocked_join_independent_mutations_reject_missing_and_forged_contracts() {
+    use structures::blocks as b;
+    let program = blocked_join_fixture();
+    for mutate in [
+        (|p: &mut structures::Program| { p.encoded.blocks.joins.clear(); }) as fn(&mut structures::Program),
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().keys.clear(); },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().keys[0].column = "y".into(); },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().keys[0].right = b::Operand::Blocked { representation: RepresentationId(0), position: 0 }; },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().binding.provider = "input".into(); },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().binding.levels.clear(); },
+        |p| { let key = p.encoded.blocks.joins["j"].keys[0].clone(); p.encoded.blocks.joins.get_mut("j").unwrap().keys.push(key); },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().payload.positions.clear(); },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().payload.owned.push("x".into()); },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().positions[1].occurrence = "r".into(); },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().positions[1].input = 1; },
+        |p| { p.encoded.blocks.joins.get_mut("j").unwrap().positions[1].output = 0; },
+        |p| { p.encoded.blocks.carrier_predicates.clear(); },
+        |p| { p.encoded.blocks.carrier_predicates.get_mut("p").unwrap().operands.remove("z"); },
+        |p| { p.encoded.blocks.carrier_predicates.get_mut("p").unwrap().operands.insert("z".into(), b::Operand::Blocked { representation: RepresentationId(1), position: 0 }); },
+        |p| { p.encoded.blocks.carrier_predicates.get_mut("p").unwrap().preserves.clear(); },
+        |p| { p.encoded.blocks.canonical_keys.get_mut("p").unwrap().fields.remove("z"); },
+        |p| { p.encoded.blocks.canonical_keys.clear(); },
+        |p| { p.encoded.blocks.canonical_keys.get_mut("p").unwrap().input = "j".into(); },
+        |p| { p.encoded.blocks.canonical_keys.get_mut("p").unwrap().fields.get_mut("z").unwrap().action = b::ReadAction::Owned; },
+        |p| { let read = p.encoded.blocks.reads["answer"].clone(); p.encoded.blocks.reads.insert("canon:p".into(), read); },
+        |p| { p.encoded.blocks.reads.get_mut("answer").unwrap().ordinary.insert("z".into(), b::Operand::Owned { column: "z".into() }); },
+        |p| { p.encoded.records.representations.get_mut(&RepresentationId(3)).unwrap().snapshot = SnapshotId(9); },
+    ] {
+        let mut invalid = program.clone();
+        mutate(&mut invalid);
+        assert!(check(&invalid).is_err());
+    }
+}
+
+#[test]
+fn blocked_join_accepts_nonpreferred_provider_and_plain_family() {
+    let mut program = blocked_join_fixture();
+    for entry in &mut program.structures.entries {
+        if let Some(provider) = entry.structure.provider_mut() {
+            if provider.token == "exact" { provider.ty = syn::parse_quote!(AnotherLawfulIndex); }
+        }
+    }
+    program.structures.providers.declarations.iter_mut().find(|d| d.token == "exact").unwrap().ty = syn::parse_quote!(AnotherLawfulIndex);
+    for declaration in program.encoded.obligations.declarations.values_mut() { declaration.family = Family::Plain; }
+    for source in program.encoded.blocks.sources.values_mut() {
+        for column in source.columns.values_mut() { column.widths = [4].into(); }
+    }
+    check(&program).unwrap();
+}
+
+#[test]
+fn blocked_join_accepts_an_independently_reordered_occurrence_layout() {
+    use structures::blocks as b;
+    let mut program = blocked_join_fixture();
+    for entry in &mut program.structures.entries {
+        if entry.name == "j" || entry.name == "p" {
+            if let structures::Structure::Repr { repr: structures::Repr::Positions { bases, .. }, .. } = &mut entry.structure {
+                *bases = bases.iter().rev().cloned().collect();
+            }
+        }
+    }
+    let join = program.encoded.blocks.joins.get_mut("j").unwrap();
+    join.positions[0].output = 1;
+    join.positions[1].output = 0;
+    for (name, slot) in [("y", 1), ("z", 0)] {
+        if let b::Operand::Blocked { position, .. } = program.encoded.blocks.carrier_predicates.get_mut("p").unwrap().operands.get_mut(name).unwrap() {
+            *position = slot;
+        }
+    }
+    let facts = check(&program).unwrap();
+    assert_eq!(b::position_occurrence(&program.physical.program.definitions, &facts, "p", 0).as_deref(), Some("s"));
+    assert_eq!(syn::parse2::<structures::Program>(program.to_token_stream()).unwrap(), program);
 }

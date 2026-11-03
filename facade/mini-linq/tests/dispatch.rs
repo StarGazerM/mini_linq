@@ -204,7 +204,7 @@ fn authored_exact_only_semi_reads_a_cursor_without_membership() {
         structures {
             providers {
                 host_scan = ::core::iter::Map<_, _> { reads [], build typed };
-                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
             }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
@@ -1088,7 +1088,7 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
             out = let canon project observed keep {x,k,z};
             return out as answer(x,k,z);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r native result(s) = exact [k] supports [expand];

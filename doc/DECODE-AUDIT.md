@@ -141,7 +141,7 @@ Blocked CPU scans distinguish physical residual decoding to a retained ordinal
 carrier from reconstruction of an authored Rust value. Encoded predicates and
 canonical keys use ordinal carriers; these are not dictionary string resolution.
 Structures records each original predicate and the exact fields of each consumer.
-Sequence records its bounded scan phases and the point of each demanded read.
+Sequence records source/predicate-run references and the point of each demanded read.
 
 `ScanTable::read_value` is a generic mixed-purpose inverse (**?**); its callers
 must supply an explicitly recorded `OpaqueRust` or `FinalAnswer` authorization.

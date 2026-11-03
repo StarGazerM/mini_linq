@@ -384,7 +384,7 @@ fn checked_bounded_masks_preserve_live_prefix_domain_and_intersection() {
     for live in [0, 1, 1024, 1027, values.len()] {
         let view = column.checked_view(domain(), live).unwrap();
         for test in [TestMode::Encoded, TestMode::DecodeToCode] {
-            for prune in [PruneMode::None, PruneMode::MinMax] {
+            for prune in [PruneMode::None, PruneMode::BlockMinMax, PruneMode::VectorMinMax] {
                 let first = Predicate::Window {
                     lo: Bound::Included(0i64.ordinal()),
                     hi: Bound::Unbounded,
@@ -425,17 +425,29 @@ fn checked_bounded_masks_preserve_live_prefix_domain_and_intersection() {
 
 #[test]
 fn requested_summary_capability_is_not_an_implicit_fallback() {
-    let mut builder = ScanColumnBuilder::<u64, Bytes>::with_domain(
-        BlockRows::new(1024).unwrap(), false, false, domain(),
-    ).unwrap();
-    builder.extend([1, 2, 3]);
-    let column = builder.finish();
-    let view = column.checked_view(domain(), 3).unwrap();
-    let mut mask = [1; 3];
-    assert_eq!(
-        view.intersect_mask(domain().id, 0, &mut mask, &Predicate::Point(2), PruneMode::MinMax, TestMode::Encoded),
-        Err(FormatError::SummaryCount),
-    );
-    view.intersect_mask(domain().id, 0, &mut mask, &Predicate::Point(2), PruneMode::None, TestMode::Encoded).unwrap();
-    assert_eq!(mask, [0, 1, 0]);
+    for (block, vector) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut builder = ScanColumnBuilder::<u64, Bytes>::with_domain(
+            BlockRows::new(1024).unwrap(), block, vector, domain(),
+        ).unwrap();
+        builder.extend([1, 2, 3]);
+        let column = builder.finish();
+        let view = column.checked_view(domain(), 3).unwrap();
+        for test in [TestMode::Encoded, TestMode::DecodeToCode] {
+            for (mode, available) in [
+                (PruneMode::None, true),
+                (PruneMode::BlockMinMax, block),
+                (PruneMode::VectorMinMax, vector),
+            ] {
+                let mut mask = [1; 3];
+                let result = view.intersect_mask(domain().id, 0, &mut mask, &Predicate::Point(2), mode, test);
+                if available {
+                    assert_eq!(result, Ok(Classification::Ambivalent));
+                    assert_eq!(mask, [0, 1, 0]);
+                } else {
+                    assert_eq!(result, Err(FormatError::SummaryCount));
+                    assert_eq!(mask, [1; 3]);
+                }
+            }
+        }
+    }
 }

@@ -197,7 +197,7 @@ mod tests {
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 l host scan = @reader as Reader [];
                 r host scan = @opaque_native as OpaqueNative<i32> [];
                 r host result(answer) = @opaque_native as OpaqueNative<i32> [a];
@@ -282,7 +282,7 @@ mod tests {
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; opaque_native = OpaqueNative<i32> { reads [exact, range, membership], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 l host scan = @reader input { keys 0; columns [i32 => Code codec Codec] } as Reader [];
                 r host scan = @opaque_native as OpaqueNative<i32> [];
                 r host result(answer) = @opaque_native as OpaqueNative<i32> [a];
@@ -425,7 +425,7 @@ mod tests {
             }
             structures { providers {
                 reader = Reader { reads [exact, range, membership], build inferred };
-                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
             }
                 l host scan = @reader input { keys 0; columns [[0] i32 => Code codec [0] Codec] } as Reader [];
                 r host scan = @reader input { keys 0; columns [[0] i32 => Code codec [0] Codec, [1] i32 => Code codec [1] Codec] } as Reader [];
@@ -480,7 +480,7 @@ mod tests {
         let program = encoded();
         let mut analysis = cq_lang_sequence::contract::check(&program).unwrap();
         let sort: Declaration = syn::parse_quote!(
-            sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         );
         let instance = sort.instance();
         let mut catalog = Catalog::default();

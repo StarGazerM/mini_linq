@@ -13,6 +13,39 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Blocked canonical key layouts are now Structures recipes rather than
+  unconditional read packets. Sequence records only executed Canon sites;
+  `group_without_canon` (r6) removes their read references with the eliminated
+  canonicalizers. Exact pull/Tasks regression covers stale/missing
+  execution-reference rejection.
+
+- Authored H19 Plain/Bytes pull/Tasks routes exercise checked blocked
+  join/index position payloads and exact correlated residuals. Existing
+  default/par routes and H12/H14 remain unchanged. Direct blocked loaders use
+  the interned columnar ingestion contract. Row/Plain/Bytes pull/Tasks exact
+  answers pass the DuckDB fixture; no SF1 join performance promotion is claimed.
+  Catalog input-binding checks use those behavioral fixtures, not Rust spelling.
+
+- Public API snapshots normalize tuple-struct and tuple-variant field IDs to
+  stable exported paths, while preserving tuple types and stripped fields.
+
+- Blocked scan contracts reject column-free encoded comparisons and unrecorded
+  base-field Fold Sum reads before printing. Structures now owns explicit
+  block/vector summary granularity and provider vector geometry; execution
+  consumes those facts without buffer-availability fallback or redundant
+  Sequence phase/scratch fields. Canonical rows require a declared comparator
+  capability rather than a provider-name check. Regression fixtures cover the
+  admitted controls and rejected boundaries; verification is pending.
+
+- Q06's authored Tasks `par` route selects blocked Bytes, with explicit
+  `row-par` preserving the row-host comparison. Serial default is unchanged.
+  Fresh Tasks-24 resident measurements retain the change: Bytes/row is
+  0.851 [0.772, 0.939], and 0.822 [0.764, 0.921] under same-source linker
+  shuffle, five paired processes each. All 1,050 timed samples and 250 warmups
+  are exact. Loading and load-plus-one-query are slower, not a claimed win.
+  No global representation policy or join admission changes. Complete evidence:
+  `experiments/storage-bench/results/p5-joins-q06.json`.
+
 - P8 measures Masks against the unconditional Tree reducer on all 29 CPU TPC-H
   SF1 default kernels and the 30-scenario planners corpus. Masks stays default:
   Tree's supported-kernel geometric mean is 1.03541x, versus 1.26056x on the

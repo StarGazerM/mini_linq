@@ -632,7 +632,7 @@ impl Printer<'_> {
         let blocked_columns = (final_read.is_some() || output_carrier.is_some() || output_read.is_some()).then(|| {
             self.carried(result).iter().filter(|column| {
                 [final_read, output_carrier, output_read].into_iter().flatten()
-                    .any(|read| read.fields.contains_key(*column))
+                    .any(|read| read.fields.contains_key(*column) || read.ordinary.contains_key(*column))
                     || self.infos[result].computed.contains(*column)
             }).cloned().collect::<Vec<_>>()
         });
@@ -641,6 +641,7 @@ impl Printer<'_> {
             let pattern = self.bind_columns(result, heading, false);
             let values = heading.iter()
                 .map(|column| self.blocked_read(&symbol_name(&head.relation), result, column)
+                    .or_else(|| self.blocked_ordinary_read(&symbol_name(&head.relation), result, column))
                     .unwrap_or_else(|| self.access(result, column)));
             quote!(::core::iter::Iterator::map(#rows, move |#pattern| (#(#values,)*)))
         } else {

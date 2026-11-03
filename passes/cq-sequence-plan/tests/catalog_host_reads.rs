@@ -34,7 +34,7 @@ fn catalog() -> Catalog {
     let declared: structures::Providers = syn::parse_quote!(providers {
         range_provider = RangeProvider { reads [exact, range, membership], build inferred };
         host_index = HostIndex { reads [exact, range, membership], build inferred };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
     });
     let mut declarations = declared.declarations.into_iter();
     let mut catalog = Catalog {
@@ -64,7 +64,7 @@ fn code_reader(retained: bool) -> structures::Program {
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b,label);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r host result(answer) = @reader as Reader [a];
             answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
@@ -132,7 +132,7 @@ fn numeric_lookup_is_published_before_host_code_expansion() {
             answer = let canon project selected keep {a,b};
             return answer as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; range_provider = RangeProvider { reads [exact, range, membership], build inferred }; host_index = HostIndex { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; range_provider = RangeProvider { reads [exact, range, membership], build inferred }; host_index = HostIndex { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             r host scan = @reader as Reader []; s host scan = @reader as Reader []; t host scan = @reader as Reader [];
             s = @range_provider as RangeProvider [a]; t = @host_index as HostIndex [b];
             answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
@@ -314,7 +314,7 @@ fn full_key_host_membership() -> structures::Program {
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; host_membership = HostMembership { reads [membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; host_membership = HostMembership { reads [membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r host result(answer) = @host_membership as HostMembership [a] membership;
             answer rows = @sort as ::cq_storage::dedup::Sort;
@@ -484,4 +484,46 @@ fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
     // Without the explicit resident token the same handle is not admitted below host.
     let (source, native) = resident(quote::quote!(exact, range, membership));
     assert!(decompose(&source, &machine(), &native).is_err());
+}
+
+#[test]
+fn blocked_catalog_retention_preserves_position_payload_and_canonical_recipes() {
+    let physical: structures::physical::Program = syn::parse_quote! { physical {
+        relation L(a: Alias [17],b: Alias [17]);
+        relation R(c: Alias [17],d: Alias [17],e: Alias [17]);
+        l = pipe rename L@0 {a -> x,b -> y};
+        r = pipe rename R@1 {c -> x,d -> z,e -> unused};
+        j = pipe probe first [x] l,r;
+        out = let canon project j keep {x,y,z};
+        return out as answer(x,y,z);
+    }};
+    let source = cq_structure_selection::compile_with(&physical, quote::quote!(blocks(
+        L { block_rows 1024; summary none; columns [a: bytes u64,b: plain u64]; },
+        R { block_rows 1024; summary none; columns [c: plain u64,d: bytes u64,e: plain u64]; }
+    ))).unwrap();
+    let declarations: structures::Providers = syn::parse_quote!(providers {
+        index = ExactIndex { reads [exact, range, membership], build inferred };
+        unsuitable_canon = OrdinaryDistinct { reads [distinct], build inferred, shared };
+        positional_canon = PositionalDistinct { reads [distinct, comparator_rows], build inferred, shared };
+    });
+    let mut catalog = Catalog::default();
+    for declaration in declarations.declarations {
+        catalog.register(declaration, vec![vec!["host".into()]]);
+    }
+    let target = select_from_catalog(&source, &catalog).unwrap();
+    structures::check_retention_rewrite(&source, &target).unwrap();
+    let facts = structures::contract::check(&target).unwrap();
+    let join = &target.encoded.blocks.joins["j"];
+    assert_eq!(join.binding.kind, structures::blocks::IndexKind::Built);
+    assert_eq!(join.binding.provider, "index");
+    assert_eq!(join.binding.levels, vec![vec!["x".to_owned()]]);
+    assert_eq!(join.payload, source.encoded.blocks.joins["j"].payload);
+    assert_eq!(target.encoded.blocks.canonical_keys, source.encoded.blocks.canonical_keys);
+    assert_eq!(facts.repr, structures::contract::check(&source).unwrap().repr);
+    assert!(!facts.filtered.contains_key("r"), "logical projection must not replace native position payload");
+    assert_eq!(facts.physical.modes["r"], structures::physical::ModeKind::Let);
+    assert!(matches!(&facts.canonical["out"], structures::CanonSource::Rows(provider) if provider.token == "positional_canon"));
+    let mut stale = target;
+    stale.encoded.blocks.joins.get_mut("j").unwrap().binding = source.encoded.blocks.joins["j"].binding.clone();
+    assert!(structures::contract::check(&stale).is_err());
 }

@@ -828,11 +828,10 @@ pub fn compile_with_consumer(
     arguments.facts.apply(&mut recorded)?;
     let mut target = compile(&recorded)?;
     target.consumer = consumer.cloned();
-    if let Some(hosts) = arguments.hosts {
-        positional::choose(&mut target, &hosts)?;
-    }
     if let Some(blocks) = arguments.blocks {
-        blocks::choose(&mut target, &blocks)?;
+        blocks::choose(&mut target, &blocks, arguments.hosts.as_ref())?;
+    } else if let Some(hosts) = &arguments.hosts {
+        positional::choose(&mut target, hosts)?;
     }
     check(&recorded, &target)?;
     Ok(target)

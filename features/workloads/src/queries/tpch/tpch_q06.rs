@@ -17,6 +17,7 @@ pub const CONFIGS: &[&str] = &[
     "built_hash",
     "built_radix",
     "par",
+    "row-par",
     "no-reduce",
     "generic-smallest",
     "staged",
@@ -128,7 +129,7 @@ pub fn load(root: &Path, config: &str) -> Result<Data, Box<dyn Error>> {
             PlainLineitemLoader::parquet(path, Default::default(), blocks, false)?
                 .bind_domains(&scan_domains())?,
         ),
-        "blocks-bytes" | "blocks-bytes-par" => LineitemInput::Bytes(
+        "par" | "blocks-bytes" | "blocks-bytes-par" => LineitemInput::Bytes(
             BytesLineitemLoader::parquet(path, Default::default(), blocks, false)?
                 .bind_domains(&scan_domains())?,
         ),
@@ -204,7 +205,7 @@ crate::tpch_runtime::configuration!(staged, $,
     query_body!();
 });
 
-// Authored scan representations; ordinary configurations retain their row host.
+// Authored scan representations; serial default and row-par retain their row host.
 crate::tpch_runtime::configuration!(blocks_plain, $, {
     select = ::mini_linq::passes::select(blocks(lineitem {
         block_rows 1024; summary none;
@@ -247,7 +248,8 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
         "radix_retained" => radix_retained::execute(data),
         "built_hash" => built_hash::execute(data),
         "built_radix" => built_radix::execute(data),
-        "par" => par::execute(data),
+        "par" => blocks_bytes_par::execute(data),
+        "row-par" => par::execute(data),
         "staged" => staged::execute(data),
         "no-reduce" => no_reduce::execute(data),
         "generic-smallest" => generic_smallest::execute(data),
@@ -298,7 +300,7 @@ mod tests {
                     column(rows, |r| r.4), column(rows, |r| r.5),
                 )).bind_domains(&scan_domains()).unwrap(),
             ),
-            "blocks-bytes" | "blocks-bytes-par" => LineitemInput::Bytes(
+            "par" | "blocks-bytes" | "blocks-bytes-par" => LineitemInput::Bytes(
                 cq_storage::scan::ScanTable::new((
                     column(rows, |r| r.0), column(rows, |r| r.1),
                     column(rows, |r| r.2), column(rows, |r| r.3),
@@ -355,7 +357,7 @@ mod tests {
             ))
             .collect();
         rows.push(rows[0]);
-        for config in ["default", "par", "blocks-plain", "blocks-bytes",
+        for config in ["default", "par", "row-par", "blocks-plain", "blocks-bytes",
             "blocks-plain-par", "blocks-bytes-par"] {
             assert_eq!(run(&input(&rows, config), config), [Some(2057 * 50_000)]);
         }

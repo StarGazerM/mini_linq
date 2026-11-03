@@ -318,7 +318,16 @@ impl<'a> Context<'a> {
             });
             let payload = a.payload.iter().map(|c| self.access(result, c));
             let capture = self.carries_positions(result).then(|| quote!(move));
-            let pairs = quote!(::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*), (#(#payload,)*))));
+            let pairs = if let Some(join) = self.blocked_index(result, std::slice::from_ref(&a.key)) {
+                let key = self.blocked_index_key(result, join, &a.key);
+                let payload = self.blocked_index_payload(result, join);
+                let mut columns = self.carried(result).to_vec();
+                columns.extend(join.payload.owned.iter().cloned());
+                let pattern = self.bind_columns(result, &columns, false);
+                quote!(::core::iter::Iterator::map(#rows, move |#pattern| (#key, #payload)))
+            } else {
+                quote!(::core::iter::Iterator::map(#rows, #capture |#pattern| ((#(#key,)*), (#(#payload,)*))))
+            };
             let ty = ty.ty.clone();
             let build_name = format!("{result}.fallback.{}", columns.join("_"));
             self.profile_label(

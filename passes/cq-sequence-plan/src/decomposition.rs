@@ -154,11 +154,11 @@ pub(crate) fn widths(level: &LevelNode) -> Vec<usize> {
     widths
 }
 
-/// Source vector geometry is a Sequence execution fact, not a machine-width
+/// Source vector geometry is a Structures provider fact, not a machine-width
 /// guess. Alignment is selected here and subsequently checked independently.
 fn blocked_tile_rows(program: &Program, term: &Term) -> Option<usize> {
     match term {
-        Term::Rows(name) => program.representation.blocks.scans.get(&cq_lang_sequence::structures::symbol_name(name)).map(|scan| scan.tile_rows),
+        Term::Rows(name) => program.representation.blocks.scans.get(&cq_lang_sequence::structures::symbol_name(name)).map(|scan| program.structures.encoded.blocks.sources[&scan.source].vector_rows),
         Term::Ref(name) => producer(program, name).and_then(|term| blocked_tile_rows(program, term)),
         Term::Map(_, inner) | Term::Compact(_, inner) | Term::Flatten(inner) | Term::Lookup { inner, .. } | Term::Fold(_, inner) | Term::Group(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } => blocked_tile_rows(program, inner),
         Term::Choose(arms) => arms.iter().filter_map(|(_, term)| blocked_tile_rows(program, term)).max(),

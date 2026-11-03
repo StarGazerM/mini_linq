@@ -157,7 +157,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
             out = let canon project p keep {k,v};
             return out as answer(k,v);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; foreign_index = ForeignIndex<_,_> { reads [exact, range, membership], supports [expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; foreign_index = ForeignIndex<_,_> { reads [exact, range, membership], supports [expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r = @foreign_index as ForeignIndex<_,_> [k] supports [expand, keys];
@@ -234,7 +234,7 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             candidate = pipe probe smallest [b] pre_s,r;
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
-        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; foreign_directory = ForeignDirectory { reads [exact, range, membership], supports [retain, expand], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; foreign_directory = ForeignDirectory { reads [exact, range, membership], supports [retain, expand], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             s host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -299,7 +299,7 @@ fn retained_host_fallback_is_shared_and_consumes_the_same_cursor() {
             s = pipe semi eager [x] l,r;
             p = let canon probe first [x] s,r;
             return p as answer(x,y);
-        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
             r host result(s) = @snapshot_alias as SnapshotAlias<_,_> [x] supports [expand, keys];

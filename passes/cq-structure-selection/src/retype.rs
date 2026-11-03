@@ -275,6 +275,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
     let mut declared = request.declared.declarations;
     declared.extend(cq_lang_structures::provider::base::declarations());
     target.structures.declare(&declared)?;
+    ir::blocks::refresh_join_bindings(&mut target)?;
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

@@ -100,7 +100,7 @@ impl Context<'_> {
             .map(|origin| self.witness_ident(origin))
     }
 
-    fn witness_fields(&self, result: &str) -> Vec<Ident> {
+    pub(super) fn witness_fields(&self, result: &str) -> Vec<Ident> {
         self.carried_witnesses[result]
             .iter()
             .map(|origin| self.witness_ident(origin))
@@ -117,8 +117,12 @@ impl Context<'_> {
 
     pub(super) fn position_ident(&self, result: &str, index: usize) -> Ident {
         let mut occurrence = result;
+        let source = structures::blocks::position_occurrence(
+            self.physical_definitions, self.analysis, result, index,
+        ).expect("checked position occurrence");
+        let mut index = index;
         loop {
-            occurrence = match &self.physical[occurrence].operator {
+            let input = match &self.physical[occurrence].operator {
                 Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
                     self.physical
                         .get_key_value(&symbol_name(&s.input))
@@ -145,6 +149,11 @@ impl Context<'_> {
                 }
                 _ => break,
             };
+            let Some(slot) = structures::blocks::position_slot(
+                self.physical_definitions, self.analysis, input, &source,
+            ) else { break; };
+            occurrence = input;
+            index = slot;
         }
         format_ident!(
             "__cq_position_{}_{}",
@@ -321,7 +330,7 @@ impl Context<'_> {
     /// Forward a subset after a filtering adapter without retaining dead columns.
     pub fn forward(&self, result: &str, input: &str, rows: TokenStream) -> TokenStream {
         if self.carried(result) == self.carried(input)
-            && self.carries_positions(result) == self.carries_positions(input)
+            && self.analysis.repr.get(result) == self.analysis.repr.get(input)
             && self.carried_witnesses[result] == self.carried_witnesses[input]
         {
             return rows;

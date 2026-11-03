@@ -327,6 +327,9 @@ fn select(
             | Structure::Stage { .. }
             | Structure::Share { .. } => continue,
         };
+        if kind == "canon" && source.encoded.blocks.canonical_keys.contains_key(&name) {
+            required.push(Capability::ComparatorRows);
+        }
         let support_required = match &entry.structure {
             Structure::Built { keyed, .. } => {
                 required_support(source, &analysis, &name, keyed, false)
@@ -360,7 +363,8 @@ fn select(
                         || recorded(&candidate))
                     && if kind == "canon" {
                         // Packed bounds are runtime codec facts, never inferred from Rust types.
-                        facts.packed_bits.is_none() && facts.reads(&Capability::Distinct)
+                        facts.packed_bits.is_none()
+                            && required.iter().all(|capability| facts.reads(capability))
                     } else {
                         supplies_support(&facts, &support_required)
                             && required.iter().all(|capability| facts.reads(capability))
@@ -573,7 +577,8 @@ fn retain_host_index(
         }
         if indexes.insert((name.clone(), keys.clone())) {
             // A retained native representation keeps its original row ABI.
-            let projected = if native.is_some() { None } else { projected };
+            let positional_payload = source.encoded.blocks.joins.values().any(|join| join.right == name);
+            let projected = if native.is_some() || positional_payload { None } else { projected };
             let provider = if native.is_some() {
                 &keyed.provider
             } else {
@@ -604,6 +609,7 @@ fn retain_host_index(
             || !matches!(&entry.structure, Structure::Host { reader, .. } if !matches!(reader, structures::ReaderRef::Scan))
     });
     target.structures.declare(&catalog.declarations)?;
+    structures::blocks::refresh_join_bindings(&mut target)?;
     structures::contract::check(&target)?;
     Ok(target)
 }

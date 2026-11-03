@@ -345,10 +345,11 @@ impl<'a> CheckedScanView<'a> {
         {
             return Err(FormatError::Position);
         }
-        if prune == PruneMode::MinMax
-            && self.metadata.block_summaries.is_none()
-            && self.metadata.vector_summaries.is_none()
-        {
+        if match prune {
+            PruneMode::None => false,
+            PruneMode::BlockMinMax => self.metadata.block_summaries.is_none(),
+            PruneMode::VectorMinMax => self.metadata.vector_summaries.is_none(),
+        } {
             return Err(FormatError::SummaryCount);
         }
         Ok(super::intersect_vector(

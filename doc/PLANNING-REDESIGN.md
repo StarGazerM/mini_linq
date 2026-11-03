@@ -827,12 +827,24 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   Main's consolidated-workspace gate. Complete samples, controls, source/binary
   identities, faults, counter caveats and per-command gate times:
   `experiments/storage-bench/results/p5-s3-q06.json`.
-  **Next-step proposal only (not implemented):** author Bytes on Q06's existing
-  Tasks/par route, retaining the serial row host and explicit representation
-  facts rather than a query-name-specific compiler rule. After join/index
-  integration, evaluate and author the Tasks routes for H12/H14/H19 under the
-  same exactness, paired-measurement and layout-control requirements. The
-  present `par` route and other kernels are unchanged by this proposal.
+  **Authored parallel checkpoint retained:** Q06 `par` selects blocked Bytes;
+  `row-par` executes the unchanged prior row-host Tasks module. Serial default
+  remains row-backed. Fresh SF1 Tasks-24 resident ratio is **0.851
+  [0.772, 0.939]** (row/Bytes medians 10.192/8.615 ms); same-source shuffled
+  ratio is **0.822 [0.764, 0.921]**. Five interleaved pairs per comparison;
+  all 1,050 samples and 250 warmups exact. Layout shuffled/normal controls:
+  row 1.032 [1.002, 1.068], Bytes 1.008 [0.924, 1.099]. This is a resident
+  query win, not an ingestion win: median row/Bytes load 539.901/575.061 ms,
+  load-plus-one-query 550.415/584.226 ms. No historical binary was rebuilt:
+  the comparison is against the same-source explicit row-host control.
+  Evidence: `experiments/storage-bench/results/p5-joins-q06.json`.
+  General blocked join/index contracts, shared emission and authored H19
+  Plain/Bytes pull/Tasks routes are now edited, but their integration/test
+  gates and SF1 measurements are outstanding at user-requested wrap-up.
+  H19 uses matched written/no-reduce controls (`advised`, `row-join-par`);
+  existing default/par and H12/H14 remain unchanged. No join speedup or
+  promotion is claimed. Author H12/H14 only if H19's measured result and
+  their SF1 byte census justify it; preserve H12 MatchingLines. Otherwise stop.
 - **P6 GPU storage** (compression for transfer/capacity first; resident
   scan codecs only where measured). Slice A adds an opt-in shared S1
   Plain/Bytes format and recorded read contracts, not automatic selection.

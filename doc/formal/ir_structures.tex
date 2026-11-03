@@ -865,7 +865,8 @@ the immutable table binding, aligned lengths, geometry, domain and snapshot.
  \mathsf{serves}(P,o) \quad
  \mathsf{repr}(c)=(P,R,o,c,s,d,\mathsf{S1},f,w) \quad
  f\in\{\mathsf{Plain},\mathsf{Bytes}\}\\
- b>0 \quad b\bmod1024=0 \quad b\leq 2^{32}-1 \quad
+ v=\mathsf{vectorRows}(B)=1024 \quad
+ b>0 \quad b\bmod v=0 \quad b\leq 2^{32}-1 \quad
  \mathsf{widths}(\mathsf{Plain},w)=\{w\} \quad
  \mathsf{widths}(\mathsf{Bytes},w)=\{0,1,2,w\}\cap[0,w]
 }{
@@ -873,9 +874,11 @@ the immutable table binding, aligned lengths, geometry, domain and snapshot.
 }
 \end{mathpar}
 The abstraction concatenates decoded blocks in original occurrence order.
-Summary capability means an enclosing min/max for that same immutable source.
-Geometry and permissible physical widths are checked independently of the
-encoder; the actual residual width remains runtime header data. Domain
+Summary capability names an enclosing min/max buffer at exactly block or vector
+granularity for that immutable source. Runtime uses the selected buffer even
+when both exist, never a summary-availability fallback. Geometry is a provider
+fact passed to execution, not duplicated Sequence advice. Geometry and physical
+widths are independently checked; actual residual width is runtime header data. Domain
 namespaces reify explicit binder identities, scoped by this source provider:
 logical-only $i$ maps to $2i+1$, code-domain $d$ to $2d+2$, with the declared
 dictionary version or zero. This is not a cross-query dictionary equivalence.
@@ -896,8 +899,10 @@ dictionary version or zero. This is not a cross-query dictionary equivalence.
  \mathsf{lineage}(p)=\mathsf{originalLineage}(p)\\
  \mathsf{ops}(\theta)\subseteq\mathsf{preserves}(P) \quad
  \mathsf{translation}=\mathsf{S1Ordinal} \quad
- \mathsf{prune}=\mathsf{minmax}\Rightarrow
-    (\mathsf{enclosingSummary}(P)\land\mathsf{unaryExactTemplate}(\theta))
+ \mathsf{prune}=\mathsf{minmax}(g)\Rightarrow
+    (\mathsf{enclosingSummary}(P,g)\land\mathsf{unaryExactTemplate}(\theta))\\
+ \forall \ell\in\mathsf{comparisonLeaves}(\theta).\ 
+    \mathsf{hasDeclaredColumnOperand}(\ell)
 }{
  p\vdash(\mathsf{prune},\mathsf{test},\mathsf{strategy})
 }
@@ -914,6 +919,12 @@ read once for the live row before evaluating the full formula. Necessary unary
 envelopes cannot discharge a correlated formula. Window and Point admit both
 encoded residual testing and explicitly selected physical decode-to-code tests.
 Adding a frame base reconstructs a global ordinal, not an authored Rust value.
+Closed-only comparison leaves currently reject: no declared column supplies
+their translation domain, and the printer may not discover a host-predicate
+execution form. Canonical blocked rows require the declared
+\code{comparator\_rows} capability, not a provider token spelling. That
+capability promises sort/par-sort by the supplied complete logical comparator
+while retaining one representative carrier per equal key.
 
 \paragraph{Reads, ownership and the checkpoint boundary.}
 Each opaque Bind/Guard records exactly its original free-variable demand,
@@ -950,9 +961,12 @@ original requirement, rejecting simultaneous edits to it and its selected
 packets. The printer emits the selected actions; it does not infer consumers
 or reconstruct ignored values.
 
-Canonical reads name the canonical result with purpose
-\code{PreserveCarrier} and action \code{Ordinal}, covering every noncomputed
-logical heading field. They authorize no inverse codec. Canonical equality is
+Canonical key recipes name the canonical result, covering every heading field
+with an \code{Ordinal} action or its recorded ordinary/computed operand.
+They authorize no inverse codec and are not unconditional executable reads:
+Structures owns the key layout, while Sequence owns each actual \code{Canon}
+execution site. Removing an execution site does not remove its source recipe.
+Canonical equality is
 equality of the full logical heading (ordinal keys plus owned computed values),
 not equality of occurrence positions; equal witnesses at different positions
 still deduplicate by value. Comparator rows are explicitly selected for this
@@ -964,13 +978,19 @@ rows. A Group may consume owned computed operands. A group key or aggregate
 argument that reads an encoded base field is rejected before printing; it
 requires a future explicit relational carrier/group protocol, not an opaque
 read or an inverse-codec fallback. Computed-only grouping remains supported.
-Any blocked occurrence reaching a join, index, noncanonical
-retained store, fused scope or restricted Rename (source atom literals) is
-rejected by the Structures checker before printing. A blocked source also
-rejects runtime \code{host\_set} certification through the borrowed-row
-protocol; an already-discharged uniqueness premise remains admissible.
-This is an explicit checkpoint boundary, not a
-claim of complete blocked join/index support. Unknown and unadvised hosts keep
+The join extension records exact Probe key pairs, the existing selected
+host-fallback or built-index binding, occurrence-qualified input/output
+position slots, and native-position/owned-field payloads. Blocked operands
+reference encoded representations; explicitly positional ordinary hosts use a
+recorded forward \code{OrderKey64} bridge with checked logical/domain identity.
+Carrier-local predicates retain the full post-join formula and do not enter
+single-source tile runs. Reused occurrences retain their checked field lineage.
+No whole base row is materialized for an index payload.
+Fused scopes, restricted Rename (source atom literals), and runtime
+\code{host\_set} certification through borrowed rows remain rejected;
+already-discharged uniqueness premises remain admissible. This implementation
+checkpoint has unrun integration fixtures and no H19 performance evidence.
+Unknown and unadvised hosts keep
 the prior Structures decisions. Correspondence checks Physical preservation;
 the language checker derives source, predicate, canonical and consumer
 coverage independently, without invoking selection or requiring its preferred

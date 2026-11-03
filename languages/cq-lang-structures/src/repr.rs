@@ -190,6 +190,10 @@ pub struct ReprBase {
 /// and carry computed values alongside their positions. Do not relax `lineages`:
 /// selection/keyset/read still require its original single-base proof.
 pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<String, Vec<Lineage>> {
+    representation_bases_of(&program.physical.program.definitions, facts)
+}
+
+pub fn representation_bases_of(definitions: &[physical::Definition], facts: &Analysis) -> BTreeMap<String, Vec<Lineage>> {
     let mut result: BTreeMap<String, Vec<Lineage>> = BTreeMap::new();
     let scoped: BTreeSet<_> = facts
         .physical
@@ -197,7 +201,7 @@ pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<Str
         .values()
         .flat_map(|group| group.members.iter())
         .collect();
-    for definition in &program.physical.program.definitions {
+    for definition in definitions {
         let name = symbol_name(&definition.name);
         if scoped.contains(&name) {
             continue;
@@ -216,10 +220,11 @@ pub fn representation_bases(program: &Program, facts: &Analysis) -> BTreeMap<Str
             Operator::Probe(_, keyed) | Operator::Semi(_, keyed) | Operator::Merge(_, keyed) => {
                 let mut origins = of(&keyed.left);
                 for origin in of(&keyed.right) {
-                    if !origins
-                        .iter()
-                        .any(|left| left.occurrence == origin.occurrence)
-                    {
+                    if let Some(left) = origins.iter_mut().find(|left| left.occurrence == origin.occurrence) {
+                        // A reused index can reintroduce fields projected away
+                        // since an earlier hit on this same source occurrence.
+                        left.columns.extend(origin.columns);
+                    } else {
                         origins.push(origin);
                     }
                 }

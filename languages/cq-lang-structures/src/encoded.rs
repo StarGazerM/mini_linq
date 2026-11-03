@@ -684,6 +684,14 @@ impl Wire for u64 {
         syn::LitInt::new(&self.to_string(), Span::call_site()).to_tokens(tokens);
     }
 }
+impl Wire for usize {
+    fn read(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<syn::LitInt>()?.base10_parse()
+    }
+    fn emit(&self, tokens: &mut TokenStream) {
+        syn::LitInt::new(&self.to_string(), Span::call_site()).to_tokens(tokens);
+    }
+}
 impl Wire for bool {
     fn read(input: ParseStream<'_>) -> syn::Result<Self> {
         Ok(input.parse::<syn::LitBool>()?.value)
@@ -730,6 +738,23 @@ impl<T: Wire> Wire for Option<T> {
             value.emit(&mut body);
         }
         tokens.extend(quote!((#body)));
+    }
+}
+impl<T: Wire> Wire for Vec<T> {
+    fn read(input: ParseStream<'_>) -> syn::Result<Self> {
+        let body;
+        syn::bracketed!(body in input);
+        let mut result = Vec::new();
+        while !body.is_empty() {
+            result.push(T::read(&body)?);
+            if !body.is_empty() { body.parse::<Token![,]>()?; }
+        }
+        Ok(result)
+    }
+    fn emit(&self, tokens: &mut TokenStream) {
+        let mut body = TokenStream::new();
+        for value in self { value.emit(&mut body); body.extend(quote!(,)); }
+        tokens.extend(quote!([#body]));
     }
 }
 impl<K: Wire + Ord, V: Wire> Wire for BTreeMap<K, V> {
@@ -939,20 +964,57 @@ record!(Contract {
 });
 mod blocked_wire {
     use super::*;
-    use crate::blocks::{Column, Source, Scan, Predicate, FieldRead, Read, Contract, Summary, Prune, Test, Translation, Strategy, ReadAction};
-    atoms!(Summary { None, MinMax });
-    atoms!(Prune { None, MinMax });
+    use crate::blocks::{Column, Source, Scan, Predicate, FieldRead, Read, Contract, Summary, Prune, Test, Translation, Strategy, ReadAction, Operand, Bridge, Side, IndexKind, IndexBinding, JoinKey, JoinPosition, Payload, Join, CarrierPredicate};
+    use crate::blocks::CanonicalKeys;
+    atoms!(Summary { None, BlockMinMax, VectorMinMax });
+    atoms!(Prune { None, BlockMinMax, VectorMinMax });
     atoms!(Test { Encoded, DecodeCodes });
     atoms!(Translation { S1Ordinal });
     atoms!(Strategy { Window, Point, Formula });
     atoms!(ReadAction { Owned, BorrowedScoped, Ordinal });
+    atoms!(Bridge { OrderKey64 });
+    atoms!(Side { Left, Right });
+    atoms!(IndexKind { Host, Built });
+    record!(IndexBinding { kind, provider, levels });
+    record!(JoinKey { column, left, right });
+    record!(JoinPosition { side, occurrence, input, output });
+    record!(Payload { positions, owned });
+    record!(Join { left, right, binding, keys, positions, owned, payload });
+    record!(CarrierPredicate { input, operands, preserves });
+    impl Wire for Operand {
+        fn read(input: ParseStream<'_>) -> syn::Result<Self> {
+            let tag: syn::Ident = input.parse()?;
+            let body; parenthesized!(body in input);
+            macro_rules! field { () => {{ let value = Wire::read(&body)?; body.parse::<Token![,]>()?; value }}; }
+            let operand = match tag.to_string().as_str() {
+                "Blocked" => Self::Blocked { representation: field!(), position: field!() },
+                "Host" => Self::Host { occurrence: field!(), column: field!(), position: field!(), slot: field!(), logical: field!(), domain: field!(), bridge: field!() },
+                "Owned" => Self::Owned { column: field!() },
+                _ => return Err(syn::Error::new_spanned(tag, "unknown blocked operand")),
+            };
+            require(body.is_empty(), "extra operand fields")?;
+            Ok(operand)
+        }
+        fn emit(&self, tokens: &mut TokenStream) {
+            let mut body = TokenStream::new();
+            macro_rules! fields { ($($field:expr),*) => { $($field.emit(&mut body); body.extend(quote!(,));)* }; }
+            let tag = match self {
+                Self::Blocked { representation, position } => { fields!(representation, position); "Blocked" }
+                Self::Host { occurrence, column, position, slot, logical, domain, bridge } => { fields!(occurrence, column, position, slot, logical, domain, bridge); "Host" }
+                Self::Owned { column } => { fields!(column); "Owned" }
+            };
+            syn::Ident::new(tag, Span::call_site()).to_tokens(tokens);
+            tokens.extend(quote!((#body)));
+        }
+    }
     record!(Column { slot, logical, declaration, widths });
-    record!(Source { block_rows, summary, columns });
+    record!(Source { block_rows, vector_rows, summary, columns });
     record!(Scan { source, columns });
     record!(Predicate { input, source, columns, prune, test, strategy, translation, preserves });
     record!(FieldRead { representation, action });
-    record!(Read { id, input, consumer, purpose, fields });
-    record!(Contract { sources, scans, predicates, reads });
+    record!(Read { id, input, consumer, purpose, fields, ordinary });
+    record!(CanonicalKeys { input, fields, ordinary });
+    record!(Contract { sources, scans, predicates, positional_hosts, joins, carrier_predicates, canonical_keys, reads });
 }
 impl Wire for Consumer {
     fn read(input: ParseStream<'_>) -> syn::Result<Self> {

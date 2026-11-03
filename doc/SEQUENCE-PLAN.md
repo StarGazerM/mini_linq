@@ -131,14 +131,21 @@ impl cq_stage::Language for Program { … }
 `Representation { identity: BTreeSet<String>, encoded: BTreeSet<String>,
 blocks: blocks::Execution }` prints as optional trailing
 `representation { identity [...]; encoded [...]; blocks { ... } }`
-after evidence. The optional CPU blocks section records source scan geometry,
-native position carriers, bounded scratch, ordered predicate phases, fused
-predicate runs and exact read-consumer identities. It references the
-Structures-owned representations and predicate decisions, rather than selecting
-families or reinterpreting Rust types. `BE-Blocks` checks phase coverage,
+after evidence. The optional CPU blocks section records source IDs, fused
+predicate runs and exact read-consumer identities. Source vector geometry and
+prune/test decisions remain authoritative Structures facts; Sequence does not
+repeat scratch lengths or predicate phases. `scan "r" (source_id);` references
+the native positional source. `BE-Blocks` checks source and run coverage,
 single-consumer fusion paths, aligned disjoint tiles and demanded-read placement
 independently of the producer; a lawful split run is not rejected merely because
 the lowering prefers one reused mask. Pull and Tasks print these checked facts.
+Fold Sum over a blocked base field rejects until a Structures read authorizes
+it; computed operands remain supported.
+Canonical key layouts live in Structures `blocks.canonical_keys`, not as
+unconditional executable reads. Sequence records `read "canon:input";` only
+when an actual `Canon` constructor uses that recipe. `group_without_canon`
+(r6) removes those references with the eliminated constructors under its
+existing checked uniqueness proof; the source key recipe remains unchanged.
 Ordinary programs have no blocks records and retain their prior realization.
 Recorded `route` entries also identify each `PartitionK` source key's
 Structures representation. Routing compares/hashes compatible global ordinal

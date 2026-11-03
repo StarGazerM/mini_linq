@@ -107,10 +107,13 @@ pub enum Capability {
     /// narrow by a positional predicate, and expose survivor positions and rows.
     /// This is not membership of logical keys or canonical row storage.
     Positions,
+    /// Sort arbitrary carriers by the supplied complete logical comparator,
+    /// retaining one representative per equal key; supports sort/par_sort.
+    ComparatorRows,
 }
 
 impl Capability {
-    const ALL: [(Capability, &'static str); 8] = [
+    const ALL: [(Capability, &'static str); 9] = [
         (Capability::Exact, "exact"),
         (Capability::Range, "range"),
         (Capability::Membership, "membership"),
@@ -119,6 +122,7 @@ impl Capability {
         (Capability::Resident, "resident"),
         (Capability::Candidates, "candidates"),
         (Capability::Positions, "positions"),
+        (Capability::ComparatorRows, "comparator_rows"),
     ];
 
     fn name(&self) -> &'static str {

@@ -108,7 +108,7 @@ fn raw_membership_proof_rejects_unbound_payload_columns() {
             result = let canon project joined keep {x,y};
             return result as answer(x,y);
         }
-        structures { providers { adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             r = @adaptive_membership as ::cq_storage::AdaptiveMembership<_, 64> [x] membership;
             r rows = @vec as ::std::vec::Vec<_>;
             l host scan = @host_scan as ::core::iter::Map<_, _> [];

@@ -1216,16 +1216,19 @@ boundaries.
 Structures owns source/declaration/representation identities, the exact
 Physical predicate, its translation and summary strategy, and every authorized
 read demand. Sequence adds a printable execution refinement, not another
-family or domain table. Each scan names its Structures source, a native
-snapshot-bound position carrier, a 1024-row vector and a 1024-byte reusable
-mask. The final vector is clipped to the initialized source extent; an empty
-extent produces no positions and performs no predicate or payload work.
+family or domain table. Each scan names its Structures source and a native
+snapshot-bound position carrier. Structures records the provider's vector
+geometry (currently 1024 rows); scan execution and Tasks range splitting
+consume that value. The provider uses one fixed reusable byte mask of that
+extent. Sequence does not duplicate geometry, scratch size or prune phases.
+The final vector is clipped to initialized extent; empty inputs do no work.
 \begin{mathpar}
 \Rule{BE-Blocks}{
  \mathsf{STRBlocks}(s)\quad
- \mathsf{cover}(s)=\biguplus_i[1024i,\min(1024(i+1),|s|))\\
+ v=\mathsf{StructuresVectorRows}(s)\quad
+ \mathsf{cover}(s)=\biguplus_i[vi,\min(v(i+1),|s|))\\
  \mathsf{run}(r)=[p_1,\ldots,p_k]\text{ is an exact single-use Physical spine}\\
- \mathsf{phases}(p_j)=[\mathsf{prune},\mathsf{exact},\mathsf{positions}]
+ \mathsf{runs}\text{ cover each original predicate exactly once}
  \quad \mathsf{reads}(c)=\mathsf{StructuresDemand}(c)
 }{
  \mathsf{blocked}(s,r,c)\sim
@@ -1253,14 +1256,27 @@ complete logical valuations collapse even at distinct source positions; the
 chosen representative retains its original snapshot-bound position. Final
 answer reads have their separate publication authorization. String codes
 remain codes throughout these actions.
+Structures' \code{canonical\_keys} table is a checked key recipe, separate
+from executable opaque/final read packets. Sequence's
+\code{read "canon:input"} references exist exactly for actual \code{Canon}
+constructors over that input. Rule r6 (\code{group\_without\_canon}) removes
+these execution references when its independently checked BE-GroupKey proof
+eliminates valuation canonicalizers. The key recipe remains available and
+checked; no Sequence trusted-key premise is copied into Structures, and no
+unused full-key read is retained merely to satisfy coverage.
 
-The independent checker checks source and predicate coverage, phase order,
+The independent checker checks source and predicate-run coverage,
 the original intervening operators and their use counts, materialization
-consumers and bounded geometry directly. It does not invoke the producer or
-compare with a preferred plan. Plain/Bytes, summaries disabled, code-decoded
-tests and shorter lawful runs are accepted under their Structures premises.
-The initial host slice rejects unsupported join/index and unrecorded
-relational reconstruction boundaries before either printer runs.
+consumers and source geometry references directly. It does not invoke the
+producer or compare with a preferred plan. Plain/Bytes, summaries disabled,
+code-decoded tests and shorter lawful runs are accepted under Structures
+premises. Fold Sum of a blocked non-computed base field rejects until it has
+an authorized Structures read; computed operands remain legal. Exact join
+sites reference Structures boundary records and must match an actual Lookup's
+provider, ordered keys and left result. Carrier-local predicate sites reference
+the exact original formula and remain outside unary fused runs. Existing
+BE-Lookup ownership checks retain build-before-probe and publication lifetimes.
+Unrecorded reconstruction and unsupported boundaries reject before printing.
 
 For Tasks, BE-TaskProducer names the borrowed blocked source and partitions
 aligned half-open ranges, clipped only at the live final extent. Each task

@@ -532,13 +532,11 @@ fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
 
 /// R-TpchEvidence premises (P3.3e). The `default`/`par` driver in
 /// `tpch_runtime.rs` records `count Name = n;` for canonical base relation
-/// names. Every kernel binds such a name to its dbgen table (`Lineitem` to
-/// `data.lineitem`, ...) and to nothing else, and the planner compares counts
-/// only, so the recorded SF1 counts must order the tables as every other
-/// scale does (SF 0.1 counts: DuckDB v1.5.5 `CALL dbgen(sf=0.1)`).
+/// names. The planner compares counts only, so the recorded SF1 counts must
+/// order the tables as every other scale does (SF 0.1 counts: DuckDB v1.5.5
+/// `CALL dbgen(sf=0.1)`). Exact-answer fixtures check the actual input bindings.
 #[test]
-fn tpch_evidence_names_bind_their_tables_and_count_order_is_scale_free() {
-    use cq_workloads::tpch;
+fn tpch_evidence_count_order_is_scale_free() {
     use std::collections::BTreeMap;
 
     let runtime =
@@ -587,43 +585,9 @@ fn tpch_evidence_names_bind_their_tables_and_count_order_is_scale_free() {
         "recorded SF1 counts order the tables differently from SF 0.1",
     );
 
-    for case in tpch::CASES {
-        let mut source = fs::read_to_string(repository_root().join(case.rust_path)).unwrap();
-        // Loader schemas (`relation_loaders!`, `interned_relation_loaders!`)
-        // declare dbgen tables, not query relations; the driver never reads them.
-        if let Some(start) = source.find("relation_loaders! {") {
-            let end = start + source[start..].find("\n}").expect("loader block closes");
-            source.replace_range(start..end, "");
-        }
-        for (name, _) in &recorded {
-            let table = name.to_ascii_lowercase();
-            let declared = source.contains(&format!("relation {name}("))
-                || source.contains(&format!("relation {name} =>"));
-            if !declared {
-                continue;
-            }
-            let mapped = source.contains(&format!("relation {name} => {table}("));
-            let bound = source.contains(&format!("let {name} = data.{table}.as_slice();"));
-            assert!(
-                mapped || bound,
-                "{}: {name} is declared but not bound to data.{table}",
-                case.name
-            );
-            for (index, _) in source.match_indices(&format!("let {name}")) {
-                let rest = &source[index + 4 + name.len()..];
-                if rest.starts_with([' ', ':', '=']) {
-                    // Zone configurations bind `&zones.<table>`, the ZoneRows
-                    // built from the whole `data.<table>`.
-                    assert!(
-                        rest.starts_with(&format!(" = data.{table}.as_slice();"))
-                            || rest.starts_with(&format!(" = &zones.{table};")),
-                        "{}: {name} is rebound to something other than data.{table}",
-                        case.name
-                    );
-                }
-            }
-        }
-    }
+    // Relation/input binding is exercised by the exact-answer workload fixtures,
+    // including row and blocked H19 configurations in grouped_h14_h18_h19.
+    // Rust source spelling is not a binding contract.
 }
 
 #[test]

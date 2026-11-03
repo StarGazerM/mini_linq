@@ -818,7 +818,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         p = pipe probe first [x] l,r;
         j = let canon project p keep {x,y};
         return j as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -1336,4 +1336,244 @@ fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
     };
     let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+fn blocked_join_indices_execute_mixed_carriers_and_exact_correlated_residuals() {
+    let mut checks = Vec::new();
+    for blocked_left in [false, true] {
+        for blocked_right in [false, true] {
+            if !blocked_left && !blocked_right { continue; }
+            for retained in [false, true] {
+                let right = if retained {
+                    quote!(source = pipe rename S@1 {key -> k, value -> y, unused -> unused_right};
+                        right = let select source if (y >= 0);)
+                } else {
+                    quote!(right = let rename S@1 {key -> k, value -> y, unused -> unused_right};)
+                };
+                let physical = syn::parse2(quote!(physical {
+                    relation R(key:i64 [1], value:i64 [1], amount:GuardedAmount [2], unused:NeverMaterialize [3]);
+                    relation S(key:i64 [1], value:i64 [1], unused:NeverMaterialize [3]);
+                    left = pipe rename R@0 {key -> k, value -> x, amount -> amount, unused -> unused_left};
+                    #right
+                    joined = pipe probe first [k] left,right;
+                    selected = pipe select joined if ((x = 0 and y = 1) or (x = 1 and y = 0));
+                    valued = pipe bind selected with value:i64 = (*x + *y + amount.0 as i64);
+                    out = pipe project valued keep {k,x,y,value};
+                    return canon out as answer(k,x,y,value);
+                })).unwrap();
+                let left_config = blocked_left.then(|| quote!(R { block_rows 1024; summary none;
+                    columns [key:bytes u64,value:bytes u64,amount:bytes u64,unused:plain u64]; }));
+                let right_config = blocked_right.then(|| quote!(S { block_rows 1024; summary none;
+                    columns [key:plain u64,value:bytes u64,unused:plain u64]; }));
+                let positional = match (blocked_left, blocked_right) {
+                    (true, false) => quote!(positional(S),),
+                    (false, true) => quote!(positional(R),),
+                    _ => quote!(),
+                };
+                let separator = (blocked_left && blocked_right).then(|| quote!(,));
+                let selected = cq_structure_selection::compile_with(&physical, quote!(
+                    #positional blocks(#left_config #separator #right_config)
+                )).unwrap();
+                let expression = sequence_rows(&selected).unwrap();
+                let left = if blocked_left {
+                    quote!(let R = ScanTable::new((
+                        ScanColumn::<i64,Bytes>::new(&left_keys,geometry,false),
+                        ScanColumn::<i64,Bytes>::new(&left_values,geometry,false),
+                        ScanColumn::<GuardedAmount,Bytes>::new(&amounts,geometry,false),
+                        ScanColumn::<NeverMaterialize,Plain>::new(&left_unused,geometry,false),
+                    )).bind_domains(&[domain(3),domain(3),domain(5),domain(7)]).unwrap();)
+                } else {
+                    quote!(let R: Vec<_> = (0..left_len).map(|i| (left_keys[i],left_values[i],amounts[i],left_unused[i])).collect();)
+                };
+                let right = if blocked_right {
+                    quote!(let S = ScanTable::new((
+                        ScanColumn::<i64,Plain>::new(&right_keys,geometry,false),
+                        ScanColumn::<i64,Bytes>::new(&right_values,geometry,false),
+                        ScanColumn::<NeverMaterialize,Plain>::new(&right_unused,geometry,false),
+                    )).bind_domains(&[domain(3),domain(3),domain(7)]).unwrap();)
+                } else {
+                    quote!(let S: Vec<_> = (0..right_len).map(|i| (right_keys[i],right_values[i],right_unused[i])).collect();)
+                };
+                checks.push(quote!({
+                    #left #right
+                    let actual: Vec<_> = (#expression).map(|(k,x,y,value)| (
+                        *::core::borrow::Borrow::<i64>::borrow(&k),
+                        *::core::borrow::Borrow::<i64>::borrow(&x),
+                        *::core::borrow::Borrow::<i64>::borrow(&y), value,
+                    )).collect();
+                    assert_eq!(actual, expected);
+                }));
+            }
+        }
+    }
+    let source = quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+        struct NeverMaterialize(u64);
+        impl cq_storage::OrderKey for NeverMaterialize {
+            type Ordinal = u64;
+            fn ordinal(&self) -> u64 { self.0 }
+        }
+        impl OrdinalDecode for NeverMaterialize {
+            const WIDTH: Width = Width::W64;
+            fn from_ordinal(_:u64) -> Self { panic!("undemanded join payload"); }
+        }
+        #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord)]
+        struct GuardedAmount(u64);
+        impl cq_storage::OrderKey for GuardedAmount {
+            type Ordinal = u64;
+            fn ordinal(&self) -> u64 { self.0 }
+        }
+        impl OrdinalDecode for GuardedAmount {
+            const WIDTH: Width = Width::W64;
+            fn from_ordinal(value:u64) -> Self {
+                assert_ne!(value,u64::MAX,"rejected join payload was read");
+                Self(value)
+            }
+        }
+        fn domain(namespace:u64) -> Domain {
+            Domain { id:DomainId {namespace,version:0},carrier:Width::W64,equality:true,order:true }
+        }
+        fn main() {
+            let geometry = BlockRows::new(1024).unwrap();
+            for (left_len,right_len) in [(0,0),(0,7),(7,0),(1,1),(13,17),(2051,2051)] {
+                let left_keys:Vec<i64> = (0..left_len).map(|i| (i/2) as i64).collect();
+                let right_keys:Vec<i64> = (0..right_len).rev().map(|i| (i/2) as i64).collect();
+                let left_values:Vec<i64> = (0..left_len).map(|i| (i%7) as i64).collect();
+                let right_values:Vec<i64> = (0..right_len).map(|i| (i%5) as i64).collect();
+                let amounts:Vec<_> = left_values.iter().map(|&x| GuardedAmount(if x < 2 { 10 } else { u64::MAX })).collect();
+                let left_unused = vec![NeverMaterialize(9);left_len];
+                let right_unused = vec![NeverMaterialize(9);right_len];
+                let mut expected = Vec::new();
+                for i in 0..left_len { for j in 0..right_len {
+                    let x = left_values[i]; let y = right_values[j];
+                    if left_keys[i] == right_keys[j] && ((x == 0 && y == 1) || (x == 1 && y == 0)) {
+                        expected.push((left_keys[i],x,y,x+y+10));
+                    }
+                }}
+                expected.sort(); expected.dedup();
+                #(#checks)*
+            }
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime,false).run(&source.to_string());
+}
+
+#[test]
+fn blocked_self_join_retains_occurrence_slots_and_computed_index_payload() {
+    let physical = syn::parse_quote!(physical {
+        relation R(key:i64 [1],value:i64 [1]);
+        left = pipe rename R@0 {key -> k,value -> x};
+        source = pipe rename R@1 {key -> k,value -> y};
+        right = let bind source with computed:i64 = (*y * 10);
+        joined = pipe probe first [k] left,right;
+        selected = pipe select joined if (x < y);
+        valued = pipe bind selected with value:i64 = (*x + *computed);
+        out = pipe project valued keep {k,x,y,value};
+        return canon out as answer(k,x,y,value);
+    });
+    let selected = cq_structure_selection::compile_with(&physical,quote!(
+        blocks(R {block_rows 1024; summary none; columns [key:bytes u64,value:bytes u64];})
+    )).unwrap();
+    let expression = sequence_rows(&selected).unwrap();
+    let source = quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        fn main() {
+            let geometry = BlockRows::new(1024).unwrap();
+            let domain = Domain { id:DomainId {namespace:3,version:0},carrier:Width::W64,equality:true,order:true };
+            for len in [0,1,9,2051] {
+                let keys:Vec<i64> = (0..len).map(|i| (i/3) as i64).collect();
+                let values:Vec<i64> = (0..len).map(|i| (i%7) as i64).collect();
+                let R = ScanTable::new((
+                    ScanColumn::<i64,Bytes>::new(&keys,geometry,false),
+                    ScanColumn::<i64,Bytes>::new(&values,geometry,false),
+                )).bind_domains(&[domain,domain]).unwrap();
+                let actual:Vec<_> = (#expression).collect();
+                let mut expected = Vec::new();
+                for i in 0..len { for j in 0..len {
+                    if keys[i] == keys[j] && values[i] < values[j] {
+                        expected.push((keys[i],values[i],values[j],values[i]+values[j]*10));
+                    }
+                }}
+                expected.sort(); expected.dedup();
+                assert_eq!(actual,expected);
+            }
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime,false).run(&source.to_string());
+}
+
+#[test]
+fn blocked_projection_remaps_surviving_occurrence_slots() {
+    let physical = syn::parse_quote!(physical {
+        relation R(key:i64 [1],value:i64 [1]);
+        left = pipe rename R@0 {key -> k,value -> x};
+        right = let rename R@1 {key -> k,value -> y};
+        joined = pipe probe first [k] left,right;
+        selected = pipe select joined if (x < y);
+        projected = pipe project selected keep {y};
+        valued = pipe bind projected with value:i64 = (*y * 10);
+        out = pipe project valued keep {y,value};
+        return canon out as answer(y,value);
+    });
+    let selected = cq_structure_selection::compile_with(&physical,quote!(
+        blocks(R {block_rows 1024;summary none;columns [key:bytes u64,value:bytes u64];})
+    )).unwrap();
+    let expression = sequence_rows(&selected).unwrap();
+    let source = quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        fn main() {
+            let geometry = BlockRows::new(1024).unwrap();
+            let domain = Domain {id:DomainId {namespace:3,version:0},carrier:Width::W64,equality:true,order:true};
+            let R = ScanTable::new((
+                ScanColumn::<i64,Bytes>::new(&[1,1,1,2],geometry,false),
+                ScanColumn::<i64,Bytes>::new(&[2,5,8,99],geometry,false),
+            )).bind_domains(&[domain,domain]).unwrap();
+            let actual:Vec<_> = (#expression).collect();
+            assert_eq!(actual,vec![(5,50),(8,80)]);
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime,false).run(&source.to_string());
+}
+
+#[test]
+fn blocked_reused_index_reintroduces_a_projected_away_occurrence() {
+    let physical = syn::parse_quote!(physical {
+        relation R(key:i64 [1],value:i64 [1]);
+        left = pipe rename R@0 {key -> k,value -> x};
+        right = let rename R@1 {key -> k,value -> y};
+        first = pipe probe first [k] left,right;
+        selected = pipe select first if (x < y);
+        projected = pipe project selected keep {k,x};
+        second = pipe probe first [k] projected,right;
+        out = pipe project second keep {x,y};
+        return canon out as answer(x,y);
+    });
+    let selected = cq_structure_selection::compile_with(&physical,quote!(
+        blocks(R {block_rows 1024;summary none;columns [key:bytes u64,value:bytes u64];})
+    )).unwrap();
+    let expression = sequence_rows(&selected).unwrap();
+    let source = quote! {
+        use cq_storage::scan::*;
+        use cq_storage::scan::format::{Domain,DomainId};
+        fn main() {
+            let geometry = BlockRows::new(1024).unwrap();
+            let domain = Domain {id:DomainId {namespace:3,version:0},carrier:Width::W64,equality:true,order:true};
+            let R = ScanTable::new((
+                ScanColumn::<i64,Bytes>::new(&[1,1,1,2],geometry,false),
+                ScanColumn::<i64,Bytes>::new(&[2,5,8,99],geometry,false),
+            )).bind_domains(&[domain,domain]).unwrap();
+            let actual:Vec<_> = (#expression).collect();
+            assert_eq!(actual,vec![(2,2),(2,5),(2,8),(5,2),(5,5),(5,8)]);
+        }
+    };
+    let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
+    cq_testkit::rustc::Runtime::new(&runtime,false).run(&source.to_string());
 }

@@ -745,6 +745,14 @@ impl<'a> Emitter<'a> {
                 partitioned: input.partitioned,
             });
         }
+        // Checked position-payload boundaries share the Physical realization.
+        // The ordinary lookup adapter below carries logical payload columns;
+        // it cannot assemble occurrence slots or read encoded join keys.
+        // map rewraps the flattened probe at Lookup's recorded nesting depth,
+        // including when the Tasks interpreter lifts this lookup over tiles.
+        if self.context().encoded.blocks.joins.contains_key(&result) {
+            return self.map(&Ident::new(&result, provider.span()), input, true);
+        }
         let access = self.context().keyed(&result, provider, &columns)?;
         if matches!(access, Access::Rows)
             || self

@@ -136,8 +136,8 @@ fn check<T: OrdinalDecode + std::fmt::Debug, F: Family + EncodedPoint + EncodedW
                         .collect();
                     assert_eq!(selected, expected, "mask {p:?}");
                     for test in [TestMode::Encoded, TestMode::DecodeToCode] {
-                        for prune in [PruneMode::None, PruneMode::MinMax] {
-                            if prune == PruneMode::MinMax && !summary {
+                        for prune in [PruneMode::None, PruneMode::BlockMinMax] {
+                            if prune == PruneMode::BlockMinMax && !summary {
                                 continue;
                             }
                             let mut selected = Vec::new();
@@ -289,21 +289,21 @@ fn bounded_laws<F: Family + EncodedPoint + EncodedWindow>() {
             let membership = Predicate::Membership(vec![0i64.ordinal(), 7i64.ordinal(), 1007i64.ordinal(), 4002i64.ordinal()]);
             let window = Predicate::Window { lo: Included(7i64.ordinal()), hi: Unbounded };
             for test in [TestMode::Encoded, TestMode::DecodeToCode] {
-                for prune in [PruneMode::None, PruneMode::MinMax] {
-                    if prune == PruneMode::MinMax && !summaries {
+                for prune in [PruneMode::None, PruneMode::BlockMinMax] {
+                    if prune == PruneMode::BlockMinMax && !summaries {
                         continue;
                     }
                     let expected: Vec<_> = values.iter().enumerate().filter_map(|(i, value)| {
                         (membership.matches(value.ordinal()) && window.matches(value.ordinal())).then_some(i)
                     }).collect();
-                    let actual: Vec<_> = table.scan_positions(0..count, |tile| {
+                    let actual: Vec<_> = table.scan_positions(0..count, VECTOR_ROWS, |tile| {
                         tile.intersect::<0>(&membership, prune, test);
                         tile.intersect::<1>(&window, prune, test);
                     }).map(ScanPosition::index).collect();
                     assert_eq!(actual, expected);
 
                     let mut mask = ScanMask::default();
-                    let mut empty = table.tile(count, &mut mask);
+                    let mut empty = table.tile(count, VECTOR_ROWS, &mut mask);
                     assert!(empty.is_empty());
                     empty.intersect::<0>(&membership, prune, test);
                     assert_eq!(empty.positions().count(), 0);
@@ -328,7 +328,7 @@ fn lazy_ranges_and_carrier_filters_preserve_order_and_multiplicity() {
         ScanColumn::<u64, Bytes>::new(&values, BlockRows::new(1024).unwrap(), false),
     ));
     let calls = Cell::new(0);
-    let mut scan = table.scan_positions(1024..2051, |tile| {
+    let mut scan = table.scan_positions(1024..2051, VECTOR_ROWS, |tile| {
         calls.set(calls.get() + 1);
         tile.intersect::<0>(&Predicate::Point(1), PruneMode::None, TestMode::Encoded);
     });
@@ -339,15 +339,15 @@ fn lazy_ranges_and_carrier_filters_preserve_order_and_multiplicity() {
     drop(scan);
     assert_eq!(calls.get(), 1, "early stop must not prepare the next vector");
 
-    let last = table.scan_positions(2048..2051, |_| {}).next().unwrap();
+    let last = table.scan_positions(2048..2051, VECTOR_ROWS, |_| {}).next().unwrap();
     let input = [(last, "late"), (first, "first"), (first, "duplicate"), (last, "again")];
-    let filtered: Vec<_> = table.filter_rows(input, |item| item.0, |tile| {
+    let filtered: Vec<_> = table.filter_rows(input, VECTOR_ROWS, |item| item.0, |tile| {
         tile.retain(|position| table.read_ordinal::<0>(position) == 1);
     }).collect();
     assert_eq!(filtered, vec![(first, "first"), (first, "duplicate")]);
-    assert_eq!(table.scan_positions(0..1024, |_| {}).count(), 1024);
-    assert_eq!(table.scan_positions(1024..2048, |_| {}).count(), 1024);
-    assert_eq!(table.scan_positions(2048..2051, |_| {}).count(), 3);
+    assert_eq!(table.scan_positions(0..1024, VECTOR_ROWS, |_| {}).count(), 1024);
+    assert_eq!(table.scan_positions(1024..2048, VECTOR_ROWS, |_| {}).count(), 1024);
+    assert_eq!(table.scan_positions(2048..2051, VECTOR_ROWS, |_| {}).count(), 3);
 }
 
 #[test]
@@ -355,7 +355,7 @@ fn lazy_ranges_and_carrier_filters_preserve_order_and_multiplicity() {
 fn table_positions_cannot_cross_snapshots() {
     let a = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
     let b = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
-    let position = a.scan_positions(0..1, |_| {}).next().unwrap();
+    let position = a.scan_positions(0..1, VECTOR_ROWS, |_| {}).next().unwrap();
     b.read_ordinal::<0>(position);
 }
 
@@ -380,7 +380,7 @@ fn only_authorized_demanded_fields_are_materialized() {
         ),
         ScanColumn::<i64, Plain>::new(&[-8, 12], BlockRows::new(1024).unwrap(), false),
     ));
-    let position = table.scan_positions(0..2, |tile| {
+    let position = table.scan_positions(0..2, VECTOR_ROWS, |tile| {
         tile.intersect::<0>(&Predicate::Point(2), PruneMode::None, TestMode::DecodeToCode);
     }).next().unwrap();
     assert_eq!(table.read_ordinal::<0>(position), 2);
@@ -414,4 +414,96 @@ fn explicit_slot_domains_bind_without_reencoding() {
     assert!(table.column::<0>().checked_view(domain, 2).is_ok());
     let bad = Domain { carrier: Width::W32, ..domain };
     assert!(matches!(table.bind_domains(&[bad]), Err(FormatError::Domain)));
+}
+
+#[test]
+fn position_payload_indices_preserve_join_bags_and_global_frame_keys() {
+    use cq_storage::{Build, HashIndex, IndexRead, PositionalRows};
+    use std::cell::Cell;
+    let geometry = BlockRows::new(1024).unwrap();
+    for (left_len, right_len) in [(0, 2051), (2051, 0), (1, 1), (2051, 2051)] {
+        let left_keys: Vec<i64> = (0..left_len).map(|i| (i / 1024 * 10000 + i % 7) as i64).collect();
+        let right_keys: Vec<i64> = (0..right_len).map(|i| (i / 1024 * 10000 + i % 5) as i64).collect();
+        let left = ScanTable::new((
+            ScanColumn::<i64, Bytes>::new(&left_keys, geometry, false),
+            ScanColumn::<NeverMaterialize, Plain>::new(&vec![NeverMaterialize(9); left_len], geometry, false),
+        ));
+        let right = ScanTable::new((
+            ScanColumn::<i64, Plain>::new(&right_keys, geometry, false),
+            ScanColumn::<NeverMaterialize, Bytes>::new(&vec![NeverMaterialize(9); right_len], geometry, false),
+        ));
+        let builds = Cell::new(0);
+        let index = HashIndex::build(right.scan_positions(0..right_len, VECTOR_ROWS, |_| {}).map(|position| {
+            builds.set(builds.get() + 1);
+            (right.read_ordinal::<0>(position), (position, position.index() * 2))
+        }));
+        let mut actual = Vec::new();
+        // Simulate disjoint worker covers sharing the same immutable index.
+        for start in (0..left_len).step_by(1024) {
+            for position in left.scan_positions(start..(start + 1024).min(left_len), VECTOR_ROWS, |_| {}) {
+                for (other, computed) in index.lookup(&left.read_ordinal::<0>(position)) {
+                    actual.push((position.index(), other.index(), computed));
+                }
+            }
+        }
+        let expected: Vec<_> = left_keys.iter().enumerate().flat_map(|(i, key)| {
+            right_keys.iter().enumerate().filter(move |(_, other)| *other == key).map(move |(j, _)| (i, j, j * 2))
+        }).collect();
+        assert_eq!(actual, expected);
+        if left_len != 0 { assert_eq!(builds.get(), right_len); }
+
+        // An explicit row host uses only its forward ordinal bridge.
+        let host: Vec<_> = right_keys.iter().copied().map(|key| (key, NeverMaterialize(9))).collect();
+        let mixed = HashIndex::build((&host).positions().map(|position| {
+            let key: u64 = (&host).row_at(position).unwrap().0.ordinal();
+            (key, position)
+        }));
+        let mixed: Vec<_> = left.scan_positions(0..left_len, VECTOR_ROWS, |_| {}).flat_map(|position| {
+            mixed.lookup(&left.read_ordinal::<0>(position)).map(move |other| (position.index(), other.offset(), other.offset() * 2))
+        }).collect();
+        assert_eq!(mixed, expected);
+
+        // Two occurrences of the same table must retain distinct position slots.
+        let self_index = HashIndex::build(left.scan_positions(0..left_len, VECTOR_ROWS, |_| {})
+            .map(|position| (left.read_ordinal::<0>(position), position)));
+        let pairs: Vec<_> = left.scan_positions(0..left_len, VECTOR_ROWS, |_| {}).flat_map(|position| {
+            self_index.lookup(&left.read_ordinal::<0>(position)).filter(move |other| position.index() < other.index())
+                .map(move |other| (position.index(), other.index()))
+        }).collect();
+        let expected: Vec<_> = left_keys.iter().enumerate().flat_map(|(i, key)| {
+            left_keys.iter().enumerate().filter(move |(j, other)| i < *j && *other == key).map(move |(j, _)| (i, j))
+        }).collect();
+        assert_eq!(pairs, expected);
+    }
+}
+
+#[test]
+fn lazy_position_join_builds_once_and_stops_before_the_next_probe() {
+    use cq_storage::{Build, HashIndex, IndexRead};
+    use std::cell::Cell;
+    let geometry = BlockRows::new(1024).unwrap();
+    let keys: Vec<u64> = (0..2051).map(|i| (i / 2) as u64).collect();
+    let table = ScanTable::new((
+        ScanColumn::<u64, Bytes>::new(&keys, geometry, false),
+        ScanColumn::<NeverMaterialize, Plain>::new(&vec![NeverMaterialize(99); keys.len()], geometry, false),
+    ));
+    let build_reads = Cell::new(0);
+    let probe_reads = Cell::new(0);
+    let index = HashIndex::build(table.scan_positions(0..keys.len(), VECTOR_ROWS, |_| {}).map(|position| {
+        build_reads.set(build_reads.get() + 1);
+        (table.read_ordinal::<0>(position), position)
+    }));
+    assert_eq!(build_reads.get(),0);
+    let mut joined = table.scan_positions(0..keys.len(), VECTOR_ROWS, |_| {}).flat_map(|left| {
+        probe_reads.set(probe_reads.get() + 1);
+        index.lookup(&table.read_ordinal::<0>(left)).map(move |right| (left.index(),right.index()))
+    });
+    assert_eq!(joined.next(),Some((0,0)));
+    assert_eq!(joined.next(),Some((0,1)));
+    assert_eq!(probe_reads.get(),1);
+    assert_eq!(build_reads.get(),keys.len());
+    drop(joined);
+    assert_eq!(probe_reads.get(),1);
+    assert_eq!(index.lookup(&1).count(),2);
+    assert_eq!(build_reads.get(),keys.len(),"later readers reuse the retained index");
 }

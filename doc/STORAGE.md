@@ -989,9 +989,9 @@ The loader's `ScanTable::bind_domains` binds the same explicitly declared
 domain identities without copying or reencoding payload. Runtime premise checks
 validate the actual source family, width, geometry and domain before scanning.
 
-Sequence's printable `representation { blocks { ... } }` records bounded
-vector scans, native positions, scratch, predicate phases, fused predicate
-runs and read-consumer IDs. Independent STR-Blocks/STR-BlockPredicate/
+Sequence's printable `representation { blocks { ... } }` records source
+references, fused predicate runs, routing and read-consumer IDs, not a second
+copy of geometry/pruning. Independent STR-Blocks/STR-BlockPredicate/
 STR-PreservedOp and BE-Blocks checks validate legality without replaying
 selection. Adjacent total predicates share one reused 1024-row mask; fusion
 does not cross an opaque Rust boundary. Pull and Tasks emit this same protocol.
@@ -1017,14 +1017,35 @@ premise is involved. Captured and computed values retain their existing
 ownership. Outer folds demanding encoded base values remain a checked
 unsupported ownership boundary of this initial checkpoint.
 
-Only Q06 has authored `blocks-plain`, `blocks-bytes`, and corresponding `-par`
-routes at this checkpoint; existing default/par routes remain row hosts.
+Q06's measured checkpoint has authored `blocks-plain`, `blocks-bytes`, and
+corresponding `-par` routes. Its authored `par` now selects Bytes, while
+`row-par` explicitly retains the prior row-host Tasks path and serial `default`
+remains row-backed. Fresh SF1 Tasks-24 resident Bytes/row-par is 0.851
+[0.772, 0.939], and 0.822 [0.764, 0.921] with same-source linker shuffle,
+so the authored parallel route is retained. Load-plus-one-query is slower
+(584.226 vs 550.415 ms); this is not an ingestion win or a compiler default
+rule. Exact samples, faults and controls:
+`experiments/storage-bench/results/p5-joins-q06.json`.
 Its quantity/discount/date predicates are all `where`; the retail H06 opaque
-numeric guards are not rewritten. Initial admission rejects join/index
-boundaries, grouping directly on encoded base fields, restricted source
-renames and undischarged host-set verification in the checker, with negative
-fixtures. Those integrations remain open; there is no decoded-row fallback.
+numeric guards are not rewritten. The next authored H19 checkpoint adds exact
+blocked Probe/index boundaries, native position payloads and carrier-local
+correlated predicates, with explicitly positional mixed-host ordinal bridges.
+Its implementation and regression fixtures are not yet integration-verified
+or SF1-measured. Encoded-base grouping, restricted source renames and
+undischarged host-set verification remain checked boundaries; no decoded-row
+fallback is introduced. H12/H14 and existing H19 default/par remain unchanged.
 The P5 planning entry tracks this staged boundary and its measurement decision.
+
+Blocked provider facts distinguish block-level `summary minmax` from
+`summary vector_minmax`. Runtime obeys exactly that selected buffer, including
+when both are present. Structures records the supported S1 vector geometry;
+scan stepping and Tasks alignment consume it, with one fixed reusable mask.
+Sequence records source/run/read references, not duplicate prune phases,
+scratch lengths or tile choices. Every encoded comparison leaf needs a declared
+column translation domain; closed-only leaves reject pending an explicit host
+predicate record. A Sequence Fold Sum cannot read a blocked non-computed base
+field without a recorded read boundary. Canonical blocked carriers require the
+provider's `comparator_rows` capability, independent of its token spelling.
 
 The new 29-kernel SF1 census at B=1024 finds no summary-disqualified static
 predicate blocks in physical load order. H01 has six fully qualified lineitem
@@ -1053,8 +1074,9 @@ faults. Serial row/Bytes process minor faults are 73,391/46,493 and peak RSS
 row/Bytes comparison; full ranges and load times are retained in the evidence.
 
 Bytes beats blocked Plain but **does not beat the existing serial row host**.
-Stop the authored rollout at Q06, retain the mechanism/tests and existing
-defaults, and do not extrapolate the parallel gain to other kernels.
+The completed S3 experiment stopped the broader rollout and retained defaults.
+The next authored Q06 parallel-only checkpoint above does not extrapolate that
+parallel gain to other kernels; join integration will measure H19 first.
 The legacy scan counters do not instrument the new bounded protocol; their
 zero row-test/block counts are not evidence of zero work or DRAM traffic.
 Raw samples, page faults, controls, exactness/counter gates, source/binary

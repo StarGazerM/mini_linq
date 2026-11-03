@@ -1832,6 +1832,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     }
     if source.encoded.obligations != target.encoded.obligations
         || source.encoded.blocks.sources != target.encoded.blocks.sources
+        || source.encoded.blocks.positional_hosts != target.encoded.blocks.positional_hosts
     {
         return error(target, "Structures rewrite must preserve original encoded source obligations");
     }
@@ -1888,6 +1889,7 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
     }
     if source.encoded.obligations != target.encoded.obligations
         || source.encoded.blocks.sources != target.encoded.blocks.sources
+        || source.encoded.blocks.positional_hosts != target.encoded.blocks.positional_hosts
     {
         return error(target, "catalog retention must preserve original encoded source obligations");
     }

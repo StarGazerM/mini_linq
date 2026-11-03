@@ -42,6 +42,7 @@ use syn::{Expr, Ident, Stmt};
 
 pub mod access;
 mod blocks;
+mod block_joins;
 mod columns;
 pub use structures::demand::{columns_used, columns_used_rust};
 pub mod expressions;
@@ -840,6 +841,7 @@ impl<'a> Context<'a> {
                 .iter()
                 .flat_map(|level| self.stored_key(name, level))
                 .collect();
+            let blocked = self.blocked_index(name, levels).cloned();
             let binders = self.carried(name).iter().map(|column| {
                 if stored_columns.contains(column) || payload_columns.contains(column) {
                     self.ident(name, column).to_token_stream()
@@ -847,11 +849,19 @@ impl<'a> Context<'a> {
                     quote!(_)
                 }
             });
-            let pattern = quote!((#(#binders,)*));
+            let pattern = if self.carries_positions(name) {
+                let mut columns = self.carried(name).to_vec();
+                if let Some(join) = &blocked { columns.extend(join.payload.owned.iter().cloned()); }
+                self.bind_columns(name, &columns, false)
+            } else {
+                quote!((#(#binders,)*))
+            };
             let payload = payload_columns.iter().map(|c| self.access(name, c));
-            // A curried value is built from nested pairs, one per level:
-            // `((k₁,), ((k₂,), (payload,)))`.
-            let mut nested = quote!((#(#payload,)*));
+            // Checked position indices retain native occurrence IDs and computed fields.
+            let mut nested = blocked.as_ref().map_or_else(
+                || quote!((#(#payload,)*)),
+                |join| self.blocked_index_payload(name, join),
+            );
             for level in levels.iter().rev() {
                 let owned = self.owned_key(name, level);
                 let key = self
@@ -859,7 +869,12 @@ impl<'a> Context<'a> {
                     .iter()
                     .map(|c| self.key_field(name, c, owned))
                     .collect::<Vec<_>>();
-                nested = quote!(::cq_storage::require::key(((#(#key,)*), #nested)));
+                nested = if let Some(join) = &blocked {
+                    let key = self.blocked_index_key(name, join, level);
+                    quote!(::cq_storage::require::key((#key, #nested)))
+                } else {
+                    quote!(::cq_storage::require::key(((#(#key,)*), #nested)))
+                };
             }
             let structure = format_ident!(
                 "__cq_{}_on_{}",
@@ -935,8 +950,12 @@ impl<'a> Context<'a> {
                     // column types and the same ownership used to build keys.
                     let owned = self.owned_key(name, &levels[0]);
                     let key_types = stored_key.iter().map(|column| {
-                        let ty = &self.infos[name].types[column];
-                        if owned { quote!(#ty) } else { quote!(&#ty) }
+                        if blocked.is_some() {
+                            quote!(u64)
+                        } else {
+                            let ty = &self.infos[name].types[column];
+                            if owned { quote!(#ty) } else { quote!(&#ty) }
+                        }
                     });
                     let router = quote!(|__cq_key: &(#(#key_types,)*), __cq_count| {
                         ::cq_storage::sharded::route_index(&(#(&__cq_key.#fields,)*), __cq_count)

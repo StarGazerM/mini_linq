@@ -27,7 +27,11 @@ impl Context<'_> {
                 let namespace = declaration.domain.code.map_or(2 * u64::from(column.logical.0) + 1, |id| 2 * u64::from(id.0) + 2);
                 let version = declaration.domain.dictionary.as_ref().map_or(0, |dictionary| dictionary.version);
                 let block_rows = binding.block_rows as usize;
-                let summary = binding.summary == structures::blocks::Summary::MinMax;
+                let summary = match binding.summary {
+                    structures::blocks::Summary::None => quote!(),
+                    structures::blocks::Summary::BlockMinMax => quote!(::core::assert!(__cq_column.summaries().is_some(), "blocked source summary capability");),
+                    structures::blocks::Summary::VectorMinMax => quote!(::core::assert!(__cq_column.vector_summaries().is_some(), "blocked source summary capability");),
+                };
                 self.statements.push(syn::parse_quote! {
                     {
                         let __cq_column: &::cq_storage::scan::ScanColumn<#value_type, #family> = #host.column::<#slot>();
@@ -36,7 +40,7 @@ impl Context<'_> {
                             id: ::cq_storage::scan::format::DomainId { namespace: #namespace, version: #version },
                             carrier: #width, equality: true, order: true,
                         }), "blocked source domain");
-                        if #summary { ::core::assert!(__cq_column.summaries().is_some(), "blocked source summary capability"); }
+                        #summary
                     }
                 });
             }
@@ -46,16 +50,17 @@ impl Context<'_> {
         let scan = &self.encoded.blocks.scans[result];
         let source = &self.encoded.obligations.sources[&scan.source];
         let host = Self::positional_host(&source.relation);
+        let vector_rows = self.encoded.blocks.sources[&scan.source].vector_rows as usize;
         let range = range.unwrap_or_else(|| quote!(0..#host.len()));
         let run = self.blocked_runs.get(result).map_or(&[][..], Vec::as_slice);
         let (preparation, configure) = self.blocked_run(run);
         self.positional_rows(result, quote!({
             #(#preparation)*
-            #host.scan_positions(#range, move |__cq_tile| { #(#configure)* })
+            #host.scan_positions(#range, #vector_rows, move |__cq_tile| { #(#configure)* })
         }))
     }
 
-    fn blocked_slot(&self, representation: structures::encoded::RepresentationId) -> usize {
+    pub(crate) fn blocked_slot(&self, representation: structures::encoded::RepresentationId) -> usize {
         let representation = &self.encoded.records.representations[&representation];
         self.encoded.blocks.sources[&representation.source].columns[&representation.column].slot as usize
     }
@@ -67,9 +72,7 @@ impl Context<'_> {
         let field = &self.encoded.records.representations[&representation];
         let source = &self.encoded.obligations.sources[&field.source];
         let host = Self::positional_host(&source.relation);
-        let structures::Repr::Positions { bases, .. } = &self.analysis.repr[result] else { unreachable!("checked routing position carrier") };
-        let base = bases.iter().position(|base| symbol_name(&base.base) == source.relation).expect("checked routing source");
-        let position = self.position_ident(result, base);
+        let position = self.position_ident(result, self.blocked_position_slot(result, &source.occurrence));
         let slot = self.blocked_slot(representation);
         Some(quote!(#host.read_ordinal::<#slot>(#position)))
     }
@@ -89,19 +92,20 @@ impl Context<'_> {
     /// Cache only demanded global ordinal keys once, retain owned computed
     /// fields in their original carrier, and return one representative carrier.
     pub fn blocked_canon_rows(&self, result: &str, rows: TokenStream, parallel: bool) -> Option<TokenStream> {
-        let consumer = format!("canon:{result}");
-        let read = self.encoded.blocks.reads.get(&consumer)?;
+        let read = self.encoded.blocks.canonical_keys.get(result)?;
         let pattern = self.bind_columns(result, self.heading(result), true);
-        let keys: Vec<_> = read.fields.iter().map(|(column, field)| {
+        let mut keys: Vec<_> = read.fields.iter().map(|(column, field)| {
             let representation = &self.encoded.records.representations[&field.representation];
             let source = &self.encoded.obligations.sources[&representation.source];
             let host = Self::positional_host(&source.relation);
-            let structures::Repr::Positions { bases, .. } = &self.analysis.repr[result] else { unreachable!("checked canonical position carrier") };
-            let base = bases.iter().position(|base| symbol_name(&base.base) == source.relation).expect("checked canonical occurrence");
-            let position = self.position_ident(result, base);
+            let position = self.position_ident(result, self.blocked_position_slot(result, &source.occurrence));
             let slot = self.blocked_slot(field.representation);
             (column.clone(), quote!(#host.read_ordinal::<#slot>(#position)))
         }).collect();
+        keys.extend(read.ordinary.iter().filter_map(|(column, operand)| {
+            matches!(operand, structures::blocks::Operand::Host { .. })
+                .then(|| (column.clone(), self.blocked_operand(result, operand)))
+        }));
         let ordinals = keys.iter().map(|(_, value)| value);
         let key = |binding: TokenStream| {
             let values: Vec<_> = self.heading(result).iter().map(|column| {
@@ -149,9 +153,7 @@ impl Context<'_> {
         let representation = &self.encoded.records.representations[&field.representation];
         let source = &self.encoded.obligations.sources[&representation.source];
         let host = Self::positional_host(&source.relation);
-        let structures::Repr::Positions { bases, .. } = &self.analysis.repr[result] else { unreachable!("checked blocked read carrier") };
-        let base = bases.iter().position(|base| symbol_name(&base.base) == source.relation).expect("checked retained blocked occurrence");
-        let position = self.position_ident(result, base);
+        let position = self.position_ident(result, self.blocked_position_slot(result, &source.occurrence));
         let slot = self.blocked_slot(field.representation);
         Some(match field.action {
             structures::blocks::ReadAction::Ordinal => quote!(#host.read_ordinal::<#slot>(#position)),
@@ -169,6 +171,28 @@ impl Context<'_> {
         })
     }
 
+    /// Ordinary fields at a mixed boundary use the checked occurrence and slot.
+    /// Unlike blocked logical reads these remain borrowed host values.
+    pub fn blocked_ordinary_read(&self, consumer: &str, result: &str, column: &str) -> Option<TokenStream> {
+        let reads = &self.encoded.blocks.reads;
+        let read = reads.get(consumer).or_else(|| {
+            ["carrier", "read"].into_iter().find_map(|role| {
+                reads.get(&format!("output:{consumer}:{role}"))
+                    .filter(|read| read.ordinary.contains_key(column))
+            })
+        })?;
+        Some(match read.ordinary.get(column)? {
+            structures::blocks::Operand::Host { occurrence, position, slot, .. } => {
+                let host = Self::positional_host(&self.physical_analysis.hosts[occurrence]);
+                let position = self.position_ident(result, *position);
+                let slot = crate::index(*slot);
+                quote!(::cq_storage::PositionalRows::row_at(#host, #position).expect("host-issued live ID").#slot)
+            }
+            structures::blocks::Operand::Owned { column } => self.access(result, column),
+            structures::blocks::Operand::Blocked { .. } => unreachable!("checked ordinary operand"),
+        })
+    }
+
     pub fn blocked_rust_aliases(&self, consumer: &str, result: &str, expression: &Expr, environment: Option<&structures::syntax::algebra::Environment>) -> Vec<TokenStream> {
         columns_used_rust(expression, self.heading(result), environment).iter().map(|column| {
             let logical = &self.infos[result].bindings[column];
@@ -176,7 +200,8 @@ impl Context<'_> {
                 let owned = format_ident!("__cq_read_{}_{}", consumer, column, span = proc_macro2::Span::mixed_site());
                 quote!(let #owned = #value; #[allow(unused_variables)] let #logical = &#owned;)
             } else {
-                let value = self.access(result, column);
+                let value = self.blocked_ordinary_read(consumer, result, column)
+                    .unwrap_or_else(|| self.access(result, column));
                 if self.infos[result].computed.contains(column) {
                     quote!(#[allow(unused_variables)] let #logical = &#value;)
                 } else {
@@ -192,6 +217,7 @@ impl Context<'_> {
         let predicate = &self.encoded.blocks.predicates[name];
         let source = &self.encoded.obligations.sources[&predicate.source];
         let host = Self::positional_host(&source.relation);
+        let vector_rows = self.encoded.blocks.sources[&predicate.source].vector_rows as usize;
         let input = &predicate.input;
         if self.blocked_runs.values().any(|run| run.iter().any(|predicate| predicate == name))
             && !self.blocked_runs.contains_key(name)
@@ -199,11 +225,9 @@ impl Context<'_> {
             return self.forward(name, input, rows);
         }
         let pattern = self.bind_columns(input, &[], true);
-        let structures::Repr::Positions { bases, .. } = &self.analysis.repr[input] else { unreachable!("checked blocked predicate carrier") };
-        let base = bases.iter().position(|base| symbol_name(&base.base) == source.relation).expect("checked predicate occurrence");
-        let position = self.position_ident(input, base);
+        let position = self.position_ident(input, self.blocked_position_slot(input, &source.occurrence));
         let (preparation, configure) = self.blocked_run(&self.blocked_runs[name]);
-        let filtered = quote!({ #(#preparation)* #host.filter_rows(#rows, move |#pattern| #position, move |__cq_tile| { #(#configure)* }) });
+        let filtered = quote!({ #(#preparation)* #host.filter_rows(#rows, #vector_rows, move |#pattern| #position, move |__cq_tile| { #(#configure)* }) });
         self.forward(name, input, filtered)
     }
 
@@ -212,7 +236,11 @@ impl Context<'_> {
         let source = &self.encoded.obligations.sources[&predicate.source];
         let host = Self::positional_host(&source.relation);
         let (Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select)) = &self.physical[name].operator else { unreachable!("checked blocked predicate") };
-        let prune = match predicate.prune { Prune::None => quote!(::cq_storage::scan::PruneMode::None), Prune::MinMax => quote!(::cq_storage::scan::PruneMode::MinMax) };
+        let prune = match predicate.prune {
+            Prune::None => quote!(::cq_storage::scan::PruneMode::None),
+            Prune::BlockMinMax => quote!(::cq_storage::scan::PruneMode::BlockMinMax),
+            Prune::VectorMinMax => quote!(::cq_storage::scan::PruneMode::VectorMinMax),
+        };
         let test = match predicate.test { Test::Encoded => quote!(::cq_storage::scan::TestMode::Encoded), Test::DecodeCodes => quote!(::cq_storage::scan::TestMode::DecodeToCode) };
         let mut preparation = Vec::new();
         let configure = match predicate.strategy {
@@ -283,7 +311,7 @@ impl Context<'_> {
     }
 }
 
-fn block_constraint(constraint: &Constraint, compare: &mut impl FnMut(&Term, Comparison, &Term) -> TokenStream) -> TokenStream {
+pub(crate) fn block_constraint(constraint: &Constraint, compare: &mut impl FnMut(&Term, Comparison, &Term) -> TokenStream) -> TokenStream {
     match constraint {
         Constraint::Compare { left, comparison, right } => compare(left, *comparison, right),
         Constraint::Between { term, low, high } => { let low = compare(term, Comparison::Ge(Default::default()), low); let high = compare(term, Comparison::Le(Default::default()), high); quote!((#low) && (#high)) }

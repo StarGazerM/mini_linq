@@ -907,7 +907,7 @@ mod tests {
                 answer = let canon semi eager [a] l,r;
                 return answer as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 l host scan = @reader as Reader []; r host scan = @reader as Reader [];
                 r = @index as Index [a]; answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
             }
@@ -918,7 +918,7 @@ mod tests {
     fn catalog(levels: Vec<Vec<String>>) -> Catalog {
         let declared: Providers = syn::parse_quote!(providers {
             index = Index { reads [exact, membership], build inferred };
-            sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         });
         let mut declarations = declared.declarations.into_iter();
         let mut catalog = Catalog::default();
@@ -946,7 +946,7 @@ mod tests {
                 answer = let canon project selected keep {a};
                 return answer as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 r host scan = @reader as Reader [];
                 answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
             }
@@ -972,7 +972,7 @@ mod tests {
                     answer = let canon project selected keep {a};
                     return answer as answer(a);
                 }
-                structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                     r host scan = @reader as Reader [];
                     answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
                 }
