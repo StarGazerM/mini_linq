@@ -11,6 +11,24 @@ import subprocess
 import time
 
 
+def benchmark_argv(bundle, manifest, argv):
+    """Resolve a named binary or python3 source script without shell evaluation."""
+    if not argv:
+        raise ValueError('--bench requires a binary name or python3 source/<script>.py')
+    if argv[0] == 'python3':
+        if len(argv) < 2:
+            raise ValueError('python3 benchmark requires a bundled source script')
+        script = Path(argv[1])
+        if (script.is_absolute() or '..' in script.parts or not script.parts
+                or script.parts[0] != 'source' or script.suffix != '.py'
+                or str(script) not in manifest.get('files', {})):
+            raise ValueError(f'Not a bundled Python source script: {argv[1]}')
+        return ['python3', str(bundle / script), *argv[2:]]
+    if argv[0] not in manifest['binaries']:
+        raise ValueError(f'Bundle does not contain benchmark {argv[0]}')
+    return [str(bundle / manifest['binaries'][argv[0]]), *argv[1:]]
+
+
 def mirror(path, destination):
     path, destination = Path(path), Path(destination).resolve(strict=True)
     if path.is_symlink():
@@ -35,7 +53,7 @@ def main():
     parser.add_argument('--data', type=Path, default=Path('/workspace/data'))
     parser.add_argument('--existing-mirrors', action='store_true', help='Local verification only; never replace existing paths')
     parser.add_argument('--allow-sf10-oom', action='store_true', help='Local verification only; record SF10 OOM as skipped, not PASS')
-    parser.add_argument('--bench', nargs=argparse.REMAINDER, help='Run one bundled named binary with literal argv instead of the gate')
+    parser.add_argument('--bench', nargs=argparse.REMAINDER, help='Run a bundled binary or python3 source/<script>.py with literal argv')
     args = parser.parse_args()
     bundle, results = args.bundle.resolve(), args.results.resolve()
     results.mkdir(parents=True, exist_ok=False)
@@ -46,10 +64,12 @@ def main():
     def save():
         status_path.write_text(json.dumps(status, indent=2) + '\n')
 
-    if args.bench is not None and not args.bench:
-        parser.error('--bench requires a binary name')
-    steps = manifest['steps'] if args.bench is None else [dict(name='bench-' + args.bench[0],
-        argv=[manifest['binaries'][args.bench[0]], *args.bench[1:]])]
+    try:
+        steps = manifest['steps'] if args.bench is None else [dict(
+            name='bench-' + (args.bench[0] if args.bench else 'invalid'),
+            argv=benchmark_argv(bundle, manifest, args.bench))]
+    except ValueError as error:
+        parser.error(str(error))
     status['not_run'] = [step['name'] for step in steps]
     save()
     # Hashes bind the source snapshot, ELF cubins and libraries to this manifest.
@@ -82,6 +102,8 @@ def main():
     # plus container driver locations (provided by nvidia-container-runtime).
     env['LD_LIBRARY_PATH'] = str(bundle / 'lib') + ':/usr/local/nvidia/lib64:/usr/local/nvidia/lib'
     env['CUDA_VISIBLE_DEVICES'] = selected
+    env['BUNDLE_DIR'] = str(bundle)
+    env.setdefault('BUNDLE_DIRS', json.dumps([str(bundle)]))
     env.pop('CUDA_HOME', None)
     env.pop('CUDA_OXIDE_PTX_DIR', None)
     failed = False
@@ -96,8 +118,10 @@ def main():
         logfile = results / (name + '.log')
         with logfile.open('w') as log:
             for command in commands:
-                argv = [str(bundle / command['argv'][0]), *[
-                    arg.replace('{results}', str(results)) for arg in command['argv'][1:]]]
+                argv = list(command['argv'])
+                if args.bench is None:
+                    argv[0] = str(bundle / argv[0])
+                argv = [arg.replace('{results}', str(results)) for arg in argv]
                 cwd = command.get('cwd', manifest['worktree'] + '/experiments/gpu')
                 print('$ ' + shlex.join(argv), file=log, flush=True)
                 code = subprocess.run(['nice', '-n', '10', *argv], cwd=cwd, env=env,

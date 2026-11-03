@@ -388,7 +388,11 @@ and driver CUDA >= 13.0, then executes `crates`, `tpch-h05-sf10-ceiling` and
 same `gpu-gate PASS|FAIL NAME Ns` lines as `gpu_gate.sh`; per-step logs,
 `gpu-gate-h05-sf10.json`, device information and `status.json` survive in DIR.
 Failures exit nonzero. `--bench NAME ARGS...` instead executes one packaged
-binary with literal arguments (no shell evaluation).
+binary with literal arguments (no shell evaluation). The alternative
+`--bench python3 source/PATH.py ARGS...` runs a Python driver from the bundle's
+hashed source snapshot. The interpreter is exactly `python3`; the script must
+be a manifest-listed `.py` file below `source/`, not an absolute/traversing path.
+Script arguments remain literal argv, with `{results}` expanded as for binaries.
 
 ### One bounded rental session
 
@@ -405,9 +409,36 @@ bash "$wt/tools/remote_gpu/session.sh" \
 ```
 
 Pass additional bundle paths for paired revisions, and repeat `--bench` for
-additional commands. The GPU id list is comma-separated and tried in priority
-order; the volume's DC must offer those devices (US-WA-1 currently has RTX 6000
-Ada, not L40). The dataset repo defaults to `<hf auth whoami>/mini-linq-gpu-data`.
+additional commands. Every benchmark command runs once per bundle.
+`--gate-bundles all` (the default) runs the full GPU gate for every bundle;
+`--gate-bundles 0,2` gates only those zero-based indices; `--gate-bundles none`
+makes the session benchmark-only. Out-of-range indices fail before provisioning.
+Skipped gates are omitted from the planned steps, not reported as passing.
+
+All bundles are unpacked before any gate/benchmark runs, into stable sibling
+directories `/workspace/remote-gpu/TIMESTAMP/bundle-0`, `bundle-1`, etc. Benchmark
+processes receive `BUNDLE_DIR` (their current absolute bundle path), `BUNDLE_DIRS`
+(a JSON array of all absolute bundle paths in CLI order), and
+`CUDA_VISIBLE_DEVICES` (the checked sm_89 GPU). A paired driver can interleave
+binaries from those paths, setting each binary's `LD_LIBRARY_PATH` to its bundle's
+`lib/` plus the NVIDIA driver directories and preparing its worktree mirror.
+For a single interleaving run under the per-bundle dispatch contract, a driver
+can return immediately unless `BUNDLE_DIR == json.loads(BUNDLE_DIRS)[-1]`.
+For example, add these options before two bundle arguments:
+
+```sh
+--gate-bundles 0 \
+--bench 'python3 source/experiments/gpu/compare/pod_bench_2026_11_02.py --results {results} --budget 2400 --pairs 5'
+```
+
+The driver must be present in every supplied bundle. Rebuild bundles with the
+updated tooling to use interpreted benchmarks; previously built archives retain
+their original pod runner. Gate selection does not change seeding, result
+retrieval, the 60-minute watchdog, or teardown.
+
+The GPU id list is comma-separated and tried in priority order; the volume's DC
+must offer those devices (US-WA-1 currently has RTX 6000 Ada, not L40). The dataset
+repo defaults to `<hf auth whoami>/mini-linq-gpu-data`.
 The token is read from `HF_TOKEN_PATH`, or the standard `HF_HOME/token` /
 `XDG_CACHE_HOME/huggingface/token`, and passed as pod environment without logging
 it. The SSH key must exist locally; its `.pub` is injected as `PUBLIC_KEY`.
@@ -428,8 +459,8 @@ or compiling anything on paid GPU time. Registry evidence:
 
 `session.sh` uses the runpodctl 2.12.0 help-confirmed `pod create --wait
 --wait-timeout 10m`, `ssh info`, `pod list --name`, and `pod delete` commands.
-It copies archives over public SSH, seeds once, executes each gate and requested
-benchmarks, and retrieves results under `target/remote-gpu/TIMESTAMP/`. The
+It copies archives over public SSH, seeds once, executes selected gates and all
+requested benchmarks, and retrieves results under `target/remote-gpu/TIMESTAMP/`. The
 `finally` cleanup and SIGINT/SIGTERM handlers delete the pod on success, failure
 or Ctrl-C. An independent 60-minute watchdog deletes it even while SSH is blocked
 in a running GPU step. No stop-only operation is used and the volume is retained.
