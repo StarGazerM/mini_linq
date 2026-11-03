@@ -83,7 +83,9 @@ def snapshot(data):
             return {k:normalize(v,k) for k,v in sorted(value.items())
                 if k not in {"span","docs","links","impls","implementations","has_body","body"}}
         if isinstance(value,list):
-            if key in {"items","fields","variants"}:return [reference(v) if v is not None else None for v in value]
+            if key in {"items","fields","variants"} or (
+                key == "tuple" and all(v is None or isinstance(v, (int, str)) for v in value)
+            ):return [reference(v) if v is not None else None for v in value]
             return [normalize(v) for v in value]
         if key=="id":return reference(value)
         if key=="value" and isinstance(value,str):return value

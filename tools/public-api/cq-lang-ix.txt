@@ -161,11 +161,11 @@ cq_lang_ix::Program::ra	{"struct_field":{"resolved_path":{"args":null,"id":"cq_l
 cq_lang_ix::SemicolonList	{"use":{"id":"cq_syntax::SemicolonList","is_glob":false,"name":"SemicolonList","source":"cq_syntax::SemicolonList"}}
 cq_lang_ix::Signature	{"type_alias":{"generics":{"params":[],"where_predicates":[]},"type":{"tuple":[{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}},{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}},{"resolved_path":{"args":null,"id":"cq_syntax::keyed::SupplyKind","path":"SupplyKind"}}]}}}
 cq_lang_ix::Supply	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_ix::Supply::Stream","cq_lang_ix::Supply::Const","cq_lang_ix::Supply::Range"]}}
-cq_lang_ix::Supply::Const	{"variant":{"discriminant":null,"kind":{"tuple":[151]}}}
+cq_lang_ix::Supply::Const	{"variant":{"discriminant":null,"kind":{"tuple":["cq_lang_ix::Supply::Const::0"]}}}
 cq_lang_ix::Supply::Const::0	{"struct_field":{"resolved_path":{"args":null,"id":"syn::token::Const","path":"$crate::token::Const"}}}
-cq_lang_ix::Supply::Range	{"variant":{"discriminant":null,"kind":{"tuple":[154]}}}
+cq_lang_ix::Supply::Range	{"variant":{"discriminant":null,"kind":{"tuple":["cq_lang_ix::Supply::Range::0"]}}}
 cq_lang_ix::Supply::Range::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_ix::kw::range","path":"kw::range"}}}
-cq_lang_ix::Supply::Stream	{"variant":{"discriminant":null,"kind":{"tuple":[149]}}}
+cq_lang_ix::Supply::Stream	{"variant":{"discriminant":null,"kind":{"tuple":["cq_lang_ix::Supply::Stream::0"]}}}
 cq_lang_ix::Supply::Stream::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_ix::kw::stream","path":"kw::stream"}}}
 cq_lang_ix::SupplyKind	{"use":{"id":"cq_syntax::keyed::SupplyKind","is_glob":false,"name":"SupplyKind","source":"cq_syntax::SupplyKind"}}
 cq_lang_ix::check_rewrite	{"function":{"generics":{"params":[],"where_predicates":[]},"header":{"abi":"Rust","is_async":false,"is_const":false,"is_unsafe":false},"sig":{"inputs":[["source",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"resolved_path":{"args":null,"id":"cq_lang_ix::Program","path":"Program"}}}}],["target",{"borrowed_ref":{"is_mutable":false,"lifetime":null,"type":{"resolved_path":{"args":null,"id":"cq_lang_ix::Program","path":"Program"}}}}]],"is_c_variadic":false,"output":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"tuple":[]}}],"constraints":[]}},"id":"syn::error::Result","path":"syn::Result"}}}}}
