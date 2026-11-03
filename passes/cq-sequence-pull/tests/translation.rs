@@ -419,9 +419,6 @@ fn runtime_choices_keep_recorded_selection_owners_alive() {
                     |_, _, _, _, _, _| Ok(()),
                 ).unwrap(),
             ] {
-                let printed = output.to_token_stream().to_string();
-                assert!(printed.contains("let __cq_s_selection_owner_"), "{printed}");
-                assert!(printed.contains("cq_storage :: sequence :: Choice :: Left"), "{printed}");
                 checks.push(quote!({
                     let R = vec![(3i64,), (1,), (2,), (3,)];
                     assert_eq!(

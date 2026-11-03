@@ -69,6 +69,8 @@ jobs:
       - name: Verify component dependency boundaries
         # Explicit package regression rows cover instrumented facade consumers.
         run: python3 tools/check_dependencies.py --isolate
+      - name: Test workspace instrumentation split
+        run: PYTHONPATH=tools python3 -m unittest tools/test_check_dependencies.py
       - name: Drop isolation build artifacts
         run: rm -rf target/component-isolation && df -h /
       - name: Test restored compiler regressions

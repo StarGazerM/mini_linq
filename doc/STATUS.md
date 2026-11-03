@@ -11,17 +11,25 @@ are historical, not a replacement for that plan.
 **Latest paired measurement (2026-11-02/03, `44bf82bc` vs `c1b75718`;
 [summary](../experiments/gpu/compare/bench-2026-11-02.md), raw samples in
 [`bench-2026-11-02.results.json`](../experiments/gpu/compare/bench-2026-11-02.results.json)).**
-Five interleaved fresh-process pairs, every sample exact. Geometric-mean
+Five interleaved fresh-process pairs (GPU TPC-H SF10: four), every sample exact. Geometric-mean
 current/reference ratios: CPU TPC-H SF1 `default` **0.908 [0.902, 0.917]** and `par`
 **0.820 [0.800, 0.840]** (28 kernels). `retail_h07_block` does not compile on
-`44bf82bc` (`sharded::Index::from_positions`, E0599). Regressions whose CI lies
-above 1: `default` `retail_h06` 1.026 [1.017, 1.043] and `retail_h20` 1.024
-[1.015, 1.035]. CPU DOOP xalan: `mini` 8.97 s, 0.975 [0.969, 0.982]; `mini-par`
+`44bf82bc` (`sharded::Index::from_positions`, E0599). Apparent CPU slowdowns:
+`default` `retail_h06` 1.026 [1.017, 1.043] and `retail_h20` 1.024
+[1.015, 1.035]. Both fit the existing same-source bidirectional layout-control
+envelope (h06 [0.9401, 1.1137]; h20 reverse [0.9794, 1.0451]; evidence in
+the linked summary), so neither is a confirmed regression; this does not
+establish the historical cause. CPU DOOP xalan: `mini` 8.97 s, 0.975 [0.969, 0.982]; `mini-par`
 (24 threads) 2.04 s, 0.913 [0.891, 0.969]. GPU TPC-H advised (RunPod RTX 6000
 Ada, every query exact): SF1 **1.085 [1.033, 1.120]**; SF10 **1.023 [1.000, 1.054]**
-(4 pairs). Regressions with CIs above 1 include h09 2.52/2.34, h21_positive
-2.07/2.09, h10 1.55/1.61 and h03 1.26/1.22; best h12 0.456/0.423 and h11
-SF10 0.416. DOOP GPU `doop-gpu` fixpoint (pod, 26/26 exact): xalan 0.239
+(4 pairs; all SF10 effects provisional/exploratory, below the five-pair minimum).
+Observed ratios with CIs above 1 include h09 2.52/2.34, h21_positive
+2.07/2.09, h10 1.55/1.61 and h03 1.26/1.22; apparent best h12 0.456/0.423 and h11
+SF10 0.416. SF1 h08 1.048 and d72_inner 1.025 lack same-source layout controls
+and are unconfirmed apparent slowdowns. The 2026-11-02 GPU TPC-H current
+timing includes final answer download whereas reference excludes it: a known
+boundary bug fixed separately, biasing cur/ref ratios against current.
+DOOP GPU `doop-gpu` fixpoint (pod, 26/26 exact): xalan 0.239
 [0.150, 0.599], batik 0.724 [0.482, 0.836]. These are low confidence:
 fresh-process spread reached 10x, cause not established. No live SRDatalog
 comparison is possible on the pod.

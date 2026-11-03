@@ -46,8 +46,10 @@ Grammars and extension APIs live in crate `//!` documentation. See
 
 The root workspace shares one lockfile and Cargo target directory across portable
 core, all features (including Datalog SRD engines), formal examples and fixtures,
-the CPU storage benchmark, and the Mac native CPU benchmark. Its default member
-remains the root package (`cargo test` does not select every workspace member).
+the CPU storage benchmark, and the Mac native CPU benchmark. Root `cargo test`
+selects 113 default members; the five counter-enabled packages (`mini-linq`,
+`cq-load`, `own-dialect`, `cq-rewrites`, and `cq-sequence-tasks`) have explicit
+`cargo test -p` regression rows to avoid workspace-wide instrumentation unification.
 `experiments/gpu` retains its separate oxide toolchain/workspace; Metal-dependent
 packages share `experiments/mac`. Intentional standalone external-packaging
 fixtures remain isolated because their topology is test input.
@@ -139,7 +141,7 @@ build requires `latexmk` and the TeX packages in `doc/formal/common.tex`.
 cargo fmt --all --check
 cargo test --locked
 cargo clippy --all-targets --locked -- -D warnings
-# Final behavioral gate; omit --changed-since for all 136 deterministic targets.
+# Final behavioral gate; omit --changed-since for all 137 deterministic targets.
 bash tools/test_regressions.sh --changed-since BASE_REV
 # Random/generated checks are opt-in, never part of default or quick tiers.
 bash tools/test_regressions.sh --tier fuzz

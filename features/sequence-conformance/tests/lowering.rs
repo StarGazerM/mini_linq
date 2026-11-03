@@ -65,6 +65,7 @@ fn every_workload_through_every_planner() {
 
 #[test]
 fn rewritten_claw_preserves_ordered_stream_providers() {
+    use cq_lang_structures::physical::{self, ModeKind};
     use quote::ToTokens;
     let source = cq_workloads::case("claw").unwrap().module().unwrap();
     for plan in 0..Planner::ALL.len() {
@@ -78,9 +79,68 @@ fn rewritten_claw_preserves_ordered_stream_providers() {
                 ..Default::default()
             };
             let physical = pipeline.physical(&source).unwrap();
+            let facts = physical::contract::check(&physical).unwrap();
+            let candidates = physical::candidate_prefixes(&physical, &facts);
+            // A retained side needs [prefix][candidate], with exactly one
+            // remaining column. Host pipes use their declared host adapters;
+            // only Let sides can receive a built candidate directory.
+            let unsupported: Vec<_> = candidates
+                .iter()
+                .flat_map(|candidate| {
+                    let facts = &facts;
+                    candidate.sides.iter().filter_map(move |(side, prefix)| {
+                        let host = facts.hosts.contains_key(side)
+                            && facts.modes[side] == ModeKind::Pipe;
+                        let tail: Vec<_> = facts.headings[side]
+                            .iter()
+                            .filter(|column| !prefix.contains(column))
+                            .collect();
+                        (!host
+                            && (facts.modes[side] != ModeKind::Let
+                                || tail != [&candidate.column]))
+                            .then_some((candidate.reader, side, prefix, tail))
+                    })
+                })
+                .collect();
             let structures = match cq_structure_selection::compile(&physical) {
-                Ok(structures) => structures,
-                Err(_) => continue,
+                Ok(structures) => {
+                    assert!(
+                        unsupported.is_empty(),
+                        "{pipeline:?}: accepted unsupported candidate facts {unsupported:?}"
+                    );
+                    let selected = cq_lang_structures::contract::check(&structures).unwrap();
+                    for candidate in &candidates {
+                        for (side, prefix) in &candidate.sides {
+                            assert!(
+                                selected.host_read(side)
+                                    || selected
+                                        .candidate_on(side, prefix, &candidate.column)
+                                        .is_some(),
+                                "{pipeline:?}: missing candidate directory for {side}"
+                            );
+                        }
+                    }
+                    structures
+                }
+                Err(error) => {
+                    assert!(
+                        !unsupported.is_empty(),
+                        "{pipeline:?}: unexpected Structures rejection: {error}"
+                    );
+                    let diagnostics: Vec<_> =
+                        error.into_iter().map(|error| error.to_string()).collect();
+                    let expected = format!(
+                        "{}: {}",
+                        unsupported[0].0,
+                        cq_workloads::pipelines::SMALLEST_LAYOUT_REJECTION
+                    );
+                    assert_eq!(
+                        diagnostics,
+                        [expected],
+                        "{pipeline:?}: Structures must reject the first unsupported candidate"
+                    );
+                    continue;
+                }
             };
             compile(&structures).unwrap_or_else(|error| {
                 panic!("{pipeline:?}: {error}\n{}", structures.to_token_stream())

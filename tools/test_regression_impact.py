@@ -179,6 +179,11 @@ class ImpactTests(unittest.TestCase):
         listing = [command for command, _ in self.commands if command[1] == "ls-files"]
         self.assertTrue(any("--exclude-standard" in command and "--cached" not in command for command in listing))
 
+    def test_workspace_split_gate_runs_on_root_manifest_changes(self):
+        row = ["architecture", "scenario", "workspace-split", "tools/test_check_dependencies.py"]
+        self.rows.append(row)
+        self.assertTrue(self.impact(["Cargo.toml"]).reasons(row))
+
     def test_architecture_and_unknown_scenarios_are_repository_wide(self):
         unknown = ["custom", "scenario", "unknown", "features/custom/check.py"]
         self.rows.append(unknown)

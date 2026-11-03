@@ -29,6 +29,7 @@ mini-linq	test	workload_callback	facade/mini-linq/tests/workload_callback.rs
 mini-linq	test	relation_loaders	facade/mini-linq/tests/relation_loaders.rs
 cq-load	test	loading	runtime/cq-load/tests/loading.rs
 architecture	scenario	closed-core-dependencies	tools/check_dependencies.py
+architecture	scenario	workspace-split	tools/test_check_dependencies.py
 architecture	scenario	external-sibling-closure	tools/test_check_external.py
 cq-planners	manifest-target-test	plans	Cargo.toml
 cq-planners	manifest-target-test	protocol	Cargo.toml

@@ -26,6 +26,7 @@ SCENARIO_CARGO = {
 }
 NON_CARGO_SCENARIOS = {
     "tools/check_dependencies.py", "tools/test_check_external.py", "tools/test_public_api.py",
+    "tools/test_check_dependencies.py",
 }
 # Small deterministic compiler/runtime contracts, not the generated workload matrix.
 QUICK_TARGETS = frozenset({

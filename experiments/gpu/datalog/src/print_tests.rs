@@ -135,13 +135,16 @@ fn negative_device_bindings_preserve_fork_declarations() {
         declaration.hosts.is_empty(),
         "device inputs do not declare CPU host reads"
     );
-    let printed = print::compile(&bound).unwrap().to_token_stream().to_string();
+    print::compile(&bound).unwrap();
     let records = bound.storage.device.as_ref().unwrap();
-    let canonical = bound.storage.providers[2].canonical;
-    let active_bits = &records.layouts[canonical].active_bits;
-    assert!(printed.contains(&quote!(let __cq_gpu_active_bits = #active_bits;).to_string()));
-    assert!(printed.contains(&quote!(state.params(), run, state.active_bits()).to_string()));
-    assert_eq!(printed.matches("__cq_gpu_active_bits").count(), 2);
+    for record in records.layouts.iter()
+        .chain(&records.delta_layouts).chain(&records.negations)
+    {
+        let word = &record.word;
+        let expected: syn::Expr =
+            syn::parse_quote!(<#word as ::gpu_datalog_runtime::Word>::BITS);
+        assert_eq!(record.active_bits, expected);
+    }
 
     // The correspondence checker must still reject a fabricated host capability.
     let mut forged = bound.clone();

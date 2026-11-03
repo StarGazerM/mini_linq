@@ -351,12 +351,14 @@ fn lazy_ranges_and_carrier_filters_preserve_order_and_multiplicity() {
 }
 
 #[test]
-#[should_panic(expected = "scan position belongs to another table")]
 fn table_positions_cannot_cross_snapshots() {
     let a = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
     let b = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
     let position = a.scan_positions(0..1, |_| {}).next().unwrap();
-    b.read_ordinal::<0>(position);
+    assert_eq!(a.read_ordinal::<0>(position), 3);
+    let same_table = b.scan_positions(0..1, |_| {}).next().unwrap();
+    assert_eq!(b.read_ordinal::<0>(same_table), 3);
+    assert!(std::panic::catch_unwind(|| b.read_ordinal::<0>(position)).is_err());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

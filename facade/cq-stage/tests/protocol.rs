@@ -74,14 +74,18 @@ fn diagnostic_message(tokens: TokenStream) -> String {
 
 #[test]
 fn combined_pass_failures_form_one_diagnostic_expression() {
-    let first = syn::Error::new(proc_macro2::Span::call_site(), "first component");
-    let second = syn::Error::new(proc_macro2::Span::call_site(), "second component");
+    const COMPONENTS: [&str; 2] = ["first component", "second component"];
+    let first = syn::Error::new(proc_macro2::Span::call_site(), COMPONENTS[0]);
+    let second = syn::Error::new(proc_macro2::Span::call_site(), COMPONENTS[1]);
     let tokens = rewrite::<Number>(quote!(pipeline { consumer }; 1), |_, _| {
         let mut errors = first;
         errors.combine(second);
         Err(errors)
     });
-    diagnostic_message(tokens);
+    assert_eq!(
+        diagnostic_message(tokens).lines().collect::<Vec<_>>(),
+        COMPONENTS
+    );
 }
 
 #[test]

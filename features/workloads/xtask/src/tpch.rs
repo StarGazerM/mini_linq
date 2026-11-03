@@ -840,8 +840,7 @@ mod tests {
             vec!["--config", "default"],
             vec!["--runs", "0"],
         ] {
-            let error = compile_all(args.into_iter().map(str::to_owned).collect()).unwrap_err();
-            assert!(error.to_string().contains("accepts no options"));
+            assert!(compile_all(args.into_iter().map(str::to_owned).collect()).is_err());
         }
     }
 

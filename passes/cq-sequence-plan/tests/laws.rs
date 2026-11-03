@@ -1031,18 +1031,30 @@ fn resource_recovery_uses_smaller_machine_derived_tiles() {
 
 #[test]
 fn resource_rejection_handles_nested_diagnostics() {
+    const COMPONENTS: [&str; 2] = ["first layout failure", "second layout failure"];
     let source = expanding_resource_fixture();
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(1);
     machine.layout = Some(|_| {
-        let mut errors = syn::Error::new(proc_macro2::Span::call_site(), "first layout failure");
+        let mut errors = syn::Error::new(proc_macro2::Span::call_site(), COMPONENTS[0]);
         errors.combine(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "second layout failure",
+            COMPONENTS[1],
         ));
         Err(errors)
     });
-    assert!(decompose(&source, &machine, &catalog(&machine)).is_err());
+    let errors = decompose(&source, &machine, &catalog(&machine))
+        .err()
+        .expect("the supplied layout rejects every candidate");
+    let diagnostics: Vec<_> = errors.into_iter().map(|error| error.to_string()).collect();
+    // Candidate/rewrite annotations may change, but neither test-owned payload
+    // may disappear when a nested syn::Error is propagated.
+    for component in COMPONENTS {
+        assert!(
+            diagnostics.iter().any(|message| message.ends_with(component)),
+            "lost layout diagnostic {component:?}: {diagnostics:?}"
+        );
+    }
 }
 
 #[test]

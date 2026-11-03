@@ -202,6 +202,10 @@ Their package-wide regression rows use `-p`, preserving instrumented coverage
 without changing the feature sets of unrelated generated query tests. Do not
 replace this split with `--workspace`, a larger global thread stack, or altered
 query optimization profiles.
+The `architecture/workspace-split` regression scenario and CI both run
+`tools/test_check_dependencies.py`, including the default-member split invariant.
+As a repository-wide architecture scenario, it is selected on code/configuration
+changes, including the root `Cargo.toml`.
 
 For `cq-workload-corpus`, `cargo tree -e features -i cq-storage` with explicit
 package/member selection is identical before and after consolidation after
@@ -390,8 +394,8 @@ fixed-seed cases × 4 CPU routes) and `cq-xtask/fuzz-full` (2,000 cases, rotatin
 logged seed, every CPU route), both in this opt-in tier. `cq-rewrites/rewrite_stages`
 runs the generated stage differential and checker mutants through the six Physical
 rewrites; its Cargo target is `test = false`, so only an explicit `--test` runs
-it. The consolidated default inventory has **136 deterministic targets**, and
-139 rows including fuzz. Seven explicit helper-package rows preserve tests
+it. The consolidated default inventory has **137 deterministic targets**, and
+140 rows including fuzz. Seven explicit helper-package rows preserve tests
 previously selected through nested workspace default members; one host-only GPU
 compiler row preserves the constant-capture test relocated from the core. The historical
 impact/quick measurements above predate these inventory additions and tier

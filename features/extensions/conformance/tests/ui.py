@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile public consumers, including the migrated extension diagnostic cases."""
+"""Compile public consumers and pin negative cases to their rejecting source spans."""
 import json
 import os
 from pathlib import Path
@@ -48,6 +48,36 @@ expressions += [
     ("surface_arguments", "cq_ext_correlated::correlated! { arguments { unexpected }; pipeline {mini_linq::passes::plan}; struct U; answer(x) :- A(x); }"),
 ]
 
+# compile_error! diagnostics have no rustc error code. Identify each rejection
+# by its primary source span instead of accepting an unrelated downstream error
+# or pinning production prose. The marker is unique in the authored expression;
+# the width is the rejected token/construct, not the enclosing macro invocation.
+rejection_spans = {
+    "union_head": ("other(x)", len("other(x)")),
+    "union_arity": ("answer(x,y)", len("answer(x,y)")),
+    "aggregate_key": ("missing", len("missing")),
+    "aggregate_arity": ("count(x)", len("count")),
+    "recursive_nonlinear": (
+        "reach(x,z) :- reach(x,y),reach(y,z);",
+        len("reach(x,z) :- reach(x,y),reach(y,z);"),
+    ),
+    "recursive_infinite": ("*x+1", len("*x+1")),
+    "recursive_copy_syntax": ("*x", len("*x")),
+    "scalar_shadow": ("x:i32=(0)", len("x")),
+    "exists_empty": (
+        "struct C; relation A(x:i32); answer(x) :- A(x),exists!{if true};",
+        len("struct C; relation A(x:i32); answer(x) :- A(x),exists!{if true};"),
+    ),
+    "unexpanded": ("name!{opaque tokens}", len("name")),
+    "empty_queue": (
+        "struct U; answer(x) :- A(x);",
+        len("struct U; answer(x) :- A(x);"),
+    ),
+    "surface_arguments": ("unexpected", len("unexpected")),
+}
+assert set(rejection_spans) == {name for name, _ in expressions}
+expected_spans = {}
+
 # Resolve public package identities from the running workspace. A packaged core
 # dependency stays a registry dependency; a local core dependency retains its
 # public path. No source files or private test modules are imported.
@@ -60,7 +90,12 @@ for name in ["cq-ext-aggregate", "cq-ext-recursion", "cq-ext-correlated", "mini-
         fields += f', path = {json.dumps(str(Path(package["manifest_path"]).parent))}'
     manifest += f'{name} = {{ {fields} }}\n'
 for name, expression in expressions:
-    (DIRECTORY / f"{name}.rs").write_text(f"fn main() {{ let _ = {expression}; }}\n")
+    fixture = f"fn main() {{ let _ = {expression}; }}\n"
+    marker, width = rejection_spans[name]
+    assert fixture.count(marker) == 1, (name, marker)
+    start = len(fixture[:fixture.index(marker)].encode("utf-8"))
+    expected_spans[name] = (start, start + width)
+    (DIRECTORY / f"{name}.rs").write_text(fixture)
     manifest += f'[[bin]]\nname = "{name}"\npath = "{name}.rs"\n'
 smoke = compile_expression("union", "struct U; relation A(x:i32); answer(x) :- A(x); answer(x) :- A(x);")
 (DIRECTORY / "smoke.rs").write_text(f"fn main() {{ let A = [(1_i32,)]; let _: Vec<_> = ({smoke}).collect(); }}\n")
@@ -74,9 +109,26 @@ if smoke.returncode:
 for name, _ in expressions:
     result = subprocess.run([CARGO, "check", "--offline", "--locked", "--bin", name, "--message-format=json"], cwd=DIRECTORY, env=env, capture_output=True, text=True)
     (DIRECTORY / f"{name}.jsonl").write_text(result.stdout)
-    errors = [message["message"]["message"] for line in result.stdout.splitlines()
+    errors = [message["message"] for line in result.stdout.splitlines()
               if (message := json.loads(line)).get("reason") == "compiler-message"
               and message["message"]["level"] == "error"]
-    if result.returncode == 0 or not errors:
-        raise SystemExit(f"{name}: expected a rustc error; errors={errors}; {result.stderr}")
+    start, end = expected_spans[name]
+    matched = any(
+        error["code"] is None
+        and any(
+            span["is_primary"]
+            and (DIRECTORY / span["file_name"]).resolve() == (DIRECTORY / f"{name}.rs").resolve()
+            and span["byte_start"] == start
+            # Macro forwarding may retain only the first token's span. It must
+            # still start at, and stay inside, the exact rejected construct.
+            and start < span["byte_end"] <= end
+            for span in error["spans"]
+        )
+        for error in errors
+    )
+    if result.returncode == 0 or not matched:
+        raise SystemExit(
+            f"{name}: expected an uncoded primary diagnostic at bytes "
+            f"{start}..{end}; errors={errors}; {result.stderr}"
+        )
 print(f"PASS: positive consumer and {len(expressions)} extension compile-fail cases; logs: {DIRECTORY}")

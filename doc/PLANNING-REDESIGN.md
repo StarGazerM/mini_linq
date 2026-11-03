@@ -1727,12 +1727,15 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
   2026-11-02/03. Summary
   [`bench-2026-11-02.md`](../experiments/gpu/compare/bench-2026-11-02.md), raw
   samples and CIs in `bench-2026-11-02.results.json`. Five interleaved
-  fresh-process pairs, exact answers every sample, paired bootstrap 95% CI
+  fresh-process pairs (GPU TPC-H SF10: four), exact answers every sample, paired bootstrap 95% CI
   of median ratios (cur/ref). CPU TPC-H SF1 (28 of 29 kernels, DuckDB-exact):
   `default` geomean 0.908 [0.902, 0.917], best h19 0.288, h04 0.535, q19
   0.707; `par` 0.820 [0.800, 0.840], best h19 0.199, h04 0.231, q06 0.235.
   CIs above 1: `default` h06 1.026 [1.017, 1.043], h20 1.024 [1.015, 1.035]
-  (not investigated here). `retail_h07_block` fails to compile on `44bf82bc`
+  fit the existing same-source bidirectional layout-control envelope:
+  h06 [0.9401, 1.1137], h20 reverse [0.9794, 1.0451] (evidence in the linked
+  summary). Neither is a confirmed regression; the control does not establish
+  the historical cause. `retail_h07_block` fails to compile on `44bf82bc`
   (E0599 `cq_storage::sharded::Index::from_positions`, emitted by
   `cq-print/src/positional.rs:393` for `par`). CPU DOOP xalan (Ascent-exact):
   `mini` 0.975 [0.969, 0.982], `mini-par` 0.913 [0.891, 0.969]. Local GPU
@@ -1740,9 +1743,15 @@ Paths and lines refer to that tree; later cutovers below supersede resolved item
   RunPod (RTX 6000 Ada, `pod_bench_2026_11_02.py`, session
   `20261103T164334.987048Z`, every query exact). SF1 geomean was 1.085
   [1.033, 1.120] (5 pairs) and SF10 1.023 [1.000, 1.054] (4 pairs, budget).
+  All SF10 effects are provisional/exploratory, not confirmed regressions
+  or improvements: the protocol requires at least five interleaved pairs.
   CIs above 1 at SF1 cover 13 queries, led by h09 2.524, h21_positive 2.065,
   h10 1.553 and h03 1.264. At SF10 they cover 11, led by h09 2.340,
-  h21_positive 2.088, h10 1.609 and h03 1.221. Not investigated here; the
+  h21_positive 2.088, h10 1.609 and h03 1.221. SF1 h08 1.048 and d72_inner
+  1.025 lack same-source layout controls and remain unconfirmed apparent
+  slowdowns. The 2026-11-02 GPU TPC-H current timing includes final answer
+  download whereas reference excludes it; this known boundary bug is fixed
+  separately and biases cur/ref ratios against current. Not investigated here; the
   h09, h21_positive and h10 growth is in build. An earlier pod gives SF1 1.169
   [1.116, 1.217] with the same outliers. `doop-gpu` xalan/batik (second
   pod, 5 pairs, 26/26 exact) gives fixpoint xalan 0.239 [0.150, 0.599] and
