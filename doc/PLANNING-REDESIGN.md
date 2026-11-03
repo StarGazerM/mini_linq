@@ -927,9 +927,25 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   cannot become the explicit `trusted_key` semantic premise. No automatic
   statistics, filter activation policy, runtime population, device transfer or
   committed-round publication is selected by this slice.
-- **P8 Remaining items.** Key-partition routing projection, placement spine
-  (only when a branching machine appears), Masks as full reducer (a cost
-  question), delta=k SRDatalog plans.
+- **P8 Remaining items.** Placement spine (only when a branching machine
+  appears), Masks as full reducer (a cost question), delta=k SRDatalog plans.
+  **Key-partition routing projection: no target in the measured CPU suite**
+  (2026-11-03, 57216a5c). The preimplementation census covered 28 Tasks/par
+  kernels at SF1 with six workers; all complete answers matched DuckDB.
+  Across 42 checked stage plans and 129 distinct routing sites, 66 routed
+  covers exchanged 34,487,575 rows / **781,900,952 carrier bytes**.
+  Existing Structures carrier demand already retains precisely the required
+  downstream/canonical/routing columns: independently seeding demand without
+  Built/filtered/native-layout requirements found **zero droppable columns,
+  zero benefiting rows and zero saved bytes (0%)**. Retain the existing
+  implementation; no paired speedup or implementation-gate claim is made.
+  `retail_h07_block` was explicitly excluded pending its separately owned
+  Positions-capability repair and must be rechecked after that repair merges.
+  Per-kernel widths/counts and eligibility rationale:
+  `/data/design-notes/p8-keypart-design.md`; raw checked plans, exact answers,
+  exchange counters and per-command gate ledger:
+  `/data/mini_linq-wt/p8-keypart/target/p8-census/`.
+  Census Gate time **583.02 s**, with **1,666.13 s** separate lock wait.
 - **Open issues (2026-10-31).** (1) `doop-gpu` (26-output DOOP) fails at base
   67d76822 with 220 P-Decompose unmet catalog obligations (DeviceLayout
   membership at host level). (2) **Resolved by closed capture (see
