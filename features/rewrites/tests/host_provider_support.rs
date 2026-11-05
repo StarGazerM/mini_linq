@@ -133,3 +133,78 @@ fn noncopy_native_cursor_uses_declared_snapshot_fallback_and_preserves_duplicate
     assert_eq!(answers, expected.iter().copied().collect());
     assert_eq!(*visits.borrow(), expected);
 }
+
+#[test]
+fn retained_host_cursor_crosses_membership_without_a_second_lookup() {
+    for (left, payload, members) in [
+        (vec![], vec![], vec![]),
+        (vec![(1, 9)], vec![], vec![(9,)]),
+        (vec![(1, 9)], vec![(1, 10)], vec![]),
+        (
+            vec![(2, 9), (1, 9), (4, 9), (1, 8), (1, 9)],
+            vec![(1, 10), (2, 20), (1, 11), (1, 10)],
+            vec![(9,), (9,)],
+        ),
+    ] {
+        let expected: Vec<_> = left
+            .iter()
+            .filter(|&&(_, tag)| members.contains(&(tag,)))
+            .flat_map(|&(key, _)| {
+                payload
+                    .iter()
+                    .filter_map(move |&(other, value)| (key == other).then_some((key, value)))
+            })
+            .collect();
+        let right = NativeHost::new(payload);
+        let visits = &RefCell::new(Vec::new());
+        // Select the same native exact cursor at both demands. Automatic
+        // membership selection intentionally uses a fallback when the host
+        // advertises exact reads but not native membership.
+        let answers: BTreeSet<_> = cq_rewrites::retain_lookups! {
+            pipeline {
+                mini_linq::passes::sequence,
+                mini_linq::passes::sequential,
+                mini_linq::passes::translate_pull
+            };
+            physical {
+                relation L(a:i64,c:i64) = (&left);
+                relation R(a:i64,b:i64) = (&right) host [a] reads [exact] supports [retain, expand];
+                relation M(c:i64) = (&members);
+                l = pipe rename L@0 {a -> x,c -> z};
+                r = pipe rename R@1 {a -> x,b -> y};
+                m = let canon rename M@2 {c -> z};
+                s = pipe semi eager [x] l,r;
+                checked = pipe probe first [z] s,m;
+                projected = pipe project checked keep {x};
+                p = pipe probe first [x] projected,r;
+                observed = pipe guard p if ({ visits.borrow_mut().push((*x, *y)); true });
+                out = let canon project observed keep {x,y};
+                return out as answer(x,y);
+            }
+            structures {
+                providers {
+                    host_scan = ::core::iter::Map<_, _> { reads [], build typed };
+                    hash_set = ::cq_storage::HashSet<_> { reads [membership], build typed, shared };
+                    sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                }
+                l host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                m host scan = @host_scan as ::core::iter::Map<_,_> [];
+                r native result(s) = exact [x] supports [retain, expand];
+                r native result(p) = exact [x] supports [retain, expand];
+                m = @hash_set as ::cq_storage::HashSet<_> [z] membership;
+                m canon = [z];
+                out rows = @sort as ::cq_storage::dedup::Sort;
+                out canon = rows;
+            }
+        }
+        .map(|(key, value)| (*key, *value))
+        .collect();
+        assert_eq!(answers, expected.iter().copied().collect());
+        assert_eq!(*visits.borrow(), expected);
+        // Includes rejected membership rows and missing payload keys: one first
+        // lookup per input row, never a re-probe at the forcing expansion.
+        assert_eq!(right.lookups.get(), left.len());
+        assert_eq!(right.scans.get(), 0);
+    }
+}

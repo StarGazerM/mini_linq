@@ -300,11 +300,10 @@ fn heapalloc_helper_hole_work_is_bounded_by_input_plus_output() {
 }
 
 #[test]
-fn authored_rule_order_is_the_hole_plan() {
+fn authored_connected_rule_order_is_the_hole_plan() {
     use mini_linq::passes::plan as renamed_planner;
-    // The same rule with its atoms authored in the written (cross-product)
-    // order: the advice is followed exactly, so the hole does the cross
-    // product work the default planner avoids. Rows agree either way.
+    // Explicit advice keeps its connected introducing order and drains ready
+    // filters. Disconnected cross-product advice is rejected by VO-Order.
     const OBJECT_ARRAY: i32 = 1_000;
     const STRING_ARRAY: i32 = 1_001;
     let alloc: Vec<(i32, i32)> = (0..200).map(|h| (h, h % 20)).collect();
@@ -341,22 +340,22 @@ fn authored_rule_order_is_the_hole_plan() {
     let planned = program!();
     let planned_cost = cq_storage::counters::snapshot();
     cq_storage::counters::reset();
-    let written = program!(pipeline {
+    let advised = program!(pipeline {
         cq = pipeline { plan = renamed_planner; };
         incremental = cq_datalog::passes::incremental(
-            plan(HeapAllocHelper, order(Alloc@0, Alloc@1, Component, Super));
+            plan(HeapAllocHelper, order(Alloc@0, Super, Component, Alloc@1));
         );
     });
-    let written_cost = cq_storage::counters::snapshot();
-    assert_eq!(planned, written);
+    let advised_cost = cq_storage::counters::snapshot();
+    assert_eq!(planned, advised);
     let work = |cost: cq_storage::counters::Snapshot| {
         cost.rows_tested + cost.rows_enumerated + cost.cursor_steps + cost.lookups
     };
-    let (planned_work, written_work) = (work(planned_cost), work(written_cost));
-    assert!(
-        written_work > 4 * planned_work,
-        "authored cross-product order {written_work} vs planned {planned_work}"
-    );
+    let bound = 8 * (alloc.len() + component.len() + supertype.len() + planned.len()) as u64;
+    for (route, cost) in [("default", planned_cost), ("authored connected", advised_cost)] {
+        let work = work(cost);
+        assert!(work <= bound, "{route}: work {work} exceeds bound {bound}");
+    }
 }
 
 #[test]

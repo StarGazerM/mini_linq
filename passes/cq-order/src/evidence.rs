@@ -272,6 +272,7 @@ pub fn compile(
         _ => default,
     };
     program.valuation.evidence = Some(evidence.clone());
+    valuation::contract::check(&program)?;
     Ok(program)
 }
 

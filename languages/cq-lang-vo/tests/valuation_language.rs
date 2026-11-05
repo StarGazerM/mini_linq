@@ -16,15 +16,15 @@ fn plan(steps: proc_macro2::TokenStream) -> syn::Result<valuation::Program> {
 #[test]
 fn complete_coarse_and_fine_plans_check_and_round_trip() {
     let coarse = plan(quote! {
-        R@0(a, b); S@1(b, c); T@2(a, c); if { a > 0 }; let d: i32 = a + c;
+        R@0(a, b); if { a > 0 }; S@1(b, c); T@2(a, c); let d: i32 = a + c;
     })
     .unwrap();
     let analysis = valuation::contract::check(&coarse).unwrap();
     assert_eq!(analysis.introduces[0], ["a", "b"]);
-    assert_eq!(analysis.introduces[2], Vec::<String>::new());
+    assert_eq!(analysis.introduces[3], Vec::<String>::new());
     let fine = plan(quote! {
-        R@0(_, b); R@0(a, b); S@1(b, c); T@2(a, c);
-        if { a > 0 }; let d: i32 = a + c;
+        R@0(_, b); R@0(a, b); if { a > 0 }; S@1(b, c); T@2(a, c);
+        let d: i32 = a + c;
     })
     .unwrap();
     let analysis = valuation::contract::check(&fine).unwrap();
@@ -53,7 +53,7 @@ fn contract_rejects_dropped_columns_missing_steps_and_early_rust() {
 fn reductions_are_relational_and_never_consume_a_rust_guard() {
     let reduced = plan(quote! {
         reduce R@0 with T@2(a, _); reduce T@2 with R@0(a, _);
-        R@0(a,b); S@1(b,c); T@2(a,c); if { a > 0 }; let d:i32 = a+c;
+        R@0(a,b); if { a > 0 }; S@1(b,c); T@2(a,c); let d:i32 = a+c;
     })
     .unwrap();
     let analysis = valuation::contract::check(&reduced).unwrap();
@@ -173,7 +173,7 @@ fn negations_round_trip_bind_nothing_and_commute_with_rust() {
     let mut late = source.clone();
     let negation = late.valuation.steps.remove(1);
     late.valuation.steps.push(negation);
-    valuation::contract::check(&late).unwrap();
+    assert!(valuation::contract::check(&late).unwrap_err().to_string().contains("VO-Order I2"));
     let mut missing = source.clone();
     missing.valuation.steps.remove(1);
     assert!(valuation::contract::check(&missing).is_err());

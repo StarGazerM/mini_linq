@@ -36,6 +36,7 @@ pub fn compile(source: &storage::Program) -> syn::Result<Program> {
         syn::parse_quote!(none),
         Some(2),
         Some(0),
+        None,
     )
 }
 struct Arguments {
@@ -44,6 +45,7 @@ struct Arguments {
     timing: Ident,
     lower: Option<usize>,
     plan: Option<usize>,
+    shared_demand: Option<Vec<Vec<round::cq::ordering::SharedDemand>>>,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
@@ -52,6 +54,7 @@ impl syn::parse::Parse for Arguments {
         let mut timing = None;
         let mut lower = None;
         let mut plan = None;
+        let mut shared_demand = None;
         while !input.is_empty() {
             let name: Ident = input.parse()?;
             input.parse::<syn::Token![=]>()?;
@@ -65,6 +68,22 @@ impl syn::parse::Parse for Arguments {
                 lower = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
             } else if name == "plan" && plan.is_none() {
                 plan = Some(input.parse::<syn::LitInt>()?.base10_parse()?);
+            } else if name == "shared_demand" && shared_demand.is_none() {
+                let strata;
+                syn::bracketed!(strata in input);
+                shared_demand = Some(
+                    strata.parse_terminated(
+                        |input| {
+                            let demands;
+                            syn::bracketed!(demands in input);
+                            Ok(demands
+                                .parse_terminated(syn::parse::Parse::parse, syn::Token![,])?
+                                .into_iter()
+                                .collect())
+                        },
+                        syn::Token![,],
+                    )?.into_iter().collect(),
+                );
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
@@ -79,6 +98,7 @@ impl syn::parse::Parse for Arguments {
             pipeline: pipeline.unwrap_or_else(default_pipeline),
             terminals: terminals.unwrap_or_default(),
             timing: timing.unwrap_or_else(|| syn::parse_quote!(none)),
+            shared_demand,
         })
     }
 }
@@ -89,8 +109,9 @@ pub fn compile_with(source: &storage::Program, args: TokenStream) -> syn::Result
         timing,
         lower,
         plan,
+        shared_demand,
     } = syn::parse2(args)?;
-    construct(source, pipeline, terminals, timing, lower, plan)
+    construct(source, pipeline, terminals, timing, lower, plan, shared_demand)
 }
 /// Formal rule CK-DL-Fork: independently check storage embedding and every hole.
 pub fn check(source: &storage::Program, target: &Program) -> syn::Result<()> {
@@ -346,8 +367,14 @@ fn construct(
     timing: Ident,
     lower: Option<usize>,
     plan: Option<usize>,
+    shared_demand: Option<Vec<Vec<round::cq::ordering::SharedDemand>>>,
 ) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
+    ensure(
+        shared_demand.as_ref().is_none_or(|demands| demands.len() == analysis.components.len()),
+        source,
+        "shared_demand must provide one demand list per stratum",
+    )?;
     terminals.check()?;
     let interface = terminals.interface(&pipeline)?;
     let lower = lower.ok_or_else(|| {
@@ -449,7 +476,7 @@ fn construct(
     let mut holes: Vec<round::cq::Program> = Vec::new();
     let mut unit_type_id = None;
     let mut planning = Vec::new();
-    for members in &analysis.components {
+    for (stratum_index, members) in analysis.components.iter().enumerate() {
         let mut stratum = Stratum {
             members: members.clone(),
             keys: Vec::new(),
@@ -691,8 +718,15 @@ fn construct(
                 }),
             )?;
             let hole = holes.len();
+            let ordering = round::cq::ordering::OrderingFacts {
+                delta: variant.delta,
+                seed: variant.delta.is_none(),
+                driver: source.incremental.driver,
+                permutation: variant.order.clone(),
+                shared_demand: shared_demand.as_ref().map(|demands| demands[stratum_index].clone()),
+            };
             holes.push(syn::parse2(
-                quote!(struct #name; #(#declarations)* #scan_declaration #output #query),
+                quote!(struct #name; #ordering #(#declarations)* #scan_declaration #output #query),
             )?);
             planning.push(Some(Planning {
                 order: variant

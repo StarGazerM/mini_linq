@@ -37,7 +37,9 @@ pub(super) fn carried_witnesses(
                     symbol_name(&s.input)
                 }
                 Operator::Project(p) => symbol_name(&p.input),
-                Operator::Semi(_, k) | Operator::Anti(_, k) => symbol_name(&k.left),
+                Operator::Probe(_, k) | Operator::Semi(_, k) | Operator::Anti(_, k) => {
+                    symbol_name(&k.left)
+                }
                 Operator::Bind(b) => symbol_name(&b.input),
                 Operator::Guard(g) => symbol_name(&g.input),
                 _ => unreachable!("checked witness forwarding chain"),

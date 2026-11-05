@@ -3,9 +3,12 @@
 
 \paragraph{Grammar.} VO extends a complete CQ$_{\rm NF}$ program with a schedule.
 \begin{lstlisting}
-VO   ::= CQProgram valuation [Evidence] { Step* }
+VO   ::= CQProgram valuation [Evidence] [OrderingInputs] { Step* }
 Evidence ::= evidence from "provenance" { (count R = n; | key R [col, ...];)* }
-Step ::= R@path(x, _, ...); | !R(Arg, ...); | x = y; | where Constraint;
+OrderingInputs ::= ordering(seed = Bool, delta = none | Index,
+    driver = WrittenOrder | DeltaFirst, permutation = [Index, ...],
+    shared_demand = none | [Relation(ColumnIndex, ...), ...])
+Step ::= R@path(x, _, ...) [check [after [path, ...]]]; | !R(Arg, ...); | x = y; | where Constraint;
        | if Expr; | let Pat [: Type] = Expr;
        | for Pat in Expr;
        | reduce R@path with S@path(...);
@@ -18,6 +21,27 @@ Number all NF body clauses $0,\ldots,m-1$; a path \code{R@c.j.k} names the fixed
 occurrence of clause $c$, extended by branch/clause pairs per nesting level.
 A subatom lists the occurrence's currently bound columns and \code{_} elsewhere.
 Equalities and constraints use internal relational syntax: \code{where} prefixes the existing \code{=}, \code{between}, \code{in \{...\}}, \code{and}/\code{or} forms; raw \code{x = y;} remains an identity step.
+Optional ordering inputs are carried unchanged from CQ and printed as recorded.
+Delta and permutation use original Datalog body identities, not positions
+renumbered by CQ normalization. Shared demand is checked input only in step 1,
+not a ranking or index-reuse claim. The executable VO contract independently
+checks I1--I3 (VO-Order, Section~\ref{sec:planning-order}) in every scope;
+Written and authored schedules are not exempt. CQ occurrence-coverage proof
+references used by correspondence checks are not executable VOs.
+The optional \code{check} suffix records a standalone membership phase: all
+its retained columns must already be supplied, and no later Physical choice
+may turn that phase into an alternate introducing provider. I2 drainage
+records this role when a check crosses an introduction, preserving the fixed
+occurrence and columns. It does not reclassify stationary phases; previously
+legal candidate intersections remain eligible. This is a producer-owned
+role, not a printer or scheduler-replay inference.
+Drainage also records the introducing occurrences it crossed as
+\code{after [path,...]}. This old positive-prefix provenance is transported
+through RA/Physical and bounds restoration of the check's former reduction
+input; it is not permission to optimize unmoved plans using future support.
+An empty projected read before a later introduction of the same occurrence
+is redundant and forbidden; a residual root check denotes Unit semijoin,
+with at most one outgoing unit, regardless of source cardinality.
 
 \paragraph{Contract.} $\mathsf{Schedule}(t,A)$ checks:
 (1)~each subatom names its relation, clause, arity and original columns; dropped

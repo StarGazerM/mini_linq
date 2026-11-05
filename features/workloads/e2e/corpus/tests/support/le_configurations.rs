@@ -475,19 +475,21 @@ macro_rules! extend_configurations {
             le_runs_probe_canon_smallest_btreemap_sorted_eager_push_unadvised::CONFIG,
         ];
     };
-    // Excluded retail_d85/le_merge_canon_first_hashmap_sorted_lazy_pull_unadvised: native merge read requires OrderedRead; pinned by UI.
-    // Excluded retail_d85/le_runs_merge_canon_first_hashmap_sorted_lazy_pull_unadvised: native merge read requires OrderedRead; pinned by UI.
     (run_retail_d85; $($configuration:ident),+) => {
         $(mod $configuration { configuration!($configuration, run_retail_d85); })+
         mod le_probe_keep_smallest_slice_default_eager_pull_unadvised { le_configuration!(le_probe_keep_smallest_slice_default_eager_pull_unadvised, run_retail_d85); }
+        mod le_probe_keep_first_hashmap_default_eager_pull_unadvised { le_configuration!(le_probe_keep_first_hashmap_default_eager_pull_unadvised, run_retail_d85); }
         mod le_probe_canon_smallest_btreemap_sorted_eager_push_unadvised { le_configuration!(le_probe_canon_smallest_btreemap_sorted_eager_push_unadvised, run_retail_d85); }
         mod le_runs_probe_keep_smallest_slice_default_eager_pull_unadvised { le_configuration!(le_runs_probe_keep_smallest_slice_default_eager_pull_unadvised, run_retail_d85); }
+        mod le_runs_probe_keep_first_hashmap_default_eager_pull_unadvised { le_configuration!(le_runs_probe_keep_first_hashmap_default_eager_pull_unadvised, run_retail_d85); }
         mod le_runs_probe_canon_smallest_btreemap_sorted_eager_push_unadvised { le_configuration!(le_runs_probe_canon_smallest_btreemap_sorted_eager_push_unadvised, run_retail_d85); }
         pub const CONFIGURATIONS: &[[usize; 9]] = &[
             $($configuration::CONFIG),+,
             le_probe_keep_smallest_slice_default_eager_pull_unadvised::CONFIG,
+            le_probe_keep_first_hashmap_default_eager_pull_unadvised::CONFIG,
             le_probe_canon_smallest_btreemap_sorted_eager_push_unadvised::CONFIG,
             le_runs_probe_keep_smallest_slice_default_eager_pull_unadvised::CONFIG,
+            le_runs_probe_keep_first_hashmap_default_eager_pull_unadvised::CONFIG,
             le_runs_probe_canon_smallest_btreemap_sorted_eager_push_unadvised::CONFIG,
         ];
     };

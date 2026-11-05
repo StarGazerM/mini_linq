@@ -99,42 +99,159 @@ mod structural;
 /// Formal rule CK-RelationalLowering: Check contracts, clause occurrences, recorded restrictions, named reductions, constraints and unchanged Rust payloads with their free variables.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let analysis = valuation::contract::check(source)?;
+    check_reference(&source.cq, &source.valuation.steps, &analysis, target)?;
+    check_phases(&source.valuation.steps, &analysis, target)
+}
+
+/// Formal rule CK-CheckPhase: surviving recorded membership phases retain
+/// their occurrence, key and check role. The preceding independent relational
+/// proof may eliminate redundant phases, but cannot turn a root guard into
+/// an enumerating empty projection. No producer schedule is replayed.
+fn check_phases(
+    steps: &[valuation::Step],
+    analysis: &valuation::Analysis,
+    target: &ra::Program,
+) -> syn::Result<()> {
+    fn expected(
+        steps: &[valuation::Step],
+        analysis: &valuation::Analysis,
+        counts: &mut BTreeMap<(cq::Occurrence, BTreeSet<String>), (usize, BTreeSet<Option<Vec<cq::Occurrence>>>)>,
+    ) {
+        for (index, step) in steps.iter().enumerate() {
+            match step {
+                valuation::Step::Atom(atom, _) if atom.check.is_some()
+                    || (atom.variables().next().is_none()
+                        && analysis.provided_before[index].is_empty()) =>
+                {
+                    let columns = atom.variables().map(|(_, variable)| symbol_name(variable)).collect();
+                    let entry = counts.entry((atom.clause.clone(), columns)).or_default();
+                    entry.0 += 1;
+                    entry.1.insert(atom.moved_after.as_ref().map(|after| after.occurrences.iter().cloned().collect()));
+                }
+                valuation::Step::Block(block, _) => {
+                    for (branch, facts) in block.branches.iter()
+                        .zip(&analysis.branches[&block.source.clause()])
+                    {
+                        expected(&branch.steps, facts, counts);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut wanted = BTreeMap::new();
+    expected(steps, analysis, &mut wanted);
+    let headings = ra::contract::check(target)?;
+    let definitions: BTreeMap<_, _> = target.plan.definitions.iter()
+        .map(|definition| (symbol_name(&definition.result), definition)).collect();
+    fn occurrence<'a>(
+        mut input: &'a Ident,
+        definitions: &BTreeMap<String, &'a ra::Definition>,
+    ) -> Option<&'a cq::Occurrence> {
+        loop {
+            match &definitions.get(&symbol_name(input))?.operator {
+                ra::Operator::Rename(rename) => return Some(&rename.occurrence),
+                ra::Operator::Select(select) => input = &select.input,
+                ra::Operator::Project(project) => input = &project.input,
+                ra::Operator::Semijoin(join) => input = &join.left,
+                _ => return None,
+            }
+        }
+    }
+    let mut surviving = BTreeMap::new();
+    let mut recorded = BTreeMap::new();
+    for definition in &target.plan.definitions {
+        let (input, columns) = match &definition.operator {
+            ra::Operator::NaturalJoin(join)
+                if headings[&symbol_name(&definition.result)].heading
+                    == headings[&symbol_name(&join.left)].heading =>
+            {
+                (&join.right, headings[&symbol_name(&join.left)].heading
+                    .intersection(&headings[&symbol_name(&join.right)].heading).cloned().collect())
+            }
+            ra::Operator::Semijoin(join) => {
+                (&join.right, headings[&symbol_name(&join.left)].heading
+                    .intersection(&headings[&symbol_name(&join.right)].heading).cloned().collect())
+            }
+            // A residual root phase still exists if it was changed into a
+            // relation.map(unit) scan; it cannot claim lawful elimination.
+            ra::Operator::Project(project) if project.attributes.is_empty() =>
+                (&project.input, BTreeSet::new()),
+            _ => continue,
+        };
+        let Some(occurrence) = occurrence(input, &definitions) else {
+            if definition.check.is_some() {
+                return Err(syn::Error::new_spanned(definition, "check phase lost its occurrence"));
+            }
+            continue;
+        };
+        let phase = (occurrence.clone(), columns);
+        *surviving.entry(phase.clone()).or_insert(0usize) += 1;
+        if definition.check.is_some() {
+            if wanted.get(&phase).is_some_and(|(_, origins)|
+                !origins.contains(&definition.moved_after.as_ref().map(|after| after.occurrences.iter().cloned().collect())))
+            {
+                return Err(syn::Error::new_spanned(definition, "check phase changes its pre-drainage support"));
+            }
+            *recorded.entry(phase).or_insert(0usize) += 1;
+        }
+    }
+    // Duplicate checks at the same key may coalesce. Extra restrictive
+    // markers are lawful; surviving demanded checks may not lose their role.
+    if wanted.iter().any(|(phase, (count, _))| {
+        let remaining = surviving.get(phase).copied().unwrap_or_default();
+        recorded.get(phase).copied().unwrap_or_default() < (*count).min(remaining)
+    }) {
+        return Err(syn::Error::new_spanned(target, "relational lowering changes recorded check phases"));
+    }
+    Ok(())
+}
+
+/// Check an occurrence-coverage proof reference, not an executable VO.
+/// `analysis` is the WF binding analysis of `source` and `steps`, obtained by
+/// `valuation::order::analyze_reference`; this path never chooses an order.
+pub fn check_reference(
+    source: &valuation::cq::Program,
+    steps: &[valuation::Step],
+    analysis: &valuation::Analysis,
+    target: &ra::Program,
+) -> syn::Result<()> {
     let target_schedule = ra::contract::Schedule::from_program(target)?;
-    if target.plan.declarations != source.cq.declarations {
+    if target.plan.declarations != source.declarations {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             format!(
                 "result `{}`: declarations differ from query `{}`",
-                target.plan.output.input, source.cq.name
+                target.plan.output.input, source.name
             ),
         ));
     }
-    if target.plan.output.head != source.cq.query.head {
+    if target.plan.output.head != source.query.head {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             format!(
                 "result `{}`: output head differs from `{}`",
-                target.plan.output.input, source.cq.query.head.relation
+                target.plan.output.input, source.query.head.relation
             ),
         ));
     }
-    if target.plan.captures != source.cq.query.captures {
+    if target.plan.captures != source.query.captures {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             format!(
                 "result `{}`: captures differ from query `{}`",
-                target.plan.output.input, source.cq.name
+                target.plan.output.input, source.name
             ),
         ));
     }
-    structural::check(source, &analysis, &target_schedule, target).map_err(|message| {
+    structural::check(source, steps, analysis, &target_schedule, target).map_err(|message| {
         syn::Error::new_spanned(
             &target.plan.output,
             format!("result `{}`: {message}", target.plan.output.input),
         )
     })?;
-    block_contract::check_placement(&source.valuation.steps, target)?;
-    check_restrictions(&source.valuation.steps, target)?;
+    block_contract::check_placement(steps, target)?;
+    check_restrictions(steps, target)?;
     Ok(())
 }
 
@@ -266,6 +383,12 @@ impl<'a> State<'a> {
                         .variables()
                         .all(|(_, variable)| self.heading.contains(&symbol_name(variable)));
                     self.subatom(subatom, check);
+                    if subatom.check.is_some() || (check && self.heading.is_empty()) {
+                        self.definitions.last_mut().expect("lowered atom").check =
+                            Some(Default::default());
+                        self.definitions.last_mut().expect("lowered atom").moved_after =
+                            subatom.moved_after.clone();
+                    }
                     self.read_clauses.insert(subatom.clause());
                 }
                 valuation::Step::Reduce(reduce, _) => self.reduce(reduce),
@@ -584,9 +707,9 @@ impl<'a> State<'a> {
         result
     }
 
-    /// Formal rule RL-Check: A partial subatom with no new names semijoins an existing prefix.
-    /// Formal rule RL-Project: Project a partial subatom unless it is an existing-prefix check.
-    /// Formal rule RL-Root: Install the first full or projected subatom as the prefix.
+    /// Formal rule RL-Check: A nonintroducing partial or root subatom semijoins the prefix, seeding Unit when absent.
+    /// Formal rule RL-Project: Project a partial introducing subatom.
+    /// Formal rule RL-Root: Only an introducing full or projected subatom installs the root stream.
     /// Formal rule RL-Join: Join a non-check subatom with the current prefix.
     fn subatom(&mut self, subatom: &valuation::Subatom, check: bool) {
         let clause = subatom.clause();
@@ -597,11 +720,10 @@ impl<'a> State<'a> {
         // semijoin with the clause's own relation. Reading the relation — not
         // a projection of it — lets every prefix check of one clause land on
         // one result, where one curried structure answers them all.
-        if partial && check {
-            if let Some(left) = self.prefix.take() {
-                self.prefix = Some(self.semijoin(left, right));
-                return;
-            }
+        if check && (partial || self.prefix.is_none() || self.heading.is_empty()) {
+            let left = self.prefix_or_unit();
+            self.prefix = Some(self.semijoin(left, right));
+            return;
         }
         if partial {
             let variables: Vec<&Ident> = self.atoms[&clause].variables().collect();
@@ -941,6 +1063,9 @@ impl<'a> State<'a> {
             result: result.clone(),
             eq_token: Default::default(),
             operator,
+            check: None,
+            moved_after: None,
+            absorptions: Vec::new(),
             semi_token: Default::default(),
         });
         result

@@ -881,6 +881,8 @@ impl<'a> Printer<'a> {
             ::core::iter::Iterator::filter_map(#input, move |#pattern| {
                 #condition
                 let #witness: #ty = #lookup;
+                // provider_contract::retain requires Cursor: Copy. This copies
+                // the cursor state: testing __cq_first leaves #witness intact.
                 let mut __cq_first = #witness;
                 if ::core::iter::Iterator::next(&mut __cq_first).is_some() {
                     Some(#row)

@@ -245,10 +245,10 @@ impl Pipeline {
             // SF10: 300,276 -> 1,461,923 -> 302,114.
             // The final Lineitem contributes no payload, only existence.
             "h03" => "Customer, Orders, Lineitem",
-            // Customer Nation@6 and Supplier Nation@5 form the exact country
-            // pair before nation-indexed Customer; use the block's measured
-            // forward traversal without replacing the authored disjunction.
-            "h07" => "Nation@6, Nation@5, Customer, Orders, Lineitem, Supplier",
+            // Grow the ready Customer chain from Nation@6 before Nation@5:
+            // the disconnected country-pair prefix violates VO-Order I3.
+            // Keep the authored disjunction after both country names bind.
+            "h07" => "Nation@6, Customer, Orders, Lineitem, Supplier, Nation@5",
             // The two country pairs restrict Customer to 12,008 at SF1, then
             // Orders 121,324 -> dated Lineitem 148,370 -> opposite Supplier 5,924.
             // SF10: 2 -> 120,469 -> 1,205,808 -> 1,463,770 -> 58,365.

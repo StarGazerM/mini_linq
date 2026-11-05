@@ -5,10 +5,9 @@ Run from any directory. LE is Written/Coarse at the stream boundary, so clone
 that planner's existing witnesses per case; the unchanged matrix coverage test
 independently proves every new planner/axis pair is exercised in each family.
 
-As in full_matrix.rs, rustc-rejected host/operator combinations are outside the
-accepted domain. D85's LE schedule exposes a native leading unary HashMap read
-under merge_joins; OrderedRead is required. Both exclusions are pinned by the
-le_ordered / le_runs_ordered UI fixtures, not suppressed by a planner fallback.
+The reviewed D85 seed uses a probe rather than its former native merge read,
+so both LE variants retain that witness without an OrderedRead exclusion.
+Printer and ordered-host boundaries remain covered by the UI fixtures.
 """
 from pathlib import Path
 import re
@@ -17,8 +16,6 @@ ROOT = Path(__file__).resolve().parent
 SOURCE = ROOT / "tests/support/configurations.rs"
 DESTINATION = ROOT / "tests/support/le_configurations.rs"
 
-REJECTED_SUFFIX = "_merge_canon_first_hashmap_sorted_lazy_pull_unadvised"
-REJECTED = {("retail_d85", planner + REJECTED_SUFFIX) for planner in ("le", "le_runs")}
 
 def generate(source):
     seeds = re.findall(
@@ -39,18 +36,12 @@ def generate(source):
             out.append(f"    ({name}, $case:ident) => {{{body}\n    }};\n")
     out.append("}\n\nmacro_rules! extend_configurations {\n")
     accepted = 0
-    excluded = set()
     for case, names in cases:
         selected = re.findall(r"\bwritten_coarse\w+", names)
         assert selected, f"{case}: no Written/Coarse witness"
         added = [name.replace("written_coarse", planner, 1)
                  for planner in ["le", "le_runs"] for name in selected]
-        rejected = [name for name in added if (case, name) in REJECTED]
-        excluded.update((case, name) for name in rejected)
-        added = [name for name in added if (case, name) not in REJECTED]
         accepted += len(added)
-        for name in rejected:
-            out.append(f"    // Excluded {case}/{name}: native merge read requires OrderedRead; pinned by UI.\n")
         out.append(f"    (run_{case}; $($configuration:ident),+) => {{\n")
         out.append("        $(mod $configuration { configuration!($configuration, run_" + case + "); })+\n")
         for name in added:
@@ -59,8 +50,7 @@ def generate(source):
         out.extend(f"            {name}::CONFIG,\n" for name in added)
         out.append("        ];\n    };\n")
     out.append("}\n")
-    assert excluded == REJECTED, "review changed rejected witnesses"
-    print(f"LE pairwise witnesses: {accepted} accepted, {len(excluded)} excluded (OrderedRead)")
+    print(f"LE pairwise witnesses: {accepted} accepted")
     return "".join(out)
 
 

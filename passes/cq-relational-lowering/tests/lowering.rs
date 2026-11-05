@@ -19,7 +19,8 @@ fn cq(tokens: TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 fn vo(source: &cq::Program, steps: TokenStream) -> valuation::Program {
-    syn::parse2(quote! { #source valuation { #steps } }).unwrap()
+    let ordering = &source.ordering;
+    syn::parse2(quote! { #source valuation #ordering { #steps } }).unwrap()
 }
 fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source
@@ -42,7 +43,10 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             cq::BodyItem::Negation(n) => quote!(#n;),
             _ => unreachable!("normal form"),
         });
-    vo(source, quote!(#(#steps)*))
+    let mut program = vo(source, quote!(#(#steps)*));
+    cq_order::drain_ready_checks(&mut program).unwrap();
+    valuation::contract::check(&program).unwrap();
+    program
 }
 /// The Written/Coarse order with its recorded O-Restrict restrictions.
 fn restricted(source: &cq::Program) -> valuation::Program {
@@ -88,6 +92,97 @@ fn chain() -> cq::Program {
         struct Chain; relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
         answer(a, c) :- L(a), R(a, b), S(b, c);
     })
+}
+
+#[test]
+fn residual_root_projection_is_a_guard_over_unit_not_a_scan() {
+    let source = cq(quote! {
+        struct RootGuard; relation R(x:i32); relation S(x:i32);
+        answer(x) :- R(x), S(x);
+    });
+    // S never introduces a variable: its preliminary nonemptiness check
+    // remains legal, but must not enumerate one unit per source row.
+    let valuation = vo(&source, quote!(S@1(_) check; R@0(x); S@1(x);));
+    let lowered = compile(&valuation).unwrap();
+    let guard = lowered.plan.definitions.iter()
+        .find(|definition| definition.check.is_some()).unwrap();
+    let ra::Operator::Semijoin(join) = &guard.operator else {
+        panic!("a root check is not an enumeration");
+    };
+    assert!(lowered.plan.definitions.iter().any(|definition|
+        definition.result == join.left && matches!(definition.operator, ra::Operator::Unit(_))));
+    for rows in [vec![], vec![vec![1]], vec![vec![1],vec![2],vec![3]]] {
+        let database = std::collections::BTreeMap::from([
+            ("R".into(), std::collections::BTreeSet::from([vec![1],vec![2]])),
+            ("S".into(), rows.into_iter().collect()),
+        ]);
+        assert_eq!(oracle::evaluate_ra(&lowered, &database).output,
+            cq_oracle::evaluate_cq(&source, &database));
+    }
+    let mut scan = lowered.clone();
+    let definition = scan.plan.definitions.iter_mut()
+        .find(|definition| definition.check.is_some()).unwrap();
+    let input = join.right.clone();
+    definition.operator = syn::parse_quote!(project #input keep {});
+    definition.check = None;
+    assert!(check(&valuation, &scan).is_err());
+    definition_check_erasure_is_rejected(&valuation, &lowered);
+}
+
+#[test]
+fn zero_variable_occurrence_is_also_a_unit_guard() {
+    let source = cq::normal::normalize(&cq(quote! {
+        struct RootConstant; relation R(x:i32); relation S(y:i32);
+        answer(y) :- R(7), S(y);
+    })).unwrap();
+    let valuation = vo(&source, quote!(R@0(); S@1(y);));
+    let target = compile(&valuation).unwrap();
+    let phase = target.plan.definitions.iter()
+        .find(|definition| definition.check.is_some()).unwrap();
+    let ra::Operator::Semijoin(join) = &phase.operator else { panic!() };
+    assert!(target.plan.definitions.iter().any(|definition|
+        definition.result == join.left && matches!(definition.operator, ra::Operator::Unit(_))));
+    for rows in [vec![], vec![vec![3]], vec![vec![7]], vec![vec![3], vec![7], vec![9]]] {
+        let database = std::collections::BTreeMap::from([
+            ("R".into(), rows.into_iter().collect()),
+            ("S".into(), std::collections::BTreeSet::from([vec![1], vec![2]])),
+        ]);
+        assert_eq!(oracle::evaluate_ra(&target, &database).output,
+            cq_oracle::evaluate_cq(&source, &database));
+    }
+}
+
+fn definition_check_erasure_is_rejected(source: &valuation::Program, target: &ra::Program) {
+    let mut erased = target.clone();
+    for definition in &mut erased.plan.definitions {
+        definition.check = None;
+    }
+    assert!(check(source, &erased).is_err());
+}
+
+#[test]
+fn check_phase_cannot_move_to_a_different_key_of_the_same_occurrence() {
+    let source = cq(quote! {
+        struct Q;
+        relation L(a:i32,b:i32); relation T(b:i32,c:i32); relation S(a:i32,b:i32,c:i32);
+        answer(a,b,c) :- L(a,b), T(b,c), S(a,b,c);
+    });
+    let valuation = vo(&source, quote! {
+        L@0(a,b); S@2(a,b,_) check; T@1(b,c); S@2(a,b,c);
+    });
+    let target = compile(&valuation).unwrap();
+    let mut changed = target.clone();
+    let phase = changed.plan.definitions.iter_mut()
+        .find(|definition| definition.check.is_some()).unwrap();
+    phase.check = None;
+    let full = changed.plan.definitions.iter_mut().rev()
+        .find(|definition| matches!(definition.operator, ra::Operator::NaturalJoin(_))).unwrap();
+    full.check = Some(Default::default());
+    ra::contract::check(&changed).unwrap();
+    // Same occurrence and same count of check markers, but not the same
+    // key/provider phase. Set-answer equivalence does not authorize this move.
+    assert!(check(&valuation, &changed).unwrap_err().to_string()
+        .contains("recorded check phases"));
 }
 
 #[test]
@@ -309,7 +404,9 @@ fn reduced_prefix_guards_keep_independent_support_witnesses() {
         relation R(x:i32); relation Other(y:i32); relation T(x:i32,y:i32,z:i32);
         answer(z) :- R(x), Other(y), where x > y, if 10 / (*x - *y) > 0, T(x,y,z);
     });
-    let written = coarse(&source);
+    let written = vo(&source, quote! {
+        R@0(x); T@4(x,y,z); Other@1(y); where x > y; if 10 / (*x - *y) > 0;
+    });
     let steps = &written.valuation.steps;
     let reduced = vo(
         &source,
@@ -332,10 +429,10 @@ fn reduced_prefix_guards_keep_independent_support_witnesses() {
             r4 = semijoin r3 with r2;
             r5 = semijoin r2 with r4;
             r6 = semijoin r1 with r5;
-            r7 = natural_join r4 with r6;
-            r8 = select r7 if (x > y);
-            r9 = guard r8 if (10 / (*x - *y) > 0);
-            r10 = natural_join r9 with r5;
+            r7 = natural_join r4 with r5;
+            r8 = natural_join r7 with r6;
+            r9 = select r8 if (x > y);
+            r10 = guard r9 if (10 / (*x - *y) > 0);
             r11 = project r10 keep { z };
             output r11 as answer(z);
         },
@@ -612,7 +709,7 @@ fn correspondence_accepts_independent_relational_placement() {
         answer(x,w) :- R(x), if 10 / *x > 1, S(w);
     });
     let written = coarse(&source);
-    let hoisted = vo(&source, quote! { R@0(x); S@2(w); if 10 / *x > 1; });
+    let hoisted = vo(&source, quote! { S@2(w); R@0(x); if 10 / *x > 1; });
     valuation::contract::check(&hoisted).unwrap();
     let later = cq_relational_lowering::compile(&written).unwrap();
     // Total Rust has no written relational predecessor obligations.
@@ -869,7 +966,7 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
 }
 
 #[test]
-fn opaque_method_and_function_guards_keep_their_written_prefix() {
+fn opaque_method_and_function_guards_keep_their_earliest_prefix() {
     for guard in ["if name.is_positive()", "if custom(name)"] {
         let source: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32); relation P(k:i32,n:i64); answer(x,name) :- R(x), P(x,name), {guard};"
@@ -924,7 +1021,7 @@ fn opaque_method_and_function_guards_keep_their_written_prefix() {
             .plan
             .definitions
             .iter()
-            .any(|d| d.result == guard.input && matches!(d.operator, ra::Operator::NaturalJoin(_)))
+            .any(|d| d.result == guard.input && matches!(d.operator, ra::Operator::Rename(_)))
     );
     let mut forged = target.clone();
     let step = forged

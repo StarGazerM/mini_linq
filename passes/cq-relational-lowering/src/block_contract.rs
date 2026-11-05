@@ -69,16 +69,16 @@ fn paths(
     }
 }
 
-pub(super) fn check(source: &vo::Program, target: &Schedule) -> Result<(), String> {
+pub(super) fn check(source: &cq::Program, steps: &[vo::Step], target: &Schedule) -> Result<(), String> {
     let mut schedule = Schedule::default();
     let mut occurrences = Vec::new();
-    paths(&source.cq.query.body, None, &mut occurrences);
+    paths(&source.query.body, None, &mut occurrences);
     schedule.occurrence_paths(occurrences);
     let mut obligation = Body {
         schedule: &mut schedule,
-        source: &source.cq,
-        body: &source.cq.query.body,
-        steps: &source.valuation.steps,
+        source,
+        body: &source.query.body,
+        steps,
         parent: None,
         context: BTreeSet::new(),
         heading: BTreeSet::new(),
@@ -95,19 +95,18 @@ pub(super) fn check(source: &vo::Program, target: &Schedule) -> Result<(), Strin
     let mut output = obligation.schedule.project(
         input,
         &source
-            .cq
             .query
             .valuation_variables()
             .cloned()
             .collect::<Vec<_>>(),
     );
-    if let Some(group) = &source.cq.query.group {
+    if let Some(group) = &source.query.group {
         output = obligation.schedule.group(
             output,
-            &group.operator(source.cq.query.head.relation.clone()),
+            &group.operator(source.query.head.relation.clone()),
         );
     }
-    obligation.schedule.finish(output, &source.cq.query.head);
+    obligation.schedule.finish(output, &source.query.head);
     schedule.check(target, &[])
 }
 
@@ -292,7 +291,11 @@ impl Body<'_, '_> {
             );
         }
         self.prefix = Some(match self.prefix {
-            Some(left) => self.schedule.join(left, right, partial && check),
+            Some(left) => self.schedule.join(left, right, check && (partial || self.heading.is_empty())),
+            None if check => {
+                let unit = self.schedule.unit();
+                self.schedule.join(unit, right, true)
+            }
             None => right,
         });
         self.heading

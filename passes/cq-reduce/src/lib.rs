@@ -316,6 +316,7 @@ pub fn compile(
         valuation: valuation::Valuation {
             valuation_token: source.valuation.valuation_token,
             evidence: source.valuation.evidence.clone(),
+            ordering: source.valuation.ordering.clone(),
             brace: Default::default(),
             steps,
         },
@@ -663,6 +664,8 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> Subat
         clause: index(clause).into(),
         paren: Default::default(),
         columns,
+        check: None,
+        moved_after: None,
     }
 }
 

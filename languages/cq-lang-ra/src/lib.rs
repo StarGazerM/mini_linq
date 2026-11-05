@@ -49,7 +49,7 @@
 //! the keys plus fresh typed fold results; empty global input produces identities.
 //!
 pub use cq_syntax::algebra::{
-    AggregateBinding, AggregateKind, Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain,
+    Absorption, AggregateBinding, AggregateKind, Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain,
     Environment, Group, Guard, OccurrenceConstants, Project, Rename, Select, Theta, Union, Unit,
 };
 pub use cq_syntax::{Equality, EqualityValue};
@@ -67,6 +67,7 @@ pub mod kw {
     syn::custom_keyword!(output);
     syn::custom_keyword!(relational);
     syn::custom_keyword!(semijoin);
+    syn::custom_keyword!(check);
 }
 
 /// A complete named relational program.
@@ -114,6 +115,13 @@ pub struct Definition {
     pub result: Ident,
     pub eq_token: Token![=],
     pub operator: Operator,
+    /// Transported standalone membership phase; not a candidate provider.
+    pub check: Option<kw::check>,
+    #[parse(cq_syntax::algebra::parse_moved_after)]
+    pub moved_after: Option<cq_syntax::algebra::MovedAfter>,
+    #[parse(cq_syntax::algebra::parse_absorptions)]
+    #[to_tokens(|tokens, facts| quote::TokenStreamExt::append_all(tokens, facts))]
+    pub absorptions: Vec<cq_syntax::algebra::Absorption>,
     pub semi_token: Token![;],
 }
 
@@ -208,7 +216,7 @@ pub mod contract {
         pub(super) split_nodes: Vec<(usize, usize)>,
         pub(super) full_reads: Vec<(usize, usize)>,
         pub(super) row_views: Vec<super::structural::RowView>,
-        pub(super) view_requests: Vec<(usize, usize, bool)>,
+        pub(super) view_requests: Vec<super::structural::ViewRequest>,
         pub(super) paths: std::collections::BTreeMap<cq_syntax::Occurrence, usize>,
     }
 
@@ -525,6 +533,27 @@ fn check_in<'a>(
                 (heading, vec![name])
             }
         };
+        if let Some(after) = &definition.moved_after {
+            for occurrence in &after.occurrences { occurrence.check()?; }
+            if definition.check.is_none() || after.occurrences.is_empty() {
+                return Err(syn::Error::new_spanned(definition, "moved support requires a check phase"));
+            }
+        }
+        // Formal rule RA-CheckPhase: a recorded check preserves the left
+        // heading and may not manufacture an introducing stream.
+        if definition.check.is_some() {
+            let left = match &definition.operator {
+                Operator::NaturalJoin(join) => &join.left,
+                Operator::Semijoin(join) => &join.left,
+                _ => return Err(syn::Error::new_spanned(definition, "check phase requires a join or semijoin")),
+            };
+            let left_heading = &earlier_relation(left, &relations)?.1.heading;
+            if *left_heading != heading
+                || (left_heading.is_empty() && matches!(definition.operator, Operator::NaturalJoin(_)))
+            {
+                return Err(syn::Error::new_spanned(definition, "check phase introduces columns"));
+            }
+        }
 
         let mut types = BTreeMap::new();
         let mut logical_type_ids = BTreeMap::new();
@@ -809,6 +838,22 @@ pub fn disjoint_unions(program: &Program) -> syn::Result<BTreeSet<String>> {
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     let source_schedule = contract::Schedule::from_program(source)?;
     let target_schedule = contract::Schedule::from_program(target)?;
+    let mut added_absorptions = false;
+    for definition in &target.plan.definitions {
+        if let Some(original) = source.plan.definitions.iter()
+            .find(|original| original.result == definition.result)
+        {
+            if original.check.is_some() != definition.check.is_some()
+                || original.moved_after != definition.moved_after
+            {
+                return Err(syn::Error::new_spanned(definition, "RA rewrite changes recorded check phase"));
+            }
+            if !definition.absorptions.starts_with(&original.absorptions) {
+                return Err(syn::Error::new_spanned(definition, "RA rewrite erases recorded reduction facts"));
+            }
+            added_absorptions |= definition.absorptions.len() != original.absorptions.len();
+        }
+    }
     if source.plan.declarations != target.plan.declarations {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
@@ -820,6 +865,13 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             &target.plan.output,
             "RA rewrite changes captures",
         ));
+    }
+    if added_absorptions {
+        return if structural::check_reduction_rewrite(source, target, &source_schedule) {
+            Ok(())
+        } else {
+            Err(syn::Error::new_spanned(target, "invalid moved-support preservation certificate"))
+        };
     }
     source_schedule
         .check(&target_schedule, &[])

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Unit regressions for the content-addressed expanded-Rust gate."""
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -231,6 +233,35 @@ fn kernel() {
                 {"pkg": "cq-gpu-runtime", "dep_kinds": [{"kind": "build"}]},
             ]
             self.assertNotIn("cq-gpu-runtime", gate.runtime_sources(meta)[0])
+
+    def test_archive_baseline_reuses_tree_and_snapshots_revision_without_git_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            payload = io.BytesIO()
+            with tarfile.open(fileobj=payload, mode="w") as archive:
+                member = tarfile.TarInfo("source.rs")
+                member.size = 3
+                archive.addfile(member, io.BytesIO(b"old"))
+            calls = []
+            def command(argv, cwd, env=None):
+                calls.append(argv)
+                if argv[1] == "archive":
+                    return payload.getvalue()
+                self.assertEqual(argv[1], "ls-tree")
+                return b"source.rs\0"
+            cache = root / "cache"
+            with patch.object(gate, "run", command):
+                with gate.baseline_tree(root, "revision", cache) as tree:
+                    self.assertEqual((tree / "source.rs").read_bytes(), b"old")
+                    (tree / "target").mkdir()
+                    (tree / "target/build").write_text("retained")
+                    snapshot = gate.source_snapshot(tree, root / "output", "query", {})
+                    self.assertEqual(set(snapshot), {"source.rs"})
+                with gate.baseline_tree(root, "revision", cache) as reused:
+                    self.assertEqual(reused, tree)
+                    self.assertEqual((reused / "target/build").read_text(), "retained")
+                self.assertEqual(sum(argv[1] == "archive" for argv in calls), 1)
+                self.assertNotIn(tree, gate.ARCHIVE_BASELINES)
 
     def test_worktree_removed_when_body_raises(self):
         with tempfile.TemporaryDirectory() as tmp:

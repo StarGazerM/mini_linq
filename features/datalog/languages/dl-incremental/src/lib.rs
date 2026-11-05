@@ -8,6 +8,7 @@
 //! order before comparison. Opaque total Rust imposes no written-order chain.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_datalog_strata as strata;
+pub use cq_lang_cq::ordering::DriverPolicy;
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -22,6 +23,7 @@ pub mod kw {
     syn::custom_keyword!(incremental);
     syn::custom_keyword!(scheme);
     syn::custom_keyword!(seminaive_covering);
+    syn::custom_keyword!(driver);
     syn::custom_keyword!(delta);
     syn::custom_keyword!(variant);
     syn::custom_keyword!(seed);
@@ -39,6 +41,8 @@ pub struct Program {
     pub strata: strata::Program,
     pub variants: Vec<Variant>,
     pub deltas: Vec<Delta>,
+    /// Upstream driver policy, recorded even when rule advice overrides it.
+    pub driver: DriverPolicy,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Variant {
@@ -149,6 +153,14 @@ impl Parse for Program {
         body.parse::<kw::scheme>()?;
         body.parse::<kw::seminaive_covering>()?;
         body.parse::<Token![;]>()?;
+        let driver = if body.peek(kw::driver) {
+            body.parse::<kw::driver>()?;
+            let driver = body.parse()?;
+            body.parse::<Token![;]>()?;
+            driver
+        } else {
+            DriverPolicy::WrittenOrder
+        };
         let mut deltas = Vec::new();
         while body.peek(kw::delta) {
             body.parse::<kw::delta>()?;
@@ -244,6 +256,7 @@ impl Parse for Program {
             strata,
             variants,
             deltas,
+            driver,
         })
     }
 }
@@ -252,6 +265,7 @@ impl ToTokens for Program {
         let strata = &self.strata;
         let variants = &self.variants;
         let deltas = &self.deltas;
+        let driver = self.driver;
         let variants = variants.iter().map(|v| {
             let rule = syn::LitInt::new(&v.rule.to_string(), proc_macro2::Span::call_site());
             let query = &v.query;
@@ -282,7 +296,7 @@ impl ToTokens for Program {
             quote!(delta #relation = #name;)
         });
         tokens.extend(
-            quote!(#strata incremental { scheme seminaive_covering; #(#deltas)* #(#variants)* }),
+            quote!(#strata incremental { scheme seminaive_covering; driver #driver; #(#deltas)* #(#variants)* }),
         );
     }
 }

@@ -11,7 +11,12 @@ Both trees use cargo rustc --offline -- -Zunpretty=expanded. The default
 matching the audit; --profile dev/release overrides this explicitly. Unpretty
 stops before query machine-code generation, including in release mode.
 Dependencies/proc macros must still be built (optimized for fast expansion).
-The temporary detached worktree is always removed.
+By default the temporary detached worktree is always removed.
+--baseline-archive [CACHE] instead extracts git archive once per resolved
+revision, makes no git state changes, and reuses the tree and revision-keyed
+build directory. CACHE defaults to /dev/shm/mini-linq-expanded-baselines;
+an exclusive per-revision lock covers use of each cached tree. Snapshots use
+the revision's tracked-file listing, never cached build artifacts.
 
 Normalization: replace repository/harness roots by <TREE>/<HARNESS>; rustfmt
 (edition 2024); remove retained macro_rules definitions, not executable items;
@@ -76,6 +81,7 @@ import difflib
 import fcntl
 import fnmatch
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -84,10 +90,12 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+ARCHIVE_BASELINES = {}
 LIBRARY = (
     "aggregate_stats aggregate_two_keys correlated_exists correlated_parameter "
     "correlated_scalar recursion_closure surface_boolean_guard surface_compare "
@@ -466,7 +474,26 @@ def record_verified(cache, target, key, outcome, evidence_root):
 
 
 @contextlib.contextmanager
-def baseline_tree(root, revision):
+def baseline_tree(root, revision, archive_cache=None):
+    if archive_cache is not None:
+        archive_cache.mkdir(parents=True, exist_ok=True)
+        tree = archive_cache / revision
+        with (archive_cache / (revision + ".lock")).open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if not tree.is_dir():
+                with tempfile.TemporaryDirectory(dir=archive_cache, prefix=revision + "-") as temporary:
+                    staging = Path(temporary) / "tree"
+                    staging.mkdir()
+                    payload = run(["git", "archive", "--format=tar", revision], root)
+                    with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+                        archive.extractall(staging, filter="data")
+                    staging.rename(tree)
+            ARCHIVE_BASELINES[tree] = (root, revision)
+            try:
+                yield tree
+            finally:
+                del ARCHIVE_BASELINES[tree]
+        return
     # Outside the repository: Cargo must not inherit working-tree ancestor
     # .cargo/config files when expanding an older checkout.
     with tempfile.TemporaryDirectory(prefix="mini-linq-expand-gate-") as temporary:
@@ -516,7 +543,11 @@ def harness(tree, directory, target, source, deps):
 
 
 def source_snapshot(tree, output, target, paths):
-    names = run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], tree).decode().split("\0")
+    if tree in ARCHIVE_BASELINES:
+        repository, revision = ARCHIVE_BASELINES[tree]
+        names = run(["git", "ls-tree", "-r", "--name-only", "-z", revision], repository).decode().split("\0")
+    else:
+        names = run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], tree).decode().split("\0")
     # Each catalog worker includes exactly its authored source. The library
     # does not include these standalone files. Shared helpers remain hashed.
     unrelated = set(paths.values()) - {paths.get(target)}
@@ -538,7 +569,10 @@ def expand_side(root, tree, state, output, label, selected, paths, extra, profil
     env["RUSTC_BOOTSTRAP"] = "1"
     env.setdefault("CARGO_PROFILE_DEV_BUILD_OVERRIDE_OPT_LEVEL", "3")
     env.setdefault("CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_OPT_LEVEL", "3")
-    env["CARGO_TARGET_DIR"] = str(state / "build" / label)
+    build = state / "build" / label
+    if tree in ARCHIVE_BASELINES:
+        build /= ARCHIVE_BASELINES[tree][1]
+    env["CARGO_TARGET_DIR"] = str(build)
     toolchain = run([env.get("RUSTC", "rustc"), "-vV"], tree, env).decode()
     rustfmt = "rustfmt"
     workspace = tree / "features/workloads/Cargo.toml"
@@ -692,6 +726,9 @@ def reclassify_report(path, rules, output):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--baseline", default="HEAD")
+    parser.add_argument("--baseline-archive", nargs="?", type=Path,
+                        const=Path("/dev/shm/mini-linq-expanded-baselines"),
+                        help="reuse a revision-keyed git archive without git worktree changes (optional cache directory)")
     parser.add_argument("--targets", nargs="+", default=["all"])
     parser.add_argument("--classes", type=Path)
     parser.add_argument("--output", type=Path)
@@ -720,7 +757,7 @@ def main(argv=None):
     revision = run(["git", "rev-parse", "--verify", args.baseline + "^{commit}"], ROOT).decode().strip()
     with (state / "gate.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        with baseline_tree(ROOT, revision) as baseline:
+        with baseline_tree(ROOT, revision, args.baseline_archive) as baseline:
             current_paths, old_paths = catalog(ROOT), catalog(baseline)
             tpch = set(current_paths) | set(old_paths)
             selected = set()

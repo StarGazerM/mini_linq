@@ -21,6 +21,12 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
             inputs
         })
         .collect();
+    let mut consumers = vec![Vec::new(); definitions.len()];
+    for (consumer, inputs) in dependencies.iter().enumerate() {
+        for &input in inputs {
+            consumers[input].push(consumer);
+        }
+    }
     let mut negative = vec![false; definitions.len()];
     let mut opaque = vec![false; definitions.len()];
     for (index, definition) in definitions.iter().enumerate() {
@@ -46,6 +52,8 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
     let proof = Lineage {
         definitions,
         dependencies: &dependencies,
+        consumers: &consumers,
+        returned: indices[&symbol_name(&source.plan.output.input)],
         headings,
         negative,
         opaque,
@@ -108,6 +116,159 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
             break;
         }
     }
+    // Keep the established local realization intact before proposing future
+    // support. A declined proposal must not undo another local absorption.
+    for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
+        if !reachable[index] || proof.negative[index] {
+            continue;
+        }
+        let Some(after) = &definition.moved_after else { continue };
+        if definition.check.is_none() {
+            continue;
+        }
+        let right = match &mut definition.operator {
+            Operator::Semijoin(join) => &mut join.right,
+            Operator::NaturalJoin(join) => &mut join.right,
+            _ => continue,
+        };
+        let mut reduced = indices[&symbol_name(right)];
+        // Formal rule RA-MovedSupport: restore only the drained check's own
+        // recorded former support, not arbitrary future reduction witnesses.
+        while let Operator::Semijoin(_) = &definitions[reduced].operator {
+            if proof.negative[reduced] || proof.opaque[reduced] {
+                break;
+            }
+            let [base, support] = dependencies[reduced][..] else {
+                unreachable!("semijoin has two operands")
+            };
+            if !proof.occurrence(support).is_some_and(|occurrence| after.occurrences.iter().any(|former| former == occurrence)) {
+                break;
+            }
+            let shared: Vec<_> = proof.headings[base]
+                .intersection(proof.headings[support]).collect();
+            let Some(consumer) = proof.restoring_join(index, support, &shared) else {
+                break;
+            };
+            definition.absorptions.push(ra::Absorption {
+                absorbed_token: Default::default(),
+                left_token: None,
+                reduced: definitions[reduced].result.clone(),
+                via_token: Default::default(),
+                consumer: definitions[consumer].result.clone(),
+            });
+            reduced = base;
+        }
+        *right = definitions[reduced].result.clone();
+    }
+    // A drained check can separate (P semi L) from its former join with L,
+    // or with the reciprocal reduction (L semi (P semi L)). Preserve those
+    // ordinary local absorptions at its already-recorded restoring join.
+    let mut restored_adjacency = false;
+    for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
+        let Some(fact) = definition.absorptions.get(definitions[index].absorptions.len()) else {
+            continue;
+        };
+        let consumer = indices[&symbol_name(&fact.consumer)];
+        let left = match &mut definition.operator {
+            Operator::Semijoin(join) => &mut join.left,
+            Operator::NaturalJoin(join) => &mut join.left,
+            _ => continue,
+        };
+        let reduced = indices[&symbol_name(left)];
+        if !matches!(definitions[reduced].operator, Operator::Semijoin(_)) {
+            continue;
+        }
+        let [base, support] = dependencies[reduced][..] else { unreachable!() };
+        let restoring = dependencies[consumer][1];
+        if restoring != support
+            && (!matches!(definitions[restoring].operator, Operator::Semijoin(_))
+                || dependencies[restoring] != [support, reduced])
+        {
+            continue;
+        }
+        let after = definition.moved_after.as_ref().expect("moved check");
+        if !proof.occurrence(support).is_some_and(|occurrence|
+            after.occurrences.iter().any(|former| former == occurrence))
+        {
+            continue;
+        }
+        definition.absorptions.push(ra::Absorption {
+            absorbed_token: Default::default(),
+            left_token: Some(Default::default()),
+            reduced: definitions[reduced].result.clone(),
+            via_token: Default::default(),
+            consumer: definitions[consumer].result.clone(),
+        });
+        *left = definitions[base].result.clone();
+        restored_adjacency = true;
+    }
+    if restored_adjacency {
+        // Reconsider the original local proposals now that the moved check no
+        // longer keeps their reciprocal reductions live. No new ordering or
+        // future-support choice is made here.
+        for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
+            if proof.negative[index]
+                || definition.absorptions.len() != definitions[index].absorptions.len()
+            {
+                continue;
+            }
+            let (left, right) = match &mut definition.operator {
+                Operator::Semijoin(join) => (&mut join.left, &mut join.right),
+                Operator::NaturalJoin(join) => (&mut join.left, &mut join.right),
+                _ => continue,
+            };
+            let reduced_right = proof.absorb(dependencies[index][1], dependencies[index][0]);
+            let reduced_left = proof.absorb(dependencies[index][0], reduced_right);
+            *left = definitions[reduced_left].result.clone();
+            *right = definitions[reduced_right].result.clone();
+        }
+    }
+    loop {
+        reachable.fill(false);
+        reachable[indices[&symbol_name(&target.plan.output.input)]] = true;
+        for (index, definition) in target.plan.definitions.iter().enumerate().rev() {
+            if reachable[index] {
+                operands(&definition.operator, |input| {
+                    reachable[indices[&symbol_name(input)]] = true;
+                });
+            }
+        }
+        let mut restored = false;
+        for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
+            let previous = definitions[index].absorptions.len();
+            let (left, right) = match &mut definition.operator {
+                Operator::Semijoin(join) => (&mut join.left, &mut join.right),
+                Operator::NaturalJoin(join) => (&mut join.left, &mut join.right),
+                _ => continue,
+            };
+            for (side, operand) in [left, right].into_iter().enumerate() {
+                let left_side = side == 0;
+                let recorded = definition.absorptions[previous..].iter()
+                    .find(|fact| fact.left_token.is_some() == left_side);
+                let original = recorded.map_or(dependencies[index][side],
+                    |fact| indices[&symbol_name(&fact.reduced)]);
+                let replacement = indices[&symbol_name(operand)];
+                let mut bypassed = original;
+                while bypassed != replacement {
+                    if reachable[bypassed] {
+                        *operand = definitions[original].result.clone();
+                        let mut fact_index = 0;
+                        definition.absorptions.retain(|fact| {
+                            let keep = fact_index < previous || fact.left_token.is_some() != left_side;
+                            fact_index += 1;
+                            keep
+                        });
+                        restored = true;
+                        break;
+                    }
+                    bypassed = dependencies[bypassed][0];
+                }
+            }
+        }
+        if !restored {
+            break;
+        }
+    }
     let mut index = 0;
     target.plan.definitions.retain(|_| {
         let keep = reachable[index];
@@ -121,12 +282,60 @@ pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
 struct Lineage<'a> {
     definitions: &'a [ra::Definition],
     dependencies: &'a [Vec<usize>],
+    consumers: &'a [Vec<usize>],
+    returned: usize,
     headings: Vec<&'a BTreeSet<String>>,
     negative: Vec<bool>,
     opaque: Vec<bool>,
 }
 
 impl Lineage<'_> {
+    fn occurrence(&self, mut input: usize) -> Option<&ra::syntax::Occurrence> {
+        loop {
+            match &self.definitions[input].operator {
+                Operator::Rename(rename) => return Some(&rename.occurrence),
+                Operator::Semijoin(_) | Operator::Select(_) | Operator::Project(_) => {
+                    input = self.dependencies[input][0];
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn restoring_join(&self, mut prefix: usize, support: usize, shared: &[&String]) -> Option<usize> {
+        if shared.is_empty() || shared.iter().any(|key| !self.headings[prefix].contains(*key)) {
+            return None;
+        }
+        loop {
+            if prefix == self.returned || self.negative[prefix] || self.opaque[prefix] {
+                return None;
+            }
+            let [next] = self.consumers[prefix][..] else {
+                return None;
+            };
+            if self.negative[next] || self.opaque[next]
+                || self.dependencies[next].first() != Some(&prefix)
+                || shared.iter().any(|key| !self.headings[next].contains(*key))
+            {
+                return None;
+            }
+            match self.definitions[next].operator {
+                Operator::NaturalJoin(_) => {
+                    if self.dependencies[next][1] == support {
+                        return Some(next);
+                    }
+                    if self.headings[next] != self.headings[prefix] {
+                        return None;
+                    }
+                }
+                Operator::Semijoin(_) | Operator::Select(_) => {}
+                Operator::Project(_) if self.headings[prefix].is_subset(self.headings[next]) => {}
+                _ => return None,
+            }
+            prefix = next;
+        }
+    }
+
     fn absorb(&self, mut reduced: usize, other: usize) -> usize {
         while matches!(self.definitions[reduced].operator, Operator::Semijoin(_))
             && !self.negative[reduced]

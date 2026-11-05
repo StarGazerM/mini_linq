@@ -75,7 +75,8 @@ fn every_planner_preserves_generator_mode_and_dependencies() {
         generator.for_token = None;
         assert!(check(&source, &changed).is_err(), "{planner:?}");
 
-        let mut changed = compile_valuation(&source, planner).unwrap();
+        let valuation = compile_valuation(&source, planner).unwrap();
+        let mut changed = valuation.clone();
         let generator = changed
             .valuation
             .steps
@@ -89,8 +90,10 @@ fn every_planner_preserves_generator_mode_and_dependencies() {
             .position(|step| matches!(step, vo::Step::Guard(..)))
             .unwrap();
         changed.valuation.steps.swap(generator, guard);
-        vo::contract::check(&changed).unwrap();
+        let error = vo::contract::check(&changed).unwrap_err().to_string();
+        assert!(error.contains("I2"), "{planner:?}: {error}");
 
+        let mut changed = valuation;
         let dependent = changed
             .valuation
             .steps
@@ -366,9 +369,10 @@ fn hypergraph_reduces_cyclic_block_branches_and_acyclic_descendants_independentl
         cuts,
         [("R".into(), "block".into()), ("T".into(), "block".into())]
     );
-    let vo::Step::Block(nested, _) = block.branches[0].steps.last().unwrap() else {
-        unreachable!()
-    };
+    let nested = block.branches[0].steps.iter().find_map(|step| match step {
+        vo::Step::Block(nested, _) => Some(nested),
+        _ => None,
+    }).expect("nested frontier block");
     // Neither U nor V has a filter, so this branch has no useful tree reduction.
     assert!(
         !nested.branches[0]
@@ -498,9 +502,107 @@ fn authored_vo_and_ra_fixtures_remain_valid_for_each_planner() {
             let stem = format!("{}_{fixture}", planner.name());
             let expected_vo = std::fs::read_to_string(root.join(format!("{stem}.vo"))).unwrap();
             let expected_ra = std::fs::read_to_string(root.join(format!("{stem}.ra"))).unwrap();
-            check_valuation(&source, &syn::parse_str(&expected_vo).unwrap(), planner).unwrap();
-            check(&source, &syn::parse_str(&expected_ra).unwrap()).unwrap();
+            let valuation: vo::Program = syn::parse_str(&expected_vo).unwrap();
+            let algebra: ra::Program = syn::parse_str(&expected_ra).unwrap();
+            check_valuation(&source, &valuation, planner).unwrap();
+            check(&source, &algebra).unwrap();
+            for seed in 0..4 {
+                let database = databases::binary_database(&valuation.cq, seed);
+                let expected = cq_semantics::evaluate_cq(&valuation.cq, &database);
+                assert_eq!(valuation_semantics::evaluate(&valuation, &database), expected,
+                    "{stem}: valuation/database {seed}");
+                assert_eq!(semantics::evaluate_ra(&algebra, &database).output, expected,
+                    "{stem}: algebra/database {seed}");
+            }
         }
+    }
+}
+
+#[test]
+fn le_omits_redundant_zero_checks_in_the_census_schedules() {
+    for (name, expected) in [
+        ("cartesian", vec!["R @ 0 (x) ;", "S @ 1 (y) ;"]),
+        ("existential", vec!["R @ 0 (x) ;", "S @ 1 (y , z) ;"]),
+        ("ya_disconnected", vec!["R @ 0 (x) ;", "S @ 1 (y , z) ;"]),
+        ("ya_disconnected_reduced", vec!["R @ 0 (x) ;", "S @ 1 (y , z) ;"]),
+        ("barbell", vec![
+            "R @ 0 (x , y) ;", "S @ 1 (y , _) ;", "T @ 2 (x , _) ;",
+            "Bridge @ 3 (x , _) ;", "S @ 1 (y , z) ;", "T @ 2 (x , z) check ;",
+            "Bridge @ 3 (x , u) ;", "U @ 4 (u , _) ;", "W @ 6 (u , _) ;",
+            "U @ 4 (u , v) ;", "V @ 5 (v , _) ;", "V @ 5 (v , w) ;",
+            // Removing the delayed T check exposes W to V's introduction;
+            // W keeps the standalone phase it had behind that separator.
+            "W @ 6 (u , w) check ;",
+        ]),
+    ] {
+        let source = SCENARIOS.iter().find(|scenario| scenario.name == name)
+            .unwrap().parse_cq().unwrap();
+        let target = compile_valuation(&source, Planner::Le).unwrap();
+        let actual: Vec<_> = target.valuation.steps.iter()
+            .filter(|step| matches!(step, vo::Step::Atom(..)))
+            .cloned().map(|mut step| {
+                if let vo::Step::Atom(atom, _) = &mut step { atom.moved_after = None; }
+                step
+            }).collect();
+        let expected: Vec<vo::Step> = expected.into_iter()
+            .map(|step| syn::parse_str(step).unwrap()).collect();
+        assert_eq!(actual, expected, "{name}");
+        check_valuation(&source, &target, Planner::Le).unwrap();
+        if name != "barbell" {
+            assert!(target.valuation.steps.iter().all(|step|
+                !matches!(step, vo::Step::Atom(atom, _) if atom.variables().next().is_none())));
+            let mut redundant = target.clone();
+            let mut probe = redundant.valuation.steps.iter().find_map(|step| match step {
+                vo::Step::Atom(atom, _) if atom.clause() == 1 => Some(atom.clone()),
+                _ => None,
+            }).unwrap();
+            probe.columns = probe.columns.iter()
+                .map(|_| vo::Column::Dropped(Default::default())).collect();
+            probe.check = Some(Default::default());
+            let before = redundant.valuation.steps.iter()
+                .position(|step| matches!(step, vo::Step::Atom(..))).unwrap();
+            redundant.valuation.steps.insert(before, vo::Step::Atom(probe, Default::default()));
+            assert!(vo::contract::check(&redundant).is_err(), "{name}");
+            continue;
+        }
+        let mut late = target.clone();
+        let check = 5;
+        let atom_positions: Vec<_> = late.valuation.steps.iter().enumerate()
+            .filter_map(|(index, step)| matches!(step, vo::Step::Atom(..)).then_some(index))
+            .collect();
+        let step = late.valuation.steps.remove(atom_positions[check]);
+        late.valuation.steps.push(step);
+        assert!(check_valuation(&source, &late, Planner::Le).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn le_root_guard_does_not_replace_the_written_outer_stream() {
+    let source: cq::Program = syn::parse_quote! {
+        struct Q; relation R(x:i32); relation Gate(value:i32); relation S(y:i32);
+        answer(x,y) :- R(x), Gate(7), S(y);
+    };
+    let valuation = compile_valuation(&source, Planner::Le).unwrap();
+    check_valuation(&source, &valuation, Planner::Le).unwrap();
+    assert!(matches!(&valuation.valuation.steps[0], vo::Step::Atom(atom, _)
+        if atom.relation == "Gate" && atom.variables().next().is_none() && atom.check.is_some()));
+    let facts = vo::contract::check(&valuation).unwrap();
+    let introducers: Vec<_> = valuation.valuation.steps.iter().zip(&facts.introduces)
+        .filter_map(|(step, introduced)| match step {
+            vo::Step::Atom(atom, _) if !introduced.is_empty() => Some(atom.relation.to_string()),
+            _ => None,
+        }).collect();
+    assert_eq!(introducers, ["R", "S"]);
+    let algebra = compile(&source, Planner::Le).unwrap();
+    for rows in [vec![], vec![vec![6]], vec![vec![7]], vec![vec![6], vec![7], vec![8]]] {
+        let database = std::collections::BTreeMap::from([
+            ("R".into(), std::collections::BTreeSet::from([vec![1], vec![2]])),
+            ("S".into(), std::collections::BTreeSet::from([vec![3], vec![4]])),
+            ("Gate".into(), rows.into_iter().collect()),
+        ]);
+        let expected = cq_semantics::evaluate_cq(&source, &database);
+        assert_eq!(valuation_semantics::evaluate(&valuation, &database), expected);
+        assert_eq!(semantics::evaluate_ra(&algebra, &database).output, expected);
     }
 }
 
@@ -549,7 +651,11 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
     let valuation = compile_valuation(&source, Planner::Le).unwrap();
     let target = compile(&source, Planner::Le).unwrap();
     check_valuation(&source, &valuation, Planner::Le).unwrap();
-    cq_relational_lowering::check(&valuation, &target).unwrap();
+    let elaborated = cq_relational_lowering::compile(&valuation).unwrap();
+    cq_relational_lowering::check(&valuation, &elaborated).unwrap();
+    // LE may independently eliminate a recorded lookup. Its rewrite proof,
+    // not the mechanical VO->RA transport obligation, certifies that removal.
+    ra::check_rewrite(&elaborated, &target).unwrap();
     check(&source, &target).unwrap();
     let analysis = ra::contract::check(&target).unwrap();
     assert!(!target.plan.definitions.iter().any(|definition| {
@@ -648,7 +754,8 @@ fn le_generator_reordering_preserves_dependencies_and_binders() {
         .rposition(|step| matches!(step, vo::Step::Atom(a, _) if a.clause() == 1))
         .unwrap();
 
-    // y is not a generator dependency: S's expansion may precede or follow it.
+    // y is not a generator dependency: S's expansion may precede or follow it,
+    // provided newly ready T(z) checks drain before the next introduction.
     for after in [false, true] {
         let mut reordered = target.clone();
         let step = reordered.valuation.steps.remove(expansion);
@@ -662,6 +769,7 @@ fn le_generator_reordering_preserves_dependencies_and_binders() {
             .valuation
             .steps
             .insert(generator + usize::from(after), step);
+        cq_order::drain_ready_checks(&mut reordered).unwrap();
         check_valuation(&source, &reordered, Planner::Le).unwrap();
     }
 
@@ -816,7 +924,11 @@ fn every_planner_places_rust_by_its_free_variables() {
         let mut delayed = valuation.clone();
         let step = delayed.valuation.steps.remove(guard);
         delayed.valuation.steps.push(step);
-        vo::contract::check(&delayed).unwrap();
+        assert_eq!(
+            vo::contract::check(&delayed).is_err(),
+            analysis.introduces[guard + 1..].iter().any(|names| !names.is_empty()),
+            "{planner:?}",
+        );
         let mut unbound = valuation.clone();
         let step = unbound.valuation.steps.remove(guard);
         unbound.valuation.steps.insert(0, step);

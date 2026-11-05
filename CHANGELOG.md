@@ -13,6 +13,40 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Preserve realizations across I2 drainage: omit implied zero-column checks,
+  realize residual root checks as Unit guards, and retain standalone provider
+  phases when a moved check exposes a formerly separated candidate pair.
+  Recorded crossed-prefix provenance lets a moved check keep its former
+  reduction input and ordinary reciprocal absorption without enabling a new
+  future-support reducer optimization on unmoved plans.
+- GR-Retain now carries retained lookup cursors across checked nonintroducing
+  membership probes, including checks on another key/provider before reuse.
+  Producer and independent retention contracts require the original keys,
+  provider and immutable snapshot; introducing joins, opaque bindings, lost
+  keys and publication/canon escapes remain ineligible. Structural regressions
+  cover hand-authored witnesses, positions, snapshot occurrence identity and
+  rejection cases; execution regressions cover empty inputs, duplicate order
+  and one native lookup per input row without scans.
+- Structural planner step 1: ready fully-bound checks drain before every
+  variable introduction, including lets, for automatic, authored and L&E
+  schedules. Executable VOs independently check readiness, earliest checks
+  and connectivity; illegal authored/Written orders are rejected. Elimination
+  keeps its variable preference only after connected-ready candidates.
+  Transfer preserves written introducing-binding boundaries through the shared
+  `WrittenConnected` policy. Known-placement advice also obeys earliest-check
+  drainage. CPU and GPU H07 authored advice now uses a legal connected chain.
+  Datalog records seed/delta, driver and permutation facts and optional
+  no-op stratum demand. Incremental ordering and prefix-based Storage remain
+  until the separately censused step 1b ownership cutover.
+- Expanded-code gates support `--baseline-archive [CACHE]`: a locked,
+  revision-keyed archive and build cache without git worktree state changes.
+  CQ-to-RA proof references are now occurrence facts and WF binding analysis,
+  not unchecked executable VOs.
+  Independent RA correspondence additionally recognizes adjacent selection
+  conjunctions and a later complete-row witness that repairs projected views
+  only through positive, binding-preserving lineage. Semantic and projection-
+  loss mutation regressions cover this certificate.
+
 - P7.3: every join filter records one mandatory `policy` in Structures:
   `abandon P of B keys key_count`, `abandon P of B keys ACCESSOR` (authored
   borrowed/attached advice only), or `always`. It replaces the optional

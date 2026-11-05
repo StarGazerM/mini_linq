@@ -48,9 +48,14 @@ fn reduction_never_pushes_opaque_rust_steps() {
 }
 #[test]
 fn opaque_and_multi_atom_guards_remain_steps() {
-    for guard in ["opaque!(a)", "{ a < c }"] {
+    for (guard, steps, guard_position) in [
+        ("opaque(a)", "R@0(a,b); if opaque(a); S@1(b,c);", 1),
+        // Opaque macro tokens conservatively depend on the written environment.
+        ("opaque!(a)", "R@0(a,b); S@1(b,c); if opaque!(a);", 2),
+        ("{ a < c }", "R@0(a,b); S@1(b,c); if { a < c };", 2),
+    ] {
         let text = format!(
-            "struct Q; relation R(a:i32,b:i32); relation S(b:i32,c:i32); answer(a,c) :- R(a,b), S(b,c), if {guard}; valuation {{ R@0(a,b); S@1(b,c); if {guard}; }}"
+            "struct Q; relation R(a:i32,b:i32); relation S(b:i32,c:i32); answer(a,c) :- R(a,b), S(b,c), if {guard}; valuation {{ {steps} }}"
         );
         let source = syn::parse_str(&text).unwrap();
         let target = compile(
@@ -61,7 +66,7 @@ fn opaque_and_multi_atom_guards_remain_steps() {
         )
         .unwrap();
         assert!(matches!(
-            target.valuation.steps.last(),
+            target.valuation.steps.get(guard_position),
             Some(valuation::Step::Guard(..))
         ));
     }
@@ -113,7 +118,7 @@ fn all_guard_kinds_keep_their_schedule_around_tree_reductions() {
     );
     let source = schedule(
         &query,
-        &format!("{ATOMS} if {{ b > 0 }}; if {{ a != c }}; if {{ a > 0 }};"),
+        "L@0(a); if { a > 0 }; R@1(a,b); if { b > 0 }; S@2(b,c); if { a != c };",
     );
     for semijoins in [Reductions::None, Reductions::Tree] {
         let options = Options { semijoins };
@@ -229,7 +234,7 @@ fn rust_guard_reductions_are_not_in_the_language() {
 #[test]
 fn full_reducer_accepts_independent_sibling_orders() {
     let query = "struct Star; relation A(a:i32,x:i32); relation B(b:i32,y:i32); relation C(c:i32,z:i32); relation R(a:i32,b:i32,c:i32); answer(a,b,c) :- A(a,x), B(b,y), C(c,z), R(a,b,c);";
-    let atoms = "A@0(a,x); B@1(b,y); C@2(c,z); R@3(a,b,c);";
+    let atoms = "A@0(a,x); R@3(a,b,c); B@1(b,y); C@2(c,z);";
     let source = schedule(query, atoms);
     let alternative = schedule(
         query,
@@ -259,8 +264,9 @@ fn cyclic_body_keeps_exact_block_cuts_and_reduces_acyclic_branches() {
         "struct Cycle; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
          relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
          answer(a,b,c) :- R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)};",
-        "R@0(a,b); S@1(b,c); T@2(a,c);
-         block @3(a) hoisted {U@3.0.0(a); V@3.0.1(a);} | {U@3.1.0(a);};",
+        "R@0(a,b);
+         block @3(a) hoisted {U@3.0.0(a); V@3.0.1(a);} | {U@3.1.0(a);};
+         S@1(b,c); T@2(a,c);",
     );
     assert!(!cq::hypergraph::Analysis::of(&source.cq).acyclic);
     let target = compile(&source, &HYPERGRAPH).unwrap();
@@ -271,7 +277,8 @@ fn cyclic_body_keeps_exact_block_cuts_and_reduces_acyclic_branches() {
             syn::parse_quote!(reduce T@2 with block@3(a);),
         ]
     );
-    let valuation::Step::Block(block, _) = target.valuation.steps.last().unwrap() else {
+    let valuation::Step::Block(block, _) = target.valuation.steps.iter()
+        .find(|step| matches!(step, valuation::Step::Block(..))).unwrap() else {
         unreachable!()
     };
     assert_eq!(block.placement, valuation::blocks::Placement::Hoisted);
@@ -302,9 +309,10 @@ fn cyclic_branches_keep_block_cuts_and_plan_descendants_independently() {
          relation T(a:i32,c:i32); relation U(a:i32); relation V(a:i32);
          answer(a) :- {R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)}} | {U(a)};",
         "block @0(a) hoisted {
-            R@0.0.0(a,b); S@0.0.1(b,c); T@0.0.2(a,c);
+            R@0.0.0(a,b);
             block @0.0.3(a) hoisted {U@0.0.3.0.0(a); V@0.0.3.0.1(a);}
                 | {U@0.0.3.1.0(a);};
+            S@0.0.1(b,c); T@0.0.2(a,c);
          } | {U@0.1.0(a);};",
     );
     assert!(cq::hypergraph::Analysis::of(&source.cq).acyclic);
@@ -320,7 +328,8 @@ fn cyclic_branches_keep_block_cuts_and_plan_descendants_independently() {
             syn::parse_quote!(reduce T@0.0.2 with block@0.0.3(a);),
         ]
     );
-    let valuation::Step::Block(nested, _) = block.branches[0].steps.last().unwrap() else {
+    let valuation::Step::Block(nested, _) = block.branches[0].steps.iter()
+        .find(|step| matches!(step, valuation::Step::Block(..))).unwrap() else {
         unreachable!()
     };
     assert!(direct_reductions(&nested.branches[0].steps).is_empty());
@@ -350,7 +359,7 @@ fn acyclic_body_retains_tree_reductions_and_additional_block_cuts() {
         "struct TreeBlock; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
          relation U(b:i32); relation V(b:i32);
          answer(a,c) :- R(a,b), S(b,c), {U(b)} | {V(b)};",
-        "R@0(a,b); S@1(b,c); block @2(b) hoisted {U@2.0.0(b);} | {V@2.1.0(b);};",
+        "R@0(a,b); block @2(b) hoisted {U@2.0.0(b);} | {V@2.1.0(b);}; S@1(b,c);",
     );
     assert!(cq::hypergraph::Analysis::of(&source.cq).acyclic);
     let target = compile(&source, &HYPERGRAPH).unwrap();
@@ -432,6 +441,9 @@ fn filtered_supports_run_point_before_domain_and_propagate_to_unfiltered_parents
         };
         source.valuation.steps.insert(clause, step);
     }
+    // The fact atom connects to Domain before the independent Point/Empty scans.
+    let fact = source.valuation.steps.remove(5);
+    source.valuation.steps.insert(2, fact);
     // Ranks read recorded restrictions: record them as `cq-order` does.
     cq_order::restrict(&mut source).unwrap();
     let target = compile(&source, &HYPERGRAPH).unwrap();
@@ -581,7 +593,7 @@ fn reductions_keep_literal_occurrences_without_literal_columns() {
     let source: valuation::Program = syn::parse_quote! {
         struct Q; relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32);
         answer(x) :- R(7,x), S(x), T(9);
-        valuation { R@0(x); S@1(x); T@2(); }
+        valuation { T@2(); R@0(x); S@1(x); }
     };
     for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
         let options = Options { semijoins };
@@ -597,7 +609,7 @@ fn negation_is_preserved_but_never_used_as_reduction_support_or_target() {
     let source = schedule(
         "struct Negative; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
          relation K(a:i32); answer(x,z) :- R(x,y), S(y,z), !K(x);",
-        "R@0(x,y); S@1(y,z); !K(x);",
+        "R@0(x,y); !K(x); S@1(y,z);",
     );
     for semijoins in [Reductions::None, Reductions::Tree, Reductions::Hypergraph] {
         let options = Options { semijoins };
@@ -714,8 +726,8 @@ fn correlated_blocks_are_not_independent_reduction_operands() {
         "struct Correlated; relation R(a:i32,b:i32); relation S(b:i32,c:i32);
          relation U(b:i32); relation V(b:i32);
          answer(a,c) :- R(a,b), S(b,c), {U(b)} | {V(b)};",
-        "R@0(a,b); S@1(b,c);
-         block @2(b) correlated {U@2.0.0(b);} | {V@2.1.0(b);};",
+        "R@0(a,b);
+         block @2(b) correlated {U@2.0.0(b);} | {V@2.1.0(b);}; S@1(b,c);",
     );
     for semijoins in [Reductions::Tree, Reductions::Hypergraph, Reductions::Masks] {
         let options = Options { semijoins };

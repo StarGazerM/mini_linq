@@ -9,14 +9,8 @@ pub use cq_order::OrderAtom;
 use cq_syntax::symbol_name;
 use std::collections::{BTreeMap, BTreeSet};
 use strata::source::{BodyItem, Query};
-/// Authored scan-driver advice; the selected permutation is checked in the IR.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DriverPolicy {
-    #[default]
-    WrittenOrder,
-    /// Lead with delta, then prefer connected reads in the first positive prefix.
-    DeltaFirst,
-}
+/// Authored scan-driver policy, retained in Incremental and CQ/VO facts.
+pub use cq_lang_datalog_incremental::DriverPolicy;
 /// Authored CQ step order, Physical sites and admission placement for a
 /// labelled rule or one version.
 ///
@@ -127,6 +121,7 @@ pub fn compile_with_advice(
         strata: source.clone(),
         variants,
         deltas,
+        driver: driver_policy,
     };
     check(source, &target)?;
     Ok(target)

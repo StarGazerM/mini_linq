@@ -26,6 +26,50 @@ pub mod kw {
     syn::custom_keyword!(sum);
     syn::custom_keyword!(min);
     syn::custom_keyword!(max);
+    syn::custom_keyword!(absorbed);
+    syn::custom_keyword!(via);
+    syn::custom_keyword!(after);
+    syn::custom_keyword!(left);
+}
+
+/// Named restoration of an I2-moved check's former reduction input. The
+/// source-to-target RA certificate checks the exact restoring join; later
+/// representations transport the fact without selecting again.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct Absorption {
+    pub absorbed_token: kw::absorbed,
+    pub left_token: Option<kw::left>,
+    pub reduced: Ident,
+    pub via_token: kw::via,
+    pub consumer: Ident,
+}
+
+pub fn parse_absorptions(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Absorption>> {
+    let mut facts = Vec::new();
+    while input.peek(kw::absorbed) {
+        facts.push(input.parse()?);
+    }
+    Ok(facts)
+}
+
+/// Introducing occurrences crossed by an I2-drained check. These supplied
+/// its old positive prefix; provenance is transported, never reconstructed.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+pub struct MovedAfter {
+    pub after_token: kw::after,
+    #[syn(bracketed)]
+    pub bracket: token::Bracket,
+    #[syn(in = bracket)]
+    #[parse(CommaList::parse_terminated)]
+    pub occurrences: CommaList<crate::Occurrence>,
+}
+
+pub fn parse_moved_after(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<MovedAfter>> {
+    if input.peek(kw::after) {
+        input.parse().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Group a set of complete named valuations; aggregate arguments retain

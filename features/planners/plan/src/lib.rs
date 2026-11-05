@@ -92,9 +92,10 @@ impl Planner {
                 (Heuristic::Written, Split::Coarse)
             }
             Self::WrittenFine => (Heuristic::Written, Split::Fine),
-            // Transfer must not expand disconnected prefixes when a ready
-            // connecting atom exists, even where opaque Rust forbids reducers.
-            Self::Transfer | Self::PrefixConnectedCoarse => {
+            // Preserve introducing-binding boundaries and same-boundary filter
+            // preference; shared cq-order still enforces I1/I2/I3.
+            Self::Transfer => (Heuristic::WrittenConnected, Split::Coarse),
+            Self::PrefixConnectedCoarse => {
                 (Heuristic::Prefix(Ranking::Connected), Split::Coarse)
             }
             Self::PrefixConnectedFine => (Heuristic::Prefix(Ranking::Connected), Split::Fine),
@@ -218,11 +219,7 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
         cq_order::restrict(&mut scheduled)?;
         scheduled
     } else {
-        let ordered = if planner == Planner::Transfer {
-            connect_transfer_atoms(cq_order::compile(&normal, &Options::default())?)
-        } else {
-            cq_order::compile(&normal, &ordering)?
-        };
+        let ordered = cq_order::compile(&normal, &ordering)?;
         cq_order::check(&normal, &ordered, &ordering)?;
         ordered
     };
@@ -236,62 +233,8 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
     }
 }
 
-/// Avoid disconnected prefixes within each top-level run of atoms. Keep every
-/// predicate, binding and block boundary in its written position: hoisting a
-/// total binding can otherwise change a later aggregate's recorded domain.
-fn connect_transfer_atoms(mut ordered: vo::Program) -> vo::Program {
-    // Connectivity is through names actually shared after normalization
-    // (A-Alias); an unsolved equality class is not a realizable join key.
-    let canonical = |name: &syn::Ident| name.to_string();
-    let mut bound = std::collections::BTreeSet::new();
-    let steps = &mut ordered.valuation.steps;
-    let mut position = 0;
-    while position < steps.len() {
-        if matches!(steps[position], vo::Step::Atom(..)) {
-            let end = position
-                + steps[position..]
-                    .iter()
-                    .take_while(|step| matches!(step, vo::Step::Atom(..)))
-                    .count();
-            while position < end {
-                let connected = |step: &vo::Step| {
-                    let vo::Step::Atom(atom, _) = step else {
-                        unreachable!("atom run");
-                    };
-                    atom.variables()
-                        .any(|(_, name)| bound.contains(&canonical(name)))
-                };
-                if !bound.is_empty() && !connected(&steps[position]) {
-                    if let Some(next) = steps[position + 1..end].iter().position(connected) {
-                        steps[position..=position + 1 + next].rotate_right(1);
-                    }
-                }
-                let vo::Step::Atom(atom, _) = &steps[position] else {
-                    unreachable!("atom run");
-                };
-                bound.extend(atom.variables().map(|(_, name)| canonical(name)));
-                position += 1;
-            }
-        } else {
-            match &steps[position] {
-                vo::Step::Let(binding, _) => {
-                    bound.extend(cq::rust::bindings(&binding.pattern).iter().map(canonical));
-                }
-                vo::Step::For(generator, _) => {
-                    bound.extend(cq::rust::bindings(&generator.pattern).iter().map(canonical));
-                }
-                vo::Step::Block(block, _) => {
-                    bound.extend(block.source.variables().map(|(_, name)| canonical(name)));
-                }
-                _ => {}
-            }
-            position += 1;
-        }
-    }
-    ordered
-}
 
-/// Predicate transfer on a Masks-reduced plan with connected atom runs.
+/// Predicate transfer on a Masks-reduced plan with shared connected ordering.
 /// The reduction tree is rooted at the stream; when that is the largest
 /// relation the root coincides with RPT's LargestRoot. After the Masks forward
 /// pass into every other clause, the stream is reduced by each child whose
@@ -448,26 +391,11 @@ pub fn check_valuation(
 pub fn check(source: &cq::Program, target: &ra::Program) -> syn::Result<()> {
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
-    cq_relational_lowering::check(&written_valuation(&normal)?, target)
+    let steps = written_steps(&normal.query.body, &std::collections::BTreeSet::new(), None);
+    let analysis = vo::order::analyze_reference(&normal, &steps)?;
+    cq_relational_lowering::check_reference(&normal, &steps, &analysis, target)
 }
 
-/// Construct the source meaning directly, with one full generator per written
-/// clause and no optimization. This is deliberately independent of cq-order.
-fn written_valuation(normal: &cq::Program) -> syn::Result<vo::Program> {
-    cq::normal::check(normal)?;
-    let steps = written_steps(&normal.query.body, &std::collections::BTreeSet::new(), None);
-    let reference = vo::Program {
-        cq: normal.clone(),
-        valuation: vo::Valuation {
-            valuation_token: Default::default(),
-            evidence: None,
-            brace: Default::default(),
-            steps,
-        },
-    };
-    vo::contract::check(&reference)?;
-    Ok(reference)
-}
 
 fn written_steps(
     body: &cq::CommaList<cq::BodyItem>,
@@ -490,6 +418,8 @@ fn written_steps(
                         at: Default::default(),
                         clause: path,
                         paren: Default::default(),
+                        check: None,
+                        moved_after: None,
                         columns: atom
                             .variables()
                             .cloned()
@@ -523,6 +453,8 @@ fn written_steps(
                             at: Default::default(),
                             clause: path,
                             paren: Default::default(),
+                            check: None,
+                            moved_after: None,
                             columns: facts
                                 .free
                                 .values()

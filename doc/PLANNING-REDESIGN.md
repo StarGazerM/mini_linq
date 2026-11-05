@@ -36,16 +36,28 @@ the dated acceptance below records exact gates and matched paired measurements.
    a connected atom is ready). Masks reduces non-root edges whose child
    subtree carries a filter (`node != root && ranks[&child] < 3`); it is
    not a full Yannakakis reduction or a general output-bound guarantee.
-   Predicate placement follows bound-variable dependencies. Written order
-   remains the explicit reference (`Heuristic::Written`) and `plan(order(..))`.
+   Every executable VO independently checks readiness (I1), earliest ready
+   nonintroducing checks (I2), and connectivity (I3), including authored orders.
+   I2 drains checks before any introduction, including a let; simultaneous
+   filters may retain their relative order. Written and `plan(order(..))`
+   constrain introducing atoms, not late checks, and reject illegal I1/I3
+   orders. Written is exempt only from I4's heuristic tie-break obligation.
 3. **Superseded by contract 7.** (Was: a closed Rust expression takes part
    in constraint recognition. Contract 7 forbids that recognition; remaining
    implementation violations are tracked below, not claimed eliminated.)
 4. **Superseded by contract 7.** (Was: opacity is a recorded property. Every
    Rust expression is opaque and total; there is no other kind.)
-5. **Datalog hands its order to CQ.** The incremental occurrence permutation
-   that storage layouts follow is passed to each hole's CQ `plan` as explicit
-   order advice, so layouts and the hole plan agree by construction.
+5. **Datalog ownership is a staged cutover.** Datalog owns stratification,
+   seed/recursive variants, delta identity and admission. In step 1 it retains
+   `delta_first_order` and its recorded occurrence permutation; Storage still
+   selects layouts from that Incremental prefix. CPU `WrittenOrder` and GPU
+   `DeltaFirst` remain distinct structural inputs. These facts accompany CQ
+   planning rather than being inferred by a printer; I2 drains fully-bound
+   checks without changing the introducing-atom order. Optional stratum shared
+   demand is a recorded no-op in this step. Step 1b, after its own census,
+   removes the permutation planner and makes Storage follow recorded VOs.
+   Until that cutover, contract 1's single-owner goal is not a claim that
+   Datalog's pre-VO ordering and layout selection have already been removed.
 6. **Docs match code.** `R-Masks` is the filter-gated, non-root reduction
    policy, not the full Yannakakis pass; Plan-Le's composition matches the
    implementation.
@@ -408,6 +420,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     is in plan by default (CPU engines expand byte-identical), so DOOP was
     not re-timed. Not done (open): per-round DOOP fact counts and CPU
     GR-RetainPrefix grading from recorded counts.
+  - **Follow-up from structural planner step 1:** GR-Retain reuse is defeated
+    when a membership check interposes between the lookup and its reuse
+    (h02/h20 `le_runs` after I2); retention should look past non-introducing
+    steps. This step records the observed emitted-code consequence and real
+    exactness/counter evidence, not a retention rewrite or a performance claim.
 - **P3b Profile the engine gaps** (`doc/STORAGE.md` §12.4): GPU h06
   reduce/dedup at 16–74× a hand kernel; CPU h01 at ~140× a String-grouping
   microbenchmark. Profiles (perf, nsys/ncu) decide whether these come before

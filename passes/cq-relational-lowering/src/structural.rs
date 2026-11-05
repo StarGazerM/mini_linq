@@ -7,26 +7,21 @@ use syn::Ident;
 /// State the supplied VO schedule as structural obligations. This does not run
 /// the compiler, solve aliases, choose an order, or discover any atom mapping.
 pub(super) fn check(
-    source: &vo::Program,
+    source: &cq::Program,
+    steps: &[vo::Step],
     analysis: &vo::Analysis,
     target: &Schedule,
     target_program: &ra::Program,
 ) -> Result<(), String> {
-    if source
-        .valuation
-        .steps
-        .iter()
-        .any(|step| matches!(step, vo::Step::Block(..)))
-    {
-        return super::block_contract::check(source, target);
+    if steps.iter().any(|step| matches!(step, vo::Step::Block(..))) {
+        return super::block_contract::check(source, steps, target);
     }
     let declarations: HashMap<_, _> = source
-        .cq
         .inputs()
         .map(|d| (symbol_name(&d.name), d))
         .collect();
     let mut schedule = Schedule::default();
-    schedule.occurrence_paths((0..source.cq.query.body.len()).map(vo::syntax::Occurrence::new));
+    schedule.occurrence_paths((0..source.query.body.len()).map(vo::syntax::Occurrence::new));
     let mut relations = HashMap::new();
     for (clause, atom) in &analysis.atoms {
         let declaration = declarations[&symbol_name(&atom.relation)];
@@ -42,12 +37,12 @@ pub(super) fn check(
             schedule.atom(*clause, &atom.relation, &mapping, constants.as_ref()),
         );
     }
-    let hypergraph = cq::hypergraph::Analysis::of(&source.cq);
+    let hypergraph = cq::hypergraph::Analysis::of(source);
     let mut prefix = None;
     let mut heading = HashSet::new();
     let mut reductions = Vec::new();
     let mut placed_negations = HashSet::new();
-    for (step, introduces) in source.valuation.steps.iter().zip(&analysis.introduces) {
+    for (step, introduces) in steps.iter().zip(&analysis.introduces) {
         match step {
             vo::Step::Block(..) => unreachable!("block schedule checked separately"),
             vo::Step::Atom(atom, _) => {
@@ -63,7 +58,11 @@ pub(super) fn check(
                     );
                 }
                 prefix = Some(match prefix {
-                    Some(left) => schedule.join(left, right, partial && check),
+                    Some(left) => schedule.join(left, right, check && (partial || heading.is_empty())),
+                    None if check => {
+                        let unit = schedule.unit();
+                        schedule.join(unit, right, true)
+                    }
                     None => right,
                 });
             }
@@ -132,7 +131,6 @@ pub(super) fn check(
             }
             vo::Step::Negation(negation, _) => {
                 let clause = source
-                    .cq
                     .query
                     .body
                     .iter()
@@ -144,7 +142,7 @@ pub(super) fn check(
                     })
                     .expect("VO negation coverage");
                 let bound =
-                    cq::blocks::bound_before(&source.cq.query.body, clause, &Default::default());
+                    cq::blocks::bound_before(&source.query.body, clause, &Default::default());
                 let input = prefix.unwrap_or_else(|| schedule.unit());
                 prefix = Some(super::negation::obligation(
                     &mut schedule,
@@ -171,16 +169,16 @@ pub(super) fn check(
         }
         heading.extend(introduces.iter().cloned());
     }
-    let attributes: Vec<Ident> = source.cq.query.valuation_variables().cloned().collect();
+    let attributes: Vec<Ident> = source.query.valuation_variables().cloned().collect();
     let input = prefix.unwrap_or_else(|| schedule.unit());
     let mut output = schedule.project(input, &attributes);
-    if let Some(group) = &source.cq.query.group {
+    if let Some(group) = &source.query.group {
         output = schedule.group(
             output,
-            &group.operator(source.cq.query.head.relation.clone()),
+            &group.operator(source.query.head.relation.clone()),
         );
     }
-    schedule.finish(output, &source.cq.query.head);
+    schedule.finish(output, &source.query.head);
     schedule.check(target, &reductions).or_else(|message| {
         // An under-canon certificate may recover a primary expansion witness
         // from the supplied target itself. No source plan is compiled or

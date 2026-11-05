@@ -170,7 +170,9 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
             let written_visits = ::std::cell::Cell::new(0);
             let visits = &written_visits;
             let expected: ::std::collections::BTreeSet<_> = (#written).collect();
-            assert_eq!(written_visits.get(), (scale*scale) as usize);
+            // I2 places the written guard immediately after R: once for each
+            // R row, including the dangling zero key, before S's fan-out.
+            assert_eq!(written_visits.get(), rows_r.len());
             let optimized_visits = ::std::cell::Cell::new(0);
             let visits = &optimized_visits;
             ::cq_storage::counters::reset();
@@ -188,10 +190,14 @@ fn canonical_projection_before_an_opaque_guard_enumerates_fan_out_linearly() {
         }
         let R: &[(i32,i32)] = &[(0,0)];
         let S: &[(i32,i32)] = &[];
-        let visits = &::std::cell::Cell::new(0);
+        let written_visits = ::std::cell::Cell::new(0);
+        let visits = &written_visits;
         assert_eq!((#written).count(), 0);
+        assert_eq!(written_visits.get(), R.len());
+        let optimized_visits = ::std::cell::Cell::new(0);
+        let visits = &optimized_visits;
         assert_eq!((#optimized).count(), 0);
-        assert_eq!(visits.get(), 0);
+        assert_eq!(optimized_visits.get(), 0);
     })]);
 }
 

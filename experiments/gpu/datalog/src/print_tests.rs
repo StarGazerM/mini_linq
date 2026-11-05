@@ -26,6 +26,7 @@ fn program_with_orders(
         Reach(*x,*z) :- Reach(x,y), Edge(y,z);
         strata { component [Reach]; }
         incremental { scheme seminaive_covering;
+            driver DeltaFirst;
             delta Reach = ReachChanges;
             variant 0 seed { Reach(*x,*y) :- Edge(x,y); }
             variant 1 delta 0 { Reach(*x,*z) :- ReachChanges(x,y), Edge(y,z); }
@@ -61,6 +62,31 @@ fn program_with_orders(
     )
     .unwrap();
     crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap()
+}
+
+#[test]
+fn device_round_preserves_delta_driver_and_source_permutation_facts() {
+    let round = program();
+    assert_eq!(
+        round.storage.incremental.driver,
+        cq_lang_datalog_round::incremental::DriverPolicy::DeltaFirst,
+    );
+    for stratum in &round.context.strata {
+        for rule in stratum.seeds.iter().chain(&stratum.steps) {
+            let variant = &round.storage.incremental.variants[rule.variant];
+            let hole = &round.holes[rule.hole];
+            let facts = hole.cq.ordering.as_ref().unwrap();
+            assert_eq!(facts.driver, round.storage.incremental.driver);
+            assert_eq!(facts.delta, variant.delta);
+            assert_eq!(facts.seed, variant.delta.is_none());
+            assert_eq!(facts.permutation, variant.order);
+            assert_eq!(facts.shared_demand, None);
+            let normal = cq_lang_datalog_round::cq::normal::normalize(&hole.cq).unwrap();
+            assert_eq!(normal.ordering.as_ref(), Some(facts));
+        }
+    }
+    let parsed: cq_lang_datalog_round::Program = syn::parse2(round.to_token_stream()).unwrap();
+    assert_eq!(parsed, round);
 }
 
 #[test]

@@ -58,6 +58,27 @@ The DOOP pod also lacks both the live SRD toolchain and the prepared corpus for
 
 ## Where we are
 
+- Structural planner step 1 implements I1–I3 checking on every executable
+  VO and I2 drainage in shared ordering and the separate L&E producer.
+  Elimination is connected-first; Transfer retains its declared written-binding
+  preference through `WrittenConnected`. The final census matches all original
+  124 I2 repairs plus 22 elimination repairs, and the complete authored-route
+  supplement has zero unpredicted changes. Root, five-package, planners, quick,
+  formal, API and all-29 compile-TPC-H gates pass. All 66 changed CPU routes
+  pass SF1 DuckDB exactness and real untimed counters; all 232 expanded hunks
+  are classified, with H15 default/par byte-identical.
+  CPU xalan passes 26-relation full-tuple checks. Final GPU workspace/all-target
+  compilation passes, including doop-gpu and the legal H07 advice mirror.
+  GPU runtime acceptance is pending: H01 SF10 exhausted VRAM while an unrelated
+  vLLM process held 44,980 MiB; the remaining GPU suite and Cassandra must run
+  with the GPU available before merge. No tests were disabled.
+  Evidence: `/data/design-notes/planner-step1-census.md` and the worktree's
+  `target/planner-step1-gates.json`. No performance comparison is claimed.
+  Datalog seed/delta, driver and permutation are recorded facts; optional
+  stratum demand is a no-op. Main explicitly retained Incremental-prefix
+  Storage and delta permutation in this step; single CQ order ownership and
+  VO-derived Storage are step 1b after a separate census.
+
 - P7.2 merged in `514ef6af`, advice-only: Structures records
   `Ordinary` versus `Statistics(BuildDemand)` construction, checked statistic
   publications and borrowed/attached filters. Ordinary builds retain their
