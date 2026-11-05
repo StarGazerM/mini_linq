@@ -998,6 +998,9 @@ optional known level as \code{Planning}. CK-DL-Fork checks these against the
 Incremental variant. A numeric \code{Planning.known} must equal explicit
 \code{Known::At} advice; automatic admission records \code{None}, not a numeric
 pin. Round rewrites keep the fact fixed.
+This is the requested advice level, not permission to delay a ready filter:
+CQ applies O-KnownAt followed by I2 drainage and records the actual earliest
+legal placement in VO. Out-of-range or unready requested boundaries reject.
 The base invocation queue contains no generated planning arguments;
 \code{invocation\_pipeline} mechanically serializes the fact at print time.
 Named configuration resolution records

@@ -966,6 +966,7 @@ dependencies = [
 name = "cq-planners"
 version = "0.1.0"
 dependencies = [
+ "cq-order",
  "cq-planners-macros",
  "cq-planners-plan",
  "cq-relational-lowering",

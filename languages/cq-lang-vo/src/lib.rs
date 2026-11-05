@@ -39,6 +39,11 @@ pub mod evidence;
 pub use evidence::Evidence;
 pub mod restrict;
 pub use restrict::Restrict;
+pub mod order;
+/// Recorded ordering inputs shared with CQ; printing never reconstructs them.
+pub mod ordering {
+    pub use cq_lang_cq::ordering::*;
+}
 
 pub mod kw {
     syn::custom_keyword!(reduce);
@@ -53,6 +58,8 @@ pub struct Valuation {
     pub valuation_token: kw::valuation,
     #[parse(evidence::parse_optional)]
     pub evidence: Option<Evidence>,
+    #[parse(ordering::parse_optional)]
+    pub ordering: Option<ordering::OrderingFacts>,
     #[syn(braced)]
     pub brace: token::Brace,
     #[syn(in = brace)]
@@ -199,6 +206,8 @@ impl Subatom {
 #[derive(Clone, Debug, Default)]
 pub struct Analysis {
     pub branches: BTreeMap<usize, Vec<Analysis>>,
+    /// Binding-only facts for independent ordering checks, indexed by step.
+    pub order: Vec<order::StepFacts>,
     /// For each hoisted block that takes a finite prefix domain: its free
     /// columns the scope's seed does not provide. VO provides them before the
     /// block and before any reduction that reads it.
@@ -218,8 +227,9 @@ pub struct Analysis {
 pub mod contract {
     /// Formal rule WF-VO: Check NF and the local valuation schedule with coverage and reduction premises.
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
-        super::cq::normal::check(&program.cq)?;
-        super::analyze(program)
+        let analysis = super::order::analyze(program)?;
+        super::order::check(program, &analysis)?;
+        Ok(analysis)
     }
 }
 
@@ -234,17 +244,23 @@ fn error<T>(
 }
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
+    if program.valuation.ordering != program.cq.ordering {
+        return error(&program.valuation, "VO ordering inputs must preserve the recorded CQ facts");
+    }
     if let Some(evidence) = &program.valuation.evidence {
         evidence.check(&program.cq)?;
     }
-    let schema = program
-        .cq
+    analyze_reference(&program.cq, &program.valuation.steps)
+}
+
+fn analyze_reference(cq: &cq::Program, steps: &[Step]) -> syn::Result<Analysis> {
+    let schema = cq
         .inputs()
         .map(|d| (symbol_name(&d.name), d))
         .collect();
     analyze_steps(
-        &program.cq.query.body,
-        &program.valuation.steps,
+        &cq.query.body,
+        steps,
         Vec::new(),
         BTreeSet::new(),
         None,
@@ -388,6 +404,10 @@ fn analyze_steps(
         analysis.bound_before.push(bound.clone());
         analysis.provided_before.push(provided.clone());
         if let Step::Restrict(restriction, _) = step {
+            analysis.order.push(order::StepFacts {
+                preprocessing: true,
+                ..Default::default()
+            });
             let expected_path = match &parent {
                 Some((path, branch)) => path.child(*branch, restriction.clause()),
                 None => Occurrence::new(restriction.clause()),
@@ -397,6 +417,7 @@ fn analyze_steps(
             continue;
         }
         started = true;
+        let mut order = order::StepFacts::default();
         match step {
             Step::Restrict(..) => unreachable!("restrictions handled above"),
             Step::Block(block, _) => {
@@ -423,6 +444,19 @@ fn analyze_steps(
                     return error(block, "hoisted blocks cannot contain Rust steps");
                 }
                 let correlated = block.placement == blocks::Placement::Correlated;
+                order.atom = true;
+                order.provides.extend(block.source.variables().map(|(_, v)| symbol_name(v)));
+                if correlated {
+                    order.required.extend(facts.free.keys().cloned());
+                }
+                if let Some(required) = analysis.domain_requires.get(&clause) {
+                    order.required.extend(required.iter().cloned());
+                }
+                order.required.extend(
+                    order.provides.iter()
+                        .filter(|name| facts.free.contains_key(*name) && let_bound.contains(*name))
+                        .cloned(),
+                );
                 if correlated && !facts.free.keys().all(|name| bound.contains(name)) {
                     return error(
                         block,
@@ -511,6 +545,11 @@ fn analyze_steps(
             }
             Step::Atom(subatom, _) => {
                 let clause = subatom.clause();
+                order.atom = true;
+                order.provides.extend(subatom.variables().map(|(_, v)| symbol_name(v)));
+                order.required.extend(
+                    order.provides.intersection(&let_bound).cloned(),
+                );
                 let expected_path = match &parent {
                     Some((path, branch)) => path.child(*branch, clause),
                     None => Occurrence::new(clause),
@@ -561,6 +600,7 @@ fn analyze_steps(
                 analysis.introduces.push(introduced);
             }
             Step::Equality(equality, _) => {
+                order.required.extend(equality.variables().map(symbol_name));
                 let clause = equalities
                     .iter()
                     .find(|(clause, expected)| {
@@ -597,6 +637,7 @@ fn analyze_steps(
                 analysis.introduces.push(Vec::new());
             }
             Step::Constraint(constraint, _) => {
+                order.required.extend(constraint.variables().map(symbol_name));
                 let clause = constraints
                     .iter()
                     .find(|(clause, expected)| {
@@ -633,6 +674,9 @@ fn analyze_steps(
                 analysis.introduces.push(Vec::new());
             }
             Step::Negation(negation, _) => {
+                order.required.extend(
+                    negation.atom.variables().map(symbol_name).filter(|v| logical.contains(v)),
+                );
                 let Some((&clause, _)) = negations.iter().find(|(clause, expected)| {
                     !placed_negations.contains(*clause) && ***expected == *negation
                 }) else {
@@ -672,6 +716,7 @@ fn analyze_steps(
                         "Rust steps must preserve each source expression exactly once",
                     );
                 };
+                order.required.extend(dependencies[&clause].iter().cloned());
                 if let Some(missing) = dependencies[&clause].iter().find(|v| !bound.contains(*v)) {
                     return error(
                         step,
@@ -685,11 +730,13 @@ fn analyze_steps(
                     .iter()
                     .map(symbol_name)
                     .collect::<Vec<_>>();
+                order.provides.extend(introduced.iter().cloned());
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
                 complete.insert(clause);
             }
             Step::Reduce(reduce, _) => {
+                order.preprocessing = true;
                 let clause = reduce.clause();
                 let variables = atom_clause(reduce, &reduce.relation, clause)?;
                 let domain_ready = !analysis.domain_requires.is_empty()
@@ -707,6 +754,9 @@ fn analyze_steps(
                 let Reduction::With(_, subatom) = &reduce.reduction;
                 let support = subatom.clause();
                 for dependent in [clause, support] {
+                    if let Some(required) = analysis.domain_requires.get(&dependent) {
+                        order.required.extend(required.iter().cloned());
+                    }
                     if steps.iter().any(|step| {
                         matches!(step, Step::Block(block, _)
                             if block.source.clause() == dependent
@@ -763,6 +813,7 @@ fn analyze_steps(
                 analysis.introduces.push(Vec::new());
             }
         }
+        analysis.order.push(order);
         // Every column the step reads is now provided by this scope.
         match step {
             Step::Atom(subatom, _) => {
@@ -867,6 +918,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             .collect()
     }
     if source.cq != target.cq
+        || source.valuation.ordering != target.valuation.ordering
         || erase(&source.valuation.steps) != erase(&target.valuation.steps)
         || reductions(&source.valuation.steps)
             .iter()

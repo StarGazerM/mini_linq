@@ -578,6 +578,29 @@ pub(crate) fn check_storage_with_analysis(
                     source,
                     "fork admission placement disagrees with its advice or recorded fan-out",
                 )?;
+                let ordering = hole.ordering.as_ref().ok_or_else(|| {
+                    syn::Error::new_spanned(hole, "rule hole must record upstream ordering facts")
+                })?;
+                ensure(
+                    ordering.delta == variant.delta
+                        && ordering.seed == variant.delta.is_none()
+                        && ordering.driver == source.incremental.driver
+                        && ordering.permutation == variant.order,
+                    hole,
+                    "ordering facts must preserve Incremental delta, driver and permutation",
+                )?;
+                if let Some(demands) = &ordering.shared_demand {
+                    for demand in demands {
+                        ensure(
+                            context.layouts.iter().any(|layout| {
+                                context.relations[layout.relation].declaration.name == demand.relation
+                                    && layout.columns[..layout.key] == demand.columns
+                            }),
+                            hole,
+                            "shared index demand must name an existing Storage key prefix",
+                        )?;
+                    }
+                }
                 let planning = target.holes[rule.hole].planning.as_ref().ok_or_else(|| {
                     syn::Error::new_spanned(hole, "rule hole must record planning facts")
                 })?;
@@ -643,7 +666,7 @@ pub(crate) fn check_storage_with_analysis(
                 )?;
                 let name = &hole.name;
                 let expected: CqProgram =
-                    syn::parse2(quote!(struct #name; #(#expected_declarations)* #query))?;
+                    syn::parse2(quote!(struct #name; #ordering #(#expected_declarations)* #query))?;
                 ensure(
                     hole == &expected,
                     source,

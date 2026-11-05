@@ -115,7 +115,11 @@ fn delta_first_does_not_cross_rust_or_negation() {
     let written = seminaive::compile(&strata).unwrap();
     let planned =
         seminaive::compile_with_driver(&strata, seminaive::DriverPolicy::DeltaFirst).unwrap();
-    assert_eq!(planned, written);
+    assert_eq!(written.driver, seminaive::DriverPolicy::WrittenOrder);
+    assert_eq!(planned.driver, seminaive::DriverPolicy::DeltaFirst);
+    assert_eq!(planned.strata, written.strata);
+    assert_eq!(planned.deltas, written.deltas);
+    assert_eq!(planned.variants, written.variants);
     roundtrip(&planned);
 }
 

@@ -11,6 +11,7 @@ cq-planners-plan = { version = "0.1.0", path = "plan" }
 cq-planners-macros = { version = "0.1.0", path = "macros" }
 
 [dev-dependencies]
+cq-order.workspace = true
 cq-testkit.workspace = true
 cq-stage.workspace = true
 cq-relational-lowering.workspace = true

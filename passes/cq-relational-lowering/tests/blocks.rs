@@ -231,8 +231,16 @@ fn moved_rust_blocks_record_only_their_free_variable_scope() {
              answer(x,y) :- R(x), S(y), {body};"
         ))
         .unwrap();
-        let mut moved = cq_order::compile(&source, &Default::default()).unwrap();
-        moved.valuation.steps.swap(1, 2);
+        let mut moved = cq_order::compile(&source, &cq_order::Options {
+            heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+            split: cq_order::Split::Coarse,
+        }).unwrap();
+        let block = moved.valuation.steps.iter()
+            .position(|step| matches!(step, cq_lang_vo::Step::Block(..))).unwrap();
+        if block != 1 {
+            let block = moved.valuation.steps.remove(block);
+            moved.valuation.steps.insert(1, block);
+        }
         cq_lang_vo::contract::check(&moved).unwrap();
         let target = compile(&moved).unwrap();
         check(&moved, &target).unwrap();
@@ -639,18 +647,20 @@ fn block_placement_is_required_and_checked_before_elaboration() {
 }
 
 #[test]
-fn rust_expressions_and_blocks_move_by_free_variables() {
+fn rust_expressions_and_blocks_cannot_delay_ready_filters_past_bindings() {
     let source: cq::Program = syn::parse_str(
         "struct Q; relation R(x:i32); answer(y) :-
          R(x), if accept(x), let y:i32 = x + 1;",
     )
     .unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
-    let mut moved = cq_order::compile(&normal, &Default::default()).unwrap();
+    let planned = cq_order::compile(&normal, &Default::default()).unwrap();
+    let mut moved = planned.clone();
     moved.valuation.steps.swap(1, 2);
-    cq_lang_vo::contract::check(&moved).unwrap();
-    let target = compile(&moved).unwrap();
-    check(&moved, &target).unwrap();
+    assert!(cq_lang_vo::contract::check(&moved).unwrap_err().to_string()
+        .contains("VO-Order I2"));
+    let target = compile(&planned).unwrap();
+    check(&planned, &target).unwrap();
 
     let source: cq::Program = syn::parse_str(
         "struct Q; relation R(x:i32); answer(y) :-
@@ -658,7 +668,11 @@ fn rust_expressions_and_blocks_move_by_free_variables() {
     )
     .unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
-    let mut late = cq_order::compile(&normal, &Default::default()).unwrap();
+    let planned = cq_order::compile(&normal, &Default::default()).unwrap();
+    let mut late = planned.clone();
     late.valuation.steps.swap(1, 2);
-    cq_lang_vo::contract::check(&late).unwrap();
+    assert!(cq_lang_vo::contract::check(&late).unwrap_err().to_string()
+        .contains("VO-Order I2"));
+    let target = compile(&planned).unwrap();
+    check(&planned, &target).unwrap();
 }

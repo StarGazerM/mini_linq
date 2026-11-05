@@ -10,8 +10,8 @@ fn rust_moves_before_unrelated_atoms_and_expressions() {
             let value: i64 = *x * (100 - *y), if *x + *y > 0;
         valuation {
             R@0(x, y);
-            let value: i64 = *x * (100 - *y);
             if *x + *y > 0;
+            let value: i64 = *x * (100 - *y);
             S@1(z);
             if opaque(z);
         }

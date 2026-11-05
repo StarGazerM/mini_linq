@@ -208,7 +208,7 @@ pub mod contract {
         pub(super) split_nodes: Vec<(usize, usize)>,
         pub(super) full_reads: Vec<(usize, usize)>,
         pub(super) row_views: Vec<super::structural::RowView>,
-        pub(super) view_requests: Vec<(usize, usize, bool)>,
+        pub(super) view_requests: Vec<super::structural::ViewRequest>,
         pub(super) paths: std::collections::BTreeMap<cq_syntax::Occurrence, usize>,
     }
 

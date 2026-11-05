@@ -60,6 +60,24 @@ impl Scope {
         }
         let key = self.atoms[&clause].key.clone();
         self.demand(&key);
+        // Demand may skip an unrelated connected ear (for example a guard
+        // demanding a disconnected aggregate). I3 still requires finishing
+        // ready connected growth before starting that disconnected component.
+        if !self.atoms[&clause].provides.is_subset(&self.bound)
+            && self.atoms[&clause].key.is_disjoint(&self.bound)
+            && self.atoms[&clause].provides.is_disjoint(&self.bound)
+        {
+            while let Some(connected) = self.atoms.iter().find_map(|(&pending, atom)| {
+                (!atom.expanded
+                    && atom.key.is_subset(&self.bound)
+                    && !atom.provides.is_subset(&self.bound)
+                    && (!atom.key.is_disjoint(&self.bound)
+                        || !atom.provides.is_disjoint(&self.bound)))
+                .then_some(pending)
+            }) {
+                self.expand(connected);
+            }
+        }
         self.lookups();
         let atom = self.atoms.get_mut(&clause).expect("pending atom");
         self.steps
@@ -83,9 +101,9 @@ impl Scope {
     }
 }
 
-// Formal rule Plan-Le: Emit ready ear lookups and postpone coarse expansions to demand.
+// Formal rule Plan-Le: Emit ready ear lookups and postpone coarse expansions to demand, without bypassing ready connected expansions.
 pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
-    let analysis = vo::contract::check(source)?;
+    let analysis = vo::order::analyze(source)?;
     fn scope(
         body: &cq::CommaList<cq::BodyItem>,
         steps: &[vo::Step],
@@ -230,6 +248,9 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
     }
     let mut target = source.clone();
     target.valuation.steps = scope(&source.cq.query.body, &source.valuation.steps, &analysis);
+    // Drain exact projected checks, not their whole-row expansions. In
+    // particular an empty projection is ready before the outer stream.
+    cq_order::drain_ready_checks(&mut target)?;
     check(&source.cq, &target)?;
     Ok(target)
 }
@@ -237,6 +258,59 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnected_guard_demand_finishes_ready_connected_expansions_first() {
+        let source: vo::Program = syn::parse_quote! {
+            struct MaximumRevenue;
+            relation Revenue(supplier:i32,revenue:i32);
+            relation Supplier(supplier:i32,phone:i32);
+            relation Phone(phone:i32,label:i32);
+            relation Maximum(maximum:i32);
+            relation answer(supplier:i32,label:i32,revenue:i32);
+            answer(supplier,label,revenue) :-
+                Revenue(supplier,revenue), Supplier(supplier,phone),
+                Phone(phone,label), Maximum(maximum), if revenue == maximum;
+            valuation {
+                Revenue@0(supplier,revenue);
+                Supplier@1(supplier,phone);
+                Phone@2(phone,label);
+                Maximum@3(maximum);
+                if revenue == maximum;
+            }
+        };
+        vo::contract::check(&source).unwrap();
+        let target = compile(&source).unwrap();
+        let analysis = vo::contract::check(&target).unwrap();
+        let introducing: Vec<_> = target.valuation.steps.iter()
+            .zip(&analysis.introduces)
+            .filter_map(|(step, introduced)| match step {
+                vo::Step::Atom(atom, _) if !introduced.is_empty() => Some(atom.clause()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(introducing, [0, 1, 2, 3]);
+        assert!(matches!(&target.valuation.steps[0],
+            vo::Step::Atom(atom, _) if atom.clause() == 3 && atom.variables().next().is_none()));
+        check(&source.cq, &target).unwrap();
+    }
+
+    #[test]
+    fn ready_membership_expansion_precedes_an_introducing_let() {
+        let source: vo::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i32); relation S(x:i32);
+            relation answer(x:i32,y:i32);
+            answer(x,y) :- R(x), let y:i32 = value(x), S(x);
+            valuation { R@0(x); let y:i32 = value(x); S@2(x); }
+        };
+        let target = compile(&source).unwrap();
+        assert!(matches!(&target.valuation.steps[0], vo::Step::Atom(a, _) if a.clause() == 0));
+        assert!(matches!(&target.valuation.steps[1], vo::Step::Atom(a, _) if a.clause() == 2));
+        assert!(matches!(&target.valuation.steps[2], vo::Step::Atom(a, _) if a.clause() == 2));
+        assert!(matches!(&target.valuation.steps[3], vo::Step::Let(..)));
+        check(&source.cq, &target).unwrap();
+    }
 
     #[test]
     fn reordered_rust_payloads_keep_dependencies_and_duplicate_occurrences() {

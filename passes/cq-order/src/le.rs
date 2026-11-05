@@ -68,15 +68,21 @@ fn check_selected(
                 _ => (),
             }
         }
-        let first = steps.iter().find_map(|step| match step {
-            vo::Step::Atom(a, _) => Some(a.clause()),
+        let first = steps.iter().enumerate().find_map(|(index, step)| match step {
+            vo::Step::Atom(a, _)
+                if selected.is_some()
+                    || Some(a.clause()) == written_outer
+                    || !analysis.introduces[index].is_empty() =>
+            {
+                Some(a.clause())
+            }
             vo::Step::Block(b, _) => Some(b.source.clause()),
             _ => None,
         });
-        // Automatic Plan-Le keeps the written outer stream and written column
-        // ownership. An advised schedule may choose its own root: its outer
-        // stream is its first read, and WF-VO alone fixes which columns each
-        // expansion introduces.
+        // Automatic Plan-Le keeps the written outer stream and column ownership;
+        // ready non-introducing probes may precede it. An advised schedule may
+        // choose its own root: its outer stream is its first read, and WF-VO
+        // alone fixes which columns each expansion introduces.
         let outer = if selected.is_some() {
             first
         } else {

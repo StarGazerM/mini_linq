@@ -19,7 +19,8 @@ fn cq(tokens: TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 fn vo(source: &cq::Program, steps: TokenStream) -> valuation::Program {
-    syn::parse2(quote! { #source valuation { #steps } }).unwrap()
+    let ordering = &source.ordering;
+    syn::parse2(quote! { #source valuation #ordering { #steps } }).unwrap()
 }
 fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source
@@ -42,7 +43,9 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             cq::BodyItem::Negation(n) => quote!(#n;),
             _ => unreachable!("normal form"),
         });
-    vo(source, quote!(#(#steps)*))
+    let program = vo(source, quote!(#(#steps)*));
+    valuation::contract::check(&program).unwrap();
+    program
 }
 
 #[test]
@@ -150,8 +153,8 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
             }
         })
         .unwrap();
-    // Partially bypassing the shared restriction is algebraically exact, but
-    // splits independently projected witnesses under the structural contract.
+    // CT-FullWitness certifies this algebraically exact partial bypass: the
+    // final full Stock row descends from both versions and matches d,i,t.
     let mut split_witness = target.clone();
     let first_support = split_witness
         .plan
@@ -167,17 +170,83 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
             }
         })
         .unwrap();
-    first_support.right = older_stock;
+    assert!(target.plan.definitions.iter().any(|definition| {
+        definition.result == first_support.left
+            && matches!(&definition.operator, ra::Operator::Rename(rename) if rename.relation == "A")
+    }));
+    first_support.right = older_stock.clone();
     ra::contract::check(&split_witness).unwrap();
-    assert!(check(&written, &split_witness).is_err());
-    assert!(ra::check_rewrite(&source, &split_witness).is_err());
+    assert_eq!(full_input(&split_witness), full_stock);
+    check(&written, &split_witness).unwrap();
+    ra::check_rewrite(&source, &split_witness).unwrap();
+
+    // Duplicate-bearing host rows enter the oracle's declared Set relation
+    // boundary. The older Stock version includes (2,2,2), which full_stock
+    // removes through A; this is not a vacuous equal-version fixture.
+    let raw = [
+        ("A", vec![vec![0, 0], vec![0, 1], vec![1, 0], vec![0, 0]]),
+        ("B", vec![vec![0, 1], vec![1, 0], vec![0, 0], vec![2, 2], vec![0, 1]]),
+        ("C", vec![vec![0, 1], vec![0, 0], vec![1, 0], vec![2, 2], vec![0, 0]]),
+        ("Stock", vec![vec![0, 0, 1], vec![0, 1, 0], vec![1, 0, 0],
+            vec![2, 2, 2], vec![0, 0, 1], vec![2, 2, 2]]),
+    ];
+    let database: cq_testkit::Database = raw.iter().map(|(name, rows)| {
+        ((*name).to_owned(), rows.iter().cloned().collect())
+    }).collect();
+    assert!(raw.iter().all(|(name, rows)| rows.len() > database[*name].len()));
+    let measured = oracle::evaluate_ra(&source, &database);
+    let older_rows = &measured.definitions[&older_stock.to_string()].rows;
+    let full_rows = &measured.definitions[&full_stock.to_string()].rows;
+    let excluded: std::collections::BTreeMap<String, i32> =
+        [("d".to_owned(), 2), ("i".to_owned(), 2), ("t".to_owned(), 2)].into();
+    assert_eq!(older_rows.len(), 4);
+    assert_eq!(full_rows.len(), 3);
+    assert!(older_rows.contains(&excluded) && !full_rows.contains(&excluded));
+    let expected = cq_oracle::evaluate_cq(&query, &database);
+    assert_eq!(expected, [vec![0, 0, 1], vec![0, 1, 0], vec![1, 0, 0]]
+        .into_iter().collect::<cq_testkit::Rows>());
+    assert_eq!(oracle::evaluate_ra(&reference, &database).output, expected);
+    assert_eq!(oracle::evaluate_ra(&split_witness, &database).output, expected);
+
+    // Sibling negative: retain the broadened support but omit its later
+    // complete-row repair. Pairwise projected Stock witnesses admit (0,0,0),
+    // although no such Stock row exists.
+    let mut unrepaired = split_witness.clone();
+    let final_read = unrepaired.plan.definitions.iter().rposition(|definition| {
+        matches!(&definition.operator, ra::Operator::NaturalJoin(join) if join.right == full_stock)
+    }).expect("final complete Stock read");
+    let removed = unrepaired.plan.definitions.remove(final_read);
+    let ra::Operator::NaturalJoin(join) = removed.operator else { unreachable!() };
+    let mut forwarded = 0;
+    for definition in &mut unrepaired.plan.definitions {
+        if let ra::Operator::Project(project) = &mut definition.operator
+            && project.input == removed.result
+        {
+            project.input = join.left.clone();
+            forwarded += 1;
+        }
+    }
+    if unrepaired.plan.output.input == removed.result {
+        unrepaired.plan.output.input = join.left;
+        forwarded += 1;
+    }
+    assert_eq!(forwarded, 1);
+    ra::contract::check(&unrepaired).unwrap();
+    for error in [
+        check(&written, &unrepaired).unwrap_err(),
+        ra::check_rewrite(&source, &unrepaired).unwrap_err(),
+    ] {
+        assert!(error.to_string().contains("CT-FullWitness"), "{error}");
+    }
+    let invalid = oracle::evaluate_ra(&unrepaired, &database).output;
+    assert!(invalid.contains(&vec![0, 0, 0]) && !expected.contains(&vec![0, 0, 0]));
+    assert_ne!(invalid, expected);
     for seed in 0..64 {
         let database = databases::binary_database(&query, seed);
-        assert_eq!(
-            oracle::evaluate_ra(&target, &database).output,
-            cq_oracle::evaluate_cq(&query, &database),
-            "seed {seed}"
-        );
+        let expected = cq_oracle::evaluate_cq(&query, &database);
+        for (name, plan) in [("written", &reference), ("optimized", &target), ("repaired", &split_witness)] {
+            assert_eq!(oracle::evaluate_ra(plan, &database).output, expected, "{name}: seed {seed}");
+        }
     }
 }
 

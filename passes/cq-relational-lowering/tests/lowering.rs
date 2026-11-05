@@ -19,7 +19,8 @@ fn cq(tokens: TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 fn vo(source: &cq::Program, steps: TokenStream) -> valuation::Program {
-    syn::parse2(quote! { #source valuation { #steps } }).unwrap()
+    let ordering = &source.ordering;
+    syn::parse2(quote! { #source valuation #ordering { #steps } }).unwrap()
 }
 fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source
@@ -42,7 +43,10 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             cq::BodyItem::Negation(n) => quote!(#n;),
             _ => unreachable!("normal form"),
         });
-    vo(source, quote!(#(#steps)*))
+    let mut program = vo(source, quote!(#(#steps)*));
+    cq_order::drain_ready_checks(&mut program).unwrap();
+    valuation::contract::check(&program).unwrap();
+    program
 }
 /// The Written/Coarse order with its recorded O-Restrict restrictions.
 fn restricted(source: &cq::Program) -> valuation::Program {
@@ -309,7 +313,9 @@ fn reduced_prefix_guards_keep_independent_support_witnesses() {
         relation R(x:i32); relation Other(y:i32); relation T(x:i32,y:i32,z:i32);
         answer(z) :- R(x), Other(y), where x > y, if 10 / (*x - *y) > 0, T(x,y,z);
     });
-    let written = coarse(&source);
+    let written = vo(&source, quote! {
+        R@0(x); T@4(x,y,z); Other@1(y); where x > y; if 10 / (*x - *y) > 0;
+    });
     let steps = &written.valuation.steps;
     let reduced = vo(
         &source,
@@ -332,10 +338,10 @@ fn reduced_prefix_guards_keep_independent_support_witnesses() {
             r4 = semijoin r3 with r2;
             r5 = semijoin r2 with r4;
             r6 = semijoin r1 with r5;
-            r7 = natural_join r4 with r6;
-            r8 = select r7 if (x > y);
-            r9 = guard r8 if (10 / (*x - *y) > 0);
-            r10 = natural_join r9 with r5;
+            r7 = natural_join r4 with r5;
+            r8 = natural_join r7 with r6;
+            r9 = select r8 if (x > y);
+            r10 = guard r9 if (10 / (*x - *y) > 0);
             r11 = project r10 keep { z };
             output r11 as answer(z);
         },
@@ -612,7 +618,7 @@ fn correspondence_accepts_independent_relational_placement() {
         answer(x,w) :- R(x), if 10 / *x > 1, S(w);
     });
     let written = coarse(&source);
-    let hoisted = vo(&source, quote! { R@0(x); S@2(w); if 10 / *x > 1; });
+    let hoisted = vo(&source, quote! { S@2(w); R@0(x); if 10 / *x > 1; });
     valuation::contract::check(&hoisted).unwrap();
     let later = cq_relational_lowering::compile(&written).unwrap();
     // Total Rust has no written relational predecessor obligations.
@@ -869,7 +875,7 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
 }
 
 #[test]
-fn opaque_method_and_function_guards_keep_their_written_prefix() {
+fn opaque_method_and_function_guards_keep_their_earliest_prefix() {
     for guard in ["if name.is_positive()", "if custom(name)"] {
         let source: cq::Program = syn::parse_str(&format!(
             "struct Q; relation R(a:i32); relation P(k:i32,n:i64); answer(x,name) :- R(x), P(x,name), {guard};"
@@ -924,7 +930,7 @@ fn opaque_method_and_function_guards_keep_their_written_prefix() {
             .plan
             .definitions
             .iter()
-            .any(|d| d.result == guard.input && matches!(d.operator, ra::Operator::NaturalJoin(_)))
+            .any(|d| d.result == guard.input && matches!(d.operator, ra::Operator::Rename(_)))
     );
     let mut forged = target.clone();
     let step = forged

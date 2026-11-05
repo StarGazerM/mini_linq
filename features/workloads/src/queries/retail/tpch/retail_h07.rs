@@ -130,7 +130,7 @@ runner!($; transfer, { plan = ::cq_planners::order(transfer); }, []);
 runner!($; le, { plan = ::cq_planners::order(le); }, []);
 runner!($; le_runs, { plan = ::cq_planners::order(le); }, [::cq_rewrites::sorted_runs, ::cq_rewrites::retain_lookups]);
 runner!($; tuned, { plan = ::cq_planners::order(hypergraph); }, []);
-runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(Nation@6, Nation@5, Customer, Orders, Lineitem, Supplier)); }, []);
+runner!($; advised, { plan = ::mini_linq::passes::plan(no_reduce, order(Nation@6, Customer, Orders, Lineitem, Supplier, Nation@5)); }, []);
 
 pub fn run(data: &Data, config: &str) -> Vec<Answer> {
     match config {

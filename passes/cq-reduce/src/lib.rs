@@ -316,6 +316,7 @@ pub fn compile(
         valuation: valuation::Valuation {
             valuation_token: source.valuation.valuation_token,
             evidence: source.valuation.evidence.clone(),
+            ordering: source.valuation.ordering.clone(),
             brace: Default::default(),
             steps,
         },

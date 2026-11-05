@@ -22,8 +22,8 @@ pub struct PlanOptions {
     /// key-functional root and emits Lookup/Expand phases (O-EvidenceLe).
     /// Exclusive with an explicit `order`, which is itself the plan.
     pub evidence: Option<vo::Evidence>,
-    /// `known(Rel@i at k)`: pin the top-level negation at clause i after the
-    /// k-th positive read (ADM-InPlan advice transported by Datalog Fork).
+    /// `known(Rel@i at k)`: request a ready boundary after positive read k;
+    /// I2 drains the negation earlier when ready (transported by Datalog Fork).
     pub known: Vec<cq_order::Known>,
 }
 
@@ -631,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn known_pins_a_negation_after_a_positive_read() {
+    fn known_records_earliest_ready_negation_despite_late_advice() {
         let source: cq::Program = syn::parse_quote! {
             struct Q;
             relation R(x:i64,y:i64);
@@ -650,11 +650,43 @@ mod tests {
         assert_eq!(position(&natural), 1);
         let options: PlanOptions = syn::parse_quote!(no_reduce, known(Old@2 at 2));
         let pinned = prefix_valuation(&source, &options).unwrap();
-        assert_eq!(position(&pinned), 2);
+        assert_eq!(position(&pinned), 1);
+        let recorded: vo::Program = syn::parse2(quote::quote!(#pinned)).unwrap();
+        assert_eq!(recorded, pinned);
+        options.known[0].check(&recorded).unwrap();
+        let mut delayed = pinned.clone();
+        let negation = delayed.valuation.steps.remove(position(&delayed));
+        delayed.valuation.steps.push(negation);
+        assert!(options.known[0].check(&delayed).is_err());
         compile_prefix(&source, &options).unwrap();
         for bad in ["known(Old@2 at 3)", "known(R@0 at 1)", "known(Old@2 at 0)"] {
             let parsed = syn::parse_str::<PlanOptions>(bad);
             assert!(parsed.is_err() || prefix_valuation(&source, &parsed.unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn known_read_boundary_respects_computed_bindings_and_rejects_missing_inputs() {
+        for variable in ["y", "z"] {
+            let source: cq::Program = syn::parse_str(&format!(
+                "struct KnownDependencies;
+                 relation R(x:i64); relation S(y:i64,z:i64); relation Old(v:i64);
+                 answer(x) :- R(x), let y:i64 = *x + 1, S(y,z), !Old({variable});"
+            )).unwrap();
+            let late: PlanOptions = syn::parse_quote!(no_reduce, known(Old@3 at 2));
+            let plan = prefix_valuation(&source, &late).unwrap();
+            let position = plan.valuation.steps.iter()
+                .position(|step| matches!(step, vo::Step::Negation(..))).unwrap();
+            assert_eq!(position, if variable == "y" { 2 } else { 3 });
+            let early: PlanOptions = syn::parse_quote!(no_reduce, known(Old@3 at 1));
+            if variable == "y" {
+                let early_plan = prefix_valuation(&source, &early).unwrap();
+                assert_eq!(early_plan, plan);
+            } else {
+                let error = prefix_valuation(&source, &early).unwrap_err().to_string();
+                assert!(error.contains("KnownDependencies") && error.contains("binding"), "{error}");
+                assert!(early.known[0].check(&plan).is_err());
+            }
         }
     }
 }

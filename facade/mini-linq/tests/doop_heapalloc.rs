@@ -108,19 +108,27 @@ fn default_plan_is_output_bounded() {
 }
 
 #[test]
-fn explicit_written_order_is_the_reference_and_keeps_the_cross_product() {
-    // The exact written reference deliberately keeps the authored join order; it
-    // must still place the explicit captured-constant selection.
-    let plan = default_plan(
-        cq_order::Options {
-            heuristic: cq_order::Heuristic::Written,
-            split: cq_order::Split::Coarse,
-        },
-        cq_reduce::Reductions::None,
+fn explicit_written_order_rejects_the_disconnected_cross_product() {
+    // Written is exempt from tie-breaking only, not the universal I3 rule.
+    let source: cq::Program = syn::parse_str(SOURCE).unwrap();
+    let normal = cq::normal::normalize(&source).unwrap();
+    assert!(
+        cq_order::compile(
+            &normal,
+            &cq_order::Options {
+                heuristic: cq_order::Heuristic::Written,
+                split: cq_order::Split::Coarse,
+            },
+        )
+        .is_err()
     );
-    let shape = shape(&plan);
-    assert_eq!(shape.cross_joins, 1, "{shape:?}");
-    assert_eq!(shape.guards, 0, "{shape:?}");
+    let selectors = [
+        syn::parse_quote!(Alloc@0),
+        syn::parse_quote!(Alloc@1),
+        syn::parse_quote!(Component),
+        syn::parse_quote!(Super),
+    ];
+    assert!(cq_order::compile_explicit(&normal, &selectors).is_err());
 }
 
 #[test]

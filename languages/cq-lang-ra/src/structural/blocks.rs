@@ -494,8 +494,18 @@ impl<'a> View<'a> {
             self.original
                 .view_requests
                 .iter()
-                .filter(|(a, b, _)| views.contains(a) && views.contains(b))
-                .copied(),
+                .filter_map(|request| {
+                    if !ids.contains(&request.occurrence)
+                        || !views.contains(&request.earlier)
+                        || !views.contains(&request.later)
+                    {
+                        return None;
+                    }
+                    Some(super::ViewRequest {
+                        node: *self.memo.get(&request.node)?,
+                        ..*request
+                    })
+                }),
         );
         self.result
             .split_nodes

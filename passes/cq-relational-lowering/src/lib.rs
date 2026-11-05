@@ -99,42 +99,54 @@ mod structural;
 /// Formal rule CK-RelationalLowering: Check contracts, clause occurrences, recorded restrictions, named reductions, constraints and unchanged Rust payloads with their free variables.
 pub fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
     let analysis = valuation::contract::check(source)?;
+    check_reference(&source.cq, &source.valuation.steps, &analysis, target)
+}
+
+/// Check an occurrence-coverage proof reference, not an executable VO.
+/// `analysis` is the WF binding analysis of `source` and `steps`, obtained by
+/// `valuation::order::analyze_reference`; this path never chooses an order.
+pub fn check_reference(
+    source: &valuation::cq::Program,
+    steps: &[valuation::Step],
+    analysis: &valuation::Analysis,
+    target: &ra::Program,
+) -> syn::Result<()> {
     let target_schedule = ra::contract::Schedule::from_program(target)?;
-    if target.plan.declarations != source.cq.declarations {
+    if target.plan.declarations != source.declarations {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             format!(
                 "result `{}`: declarations differ from query `{}`",
-                target.plan.output.input, source.cq.name
+                target.plan.output.input, source.name
             ),
         ));
     }
-    if target.plan.output.head != source.cq.query.head {
+    if target.plan.output.head != source.query.head {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             format!(
                 "result `{}`: output head differs from `{}`",
-                target.plan.output.input, source.cq.query.head.relation
+                target.plan.output.input, source.query.head.relation
             ),
         ));
     }
-    if target.plan.captures != source.cq.query.captures {
+    if target.plan.captures != source.query.captures {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
             format!(
                 "result `{}`: captures differ from query `{}`",
-                target.plan.output.input, source.cq.name
+                target.plan.output.input, source.name
             ),
         ));
     }
-    structural::check(source, &analysis, &target_schedule, target).map_err(|message| {
+    structural::check(source, steps, analysis, &target_schedule, target).map_err(|message| {
         syn::Error::new_spanned(
             &target.plan.output,
             format!("result `{}`: {message}", target.plan.output.input),
         )
     })?;
-    block_contract::check_placement(&source.valuation.steps, target)?;
-    check_restrictions(&source.valuation.steps, target)?;
+    block_contract::check_placement(steps, target)?;
+    check_restrictions(steps, target)?;
     Ok(())
 }
 

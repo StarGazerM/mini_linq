@@ -731,6 +731,48 @@ fn predicates_belong_to_their_independent_projected_witnesses() {
 }
 
 #[test]
+fn split_witness_wiring_fuses_only_same_witness_selection_conjunctions() {
+    for (first, second) in [
+        (quote!(y > 0), quote!(y < 3)),
+        (quote!(x = y), quote!(y > 0)),
+    ] {
+        let split: ra::Program = syn::parse2(quote! { relational {
+            relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+            lower = select r if (#first);
+            filtered = select lower if (#second);
+            px = project filtered keep {x}; py = project filtered keep {y};
+            j = natural_join px with py; output j as answer(x,y);
+        }}).unwrap();
+        let fused: ra::Program = syn::parse2(quote! { relational {
+            relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+            filtered = select r if (#second, #first);
+            px = project filtered keep {x}; py = project filtered keep {y};
+            j = natural_join px with py; output j as answer(x,y);
+        }}).unwrap();
+        ra::check_rewrite(&split, &fused).unwrap();
+        ra::check_rewrite(&fused, &split).unwrap();
+
+        let changed_witness: ra::Program = syn::parse2(quote! { relational {
+            relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+            filtered = select r if (#second, #first);
+            px = project r keep {x}; py = project filtered keep {y};
+            j = natural_join px with py; output j as answer(x,y);
+        }}).unwrap();
+        let missing_predicate: ra::Program = syn::parse2(quote! { relational {
+            relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+            filtered = select r if (#first);
+            px = project filtered keep {x}; py = project filtered keep {y};
+            j = natural_join px with py; output j as answer(x,y);
+        }}).unwrap();
+        for changed in [&changed_witness, &missing_predicate] {
+            ra::contract::check(changed).unwrap();
+            assert!(ra::check_rewrite(&split, changed).is_err());
+            assert!(ra::check_rewrite(changed, &split).is_err());
+        }
+    }
+}
+
+#[test]
 fn split_witness_wiring_accepts_local_semijoin_identities() {
     let compact: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};

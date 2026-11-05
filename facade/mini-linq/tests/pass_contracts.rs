@@ -234,7 +234,7 @@ fn rust_block_depends_on_free_variables_not_the_written_prefix() {
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let options = cq_order::Options {
-        heuristic: cq_order::Heuristic::Written,
+        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
         split: cq_order::Split::Coarse,
     };
     let original = cq_order::compile(&normal, &options).unwrap();
@@ -245,14 +245,16 @@ fn rust_block_depends_on_free_variables_not_the_written_prefix() {
         .iter()
         .position(|step| matches!(step, cq_lang_vo::Step::Block(..)))
         .unwrap();
-    let block = moved.valuation.steps.remove(index);
-    moved.valuation.steps.insert(1, block);
+    assert_eq!(index, 1, "the connected block precedes the independent S scan");
+    // Both legal orders retain the block's x-only free-variable scope.
+    let independent = moved.valuation.steps.remove(2);
+    moved.valuation.steps.insert(0, independent);
     cq_lang_vo::contract::check(&moved).unwrap();
-    let earlier = cq_relational_lowering::compile(&moved).unwrap();
-    cq_relational_lowering::check(&moved, &earlier).unwrap();
-    let later = cq_relational_lowering::compile(&original).unwrap();
-    ra::check_rewrite(&later, &earlier).unwrap();
-    ra::check_rewrite(&earlier, &later).unwrap();
+    let with_prior_scan = cq_relational_lowering::compile(&moved).unwrap();
+    cq_relational_lowering::check(&moved, &with_prior_scan).unwrap();
+    let with_later_scan = cq_relational_lowering::compile(&original).unwrap();
+    ra::check_rewrite(&with_later_scan, &with_prior_scan).unwrap();
+    ra::check_rewrite(&with_prior_scan, &with_later_scan).unwrap();
 }
 
 #[test]
@@ -284,7 +286,8 @@ fn mixed_disjunction_and_negation_stay_wholly_opaque() {
         );
         let mut moved = vo.clone();
         moved.valuation.steps.swap(1, 2);
-        cq_lang_vo::contract::check(&moved).unwrap();
+        assert!(cq_lang_vo::contract::check(&moved).unwrap_err().to_string()
+            .contains("VO-Order I2"));
     }
 }
 
@@ -380,7 +383,7 @@ fn hypergraph_reduced_prefix_tuple_survives_elaboration_checks() {
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let order = cq_order::Options {
-        heuristic: cq_order::Heuristic::Written,
+        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
         split: cq_order::Split::Coarse,
     };
     let written = cq_order::compile(&normal, &order).unwrap();

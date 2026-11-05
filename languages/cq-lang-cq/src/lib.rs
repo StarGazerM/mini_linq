@@ -24,6 +24,7 @@ mod domain;
 pub mod group;
 pub mod hypergraph;
 pub mod normal;
+pub mod ordering;
 pub use blocks::{Block, Branch};
 mod sugar;
 pub use cq_syntax::Constraint;
@@ -49,6 +50,7 @@ pub struct Program {
     pub struct_token: Token![struct],
     pub name: Ident,
     pub declaration_semi: Token![;],
+    pub ordering: Option<ordering::OrderingFacts>,
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<RelationDecl>,
     pub query: Query,
@@ -104,6 +106,7 @@ impl Program {
             struct_token: input.parse()?,
             name: input.parse()?,
             declaration_semi: input.parse()?,
+            ordering: ordering::parse_optional(input)?,
             declarations: parse_declarations(input)?,
             query: input.parse()?,
         })
@@ -447,6 +450,9 @@ pub mod contract {
 
 /// Formal rule WF-CQ: Check CQ declarations, written scope, output arity and symbolic type availability.
 fn check_program(program: &Program) -> syn::Result<()> {
+    if let Some(ordering) = &program.ordering {
+        ordering.check()?;
+    }
     let mut schema = check_input_declarations(&program.declarations)?;
     if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {
         output.check_result()?;

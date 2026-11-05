@@ -104,6 +104,65 @@ equals for equals in relational positions only, so meanings are equal.
 
 \subsection{Ordering: CQ$_{\rm NF}\to$ VO}
 \label{sec:planning-order}
+
+\paragraph{Step-1 ordering contract.}
+For a recorded scope $S=[s_0,\ldots,s_{n-1}]$, let $B_k$ be its recorded
+incoming supplied bindings plus the outputs of $s_0,\ldots,s_{k-1}$, $U_k$ its
+remaining steps, and $R(s),O(s)$ its declared requirements and outputs.
+Visible but unsupplied free columns of a hoisted arm are not in $B_k$.
+These are binding facts, not deductions from Rust syntax or types.
+Write $\mathsf{ready}(s,B)$ for $R(s)\subseteq B$ and
+$\mathsf{filter}(s,B)$ for $\mathsf{ready}(s,B)\land O(s)\subseteq B$.
+An atom's connectivity is sharing a declared output with $B$.
+``Earliest'' means before the next variable introduction: several ready
+filters cannot occupy the same sequence position, so they drain as a group;
+no ordering between such filters is imposed by I2.
+\begin{mathpar}
+\Rule{I1}{\forall k<n.\ R(s_k)\subseteq B_k}
+ {S:\mathsf{Ready}}
+
+\Rule{I2}{\forall k<n.\ O(s_k)\not\subseteq B_k
+ \Rightarrow \neg\exists t\in U_k.\ \mathsf{filter}(t,B_k)}
+ {S:\mathsf{EarliestFilters}}
+
+\Rule{I3}{\forall k<n.\ s_k\text{ introducing atom}\land O(s_k)\cap B_k=\varnothing
+ \Rightarrow \neg\exists t\in U_k.\ t\text{ atom}\land
+ \mathsf{ready}(t,B_k)\land O(t)\cap B_k\ne\varnothing}
+ {S:\mathsf{Connected}}
+
+\Rule{I4}{C_k\text{ candidates permitted by I1--I3}\quad
+ s_k\in\mathsf{allowed}(C_k,E_k,T_k)\quad
+ \text{written position is the last tie-break}}
+ {S:\mathsf{DeclaredChoice}}
+
+\Rule{I5}{D\text{ optional recorded stratum demand}\quad
+ W_k\subseteq D\quad
+ \text{every cited reused key in }W_k\text{ matches the recorded lookup}}
+ {S:\mathsf{SharedDemand}}
+
+\Rule{VO-Order}{S:\mathsf{Ready}\quad S:\mathsf{EarliestFilters}\quad
+ S:\mathsf{Connected}\quad
+ \forall k.\ \mathsf{citationsExist}(E_k,T_k,W_k)\land
+ s_k\in\mathsf{allowed}(C_k,E_k,T_k)}
+ {\mathsf{checkOrder}(S)\Downarrow\ok}
+\end{mathpar}
+I4 records structural choices, or cited evidence when present; Written is
+exempt from I4 only. In step 1 there is no cost stage. I5 transports optional
+shared demand but does not rank candidates yet, and records no reuse claim.
+The eventual I5 preference applies only within candidates tied under I1--I3.
+VO-Order checks each scope independently, including nested scopes, from
+recorded binding and choice facts; it neither calls the scheduler nor proves
+optimality. Advice constrains introducing atoms only: ready fully-bound
+checks drain independently of advised position. An authored violation of I1
+or I3 is rejected with its rule identity, never repaired by reordering atoms.
+A let introducing a fresh variable is not an I2 filter merely because it is
+a let. A fully-bound positive atom is an I2 filter even though syntactically
+it is an atom. Datalog records seed/delta identity, the driver policy and
+the occurrence permutation as structural input. Step 1 retains CPU
+WrittenOrder, GPU DeltaFirst and Incremental-prefix Storage selection.
+Removing that permutation planner and deriving Storage from VOs is the
+separately censused step 1b; no such ownership reversal is claimed here.
+
 Let $T$ be scalar-let- and generator-supplied names and $B_w$ the written prefix. Clause $i$ provides
 $\bar O_i$ and requires $R_i$:
 \begin{mathpar}
@@ -135,22 +194,36 @@ block requires its free names and is Rust. Heuristics repeatedly place the
 least-ranked ready clause; an empty ready set is an error. Connectivity counts
 only names actually shared after normalization, $s_i=|O_i\cap B|$: an unsolved
 equality class (A-Alias declined) is not a realizable join key.
+Let $a_i=[O_i\not\subseteq B]$. The scheduler first minimizes $a_i$,
+then the structural rank below, so ready nonintroducing work precedes
+introducing lets as well as introducing atoms. A final stable drainage
+applies the same I2 obligation to assembled Fine and authored schedules
+without changing projected subatoms or introducing choices.
 \begin{mathpar}
-\Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=[0,\ldots,m-1]}
+\Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=\mathsf{drain}_{I2}([0,\ldots,m-1])}
+
+\Rule{S-WrittenConnected}{
+ C=\{i\in U\mid R_i\subseteq B\}\quad j=\arg\min_{i\in C}(a_i,i)\\
+ K=\{i\in C\mid c_i\text{ is an atom},\ |O_i\cap B|>0\}}
+ {\mathsf{next}_{WrittenConnected}=
+ \begin{cases}
+ \min K & a_j=1,\ c_j\text{ atom},\ |O_j\cap B|=0,\ K\ne\varnothing\\
+ j & \text{otherwise}
+ \end{cases}}
 
 \Rule{S-Connected}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
- {\mathsf{rank}_{Connected}(i,B)=(1,[s_i=0],0,i)}
+ {\mathsf{rank}_{Connected}(i,B)=(a_i,1,[s_i=0],0,i)}
 
 \Rule{S-Filtered}{c_i\text{ atom}\quad s_i=|O_i\cap B|}
- {\mathsf{rank}_{Filtered}(i,B)=(1,[s_i=0],f_i,i)}
+ {\mathsf{rank}_{Filtered}(i,B)=(a_i,1,[s_i=0],f_i,i)}
 
 \Rule{S-Greedy}{c_i\text{ atom}\quad s_i=|O_i\cap B|\\
  r\in\{GreedyWidth,Auto\}}
- {\mathsf{rank}_{r}(i,B)=(1,[s_i=0],|B\cup O_i|,i)}
+ {\mathsf{rank}_{r}(i,B)=(a_i,1,[s_i=0],|B\cup O_i|,i)}
 
 \Rule{S-Elimination}{c_i\text{ atom}\quad E=\mathsf{analysis}(q).\mathit{elimination\_order}\\
  e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\}\cup\{|E|\})}
- {\mathsf{rank}_{Elimination}(i,B)=(1,0,e_i,i)}
+ {\mathsf{rank}_{Elimination}(i,B)=(a_i,1,[|O_i\cap B|=0],e_i,i)}
 
 \Rule{O-Coarse}{\mathit{seq}\text{ chosen}}
  {\mathsf{coarse}(\mathit{seq})=[\mathsf{fullSubatom}(i)\text{ or the copied central/Rust step}\mid i\in\mathit{seq}]}
@@ -196,8 +269,8 @@ equality class (A-Alias declined) is not a realizable join key.
 
 \Rule{O-KnownAt}{\neg R(\bar x)\text{ at top-level clause }i\quad
  t'=t\text{ with }\neg R(\bar x)\text{ moved after the }k\text{-th positive read}\\
- \mathsf{WF}_{VO}(t')}
- {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=t'}
+ \mathsf{WFBindings}(t')\quad t''=\mathsf{drain}_{I2}(t')\quad\mathsf{WF}_{VO}(t'')}
+ {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=t''}
 \end{mathpar}
 A read of occurrence $i$ is \emph{keyed} under bound variables $B$
 ($\mathsf{keyBound}_{\mathcal{E}}(i,B)$) when every column of some recorded key
@@ -225,18 +298,28 @@ first reads and filtered lookups directly; it does not require equality with
 the producer's complete read schedule. Thus this root-feasibility check is
 producer replay, not an independent proof of functional reachability.
 Evidence chooses only: every result is a plan WF-VO and CK-Le accept on their own,
-so a false count or key changes speed, never answers. O-KnownAt pins the
-admission anti-join of ADM-InPlan when advice asks for a later level than the
-ready placement; it is applied before Masks and re-checked after reduction.
+so a false count or key changes speed, never answers. O-KnownAt validates the
+requested admission level and its binding prerequisites, then applies I2:
+a requested late anti-join drains to its earliest ready boundary. It is
+applied before Masks and re-checked afterward; no requested level exempts a
+filter from VO-Order.
 
 In $\mathsf{authorSteps}$ unadvised filters (constraints, negations,
 guards) are placed as soon as ready; an unadvised Rust binding waits until the
 next advised step reads one of its bindings, or the end. Pure totality makes any
 position after its free variables and before its first use equivalent (WF-VO),
 and this keeps advised steps adjacent, e.g. an intersection site.
-Ready constraints rank $(0,0,0,i)$, other nonatoms $(0,0,1,i)$; Auto is
-GreedyWidth; Elimination uses reverse maximum-cardinality search on the primal
-graph. Written/Fine splits atoms in place. $\mathsf{flush}$ emits ready waiting
+For Prefix, Filtered and Elimination, ready constraints rank
+$(a_i,0,0,0,i)$ and other nonatoms $(a_i,0,0,1,i)$. WrittenConnected instead
+uses written clause preference for all ready work after the I2 partition,
+substituting the first ready connected atom only when I3 forbids its chosen
+disconnected introduction. This declared I4 policy preserves legal
+introducing-binding boundaries and same-boundary filter order; it does not
+eagerly hoist an introducing let just because its inputs are ready.
+Auto is GreedyWidth; Elimination uses reverse maximum-cardinality search on the
+primal graph, with connected-ready variables or binders first.
+Written/Fine and WrittenConnected/Fine split each chosen atom in place,
+then drain ready checks. $\mathsf{flush}$ emits ready waiting
 steps (constraints first); a variable is eligible if no Rust step supplies it or
 it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
 then the others' checks. Every atom's full correlated row must eventually be
@@ -245,9 +328,10 @@ are placed as complete zero-column reads before the fine variable loop.
 The production facade uses Prefix(Connected)/Coarse: the written root, then
 at each step a ready atom sharing a bound name before a disconnected
 one (earliest clause first), with ready relational predicates placed where
-their variables are bound. Written/Coarse with O-WrittenBlocks is the exact
-executable reference; ordinary Written/Coarse retains O-BlockPlacement and is
-the `plan(order(..))` fallback. Filtered/Coarse serves external planners
+their variables are bound. Written/Coarse with O-WrittenBlocks retains
+introducing-atom order and correlated blocks, but drains I2 checks and rejects
+I1/I3 violations; it is not an exemption from VO-Order. Ordinary Written/Coarse
+retains O-BlockPlacement and is the `plan(order(..))` fallback. Filtered/Coarse serves external planners
 and R-Masks' sibling order. Under H-FilterRank, $f_i$ is
 $0$ for an occurrence containing a literal or a local constant equality, $1$ for a local constant range,
 $2$ for a derived domain, relational predicate or finite relational block,
@@ -313,18 +397,21 @@ predicate keeps its prefix \code{where} step unless every written instance of
 it has a target. Every ordering producer (plain, advised, evidence, LE and the
 planners' transfer route) records restrictions this way; a rescheduling
 producer (LE, advised lookups) restricts its own schedule, so prefix
-predicates still constrain its choices. The exact written
-reference (\code{compile_written}) records none.
+predicates still constrain its choices. The written
+reference (\code{compile_written}) records none, but still obeys VO-Order.
 $\mathsf{OrderObligations}$: unchanged CQ; no reductions; every atom has a
 subatom; Coarse has one full subatom per atom; Fine introduces at most one
-variable per subatom; Written keeps NF order, where a predicate placed only by
-restrictions has no position. Filtered/Coarse independently
-checks that no ready occurrence outranks the recorded choice. CK-Restrict
+variable per subatom; Written keeps introducing-atom NF order, where a predicate
+placed only by restrictions has no position. VO-Order independently checks
+readiness, earliest-filter placement and connectivity on every executable VO.
+Filtered/Coarse no longer replays its producer's ranking. CK-Restrict
 requires a predicate to drop the prefix steps of all its written instances or
 none; WF-Restrict checks each restriction's legality, without rerunning the
-producer. Other rankings
-remain construction
-choices. \emph{Refinement:} by the VO contract (free-variable dependencies,
+producer. Other ranks remain construction choices.
+The planners' CQ-to-RA correspondence entry takes an occurrence-coverage
+reference (CQ, steps and WF binding analysis), not an executable VO; it neither
+chooses a schedule nor exempts a recorded VO from VO-Order.
+\emph{Refinement:} by the VO contract (free-variable dependencies,
 unchanged total Rust expressions, relational predicates and full rows checked).
 
 \subsection{Hypergraph analysis and GYO}
@@ -631,6 +718,51 @@ match by occurrence footprint, fallback siblings in order, negated references by
 original branch. \emph{Refinement:} occurrences, constraints, Rust expressions
 and their recorded placements are those of the source; totality and the
 representation laws establish equal answers.
+
+\paragraph{Two independent witness-preserving proof laws.}
+Structural comparison normally retains the exact wiring of independent
+projected row witnesses. It admits the following local certificates without
+changing either supplied schedule or selecting a new execution order.
+\begin{mathpar}
+\Rule{CT-SelectConjunction}{
+ P,Q\text{ are adjacent central selections over the same row witness }R}
+ {\mathsf{wire}(\sigma_P(\sigma_Q(R)))=
+  \mathsf{wire}(\sigma_{P\land Q}(R))}
+
+\Rule{CT-FullWitness}{
+ n\text{ requests compatibility of occurrence }o\text{ views }v_1,v_2\\
+ K=\text{all }o\text{-bindings participating in the two operands of }n\\
+ m=\mathsf{naturalJoin}(q,f)\text{ is a later primary read}\\
+ f\text{ is a complete }o\text{ row with }v_f\preceq v_1,\ v_f\preceq v_2\\
+ n\leadsto_K q\text{ along one positive, binding-preserving lineage}}
+ {\mathsf{viewRequest}(n,o,v_1,v_2)\Downarrow\mathsf{correlated}}
+\end{mathpar}
+In CT-SelectConjunction, exact predicate shapes and fixed column identities
+are unioned; no predicate crosses a projection, join, Rust operator or other
+non-selection node. This permits a VO's separate restrictions and lowering's
+coalesced relational theta to state the same witness obligation.
+
+In CT-FullWitness, $v_f\preceq v$ means recorded restricted-view ancestry,
+not equality of occurrence numbers. The lineage $n\leadsto_K q$ must retain
+every binding in $K$ with its original column origin at every node. It may
+follow selections, projections that retain all of $K$, the left operand of
+a semijoin, or either operand of a natural join. It never crosses Rust,
+antijoin, union or grouping. A full row on an unrelated branch, an ancestor
+instead of a descendant restricted view, or a dropped and later rebound key
+does not discharge the obligation. Branch extraction remaps the requesting
+node together with its occurrence and both restricted views.
+
+\emph{Local equivalence argument.} The final join matches every participating
+binding with the complete row $f$. Since $f$ descends from both restricted
+views, it can supply both earlier existential projected witnesses with those
+same values. The binding-preserving lineage does not forget a match or
+introduce an opaque observation between the request and this join. Thus
+using that one complete row establishes the original correlation; the
+reverse implication is immediate from the already-present full read.
+This discharges only that request. Every other projected-view obligation,
+fixed occurrence, equality, predicate, reduction edge, Rust payload and output
+binding remains checked. It is not an occurrence-only witness unification.
+
 For pure positive targets produced by \code{cq_ra_rewrites::simplify_expansions},
 CK-RelationalLowering also permits an inverse dead-expansion certificate. Starting
 only from the supplied RA target, it tentatively replaces a semijoin by a
@@ -641,10 +773,10 @@ resulting equivalent witness against the supplied VO schedule. Required
 named reductions are still checked on the \emph{original target}; inverse
 expansion cannot invent their edges or column matches. This certificate
 does not recompile the VO, select a planner, or merge equality facts from
-independent existential supports. A split projected-witness view in either
-original schedule excludes this fallback: exposing a full read cannot erase
-its original correlation obligations. Rust, negative and block programs
-retain their existing checker.
+independent existential supports. An unresolved split projected-witness view
+in either original schedule excludes this fallback: an inverse expansion
+cannot invent the actual full-row certificate required by CT-FullWitness.
+Rust, negative and block programs retain their existing checker.
 
 \paragraph{Example: free variables determine eligibility.}
 In \code{answer(a,w) :- R(a,x), S(a,y), T(y,z), let k = combine(*x,*y), let
@@ -1036,7 +1168,7 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
  w=R_{None,r}(v)\quad a=S(E(w))}
  {\code{cq_planners::order(hypergraph)}(q)=a}
 
-\Rule{Plan-Transfer}{n=N(q)\quad v=C_{atoms}(O_{Written,Coarse}(n))\quad w=R_{None,Masks}(v)\\
+\Rule{Plan-Transfer}{n=N(q)\quad v=O_{WrittenConnected,Coarse}(n)\quad w=R_{None,Masks}(v)\\
  r=\mathsf{outer}(w)\quad T=\mathsf{reductionTree}(q)\ \text{rooted at}\ r\\
  F=\{\mathsf{red}(r,c)\mid c\in\mathsf{children}(r),\ \mathsf{filteredSubtree}(c)\}\\
  B=\{\mathsf{red}(c,p)\mid p=\mathsf{parent}(c),\ \exists\ \text{filter outside}\ \mathsf{subtree}(c)\}\ \text{parents first}}
@@ -1049,8 +1181,8 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 \Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
  \text{for each inner occurrence }R\text{ in GYO ear order:}\\
  \mathsf{lookup}(R)=R(\bar b,\_)\ \text{at the first point its bound key }\bar b\text{ is available}\\
- \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{at the latest point before }
- \mathsf{firstUse}(\bar y)\lor\text{scope exit}\\
+ \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{before first use or scope exit,}\\
+ \text{finishing ready connected expansions before any disconnected expansion}\\
  \mathsf{CK\text{-}Le}(n,\mathsf{le}(v),L)\quad w=R_{None,Masks}(\mathsf{restrict}(\mathsf{le}(v)))}
  {\code{cq_planners::order(le)}(q)=\mathsf{simplify}(E(w))}
 
@@ -1065,7 +1197,10 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 Automatic Plan-Le keeps the written outer stream and written column
 ownership. An advised schedule chooses its root: its outer stream is its
 first read, which is expanded once, and WF-VO alone fixes which columns each
-expansion introduces; lookups still introduce nothing.
+expansion introduces; lookups still introduce nothing. Final I2 drainage moves
+ready checks (including empty projections) before every introduction without
+changing their projected columns. Demand-driven expansion obeys I3 even when
+an unrelated aggregate guard demands a disconnected occurrence first.
 
 The \code{no_reduce} option disables implicit Masks reductions, not explicit
 \code{reduce(T with S)} advice. Such advice therefore composes with the empty
@@ -1075,12 +1210,14 @@ silently becoming a no-op.
 
 \code{order(transfer)} is an exact-semijoin adaptation of robust predicate
 transfer (Zhao et al., SIGMOD'25), not the paper's vectorized Bloom pipeline or
-RPT+'s adaptive execution. $C_{atoms}$ preserves every predicate, binding and
-block boundary, but within each maximal top-level run of atoms prefers the
-earliest atom connected to already bound columns. It preserves written ties
-and does not invent a connection for genuinely disconnected components.
-This prevents avoidable Cartesian prefixes even when opaque Rust excludes
-additional transfer reductions. The reduction tree is rooted at the stream;
+RPT+'s adaptive execution. Transfer uses the shared CQ scheduler's declared
+WrittenConnected I4 preference (S-WrittenConnected): preserve legal written
+introductions, including introducing-binding boundaries and same-boundary
+filter order, with readiness, I2 drainage and I3 connectivity enforced first.
+It has no separate boundary-limited atom scheduler and constructs no illegal
+Written intermediate. Genuinely disconnected components are permitted only
+when no connected atom is ready.
+The reduction tree is rooted at the stream;
 when that is the largest relation the root coincides with LargestRoot.
 The most-shared-first spanning core matches the paper's maximum-spanning-tree weights.
 The forward pass is the Masks pass plus the stream's reductions by its filtered

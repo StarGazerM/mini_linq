@@ -109,6 +109,8 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     // The scan declares none.
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
+        ordering(seed = false, delta = 0, driver = WrittenOrder,
+            permutation = [0, 1, 2], shared_demand = none)
         relation #lookup(x:i32,y:i32) = (&#lookup_host)
             host [x] reads [exact, membership, candidates];
         relation #keys(x:i32) = (#keys) host [x] borrowed reads [membership];
@@ -626,6 +628,8 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
     let declarations = &hole.declarations;
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
+        ordering(seed = false, delta = 4, driver = WrittenOrder,
+            permutation = [0, 1, 2, 3, 4], shared_demand = none)
         #(#declarations)*
         #name(*heap,*to) :- #assign_scan(to,from),
             where to != 0, if 10 / *to > 0,
@@ -686,13 +690,17 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
     let stratum = &target.context.strata[0];
     assert!(stratum.seeds[0].scan.is_none());
     assert!(stratum.steps[0].scan.is_none());
-    for (index, body) in [
+    for (index, ordering, body) in [
         (
             stratum.seeds[0].hole,
+            quote!(ordering(seed = true, delta = none, driver = WrittenOrder,
+                permutation = [0, 1], shared_demand = none)),
             quote!(#first(7,x,x), #second(x,(1 + 2),_)),
         ),
         (
             stratum.steps[0].hole,
+            quote!(ordering(seed = false, delta = 2, driver = WrittenOrder,
+                permutation = [0, 1, 2, 3], shared_demand = none)),
             quote!(#third(7,y,_), where y != 0, #delta(x), #fourth(x,x,7)),
         ),
     ] {
@@ -702,6 +710,7 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
         let head = &hole.query.head;
         let expected: cq_lang_cq::Program = syn::parse2(quote! {
             struct #name;
+            #ordering
             #(#declarations)*
             #head :- #body;
         })
@@ -745,13 +754,23 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
         quote!(#scan5(x,y,_), #pair(x,y,z)),
         quote!(#constant(7,x,x)),
     ];
-    for (step, body) in context.strata[0].steps.iter().zip(expected_bodies) {
+    let expected_occurrences = [(0, 1), (0, 1), (1, 2), (3, 4), (1, 2), (1, 2), (0, 1)];
+    for ((step, body), (delta, clauses)) in context.strata[0]
+        .steps
+        .iter()
+        .zip(expected_bodies)
+        .zip(expected_occurrences)
+    {
+        let delta = syn::Index::from(delta);
+        let permutation = (0..clauses).map(syn::Index::from);
         let hole = &target.holes[step.hole].cq;
         let name = &hole.name;
         let declarations = &hole.declarations;
         let head = &hole.query.head;
         let expected: cq_lang_cq::Program = syn::parse2(quote! {
             struct #name;
+            ordering(seed = false, delta = #delta, driver = WrittenOrder,
+                permutation = [#(#permutation),*], shared_demand = none)
             #(#declarations)*
             #head :- #body;
         })
@@ -1251,4 +1270,153 @@ fn smallest_rule_sites_preserve_recorded_pipeline_ordinals() {
     let mut invalid = incremental.clone();
     invalid.variants[0].smallest = vec![vec![1, 1]];
     assert!(cq_datalog_incremental::check(&strata, &invalid).is_err());
+}
+
+#[test]
+fn upstream_ordering_facts_survive_both_driver_policies_and_cq_planning() {
+    use cq_datalog_incremental::DriverPolicy;
+    let source = syn::parse_quote! {
+        struct Paths;
+        relation E(x:i32,y:i32) = (edges);
+        relation R(x:i32,y:i32);
+        output R;
+        R(*x,*y) :- E(x,y);
+        R(*x,*z) :- R(x,y), R(y,z);
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let options = cq_order::Options {
+        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+        split: cq_order::Split::Coarse,
+    };
+    for driver in [DriverPolicy::WrittenOrder, DriverPolicy::DeltaFirst] {
+        let incremental = cq_datalog_incremental::compile_with_driver(&strata, driver).unwrap();
+        assert_eq!(incremental.driver, driver);
+        let parsed: cq_lang_datalog_round::incremental::Program =
+            syn::parse2(incremental.to_token_stream()).unwrap();
+        assert_eq!(incremental, parsed);
+        assert_eq!(
+            incremental.variants[2].order,
+            if driver == DriverPolicy::DeltaFirst { vec![1, 0] } else { vec![0, 1] }
+        );
+        let storage = schedule(&incremental).unwrap();
+        let fork = compile(&storage).unwrap();
+        for stratum in &fork.context.strata {
+            for rule in stratum.seeds.iter().chain(&stratum.steps) {
+                let variant = &incremental.variants[rule.variant];
+                let cq = &fork.holes[rule.hole].cq;
+                let facts = cq.ordering.as_ref().unwrap();
+                assert_eq!(facts.delta, variant.delta);
+                assert_eq!(facts.seed, variant.delta.is_none());
+                assert_eq!(facts.driver, driver);
+                assert_eq!(facts.permutation, variant.order);
+                assert_eq!(facts.shared_demand, None);
+                let normal = cq_lang_cq::normal::normalize(cq).unwrap();
+                let vo = cq_order::compile(&normal, &options).unwrap();
+                assert_eq!(vo.valuation.ordering.as_ref(), Some(facts));
+                let mut fact_free = normal.clone();
+                fact_free.ordering = None;
+                let plain = cq_order::compile(&fact_free, &options).unwrap();
+                assert_eq!(plain.valuation.steps, vo.valuation.steps);
+                let changes: &[fn(&mut cq_lang_cq::ordering::OrderingFacts)] = &[
+                    |f: &mut cq_lang_cq::ordering::OrderingFacts| f.seed = !f.seed,
+                    |f: &mut cq_lang_cq::ordering::OrderingFacts| f.delta = Some(99),
+                    |f: &mut cq_lang_cq::ordering::OrderingFacts| f.permutation.clear(),
+                    |f: &mut cq_lang_cq::ordering::OrderingFacts| {
+                        f.driver = if f.driver == DriverPolicy::WrittenOrder {
+                            DriverPolicy::DeltaFirst
+                        } else {
+                            DriverPolicy::WrittenOrder
+                        };
+                    },
+                ];
+                for change in changes {
+                    let mut changed = fork.clone();
+                    change(changed.holes[rule.hole].cq.ordering.as_mut().unwrap());
+                    assert!(check(&storage, &changed).is_err());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn optional_stratum_shared_demand_is_checked_and_recorded_without_ranking() {
+    let storage = authored();
+    let baseline = compile(&storage).unwrap();
+    let layout = &baseline.context.layouts[0];
+    let relation = &baseline.context.relations[layout.relation].declaration.name;
+    let columns = layout.columns[..layout.key].iter().copied().map(syn::Index::from);
+    let supplied = cq_datalog_fork::compile_with(
+        &storage,
+        quote!(shared_demand = [[#relation(#(#columns),*)]];),
+    ).unwrap();
+    let parsed: Fork = syn::parse2(supplied.to_token_stream()).unwrap();
+    assert_eq!(parsed, supplied);
+    check(&storage, &parsed).unwrap();
+    for (before, after) in baseline.holes.iter().zip(&supplied.holes) {
+        if let Some(facts) = &after.cq.ordering {
+            assert_eq!(facts.shared_demand.as_ref().unwrap().len(), 1);
+            let options = cq_order::Options {
+                heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
+                split: cq_order::Split::Coarse,
+            };
+            let before = cq_order::compile(&cq_lang_cq::normal::normalize(&before.cq).unwrap(), &options).unwrap();
+            let after = cq_order::compile(&cq_lang_cq::normal::normalize(&after.cq).unwrap(), &options).unwrap();
+            assert_eq!(before.valuation.steps, after.valuation.steps);
+            assert_eq!(after.valuation.ordering.as_ref(), Some(facts));
+        } else {
+            assert_eq!(before, after);
+        }
+    }
+    assert!(cq_datalog_fork::compile_with(&storage, quote!(shared_demand = [];)).is_err());
+    assert!(cq_datalog_fork::compile_with(
+        &storage,
+        quote!(shared_demand = [[Missing(0)]];),
+    ).is_err());
+}
+
+#[test]
+fn heapalloc_disconnected_authored_order_is_rejected_at_cq_boundary() {
+    use cq_datalog_incremental::{DriverPolicy, RulePlan};
+    use syn::parse::{Parse, Parser};
+    let source = syn::parse_quote! {
+        struct Heaps;
+        relation Alloc(h:i32,t:i32) = (alloc);
+        relation Component(a:i32,c:i32) = (component);
+        relation Super(c:i32,t:i32) = (supertype);
+        relation Compat(h:i32,b:i32);
+        output Compat;
+        HeapAllocHelper: Compat(*heap,*baseheap) :-
+            Alloc(heap,heaptype), Alloc(baseheap,baseheaptype),
+            Component(baseheaptype,comptype), Super(comptype,heaptype),
+            where baseheaptype != constants.object_array;
+    };
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let advice = RulePlan {
+        rule: syn::parse_quote!(HeapAllocHelper),
+        delta: None,
+        order: vec![
+            syn::parse_quote!(Alloc@0),
+            syn::parse_quote!(Alloc@1),
+            syn::parse_quote!(Component),
+            syn::parse_quote!(Super),
+        ],
+        smallest: Vec::new(),
+        known: None,
+    };
+    let incremental = cq_datalog_incremental::compile_with_advice(
+        &strata, DriverPolicy::WrittenOrder, &[advice],
+    ).unwrap();
+    let fork = compile(&schedule(&incremental).unwrap()).unwrap();
+    let hole = &fork.holes[fork.context.strata[0].seeds[0].hole];
+    let arguments = hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()].arguments.clone();
+    let selectors = (|input: syn::parse::ParseStream<'_>| {
+        let order: syn::Ident = input.parse()?;
+        assert_eq!(order, "order");
+        let entries;
+        syn::parenthesized!(entries in input);
+        entries.parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])
+    }).parse2(arguments).unwrap().into_iter().collect::<Vec<_>>();
+    let normal = cq_lang_cq::normal::normalize(&hole.cq).unwrap();
+    assert!(cq_order::compile_explicit(&normal, &selectors).is_err());
 }

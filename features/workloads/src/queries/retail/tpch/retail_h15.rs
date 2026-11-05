@@ -93,9 +93,9 @@ crate::tpch_runtime::standalone_configs! { $;
             relation Maximum(maximum: Option<i64>);
             relation answer(supplier_key: i64, name: StringCode, address: StringCode, phone: StringCode, revenue: i64);
             answer(supplier_key, name, address, phone, revenue) :-
-                Revenue(supplier_key, revenue), Maximum(maximum),
-                if Some(*revenue) == *maximum,
-                Supplier(supplier_key, name, address, phone);
+                Revenue(supplier_key, revenue),
+                Supplier(supplier_key, name, address, phone),
+                Maximum(maximum), if Some(*revenue) == *maximum;
         }.map(|(supplier, name, address, phone, revenue)| {
             // DECODE P: Supplier text is materialized only when publishing answers.
             (*supplier, data.dictionaries.publish("s_name", *name),

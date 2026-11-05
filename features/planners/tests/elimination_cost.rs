@@ -3,7 +3,7 @@ use cq_testkit::{Database, Rows, semantics};
 use quote::quote;
 
 #[test]
-fn leaf_first_product_576_becomes_24_when_shared_keys_bind_first() {
+fn leaf_first_product_is_rejected_and_connected_plan_keeps_24_row_bound() {
     let source: cq::Program = syn::parse_quote! {
         struct LeafProducts;
         relation R(b:i32,a:i32); relation S(c:i32); relation T(b:i32,c:i32,k:i32);
@@ -17,27 +17,21 @@ fn leaf_first_product_576_becomes_24_when_shared_keys_bind_first() {
         }
     })
     .unwrap();
-    vo::contract::check(&leaf_first).unwrap();
-    let baseline = cq_relational_lowering::compile(&leaf_first).unwrap();
+    let error = vo::contract::check(&leaf_first).unwrap_err().to_string();
+    assert!(error.contains("I3"), "{error}");
+    assert!(cq_relational_lowering::compile(&leaf_first).is_err());
     let fixed = compile(&source, Planner::EliminationFine).unwrap();
-    check(&source, &baseline).unwrap();
     check(&source, &fixed).unwrap();
     let database = Database::from([
         ("R".into(), (0..24).map(|v| vec![v, v]).collect()),
         ("S".into(), (0..24).map(|v| vec![v]).collect()),
         ("T".into(), (0..24).map(|v| vec![v, v, v]).collect()),
     ]);
-    let baseline = semantics::evaluate_ra(&baseline, &database);
     let fixed = semantics::evaluate_ra(&fixed, &database);
-    assert_eq!(
-        baseline.definitions.values().map(|r| r.rows.len()).max(),
-        Some(576)
-    );
     assert_eq!(
         fixed.definitions.values().map(|r| r.rows.len()).max(),
         Some(24)
     );
-    assert_eq!(baseline.output, fixed.output);
     assert_eq!(fixed.output, (0..24).map(|v| vec![v]).collect::<Rows>());
     let valuation = compile_valuation(&source, Planner::EliminationFine).unwrap();
     let vo::Step::Atom(first, _) = &valuation.valuation.steps[0] else {

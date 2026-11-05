@@ -538,6 +538,7 @@ name = "cq-lang-datalog-incremental"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-support",
+ "cq-lang-cq",
  "cq-lang-datalog-strata",
  "cq-stage",
  "cq-syntax",
