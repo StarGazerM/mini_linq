@@ -226,6 +226,7 @@ default-members = [
     "features/planners",
     "features/planners/macros",
     "features/planners/plan",
+    "features/planners/cost",
     "features/planners/test-driver",
     "features/rewrites/passes",
     "features/rewrites/test-driver",
