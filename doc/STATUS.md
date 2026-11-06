@@ -8,6 +8,19 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Per-batch CPU baseline (2026-11-06, `b23e6bb2` vs `96f32991`):**
+[report](../experiments/gpu/compare/baseline-2026-11-06.md),
+[raw results](../experiments/gpu/compare/baseline-2026-11-06.results.json).
+Five interleaved pairs, all 29 TPC-H SF1 kernels: default geomean
+**0.998 [0.989, 1.006]**, par **0.992 [0.977, 1.047]**.
+DOOP xalan mini/mini-par: 26-output query **1.015 [0.949, 1.188]**,
+field_flow **1.018 [0.944, 1.071]**. Bench-check exactness is full-first,
+sampled-later; DOOP validation runs after collection, with no resident checker
+during timing. The report records expanded plan movements, same-source linker
+layout controls, per-command Gate times, and a native checker full-witness
+memory defect exposed by field_flow's 103.7 million output rows.
+**GPU pending:** a foreign tenant holds the GPU; no new GPU result is claimed.
+
 **Historical paired measurement (2026-11-02/03, `44bf82bc` vs `c1b75718`;
 [summary](../experiments/gpu/compare/bench-2026-11-02.md), raw samples in
 [`bench-2026-11-02.results.json`](../experiments/gpu/compare/bench-2026-11-02.results.json)).**
