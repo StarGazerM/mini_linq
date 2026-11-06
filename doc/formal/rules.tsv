@@ -114,9 +114,6 @@ O-Fine	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-Fine:	Introdu
 O-EmptyCheck	implementation	passes/cq-order/src/lib.rs	// Formal rule O-EmptyCheck:	Omit zero-column preliminary reads precisely when the same occurrence later introduces columns, recursively by scope.
 VO-EmptyCheck	implementation	languages/cq-lang-vo/src/order.rs	// Formal rule VO-EmptyCheck:	Reject a zero-column preliminary check when the same occurrence later introduces columns.
 VO-CheckPhase	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule VO-CheckPhase:	A recorded standalone check requires all retained columns already supplied and cannot introduce variables.
-RA-CheckPhase	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-CheckPhase:	A recorded standalone check is a join or semijoin preserving its left heading; rewrites preserve retained phase facts.
-PH-CheckPhase	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-CheckPhase:	A transported check preserves its left heading and is not an alternate PH-Smallest provider.
-CK-CheckPhase	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule CK-CheckPhase:	Compare surviving VO check occurrences and key columns with heading-preserving RA reads; independently proved elimination may remove redundant phases, but a root unit-projected scan is not elimination.
 O-BlockPlacement	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-BlockPlacement:	Ordinary ordering records Hoisted iff a block is Rust-free, otherwise Correlated.
 O-WrittenBlocks	implementation	passes/cq-order/src/lib.rs	/// Formal rule O-WrittenBlocks:	The exact Written/Coarse reference constructor records Correlated recursively.
 H-Occurrence	implementation	languages/cq-lang-cq/src/hypergraph.rs	/// Formal rule H-Occurrence:	Construct atom facts indexed by the complete normal-form body.
@@ -133,9 +130,9 @@ Y-Down	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule Y-Down:	Produc
 R-Tree	implementation	passes/cq-reduce/src/lib.rs	/// Formal rule R-Tree:	Insert only relational tree semijoins before atom reads.
 RL-Emit	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Emit:	Append the operator under rN in definition emission order.
 RL-Occurrence	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Occurrence:	Reuse a clause result or emit its positional rename with literal source-column bindings and only variable columns in its heading.
-RL-Check	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Check:	A nonintroducing partial or root subatom semijoins the prefix, seeding Unit when absent.
-RL-Project	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Project:	Project a partial introducing subatom.
-RL-Root	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Root:	Only an introducing full or projected subatom installs the root stream.
+RL-Check	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Check:	A partial subatom with no new names semijoins an existing prefix.
+RL-Project	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Project:	Project a partial subatom unless it is an existing-prefix check.
+RL-Root	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Root:	Install the first full or projected subatom as the prefix.
 RL-Join	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Join:	Join a non-check subatom with the current prefix.
 RL-Guard	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Guard:	Append an opaque guard to the prefix, seeding Unit if absent.
 RL-Bind	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Bind:	Append an opaque pattern binding to the prefix without applying RA laws to it.
@@ -176,10 +173,6 @@ D-Constraint	implementation	passes/cq-order/src/lib.rs	// Formal rule D-Constrai
 RL-Constraint	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Constraint:	Select the prefix by a recorded prefix constraint step; restrictions are RL-Restrict.
 RL-Restrict	implementation	passes/cq-relational-lowering/src/lib.rs	/// Formal rule RL-Restrict:	Select a new occurrence by its recorded literal-equality restrictions, then each same-column group of its other restrictions.
 CT-Constraint	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-Constraint:	Preserve exact predicate shape and fixed columns, recomputing implied unary domains on both sides.
-CT-SelectConjunction	implementation	languages/cq-lang-ra/src/structural.rs	// Formal rule CT-SelectConjunction:	Intern adjacent central selections as one conjunction without crossing a projection, join or opaque boundary or changing the named witness.
-CT-FullWitness	implementation	languages/cq-lang-ra/src/structural.rs	/// Formal rule CT-FullWitness:	A later primary complete row descends from both restricted views and matches all participating bindings retained along positive lineage; no hidden-key rebinding or opaque crossing.
-RA-MovedSupport	implementation	passes/cq-ra-rewrites/src/reductions.rs	// Formal rule RA-MovedSupport:	Restore an I2-moved check's recorded former support only across a unique nonintroducing key-preserving prefix to the exact named support join.
-CK-MovedSupport	implementation	languages/cq-lang-ra/src/structural/reductions.rs	/// Formal rule CK-MovedSupport:	Independently validate transported former occurrence, named reduction, local intermediate and exact restoring join without producer replay.
 RA-Constraint	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-Constraint:	Relational theta checks scope and Eq/Ord premises without Rust.
 IX-Const	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Const:	Column constant equalities and literal membership produce const supply; a captured domain code is a constant like any closed operand.
 IX-Range	implementation	languages/cq-lang-ix/src/lib.rs	// IX-Range:	Constant order bounds on one column produce range supply.
@@ -244,8 +237,8 @@ STR-Repr	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Repr:	Ch
 ST-Total	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Total:	Record supported batch operators and producer representations; Rust totality is a common premise.
 ST-Stage	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Stage:	Require an indexable producer, positive batch size and represented segment preserving recorded demand.
 BK-Dual	abstract	-	-	Fold and unfold realize the same recorded pure-total stream algebra; answer-determined early stop preserves answers.
-ST-Share	implementation	languages/cq-lang-structures/src/share.rs	// ST-Share:	Couple an eager semi and later same-key probe over an immutable payload/candidate layout or identically declared immutable host snapshot; preserve every key through relational filters/projections and checked nonintroducing probes, never opaque bindings or introducing joins.
-STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witness:	Require selected-layout Retain support and reject every cursor-carrier path escaping, publishing, canonicalizing or losing keys before its force; native Rust proves Copy and infers the concrete cursor.
+ST-Share	implementation	languages/cq-lang-structures/src/share.rs	// ST-Share:	Couple an eager semi and later same-key probe over an immutable payload/candidate layout or identically declared immutable host snapshot, independent of provider spelling.
+STR-Witness	implementation	languages/cq-lang-structures/src/repr.rs	// STR-Witness:	Require selected-layout Retain support and reject every cursor-carrier path escaping before its force; native Rust proves Copy and infers the concrete cursor.
 ST-Expand	implementation	languages/cq-lang-structures/src/stage.rs	// ST-Expand:	Require declared Expand on the selected payload or candidate directory, total finite cursor flattening, and represented producer segments preserving recorded demand; target realizations enforce cursor obligations.
 STR-SortedRun	implementation	runtime/cq-storage/src/sorted_run.rs	/// Formal rule STR-SortedRun:	Stable clustered runs preserve the occurrence bag and within-key order; exact directory lookup selects the matching range.
 EXT-SortedRuns	implementation	features/rewrites/passes/src/structures.rs	/// Formal rule EXT-SortedRuns:	Retype eligible one-level stream-keyed HashIndex payload providers while preserving Physical and coverage.

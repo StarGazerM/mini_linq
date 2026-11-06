@@ -58,11 +58,7 @@ pub(super) fn check(
                     );
                 }
                 prefix = Some(match prefix {
-                    Some(left) => schedule.join(left, right, check && (partial || heading.is_empty())),
-                    None if check => {
-                        let unit = schedule.unit();
-                        schedule.join(unit, right, true)
-                    }
+                    Some(left) => schedule.join(left, right, partial && check),
                     None => right,
                 });
             }

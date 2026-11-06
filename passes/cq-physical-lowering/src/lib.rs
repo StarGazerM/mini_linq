@@ -81,8 +81,7 @@ pub fn compile_with(
         .iter()
         .zip(modes)
         .zip(operators)
-        .zip(&source.ra.plan.definitions)
-        .map(|((((name, op), mode), operator), source)| {
+        .map(|(((name, op), mode), operator)| {
             let canon = (group_inputs.contains(&symbol_name(name)) && !unique.contains(&symbol_name(name)))
                 || (name == &returned && (!consumer_canonical || reads[&symbol_name(name)].count > 1) && !unique.contains(&symbol_name(name)) && !disjoint.contains(&symbol_name(name)))
                 || matches!(op, Op::Union(union) if !disjoint.contains(&symbol_name(name)) && union.origin.as_ref().is_none_or(|o| !o.interface.is_empty()));
@@ -101,9 +100,6 @@ pub fn compile_with(
             },
             canon: canon.then(Default::default),
             operator,
-            check: source.check.as_ref().map(|_| Default::default()),
-            moved_after: source.moved_after.clone(),
-            absorptions: source.absorptions.clone(),
             semi_token: Default::default(),
             }
         })
@@ -463,9 +459,6 @@ pub fn erase(target: &physical::Program) -> ix::ra::Program {
                     result: d.name.clone(),
                     eq_token: d.eq_token,
                     semi_token: d.semi_token,
-                    check: d.check.as_ref().map(|_| Default::default()),
-                    moved_after: d.moved_after.clone(),
-                    absorptions: d.absorptions.clone(),
                     operator: match &d.operator {
                         physical::Operator::Union(union) => Op::Union(Box::new(union.logical())),
                         physical::Operator::Anti(_, k) => Op::Anti(Box::new(ra::Anti {

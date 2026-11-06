@@ -94,8 +94,11 @@ The DOOP pod also lacks both the live SRD toolchain and the prepared corpus for
   all GPU crate suites, separate radix-counters suite, H05 SF10 ceiling, both
   DOOP builds and Cassandra 26/26 complete tuple sets; see dated baseline above.
   Evidence: `/data/design-notes/planner-step1-census.md` and the worktree's
-  `target/planner-step1-gates.json`. The subsequent paired GPU comparison is
-  recorded in the dated baseline above, not in that historical census.
+  `target/planner-step1-gates.json`. No performance comparison is claimed.
+  Revert pending merge (`codex/unleak-order`): all step-1 edits outside the VO
+  layer are undone and the `after [..]` provenance is removed; D85 (transfer) fails
+  correspondence, H05/D72/H02/H20 realizations change, one planners test fails.
+  `/data/design-notes/planner-step1-revert.md`.
   Datalog seed/delta, driver and permutation are recorded facts; optional
   stratum demand is a no-op. Main explicitly retained Incremental-prefix
   Storage and delta permutation in this step; single CQ order ownership and

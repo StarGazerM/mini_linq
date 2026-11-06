@@ -4,9 +4,8 @@ use proc_macro2::TokenStream;
 /// Record Copy range witnesses for eager semijoins with a later matching probe.
 ///
 /// Candidate generation uses declared retained-read support on built providers
-/// and identical host layouts at both demands. Candidate paths may cross only
-/// key-preserving, nonintroducing relational steps; the language independently
-/// proves provider identity, key preservation and non-escape.
+/// and identical host layouts at both demands; the language independently proves
+/// provider identity, key preservation and non-escape.
 /// Existing representation choices are preserved, including positions carriers.
 pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
@@ -40,9 +39,6 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             let Operator::Probe(_, probe) = &force.operator else {
                 continue;
             };
-            if !preserving_bridge(source, &facts, &name, &probe.left, &keys) {
-                continue;
-            }
             let candidate = candidates.iter().find(|candidate| {
                 symbol_name(candidate.reader) == symbol_name(&force.name)
                     && candidate
@@ -132,52 +128,4 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     }
     ir::check_rewrite(source, &target)?;
     Ok(target)
-}
-
-/// Follow the actual input chain, not definition adjacency. In particular, a
-/// full-key membership probe can intervene without introducing a new binding.
-/// Opaque Rust, introducing joins and lost keys are not forwarding evidence.
-fn preserving_bridge(
-    source: &ir::Program,
-    facts: &ir::Analysis,
-    first: &str,
-    input: &syn::Ident,
-    keys: &[String],
-) -> bool {
-    let mut current = symbol_name(input);
-    while current != first {
-        let Some(definition) = source
-            .physical
-            .program
-            .definitions
-            .iter()
-            .find(|definition| symbol_name(&definition.name) == current)
-        else {
-            return false;
-        };
-        let operator = &definition.operator;
-        let Some(input) = operator.input() else {
-            return false;
-        };
-        let input = symbol_name(input);
-        let heading = &facts.physical.headings[&current];
-        if !matches!(
-            operator,
-            Operator::Project(_)
-                | Operator::Select(_)
-                | Operator::Point(_, _)
-                | Operator::Range(_, _)
-                | Operator::Semi(_, _)
-                | Operator::Anti(_, _)
-                | Operator::Probe(_, _)
-        ) || heading
-            .iter()
-            .any(|column| !facts.physical.headings[&input].contains(column))
-            || keys.iter().any(|key| !heading.contains(key))
-        {
-            return false;
-        }
-        current = input;
-    }
-    true
 }

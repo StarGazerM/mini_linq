@@ -9,13 +9,7 @@ use crate::{Operator, Program, symbol_name};
 use std::collections::{HashMap, HashSet};
 
 pub(super) fn check(source: &Program, target: &Program, schedule: &Schedule) -> bool {
-    let recorded = target.plan.definitions.iter().any(|definition| {
-        source.plan.definitions.iter()
-            .find(|original| original.result == definition.result)
-            .is_none_or(|original| original.absorptions != definition.absorptions)
-    });
-    check_absorption(source, target, schedule)
-        || (!recorded && check_dead_expansion(source, target, schedule))
+    check_absorption(source, target, schedule) || check_dead_expansion(source, target, schedule)
 }
 
 /// Supply an independently checked inverse of the dead-expansion law to the
@@ -120,22 +114,6 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
         grouped,
         retained,
     };
-    let mut consumers = vec![Vec::new(); schedule.nodes.len()];
-    let mut opaque = vec![false; schedule.nodes.len()];
-    for (index, node) in schedule.nodes.iter().enumerate() {
-        for input in dependencies(node) {
-            consumers[input].push(index);
-        }
-        opaque[index] = matches!(node.kind, Kind::Rust(_) | Kind::Group(_))
-            || dependencies(node).any(|input| opaque[input]);
-    }
-    let future = MovedSupport {
-        proof: &proof,
-        consumers,
-        opaque,
-        returned: indices[&symbol_name(&source.plan.output.input)],
-        indices: &indices,
-    };
     let mut remaining = target.plan.definitions.iter().peekable();
     let mut substituted = false;
     for (index, definition) in source.plan.definitions.iter().enumerate() {
@@ -155,16 +133,6 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
             }
             continue;
         };
-        if !other.absorptions.starts_with(&definition.absorptions) {
-            return false;
-        }
-        let added = &other.absorptions[definition.absorptions.len()..];
-        if !added.is_empty()
-            && (definition.operator == other.operator || definition.check.is_none()
-                || definition.moved_after.is_none())
-        {
-            return false;
-        }
         if definition.operator != other.operator {
             if proof.negative[index] {
                 return false;
@@ -181,32 +149,10 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
                 return false;
             };
             let node = &schedule.nodes[index];
-            // The first recorded bypass names the RHS after ordinary local
-            // absorption. Verify that intermediate substitution independently,
-            // then compose it with the recorded moved-support preservation.
-            let right_fact = added.iter().find(|fact| fact.left_token.is_none());
-            let left_fact = added.iter().find(|fact| fact.left_token.is_some());
-            let local_right = if let Some(first) = right_fact {
-                let Some(&intermediate) = indices.get(&symbol_name(&first.reduced)) else {
-                    return false;
-                };
-                intermediate
-            } else {
-                right
-            };
-            let local_left = if let Some(first) = left_fact {
-                let Some(&intermediate) = indices.get(&symbol_name(&first.reduced)) else { return false };
-                intermediate
-            } else { left };
-            let right_valid = proof.absorbed(node.operands[1], local_right, node.operands[0])
-                && (right_fact.is_none()
-                    || future.absorbed(local_right, right, index, added,
-                        definition.moved_after.as_ref().expect("checked provenance"), false));
-            let left_valid = proof.absorbed(node.operands[0], local_left, local_right)
-                && (left_fact.is_none()
-                    || future.absorbed(local_left, left, index, added,
-                        definition.moved_after.as_ref().expect("checked provenance"), true));
-            if !right_valid || !left_valid
+            // Replay the two local identities in order; the left substitution
+            // must be justified by the target RHS, not a removed restriction.
+            if !proof.absorbed(node.operands[1], right, node.operands[0])
+                || !proof.absorbed(node.operands[0], left, right)
             {
                 return false;
             }
@@ -215,111 +161,6 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
         remaining.next();
     }
     substituted && remaining.next().is_none()
-}
-
-/// Formal rule CK-MovedSupport: verify the transported pre-drainage occurrence,
-/// exact former support and named restoring join without replaying the producer.
-struct MovedSupport<'a> {
-    proof: &'a Proof<'a>,
-    consumers: Vec<Vec<usize>>,
-    opaque: Vec<bool>,
-    returned: usize,
-    indices: &'a HashMap<String, usize>,
-}
-
-impl MovedSupport<'_> {
-    fn absorbed(
-        &self,
-        mut reduced: usize,
-        replacement: usize,
-        check: usize,
-        facts: &[crate::Absorption],
-        former: &cq_syntax::algebra::MovedAfter,
-        left_side: bool,
-    ) -> bool {
-        let mut facts = facts.iter().filter(|fact| fact.left_token.is_some() == left_side);
-        while reduced != replacement {
-            let node = &self.proof.schedule.nodes[reduced];
-            if !matches!(node.kind, Kind::Join(true))
-                || self.proof.negative[reduced] || self.proof.grouped[reduced]
-                || self.proof.retained[reduced]
-            {
-                return false;
-            }
-            let [base, support] = node.operands[..] else { return false };
-            let shared: Vec<_> = self.proof.schedule.nodes[base].heading.keys()
-                .filter(|key| self.proof.schedule.nodes[support].heading.contains_key(*key))
-                .collect();
-            let Some(fact) = facts.next() else { return false };
-            let Some(&consumer) = self.indices.get(&symbol_name(&fact.consumer)) else { return false };
-            let restoring_support = if left_side {
-                let Some(&reciprocal) = self.proof.schedule.nodes[consumer].operands.get(1) else {
-                    return false;
-                };
-                let pair = &self.proof.schedule.nodes[reciprocal];
-                if reciprocal != support
-                    && (!matches!(pair.kind, Kind::Join(true)) || pair.operands != [support, reduced])
-                {
-                    return false;
-                }
-                reciprocal
-            } else { support };
-            if self.indices.get(&symbol_name(&fact.reduced)) != Some(&reduced)
-                || self.opaque[reduced]
-                || !self.former_support(support, former)
-                || !self.witness(check, consumer, restoring_support, &shared)
-            {
-                return false;
-            }
-            reduced = base;
-        }
-        facts.next().is_none()
-    }
-
-    fn former_support(&self, mut input: usize, former: &cq_syntax::algebra::MovedAfter) -> bool {
-        loop {
-            let node = &self.proof.schedule.nodes[input];
-            match node.kind {
-                Kind::Atom(occurrence) => return former.occurrences.iter()
-                    .any(|path| self.proof.schedule.paths.get(path) == Some(&occurrence)),
-                Kind::Join(true) | Kind::Select | Kind::Project => input = node.operands[0],
-                _ => return false,
-            }
-        }
-    }
-
-    fn witness(&self, mut prefix: usize, consumer: usize, support: usize, keys: &[&String]) -> bool {
-        if keys.is_empty()
-            || keys.iter().any(|key| !self.proof.schedule.nodes[prefix].heading.contains_key(*key))
-        {
-            return false;
-        }
-        loop {
-            if prefix == self.returned || self.proof.negative[prefix] || self.opaque[prefix] {
-                return false;
-            }
-            let [next] = self.consumers[prefix][..] else { return false };
-            let node = &self.proof.schedule.nodes[next];
-            if node.operands.first() != Some(&prefix) || self.proof.negative[next]
-                || self.opaque[next] || keys.iter().any(|key| !node.heading.contains_key(*key))
-            {
-                return false;
-            }
-            if next == consumer {
-                return matches!(node.kind, Kind::Join(false))
-                    && node.operands[1] == support;
-            }
-            match node.kind {
-                Kind::Join(false) if node.heading.keys().any(|key|
-                    !self.proof.schedule.nodes[prefix].heading.contains_key(key)) => return false,
-                Kind::Join(_) | Kind::Select => {}
-                Kind::Project if self.proof.schedule.nodes[prefix].heading.keys()
-                    .all(|key| node.heading.contains_key(key)) => {}
-                _ => return false,
-            }
-            prefix = next;
-        }
-    }
 }
 
 /// This certificate does not relax the ordinary schedule contract. It replays

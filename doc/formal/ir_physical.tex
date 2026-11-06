@@ -171,11 +171,8 @@ $v\notin\mathsf{heading}(p)$. Each provider is retained or a reusable host.
 The introducing key is $K_1$; subsequent keys are $K_i\cup\{v\}$.
 Every intermediate result is a noncanonical pipe, consumed by the next check.
 The final result retains its written mode and canonicalization.
-A definition may carry the transported \code{check} suffix. Such a read
-preserves its left heading and is not an intersection candidate, even when
-I2 drainage has placed it immediately after an introducing probe.
 \begin{mathpar}
-\Rule{PH-Smallest}{k\ge2\quad\forall i.\neg d_i.\mathsf{check}\quad C_i(p)=\{v\mid(p[K_i],v)\in R_i\}\\
+\Rule{PH-Smallest}{k\ge2\quad C_i(p)=\{v\mid(p[K_i],v)\in R_i\}\\
  j=\mathop{\mathrm{arg\,min}}_{1\le i\le k}|C_i(p)|}
  {\bigcap_{i=1}^{k}C_i(p)
    =\{v\in C_j(p)\mid\forall i\ne j,\ v\in C_i(p)\}}
@@ -184,11 +181,6 @@ I2 drainage has placed it immediately after an introducing probe.
  R_J=\pi_J(R)\ \text{retained}\\
  R_J\text{ is private to one smallest membership edge}}
  {p\ltimes_J R=p\ltimes_J R_J}
-
-\Rule{PH-CheckPhase}{d.\mathsf{check}\quad
- d\in\{\mathsf{probeFirst},\mathsf{semi},\mathsf{merge}\}\\
- \mathsf{heading}(d)=\mathsf{heading}(\mathsf{left}(d))}
- {d\notin\mathsf{smallestCandidates}}
 \end{mathpar}
 The opt-in \code{smallest_intersections} rewrite records this choice without
 altering keys or Rust payloads. Explicit occurrence advice may additionally

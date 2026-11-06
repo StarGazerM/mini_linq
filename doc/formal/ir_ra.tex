@@ -3,7 +3,7 @@
 
 \paragraph{Grammar.} A standalone named DAG; declarations and output are part of it.
 \begin{lstlisting}
-RA ::= relational { Decl* (r = Op [check [after [path, ...]]] (absorbed [left] r via r)*;)* output r as Head; }
+RA ::= relational { Decl* (r = Op;)* output r as Head; }
 Op ::= unit | rename R@path {source -> variable, ...} [constants {source = literal, ...}]
      | natural_join l with r | semijoin l with r
      | project r keep {columns} | select r if (Theta)
@@ -27,13 +27,6 @@ and $\Delta(r)=(V,T,C)$ records sort, symbolic Rust types and computed columns.
 The optional \code{for} token distinguishes set-valued unnest from scalar
 extension within the same Bind operator; its absence preserves scalar meaning.
 The Environment syntax is unchanged. IX and Physical preserve this token.
-The optional \code{check} suffix transports a standalone membership phase;
-its read preserves the left heading and cannot become an alternate provider
-during later intersection selection. The \code{after [path,...]} provenance
-records crossed introducing occurrences. Each \code{absorbed r via m} suffix
-records restoration of that exact former support (RA-MovedSupport/CK-MovedSupport),
-not an instruction for the printer
-or Physical selection to repeat that decision.
 
 \paragraph{Contract.}
 \begin{mathpar}

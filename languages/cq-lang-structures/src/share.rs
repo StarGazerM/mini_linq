@@ -9,31 +9,17 @@ pub struct Share {
     pub force: String,
 }
 
-/// Structural forwarding only: never infer purity or binding identity from Rust.
-/// A Probe is a bridge only when its checked heading introduces no columns.
-pub(crate) fn forwarding(
-    operator: &Operator,
-    result: &str,
-    keys: &[String],
-    facts: &Analysis,
-) -> bool {
-    let Some(input) = operator.input() else {
-        return false;
-    };
-    let heading = &facts.physical.headings[result];
-    keys.iter().all(|key| heading.contains(key))
-        && match operator {
-            Operator::Project(_)
+pub(crate) fn forwarding(operator: &Operator) -> bool {
+    matches!(
+        operator,
+        Operator::Rename(_)
+            | Operator::Project(_)
             | Operator::Select(_)
             | Operator::Point(_, _)
             | Operator::Range(_, _)
             | Operator::Semi(_, _)
-            | Operator::Anti(_, _) => true,
-            Operator::Probe(_, _) => heading
-                .iter()
-                .all(|column| facts.physical.headings[&symbol_name(input)].contains(column)),
-            _ => false,
-        }
+            | Operator::Anti(_, _)
+    )
 }
 
 /// The retained read of a host reader on `keys`: its recorded fallback
@@ -221,7 +207,12 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
                 return Err(fail());
             };
             let operator = &definitions[index].operator;
-            if !forwarding(operator, &current, &share.keys, facts) {
+            if !forwarding(operator)
+                || share
+                    .keys
+                    .iter()
+                    .any(|key| !facts.physical.headings[&current].contains(key))
+            {
                 return Err(fail());
             }
             let Some(input) = operator.input() else {

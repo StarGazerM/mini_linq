@@ -540,10 +540,7 @@ fn le_omits_redundant_zero_checks_in_the_census_schedules() {
         let target = compile_valuation(&source, Planner::Le).unwrap();
         let actual: Vec<_> = target.valuation.steps.iter()
             .filter(|step| matches!(step, vo::Step::Atom(..)))
-            .cloned().map(|mut step| {
-                if let vo::Step::Atom(atom, _) = &mut step { atom.moved_after = None; }
-                step
-            }).collect();
+            .cloned().collect();
         let expected: Vec<vo::Step> = expected.into_iter()
             .map(|step| syn::parse_str(step).unwrap()).collect();
         assert_eq!(actual, expected, "{name}");

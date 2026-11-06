@@ -140,12 +140,10 @@ This cursor is not a column and does not contribute to coverage.
 }{\mathsf{witness}(r,b,K,s,w)\text{ is admissible}}
 \end{mathpar}
 The escape obligation is checked explicitly, not implemented by pruning:
-only project, select, point, range, left semi/anti, and nonintroducing probes
-may forward the witness, and each must retain every lookup key column.
-A rename starts a distinct occurrence; it is not forwarding evidence.
-Every path must reach the force probe before canon, return, retained let/rows,
-exists, union/fallback operands, fused prefixes, or opaque bind/guard.
-Rust checks the cursor's type and Copy capability.
+only rename, project, select, point, range, and left semi/anti may forward
+the witness. Every path must reach the force probe before canon, return,
+retained let/rows, exists, union/fallback operands, fused prefixes, or opaque
+bind/guard. Rust checks the cursor's type and Copy capability.
 For a maintained leveled host the cursor is the bounded sequence of
 $(\mathit{run},\mathit{begin},\mathit{end})$ ranges obtained from its snapshot,
 not a single contiguous range. Its abstraction is their bag concatenation
@@ -229,26 +227,6 @@ layout and key on the same immutable occurrence. Snapshot publication belongs
 to the runtime owner, not this pass. A different layout or key cannot establish
 the premise. Generated witness types may be inferred; native emission checks
 Copy without choosing a concrete cursor representation.
-
-\paragraph{GR-Retain: nonintroducing bridges.}
-The \code{retain\_lookups} producer follows the actual input chain from the
-later force back to the eager lookup, not adjacency in the definition list.
-The independently checked $\mathsf{preservedKeys}$ premise permits
-project/select/point/range/semi/anti and a probe whose checked output heading
-is contained in its left input heading. Every bridge keeps all retained key
-columns (including candidate-directory prefixes) unchanged. A full-key
-membership probe on another provider is therefore a bridge; it remains in
-place and still filters the stream. It neither replaces the retained provider
-nor becomes the force for that provider.
-An introducing probe is not a bridge, even if a later projection drops its
-new columns. Opaque binds/guards, lost keys and unsupported operators are not
-forwarding evidence. STR-Witness additionally checks every consumer path:
-no branch may publish, canonicalize, escape a scope or lose the key before
-the recorded force. The same $(b,K,s)$ cursor is carried as a non-column Copy
-field through admitted bridges and consumed at that force, without repeating
-the lookup. Provider identity, ownership and immutable snapshot lifetime
-requirements above are unchanged; the realization only transports the checked
-witness and does not select bridges or inspect Rust types or expressions.
 \begin{lemma}[Lookup coupling]
 The retained memo satisfies $\mathsf{memo}=\mathsf{lookup}_b(k)$ at both demands.
 \end{lemma}

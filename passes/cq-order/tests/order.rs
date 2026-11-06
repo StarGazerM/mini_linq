@@ -149,7 +149,6 @@ fn drainage_records_only_moved_checks_and_preserves_their_provider() {
     // PH-Smallest alternatives remain available.
     let valuation::Step::Atom(check, _) = &mut source.valuation.steps[2] else { panic!() };
     check.check = None;
-    check.moved_after = None;
     let stationary = source.clone();
     cq_order::drain_ready_checks(&mut source).unwrap();
     assert_eq!(source, stationary);

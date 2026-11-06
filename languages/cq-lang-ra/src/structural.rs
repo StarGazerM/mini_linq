@@ -91,15 +91,6 @@ pub(super) struct RowView {
     restricted: bool,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct ViewRequest {
-    node: usize,
-    occurrence: usize,
-    earlier: usize,
-    later: usize,
-    projected: bool,
-}
-
 fn row_view(views: &mut Vec<RowView>, parent: Option<usize>, restricted: bool) -> usize {
     let index = views.len();
     views.push(RowView { parent, restricted });
@@ -485,13 +476,8 @@ impl Schedule {
                 let projected = rm
                     .get(occurrence)
                     .is_none_or(|mask| lm.get(occurrence).is_some_and(|left| mask.is_subset(left)));
-                self.view_requests.push(ViewRequest {
-                    node: self.nodes.len(),
-                    occurrence: *occurrence,
-                    earlier: l.views[occurrence],
-                    later: *other,
-                    projected,
-                });
+                self.view_requests
+                    .push((l.views[occurrence], *other, projected));
             }
         }
         for occurrence in &r.pruned {
@@ -500,13 +486,8 @@ impl Schedule {
                     rm.get(occurrence)
                         .is_some_and(|right| mask.is_subset(right))
                 });
-                self.view_requests.push(ViewRequest {
-                    node: self.nodes.len(),
-                    occurrence: *occurrence,
-                    earlier: r.views[occurrence],
-                    later: *other,
-                    projected,
-                });
+                self.view_requests
+                    .push((r.views[occurrence], *other, projected));
             }
         }
         let mut views = l.views.clone();
@@ -938,84 +919,12 @@ impl Schedule {
                 pending.extend(children[index].iter().map(|i| (*i, false)));
             }
         }
-        let mut lineage = Vec::new();
-        self.view_requests.iter().any(|request| {
-            let (a, b) = (intervals[request.earlier], intervals[request.later]);
-            !(a.0 <= b.0 && b.1 <= a.1
-                || request.projected && b.0 <= a.0 && a.1 <= b.1
-                || self.restores_view(request, &intervals, &primary, &mut lineage))
-        })
-    }
-
-    /// Formal rule CT-FullWitness: A later primary full-row read discharges a
-    /// projected-view obligation only if its restricted view descends from both
-    /// views and its other operand retains every participating binding along
-    /// one positive lineage from that obligation. No hidden column may be
-    /// rebound, and no Rust, anti, union or grouping barrier may be crossed.
-    fn restores_view(
-        &self,
-        request: &ViewRequest,
-        intervals: &[(usize, usize)],
-        primary: &[bool],
-        lineage: &mut Vec<bool>,
-    ) -> bool {
-        if !primary[request.node] {
-            return false;
-        }
-        let occurrence = &self.atoms[&request.occurrence];
-        let descends = |view: usize, ancestor: usize| {
-            let (a, b) = (intervals[ancestor], intervals[view]);
-            a.0 <= b.0 && b.1 <= a.1
-        };
-        let is_witness = |read: &Node| {
-            read.owner == Some(request.occurrence)
-                && read.heading.len() == occurrence.bindings.len()
-                && read.views.get(&request.occurrence).is_some_and(|&view| {
-                    descends(view, request.earlier) && descends(view, request.later)
-                })
-        };
-        if !self.full_reads.iter().any(|&(node, atom)| {
-            atom == request.occurrence && node >= request.node && primary[node]
-                && matches!(self.nodes[node].kind, Kind::Join(false))
-                && self.nodes[node].operands.iter().any(|&input| is_witness(&self.nodes[input]))
-        }) {
-            return false;
-        }
-        let mut required = Vec::new();
-        for &input in &self.nodes[request.node].operands {
-            for column in self.nodes[input].origins.values().flatten() {
-                if let Column::Atom(atom, attribute) = column {
-                    if *atom == request.occurrence && !required.iter().any(|(_, c)| *c == column) {
-                        required.push((&occurrence.bindings[attribute], column));
-                    }
-                }
-            }
-        }
-        let retains = |node: &Node| required.iter().all(|(name, column)| {
-            node.origins.get(*name).is_some_and(|columns| columns.contains(*column))
-        });
-        if !retains(&self.nodes[request.node]) {
-            return false;
-        }
-        lineage.resize(self.nodes.len(), false);
-        lineage.fill(false);
-        lineage[request.node] = true;
-        for index in request.node + 1..self.nodes.len() {
-            let node = &self.nodes[index];
-            lineage[index] = retains(node) && match node.kind {
-                Kind::Project | Kind::Select | Kind::Join(true) => lineage[node.operands[0]],
-                Kind::Join(false) => node.operands.iter().any(|&input| lineage[input]),
-                _ => false,
-            };
-        }
-        self.full_reads.iter().any(|&(node, atom)| {
-            atom == request.occurrence && node >= request.node && primary[node]
-                && matches!(self.nodes[node].kind, Kind::Join(false))
-                && (0..2).any(|side| {
-                    let inputs = &self.nodes[node].operands;
-                    is_witness(&self.nodes[inputs[side]]) && lineage[inputs[1 - side]]
-                })
-        })
+        self.view_requests
+            .iter()
+            .any(|&(earlier, later, projected)| {
+                let (a, b) = (intervals[earlier], intervals[later]);
+                !(a.0 <= b.0 && b.1 <= a.1 || projected && b.0 <= a.0 && a.1 <= b.1)
+            })
     }
 
     /// Check the supplied schedule's structural obligations against checked RA.
@@ -1191,15 +1100,6 @@ fn wiring_ids(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Vec<u
         projection: bool,
     }
 
-    let canonical_equality = |(a, b): &(Column, Column)| {
-        (a != b).then(|| {
-            if a <= b {
-                (a.clone(), b.clone())
-            } else {
-                (b.clone(), a.clone())
-            }
-        })
-    };
     let mut nodes: Vec<Wired> = Vec::with_capacity(schedule.nodes.len());
     for (index, node) in schedule.nodes.iter().enumerate() {
         let identity = match node.kind {
@@ -1266,7 +1166,7 @@ fn wiring_ids(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Vec<u
         if matches!(kind, Kind::Join(false) | Kind::Union(false, _)) {
             operands.sort_unstable();
         }
-        let mut key = Wiring {
+        let key = Wiring {
             correlation: node.correlation.map(|prefix| nodes[prefix].id),
             kind,
             operands,
@@ -1276,25 +1176,21 @@ fn wiring_ids(schedule: &Schedule, intern: &mut HashMap<Wiring, usize>) -> Vec<u
                     .map(|(n, c)| (n.clone(), c.clone()))
                     .collect(),
             ),
-            equalities: Facts(equalities.iter().filter_map(canonical_equality).collect()),
+            equalities: Facts(
+                equalities
+                    .iter()
+                    .filter(|(a, b)| a != b)
+                    .map(|(a, b)| {
+                        if a <= b {
+                            (a.clone(), b.clone())
+                        } else {
+                            (b.clone(), a.clone())
+                        }
+                    })
+                    .collect(),
+            ),
             predicates: Facts(node.predicates.iter().cloned().collect()),
         };
-        if matches!(node.kind, Kind::Select) {
-            // Formal rule CT-SelectConjunction: Intern consecutive relational selections as one conjunction over the same named row witness.
-            // Consecutive relational selections constrain the exact same row
-            // witness: select_P(select_Q(R)) = select_(P and Q)(R). Fuse only
-            // adjacent Select nodes, never across projections, joins or Rust.
-            let mut input = node.operands[0];
-            while matches!(schedule.nodes[input].kind, Kind::Select) {
-                let selection = &schedule.nodes[input];
-                key.equalities.0.extend(
-                    selection.equalities.iter().filter_map(canonical_equality),
-                );
-                key.predicates.0.extend(selection.predicates.iter().cloned());
-                input = selection.operands[0];
-            }
-            key.operands[0] = nodes[input].id;
-        }
         let next = intern.len();
         nodes.push(Wired {
             id: *intern.entry(key).or_insert(next),
@@ -1455,7 +1351,7 @@ fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
         // There is no equivalence search; DAG nodes are interned topologically.
         let mut intern = HashMap::new();
         if wiring(source, &mut intern)? != wiring(target, &mut intern)? {
-            return Err("CT-FullWitness: projection correlations differ from source".into());
+            return Err("projection correlations differ from source".into());
         }
     }
     let mut columns = HashMap::new();

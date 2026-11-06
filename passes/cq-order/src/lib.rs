@@ -411,7 +411,6 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> valua
             paren: Default::default(),
             columns,
             check: None,
-            moved_after: None,
         },
         Default::default(),
     )
@@ -732,23 +731,6 @@ pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
                     let facts = &analysis.order[order[next]];
                     !facts.preprocessing && facts.ready(&bound) && !facts.introduces(&bound)
                 }) {
-                    // I2 moves an existing check, not its provider phase.
-                    // Newly adjacent introductions must not turn it into an
-                    // alternate supplier during Physical selection.
-                    let crossed = (position..next).filter_map(|crossed| {
-                        if analysis.introduces[order[crossed]].is_empty() {
-                            return None;
-                        }
-                        match &steps[crossed] {
-                            valuation::Step::Atom(atom, _) => Some(atom.clause.clone()),
-                            _ => None,
-                        }
-                    }).collect::<Vec<_>>();
-                    let moved_after = (!crossed.is_empty()).then(|| cq::syntax::algebra::MovedAfter {
-                        after_token: Default::default(),
-                        bracket: Default::default(),
-                        occurrences: crossed.into_iter().collect(),
-                    });
                     // Removing a separating check must not make the following
                     // standalone check an alternate candidate provider.
                     if next != position && next + 1 < steps.len()
@@ -758,14 +740,14 @@ pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
                             following.check = Some(Default::default());
                         }
                     }
+                    // I2 moves an existing check, not its provider phase.
+                    // Newly adjacent introductions must not turn it into an
+                    // alternate supplier during Physical selection.
                     if next != position || matches!(&steps[next],
                         valuation::Step::Atom(atom, _) if atom.variables().next().is_none())
                     {
                         if let valuation::Step::Atom(atom, _) = &mut steps[next] {
                             atom.check = Some(Default::default());
-                            if moved_after.is_some() {
-                                atom.moved_after = moved_after;
-                            }
                         }
                     }
                     steps[position..=next].rotate_right(1);

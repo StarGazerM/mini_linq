@@ -437,7 +437,6 @@ fn written_steps(
                         clause: path,
                         paren: Default::default(),
                         check: None,
-                        moved_after: None,
                         columns: atom
                             .variables()
                             .cloned()
@@ -472,7 +471,6 @@ fn written_steps(
                             clause: path,
                             paren: Default::default(),
                             check: None,
-                            moved_after: None,
                             columns: facts
                                 .free
                                 .values()

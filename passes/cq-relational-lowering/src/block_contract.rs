@@ -291,11 +291,7 @@ impl Body<'_, '_> {
             );
         }
         self.prefix = Some(match self.prefix {
-            Some(left) => self.schedule.join(left, right, check && (partial || self.heading.is_empty())),
-            None if check => {
-                let unit = self.schedule.unit();
-                self.schedule.join(unit, right, true)
-            }
+            Some(left) => self.schedule.join(left, right, partial && check),
             None => right,
         });
         self.heading
