@@ -115,7 +115,18 @@ def generate(repo: Path, field_flow: bool, output: Path, plans: bool = False) ->
     lines += [f'            c_{key.lower()}: *meta.get("{key}").ok_or("Missing metadata key: {key}")?,' for key in keys]
     lines += ["        })", "    }", "}", "#[derive(Clone, Debug, Default)]", "pub struct SrdFacts {", "    pub constants: SrdConstants,"]
     lines += [f"    pub {ident(r.name)}: Vec<{tuple_type(r.arity)}>," for r in inputs]
-    lines += ["}", "impl SrdFacts {", "    pub fn load(dir: &std::path::Path) -> crate::Result<Self> {", '        let meta = serde_json::from_reader(std::fs::File::open(dir.join("meta.json"))?)?;', "        let constants = SrdConstants::load(&meta)?;", "        Ok(Self {", "            constants,"]
+    lines += ["}", "impl SrdFacts {", "    pub fn load(dir: &std::path::Path) -> crate::Result<Self> {",
+              '        #[cfg(not(feature = "planner-calibration"))]',
+              '        let meta = serde_json::from_reader(std::fs::File::open(dir.join("meta.json"))?)?;',
+              '        #[cfg(feature = "planner-calibration")]',
+              '        let meta = if cq_storage::counters::calibration::observing() {',
+              '            let bytes = std::fs::read(dir.join("meta.json"))?;',
+              '            cq_storage::counters::calibration::metadata("meta.json", &bytes);',
+              '            serde_json::from_slice(&bytes)?',
+              '        } else {',
+              '            serde_json::from_reader(std::fs::File::open(dir.join("meta.json"))?)?',
+              '        };',
+              "        let constants = SrdConstants::load(&meta)?;", "        Ok(Self {", "            constants,"]
     for r in inputs:
         values = "".join(f"row[{i}], " for i in range(r.arity))
         lines.append(f'            {ident(r.name)}: crate::load_rows::<{r.arity}, _>(&dir.join("{r.input_file}"), |row| ({values}))?,')

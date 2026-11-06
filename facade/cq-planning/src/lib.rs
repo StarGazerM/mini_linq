@@ -309,6 +309,19 @@ pub fn compile_prefix(source: &cq::Program, options: &PlanOptions) -> syn::Resul
     Ok(target)
 }
 
+pub use cq_relational_lowering::Origins;
+
+/// Optional diagnostics from the same selected VO and actual lowering run.
+pub fn compile_prefix_with_origins(
+    source: &cq::Program,
+    options: &PlanOptions,
+) -> syn::Result<(ra::Program, vo::Program, Origins)> {
+    let valuation = prefix_valuation(source, options)?;
+    let (target, origins) = cq_relational_lowering::compile_with_origins(&valuation)?;
+    cq_relational_lowering::check(&valuation, &target)?;
+    Ok((target, valuation, origins))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

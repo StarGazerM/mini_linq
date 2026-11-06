@@ -169,4 +169,37 @@ mod witness_tests {
             && row[0].parse::<i32>().is_ok_and(|value| (0..1501).contains(&value))));
         assert_eq!(relation.rows, result.witness(policy)["Reachable"].rows);
     }
+
+    #[cfg(feature = "planner-calibration")]
+    #[test]
+    fn calibration_observes_the_same_raw_metadata_bytes_once() {
+        use cq_storage::counters::calibration::{Observer, with_observer};
+        use std::sync::{Arc, Mutex};
+        struct Directory(std::path::PathBuf);
+        impl Drop for Directory {
+            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        }
+        #[derive(Default)]
+        struct Metadata(Mutex<Vec<(String, Vec<u8>)>>);
+        impl Observer for Metadata {
+            fn metadata(&self, path: &str, bytes: &[u8]) {
+                self.0.lock().unwrap().push((path.into(), bytes.into()));
+            }
+        }
+        let root = Directory(std::env::temp_dir().join(format!("srd-calibration-metadata-{}", std::process::id())));
+        std::fs::create_dir(&root.0).unwrap();
+        let schema: serde_json::Value = serde_json::from_str(include_str!("generated.schema.json")).unwrap();
+        for input in schema["inputs"].as_object().unwrap().values() {
+            std::fs::write(root.0.join(input["file"].as_str().unwrap()), b"").unwrap();
+        }
+        let constants = schema["metadata_keys"].as_array().unwrap().iter().enumerate()
+            .map(|(index, key)| (key.as_str().unwrap().to_owned(), index as i32))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let bytes = serde_json::to_vec_pretty(&constants).unwrap();
+        std::fs::write(root.0.join("meta.json"), &bytes).unwrap();
+        let observed = Arc::new(Metadata::default());
+        let facts = with_observer(observed.clone(), || SrdFacts::load(&root.0)).unwrap();
+        assert_eq!(facts.constants.c_public, constants["public"]);
+        assert_eq!(*observed.0.lock().unwrap(), vec![("meta.json".into(), bytes)]);
+    }
 }

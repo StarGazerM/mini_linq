@@ -1046,6 +1046,75 @@ hash/btree decode violations still await P4 encoded index keys; CSV scan loads
 have a direct columnar route. No query compiler or workload-default selection
 changes in S2.
 
+**Offline dataset statistics.** `cq-load` also provides the `cq-stats` binary:
+
+```text
+cargo run -p cq-load --bin cq-stats -- stats \
+  --request stats-input.json --dataset DATASET_DIR --out evidence.json
+cargo run -p cq-load --bin cq-stats -- check --evidence evidence.json
+```
+
+The versioned request (`mini-linq.stats-input.v1`) names the dataset/date/
+formulation, mandatory `hash_mode: "typed-row-stream-v1"`, distinct mode
+(`"exact"` or `{"hll":{"precision":14}}`), a vector of relation inputs, and
+metadata files. Each relation input supplies a `RelationSpec` (name, ordered
+named/domain columns, bag/set semantics, optional composite `key_sets`), a
+relative path, effective `SourceOptions`, and explicit `missing_as_empty`.
+Metadata entries name a relative path and `metadata`, `constants` or
+`dictionary` role. Unknown fields, duplicate names/files, unsupported modes
+and invalid schema/options are errors, not missing statistics.
+
+`stats_source::visit` uses the same CSV/Parquet readers, column mapping and
+bounded `Batch` conversion as ordinary row/columnar loading; dynamic schemas
+do not require leaked names or tuple-arity-limited ScanTables. `literal_tabs`
+means tab-delimited unquoted records, skipped empty lines, CRLF support and
+exact arity. Parquet requires the existing `parquet` feature.
+Supported scalar conversions are signed i64, exact i64-backed decimal scales
+0–18, Gregorian dates with `days_since_unix_epoch`, UTF-8 and dictionary-bound
+u64 symbol codes. Unordered opaque domains are rejected; unordered symbol
+codes retain equality counts without extrema. Nulls follow normal loader
+rejection.
+
+`RelationAccumulator` computes exact row/distinct/degree/extrema facts in one
+decoded traversal. Set mode deduplicates **complete tuples**, not individual
+columns. Composite degrees retain correlations. Frequency maps and optional
+dedup sets are released into a compact `RelationSummary` after each relation;
+only final summaries wait for the dataset identity. HLL consumes the full
+stream without sampling, records an observation with algorithm/precision/seed
+provenance, and never replaces exact max-degree with an estimate. It does not
+save frequency-map memory while exact degree is requested.
+
+Data content hashes cover the typed, length-framed decoded row stream,
+including original order and duplicates **before** set deduplication.
+Metadata/constants/dictionaries retain raw-byte SHA-256. The manifest also
+binds column order, domains, encoding and effective loader options. This is
+semantic input identity, not physical CSV/Parquet byte identity. Exact byte
+framing and the required hash-mode constraint are specified in
+`doc/planner-evidence.schema.json`; the evidence checker rejects missing or
+different modes even if the manifest digest was recomputed.
+
+The command validates the final provenance-bearing evidence before atomic
+publication and never executes a query, estimates recursive final sizes or
+rounds, supplies target h/m constants, or selects a plan. Input-only evidence
+leaves those facts unknown.
+
+With `planner-calibration`, `CanonicalAccumulator` instead consumes the
+generated Datalog input boundary: raw rows are hashed before insertion, and
+the same borrowed row is counted only inside successful canonical admission.
+It reuses the engine's uniqueness decision, checks final canonical length,
+and retains no duplicate full-tuple set. Both paths produce the same typed
+content digest and exact statistics. Unsupported codecs, mismatched rows,
+repeated admission or incomplete counts poison the measurement rather than
+publishing partial evidence.
+
+Physical calibration packets are observational diagnostics, including unknown
+or exceeded computed bounds. `DatasetEvidence::planning_facts()` removes only
+step diagnostics, not row/degree/recursive facts or complete delta series.
+The full file and compiler projection share their measured manifest identity;
+cost matching cannot use a diagnostic comparison as a cardinality certificate.
+See the optional completed-run calibration section in `PLANNING-REDESIGN.md`.
+
+
 **P5 S3 authored CPU checkpoint.** `select(blocks(R { block_rows 1024;
 summary none; columns [a: plain u64, b: bytes u32]; }))` binds explicit
 declaration-order column facts to the existing Structures encoded contract.

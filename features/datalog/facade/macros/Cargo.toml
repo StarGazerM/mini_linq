@@ -12,6 +12,7 @@ proc-macro = true
 [features]
 hoist-invariants = []
 phase-timing = ["cq-datalog-configuration/phase-timing"]
+planner-calibration = []
 
 [dependencies]
 cq-datalog-configuration.workspace = true

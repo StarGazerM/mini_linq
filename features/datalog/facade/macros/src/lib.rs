@@ -10,8 +10,6 @@ mod kw {
     syn::custom_keyword!(hoist_invariants);
     syn::custom_keyword!(driver);
     syn::custom_keyword!(plan);
-    syn::custom_keyword!(delta);
-    syn::custom_keyword!(order);
     syn::custom_keyword!(context);
 }
 
@@ -58,10 +56,13 @@ fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStre
             .arguments
             .extend(quote::quote!(hoist_invariants;));
     }
-    entry
-        .configuration
-        .resolve(DatalogConfiguration::defaults())?
-        .start(entry.source)
+    let defaults = DatalogConfiguration::defaults();
+    let pipeline = if cfg!(feature = "planner-calibration") {
+        entry.configuration.resolve_calibrated(defaults)?
+    } else {
+        entry.configuration.resolve(defaults)?
+    };
+    pipeline.start(entry.source)
 }
 
 /// Expand surface syntax and run the named checked Datalog pipeline.
@@ -101,93 +102,6 @@ struct IncrementalArguments {
     plans: Vec<cq_datalog_incremental::RulePlan>,
 }
 
-/// `plan(Label, [delta(Relation@clause),] [order(Relation, Relation@clause, ...),]
-/// [smallest(..), ...] [known(admit) | known(at(level k))])`: the CQ
-/// `plan(order(...))` selectors and ADM-InPlan placement for one labelled rule
-/// version. `order` may be omitted when `known` is given; `smallest` needs it.
-fn rule_plan(input: ParseStream<'_>) -> syn::Result<cq_datalog_incremental::RulePlan> {
-    let rule = input.parse()?;
-    input.parse::<Token![,]>()?;
-    let delta = if input.peek(kw::delta) {
-        input.parse::<kw::delta>()?;
-        let selector;
-        syn::parenthesized!(selector in input);
-        let delta = selector.parse()?;
-        if !selector.is_empty() {
-            return Err(selector.error("expected one delta(Relation@clause)"));
-        }
-        input.parse::<Token![,]>()?;
-        Some(delta)
-    } else {
-        None
-    };
-    let order = if input.peek(kw::order) {
-        input.parse::<kw::order>()?;
-        let selectors;
-        syn::parenthesized!(selectors in input);
-        let order = selectors
-            .parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
-            .into_iter()
-            .collect::<Vec<_>>();
-        if order.is_empty() {
-            return Err(input.error("plan order(...) names no atom"));
-        }
-        if !input.is_empty() {
-            input.parse::<Token![,]>()?;
-        }
-        order
-    } else {
-        Vec::new()
-    };
-    let mut smallest = Vec::new();
-    let mut known = None;
-    while !input.is_empty() {
-        let name: syn::Ident = input.parse()?;
-        let site;
-        syn::parenthesized!(site in input);
-        if name == "smallest" && !order.is_empty() {
-            smallest.push(
-                site.parse_terminated(cq_datalog_incremental::OrderAtom::parse, Token![,])?
-                    .into_iter()
-                    .collect(),
-            );
-        } else if name == "known" {
-            if known.is_some() {
-                return Err(syn::Error::new_spanned(
-                    name,
-                    "duplicate or conflicting known(...) advice for one rule version",
-                ));
-            }
-            known = Some(site.parse::<cq_datalog_incremental::Known>()?);
-            if !site.is_empty() {
-                return Err(site.error("expected known(admit) or known(at(level k))"));
-            }
-        } else if name == "smallest" {
-            return Err(syn::Error::new_spanned(
-                name,
-                "smallest(...) requires order(...) advice",
-            ));
-        } else {
-            return Err(syn::Error::new_spanned(
-                name,
-                "expected order(..), smallest(Relation@clause, ...) or known(admit | at(level k))",
-            ));
-        }
-        if !input.is_empty() {
-            input.parse::<Token![,]>()?;
-        }
-    }
-    if order.is_empty() && known.is_none() {
-        return Err(input.error("plan advice needs order(...) or known(...)"));
-    }
-    Ok(cq_datalog_incremental::RulePlan {
-        rule,
-        delta,
-        order,
-        smallest,
-        known,
-    })
-}
 
 fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<IncrementalArguments> {
     let mut hoist = false;
@@ -225,7 +139,7 @@ fn incremental_arguments(input: ParseStream<'_>) -> syn::Result<IncrementalArgum
             input.parse::<kw::plan>()?;
             let argument;
             syn::parenthesized!(argument in input);
-            plans.push(rule_plan(&argument)?);
+            plans.push(argument.parse::<cq_datalog_incremental::RulePlan>()?);
         } else {
             return Err(
                 input.error("expected hoist_invariants;, driver(delta_first); or plan(..);")

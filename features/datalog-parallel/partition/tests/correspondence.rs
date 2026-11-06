@@ -51,6 +51,32 @@ fn rejected(change: impl FnOnce(&mut Program)) {
 }
 
 #[test]
+fn partition_preserves_and_erases_declared_dataset_view_bindings() {
+    let json = include_str!("../../../../languages/cq-syntax/tests/fixtures/planner-recursive-evidence.json");
+    let source = lower(quote! {
+        struct Closure;
+        relation Edge(x:i32,y:i32) = (edges);
+        relation Reach(x:i32,y:i32);
+        declared_evidence #json { Reach = "R" full [x="a",y="b"]; }
+        output Reach;
+        Seed: Reach(*x,*y) :- Edge(x,y);
+        Step: Reach(*x,*z) :- Reach(x,y), Edge(y,z);
+    });
+    let target = compile_sharded(&source).unwrap();
+    check_sharded(&source, &target).unwrap();
+    assert_eq!(round::erase(&target.round).unwrap(), expected_push(source.clone()));
+    let entry = target.round.execution.iter().find(|entry| {
+        target.round.holes[entry.hole].cq.declared_evidence.as_ref().unwrap()
+            .bindings.iter().any(|binding| binding.relation == entry.binding)
+    }).unwrap();
+    let mut stale = target.clone();
+    let facts = stale.round.holes[entry.hole].cq.declared_evidence.as_mut().unwrap();
+    facts.bindings.iter_mut().find(|binding| binding.relation == entry.binding)
+        .unwrap().relation = syn::parse_quote!(missing_scan);
+    assert!(check_sharded(&source, &stale).is_err());
+}
+
+#[test]
 fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
     let source = authored();
     let target = compile_sharded(&source).unwrap();

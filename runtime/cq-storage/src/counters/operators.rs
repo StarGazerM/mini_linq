@@ -39,12 +39,29 @@ pub struct OperatorRecord {
     /// cumulative construction time across invocations. Parallel invocations
     /// can overlap: this difference is not an elapsed wall-time phase.
     pub source_elapsed: Duration,
+    /// Immutable hole/round identity captured when the program was registered.
+    #[cfg(feature = "planner-calibration")]
+    pub calibration: Option<super::calibration::CalibrationFrame>,
+    /// Actual row-counter alias, as a global record ID; time sharing is separate.
+    #[cfg(feature = "planner-calibration")]
+    pub row_alias: Option<usize>,
+    /// A row tally overflowed; none of this record's counts are exact evidence.
+    #[cfg(feature = "planner-calibration")]
+    pub row_overflow: bool,
+    /// An actual output boundary was observed, including an observed empty result.
+    /// False means unobserved, not exact zero; time sharing never supplies this fact.
+    #[cfg(feature = "planner-calibration")]
+    pub row_observed: bool,
 }
 pub(super) struct State {
     id: usize,
     program: usize,
     label: OperatorLabel,
     metrics: Mutex<Metrics>,
+    #[cfg(feature = "planner-calibration")]
+    calibration: Option<super::calibration::CalibrationFrame>,
+    #[cfg(feature = "planner-calibration")]
+    row_overflow: AtomicBool,
 }
 #[derive(Clone, Default)]
 struct Metrics {
@@ -57,8 +74,23 @@ struct Metrics {
     stored_rows: Option<u64>,
     time_source: Option<usize>,
     source_elapsed: Duration,
+    #[cfg(feature = "planner-calibration")]
+    row_observed: bool,
 }
 impl State {
+    #[inline]
+    fn add_rows(&self, value: &mut u64, amount: u64) {
+        crate::calibration_select! {
+            plain { *value += amount; }
+            calibration {
+                if let Some(sum) = value.checked_add(amount) {
+                    *value = sum;
+                } else {
+                    self.row_overflow.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+    }
     fn update(&self, update: impl FnOnce(&mut Metrics)) {
         update(
             &mut self
@@ -98,8 +130,12 @@ pub fn operators() -> Vec<OperatorRecord> {
             .map(|s| {
                 let own = s.snapshot();
                 let mut source = own.clone();
+                #[cfg(feature = "planner-calibration")]
+                let mut row_overflow = s.row_overflow.load(Ordering::Relaxed);
                 while let Some(i) = source.alias {
                     source = ops[i].snapshot();
+                    #[cfg(feature = "planner-calibration")]
+                    { row_overflow |= ops[i].row_overflow.load(Ordering::Relaxed); }
                 }
                 let time = source
                     .time_source
@@ -118,6 +154,14 @@ pub fn operators() -> Vec<OperatorRecord> {
                     elapsed: time.elapsed,
                     calls: time.calls,
                     source_elapsed: time.source_elapsed,
+                    #[cfg(feature = "planner-calibration")]
+                    calibration: s.calibration.clone(),
+                    #[cfg(feature = "planner-calibration")]
+                    row_alias: own.alias,
+                    #[cfg(feature = "planner-calibration")]
+                    row_overflow,
+                    #[cfg(feature = "planner-calibration")]
+                    row_observed: source.row_observed,
                 }
             })
             .collect()
@@ -138,14 +182,52 @@ pub fn operators() -> Vec<OperatorRecord> {
             elapsed,
             calls: 1,
             source_elapsed: Duration::ZERO,
+            #[cfg(feature = "planner-calibration")]
+            calibration: None,
+            #[cfg(feature = "planner-calibration")]
+            row_alias: None,
+            #[cfg(feature = "planner-calibration")]
+            row_overflow: false,
+            #[cfg(feature = "planner-calibration")]
+            row_observed: false,
         });
     }
     records
 }
+/// Push-loop cardinalities accumulated locally and merged even on early exit.
+#[cfg(feature = "planner-calibration")]
+pub struct OperatorPush {
+    state: Arc<State>,
+    input: u64,
+    output: u64,
+    started: Instant,
+}
+#[cfg(feature = "planner-calibration")]
+impl OperatorPush {
+    pub fn input(&mut self) { self.state.add_rows(&mut self.input, 1); }
+    pub fn output(&mut self) { self.state.add_rows(&mut self.output, 1); }
+}
+#[cfg(feature = "planner-calibration")]
+impl Drop for OperatorPush {
+    fn drop(&mut self) {
+        self.state.update(|metrics| {
+            metrics.row_observed = true;
+            self.state.add_rows(&mut metrics.rows_in, self.input);
+            self.state.add_rows(&mut metrics.rows_out, self.output);
+            metrics.calls += 1;
+            metrics.elapsed += self.started.elapsed();
+        });
+    }
+}
+
 /// Shared handles cloned per iterator/task, never looked up through TLS per row.
 #[derive(Clone)]
 pub struct OperatorProgram(Arc<Vec<Arc<State>>>, super::TaskContext);
 impl OperatorProgram {
+    #[cfg(feature = "planner-calibration")]
+    pub fn push(&self, index: usize) -> OperatorPush {
+        OperatorPush { state: self.0[index].clone(), input: 0, output: 0, started: Instant::now() }
+    }
     pub fn new(labels: &[OperatorLabel]) -> Self {
         let context = super::TaskContext::capture();
         let states = {
@@ -163,6 +245,10 @@ impl OperatorProgram {
                         program,
                         label,
                         metrics: Mutex::new(Metrics::default()),
+                        #[cfg(feature = "planner-calibration")]
+                        calibration: context.2.frame(),
+                        #[cfg(feature = "planner-calibration")]
+                        row_overflow: AtomicBool::new(false),
                     });
                     ops.push(state.clone());
                     state
@@ -205,6 +291,8 @@ impl OperatorProgram {
             source: Some(source),
             state: self.0[index].clone(),
             count: 0,
+            #[cfg(feature = "planner-calibration")]
+            polled: false,
         }
     }
     #[cfg(not(feature = "counters"))]
@@ -307,9 +395,13 @@ impl OperatorProgram {
     #[cfg(feature = "counters")]
     pub fn rows(&self, index: usize, input: u64, output: u64, inserted: u64) {
         self.0[index].update(|metrics| {
-            metrics.rows_in += input;
-            metrics.rows_out += output;
-            metrics.inserted += inserted;
+            crate::calibration_select! {
+                plain {}
+                calibration { metrics.row_observed = true; }
+            }
+            self.0[index].add_rows(&mut metrics.rows_in, input);
+            self.0[index].add_rows(&mut metrics.rows_out, output);
+            self.0[index].add_rows(&mut metrics.inserted, inserted);
         });
     }
 }
@@ -375,9 +467,9 @@ impl<I> OperatorInput<I> {
             return;
         }
         self.state.update(|metrics| {
-            metrics.rows_in += self.count;
+            self.state.add_rows(&mut metrics.rows_in, self.count);
             if self.insert {
-                metrics.inserted += self.count;
+                self.state.add_rows(&mut metrics.inserted, self.count);
             }
         });
         self.count = 0;
@@ -394,7 +486,7 @@ impl<I: Iterator> Iterator for OperatorInput<I> {
     fn next(&mut self) -> Option<Self::Item> {
         let row = self.source.as_mut().expect("live iterator").next();
         if row.is_some() {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
         } else {
             self.flush();
         }
@@ -406,7 +498,7 @@ impl<I: Iterator> Iterator for OperatorInput<I> {
     {
         let source = self.source.take().expect("live iterator");
         source.fold(init, |acc, row| {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
             f(acc, row)
         })
     }
@@ -450,11 +542,15 @@ impl<I> OperatorStream<I> {
             return;
         }
         self.state.update(|metrics| {
+            crate::calibration_select! {
+                plain {}
+                calibration { metrics.row_observed = true; }
+            }
             if let Some(elapsed) = elapsed {
                 metrics.elapsed += elapsed;
                 metrics.calls += 1;
             }
-            metrics.rows_out += self.count;
+            self.state.add_rows(&mut metrics.rows_out, self.count);
         });
         self.count = 0;
     }
@@ -470,7 +566,7 @@ impl<I: Iterator> Iterator for OperatorStream<I> {
         if row.is_some() {
             #[cfg(feature = "counters")]
             {
-                self.count += 1;
+                self.state.add_rows(&mut self.count, 1);
             }
         } else {
             self.finish();
@@ -486,7 +582,7 @@ impl<I: Iterator> Iterator for OperatorStream<I> {
         source.fold(init, |acc, row| {
             #[cfg(feature = "counters")]
             {
-                self.count += 1;
+                self.state.add_rows(&mut self.count, 1);
             }
             f(acc, row)
         })
@@ -612,7 +708,11 @@ pub(crate) struct DeferredClock(Option<OperatorClock>);
 impl DeferredBuild {
     pub(crate) fn cardinality(&self, rows: usize) {
         self.0.update(|metrics| {
-            metrics.stored_rows = Some(metrics.stored_rows.unwrap_or(0) + rows as u64);
+            crate::calibration_select! {
+                plain {}
+                calibration { metrics.row_observed = true; }
+            }
+            self.0.add_rows(metrics.stored_rows.get_or_insert(0), rows as u64);
         });
     }
     pub(crate) fn start(&self) -> DeferredClock {
@@ -640,16 +740,39 @@ pub struct OperatorPredicate<P> {
 impl<P> Drop for OperatorPredicate<P> {
     fn drop(&mut self) {
         let count = *self.count.get_mut();
-        self.state.update(|metrics| metrics.rows_in += count);
+        self.state.update(|metrics| {
+            self.state.add_rows(&mut metrics.rows_in, count);
+            crate::calibration_select! {
+                plain {}
+                calibration { metrics.row_observed |= count != 0; }
+            }
+        });
         if let Some(source) = &self.source {
-            source.update(|metrics| metrics.rows_out += count);
+            source.update(|metrics| {
+                source.add_rows(&mut metrics.rows_out, count);
+                crate::calibration_select! {
+                    plain {}
+                    calibration { metrics.row_observed |= count != 0; }
+                }
+            });
+            #[cfg(feature = "planner-calibration")]
+            if self.state.row_overflow.load(Ordering::Relaxed) {
+                source.row_overflow.store(true, Ordering::Relaxed);
+            }
         }
     }
 }
 impl<K, P: crate::ReadPredicate<K>> crate::ReadPredicate<K> for OperatorPredicate<P> {
     #[inline]
     fn test(&self, key: &K) -> bool {
-        self.count.fetch_add(1, Ordering::Relaxed);
+        crate::calibration_select! {
+            plain { self.count.fetch_add(1, Ordering::Relaxed); }
+            calibration {
+                if self.count.fetch_add(1, Ordering::Relaxed) == u64::MAX {
+                    self.state.row_overflow.store(true, Ordering::Relaxed);
+                }
+            }
+        }
         self.predicate.test(key)
     }
     fn any_in(&self, lo: &K, hi: &K) -> bool {
@@ -662,13 +785,28 @@ pub struct OperatorOutput<I> {
     source: Option<I>,
     state: Arc<State>,
     count: u64,
+    #[cfg(feature = "planner-calibration")]
+    polled: bool,
 }
 impl<I> OperatorOutput<I> {
     fn flush(&mut self) {
-        if self.count == 0 {
+        if crate::calibration_select! {
+            plain { self.count == 0 }
+            calibration { self.count == 0 && !self.polled }
+        } {
             return;
         }
-        self.state.update(|metrics| metrics.rows_out += self.count);
+        self.state.update(|metrics| {
+            self.state.add_rows(&mut metrics.rows_out, self.count);
+            crate::calibration_select! {
+                plain {}
+                calibration { metrics.row_observed = true; }
+            }
+        });
+        crate::calibration_select! {
+            plain {}
+            calibration { self.polled = false; }
+        }
         self.count = 0;
     }
 }
@@ -681,9 +819,13 @@ impl<I: Iterator> Iterator for OperatorOutput<I> {
     type Item = I::Item;
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
+        crate::calibration_select! {
+            plain {}
+            calibration { self.polled = true; }
+        }
         let row = self.source.as_mut().expect("live iterator").next();
         if row.is_some() {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
         } else {
             self.flush();
         }
@@ -693,9 +835,13 @@ impl<I: Iterator> Iterator for OperatorOutput<I> {
     where
         F: FnMut(B, Self::Item) -> B,
     {
+        crate::calibration_select! {
+            plain {}
+            calibration { self.polled = true; }
+        }
         let source = self.source.take().expect("live iterator");
         source.fold(init, |acc, row| {
-            self.count += 1;
+            self.state.add_rows(&mut self.count, 1);
             f(acc, row)
         })
     }
@@ -723,7 +869,11 @@ pub(crate) fn build_cardinality(rows: usize) {
     ACTIVE_BUILD.with(|active| {
         if let Some((state, _)) = &*active.borrow() {
             state.update(|metrics| {
-                metrics.stored_rows = Some(metrics.stored_rows.unwrap_or(0) + rows as u64);
+                crate::calibration_select! {
+                    plain {}
+                    calibration { metrics.row_observed = true; }
+                }
+                state.add_rows(metrics.stored_rows.get_or_insert(0), rows as u64);
             });
         }
     });
@@ -949,5 +1099,69 @@ mod tests {
         );
         counters::reset();
         assert!(operators().is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "planner-calibration"))]
+mod calibration_overflow_tests {
+    use super::*;
+
+    #[test]
+    fn local_cursor_push_and_atomic_predicate_overflows_are_observable() {
+        const LABEL: OperatorLabel = OperatorLabel {
+            result: "rows", kind: "SCAN", key: "", inputs: &[],
+        };
+        super::super::TaskContext::default().run(|| {
+            let program = OperatorProgram::new(&[LABEL; 5]);
+            let mut stream = program.stream(0, std::iter::once(1));
+            stream.count = u64::MAX;
+            assert_eq!(stream.next(), Some(1));
+            drop(stream);
+            let mut input = program.input(1, std::iter::once(1));
+            input.count = u64::MAX;
+            assert_eq!(input.next(), Some(1));
+            drop(input);
+            let mut output = program.output(2, std::iter::once(1));
+            output.count = u64::MAX;
+            assert_eq!(output.next(), Some(1));
+            drop(output);
+            let mut push = program.push(3);
+            push.output = u64::MAX;
+            push.output();
+            drop(push);
+            struct All;
+            impl crate::ReadPredicate<i32> for All {
+                fn test(&self, _: &i32) -> bool { true }
+                fn any_in(&self, _: &i32, _: &i32) -> bool { true }
+            }
+            let predicate = program.predicate(4, None, All);
+            predicate.count.store(u64::MAX, Ordering::Relaxed);
+            assert!(crate::ReadPredicate::test(&predicate, &1));
+            drop(predicate);
+            assert!(operators().iter().all(|record| record.row_overflow));
+        });
+    }
+}
+
+#[cfg(all(test, feature = "planner-calibration"))]
+mod calibration_observation_tests {
+    use super::*;
+
+    #[test]
+    fn concrete_zero_build_cardinality_is_observed_without_a_row_or_clock_event() {
+        const LABEL: OperatorLabel = OperatorLabel {
+            result: "index", kind: "INDEX_BUILD", key: "", inputs: &[],
+        };
+        super::super::TaskContext::default().run(|| {
+            let program = OperatorProgram::new(&[LABEL; 3]);
+            program.build(0, || build_cardinality(0));
+            let deferred = program.build(1, || defer_build().unwrap());
+            assert!(!operators()[1].row_observed, "a deferred handle does not build rows");
+            deferred.cardinality(0);
+            let records = operators();
+            assert_eq!(records.iter().map(|record| record.row_observed).collect::<Vec<_>>(), [true, true, false]);
+            assert_eq!(records[1].calls, 0);
+            assert!(records.iter().all(|record| record.rows_out == 0));
+        });
     }
 }

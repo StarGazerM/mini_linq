@@ -5,12 +5,21 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "cq-stats"
+path = "src/bin/stats.rs"
+
 [features]
 default = []
 parquet = ["dep:arrow-array", "dep:arrow-schema", "dep:parquet"]
+planner-calibration = ["cq-storage/planner-calibration"]
 
 [dependencies]
 cq-storage = { path = "../cq-storage", version = "0.1.0" }
+cq-syntax.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 csv = "1.4"
 ahash = "=0.8.12"
 hashbrown = { version = "=0.15.5", default-features = false, features = ["inline-more"] }

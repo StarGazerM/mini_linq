@@ -133,6 +133,7 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
         passes,
         observer: None,
         output_consumer: None,
+        calibration: None,
     })
 }
 
@@ -211,9 +212,20 @@ pub fn plan(input: TokenStream) -> TokenStream {
     if sequence_plan_source(&input) {
         return plan_sequential(input.into());
     }
-    cq_stage::pass::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args| {
+    cq_stage::pass_with_calibration::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args, enabled| {
         let args: PlanOptions = syn::parse2(args)?;
-        cq_planning::compile_prefix(source, &args)
+        if !enabled {
+            return cq_planning::compile_prefix(source, &args).map(|target| (target, None));
+        }
+        use cq_stage::{Language, calibration::{Coverage, Seed}};
+        let (target, valuation, origins) = cq_planning::compile_prefix_with_origins(source, &args)?;
+        let seed = Seed {
+            valuation: valuation.calibration_snapshot().expect("VO adapter"),
+            lowering: target.calibration_snapshot().expect("RA adapter"),
+            origins: origins.definitions.into_iter().map(|(node, origins)| Coverage {node, origins}).collect(),
+            elided: origins.elided,
+        };
+        Ok((target, Some(seed)))
     })
     .into()
 }
@@ -774,5 +786,58 @@ mod tests {
             ).unwrap();
             assert_eq!(render(&selected), expected);
         }
+    }
+    #[test]
+    fn actual_checked_boundaries_preserve_local_origins_and_executable_ir() {
+        use cq_stage::calibration::{Coverage, Seed, Trace};
+        let source = syn::parse_quote! {
+            struct Q; relation R(x:i32,y:i32); relation S(y:i32);
+            answer(x) :- R(x,y), where x >= 1, S(y), if accept(x);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce);
+        let ordinary = cq_planning::compile_prefix(&source, &options).unwrap();
+        let (lowered, valuation, origins) =
+            cq_planning::compile_prefix_with_origins(&source, &options).unwrap();
+        assert_eq!(ordinary, lowered);
+        let mut trace = Trace::default();
+        trace.initialize(Seed {
+            valuation: valuation.calibration_snapshot().unwrap(),
+            lowering: lowered.calibration_snapshot().unwrap(),
+            origins: origins.definitions.into_iter().map(|(node, origins)|
+                Coverage {node, origins}).collect(),
+            elided: origins.elided,
+        }).unwrap();
+        let original_coverage = trace.coverage().unwrap();
+        let indexed = cq_index_policy::compile(&lowered).unwrap();
+        trace.advance(indexed.calibration_snapshot().unwrap()).unwrap();
+        let physical = cq_physical_lowering::compile(&indexed).unwrap();
+        let physical_snapshot = physical.calibration_snapshot().unwrap();
+        assert_eq!(trace.current().unwrap().nodes, physical_snapshot.nodes);
+        trace.advance(physical_snapshot).unwrap();
+        let structures = cq_structure_selection::compile(&physical).unwrap();
+        trace.advance(structures.calibration_snapshot().unwrap()).unwrap();
+        assert_eq!(trace.coverage().unwrap(), original_coverage);
+        assert_eq!(trace.current().unwrap().nodes.len(), physical.program.definitions.len());
+        let encoded = trace.descriptor().unwrap();
+        assert_eq!(Trace::parse_descriptor(&encoded).unwrap(), trace);
+        let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+        trace.advance(sequence.calibration_snapshot().unwrap()).unwrap();
+        assert_eq!(trace.coverage().unwrap(), original_coverage);
+        let analysis = cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
+        let original = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+        let source_tokens = quote!(pipeline {}; #sequence);
+        let trace_off = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
+            source_tokens, |source, _| cq_sequence_pull::translate(source, &analysis),
+        );
+        assert_eq!(trace_off.to_string(), original.to_token_stream().to_string());
+        let descriptor = trace.descriptor().unwrap();
+        let trace_on = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
+            quote!(pipeline {} #trace; #sequence),
+            |source, _| cq_sequence_pull::translate(source, &analysis),
+        );
+        assert_eq!(trace_on.to_string(), quote!(::cq_storage::calibration_select! {
+            plain { #original }
+            calibration {{ ::cq_storage::counters::calibration::register_plan(#descriptor); #original }}
+        }).to_string());
     }
 }

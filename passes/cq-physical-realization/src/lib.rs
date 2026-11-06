@@ -70,6 +70,24 @@ use cq_print::{Context, Repr, error, index, sorted};
 pub fn sources_with<'a>(
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
+    prepared: impl FnMut(&str, &Repr),
+) -> syn::Result<Context<'a>> {
+    sources_prepared(module, analysis, false, prepared)
+}
+
+/// Prepare the same sources with the existing physical operator counters enabled.
+pub fn sources_profile_with<'a>(
+    module: &'a structures::Program,
+    analysis: &'a structures::Analysis,
+    prepared: impl FnMut(&str, &Repr),
+) -> syn::Result<Context<'a>> {
+    sources_prepared(module, analysis, true, prepared)
+}
+
+fn sources_prepared<'a>(
+    module: &'a structures::Program,
+    analysis: &'a structures::Analysis,
+    profile: bool,
     mut prepared: impl FnMut(&str, &Repr),
 ) -> syn::Result<Context<'a>> {
     for definition in &module.physical.program.definitions {
@@ -124,6 +142,9 @@ pub fn sources_with<'a>(
         partitioned: false,
         canon_target: CanonTarget::Sequential,
     };
+    if profile {
+        printer.context.enable_profile(module);
+    }
     printer.certify_host_sets(module);
     let definitions = &module.physical.program.definitions;
     let mut position = 0;

@@ -332,6 +332,8 @@
 
 pub use cq_datalog_configuration::DatalogConfiguration;
 pub use cq_datalog_macros::datalog;
+#[cfg(feature = "planner-calibration")]
+pub use cq_cost::calibration;
 pub use cq_lang_datalog_incremental as incremental;
 pub use cq_lang_datalog_round as round;
 pub use cq_lang_datalog_source as source;

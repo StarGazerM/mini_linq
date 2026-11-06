@@ -890,6 +890,51 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
         })
 }
 impl cq_stage::Language for Program {
+    fn calibration_snapshot(&self) -> Option<cq_stage::calibration::Snapshot> {
+        use quote::ToTokens;
+        use cq_stage::calibration::{Node, Snapshot};
+        Some(Snapshot {
+            language: "ra".into(),
+            program: self.to_token_stream().to_string(),
+            nodes: self.plan.definitions.iter().map(|d| {
+                let inputs: Vec<&Ident> = match &d.operator {
+                    Operator::Unit(_) | Operator::Rename(_) => Vec::new(),
+                    Operator::Union(u) => u.operands.iter().collect(),
+                    Operator::Anti(a) => vec![&a.left, &a.right],
+                    Operator::NaturalJoin(j) => vec![&j.left, &j.right],
+                    Operator::Semijoin(j) => vec![&j.left, &j.right],
+                    Operator::Group(g) => vec![&g.input],
+                    Operator::Project(p) => vec![&p.input],
+                    Operator::Select(s) => vec![&s.input],
+                    Operator::Bind(b) => vec![&b.input],
+                    Operator::Guard(g) => vec![&g.input],
+                };
+                let slot = |index| Ident::new(&format!("__cq_operand_{index}"), proc_macro2::Span::call_site());
+                let mut logical = d.operator.clone();
+                match &mut logical {
+                    Operator::Unit(_) | Operator::Rename(_) => (),
+                    Operator::Union(u) => {
+                        for (i, operand) in u.operands.iter_mut().enumerate() { *operand = slot(i); }
+                        if let Some(origin) = &mut u.origin {
+                            if let Some(over) = &mut origin.over { over.prefix = slot(0); }
+                            if let Some(domain) = &mut origin.domain { domain.input = slot(0); }
+                        }
+                    }
+                    Operator::Anti(a) => { a.left = slot(0); a.right = slot(1); }
+                    Operator::NaturalJoin(j) => { j.left = slot(0); j.right = slot(1); }
+                    Operator::Semijoin(j) => { j.left = slot(0); j.right = slot(1); }
+                    Operator::Group(g) => g.input = slot(0),
+                    Operator::Project(p) => p.input = slot(0),
+                    Operator::Select(s) => s.input = slot(0),
+                    Operator::Bind(b) => b.input = slot(0),
+                    Operator::Guard(g) => g.input = slot(0),
+                }
+                Node { name: symbol_name(&d.result),
+                    operator: logical.to_token_stream().to_string(),
+                    inputs: inputs.into_iter().map(symbol_name).collect() }
+            }).collect(),
+        })
+    }
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())
     }

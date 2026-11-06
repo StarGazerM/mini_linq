@@ -1084,6 +1084,12 @@ impl ToTokens for OutputProtocol {
 }
 
 impl cq_stage::Language for Program {
+    fn calibration_snapshot(&self) -> Option<cq_stage::calibration::Snapshot> {
+        let mut snapshot = cq_stage::Language::calibration_snapshot(&self.structures)?;
+        snapshot.language = "sequence".into();
+        snapshot.program = self.to_token_stream().to_string();
+        Some(snapshot)
+    }
     fn context(&self) -> cq_stage::Context {
         cq_stage::Language::context(&self.structures)
     }

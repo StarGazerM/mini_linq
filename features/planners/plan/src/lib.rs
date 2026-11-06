@@ -342,6 +342,24 @@ pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Progra
     Ok(target)
 }
 
+/// Preserve the actual selected VO and pre-rewrite lowering witness. The
+/// executable target is checked and simplified exactly as in [`compile`].
+pub fn compile_with_origins(
+    source: &cq::Program,
+    planner: Planner,
+) -> syn::Result<(ra::Program, vo::Program, ra::Program, cq_relational_lowering::Origins)> {
+    let valuation = compile_valuation(source, planner)?;
+    let (lowered, origins) = cq_relational_lowering::compile_with_origins(&valuation)?;
+    cq_relational_lowering::check(&valuation, &lowered)?;
+    let target = match planner {
+        Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&lowered)?,
+        Planner::Le => cq_ra_rewrites::simplify_expansions(&lowered)?,
+        _ => lowered.clone(),
+    };
+    check(source, &target)?;
+    Ok((target, valuation, lowered, origins))
+}
+
 /// Independently check an authored valuation, including split and selected
 /// reducer obligations in every block branch. Rankings are not reselected.
 pub fn check_valuation(

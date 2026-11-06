@@ -24,6 +24,8 @@
 //! the admissible scalar bound rather than being refused.
 
 //! Push realizes standalone union/anti loops and consumes the prepared fused-dependent pipe once before pushing tuples to its sink.
+//! Optional calibration observes these same push loops through the shared
+//! OperatorProgram counters; local row tallies merge on exhaustion or unwind.
 //! Recorded canonicalization strategies and any/all witness choices are retained.
 //!
 //! Core blocks denote `bottom + Set`: `{ B1 } | { B2 }` unions projected
@@ -51,7 +53,7 @@ pub fn push(input: TokenStream) -> TokenStream {
         if !arguments.is_empty() {
             return error(&arguments, "own_push::push accepts no arguments");
         }
-        compile(source, None)
+        compile_observed(source, None)
     })
     .into()
 }
@@ -85,7 +87,7 @@ impl syn::parse::Parse for Consumer {
 pub fn push_into(input: TokenStream) -> TokenStream {
     cq_stage::pass::<structures::Program, syn::Expr>(input.into(), |source, arguments| {
         let consumer: Consumer = syn::parse2(arguments)?;
-        compile(source, Some(&consumer.0))
+        compile_observed(source, Some(&consumer.0))
     })
     .into()
 }
@@ -105,6 +107,19 @@ impl<'a> std::ops::Deref for Push<'a> {
 }
 
 fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
+    compile_mode(module, consumer, false)
+}
+
+fn compile_observed(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
+    let plain = compile(module, consumer)?;
+    let calibrated = compile_mode(module, consumer, true)?;
+    syn::parse2(quote!(::cq_storage::calibration_select! {
+        plain { #plain }
+        calibration { #calibrated }
+    }))
+}
+
+fn compile_mode(module: &structures::Program, consumer: Option<&syn::Expr>, profile: bool) -> syn::Result<syn::Expr> {
     let analysis = structures::contract::check(module)?;
     // Refuse unsupported written choices even in an otherwise unused result.
     for definition in &module.physical.program.definitions {
@@ -153,11 +168,16 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
         }
     }
     let mut positions = BTreeMap::new();
-    let context = cq_physical_realization::sources_with(module, &analysis, |name, repr| {
+    let prepared = |name: &str, repr: &Repr| {
         if let Repr::Positions(Some(ids)) = repr {
             positions.insert(name.to_owned(), ids.clone());
         }
-    })?;
+    };
+    let context = if profile {
+        cq_physical_realization::sources_profile_with(module, &analysis, prepared)?
+    } else {
+        cq_physical_realization::sources_with(module, &analysis, prepared)?
+    };
     let chunked = analysis
         .stages
         .keys()
@@ -206,6 +226,7 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
             quote!(#out.extend(#rows);)
         }
     });
+    let registration = push.context.profile_registration();
     let statements = &push.statements;
     let (endpoint, result) = match consumer {
         Some(consumer) => (quote!(let mut #out = #consumer;), Tokens::new()),
@@ -222,6 +243,7 @@ fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::R
         quote!(if #(#gates)&&* { #body #head_publish })
     };
     let mut expression = syn::parse2(quote!({
+        #registration
         #(#statements)*
         #endpoint
         #head_state
@@ -346,6 +368,23 @@ impl Push<'_> {
     }
 
     fn emit(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
+        let measured = self.context.profile_index(result).filter(|_| {
+            !(self.streamed(result) && self.prepared_dependency(result))
+                && !self.positions.contains_key(result)
+                && !matches!(self.reprs.get(result), Some(Repr::Selection { .. } | Repr::Let { .. }))
+                && !self.chunked.contains(result)
+        });
+        let Some(index) = measured else { return self.emit_inner(result, sink); };
+        let count = temporary("count", result);
+        let profile = self.profile_handle().clone();
+        let body = self.emit_inner(result, quote!(#count.output(); #sink))?;
+        Ok(quote!({
+            let mut #count = #profile.push(#index);
+            #body
+        }))
+    }
+
+    fn emit_inner(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.context.physical[result];
         if self.streamed(result) && self.prepared_dependency(result) {
             if !self.consumed.insert(result.to_owned()) {
@@ -446,6 +485,16 @@ impl Push<'_> {
         self.operator(result, sink)
     }
 
+    fn emit_input(&mut self, result: &str, input: &str, sink: Tokens) -> syn::Result<Tokens> {
+        let sink = if self.profile_index(result).is_some() {
+            let count = temporary("count", result);
+            quote!(#count.input(); #sink)
+        } else {
+            sink
+        };
+        self.emit(input, sink)
+    }
+
     fn operator(&mut self, result: &str, sink: Tokens) -> syn::Result<Tokens> {
         let definition = self.context.physical[result];
         if self.chunked.contains(result) {
@@ -471,7 +520,7 @@ impl Push<'_> {
                             value.to_token_stream()
                         }
                     });
-                    body.extend(self.emit(&input, quote!(let #pattern = #row; #sink))?);
+                    body.extend(self.emit_input(result, &input, quote!(let #pattern = #row; #sink))?);
                 }
                 Ok(body)
             }
@@ -482,7 +531,7 @@ impl Push<'_> {
                 let pattern = self.bind_columns(result, self.carried(result), false);
                 Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
             }
-            Operator::Project(project) => self.emit(&symbol_name(&project.input), sink),
+            Operator::Project(project) => self.emit_input(result, &symbol_name(&project.input), sink),
             Operator::Point(_, select) | Operator::Range(_, select) => {
                 let input_name = symbol_name(&select.input);
                 let hidden = self.context.idents[&input_name].clone();
@@ -507,16 +556,16 @@ impl Push<'_> {
                     let pattern = self.bind_columns(result, self.carried(result), false);
                     Ok(quote!(#[allow(unused_variables)] for #pattern in #rows { #sink }))
                 } else {
-                    self.select(select, sink)
+                    self.select(result, select, sink)
                 }
             }
-            Operator::Select(select) => self.select(select, sink),
+            Operator::Select(select) => self.select(result, select, sink),
             Operator::Guard(guard) => {
                 let input = symbol_name(&guard.input);
                 let shadows =
                     self.rust_aliases(&input, &guard.condition, guard.environment.as_ref());
                 let condition = guard.test();
-                self.emit(&input, quote!(if { #(#shadows)* #condition } { #sink }))
+                self.emit_input(result, &input, quote!(if { #(#shadows)* #condition } { #sink }))
             }
             Operator::Bind(bind) => {
                 let pattern = &bind.pattern;
@@ -528,7 +577,8 @@ impl Push<'_> {
                     Some((function, arguments)) => quote!(#function(#(#arguments),*)),
                     None => bind.value().to_token_stream(),
                 };
-                self.emit(
+                self.emit_input(
+                    result,
                     &input,
                     {
                         let row = self.carrier(result, |column| {
@@ -583,7 +633,7 @@ impl Push<'_> {
                         });
                         let pattern = self.bind_columns(result, self.carried(result), false);
                         let inner = self.emit(&right, quote!(let #pattern = #row; #sink))?;
-                        return self.emit(&left, inner);
+                        return self.emit_input(result, &left, inner);
                     }
                     Access::Host(access) => (
                         self.host_lookup(&left, &access, false, false),
@@ -624,7 +674,8 @@ impl Push<'_> {
                     }
                 });
                 let pattern = self.bind_columns(result, self.carried(result), false);
-                self.emit(
+                self.emit_input(
+                    result,
                     &left,
                     quote! {
                         for #value in #lookup {
@@ -658,6 +709,11 @@ impl Push<'_> {
         let id = temporary("position", result);
         let mut predicates = Vec::new();
         for definition in chain.iter().rev() {
+            let index = self.profile_index(&symbol_name(&definition.name));
+            let before = temporary("stage_input", &symbol_name(&definition.name));
+            if index.is_some() {
+                predicates.push(quote!(let #before = #chunk.survivors().size_hint().0 as u64;));
+            }
             if let Operator::Select(select)
             | Operator::Point(_, select)
             | Operator::Range(_, select) = &definition.operator
@@ -675,6 +731,17 @@ impl Push<'_> {
                         #condition
                     });
                 });
+            }
+            if let Some(index) = index {
+                let profile = self.profile_handle();
+                let input = if matches!(definition.operator, Operator::Rename(_)) {
+                    quote!(0)
+                } else {
+                    quote!(#before)
+                };
+                predicates.push(quote!(
+                    #profile.rows(#index, #input, #chunk.survivors().size_hint().0 as u64, 0);
+                ));
             }
         }
         let pattern = self.positional_pattern(result);
@@ -743,17 +810,18 @@ impl Push<'_> {
             }
         };
         let test = if negative { quote!(!(#test)) } else { test };
-        self.emit(&left, quote!(if #test { #sink }))
+        self.emit_input(reader, &left, quote!(if #test { #sink }))
     }
     fn select(
         &mut self,
+        result: &str,
         select: &structures::syntax::algebra::Select,
         sink: Tokens,
     ) -> syn::Result<Tokens> {
         let condition = self.relational_condition(&select.condition);
         let input = symbol_name(&select.input);
         let shadows = self.predicate_aliases(&input, &select.condition);
-        self.emit(&input, quote!(if { #(#shadows)* #condition } { #sink }))
+        self.emit_input(result, &input, quote!(if { #(#shadows)* #condition } { #sink }))
     }
 }
 
@@ -815,5 +883,32 @@ mod tests {
                 assert!(!printed.contains("__cq_seen"), "{printed}");
             }
         }
+    }
+
+    #[test]
+    fn calibrated_push_keeps_loops_and_registers_real_operator_counters() {
+        let module = syn::parse2(quote! {
+            physical {
+                relation R(a:i32);
+                consumer canonical;
+                r = pipe rename R@0 {a -> a};
+                p = pipe project r keep {a};
+                return p as answer(a);
+            }
+            structures {
+                providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
+                r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            }
+        }).unwrap();
+        let consumer = syn::parse_quote!(consume);
+        let plain = compile(&module, Some(&consumer)).unwrap().to_token_stream().to_string();
+        let observed = compile_mode(&module, Some(&consumer), true).unwrap().to_token_stream().to_string();
+        assert!(!plain.contains("OperatorProgram"));
+        assert!(observed.contains("OperatorProgram :: new"));
+        assert!(observed.contains(". push ("));
+        assert!(observed.contains(". output ()"));
+        assert_eq!(observed.matches("for ").count(), plain.matches("for ").count());
+        assert!(!observed.contains("rows_enumerated"));
+        assert!(!observed.contains("collect"));
     }
 }

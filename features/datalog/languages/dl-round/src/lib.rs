@@ -36,6 +36,7 @@ pub use storage::incremental;
 use storage::{record, text::Text};
 use syn::{Expr, Ident};
 mod correspondence;
+pub mod evidence;
 mod planning;
 pub use correspondence::check_storage;
 pub mod schedule;
@@ -349,6 +350,9 @@ impl Eq for Hole {}
 impl Hole {
     /// Rename a certified scan input and its exact lowering argument packet.
     pub fn rename_host_fact(&mut self, old: &Ident, new: &Ident) {
+        if let Some(evidence) = &mut self.cq.declared_evidence {
+            evidence.rename_relation(old, new);
+        }
         if self.facts.discharged_host_sets.remove(&symbol_name(old)) {
             self.facts.discharged_host_sets.insert(symbol_name(new));
             if let Some(lower) = self.pipeline.passes.get_mut(self.lower) {
@@ -703,6 +707,9 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
                     .is_some_and(|h| h.cq.name == cq.name)
                 {
                     if let Some(scan) = &rule.scan {
+                        if let Some(evidence) = &mut cq.declared_evidence {
+                            evidence.rename_relation(&entry.binding, &scan.binding);
+                        }
                         for declaration in &mut cq.declarations {
                             if declaration.name == entry.binding {
                                 declaration.name = scan.binding.clone();
@@ -1174,6 +1181,7 @@ pub mod contract {
         check_admit_once(&erased)?;
         check_execution(program)?;
         schedule::check(program, &analysis)?;
+        evidence::check_iteration_scope(program)?;
         Ok(Analysis { storage: analysis })
     }
 }

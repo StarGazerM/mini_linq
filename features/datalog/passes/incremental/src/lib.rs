@@ -1,5 +1,6 @@
 //! Record the exact Boolean semi-naive cover without storage decisions.
 use cq_datalog_support::{Fresh, ensure};
+mod advice;
 /// ADM-InPlan advice carried by [`RulePlan::known`].
 pub use cq_lang_datalog_incremental::Known;
 use cq_lang_datalog_incremental::{AdviceStep, Delta, Program, Variant, contract};

@@ -59,8 +59,8 @@ fn rendered_invocations_follow_wave_and_within_wave_order() {
                 Ok(evaluate(rules, context, holes, &program.holes, timed))
             })
             .unwrap()
-            .to_token_stream()
-            .to_string();
+            .to_token_stream();
+            let rendered = cq_datalog_print::calibration_branch(rendered, false).to_string();
             let stratum = &program.context.strata[0];
             let expected: Vec<_> = program.schedule.strata[0]
                 .waves

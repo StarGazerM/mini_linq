@@ -6,6 +6,7 @@ publish = false
 
 [features]
 phase-timing = ["cq-datalog/phase-timing"]
+planner-calibration = ["cq-datalog/planner-calibration", "srd-doop-harness/planner-calibration", "srd-doop-shared/planner-calibration"]
 
 [dependencies]
 srd-doop-shared = { path = "../../srd" }

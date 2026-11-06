@@ -100,6 +100,16 @@ impl DatalogConfiguration {
     /// terminal interface declarations in fork args. Replacement fork passes receive
     /// `cq = pipeline { ... }; terminals = [path => pull, ...];` after authored arguments.
     pub fn resolve(self, defaults: Self) -> syn::Result<Pipeline> {
+        self.resolve_diagnostics(defaults, false)
+    }
+
+    /// Enable explicit erasable VO-to-Physical provenance in each CQ hole.
+    /// This changes diagnostic metadata only, never a pass or planning option.
+    pub fn resolve_calibrated(self, defaults: Self) -> syn::Result<Pipeline> {
+        self.resolve_diagnostics(defaults, true)
+    }
+
+    fn resolve_diagnostics(self, defaults: Self, calibration: bool) -> syn::Result<Pipeline> {
         let missing = || {
             syn::Error::new(
                 proc_macro2::Span::call_site(),
@@ -111,7 +121,8 @@ impl DatalogConfiguration {
         // named role so aliases receive the same context packet as default lower.
         let lower = syn::Index::from(cq_configuration.surface.len() + 2);
         let plan = syn::Index::from(cq_configuration.surface.len());
-        let cq = cq_datalog_fork::resolve_cq(cq_configuration)?;
+        let mut cq = cq_datalog_fork::resolve_cq(cq_configuration)?;
+        if calibration { cq.enable_calibration(); }
         let mut fork = self.fork.or(defaults.fork).ok_or_else(missing)?;
         fork.arguments
             .extend(quote!(cq = #cq; lower = #lower; plan = #plan;));
@@ -138,6 +149,7 @@ impl DatalogConfiguration {
             passes,
             observer: None,
             output_consumer: None,
+            calibration: None,
         })
     }
 }

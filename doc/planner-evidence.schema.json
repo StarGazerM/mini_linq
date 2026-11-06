@@ -1,0 +1,1637 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mini-linq.org/schema/planner-evidence.v1.json",
+  "title": "mini-linq.planner-evidence.v1",
+  "description": "Declarative dataset evidence, not scheduling advice. Rust cq_syntax::evidence checking is authoritative for hashes, cross-field units and scopes, feasible intervals, keys, recursion, exact relative arithmetic, and observation citations. JSON consumers must reject duplicate object keys before schema validation. Canonical identity uses compact JSON, recursively sorted object keys, preserved array order, UTF-8 strings and exact integer encoding. Counts are u64; rationals are unbounded canonical decimal strings. No optional missing fact denotes zero. This checker does not reopen data files or prove declarations.",
+  "$comment": "hash_mode=typed-row-stream-v1 is REQUIRED. For each data file SHA-256 starts with ASCII mini-linq:typed-row-stream-v1 followed by NUL and column count as unsigned 64-bit big-endian. For each decoded row in source order, including duplicates BEFORE set deduplication, append byte 0x52 followed by cells in the recorded declaration order. Cell tags/payloads: 0x01 signed integer + signed i64 big-endian; 0x02 decimal + scale u32 big-endian + unscaled signed i64 big-endian; 0x03 date + signed i64 Gregorian days since 1970-01-01 big-endian (encoding days_since_unix_epoch); 0x04 UTF-8 + byte length u64 big-endian + exact UTF-8 bytes; 0x05 symbol + code u64 big-endian. At EOF append 0x45 and original decoded row count u64 big-endian. Integers use two's-complement encoding. Schema, column order, effective loader/encoding options and symbol dictionary identities are separately bound by the canonical manifest. Metadata/constants/dictionary files use SHA-256 of raw bytes. No physical CSV/Parquet byte-identity claim is made for data files; equivalent decoded rows under identical recorded semantics have identical content digests.",
+  "$defs": {
+    "Hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "Source": {
+      "enum": [
+        "exact",
+        "hll",
+        "bound",
+        "declared",
+        "calibrated"
+      ]
+    },
+    "Claim": {
+      "enum": [
+        "equal",
+        "upper",
+        "lower",
+        "interval",
+        "observation"
+      ]
+    },
+    "Unit": {
+      "enum": [
+        "rows",
+        "distinct",
+        "degree",
+        "rounds",
+        "scalar",
+        "ratio",
+        "declared-row-work"
+      ]
+    },
+    "Semantics": {
+      "enum": [
+        "bag",
+        "set"
+      ]
+    },
+    "Scope": {
+      "enum": [
+        "input",
+        "frozen",
+        "recursive_final"
+      ]
+    },
+    "Admission": {
+      "enum": [
+        "insert_only_set",
+        "bag",
+        "replacement",
+        "deletion"
+      ]
+    },
+    "RunIdentity": {
+      "type": "object",
+      "properties": {
+        "program_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "configuration_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "admission": {
+          "$ref": "#/$defs/Admission"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "completed": {
+          "const": true
+        }
+      },
+      "required": [
+        "program_hash",
+        "configuration_hash",
+        "admission",
+        "run_id",
+        "completed"
+      ],
+      "additionalProperties": false
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "producer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifact_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "producer",
+        "method",
+        "locator"
+      ],
+      "additionalProperties": false
+    },
+    "ScalarDomain": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "signed_integer"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "decimal"
+            },
+            "scale": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          },
+          "required": [
+            "kind",
+            "scale"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "date"
+            },
+            "encoding": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "encoding"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "utf8"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "symbol"
+            },
+            "dictionary_hash": {
+              "$ref": "#/$defs/Hash"
+            },
+            "ordered": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "dictionary_hash",
+            "ordered"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "unordered"
+            },
+            "limitation": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "limitation"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Scalar": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "signed_integer"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "decimal"
+            },
+            "unscaled": {
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
+            },
+            "scale": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          },
+          "required": [
+            "kind",
+            "unscaled",
+            "scale"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "date"
+            },
+            "value": {
+              "type": "integer",
+              "minimum": -9223372036854775808,
+              "maximum": 9223372036854775807
+            },
+            "encoding": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "value",
+            "encoding"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "utf8"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "symbol"
+            },
+            "code": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "dictionary_hash": {
+              "$ref": "#/$defs/Hash"
+            }
+          },
+          "required": [
+            "kind",
+            "code",
+            "dictionary_hash"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Rational": {
+      "type": "object",
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "denominator": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "additionalProperties": false
+    },
+    "CountFact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "claim": {
+          "$ref": "#/$defs/Claim"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dataset_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "unit": {
+          "enum": [
+            "rows",
+            "distinct",
+            "degree",
+            "rounds"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "claim",
+        "dataset_hash",
+        "provenance",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "claim": {
+                "const": "interval"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "lower",
+              "upper"
+            ],
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "lower": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              },
+              "upper": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 18446744073709551615
+              },
+              "lower": {
+                "type": "null"
+              },
+              "upper": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "hll"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "claim": {
+                "const": "observation"
+              },
+              "unit": {
+                "const": "distinct"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "bound"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "claim": {
+                "enum": [
+                  "upper",
+                  "lower",
+                  "interval"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ScalarFact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "claim": {
+          "$ref": "#/$defs/Claim"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Scalar"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Scalar"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Scalar"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dataset_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "unit": {
+          "enum": [
+            "scalar"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "claim",
+        "dataset_hash",
+        "provenance",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "claim": {
+                "const": "interval"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "lower",
+              "upper"
+            ],
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "lower": {
+                "$ref": "#/$defs/Scalar"
+              },
+              "upper": {
+                "$ref": "#/$defs/Scalar"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/Scalar"
+              },
+              "lower": {
+                "type": "null"
+              },
+              "upper": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "hll"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "claim": {
+                "const": "observation"
+              },
+              "unit": {
+                "const": "distinct"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "bound"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "claim": {
+                "enum": [
+                  "upper",
+                  "lower",
+                  "interval"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "RationalFact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "claim": {
+          "$ref": "#/$defs/Claim"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dataset_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "unit": {
+          "enum": [
+            "ratio",
+            "rows",
+            "declared-row-work"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "claim",
+        "dataset_hash",
+        "provenance",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "claim": {
+                "const": "interval"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "lower",
+              "upper"
+            ],
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "lower": {
+                "$ref": "#/$defs/Rational"
+              },
+              "upper": {
+                "$ref": "#/$defs/Rational"
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/Rational"
+              },
+              "lower": {
+                "type": "null"
+              },
+              "upper": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "hll"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "claim": {
+                "const": "observation"
+              },
+              "unit": {
+                "const": "distinct"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "bound"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "claim": {
+                "enum": [
+                  "upper",
+                  "lower",
+                  "interval"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ManifestRelation": {
+      "type": "object",
+      "properties": {
+        "semantics": {
+          "$ref": "#/$defs/Semantics"
+        },
+        "columns": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ScalarDomain"
+          },
+          "propertyNames": {
+            "minLength": 1
+          }
+        },
+        "null_handling": {
+          "type": "string",
+          "minLength": 1
+        },
+        "set_certification": {
+          "anyOf": [
+            {
+              "enum": [
+                "full_tuple_deduplicated",
+                "input_unique"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "semantics",
+        "columns",
+        "null_handling"
+      ],
+      "additionalProperties": false
+    },
+    "ManifestFile": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "data",
+            "metadata",
+            "constants",
+            "dictionary"
+          ]
+        },
+        "content_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "encoding_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "missing_as_empty": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "role",
+        "encoding_hash",
+        "missing_as_empty"
+      ],
+      "additionalProperties": false
+    },
+    "InputManifest": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ManifestRelation"
+          },
+          "propertyNames": {
+            "minLength": 1
+          }
+        },
+        "formulation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ManifestFile"
+          },
+          "propertyNames": {
+            "minLength": 1
+          }
+        },
+        "dictionaries": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Hash"
+          },
+          "propertyNames": {
+            "minLength": 1
+          }
+        },
+        "loader_options": {
+          "type": "object",
+          "properties": {
+            "hash_mode": { "const": "typed-row-stream-v1" }
+          },
+          "required": ["hash_mode"],
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          },
+          "propertyNames": {
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "schema",
+        "formulation",
+        "files",
+        "dictionaries",
+        "loader_options"
+      ],
+      "additionalProperties": false
+    },
+    "DatasetIdentity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "date": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "schema_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "formulation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest": {
+          "$ref": "#/$defs/InputManifest"
+        }
+      },
+      "required": [
+        "name",
+        "hash",
+        "date",
+        "schema_hash",
+        "formulation",
+        "manifest"
+      ],
+      "additionalProperties": false
+    },
+    "ColumnEvidence": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "$ref": "#/$defs/ScalarDomain"
+        },
+        "distinct": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScalarFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScalarFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_degree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "domain"
+      ],
+      "additionalProperties": false
+    },
+    "KeySetEvidence": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "distinct": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_degree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "columns"
+      ],
+      "additionalProperties": false
+    },
+    "KeyDeclaration": {
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "source": {
+          "enum": [
+            "exact",
+            "declared"
+          ]
+        },
+        "dataset_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      },
+      "required": [
+        "columns",
+        "source",
+        "dataset_hash",
+        "provenance"
+      ],
+      "additionalProperties": false
+    },
+    "RecursiveEvidence": {
+      "type": "object",
+      "properties": {
+        "stratum": {
+          "type": "string",
+          "minLength": 1
+        },
+        "final_rows": {
+          "$ref": "#/$defs/CountFact"
+        },
+        "rounds": {
+          "$ref": "#/$defs/CountFact"
+        },
+        "round_convention": {
+          "const": "executed-steady-rounds-excluding-seed-and-terminal-empty"
+        },
+        "run": {
+          "$ref": "#/$defs/RunIdentity"
+        },
+        "seed_rows": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unconsumed_final_delta_rows": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "stratum",
+        "final_rows",
+        "rounds",
+        "round_convention",
+        "run"
+      ],
+      "additionalProperties": false
+    },
+    "RelationEvidence": {
+      "type": "object",
+      "properties": {
+        "semantics": {
+          "$ref": "#/$defs/Semantics"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "columns": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ColumnEvidence"
+          },
+          "propertyNames": {
+            "minLength": 1
+          }
+        },
+        "rows": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key_sets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeySetEvidence"
+          }
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/KeyDeclaration"
+          }
+        },
+        "recursive": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecursiveEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "semantics",
+        "scope",
+        "columns"
+      ],
+      "additionalProperties": false
+    },
+    "Premise": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "delta_subset"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "const": "declared"
+            },
+            "dataset_hash": {
+              "$ref": "#/$defs/Hash"
+            },
+            "provenance": {
+              "$ref": "#/$defs/Provenance"
+            },
+            "relations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "source",
+            "dataset_hash",
+            "provenance",
+            "relations"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "delta_partition"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "const": "declared"
+            },
+            "dataset_hash": {
+              "$ref": "#/$defs/Hash"
+            },
+            "provenance": {
+              "$ref": "#/$defs/Provenance"
+            },
+            "relation": {
+              "type": "string",
+              "minLength": 1
+            },
+            "includes_seed_delta": {
+              "const": true
+            },
+            "insert_only_set": {
+              "const": true
+            },
+            "complete_consumption": {
+              "const": true
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "source",
+            "dataset_hash",
+            "provenance",
+            "relation",
+            "includes_seed_delta",
+            "insert_only_set",
+            "complete_consumption"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "FactSubject": {
+      "type": "object",
+      "properties": {
+        "relation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "measure": {
+          "enum": [
+            "rows",
+            "final_rows"
+          ]
+        }
+      },
+      "required": [
+        "relation",
+        "measure"
+      ],
+      "additionalProperties": false
+    },
+    "RelativeFact": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "const": "declared"
+        },
+        "dataset_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "left": {
+          "$ref": "#/$defs/FactSubject"
+        },
+        "op": {
+          "const": "le_scaled"
+        },
+        "right": {
+          "$ref": "#/$defs/FactSubject"
+        },
+        "factor": {
+          "$ref": "#/$defs/RationalFact"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "dataset_hash",
+        "provenance",
+        "left",
+        "op",
+        "right",
+        "factor"
+      ],
+      "additionalProperties": false
+    },
+    "TargetEvidence": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "const": "declared-row-work"
+        },
+        "build_per_row_h": {
+          "$ref": "#/$defs/RationalFact"
+        },
+        "merge_per_row_m": {
+          "$ref": "#/$defs/RationalFact"
+        },
+        "configuration_hash": {
+          "$ref": "#/$defs/Hash"
+        }
+      },
+      "required": [
+        "unit",
+        "build_per_row_h",
+        "merge_per_row_m",
+        "configuration_hash"
+      ],
+      "additionalProperties": false
+    },
+    "RoundObservation": {
+      "type": "object",
+      "properties": {
+        "round": {
+          "$ref": "#/$defs/CountFact"
+        },
+        "delta_rows": {
+          "$ref": "#/$defs/CountFact"
+        }
+      },
+      "required": [
+        "round",
+        "delta_rows"
+      ],
+      "additionalProperties": false
+    },
+    "RoundObservations": {
+      "type": "object",
+      "properties": {
+        "relation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stratum": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run": {
+          "$ref": "#/$defs/RunIdentity"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoundObservation"
+          }
+        }
+      },
+      "required": [
+        "relation",
+        "stratum",
+        "run",
+        "complete",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "BoundCitation": {
+      "type": "object",
+      "properties": {
+        "fact": {
+          "type": "string",
+          "minLength": 1
+        },
+        "premises": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "dataset_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "program_hash": {
+          "$ref": "#/$defs/Hash"
+        },
+        "variant": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "fact",
+        "premises",
+        "dataset_hash",
+        "program_hash",
+        "variant"
+      ],
+      "additionalProperties": false
+    },
+    "StepObservation": {
+      "type": "object",
+      "properties": {
+        "relation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hole": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variant": {
+          "type": "string",
+          "minLength": 1
+        },
+        "step": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run": {
+          "$ref": "#/$defs/RunIdentity"
+        },
+        "round": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CountFact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rows": {
+          "$ref": "#/$defs/CountFact"
+        },
+        "bound": {
+          "$ref": "#/$defs/BoundCitation"
+        }
+      },
+      "required": [
+        "relation",
+        "hole",
+        "variant",
+        "step",
+        "run",
+        "rows",
+        "bound"
+      ],
+      "additionalProperties": false
+    },
+    "PhysicalBoundComparison": {
+      "type": "object",
+      "$comment": "A computed bound comparison is observational, never a supplied cardinality certificate. The Rust checker requires calibrated/observation strength, matching completed run, non-observational fact citations, and an arithmetically correct within_bound flag; a falsified comparison remains visible.",
+      "properties": {
+        "computed": { "$ref": "#/$defs/RationalFact" },
+        "fact_citations": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "compiler_citations": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "within_bound": { "type": "boolean" }
+      },
+      "required": ["computed", "fact_citations", "compiler_citations", "within_bound"],
+      "additionalProperties": false
+    },
+    "PhysicalStepObservation": {
+      "type": "object",
+      "$comment": "Actual operator-counter instance, with checked VO lineage and true row-alias fusion. Numeric labels are identities, not measured facts. Unknown bounds require a reason; comparison numbers must not enter the optimizer as certificates.",
+      "properties": {
+        "hole": { "type": "string", "minLength": 1 },
+        "variant": { "type": "string", "minLength": 1 },
+        "instance": { "type": "string", "minLength": 1 },
+        "stratum": { "type": "string", "minLength": 1 },
+        "trace_hash": { "$ref": "#/$defs/Hash" },
+        "physical_steps": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "vo_steps": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "fused": { "type": "boolean" },
+        "run": { "$ref": "#/$defs/RunIdentity" },
+        "round": { "anyOf": [{ "$ref": "#/$defs/CountFact" }, { "type": "null" }] },
+        "rows": { "$ref": "#/$defs/CountFact" },
+        "comparison": { "anyOf": [{ "$ref": "#/$defs/PhysicalBoundComparison" }, { "type": "null" }] },
+        "unknown": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "required": ["hole", "variant", "instance", "stratum", "trace_hash", "physical_steps", "vo_steps", "fused", "run", "rows", "unknown"],
+      "additionalProperties": false
+    },
+    "Observations": {
+      "type": "object",
+      "properties": {
+        "rounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RoundObservations"
+          }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StepObservation"
+          }
+        },
+        "physical_steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PhysicalStepObservation" }
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "mini-linq.planner-evidence.v1"
+    },
+    "dataset": {
+      "$ref": "#/$defs/DatasetIdentity"
+    },
+    "relations": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RelationEvidence"
+      },
+      "propertyNames": {
+        "minLength": 1
+      }
+    },
+    "premises": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Premise"
+      }
+    },
+    "relative": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RelativeFact"
+      }
+    },
+    "targets": {
+      "type": "object",
+      "properties": {
+        "cpu": {
+          "$ref": "#/$defs/TargetEvidence"
+        },
+        "cpu-par": {
+          "$ref": "#/$defs/TargetEvidence"
+        },
+        "gpu": {
+          "$ref": "#/$defs/TargetEvidence"
+        }
+      },
+      "additionalProperties": false
+    },
+    "observations": {
+      "$ref": "#/$defs/Observations"
+    }
+  },
+  "required": [
+    "schema",
+    "dataset",
+    "relations"
+  ],
+  "additionalProperties": false
+}

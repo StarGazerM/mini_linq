@@ -121,6 +121,7 @@ fn evaluate(
     let grain = Ident::new("__cq_grain", Span::mixed_site());
     let bucket = Ident::new("__cq_bucket", Span::mixed_site());
     let inline = Ident::new("__cq_inline", Span::mixed_site());
+    let calibration_task = Ident::new("__cq_calibration_task", Span::mixed_site());
     for rule in rules {
         let index = phase_rules
             .iter()
@@ -212,7 +213,16 @@ fn evaluate(
                 .map(|&column| &relation.declaration.columns[column].ty);
             quote!({
                 let #source_name = #source;
-                let #evaluator = |#chunk: &[(#(#input_types,)*)]| { #consume };
+                ::cq_storage::calibration_select! {
+                    plain {}
+                    calibration { let #calibration_task = ::cq_storage::counters::TaskContext::capture(); }
+                }
+                let #evaluator = |#chunk: &[(#(#input_types,)*)]| {
+                    ::cq_storage::calibration_select! {
+                        plain { #consume }
+                        calibration { #calibration_task.run(|| { #consume }) }
+                    }
+                };
                 // Recorded minimum grain, widened so a large driver yields about
                 // four chunks per worker (the documented partition formula).
                 let #grain = ::core::cmp::max(
@@ -353,7 +363,18 @@ fn evaluate(
         let closures = wave_evaluators.iter().map(|&index| {
             let run = &evaluators[index];
             let body = &evaluations[index];
-            quote!(let mut #run = || { #body };)
+            quote!(
+                ::cq_storage::calibration_select! {
+                    plain {}
+                    calibration { let #calibration_task = ::cq_storage::counters::TaskContext::capture(); }
+                }
+                let mut #run = || {
+                    ::cq_storage::calibration_select! {
+                        plain { #body }
+                        calibration { #calibration_task.run(|| { #body }) }
+                    }
+                };
+            )
         });
         let runs: Vec<_> = wave_evaluators
             .iter()
@@ -397,7 +418,18 @@ fn evaluate(
         let admission_closures = admission_tasks
             .iter()
             .zip(&inline_admit)
-            .map(|(task, body)| quote!(let #task = || { #body };));
+            .map(|(task, body)| quote!(
+                ::cq_storage::calibration_select! {
+                    plain {}
+                    calibration { let #calibration_task = ::cq_storage::counters::TaskContext::capture(); }
+                }
+                let #task = || {
+                    ::cq_storage::calibration_select! {
+                        plain { #body }
+                        calibration { #calibration_task.run(|| { #body }) }
+                    }
+                };
+            ));
         emitted_waves.push(quote! {
             #(#closures)*
             if #inline {
@@ -716,6 +748,11 @@ fn timed_chunk(
 mod tests {
     use super::*;
     use quote::ToTokens;
+
+    fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<syn::Expr> {
+        let expression = super::compile(program)?;
+        syn::parse2(cq_datalog_print::calibration_branch(expression.to_token_stream(), false))
+    }
 
     fn pull_program() -> round::Program {
         let source = syn::parse_quote! {
@@ -1079,7 +1116,7 @@ mod tests {
                 &round::erase(&program.round).unwrap(),
             )
             .unwrap();
-            let evaluation = evaluation.to_string();
+            let evaluation = cq_datalog_print::calibration_branch(evaluation, false).to_string();
             assert_eq!(
                 evaluation.contains("for row in"),
                 interface == round::HoleInterface::Pull,

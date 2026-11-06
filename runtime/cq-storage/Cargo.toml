@@ -16,6 +16,8 @@ cq-load = { path = "../cq-load", default-features = false }
 [features]
 default = []
 counters = []
+# Diagnostic planner lineage and borrowed input/round observations.
+planner-calibration = ["counters"]
 # Independent timing mode; enabling counters as well retains every counter.
 operator-timing = []
 

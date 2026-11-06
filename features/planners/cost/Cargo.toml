@@ -1,0 +1,44 @@
+[package]
+name = "cq-cost"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+planner-calibration = ["dep:cq-storage", "cq-storage/planner-calibration", "dep:cq-load", "cq-load/planner-calibration", "dep:cq-stage", "dep:cq-lang-ra", "dep:cq-lang-ix", "dep:cq-lang-physical", "dep:cq-lang-structures", "dep:cq-lang-sequence", "dep:cq-relational-lowering", "dep:cq-datalog-print"]
+
+[dependencies]
+cq-syntax.workspace = true
+cq-lang-cq.workspace = true
+cq-lang-vo.workspace = true
+cq-planning.workspace = true
+cq-lang-datalog-round.workspace = true
+cq-datalog-stratify.workspace = true
+cq-datalog-incremental.workspace = true
+cq-datalog-storage.workspace = true
+cq-datalog-fork.workspace = true
+cq-storage = { workspace = true, optional = true }
+cq-load = { workspace = true, optional = true }
+cq-stage = { workspace = true, optional = true }
+cq-lang-ra = { workspace = true, optional = true }
+cq-lang-ix = { workspace = true, optional = true }
+cq-lang-physical = { workspace = true, optional = true }
+cq-lang-structures = { workspace = true, optional = true }
+cq-lang-sequence = { workspace = true, optional = true }
+cq-relational-lowering = { workspace = true, optional = true }
+cq-datalog-print = { workspace = true, optional = true }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
+
+[dev-dependencies]
+cq-datalog-partition = { path = "../../datalog-parallel/partition" }
+cq-load.workspace = true

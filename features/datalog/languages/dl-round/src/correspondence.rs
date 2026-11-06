@@ -388,8 +388,11 @@ pub(crate) fn check_storage_with_analysis(
                 quote!(where #first == #repeated)
             });
             // Parse complete CQ to resolve the relational predicate's terms.
+            let declared_evidence =
+                crate::evidence::for_hole(source, context, key.hole, &expected_declarations)?;
             let expected: CqProgram = syn::parse2(quote! {
                 struct #name;
+                #declared_evidence
                 #(#expected_declarations)*
                 #name(#(#expected_args),*) :- #atom #(, #selections)* #(, #repeated)*;
             })?;
@@ -665,8 +668,10 @@ pub(crate) fn check_storage_with_analysis(
                     "fork changed hole declarations",
                 )?;
                 let name = &hole.name;
+                let declared_evidence =
+                    crate::evidence::for_hole(source, context, rule.hole, &expected_declarations)?;
                 let expected: CqProgram =
-                    syn::parse2(quote!(struct #name; #ordering #(#expected_declarations)* #query))?;
+                    syn::parse2(quote!(struct #name; #ordering #declared_evidence #(#expected_declarations)* #query))?;
                 ensure(
                     hole == &expected,
                     source,

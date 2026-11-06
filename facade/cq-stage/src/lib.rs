@@ -74,6 +74,9 @@
 //! checked context. Ordinary passes forward it opaquely; selection binds it once
 //! through [`pass_with_output_consumer`]. It never authorizes removing dedup.
 
+/// Optional diagnostic provenance carried outside every executable language.
+pub mod calibration;
+
 use std::collections::BTreeSet;
 
 use proc_macro2::TokenStream;
@@ -93,6 +96,7 @@ mod kw {
     syn::custom_keyword!(output_consumer);
     syn::custom_keyword!(head);
     syn::custom_keyword!(value_reads);
+    syn::custom_keyword!(calibration_trace);
 }
 
 /// Public contract implemented by each IR language. Rust expressions terminate
@@ -106,6 +110,11 @@ pub trait Language: Parse + ToTokens {
     }
     /// Original output demand bound by the owning selection boundary.
     fn output_consumer(&self) -> Option<&OutputConsumer> {
+        None
+    }
+    /// Exact checked payload and named dependency graph, only requested when
+    /// calibration is enabled. This must not infer lineage from generated Rust.
+    fn calibration_snapshot(&self) -> Option<calibration::Snapshot> {
         None
     }
     fn terminal() -> bool {
@@ -330,6 +339,8 @@ pub struct Pipeline {
     pub observer: Option<syn::Path>,
     /// Pending checked outer-consumer requirement, consumed only by selection.
     pub output_consumer: Option<OutputConsumer>,
+    /// Absent on ordinary paths; never printed when disabled.
+    pub calibration: Option<calibration::Trace>,
 }
 impl Parse for Pipeline {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -353,7 +364,12 @@ impl Parse for Pipeline {
             None
         };
         let output_consumer = OutputConsumer::parse_optional(input)?;
-        Ok(Self { passes, observer, output_consumer })
+        let calibration = if input.peek(kw::calibration_trace) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        Ok(Self { passes, observer, output_consumer, calibration })
     }
 }
 impl ToTokens for Pipeline {
@@ -364,9 +380,15 @@ impl ToTokens for Pipeline {
             output.extend(quote!(observe { #receiver }));
         }
         self.output_consumer.to_tokens(output);
+        self.calibration.to_tokens(output);
     }
 }
 impl Pipeline {
+    /// Enable checked origin recording without changing executable IR choices.
+    pub fn enable_calibration(&mut self) {
+        self.calibration.get_or_insert_with(Default::default);
+    }
+
     /// Start this pipeline with unchecked tokens (surface expansion is allowed).
     /// This does not authorize recorded facts: a factful payload still requires
     /// an exact context envelope at the receiving pass (CTX-Entry).
@@ -451,7 +473,25 @@ pub fn pass<In: Language, Out: Language>(
     input: TokenStream,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _| f(source, args), |_, _| Ok(()))
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), |_, _| Ok(()))
+}
+
+/// A planning/lowering producer supplies provenance from the actual compilation.
+/// The boolean is false on ordinary paths, which need not allocate diagnostics.
+pub fn pass_with_calibration<In: Language, Out: Language>(
+    input: TokenStream,
+    f: impl FnOnce(&In, TokenStream, bool) -> syn::Result<(Out, Option<calibration::Seed>)>,
+) -> TokenStream {
+    run(input, |_| Ok(Context::default()), false, |source, args, _, trace| {
+        let (target, seed) = f(source, args, trace.is_some())?;
+        match (trace.as_mut(), seed) {
+            (Some(trace), Some(seed)) => trace.initialize(seed)?,
+            (None, Some(_)) => return Err(syn::Error::new_spanned(&target,
+                "ST-Calibration: disabled producer supplied metadata")),
+            _ => (),
+        }
+        Ok(target)
+    }, |_, _| Ok(()))
 }
 
 /// Introduce facts named by a lower/select argument packet into a fact-free source.
@@ -467,7 +507,7 @@ pub fn pass_with_context<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, false, |source, args, _| f(source, args), |_, _| Ok(()))
+    run(input, authorize, false, |source, args, _, _| f(source, args), |_, _| Ok(()))
 }
 
 /// Bind a pending outer-consumer requirement into the selected target exactly
@@ -477,7 +517,7 @@ pub fn pass_with_output_consumer<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, true, f, |_, _| Ok(()))
+    run(input, authorize, true, |source, args, consumer, _| f(source, args, consumer), |_, _| Ok(()))
 }
 
 /// Run an L → L pass and the language's exported correspondence check.
@@ -485,7 +525,7 @@ pub fn rewrite<L: Language>(
     input: TokenStream,
     f: impl FnOnce(&L, TokenStream) -> syn::Result<L>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _| f(source, args), L::check_rewrite)
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), L::check_rewrite)
 }
 
 /// Delegate an invocation's checked packet to a target-owned macro path.
@@ -535,7 +575,7 @@ fn run<In: Language, Out: Language>(
     input: TokenStream,
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     bind_consumer: bool,
-    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>) -> syn::Result<Out>,
+    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>, &mut Option<calibration::Trace>) -> syn::Result<Out>,
     correspondence: impl FnOnce(&In, &Out) -> syn::Result<()>,
 ) -> TokenStream {
     let result = (|| {
@@ -565,12 +605,15 @@ fn run<In: Language, Out: Language>(
             ));
         }
         input.program.check()?;
+        if let Some(trace) = &input.pipeline.calibration {
+            trace.check_source(input.program.calibration_snapshot().as_ref())?;
+        }
         let consumer = if bind_consumer {
             input.pipeline.output_consumer.take()
         } else {
             None
         };
-        let target = f(&input.program, input.args, consumer.as_ref())?;
+        let target = f(&input.program, input.args, consumer.as_ref(), &mut input.pipeline.calibration)?;
         if bind_consumer {
             if input.program.output_consumer().is_some()
                 || target.output_consumer() != consumer.as_ref()
@@ -596,6 +639,16 @@ fn run<In: Language, Out: Language>(
         }
         target.check()?;
         correspondence(&input.program, &target)?;
+        if let Some(trace) = &mut input.pipeline.calibration {
+            if !Out::terminal() {
+                if let Some(snapshot) = target.calibration_snapshot() {
+                    trace.advance(snapshot)?;
+                } else if trace.seed.is_some() {
+                    return Err(syn::Error::new_spanned(&target,
+                        "ST-Calibration: language has no checked trace adapter"));
+                }
+            }
+        }
         let target_context = target.context();
         let mut allowed = source_context;
         allowed.extend(&authorized);
@@ -615,7 +668,18 @@ fn run<In: Language, Out: Language>(
             if let Some(receiver) = input.pipeline.observer {
                 Ok(quote!(#receiver! { #target }))
             } else if Out::terminal() {
-                Ok(target.to_token_stream())
+                if let Some(trace) = &input.pipeline.calibration {
+                    let descriptor = trace.descriptor()?;
+                    Ok(quote!(::cq_storage::calibration_select! {
+                        plain { #target }
+                        calibration {{
+                            ::cq_storage::counters::calibration::register_plan(#descriptor);
+                            #target
+                        }}
+                    }))
+                } else {
+                    Ok(target.to_token_stream())
+                }
             } else {
                 Err(syn::Error::new_spanned(
                     target,
@@ -879,6 +943,6 @@ impl Configuration {
         } else {
             None
         };
-        Ok(Pipeline { passes, observer, output_consumer: None })
+        Ok(Pipeline { passes, observer, output_consumer: None, calibration: None })
     }
 }

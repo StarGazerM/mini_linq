@@ -837,6 +837,10 @@ fn construct(
             .any(|facts| facts.authored || facts.known.is_some()),
     )?;
     debug_assert_eq!(holes.len(), planning.len());
+    for (index, hole) in holes.iter_mut().enumerate() {
+        hole.declared_evidence =
+            round::evidence::for_hole(source, &context, index, &hole.declarations)?;
+    }
     let holes = holes
         .into_iter()
         .zip(planning)

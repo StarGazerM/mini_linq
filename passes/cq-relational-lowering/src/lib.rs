@@ -40,12 +40,48 @@ use syn::Ident;
 /// prefix step. A written reference is a VO without restrictions or reductions.
 /// Formal rule RL-Guard: Append an opaque guard to the prefix, seeding Unit if absent.
 pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
+    compile_recorded(source, false).map(|(program, _)| program)
+}
+
+/// Actual emission witness. Paths use VO step/branch/step indices; `$output`
+/// records return projection and an otherwise empty query's Unit.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Origins {
+    pub definitions: Vec<(String, Vec<String>)>,
+    pub elided: Vec<String>,
+}
+
+/// Run exactly the ordinary lowering while recording its emission decisions.
+pub fn compile_with_origins(source: &valuation::Program) -> syn::Result<(ra::Program, Origins)> {
+    let (program, origins) = compile_recorded(source, true)?;
+    Ok((program, origins.expect("enabled origin recorder")))
+}
+
+/// Independently reproduce the mechanical emission witness, not the planner.
+pub fn check_origins(source: &valuation::Program, target: &ra::Program, origins: &Origins) -> syn::Result<()> {
+    let (expected, witness) = compile_with_origins(source)?;
+    if expected != *target || witness != *origins {
+        return Err(syn::Error::new_spanned(target, "RL-Origin: emission witness differs from actual lowering"));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct Recorder {
+    scope: String,
+    active: BTreeSet<String>,
+    definitions: BTreeMap<String, BTreeSet<String>>,
+    elided: Vec<String>,
+}
+
+fn compile_recorded(source: &valuation::Program, record: bool) -> syn::Result<(ra::Program, Option<Origins>)> {
     let analysis = valuation::contract::check(source)?;
     let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
         .iter()
         .any(|item| matches!(item, valuation::cq::BodyItem::Block(_)));
 
     let mut state = State {
+        recorder: record.then(Recorder::default),
         inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
         analysis: &analysis,
@@ -73,7 +109,18 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
     };
     state.scope_restrictions();
     state.run_steps(&source.valuation.steps);
+    if let Some(recorder) = &mut state.recorder {
+        recorder.active = BTreeSet::from(["$output".into()]);
+    }
     let output = state.finish(&source.cq.query);
+    let origins = state.recorder.map(|mut recorder| Origins {
+        definitions: state.definitions.iter().map(|d| {
+            let name = symbol_name(&d.result);
+            let origins = recorder.definitions.remove(&name).expect("recorded emission");
+            (name, origins.into_iter().collect())
+        }).collect(),
+        elided: recorder.elided,
+    });
     let target = ra::Program {
         relational_token: Default::default(),
         relational_brace: Default::default(),
@@ -85,7 +132,7 @@ pub fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
         },
     };
     ra::contract::check(&target)?;
-    Ok(target)
+    Ok((target, origins))
 }
 
 mod block_contract;
@@ -323,6 +370,7 @@ fn check_restrictions(steps: &[valuation::Step], target: &ra::Program) -> syn::R
 /// The definitions so far, each clause's current relation, the prefix
 /// result and its heading.
 struct State<'a> {
+    recorder: Option<Recorder>,
     inputs: &'a [cq::RelationDecl],
     atoms: &'a BTreeMap<usize, cq::Atom>,
     analysis: &'a valuation::Analysis,
@@ -362,7 +410,10 @@ impl<'a> State<'a> {
     }
 
     fn run_steps(&mut self, steps: &[valuation::Step]) {
-        for (step, introduces) in steps.iter().zip(&self.analysis.introduces) {
+        for (index, (step, introduces)) in steps.iter().zip(&self.analysis.introduces).enumerate() {
+            if let Some(recorder) = &mut self.recorder {
+                recorder.active = BTreeSet::from([format!("{}{index}", recorder.scope)]);
+            }
             match step {
                 valuation::Step::Block(block, _) => {
                     let clause = block.source.clause();
@@ -403,6 +454,19 @@ impl<'a> State<'a> {
                 valuation::Step::Equality(equality, _) => self.equality(equality),
                 valuation::Step::Constraint(c, _) => self.constraint(c),
             }
+            if let Some(recorder) = &mut self.recorder {
+                if matches!(step, valuation::Step::Atom(..) | valuation::Step::Block(..)) {
+                    if let Some(prefix) = &self.prefix {
+                        recorder.definitions.get_mut(&symbol_name(prefix))
+                            .expect("recorded prefix").extend(recorder.active.iter().cloned());
+                    }
+                }
+                if !matches!(step, valuation::Step::Restrict(..))
+                    && recorder.active.iter().all(|origin|
+                        !recorder.definitions.values().any(|origins| origins.contains(origin))) {
+                    recorder.elided.extend(recorder.active.iter().cloned());
+                }
+            }
             self.heading.extend(introduces.iter().cloned());
         }
     }
@@ -420,6 +484,13 @@ impl<'a> State<'a> {
                 _ => None,
             })
             .expect("VO places every block");
+        let saved_origin = self.recorder.as_mut().map(|recorder| {
+            let index = self.steps.iter().position(|step| matches!(step,
+                valuation::Step::Block(block, _) if block.source.clause() == clause)).unwrap();
+            let saved = (recorder.scope.clone(), recorder.active.clone());
+            recorder.active = BTreeSet::from([format!("{}{index}", recorder.scope)]);
+            saved
+        });
         let written_prefix = valuation::cq::blocks::bound_before(self.body, clause, &self.context);
         let facts = written.analyze(&written_prefix);
         let hoisted = planned.placement == valuation::blocks::Placement::Hoisted;
@@ -456,6 +527,13 @@ impl<'a> State<'a> {
         for (j, (branch, source_branch)) in
             planned.branches.iter().zip(&written.branches).enumerate()
         {
+            if let Some(recorder) = &mut self.recorder {
+                let (scope, _) = saved_origin.as_ref().unwrap();
+                let index = parent_steps.iter().position(|step| matches!(step,
+                    valuation::Step::Block(block, _) if block.source.clause() == clause)).unwrap();
+                recorder.scope = format!("{scope}{index}/{j}/");
+                recorder.active = BTreeSet::from([format!("{scope}{index}")]);
+            }
             self.atoms = &parent_analysis.branches[&clause][j].atoms;
             self.analysis = &parent_analysis.branches[&clause][j];
             self.body = &source_branch.body;
@@ -496,6 +574,12 @@ impl<'a> State<'a> {
             }
             self.scope_restrictions();
             self.run_steps(&branch.steps);
+            if let Some(recorder) = &mut self.recorder {
+                let (scope, _) = saved_origin.as_ref().unwrap();
+                let index = parent_steps.iter().position(|step| matches!(step,
+                    valuation::Step::Block(block, _) if block.source.clause() == clause)).unwrap();
+                recorder.active = BTreeSet::from([format!("{scope}{index}")]);
+            }
             let keep: BTreeSet<_> = if hoisted {
                 common.clone()
             } else {
@@ -559,6 +643,10 @@ impl<'a> State<'a> {
                 }),
             }),
         })));
+        if let (Some(recorder), Some((scope, active))) = (&mut self.recorder, saved_origin) {
+            recorder.scope = scope;
+            recorder.active = active;
+        }
         if !hoisted {
             self.fused.insert(clause);
         }
@@ -686,7 +774,9 @@ impl<'a> State<'a> {
             .filter_map(|(_, predicate)| predicate.equality())
             .collect();
         if !literals.is_empty() {
+            let saved = self.restriction_origins(clause, |predicate| predicate.equality().is_some());
             result = self.select(result, literals);
+            self.restore_origins(saved);
         }
         let mut groups: Vec<(BTreeSet<String>, Vec<cq::Constraint>)> = Vec::new();
         for (target, predicate) in &self.restrictions {
@@ -701,10 +791,28 @@ impl<'a> State<'a> {
             }
         }
         for (_, constraints) in groups {
+            let saved = self.restriction_origins(clause, |predicate| constraints.contains(predicate));
             result = self.select_constraints(result, constraints);
+            self.restore_origins(saved);
         }
         self.relations.insert(clause, result.clone());
         result
+    }
+
+    fn restriction_origins(&mut self, clause: usize, includes: impl Fn(&cq::Constraint) -> bool) -> Option<BTreeSet<String>> {
+        let recorder = self.recorder.as_mut()?;
+        let active = self.steps.iter().enumerate().filter_map(|(index, step)| match step {
+            valuation::Step::Restrict(restrict, _) if restrict.clause() == clause && includes(&restrict.predicate) =>
+                Some(format!("{}{index}", recorder.scope)),
+            _ => None,
+        }).collect();
+        Some(std::mem::replace(&mut recorder.active, active))
+    }
+
+    fn restore_origins(&mut self, saved: Option<BTreeSet<String>>) {
+        if let (Some(recorder), Some(active)) = (&mut self.recorder, saved) {
+            recorder.active = active;
+        }
     }
 
     /// Formal rule RL-Check: A nonintroducing partial or root subatom semijoins the prefix, seeding Unit when absent.
@@ -1059,6 +1167,9 @@ impl<'a> State<'a> {
                 break format_ident!("{name}");
             }
         };
+        if let Some(recorder) = &mut self.recorder {
+            recorder.definitions.insert(symbol_name(&result), recorder.active.clone());
+        }
         self.definitions.push(ra::Definition {
             result: result.clone(),
             eq_token: Default::default(),

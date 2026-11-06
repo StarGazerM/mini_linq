@@ -41,6 +41,7 @@ pub use cq_syntax::{CommaList, kw, symbol_name};
 ///
 /// ```text
 /// Program ::= RustVisibility? "struct" Ident ";"
+///             OrderingFacts? DeclaredEvidence?
 ///             RelationDecl*
 ///             Query
 /// ```
@@ -51,6 +52,8 @@ pub struct Program {
     pub name: Ident,
     pub declaration_semi: Token![;],
     pub ordering: Option<ordering::OrderingFacts>,
+    /// Dataset facts are recorded separately from legacy evidence-driven planning.
+    pub declared_evidence: Option<cq_syntax::declared_evidence::DeclaredEvidence>,
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
     pub declarations: Vec<RelationDecl>,
     pub query: Query,
@@ -107,6 +110,7 @@ impl Program {
             name: input.parse()?,
             declaration_semi: input.parse()?,
             ordering: ordering::parse_optional(input)?,
+            declared_evidence: cq_syntax::declared_evidence::parse_optional(input)?,
             declarations: parse_declarations(input)?,
             query: input.parse()?,
         })
@@ -452,6 +456,9 @@ pub mod contract {
 fn check_program(program: &Program) -> syn::Result<()> {
     if let Some(ordering) = &program.ordering {
         ordering.check()?;
+    }
+    if let Some(evidence) = &program.declared_evidence {
+        evidence.check(&program.declarations)?;
     }
     let mut schema = check_input_declarations(&program.declarations)?;
     if let Some(output) = schema.remove(&symbol_name(&program.query.head.relation)) {

@@ -27,6 +27,46 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   cover hand-authored witnesses, positions, snapshot occurrence identity and
   rejection cases; execution regressions cover empty inputs, duplicate order
   and one native lookup per input row without scans.
+- Planner dataset evidence has a strict versioned JSON schema/checker and a
+  separate recorded CQ/Datalog input with explicit relation/column mappings.
+  Normalization, delta/layout views and parallel scan erasure preserve that
+  input without invoking legacy P3.3e root selection. The optional `cq-cost`
+  export projects checked compiler records and source-variant identities for
+  external advice; printers do not estimate cardinalities or choose orders.
+- `cq-load` adds the offline `cq-stats stats/check` command, sharing bounded
+  CSV/Parquet source readers with typed columnar loading. It records exact
+  row/distinct/extrema/degree facts (including complete-tuple set semantics)
+  and optional full-stream HLL observations. Versioned typed-row content
+  hashing binds data order/duplicates, schema, loader options and raw metadata;
+  missing/mismatched hash modes are rejected. No runtime planner or implicit
+  recursive/target cost facts are introduced.
+- `cq-cost advise` emits static, provenance-bearing per-variant advice from
+  checked compiler records and exact-rational degree bounds. It records all
+  legal candidates, amortizes delta work over declared final rows/rounds,
+  accounts for shared read indexes, and retains structural orders for unknown
+  or crossing costs. Generated advice uses the same RulePlan parser as macros
+  and is checked through the pre-Storage compiler boundary. No default planner
+  or runtime guard is introduced.
+- Static advice now pins and checks the existing admission owner. Joined
+  restricted-view materialization/lifetimes remain explicitly Unknown rather
+  than receiving an incomplete whole-run cost; explicit single-read component
+  key builders include restriction work and one key-set build.
+- Bound-quality review now reports incumbent looseness and only same-prefix/
+  key/version observations for proposed steps. A declared 1.05 minimum claimed
+  bound-ratio screen retains noise-sized changes before shared-index ownership
+  is updated. Aggregate counters never become per-key fan-out certificates;
+  unobserved winning prefixes remain unvalidated, not performance evidence.
+- Optional `planner-calibration` captures exact canonical input statistics,
+  seed/delta/final/round counts and actual Physical operator rows, with checked
+  VO lineage, immutable task/host-binding provenance and true row-alias fusion.
+  It re-costs only after completion, emits full diagnostic evidence and an
+  explicit planning-facts projection, and never adopts a plan at runtime.
+  CPU and synchronous CPU-par hooks erase when disabled; relational-progress
+  and device counting require separate recorded models/producers.
+- Evidence iteration scope is checked against actual Round components:
+  coalesced acyclic IDBs may be iterated, seed-only components remain Frozen,
+  EDBs cannot claim RecursiveFinal, and a file cannot choose its component ID.
+
 - Structural planner step 1: ready fully-bound checks drain before every
   variable introduction, including lets, for automatic, authored and L&E
   schedules. Executable VOs independently check readiness, earliest checks

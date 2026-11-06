@@ -359,3 +359,16 @@ macro_rules! profile_select {
 macro_rules! profile_select {
     (plain { $($plain:tt)* } counters { $($profile:tt)* }) => { $($profile)* };
 }
+
+/// Erase all calibration hooks and metadata before type checking when disabled.
+#[cfg(not(feature = "planner-calibration"))]
+#[macro_export]
+macro_rules! calibration_select {
+    (plain { $($plain:tt)* } calibration { $($calibration:tt)* }) => { $($plain)* };
+}
+/// Select diagnostic calibration hooks using the runtime's opt-in feature.
+#[cfg(feature = "planner-calibration")]
+#[macro_export]
+macro_rules! calibration_select {
+    (plain { $($plain:tt)* } calibration { $($calibration:tt)* }) => { $($calibration)* };
+}

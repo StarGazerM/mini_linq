@@ -195,6 +195,247 @@ sit where a representation is introduced.**
 Evidence/advice (counts, keys, selectivities, ratios) never carries
 semantics: it chooses among checked candidates.
 
+### Declared dataset input and external planner records
+
+`cq_syntax::evidence` owns the versioned JSON document and its strict checker
+(`doc/planner-evidence.schema.json`). Numbers retain source, claim kind,
+provenance, units and dataset hash. HLL observations are not deterministic
+bounds; absent facts remain unknown. Dataset identity hashes the canonical
+schema/input manifest, not a pathname. Exact bag counts are not silently
+relabeled exact set counts.
+
+CQ and DL-Source carry a separate optional `declared_evidence` attachment:
+
+```text
+declared_evidence "<checked evidence JSON>" {
+    R = "dataset_relation" full [a = "dataset_column_a", b = "dataset_column_b"];
+}
+```
+
+In CQ this follows the optional `ordering(...)` and precedes declarations;
+in Datalog it follows P3.3e key evidence and precedes `output`. Explicit
+relation/column mappings survive normalization, Fork's layout/delta/scan
+projection and parallel scan rebinding. `full`, `delta`, and `subset` record
+the view, not an equality between its statistics and the full dataset.
+Source/Fork/VO correspondence rejects lost or changed attachments.
+Iteration scope is checked at its owner: EDBs cannot claim `recursive_final`,
+and intrinsically recursive IDBs cannot claim `frozen`. Source permits an
+acyclic IDB to be iterated by a later union of SCCs; Round then checks its
+actual component. Components with steady work require `recursive_final` and
+the exact zero-based component index in `recursive.stratum`; seed-only
+components require `frozen`. The file cannot invent an iteration scope.
+`DeclaredEvidence::load_build_input` reads an explicitly named JSON file and
+registers its canonical path with Cargo's `rerun-if-changed`; ordinary IR
+parsers and runtime printers never read a file.
+
+This input **does not activate** `PlanOptions.evidence`, change a root, or
+conflict with authored order. Legacy P3.3e still owns its existing count/key
+root/L&E behavior. File key restatements do not become semantic
+`Sequence::TrustedKey` facts. CPU TPC-H's fixed SF1 ordering counts must not
+be reused as exact SF10 bounds.
+
+The optional `cq-cost` package exports a versioned compiler-record projection:
+
+```text
+cargo run -p cq-cost -- export --language datalog --source program.dl \
+  --compiler-hash sha256:HEX --out plans.json
+cargo run -p cq-cost -- export --language cq --source query.cq \
+  --compiler-hash sha256:HEX --vo checked.vo --out plans.json
+```
+
+The library accepts checked CQ/VO or Round plus every checked hole VO; the
+CLI can consume those records or invoke the production compiler once.
+Source, compiler/configuration and input digests, original occurrences,
+delta/seed/driver/permutation facts, bindings and complete IR are retained.
+The semantic program digest excludes the dataset attachment, avoiding a cycle
+with calibrated facts that cite that program; separate source/evidence/input
+digests still bind its exact bytes. Record-only export accepts explicit CPU,
+CPU-par and GPU target identities and checks Round target compatibility.
+CLI compilation is CPU-only; other routes supply their checked records.
+The checker verifies the projection against those records without rerunning
+scheduling. A CPU VO boundary has no selected physical providers and says so;
+it does not invent them from a target name. This export is input to the
+external tool, not a new compiler default. Crossing-plan guarded advice and
+its Datalog transport remain design-only, outside this step's static-advice
+scope.
+
+Static costing is an explicit offline command:
+
+```text
+cq-cost advise --plans plans.json --evidence evidence.json --target cpu \
+  --out costs.json --advice orders.dl
+```
+
+The evidence must supply the selected target's declared rational `h`/`m` and
+matching configuration identity; there are no guessed defaults. A deliberately
+authored `h=m=1` reference policy is normalized row work, not hardware timing.
+The tool enumerates the complete I1–I3-legal positive-prefix orders, drains
+ready checks before every introduction, retains original occurrences/delta
+positions, and records every candidate and per-step inequality/citation.
+Bindings come from the checked export, never from lowercasing relation names.
+
+Bounds use cardinalities, maximum degrees, declared keys and support caps:
+`|P join R| <= min(U_P*M_R, U_R*M_P, min(D_P,D_R)*M_P*M_R, U_P*U_R)`.
+Only supported terms participate. No product of independent selectivities or
+HLL-derived bound is introduced. Prefix degrees retain earlier multiplicity;
+a base key is not automatically a key of an expanded prefix. The row-work
+model charges each processed scalar/guard/expansion frame, including generated
+head-copy lets; these do not multiply rows. It is not a bound on arbitrary
+opaque Rust instruction time.
+
+For a steady variant, an affine certificate `a*|delta_r|+b` becomes
+`a*F+b*N` under the recorded complete partition, or a conservative upper bound
+under completed insert-only-set consumption. Seeds and recorded component-key
+construction execute once. Persistent read-index maintenance is charged once
+across holes and strata, with its recorded policy; negative-key helpers retain
+their actual canonical provider rather than inventing a constant-key index.
+The greedy planning rank and every reused demand are printed.
+
+Incomplete/incomparable bounds retain the recorded incumbent. Crossings are
+reported, but no runtime guard or pair of alternative plans is emitted.
+Existing partial-read/nested work without finite model certificates remains
+explicitly unknown rather than being replaced by an uncosted coarse plan.
+The named `restricted-view-lifetime` gap also stays unknown: joined filtered
+views can introduce per-invocation materialization that the VO/Storage export
+does not record for each candidate. No such candidate gets a complete
+whole-run certificate or a new order. A single-read component key builder
+does have an explicit lifetime: its occurrence restrictions and key-set
+construction are charged once, not once per steady round.
+The output is a complete replacement for existing authored directives:
+unchanged phase/intersection/admission advice is retained, and new whole orders
+use `plan(Label, delta(R@k), order(...))` (without `delta` for seeds).
+Core CQ uses `plan(order(...))`. Provenance comments escape newlines; they
+cannot inject unchecked advice.
+Changed variants hold the recorded admission owner fixed with an explicit
+checked `known(admit)` or `known(at(...))` constraint. Existing authored hints
+are preserved; automatic InPlan receives a checked ready boundary. The report
+records that ownership was held fixed and does not select a potentially cheaper
+different owner. Adoption rejects a changed constraint or a directive set
+different from the costed one.
+A declared acceptance-review policy suppresses a proven sub-1.05 whole-run
+bound ratio. `noise_screen` records the rejected candidate, exact 21/20
+threshold and policy provenance; shared demands follow the retained incumbent,
+not a rejected plan. This screen is not a measured speedup or a proof that a
+larger bound difference is useful.
+
+The compiler-owned `RulePlan` grammar is shared by macros and the tool.
+Before emission, selected Datalog orders go through Incremental **before**
+Storage, then Fork and shared VO-Order; predicted read demands must exist in
+the resulting Storage. This establishes logical advice legality, not execution
+or a replay of a custom/GPU physical pipeline. The adopting target must still
+check its own representation/launch decisions. Printers make no cost choice.
+
+### Optional completed-run calibration
+
+The optional `planner-calibration` feature on `cq-datalog` (also forwarded by
+the prepared `srd-doop-mini` and `srd-doop-mini-par` engines) enables the
+`cq_cost::calibration` API, reexported as `cq_datalog::calibration`.
+`measure`/`try_measure` take checked compiler records, baseline evidence, the
+explicit stats request, a run ID and one execution closure. They install an
+isolated counter epoch, execute the unchanged program, and invoke the offline
+cost tool only **after** a complete return. They never adopt advice at runtime.
+
+The generated input hooks reuse the existing canonicalization traversal:
+raw decoded rows feed `typed-row-stream-v1`, including order/duplicates;
+only successful full-tuple admission updates exact frequencies. The canonical
+cardinality is independently checked at input completion. No second tuple set
+or data-file pass is introduced. Raw metadata bytes must be forwarded from
+the same loader read; the prepared DOOP loader does this for `meta.json`.
+Unsupported scalar codecs produce an explicit calibration failure, not a
+coercion or a new query type bound. Without an active observer the codec is
+not evaluated.
+
+Each component records seed mass, every consumed delta, executed N, final
+canonical rows and the unconsumed tail. Complete insert-only consumption is
+checked by `sum(consumed deltas) + tail = final_rows`; a partition premise is
+emitted only when the tail is zero. Derived columns without measured scalar/
+degree statistics remain explicitly unordered/unknown. Dataset identity is
+recomputed when the measured manifest adds derived schemas; all numbers are
+bound to that identity and the completed program/configuration/run.
+
+An optional checked continuation trace records the actual VO, mechanical
+VO-to-RA origins, and subsequent checked IR snapshots through Physical and
+Structures/Sequence. It is metadata, not another planner. Compiler-owned host
+parameter substitutions are recorded by the partition printer and replayed by
+its shared substitution routine; no source identity is guessed from generated
+Rust. Metadata is erased when calibration is disabled.
+
+Reports use existing **operator** counters at actual Physical definitions and
+their explicit return, never storage `rows_enumerated`. The VO/hole/variant/
+seed-or-round identity survives joined Rayon tasks. True row-counter aliases
+are grouped once, their VO coverage deduplicated, and the covered bounds
+summed with `fused` marked; shared timers do not fuse row counts. Distinct
+physical invocation/worker instances remain distinct. Input/setup caps are
+reported separately from joined stream-output caps, so a raw source scan is
+not compared to an empty join's output bound. Concrete-build/timer auxiliaries
+are identified separately rather than mislabeled as Physical definitions.
+An unobserved operator is reported explicitly, not published as an exact zero;
+an operator that actually observes an empty stream may report zero. Replayed
+Cartesian RHS counters use the checked join-output envelope only for a
+host-only, single-consumer RHS with the same VO coverage as its empty-key
+probe. Other unsupported replay scopes remain Unknown rather than receiving
+a misleading single-scan bound.
+
+The count report shows final/N/seed/tail and delta series, then Physical-to-VO
+coverage, bound role, planned bound, observed rows, measured-fact bound,
+unknown/exceeded status, fusion and per-variant advice differences. It neither
+fits hardware h/m nor reports workload timings. Failed/unknown bound
+comparisons remain observational; they never become cardinality certificates.
+Incomplete runs, stale decoded input/metadata, count overflow, mismatched
+programs/scopes or bad provenance cannot publish calibrated facts.
+The bound-quality review reports `bound_sum / observed_rows` for incumbents,
+and observed per-step ratios only for an identical executed VO prefix/key/
+version and an unambiguous output counter. Zero denominators remain undefined;
+changed prefixes and fused multi-VO scopes remain unobserved. The numeric bands
+are C (<1.05, suppressed), D ([1.05,2)), and B (>=2, winning-key evidence still
+unvalidated). No A certification is inferred from aggregate counters. In
+particular, output/input is an average, not a maximum fan-out certificate.
+The optional-feature command below reviews saved artifacts without executing
+the workload; `--vo-out` prints checked current/proposed VOs, without adopting
+the proposed orders:
+
+```text
+cq-cost review --plans calibration.plans.json --evidence calibration.facts.json \
+  --costs screened.costs.json --report calibration.report.json \
+  --out bound-quality.review.json --vo-out checked-vos.json
+```
+
+Per-key maxima need complete lookup exhaustion, exact upstream-prefix and
+relation-version/round identity, and a key-domain coverage certificate before
+they can replace degree bounds. These are not supplied by the current aggregate
+counters. The xalan result and the certifying-run entry conditions are recorded
+in `/data/design-notes/planner-step2-design.md` §11.
+
+```text
+cargo run -p srd-doop-mini --features planner-calibration -- PREPARED_DIR \
+  --calibrate plans.json evidence.json stats-input.json OUTPUT_DIR RUN_ID
+# The parallel engine uses the same flags, plus --threads N:
+cargo run -p srd-doop-mini-par --features planner-calibration -- PREPARED_DIR \
+  --threads N --calibrate plans.json evidence.json stats-input.json OUTPUT_DIR RUN_ID
+```
+
+This route bypasses the harness's benchmark clocks, preserves answer export/
+`BENCH_CHECK_WITNESS`, and refuses to overwrite artifacts. It emits
+`calibration.evidence.json`, `calibration.facts.json`, `calibration.plans.json`,
+`calibration.costs.json`, `calibration.orders.dl`, and JSON/text reports.
+The full evidence contains Physical diagnostics; `planning_facts()` explicitly
+removes only step observations, retaining all admitted facts and complete delta
+series. The facts file is the compiler attachment, avoiding diagnostic-volume
+duplication into every hole. Cost matching compares this checked projection,
+while reports retain the full evidence-file hash. Numeric facts and provenance
+must still match exactly. Exceeded comparisons produce a nonzero CLI result
+after emitting truthful diagnostics, without changing the running plan.
+
+Synchronous CPU and CPU-par components are supported. Recorded
+`schedule.progress=relational` is rejected at setup: event-driven member
+batches need a distinct per-driver invocation-count model, not an invented
+shared N or observation barriers. Device calibration requires a device-counter
+producer and is not enabled by this host feature. The separate future
+restricted-view lifetime model must record actual candidate materialization/
+build ownership before those unknown costs can select an order.
+
+
+
 ### GPU TPC-H authored stage frontend (DR-StageSource)
 
 The 26 GPU programs are authored in

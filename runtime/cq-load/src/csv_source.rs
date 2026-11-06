@@ -1,5 +1,6 @@
 use crate::{Batch, BatchData, DEFAULT_BATCH_SIZE, Error, Relation, Result, column_mapping};
 use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
@@ -23,16 +24,33 @@ impl Default for CsvOptions {
     }
 }
 
+impl CsvOptions {
+    pub(crate) fn check(&self, file: &Path) -> Result<()> {
+        if self.batch_size == 0 {
+            return Err(Error::new(file, 0, "<options>", "0", "batch size must be positive"));
+        }
+        if !self.delimiter.is_ascii() || matches!(self.delimiter, 0 | b'\r' | b'\n' | b'"') {
+            return Err(Error::new(file, 0, "<options>", self.delimiter.to_string(),
+                "delimiter must be an ASCII byte other than NUL, a quote or a newline"));
+        }
+        Ok(())
+    }
+}
+
 /// Single-pass CSV source with bounded batches and columnar ingestion support.
 pub struct Csv<S> {
-    reader: csv::Reader<File>,
+    reader: CsvReader<'static>,
+    schema: PhantomData<S>,
+}
+
+pub(crate) struct CsvReader<'a> {
+    reader: RecordReader,
     file: PathBuf,
     mapping: Vec<usize>,
-    columns: &'static [&'static str],
-    source_columns: Vec<&'static str>,
+    columns: &'a [&'a str],
+    source_columns: Vec<&'a str>,
     options: CsvOptions,
     finished: bool,
-    schema: PhantomData<S>,
 }
 
 impl<S: Relation> Csv<S> {
@@ -47,25 +65,28 @@ impl<S> Csv<S> {
         options: CsvOptions,
         columns: &'static [&'static str],
     ) -> Result<Self> {
-        let file = path.as_ref();
-        if options.batch_size == 0 {
-            return Err(Error::new(
-                file,
-                0,
-                "<options>",
-                "0",
-                "batch size must be positive",
-            ));
-        }
-        if !options.delimiter.is_ascii() || matches!(options.delimiter, 0 | b'\r' | b'\n' | b'"') {
-            return Err(Error::new(
-                file,
-                0,
-                "<options>",
-                options.delimiter.to_string(),
-                "delimiter must be an ASCII byte other than NUL, a quote or a newline",
-            ));
-        }
+        Ok(Self {
+            reader: CsvReader::open(path.as_ref(), options, columns)?,
+            schema: PhantomData,
+        })
+    }
+
+    pub(crate) fn next_with<T>(
+        &mut self,
+        decode: impl FnOnce(&Batch<'_>) -> Result<T>,
+    ) -> Option<Result<T>> {
+        self.reader.next_with(decode)
+    }
+}
+
+impl<'a> CsvReader<'a> {
+    pub(crate) fn open(
+        path: &Path,
+        options: CsvOptions,
+        columns: &'a [&'a str],
+    ) -> Result<Self> {
+        let file = path;
+        options.check(file)?;
         let input = File::open(file)
             .map_err(|error| Error::new(file, 0, "<file>", "", error.to_string()))?;
         let mut reader = csv::ReaderBuilder::new()
@@ -91,19 +112,44 @@ impl<S> Csv<S> {
             source_columns[source] = columns[declared];
         }
         Ok(Self {
-            reader,
+            reader: RecordReader::Csv(reader),
             file: file.to_path_buf(),
             mapping,
             source_columns,
             columns,
             options,
             finished: false,
-            schema: PhantomData,
+        })
+    }
+
+    pub(crate) fn literal_tabs(
+        path: &Path,
+        columns: &'a [&'a str],
+        batch_size: usize,
+    ) -> Result<Self> {
+        let input = File::open(path)
+            .map_err(|error| Error::new(path, 0, "<file>", "", error.to_string()))?;
+        Ok(Self {
+            reader: RecordReader::LiteralTabs {
+                reader: BufReader::new(input),
+                line: String::new(),
+                position: csv::Position::new(),
+            },
+            file: path.to_path_buf(),
+            mapping: (0..columns.len()).collect(),
+            columns,
+            source_columns: columns.to_vec(),
+            options: CsvOptions {
+                delimiter: b'\t',
+                batch_size,
+                ..CsvOptions::default()
+            },
+            finished: false,
         })
     }
 }
 
-impl<S> Csv<S> {
+impl CsvReader<'_> {
     pub(crate) fn next_with<T>(
         &mut self,
         decode: impl FnOnce(&Batch<'_>) -> Result<T>,
@@ -114,14 +160,14 @@ impl<S> Csv<S> {
         let mut records = Vec::with_capacity(self.options.batch_size);
         for _ in 0..self.options.batch_size {
             let mut record = csv::StringRecord::new();
-            match self.reader.read_record(&mut record) {
+            match self.reader.read_record(&self.file, &mut record) {
                 Ok(false) => {
                     self.finished = true;
                     break;
                 }
                 Err(error) => {
                     self.finished = true;
-                    return Some(Err(csv_error(&self.file, error)));
+                    return Some(Err(error));
                 }
                 Ok(true) => {}
             }
@@ -171,6 +217,47 @@ pub fn read_csv<S: Relation>(path: impl AsRef<Path>, options: CsvOptions) -> Res
         rows.extend(batch?);
         Ok(rows)
     })
+}
+
+enum RecordReader {
+    Csv(csv::Reader<File>),
+    LiteralTabs {
+        reader: BufReader<File>,
+        line: String,
+        position: csv::Position,
+    },
+}
+
+impl RecordReader {
+    fn read_record(&mut self, file: &Path, record: &mut csv::StringRecord) -> Result<bool> {
+        match self {
+            Self::Csv(reader) => reader.read_record(record).map_err(|error| csv_error(file, error)),
+            Self::LiteralTabs { reader, line, position } => loop {
+                line.clear();
+                let bytes = reader.read_line(line).map_err(|error| {
+                    Error::new(file, position.line(), "<record>", "<unreadable>", error.to_string())
+                })?;
+                if bytes == 0 {
+                    return Ok(false);
+                }
+                record.set_position(Some(position.clone()));
+                position.set_byte(position.byte() + bytes as u64);
+                position.set_line(position.line() + 1);
+                if line.ends_with('\n') {
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                }
+                if line.is_empty() {
+                    continue;
+                }
+                record.extend(line.split('\t'));
+                position.set_record(position.record() + 1);
+                return Ok(true);
+            },
+        }
+    }
 }
 
 fn validate_width(

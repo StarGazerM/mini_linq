@@ -13,6 +13,9 @@
 //! relation, on the inputs of its rules). Evidence has no denotation: it only
 //! feeds DL-Fanout, which chooses where a checked plan discharges admission,
 //! so a false key changes speed, never answers.
+//! A separate `declared_evidence "<JSON>" { R = "dataset_R" full [c = "column"]; }`
+//! after key evidence records dataset-scoped statistics and explicit mappings.
+//! Importing it selects no order and never upgrades a key to a semantic premise.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_cq::{BodyItem, Query};
 use cq_stage::Language;
@@ -48,6 +51,8 @@ pub struct Program {
     pub models: BTreeMap<String, Ident>,
     pub invariants: Vec<Invariant>,
     pub evidence: Option<Evidence>,
+    /// Dataset-scoped numerical facts; importing these performs no planning.
+    pub declared_evidence: Option<cq_syntax::declared_evidence::DeclaredEvidence>,
 }
 /// A checked frozen-filter factorization retaining the original rule for erasure.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,6 +178,7 @@ impl Parse for Program {
         } else {
             None
         };
+        let declared_evidence = cq_syntax::declared_evidence::parse_optional(input)?;
         input.parse::<kw::output>()?;
         let mut outputs = vec![input.parse()?];
         while input.peek(Token![,]) {
@@ -228,6 +234,7 @@ impl Parse for Program {
             models,
             invariants,
             evidence,
+            declared_evidence,
         })
     }
 }
@@ -243,6 +250,7 @@ impl ToTokens for Program {
             models,
             invariants,
             evidence,
+            declared_evidence,
         } = self;
         if let Some(e) = observer {
             tokens.extend(quote!(observe = #e;));
@@ -254,7 +262,7 @@ impl ToTokens for Program {
                 tokens.extend(quote!(model #relation #model;));
             }
         }
-        tokens.extend(quote!(#evidence));
+        tokens.extend(quote!(#evidence #declared_evidence));
         let rules = rules.iter().zip(labels).map(|(rule, label)| match label {
             Some(label) => quote!(#label: #rule),
             None => quote!(#rule),
@@ -439,6 +447,35 @@ pub mod contract {
         if let Some(evidence) = &program.evidence {
             check_evidence(program, evidence)?;
         }
+        if let Some(evidence) = &program.declared_evidence {
+            evidence.check(&program.declarations)?;
+            for binding in &evidence.bindings {
+                let position = graph.index(&binding.relation)?;
+                let declaration = &program.declarations[position];
+                let facts = &evidence.document.relations[&binding.source];
+                use cq_syntax::evidence::RelationScope;
+                // Source can rule out EDB/IDB and intrinsic-recursion mistakes,
+                // but cannot yet know which acyclic IDBs a later union of SCCs
+                // will iterate. Round checks that recorded component boundary.
+                let scope_allowed = if declaration.value.is_some() {
+                    facts.scope == RelationScope::Input
+                } else if graph.reach[position][position] {
+                    facts.scope == RelationScope::RecursiveFinal
+                } else {
+                    matches!(facts.scope, RelationScope::Frozen | RelationScope::RecursiveFinal)
+                };
+                ensure(
+                    scope_allowed,
+                    binding,
+                    "declared evidence scope disagrees with the source input/derived/recursive relation",
+                )?;
+                ensure(
+                    binding.view != cq_syntax::declared_evidence::EvidenceView::Delta,
+                    binding,
+                    "source evidence cannot name a round-local delta view",
+                )?;
+            }
+        }
         let positions = graph
             .names
             .iter()
@@ -519,7 +556,8 @@ fn check_rewrite_admitted(source: &Program, target: &Program) -> syn::Result<()>
             && source.outputs == target.outputs
             && source.models == target.models
             && source.observer == target.observer
-            && source.evidence == target.evidence,
+            && source.evidence == target.evidence
+            && source.declared_evidence == target.declared_evidence,
         target,
         "Datalog rewrite changed name, declarations, EDB bindings, outputs, models, observer or evidence",
     )

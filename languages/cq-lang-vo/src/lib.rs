@@ -950,6 +950,26 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     Ok(())
 }
 impl cq_stage::Language for Program {
+    fn calibration_snapshot(&self) -> Option<cq_stage::calibration::Snapshot> {
+        use quote::ToTokens;
+        use cq_stage::calibration::{Node, Snapshot};
+        fn collect(steps: &[Step], prefix: &str, nodes: &mut Vec<Node>) {
+            for (i, step) in steps.iter().enumerate() {
+                let name = format!("{prefix}{i}");
+                nodes.push(Node { name: name.clone(),
+                    operator: step.to_token_stream().to_string(), inputs: Vec::new() });
+                if let Step::Block(block, _) = step {
+                    for (branch, arm) in block.branches.iter().enumerate() {
+                        collect(&arm.steps, &format!("{name}/{branch}/"), nodes);
+                    }
+                }
+            }
+        }
+        let mut nodes = Vec::new();
+        collect(&self.valuation.steps, "", &mut nodes);
+        Some(Snapshot { language: "vo".into(),
+            program: self.to_token_stream().to_string(), nodes })
+    }
     fn check(&self) -> syn::Result<()> {
         contract::check(self).map(|_| ())
     }

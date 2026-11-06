@@ -3,6 +3,14 @@ use incremental::strata::source;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use round::storage::incremental;
+
+fn plain(expression: syn::Expr) -> syn::Expr {
+    syn::parse2(calibration_branch(expression.to_token_stream(), false)).unwrap()
+}
+
+fn compile(program: &Program) -> syn::Result<syn::Expr> {
+    cq_datalog_print::compile(program).map(plain)
+}
 struct Expanded {
     program: Program,
     context: RoundContext,
@@ -35,7 +43,7 @@ fn render(expanded: Expanded) -> TokenStream {
             ))
         },
     )
-    .unwrap();
+    .map(plain).unwrap();
     erase_partitions(&mut expression);
     expression.to_token_stream()
 }
@@ -139,7 +147,7 @@ fn authored_round_expansion_matches_independent_fixture() {
     let partitioned = render_with(&fork.program, &fork.holes, |rules, context, holes, _| {
         Ok(evaluate(rules, context, holes, &fork.program.holes, false))
     })
-    .unwrap()
+    .map(plain).unwrap()
     .to_token_stream()
     .to_string();
     for slot in 0..3 {
@@ -723,4 +731,77 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
         );
         assert!(rejected.to_string().contains("CTX-Entry"));
     }
+}
+
+#[test]
+fn calibrated_partitions_record_exact_parameter_substitutions_inside_the_closure() {
+    use syn::visit_mut::{self, VisitMut};
+    let source: source::Program = syn::parse2(source()).unwrap();
+    let strata = cq_datalog_stratify::compile(&source).unwrap();
+    let incremental = cq_datalog_incremental::compile(&strata).unwrap();
+    let expanded = expand(&incremental, |_| Ok(quote!(authored_rows()))).unwrap();
+    let expression = render_with(&expanded.program, &expanded.holes, |rules, context, holes, _| {
+        Ok(evaluate(rules, context, holes, &expanded.program.holes, false))
+    }).unwrap();
+    let plain = calibration_branch(expression.to_token_stream(), false);
+    assert!(!plain.to_string().contains("host_alias_scope"));
+    let mut calibrated: syn::Expr =
+        syn::parse2(calibration_branch(expression.to_token_stream(), true)).unwrap();
+
+    #[derive(Default)]
+    struct Scopes { scopes: usize, aliases: usize }
+    impl VisitMut for Scopes {
+        fn visit_expr_closure_mut(&mut self, closure: &mut syn::ExprClosure) {
+            if let Some(syn::Pat::Tuple(parameters)) = closure.inputs.first()
+                && let syn::Expr::Block(body) = &*closure.body
+                && let Some(syn::Stmt::Local(local)) = body.block.stmts.first()
+                && let Some(initializer) = &local.init
+                && let syn::Expr::Call(call) = &*initializer.expr
+                && let syn::Expr::Path(path) = &*call.func
+                && path.path.segments.last().unwrap().ident == "host_alias_scope"
+            {
+                self.scopes += 1;
+                let syn::Expr::Reference(argument) = &call.args[0] else { panic!("borrowed alias slice") };
+                let syn::Expr::Array(aliases) = &*argument.expr else { panic!("static alias array") };
+                for alias in &aliases.elems {
+                    let syn::Expr::Tuple(pair) = alias else { panic!("host and replacement pair") };
+                    let syn::Expr::Lit(replacement) = &pair.elems[1] else { panic!("replacement literal") };
+                    let syn::Lit::Str(replacement) = &replacement.lit else { panic!("replacement string") };
+                    assert!(parameters.elems.iter().any(|parameter| {
+                        let syn::Pat::Ident(parameter) = parameter else { return false; };
+                        let parameter = &parameter.ident;
+                        replacement.value() == parameter.to_string()
+                    }), "recorded substitution names an actual parameter of this partition");
+                    self.aliases += 1;
+                }
+            }
+            visit_mut::visit_expr_closure_mut(self, closure);
+        }
+    }
+    let mut scopes = Scopes::default();
+    scopes.visit_expr_mut(&mut calibrated);
+    assert!(scopes.scopes >= 2, "component and rule partitions are both scoped");
+    assert!(scopes.aliases > 0);
+}
+
+#[test]
+fn host_binding_replay_uses_owner_substitution_and_rejects_nonidentifiers_and_duplicates() {
+    let original = quote!(query! { read (&first); nested { second, untouched } });
+    let rewritten = substitute_host_parameters(original.clone(), &[
+        ("first", "__cq_codegen_1_0"),
+        ("second", "__cq_codegen_1_1"),
+    ]).unwrap();
+    assert_eq!(
+        rewritten.to_string(),
+        quote!(query! { read (&(*__cq_codegen_1_0)); nested { (*__cq_codegen_1_1), untouched } }).to_string(),
+    );
+    for pairs in [
+        vec![("first + second", "parameter")],
+        vec![("first", "(*parameter)")],
+        vec![("first", "a"), ("first", "b")],
+        vec![("first", "a"), ("second", "a")],
+    ] {
+        assert!(substitute_host_parameters(original.clone(), &pairs).is_err());
+    }
+    assert_eq!(substitute_host_parameters(original.clone(), &[]).unwrap().to_string(), original.to_string());
 }

@@ -12,6 +12,7 @@ counters = ["cq-storage/counters"]
 # The proc macro resolves host-side features separately: forward to it too.
 phase-timing = ["cq-datalog-configuration/phase-timing", "cq-datalog-macros/phase-timing"]
 hoist-invariants = ["cq-datalog-macros/hoist-invariants"]
+planner-calibration = ["cq-storage/planner-calibration", "cq-datalog-macros/planner-calibration", "dep:cq-cost", "cq-cost/planner-calibration"]
 
 [dependencies]
 cq-datalog-configuration.workspace = true
@@ -22,6 +23,7 @@ cq-lang-datalog-incremental.workspace = true
 cq-lang-datalog-storage.workspace = true
 cq-lang-datalog-round.workspace = true
 cq-storage.workspace = true
+cq-cost = { path = "../../../planners/cost", optional = true }
 rustc-hash.workspace = true
 own-push.workspace = true
 
@@ -32,8 +34,19 @@ cq-stage.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
+cq-syntax.workspace = true
+serde_json.workspace = true
 cq-datalog-test-passes = { path = "../../test-passes" }
 cq-datalog-testkit = { path = "../../testkit" }
+cq-datalog-parallel = { path = "../../../datalog-parallel" }
+cq-datalog-parallel-runtime = { path = "../../../datalog-parallel/runtime" }
+cq-datalog-partition = { path = "../../../datalog-parallel/partition" }
+cq-datalog-stratify.workspace = true
+cq-datalog-incremental.workspace = true
+cq-datalog-storage.workspace = true
+cq-datalog-fork.workspace = true
+cq-planning.workspace = true
+rayon = "1"
 ascent = { version = "0.8", default-features = false }
 
 [[test]]
@@ -53,6 +66,11 @@ name = "counters"
 path = "../../tests/counters.rs"
 required-features = ["counters"]
 
+[[test]]
+name = "calibration"
+path = "../../tests/calibration.rs"
+required-features = ["planner-calibration"]
+
 [[example]]
 name = "reach"
 path = "../../examples/reach.rs"
@@ -61,3 +79,12 @@ path = "../../examples/reach.rs"
 name = "layout_mismatch"
 path = "../../examples/layout_mismatch.rs"
 required-features = ["counters"]
+
+[[test]]
+name = "calibration_workflow"
+path = "../../tests/calibration_workflow.rs"
+required-features = ["planner-calibration"]
+
+[[test]]
+name = "calibration_erasure"
+path = "../../tests/calibration_erasure.rs"

@@ -72,12 +72,21 @@
 //! rows can be consumed by [`cq_storage::dedup::ordered`] or borrowed by
 //! [`cq_storage::dedup::ordered_ref`] to sort and unique within prefix runs;
 //! no unchecked sortedness or uniqueness declaration is accepted.
+//!
+//! [`stats_source::visit`] borrows a dynamic schema and streams the same CSV and
+//! Arrow batches into statistics collection without retaining source rows.
+//! Its literal-tab mode matches prepared integer inputs: no quoting, blank lines
+//! skipped, CRLF accepted, and exact field counts. Scalar decoding remains the
+//! batch consumer's responsibility.
 
 mod columnar;
 mod csv_source;
 mod intern;
 mod loader;
 mod scalar;
+pub mod stats;
+pub mod stats_manifest;
+pub mod stats_source;
 pub mod zone;
 mod zone_docs;
 
@@ -201,10 +210,10 @@ enum BatchData<'a> {
     Parquet(&'a arrow_array::RecordBatch, u64),
 }
 
-/// Borrowed source batch, valid only while a generated decoder runs.
+/// Borrowed source batch, valid only while a decoder or visitor runs.
 pub struct Batch<'a> {
     file: &'a Path,
-    columns: &'static [&'static str],
+    columns: &'a [&'a str],
     mapping: &'a [usize],
     data: BatchData<'a>,
 }

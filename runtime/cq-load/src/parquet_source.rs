@@ -38,13 +38,17 @@ impl Default for ParquetOptions {
 
 /// Arrow-backed source supporting row batches or direct column ingestion.
 pub struct Parquet<S> {
+    reader: ParquetReader<'static>,
+    schema: PhantomData<S>,
+}
+
+pub(crate) struct ParquetReader<'a> {
     reader: ParquetRecordBatchReader,
     file: PathBuf,
     mapping: Vec<usize>,
-    columns: &'static [&'static str],
+    columns: &'a [&'a str],
     next_row: u64,
     finished: bool,
-    schema: PhantomData<S>,
 }
 
 impl<S: Relation> Parquet<S> {
@@ -59,7 +63,26 @@ impl<S> Parquet<S> {
         options: ParquetOptions,
         columns: &'static [&'static str],
     ) -> Result<Self> {
-        let file = path.as_ref();
+        Ok(Self {
+            reader: ParquetReader::open(path.as_ref(), options, columns)?,
+            schema: PhantomData,
+        })
+    }
+
+    pub(crate) fn next_with<T>(
+        &mut self,
+        decode: impl FnOnce(&Batch<'_>) -> Result<T>,
+    ) -> Option<Result<T>> {
+        self.reader.next_with(decode)
+    }
+}
+
+impl<'a> ParquetReader<'a> {
+    pub(crate) fn open(
+        file: &Path,
+        options: ParquetOptions,
+        columns: &'a [&'a str],
+    ) -> Result<Self> {
         if options.batch_size == 0 {
             return Err(Error::new(
                 file,
@@ -91,12 +114,11 @@ impl<S> Parquet<S> {
             columns,
             next_row: 1,
             finished: false,
-            schema: PhantomData,
         })
     }
 }
 
-impl<S> Parquet<S> {
+impl ParquetReader<'_> {
     pub(crate) fn next_with<T>(
         &mut self,
         decode: impl FnOnce(&Batch<'_>) -> Result<T>,
