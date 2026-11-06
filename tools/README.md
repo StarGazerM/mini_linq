@@ -42,6 +42,23 @@ requires them. Do not rerun behavioral gates for a docs-only rebase.
 An explicitly named selector narrows even an impact-selected run; omit selectors
 for the final gate. Unknown selectors are errors, not successful empty gates.
 
+**Merge protocol (2026-11-06).** Before Main merges a branch that changes a
+compiler pass, checker, printer, runtime or planner: (1) the branch's census
+lists every recorded plan it moves (old/new/reason) and every generated-code
+target it changes, and its realization-level review (providers, phases,
+scans, probes per row) shows only intended changes; (2) an independent
+reviewer reads the diff against the contract (one decision per IR, printers
+decide nothing, checkers verify without rerunning, no type/syntax
+inspection, no avoidable allocation) and the census, and Main reads the
+expanded code of every changed target itself; (3) the gates above. A branch
+whose generated code changes in kind where its census predicted only a
+reorder is sent back, not merged with the change explained after the fact.
+After each merge batch Main runs the performance baseline: CPU TPC-H SF1
+default/par, CPU DOOP xalan mini/mini-par, and (GPU available) GPU TPC-H SF1
+advised and `doop-gpu` xalan, paired against the previous batch's main under
+the timing protocol, so a regression is attributed to one batch.
+
+
 The regression inventory includes GPU compiler host-only tests, but performs no
 GPU device execution. The constant-capture test lives with the GPU compiler;
 core has no GPU dev-dependency. When a merge batch can affect
