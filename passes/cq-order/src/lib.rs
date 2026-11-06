@@ -1319,6 +1319,7 @@ pub fn check(
     )
 }
 
+/// Formal rule CK-OrderObligations: Per scope, no reductions, every atom read, Coarse/Fine split and Written introducing order, then CK-Restrict.
 fn check_steps(
     source: &cq::Program,
     body: &cq::CommaList<BodyItem>,

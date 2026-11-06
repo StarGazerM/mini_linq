@@ -43,47 +43,162 @@ An empty projected read before a later introduction of the same occurrence
 is redundant and forbidden; a residual root check denotes Unit semijoin,
 with at most one outgoing unit, regardless of source cardinality.
 
-\paragraph{Contract.} $\mathsf{Schedule}(t,A)$ checks:
-(1)~each subatom names its relation, clause, arity and original columns; dropped
-columns are unbound; every atom's full correlated row is eventually checked;
-(2)~each identity, constraint and negation appears exactly once, after its
-variables bind, and binds nothing; negation preserves its source atom; a
-written predicate restricting some occurrence (6) may omit its step;
-(3)~each Rust let, generator and guard appears exactly once with unchanged
-expression, pattern, annotation and lexical bindings, after all its free
-variables bind. Lexically opaque expressions require their whole environment;
-there is no additional written-order or relational-predecessor restriction;
-(4)~a reduction names a different atom or Rust-free hoisted block and lists
-exactly the shared equality classes at its support's column positions; it
-precedes the target's first subatom, except that a target already read to
-supply a finite block domain restricts the retained prefix instead; a
-reduction naming a hoisted block that takes a finite prefix domain follows
-that block's free columns;
-no Rust guard, scalar bind, generator or negation is a reduction target or support;
-the reduction graph need not be acyclic;
-(5)~blocks recursively check kind, paths, interface coverage, arm schedules and
-the required placement field. Hoisted blocks contain no Rust steps, and one
-taking a finite prefix domain (an arm lacks a generator for a free column)
-follows its free columns as provided by the scope (a correlated arm's prefix,
-a hoisted arm's finite domain, or the scope's own earlier steps; a hoisted
-arm without a finite domain provides none of its free columns up front); correlated
-blocks require every free prefix variable. Repeated reads retain placement;
-(6)~a restriction (WF-Restrict) names a positive atom occurrence of its scope,
-carries a written relational predicate other than a variable identity (a
-literal equality in constraint form) or one of its E-Domain implied domains,
-uses only columns of that occurrence, and precedes every other step of the
-scope. It binds nothing; it filters the occurrence's own relation, so
-$\sigma_P(R)\bowtie p=\sigma_P(R\bowtie p)$ since $\vars(P)\subseteq\vars(R)$.
+\paragraph{Contract.}
+The six judgments below define $\mathsf{Schedule}$, scope by scope.
+Write $s_i$ for a scheduled step, $c_i$ for its source clause, and
+$\pi(c)$ for the occurrence path obtained from the enclosing branch and clause.
+$I_a,I_b,I_p,I_n,I_r,I_d,I_x$ are respectively the indices of atom reads,
+block reads, relational predicates, negations, Rust steps, reductions and
+restrictions; $C_a,C_b,C_p,C_n,C_r$ are the corresponding source-clause sets.
+Here $C_p$ includes identities and constraints. The vector $\bar x_c$ is the
+source atom's columns, or a block's free columns followed by its interface.
+$K_i$ is the set of retained column positions of a read, $F_c$ is a block's
+free-variable set, $Q$ is the scope's logical variables (including its context),
+and $L$ is the set of Rust-bound variables, including Rust-block interfaces.
+$A.introduces_i$ records the bindings added by step $i$.
+In a reduction, $u_i=s_i.target.clause$ and $v_i=s_i.support.clause$;
+$x\sim y$ is the source hypergraph's equality-class relation.
+The maps $f$ in the predicate and Rust rules are independent matching witnesses.
+The function $\mathsf{payload}$ extracts the source syntax, treating a
+relational equality and its equality-constraint spelling identically but
+otherwise retaining expressions, patterns, annotations and negated atoms.
+The set $H$ contains the source predicate clauses stated by at least one
+restriction; implied domains alone do not put their originating clause in $H$.
+The function $\mathsf{impliedDomains}$ returns a constraint's E-Domain
+consequences and the empty set on an identity clause.
+$E_c$ is the written lexical environment before Rust clause $c$;
+$\mathsf{binders}(c)$ and $\mathsf{names}(c)$ are its pattern bindings and
+lexically free value names, and $\mathsf{opaque}(c)$ is its lexical opacity flag.
+For a block $c$, $\mathsf{needsDomain}(c)$ holds when some arm fails to
+generate a free column from its atoms or has a negation using a free column.
+$D_c$ is $F_c\setminus P_0$ for a Rust-free, domain-taking block with a
+hoisted read, and is empty otherwise; it is empty for positive atoms too.
+The function $\mathsf{arm}(t,i,j)$ pairs source arm $j$ of block $c_i$
+with scheduled arm $j$ of $s_i$, using context $F_{c_i}$, the indicated seed,
+and parent path $(\pi(c_i),j)$.
+No Rust written-order or relational-predecessor condition is imposed here,
+and the reduction graph need not be acyclic.
+Restrictions filter their occurrence's own relation:
+$\sigma_P(R)\bowtie p=\sigma_P(R\bowtie p)$ when $\vars(P)\subseteq\vars(R)$.
 Let $B$ be the visible bindings and $P\subseteq B$ the columns provided by
 the scope's finite seed or preceding steps. A hoisted arm without a finite
 domain starts with $P=\emptyset$, even when its free columns are visible in $B$.
 Every step extends $P$ by its provided columns.
+\[
+\begin{aligned}
+\mathsf{Schedule}(t,A)\triangleq{}&
+ \mathsf{VOSubatoms}(t,A)\land\mathsf{VOPredicates}(t,A)
+ \land\mathsf{VORustSteps}(t,A)\\
+ &{}\land\mathsf{VOReductions}(t,A)\land\mathsf{VOBlocks}(t,A)
+ \land\mathsf{VORestrictions}(t,A).
+\end{aligned}
+\]
 \begin{mathpar}
+\Rule{WF-VO-Subatoms}{
+ \forall i\in I_a\cup I_b.\ c_i\in C_a\cup C_b\land
+ s_i.source=(\mathsf{relation}(c_i),\pi(c_i))\land
+ |s_i.columns|=|\bar x_{c_i}|\\
+ \forall i\in I_a\cup I_b,\ k<|\bar x_{c_i}|.\
+ (k\in K_i\Rightarrow s_i.columns_k=x_{c_i,k})\land
+ (k\notin K_i\Rightarrow x_{c_i,k}\notin B_i)\\
+ \forall i\in I_a.\
+ \{x_{c_i,k}\mid k\in K_i\}\cap L\subseteq B_i\\
+ \forall c\in C_a\cup C_b.\ \exists i\in I_a\cup I_b.\
+ c_i=c\land K_i=\{0,\ldots,|\bar x_c|-1\}\\
+ \forall i\in I_a\cup I_b.\
+ A.introduces_i=\{x_{c_i,k}\mid k\in K_i\}\setminus B_i}
+ {\mathsf{VOSubatoms}(t,A)}
+
+\Rule{WF-VO-Predicates}{
+ f:I_p\cup I_n\hookrightarrow C_p\cup C_n\\
+ f(I_p)\subseteq C_p\land f(I_n)=C_n\land C_p\setminus H\subseteq f(I_p)\\
+ \forall i\in I_p\cup I_n.\
+ \mathsf{payload}(s_i)=\mathsf{payload}(t.cq.body_{f(i)})
+ \land A.introduces_i=\emptyset\\
+ \forall i\in I_p.\ \vars(s_i)\subseteq B_i\\
+ \forall i\in I_n.\ \vars(s_i)\cap Q\subseteq B_i}
+ {\mathsf{VOPredicates}(t,A)}
+
+\Rule{WF-VO-RustSteps}{
+ f:I_r\xrightarrow{\sim}C_r\\
+ \forall i\in I_r.\
+ \mathsf{payload}(s_i)=\mathsf{payload}(t.cq.body_{f(i)})
+ \land A.introduces_i=\mathsf{binders}(f(i))\\
+ \forall i\in I_r.\
+ (\mathsf{opaque}(f(i))\Rightarrow E_{f(i)}\subseteq B_i)\land
+ (\neg\mathsf{opaque}(f(i))\Rightarrow
+       \mathsf{names}(f(i))\cap E_{f(i)}\subseteq B_i)}
+ {\mathsf{VORustSteps}(t,A)}
+
+\Rule{WF-VO-Reductions}{
+ \forall i\in I_d.\ u_i\ne v_i\land u_i,v_i\in C_a\cup C_b\\
+ \forall i\in I_d,\ c\in\{s_i.target.clause,s_i.support.clause\}.\
+ D_c\subseteq P_i\land
+ (c\in C_b\Rightarrow
+   \neg\mathsf{Rust}(c)\land
+   \forall j\in I_b.\ c_j=c\Rightarrow s_j.placement=\mathsf{hoisted})\\
+ \forall i\in I_d.\
+ s_i.target.relation=\mathsf{relation}(s_i.target.clause)\land
+ s_i.support.relation=\mathsf{relation}(s_i.support.clause)\land
+ |s_i.support.columns|=|\bar x_{s_i.support.clause}|\\
+ \forall i\in I_d,\ k<|\bar x_{s_i.support.clause}|.\
+ s_i.support.columns_k=
+ \begin{cases}
+ x_{s_i.support.clause,k}&
+   \exists x\in\bar x_{s_i.target.clause}.\ x\sim x_{s_i.support.clause,k}\\
+ \_&\neg\exists x\in\bar x_{s_i.target.clause}.\ x\sim x_{s_i.support.clause,k}
+ \end{cases}\\
+ \forall i\in I_d.\
+ (\exists j\in I_a\cup I_b.\ j<i\land c_j=s_i.target.clause)
+ \Rightarrow
+ \bigcup_c D_c\ne\emptyset\land\bigcup_c D_c\subseteq P_i\\
+ \forall i\in I_d.\ A.introduces_i=\emptyset}
+ {\mathsf{VOReductions}(t,A)}
+
+\Rule{WF-VO-Blocks}{
+ \forall i\in I_b.\ c_i\in C_b\land
+ s_i.kind=t.cq.body_{c_i}.kind\land
+ |s_i.arms|=|t.cq.body_{c_i}.arms|\\
+ \forall i\in I_b.\
+ s_i.placement\in\{\mathsf{hoisted},\mathsf{correlated}\}\land
+ (s_i.placement=\mathsf{hoisted}\Rightarrow\neg\mathsf{Rust}(c_i))
+ \land D_{c_i}\subseteq P_i\\
+ \forall i\in I_b.\
+ (s_i.placement=\mathsf{correlated}\Rightarrow F_{c_i}\subseteq B_i)
+ \land\{x_{c_i,k}\mid k\in K_i\}\cap F_{c_i}\cap L\subseteq B_i\\
+ \forall i\in I_b.\
+ \mathsf{Rust}(c_i)\Rightarrow K_i=\{0,\ldots,|\bar x_{c_i}|-1\}
+ \land|\{j\in I_b\mid c_j=c_i\}|=1\\
+ \forall i,j\in I_b.\ c_i=c_j\Rightarrow
+ (s_i.kind,s_i.placement,s_i.arms)=(s_j.kind,s_j.placement,s_j.arms)\\
+ \forall i\in I_b,\ j<|s_i.arms|.\
+ \mathsf{Schedule}(\mathsf{arm}(t,i,j),A.branches_{c_i,j})
+ \land \mathsf{arm}(t,i,j).B_0=F_{c_i}\\
+ \forall i\in I_b,\ j<|s_i.arms|.\
+ \mathsf{arm}(t,i,j).P_0=
+ \begin{cases}
+ F_{c_i}&s_i.placement=\mathsf{correlated}\lor\mathsf{needsDomain}(c_i)\\
+ \emptyset&s_i.placement=\mathsf{hoisted}\land\neg\mathsf{needsDomain}(c_i)
+ \end{cases}}
+ {\mathsf{VOBlocks}(t,A)}
+
+\Rule{WF-VO-Restrictions}{
+ \forall i\in I_x.\ c_i\in C_a\land
+ s_i.source=(\mathsf{relation}(c_i),\pi(c_i))\land
+ \emptyset\ne\vars(s_i.predicate)\subseteq\vars(\bar x_{c_i})\\
+ \forall i\in I_x.\
+ s_i.predicate\in
+ \{\mathsf{payload}(t.cq.body_c)\mid c\in C_p\}
+ \cup\bigcup_{c\in C_p}\mathsf{impliedDomains}(t.cq.body_c)\\
+ \forall i\in I_x.\
+ s_i.predicate\notin\{x=y\mid x,y\in Q\}\land
+ \{j\mid j<i\}\subseteq I_x\land A.introduces_i=\emptyset}
+ {\mathsf{VORestrictions}(t,A)}
+
 \Rule{D-Constraint}{\vars(C)\subseteq B}
  {\mathsf{requires}(C)=\vars(C),\quad\mathsf{provides}(C)=\emptyset}
 
-\Rule{WF-VO-Rust}{\forall i\text{ a Rust step}.\ \fv(e_i)\cap Q\subseteq B_i\\
- \mathsf{PlacedOnce}(i)\quad\mathsf{UnchangedRustPayload}(i)}
+\Rule{WF-VO-Rust}{\mathsf{VORustSteps}(t,A)}
  {\mathsf{RustSchedule}(t)\Downarrow\ok}
 
 \Rule{WF-BlockPlacement}{b.placement\in\{\mathsf{hoisted},\mathsf{correlated}\}\\
@@ -91,7 +206,7 @@ Every step extends $P$ by its provided columns.
  b.placement=\mathsf{hoisted}\land\mathsf{needsDomain}(b)\Longrightarrow F_b\subseteq P
   \text{ at }b\text{ and at every reduction naming }b\\
  b.placement=\mathsf{correlated}\Longrightarrow F_b\subseteq B\\
- \mathsf{RepeatedReadsAgree}(b.placement)\quad
+ \forall i,j\in I_b.\ c_i=c_j\Rightarrow s_i.placement=s_j.placement\\
  \mathsf{ReductionOperands}(t)\cap\mathsf{CorrelatedBlocks}(t)=\emptyset}
  {\mathsf{BlockPlacement}(b,B,P,t)\Downarrow\ok}
 
@@ -108,7 +223,7 @@ Every step extends $P$ by its provided columns.
  {\mathsf{Evidence}(t.cq,\mathcal{E})\Downarrow\ok}
 
 \Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\\
- t.evidence\text{ present}\Rightarrow\mathsf{Evidence}(t.cq,t.evidence)\Downarrow\ok}
+ t.evidence\ne\epsilon\Rightarrow\mathsf{Evidence}(t.cq,t.evidence)\Downarrow\ok}
  {\mathsf{WF}_{VO}(t)\Downarrow A}
 \end{mathpar}
 

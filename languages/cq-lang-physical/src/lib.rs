@@ -596,6 +596,7 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 /// Formal rule CTX-HostSet: Require each uniqueness fact to name one used host.
 fn analyze(module: &Program) -> syn::Result<Analysis> {
     let program = &module.program;
+    // Formal rule PH-H-Heading: Combine definition, key, range, union and output heading checks.
     let declarations = cq_syntax::check_input_declarations(&program.declarations)?;
     let mut certified = BTreeSet::new();
     for fact in &program.host_sets {
@@ -670,6 +671,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
     let mut readers: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut operands: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unique: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Formal rule PH-H-Definitions: Check unique earlier definitions, rename partitions, fresh bindings, visible uses and reachable output.
     for definition in &program.definitions {
         let name = symbol_name(&definition.name);
         if analysis.rows.contains_key(&name) {
@@ -702,6 +704,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         let mut deps = Vec::new();
         let row = match &definition.operator {
             Operator::Union(union) => {
+                // Formal rule PH-H-Union: Require matching arm headings and type identities, valid origin interfaces and dependent fused arms.
                 if union.operands.len() < 2 {
                     return error(union, "union requires at least two operands");
                 }
@@ -948,6 +951,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                         .push((name.clone(), columns, cq_syntax::SupplyKind::Const));
                 }
                 // Formal rule PH-Range: A window demand is constant order bounds on exactly one column.
+                // Formal rule PH-H-Range: Require a nonempty set of closed ordered bounds on one available column.
                 if matches!(definition.operator, Operator::Range(..)) {
                     let Some((column, _)) = s.condition.range_bounds() else {
                         return error(s, "range read requires constant order bounds on one column");
@@ -1106,6 +1110,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             }
         }
         let mode = ModeKind::from(&definition.mode);
+        // Formal rule PH-Modes: Check each result mode, canon eligibility and empty exists headings.
         if mode == ModeKind::Exists && !analysis.headings[&name].is_empty() {
             return error(&definition.name, "exists mode requires an empty heading");
         }
@@ -1148,6 +1153,7 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
         .iter()
         .flat_map(|e| cq_syntax::rust::free_variables(e).dependencies(&heading))
         .collect();
+    // Formal rule PH-H-Output: Require an all-bare head dependency set to equal the returned heading.
     if program.head.variables().count() == program.head.args.len() && output != heading {
         return error(
             &program.head,
@@ -1351,6 +1357,7 @@ pub fn head_collapses<'a>(program: &Body, columns: impl IntoIterator<Item = &'a 
         })
 }
 
+/// Formal rule PH-H-Keys: Require distinct common join keys; anti uses a common subset and semi/anti preserve the left heading.
 fn join_columns(keyed: &Keyed, left: &[String], right: &[String]) -> syn::Result<Vec<String>> {
     let shared: BTreeSet<String> = left.iter().filter(|c| right.contains(c)).cloned().collect();
     let written: BTreeSet<String> = keyed.columns.iter().map(symbol_name).collect();

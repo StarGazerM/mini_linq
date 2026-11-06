@@ -75,15 +75,104 @@ or Physical selection to repeat that decision.
 
 \Rule{WF-RA}{\mathsf{RAHeading}(a,A)}{\mathsf{WF}_{RA}(a)\Downarrow A}
 \end{mathpar}
-$\mathsf{RAHeading}$ is these rules plus: (1)~valid declarations, unique result
-names, operands defined earlier, every definition reachable from the output;
-(2)~each rename names a unique occurrence; (3)~guard/bind payloads use only
-visible names, or an explicit Environment lists names available in the input
-heading at a valid path; (4)~union operands have equal headings and a valid
-block origin; (5)~an all-bare output has exactly its input heading, a computed
-output may use a subset; (6)~Rust expressions retain their lexical
-free-variable identities. Types are opaque host syntax; merging transports
-annotations and Rust establishes concrete type compatibility.
+For the following clauses, write $a.defs=(r_i=o_i)_{i=1}^n$,
+$H(r)=A(r).V$, and $\operatorname{reach}(r)$ for operand-graph reachability,
+including $r$ itself. $\operatorname{names}$ extracts names from a sequence;
+$\operatorname{FV}(e)$ is lexical Rust free-variable analysis (including
+opaque macro dependencies as in the shared Rust analyzer).
+$L$ is the set of all rename targets, bind names and aggregate names in $a$.
+For a guard or bind $b$, $E_b$ is its optional Environment and $e_b$ its
+expression. $\operatorname{scope}(b)$ is $H(b.input)$ without an Environment,
+and $\set(E_b.variables)$ otherwise. A path is admissible precisely when
+its sequence of nonnegative indices has positive odd length.
+The optional-field notation $x=\bot$ means absent.
+\begin{mathpar}
+\Rule{RA-H-Declarations}{
+ |\set(\operatorname{names}(a.decls))|=|a.decls|\quad
+ \forall d\in a.decls,\ |d.columns|>0\ \land\
+ |\set(\operatorname{names}(d.columns))|=|d.columns|\\
+ \forall d\in a.decls,\ \forall h\in d.hosts,\
+ \mathsf{hostReads}(d.name,h.key)=h.reads\ \land\
+ \mathsf{hostSupports}(d.name,h.key)=h.supports\\
+ \forall d\in a.decls,\ d.name=a.output.head.relation
+ \Rightarrow(d.value=\bot\land d.hosts=[])\\
+ |\{r_i\mid1\leq i\leq n\}|=n\quad
+ \forall i,\ \operatorname{refs}(o_i)\subseteq\{r_j\mid j<i\}\\
+ a.output.input\in\{r_i\mid1\leq i\leq n\}\quad
+ \operatorname{reach}(a.output.input)=\{r_i\mid1\leq i\leq n\}
+ }{\mathsf{RADeclarations}(a,A)}
+
+\Rule{RA-H-Renames}{
+ \forall i,\ o_i=\operatorname{rename}(R,p,m,C)
+ \Rightarrow(|p|\in\{2k+1\mid k\in\mathbb N\})\\
+ \forall i,j,\ (o_i=\operatorname{rename}(R,p,m,C)\land
+ o_j=\operatorname{rename}(R',p',m',C')\land p=p')\Rightarrow i=j
+ }{\mathsf{RARenames}(a,A)}
+
+\Rule{RA-H-Payloads}{
+ \forall b\in\operatorname{guardBind}(a),\
+ E_b=\bot\Rightarrow \operatorname{FV}(e_b)\cap L\subseteq H(b.input)\\
+ \forall b\in\operatorname{guardBind}(a),\
+ E_b\ne\bot\Rightarrow
+ \bigl(|\set(E_b.variables)|=|E_b.variables|\ \land\
+ \set(E_b.variables)\subseteq H(b.input)\ \land\
+ (E_b.path\ne\bot\Rightarrow |E_b.path|\in\{2k+1\mid k\in\mathbb N\})\bigr)
+ }{\mathsf{RAPayloads}(a,A)}
+
+\Rule{RA-H-Unions}{
+ \forall u\in\operatorname{unions}(a),\ |u.operands|\geq2\ \land\
+ \forall r,s\in u.operands,\ H(r)=H(s)\\
+ \forall u\in\operatorname{unions}(a),\ \forall r,s\in u.operands,\ \forall x\in
+ (\dom A(r).logicalTypeIds\setminus A(r).C)\cap
+ (\dom A(s).logicalTypeIds\setminus A(s).C),\
+ A(r).logicalTypeIds(x)=A(s).logicalTypeIds(x)\\
+ \forall u\in\operatorname{unions}(a),\ u.origin\ne\bot\Rightarrow
+ \bigl(|u.origin.path|\in\{2k+1\mid k\in\mathbb N\}\ \land\
+ |F_u|=|u.origin.free|\ \land\ |I_u|=|u.origin.interface|\ \land\
+ F_u\cap I_u=\emptyset\\
+ {}\land (u.origin.domain\ne\bot\Rightarrow
+ (u.origin.over=\bot\land H(u.origin.domain)=F_u))\\
+ {}\land (u.origin.over\ne\bot\Rightarrow
+ (F_u\subseteq H(u.origin.over)\land I_u\cap H(u.origin.over)=\emptyset))\\
+ {}\land H(u.operands_1)=F_u\cup I_u\cup P_u\bigr)
+ }{\mathsf{RAUnions}(a,A)}
+
+\Rule{RA-H-Output}{
+ \forall e\in a.output.head.args,\ e\in\operatorname{Ident}\\
+ \set(a.output.head.args)\setminus\operatorname{captureNames}(a)
+ =H(a.output.input)
+ }{\mathsf{RAOutput}(a,A)}
+
+\Rule{RA-H-Rust}{
+ \forall b\in\operatorname{guardBind}(a),\
+ \operatorname{args}(b)=
+ \{(x,\operatorname{column}(b.input,x))\mid
+ x\in\operatorname{FV}(e_b)\cap\operatorname{scope}(b)\}
+ }{\mathsf{RARust}(a,A)}
+
+\Rule{RA-H-Heading}{
+ \Delta_0=\emptyset\quad
+ \forall i\in\{1,\ldots,n\},\
+ \Sigma\vdash(\Delta_{i-1},r_i=o_i)\Rightarrow\Delta_i\quad A=\Delta_n\\
+ \mathsf{RADeclarations}(a,A)\quad\mathsf{RARenames}(a,A)\quad
+ \mathsf{RAPayloads}(a,A)\quad\mathsf{RAUnions}(a,A)\quad
+ \mathsf{RAOutput}(a,A)\quad\mathsf{RARust}(a,A)
+ }{\mathsf{RAHeading}(a,A)}
+\end{mathpar}
+Here $\Sigma$ is the declaration map of $a$; $\operatorname{refs}$ includes
+ordinary operands and block-origin domain/prefix references, while reachability
+uses only ordinary operands, as the implementation does.
+$F_u=\set(u.origin.free)$, $I_u=\set(u.origin.interface)$, and $P_u$ is
+$H(u.origin.over)$ when present and $\emptyset$ otherwise.
+$\operatorname{args}$ and $\operatorname{column}$ denote the structural
+schedule's recorded Rust arguments and input column identities; RA-H-Rust
+specifies their construction, not a second local rejection check.
+The output rule reflects the standalone checker: computations belong in final
+bind nodes, and output columns match the entire input heading after removing
+host captures. Explicit Environments validate their listed scope and path;
+they do not add a free-variable subset test on the expression.
+Types are opaque host syntax; merging transports annotations and Rust
+establishes concrete type compatibility.
 Generator outputs are computed columns with item-derived types. A generator
 does not inherit a scalar literal value or a scalar-bind uniqueness proof:
 one input row may produce many distinct extensions (or none).

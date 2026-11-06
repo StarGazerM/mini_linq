@@ -64,6 +64,7 @@ pub fn step_states(step: &Step, predicate: &cq::Constraint) -> bool {
 ///
 /// Returns the written predicate clauses whose predicate this restriction
 /// carries (an implied domain carries none).
+/// Formal rule WF-VO-Restrictions: Restrict only a scoped positive occurrence with a written or implied column predicate before all other steps.
 pub(super) fn check(
     body: &cq_syntax::CommaList<cq::BodyItem>,
     restrict: &Restrict,

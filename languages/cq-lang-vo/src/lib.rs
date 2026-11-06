@@ -548,6 +548,7 @@ fn analyze_steps(
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
             }
+            // Formal rule WF-VO-Subatoms: Validate source columns and bound-column retention, and require every atom's full row.
             Step::Atom(subatom, _) => {
                 let clause = subatom.clause();
                 order.atom = true;
@@ -617,6 +618,7 @@ fn analyze_steps(
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
             }
+            // Formal rule WF-VO-Predicates: Match each predicate or negation to one source clause, require its inputs, and introduce nothing.
             Step::Equality(equality, _) => {
                 order.required.extend(equality.variables().map(symbol_name));
                 let clause = equalities
@@ -717,6 +719,7 @@ fn analyze_steps(
                 complete.insert(clause);
                 analysis.introduces.push(Vec::new());
             }
+            // Formal rule WF-VO-RustSteps: Preserve every Rust payload exactly once with its lexical dependencies and pattern bindings.
             Step::Guard(_, _) | Step::Let(_, _) | Step::For(_, _) => {
                 let identical = |clause: usize| match (step, &body[clause]) {
                     (Step::Guard(a, _), cq::BodyItem::Filter(b)) => a == b,
@@ -753,6 +756,7 @@ fn analyze_steps(
                 analysis.introduces.push(introduced);
                 complete.insert(clause);
             }
+            // Formal rule WF-VO-Reductions: Check distinct relational operands, exact shared columns, and finite-domain placement.
             Step::Reduce(reduce, _) => {
                 order.preprocessing = true;
                 let clause = reduce.clause();
@@ -882,6 +886,7 @@ fn analyze_steps(
     Ok(analysis)
 }
 
+/// Formal rule WF-VO-Blocks: Recursive block schedules preserve source kind, interfaces and placement, including identical repeated arm plans.
 fn same_branch_steps(block: &blocks::Block, steps: &[Step], clause: usize) -> bool {
     steps.iter().all(|step| match step {
         Step::Block(other, _) if other.source.clause() == clause => {

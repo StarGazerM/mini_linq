@@ -393,9 +393,19 @@ every answer.
  {t'=t\setminus\{\mathsf{where}\ P\mid\text{every written instance of }P\text{ has a target}\}}
 \]
 \[
-\Rule{CK-Order}{\mathsf{WF}_{NF}(s)\quad\mathsf{WF}_{VO}(t)\\
+\Rule{CK-Order}{\mathsf{WF}_{NF}(s)\quad\mathsf{WF}_{VO}(t)\quad t.cq=s\\
  \mathsf{OrderObligations}(s,t,\chi)}
  {\mathsf{check}_{order}(s,t,\chi)\Downarrow\ok}
+
+\Rule{CK-OrderObligations}{\forall\sigma\in\mathsf{scopes}(t).\ \forall k<|\sigma|.\ \sigma_k\notin\mathsf{Reduce}\\
+ \forall\sigma.\ \forall i\in\mathsf{atoms}(\sigma).\ \exists k.\ \mathsf{clause}(\sigma_k)=i\\
+ \chi.split=\mathsf{Coarse}\Rightarrow\forall\sigma,i.\
+  |\{k\mid\mathsf{clause}(\sigma_k)=i\}|=1\land\forall k.\ \mathsf{clause}(\sigma_k)=i\Rightarrow\mathsf{cols}(\sigma_k)=\vars(c_i)\\
+ \chi.split=\mathsf{Fine}\Rightarrow\forall\sigma,k.\ |\mathsf{intro}(\sigma_k)|\le1\\
+ \chi.order=\mathsf{Written}\Rightarrow\forall\sigma.\ \forall k<l.\
+  \mathsf{intro}(\sigma_k)\ne\emptyset\ne\mathsf{intro}(\sigma_l)\Rightarrow\mathsf{clause}(\sigma_k)\le\mathsf{clause}(\sigma_l)\\
+ \mathsf{restrictionsConsistent}(s,t)}
+ {\mathsf{OrderObligations}(s,t,\chi)}
 
 \Rule{CK-Restrict}{\forall P\text{ written}.\ |\{\mathsf{where}\ P\in t\}|\in\{0,|\{k\mid c_k=P\}|\}}
  {\mathsf{restrictionsConsistent}(s,t)}
@@ -409,9 +419,11 @@ planners' transfer route) records restrictions this way; a rescheduling
 producer (LE, advised lookups) restricts its own schedule, so prefix
 predicates still constrain its choices. The written
 reference (\code{compile_written}) records none, but still obeys VO-Order.
-$\mathsf{OrderObligations}$: unchanged CQ; no reductions; every atom has a
-subatom; Coarse has one full subatom per atom; Fine introduces at most one
-variable per subatom; Written keeps introducing-atom NF order, where a predicate
+In CK-OrderObligations, $\mathsf{scopes}(t)$ is the top-level step list and every
+block arm's step list, $\mathsf{clause}(\sigma_k)$ the NF clause of an atom or
+block step, $\mathsf{cols}(\sigma_k)$ its listed bound columns,
+$\mathsf{intro}(\sigma_k)$ the variables it introduces (WF-VO analysis) and
+$\mathsf{atoms}(\sigma)$ the positive atom clauses of the scope. A predicate
 placed only by restrictions has no position. VO-Order independently checks
 readiness, earliest-filter placement and connectivity on every executable VO.
 Filtered/Coarse no longer replays its producer's ranking. CK-Restrict
@@ -507,19 +519,41 @@ full support index. This optional omission preserves exact joins, makes no
 key assumptions, and does not suppress derived-domain support.
 Reductions distribute into positive uses and never into negated originals.
 \[
-\Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\\
+\Rule{CK-Reduce}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{VO}(t)\quad t.cq=s.cq\\
  \mathsf{ReduceObligations}(s,t,\chi)}
  {\mathsf{check}_{reduce}(s,t,\chi)\Downarrow\ok}
 \]
-$\mathsf{ReduceObligations}$: reduction-free source, unchanged CQ, equal step
-erasure; under None no reductions; under Tree an acyclic source with every
-directed tree edge once, all upward before downward, respecting parent/child
-order; Hypergraph requires exact atom-to-block cuts in both cyclic and acyclic
-scopes, and only the independently filter-supported tree edges in acyclic
-scopes, with strongest upward siblings first. The checker traverses each
-cut component independently and checks actual support-version provenance.
-Cyclic block-free scopes have no reductions. Missing cuts, unsupported
-reductions, and non-tree atom-to-atom reductions are rejected.
+\[
+\Rule{CK-ReduceObligations}{\mathsf{red}(s)=\emptyset\quad\mathsf{erase}(t)=s\quad
+ \chi=\mathsf{None}\Rightarrow E=\emptyset\quad
+ \chi=\mathsf{Tree}\Rightarrow J\ne\bot\\
+ \forall(i,j)\in E.\ (j,i)\in J\lor(i,j)\in J\lor\mathsf{cut}(i,j)\quad
+ |\mathsf{red}(t)|=|E|\\
+ \forall(c,p)\in J.\ \forall e\in\{(p,c),(c,p)\}.\ \mathsf{req}(e)\Rightarrow e\in E\quad
+ \chi=\mathsf{Hypergraph}\Rightarrow\forall i,j.\ \mathsf{cut}(i,j)\Rightarrow(i,j)\in E\\
+ \chi=\mathsf{Hypergraph}\Rightarrow\forall(i,j)\in E.\ v_j<3\land(\mathsf{cut}(i,j)\lor\mathsf{req}(i,j))\\
+ \forall(i,j),(i',j')\in E\setminus\mathsf{cut}.\ (j,i)\in J\land(i',j')\in J\Rightarrow\mathsf{pos}(i,j)<\mathsf{pos}(i',j')\\
+ \forall(c,p),(p,g)\in J.\ \mathsf{pos}(p,c)<\mathsf{pos}(g,p)\land\mathsf{pos}(p,g)<\mathsf{pos}(c,p)\\
+ \chi=\mathsf{Hypergraph}\Rightarrow\forall(i,j),(i,j')\in E\setminus\mathsf{cut}.\
+  (j,i),(j',i)\in J\land\mathsf{pos}(i,j)<\mathsf{pos}(i,j')\Rightarrow F_j\le F_{j'}\\
+ \chi=\mathsf{Masks}\Rightarrow\mathsf{check}_{reduce}^{Masks}(s,t)\Downarrow\ok\\
+ \forall b\in\mathsf{Blocks}(s),\ a<|b.arms|.\
+  \mathsf{ReduceObligations}(s_{b,a},t_{b,a},\chi_{b,a})}
+ {\mathsf{ReduceObligations}(s,t,\chi)}
+\]
+Per scope, $E\subseteq\mathsf{clauses}^2$ is the set of recorded
+\code{reduce i with j} pairs of $t$ (Masks excluded: CK-Masks checks those),
+$\mathsf{red}(t)$ their list and $\mathsf{pos}(i,j)$ the step index;
+$J$ is the child-to-parent map of the reduction tree (the GYO join tree under
+Tree, H-SpanningCore's tree for acyclic Hypergraph, $\bot$ otherwise);
+$\mathsf{cut}(i,j)$ holds under Hypergraph when $c_i$ is an atom, $c_j$ a block and
+they share a variable; $\mathsf{req}(i,j)$ is true outside Hypergraph and otherwise
+$f_{j\mid i}<3\land\neg(f_{j\mid i}=1\land f_{i\mid j}=0)$ (R-Filtered);
+$v_j$ is the filter rank of $j$ lowered by earlier reductions of $j$, and
+$F_j$ the minimum rank in $j$'s subtree. Arm scopes $s_{b,a},t_{b,a}$ use the
+arm's own reduction graph and $\chi_{b,a}=\chi$ made effective for a cyclic arm.
+The checker traverses each cut component independently and checks actual
+support-version provenance; it never runs the reducer.
 
 The default plan is left-deep in Prefix(Connected)/Coarse order: the left
 natural-join operand streams and the right builds. Elaboration preserves that
@@ -725,20 +759,45 @@ comparisons, inclusive ranges and membership over literal or CQ-Closed operands,
 never database statistics or foreign-key assumptions.
 \[
 \Rule{CK-RelationalLowering}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
- t.declarations=s.cq.declarations\quad t.head=s.cq.head\\
- \mathsf{FixedFacts}(s,t)\quad\mathsf{RustPayloadsAndBindings}(s,t)\quad
- \mathsf{BlockPlacements}(s,t)\Downarrow\ok\quad
- \mathsf{RecordedPlacement}(s,t)\\
+ t.declarations=s.cq.declarations\quad t.captures=s.cq.captures\\
+ \mathsf{StructuralFacts}(s,t)\quad
+ \mathsf{BlockPlacements}(s,t)\Downarrow\ok\\
+ \forall(\mathsf{restrict}\ R@i\ \mathsf{where}\ P)\in s.\ \mathsf{restrictionPlaced}(s,t,P)\\
+ \forall(R@i(K)\ \code{check})\in s.\ \forall d\in t.\ \mathsf{survives}(i,K,d)\Rightarrow d.\mathsf{check}=\mathsf{true}\\
  \mathsf{OutputBindings}(s)=\mathsf{OutputBindings}(t)}
  {\mathsf{check}_{lowering}(s,t,())\Downarrow\ok}
+
+\Rule{CK-RLStructure}{\Sigma=\mathsf{RL}(s)\quad
+ \{\!\{(o,R_o,\kappa_o,\dom\beta_o)\}\!\}_{o\in\mathsf{occ}(t)}=\{\!\{(o,R_o,\kappa_o,\dom\beta_o)\}\!\}_{o\in\mathsf{occ}(\Sigma)}\\
+ {\equiv_t}={\equiv_\Sigma}\quad
+ \forall o,c.\ \beta^t_o(c)=\beta^\Sigma_o(c)\lor\beta^t_o(c)\equiv_\Sigma\beta^\Sigma_o(c)\\
+ \{(\mathsf{shape}(P),[\vars(P)]_{\equiv})\mid P\in\mathsf{preds}(t)\}=
+ \{(\mathsf{shape}(P),[\vars(P)]_{\equiv})\mid P\in\mathsf{preds}(\Sigma)\}\\
+ \{\!\{(e,\fv(e))\mid e\in\mathsf{rust}(t)\}\!\}=\{\!\{(e,\fv(e))\mid e\in\mathsf{rust}(\Sigma)\}\!\}\quad
+ \mathsf{red}(s)\subseteq\mathsf{supports}(t)\quad t.head=\Sigma.head}
+ {\mathsf{StructuralFacts}(s,t)}
 \]
-The checker builds a schedule from the supplied VO and compares fixed occurrence
-paths and column bindings, equality closure, predicate shapes, named reduction
-support, Rust payloads and bindings, output heading and head. Union siblings
-match by occurrence footprint, fallback siblings in order, negated references by
-original branch. \emph{Refinement:} occurrences, constraints, Rust expressions
-and their recorded placements are those of the source; totality and the
-representation laws establish equal answers.
+\[
+\mathsf{OutputBindings}(s)\triangleq(s.cq.head,\ \mathsf{valuationVariables}(s.cq))\qquad
+\mathsf{OutputBindings}(t)\triangleq(t.output.head,\ \mathsf{heading}(\mathsf{ungrouped}(t.output.input)))
+\]
+In CK-RLStructure, $\Sigma=\mathsf{RL}(s)$ is the structural schedule obtained by
+folding the RL rules over the supplied VO steps (no order is chosen);
+$\mathsf{occ}$ are occurrence paths with relation $R_o$, literal constants
+$\kappa_o$ and column bindings $\beta_o$; $\equiv$ is the union-find closure of the
+relational equalities on primary nodes; $\mathsf{preds}$ the predicate facts
+(CT-Constraint); $\mathsf{rust}$ the Rust payloads with their lexical
+free-variable bindings; $\mathsf{supports}(t)$ the named reduction supports.
+Split views compare wiring (CT-FullWitness, CT-SelectConjunction); union
+siblings match by occurrence footprint, fallback siblings in order, negated
+references by original branch; an under-canon certificate may discharge a
+primary expansion witness from $t$ itself.
+The former $\mathsf{FixedFacts}$ and $\mathsf{RustPayloadsAndBindings}$ are both
+StructuralFacts (one comparison decides them); the former
+$\mathsf{RecordedPlacement}$ is exactly the restrictionPlaced and CK-CheckPhase
+premises, now quantified directly. \emph{Refinement:} occurrences, constraints,
+Rust expressions and their recorded placements are those of the source;
+totality and the representation laws establish equal answers.
 
 \paragraph{Two independent witness-preserving proof laws.}
 Structural comparison normally retains the exact wiring of independent
@@ -825,6 +884,11 @@ reduction support and the head; it searches no general subtree pruning.
 \label{sec:pass-index}
 Traverse definitions in order from empty $D$:
 \begin{mathpar}
+\Rule{IX-Policy}{\mathsf{WF}_{RA}(s)\quad\mathsf{WF}_{IX}(t)\quad t.ra=s\\
+ F=\mathsf{firstUses}(s)\quad
+ t.indexes=[(i_k,F_k)\mid 0\leq k<|F|]}
+ {\mathsf{lower}_{index}(s,t)}
+
 \Rule{IX-Reuse}{D(i)=(r,C,supply)}{D\vdash(r,C,supply)\Downarrow(i,D)}
 
 \Rule{IX-New}{(r,C,supply)\notin\operatorname{ran}D\quad i=i_{|D|}}
@@ -851,15 +915,17 @@ Traverse definitions in order from empty $D$:
  {D\vdash d\Downarrow D}
 
 \Rule{CK-Index}{\mathsf{WF}_{RA}(s)\quad\mathsf{WF}_{IX}(t)\quad t.ra=s\\
- \forall u\in\mathsf{keyedReads}(s).\ \exists d\in t.indexes.\ d\text{ matches }u\\
- \forall d\in t.indexes.\ \exists u\in\mathsf{keyedReads}(s).\ d\text{ matches }u\\
- t.indexes\text{ is named }i_0,\ldots,i_{k-1}\text{ in first matched-use order}}
+ \forall u\in\mathsf{keyedReads}(s).\ \exists d\in t.indexes.\ \mathsf{desc}(d)=\mathsf{desc}(u)\\
+ \forall d\in t.indexes.\ \exists u\in\mathsf{keyedReads}(s).\ \mathsf{desc}(d)=\mathsf{desc}(u)\\
+ \forall k<|t.indexes|.\ t.indexes_k.name=i_k\land\mathsf{desc}(t.indexes_k)=\mathsf{firstUses}(s)_k}
  {\mathsf{check}_{index}(s,t,())\Downarrow\ok}
 \end{mathpar}
 Antijoin uses IX-Join on its explicit key only. \emph{Refinement:} equality,
 since IX adds no meaning.
-Matching checks the recorded relation, logical column ordinals and supply against
-the read itself, using the local premises of IX-Join, IX-Const and IX-Range.
+Here $\mathsf{desc}$ is the recorded triple (relation, logical column ordinals,
+supply) of a descriptor, and of a read by the local premises of IX-Join, IX-Const
+and IX-Range; $\mathsf{firstUses}(s)$ lists the distinct read descriptors in
+definition order.
 It does not invoke the producer's demand traversal or reconstruct its ordered
 output list. The checked analysis associates each keyed read with the existing
 recorded requirement; repeated reads may share that entry. Local WF-IX permits
@@ -879,6 +945,13 @@ Such a rename is retained (\code{let}, or \code{exists} for an empty heading):
 every chosen index is built over the filtered, projected occurrence, and a
 stream source retains filtered rows rather than filtering a reusable host scan.
 \begin{mathpar}
+\Rule{PH-Lower}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
+ \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\Downarrow\ok\\
+ t.host\_sets=A.host\_sets\quad
+ t.consumer\_canonical=A.consumer\_canonical\quad
+ \mathsf{check}_{physical}(s,t)\Downarrow\ok}
+ {\mathsf{lower}_{physical}(s,A,t)}
+
 \Rule{PH-Range}{\theta\text{ constant order bounds on one column }c}
  {\mathsf{reads}(range\ select\ r\ if\ (\theta))=(r,\{c\},range)}
 
@@ -895,6 +968,10 @@ stream source retains filtered rows rather than filtering a reusable host scan.
 No missing demand is synthesized; merge has its own ordering premise; the check
 accepts any admissible recorded decisions. \emph{Refinement:} erasure equals the
 source RA, and modes only change evaluation.
+In PH-Lower, $A$ is the parsed fact packet passed to
+\code{cq_physical_lowering::compile_with}; fields of the Physical body are
+written directly on $t$. The relation constrains successful producer outputs,
+without requiring every admissible Physical choice to be a default choice.
 The optional \textsc{PH-ConstantGuard} Physical rewrite exposes a literal-bearing
 rename as a private pipe rename, a private pipe selection of the same literal
 equalities, and a projection onto exactly the original mapped columns.
@@ -938,11 +1015,82 @@ point conjunct; positional pipe reads retain all residual conjuncts.
 \end{mathpar}
 \[
 \Rule{CK-Structures}{\mathsf{WF}_{Physical}(s)\quad\mathsf{WF}_{Structures}(t)\\
- s=t.physical\text{ as AST and serialized tokens}}
+ s=t.physical\quad\mathsf{tokens}(s)=\mathsf{tokens}(t.physical)}
  {\mathsf{check}_{structures}(s,t)\Downarrow\ok}
 \]
 \emph{Refinement:} the embedded Physical is unchanged; each type
 represents its relation under the storage laws (a premise checked by tests).
+
+\subsubsection{Representation recording: Structures $\to$ Structures}
+In the two recording passes, $s.entries$ denotes the Structures entry list;
+$s.repr$, $s.stages$ and $s.retained$ denote the corresponding checked-analysis
+maps. Replacing $entries$ preserves the provider declarations and every other
+field. A result in a definition-order list denotes that definition's name.
+For \code{cq_represent}, let $E_s$ be the results admitted by its direct-chain
+eligibility function: noncanonical pipes whose operator is rename, select,
+point, range, project, semi or anti, whose predecessor is eligible, and whose
+heading is covered by the first scan lineage together with owned computed
+columns. A rename has no predecessor; semi and anti use their left input.
+Write $p_s$ for this predecessor function and $p_s^*(X)$ for its reflexive
+ancestor closure. Let $L_s(r)$ be the first recorded scan lineage and
+$O_s(r)=\mathsf{computed}_s(r)\cap H_s(r)$.
+The argument packet $a$ selects
+\[
+ \mathsf{reprSelection}(s,a)\triangleq
+ \begin{cases}
+ \varnothing & a=\epsilon,\\
+ E_s & a=\mathsf{positions},\\
+ p_s^*(X) & a=\mathsf{positions}(X),\ X\subseteq E_s.
+ \end{cases}
+\]
+Entries below follow Physical definition order; existing decisions, including
+tuple decisions, are never overwritten. The target contract also checks that
+new positional decisions have positional predecessors.
+\begin{mathpar}
+\Rule{STR-Represent}{\mathsf{WF}_{Structures}(s)\quad\mathsf{WF}_{Structures}(t)\\
+ S=\mathsf{reprSelection}(s,a)\setminus\operatorname{dom}(s.repr)\\
+ \Delta=[\,r\ \mathsf{repr}=\mathsf{positions}(L_s(r),O_s(r))\mid
+             r\in\mathsf{definitions}(s.physical),\ r\in S\,]\\
+ t=s[\mathit{entries}:=s.entries\mathbin{+\!\!+}\Delta]\quad
+ t.physical=s.physical}
+ {\mathsf{lower}_{represent}(s,a,t)}
+\end{mathpar}
+
+\subsubsection{Stage recording: Structures $\to$ Structures}
+For \code{cq_staging}, $s+e$ appends one entry without changing any other field.
+Let $B_s$ be the set of left inputs of probes with a non-host, single-level
+built right index on exactly the probe columns, no matching membership entry,
+no filtered right constant on those columns, no computed left columns, and a
+left scan spine of select/point/range/project ending at a constant-free rename.
+Only individually admissible, previously unstaged boundaries belong to $V_N$:
+\[
+ V_N\triangleq\{r\mid r\notin\operatorname{dom}(s.stages)\land
+                   \mathsf{WF}_{Structures}(s+(r\ \mathsf{stage}=\mathsf{batch}\ N))\}.
+\]
+The policy sets $N=128$ for empty arguments and reads positive $N$ from
+\code{batch(N)} otherwise. Let $J=\varnothing$ for empty arguments and
+$J=\{r\in V_N\mid\mathsf{mode}_s(r)=\mathsf{pipe}\}$ otherwise.
+Here $\mathsf{input}_s$ is the Physical operator's single-input accessor
+(undefined where that accessor returns none).
+\[
+ C\triangleq\{\mathsf{input}_s(r)\mid r\in J\cap\operatorname{dom}(\mathsf{input}_s),\
+       \mathsf{input}_s(r)\notin
+       \operatorname{dom}(s.retained)\cup\operatorname{dom}(s.stages)\},
+ \qquad B=B_s\cap V_{128}.
+\]
+\begin{mathpar}
+\Rule{STR-Staging}{\mathsf{WF}_{Structures}(s)\quad\mathsf{WF}_{Structures}(t)\quad N>0\\
+ D=\{r\mapsto128\mid r\in B\}\cup
+   \{r\mapsto N\mid r\in J\setminus(C\cup B)\}\\
+ \Delta=[\,r\ \mathsf{stage}=\mathsf{batch}\ D(r)\mid
+          r\in\mathsf{definitions}(s.physical),\ r\in\operatorname{dom}(D)\,]\\
+ t=s[\mathit{entries}:=s.entries\mathbin{+\!\!+}\Delta]\quad
+ t.physical=s.physical}
+ {\mathsf{lower}_{staging}(s,a,t)}
+\end{mathpar}
+Thus default probe boundaries keep size 128 even under explicit batch advice;
+additional maximal pipe boundaries use the requested size. Checking the whole
+target remains necessary after the individual candidate checks.
 
 \subsection{Realization: checked Sequence $\to$ Rust}
 The default CPU translator consumes checked, sequentially graded Sequence.
@@ -950,7 +1098,25 @@ Its host interpreter uses row adapters over the \code{cq-storage} traits;
 the shared realization helpers also serve an external push printer that
 consumes Structures directly. Rust translation has no source/target
 correspondence check; evidence is answer oracles, rustc trait guards and
-expansion fixtures. Interfaces at the Rust boundary:
+expansion fixtures.
+For the shared \code{cq_physical_realization::sources_with} entry, $s$ is
+Structures, $A$ is its checked analysis, and $t$ is the returned printer context.
+Let $\mathsf{indexBuilds}(t)$ extract the set of (result, key levels, provider
+type tokens) from built-index constructions in its statements and prepared
+stream fragments, including deferred arm fragments. This excludes temporary
+host-set certification tables and ordinary rows collections.
+The producer obligation is:
+\[
+\Rule{P-Realize}{\mathsf{WF}_{Structures}(s)\quad A=\mathsf{analysis}_{Structures}(s)\\
+ t.analysis=A\quad
+ t.physical=\{r\mapsto d\mid d\in s.physical.definitions,\ r=d.name\}\\
+ \mathsf{indexBuilds}(t)=
+ \{(r,L,\mathsf{tokens}(p.ty))\mid r\in\operatorname{dom}(A.built),\
+                                      (L,p)\in A.built(r)\}}
+ {\mathsf{lower}_{sources}(s,A,t)}
+\]
+This records provider fidelity, not a new Rust semantic checker: generated
+trait obligations and the storage abstraction laws still apply.
 \begin{mathpar}
 \Rule{IF-Surface}{\operatorname{parse}_{CQ}(T)=s\quad
  \text{no unexpanded extension clause remains in }s}

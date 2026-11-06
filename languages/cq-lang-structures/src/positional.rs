@@ -130,6 +130,7 @@ pub fn lineages(
     result
 }
 
+/// Formal rule STR-E-Lineage: Compare each recorded origin with total injective independently derived lineage.
 fn check_origin(
     origin: &Origin,
     name: &str,
@@ -159,6 +160,7 @@ fn check_origin(
     Ok(())
 }
 
+/// Formal rule STR-E-Keysets: Record distinct let keys with scalar owned layout and concrete provider ownership.
 pub(crate) fn entry(program: &Program, entry: &Entry, facts: &mut Analysis) -> syn::Result<bool> {
     let name = symbol_name(&entry.name);
     match &entry.structure {
@@ -291,6 +293,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
         .enumerate()
         .map(|(i, d)| (symbol_name(&d.name), (i, d)))
         .collect();
+    // Formal rule STR-E-Selection: Require exact reads throughout each retained positional selection spine.
     for (name, s) in &facts.selections {
         if !matches!(
             defs[name].1.operator,
@@ -368,6 +371,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
         // of the recorded provider, identical for aliases and builtin spellings.
     }
     // Formal rule STR-Read: A summary names only the existing right build of this reader, earlier in Physical.
+    // Formal rule STR-E-Read: Restrict reads to their Physical predicate or eager semi's earlier scalar owned keyset.
     for (name, read) in &facts.reads {
         let (position, d) = defs[name];
         if facts

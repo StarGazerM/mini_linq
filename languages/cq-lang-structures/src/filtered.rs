@@ -147,6 +147,7 @@ pub fn reconstructible_constants(select: &syntax::algebra::Select) -> BTreeMap<S
 /// Formal rule STR-Existential: A projected full-key index can replace payload
 /// enumeration with membership when every observed column is a key or constant.
 pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
+    // Formal rule STR-E-Filtered: Check shared projections, permitted readers, proven constants and downstream coverage.
     let required = required_columns(&program.physical, &analysis.physical);
     for (name, filtered) in &analysis.filtered {
         let definition = program

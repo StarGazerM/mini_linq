@@ -93,68 +93,215 @@ Hash routing preserves exact probes and distinct-key enumeration but neither a
 part's global order nor its retained or expandable cursors; a routed instance
 enumerates a supplementary join filter iff its inner does.
 
-\paragraph{Contract.} $\mathsf{Entries}(t,A)$ checks the embedded Physical and:
-(1)~built columns belong to the heading and never repeat across levels; a built
-key answers a union of a prefix of its levels;
-(2)~host entries record fallback types per typed reader reference, not native
-trait claims. Scan, candidate and membership roles are disjoint from
-\code{result(Ident)} even when that identifier has a role's spelling.
-Keyed Sequence capability obligations exclude Scan and named point/range
-scan adapters even when their key is empty; they consume candidate, membership,
-or named keyed-reader providers;
-(3)~retained scans, multiple unfiltered builds and exists state record row
-storage; unfiltered host renames record scan and keyed-reader fallbacks;
-(4)~every definition canon has a canonical reference (STR-Canon);
-exactly the recorded Physical return-boundary dedup obligation
-(\code{return canon} or \code{return dedup}, \textsc{PH-HeadDedup}) has a head
-entry typing the answer's identity index; Structures checks its presence and
-never recomputes the obligation;
-(5)~filtered entries (ordinary renames without literal bindings, declarative
-selections including trusted-total predicates, or unions) record one shared
-projection; their readers are stream \code{probe first}, semi or anti on a level
-prefix; payload plus the singleton constants proved by the selection cover all
-downstream keys, predicates, Rust free variables and answers. Constant columns
-are reconstructed, not stored. Literal-bearing renames instead have ordinary
-\code{let} storage entries, with no filtered payload annotation: their source
-filters and drops literal columns before ordinary row retention and index builds.
-The recorded layout of the retained result itself is this projection, as are
-the layouts seen by its keyed readers; projection occurs after evaluating the
-predicate, before publication or upload.
-Eligible leading literal keys use the host's native point read; otherwise the
-build source scans and filters. GPU retained occurrence tables are produced in
-the build phase, not filtered inside the query stream kernel;
-(6)~selection, keyset and read entries independently rederive a single declared
-host occurrence and a total, injective logical-to-host mapping over the reader's
-heading. Rename, declarative selection, occurrence-preserving projection and
-the left of eager semi propagate lineage. The semi's support need not have
-lineage: filtering preserves left-row positions even when support is a join
-or computed relation. Computed columns, bind, opaque guard, join expansion,
-canon, union/fallback/anti and fused branch scopes do not propagate lineage;
-(7)~a selection replaces a retained tuple collection, never a key-only,
-ordered or candidate provider. Every filtering step down to a prior immutable
-snapshot has an explicit read; an unrecorded retained result cannot be bypassed;
-(8)~a positional read refers only to its existing point/range predicate or its
-own eager semi's strictly earlier RHS build. These exact read entries cannot
-form summary cycles or name nonlocal probe filters. Exact summary requires
-an owned scalar keyset and \code{ExactIntervalMembership}; row summary uses exact membership alone;
-(9)~keysets record their concrete provider and ownership. The default policy
-records its codec and bitmap budget in that provider type; Rust checks codec,
-key-layout and interval traits uniformly for builtin and aliased types.
-Payload indexes may coexist with keysets.
-Every positional or join-filter marker must implement \code{ColumnSlot<H,N>}
-for the declaration-order slot $N$ derived from its recorded lineage.
-Rust proves this binding even through a type alias; compatible key types alone
-cannot justify selecting a different column. No marker spelling grants it.
-Rust additionally checks positional host, marker, key, lifetime and provider
-obligations; a trait implementation must obey the storage abstraction laws.
-Every keyed Group has exactly one \code{group} entry; global groups have none.
-The provider is a finite map from key tuples to declared accumulator tuples.
-Its \code{Default} creates the empty map, \code{entry(k).or\_insert\_with(f)}
-returns the unique state for $k$ and calls $f$ only for a new key, and owned
-\code{IntoIterator} enumerates each present key/state once. Rust checks these
-operations and type bounds; their finite-map laws remain semantic premises.
-Authored providers may use a different map or hasher; realization never
-replaces their recorded type. Retyping \code{group} selects these entries.
+\paragraph{Contract.}
+Write $h_r=A.physical.headings[r]$, $B_r=A.built[r]$, $F=A.fallbacks$,
+$N=A.natives$, $S=\mathrm{dom}(A.selections)$, $R=\mathrm{dom}(A.retained)$,
+$D=\mathrm{dom}(A.reads)$ and $Q=\mathrm{dom}(A.filtered)$.
+$k_r$ is the list of Physical keyed reads $(u,K,supply)$ of $r$.
+The function $\mathsf{prefixes}(L)$ returns the unions of the nonempty
+prefixes of the sequence of levels $L$.
+$\mathsf{candidates}(t)$ returns the Physical candidate sides $(r,K)$.
+$\mathsf{required}(t,A,r)$ is the downstream column demand computed by
+\code{filtered::required\_columns}, including keys, predicates, Rust free
+variables and the answer. $\mathsf{constants}(r)$ is the map of reconstructible
+literal equalities proved by a declarative selection, and the empty map for
+a rename or union. $\mathsf{multi}(r)$ is true exactly for a union with no
+correlated \code{over} origin. These functions do not inspect type spellings.
+$\mathsf{physicalReads}$ enumerates the checked Physical keyed and merge
+demands as $(provider,key,mode)$ triples, using range mode for non-stream
+point/range supplies and the reader's probe, semi, anti or merge mode otherwise.
+\begin{mathpar}
+\Rule{STR-E-Built}{
+ \forall r,(L,T)\in B_r.\quad
+ \varnothing\ne\biguplus_i L_i\subseteq h_r\ \land\
+ |\mathop{\mathrm{concat}} L|=|\bigcup_i L_i|\ \land\
+ A.physical.modes[r]\ne pipe\ \land\ r\notin\mathrm{dom}(A.host\_layouts)
+ \\
+ \forall r,(L,T)\in B_r.\ \exists(u,K,stream)\in k_r.\ K\in\mathsf{prefixes}(L)
+ \\
+ \forall r.\ |\{L\mid(L,T)\in B_r\}|=|B_r|
+}{\mathsf{EntriesBuilt}(t,A)}
+
+\Rule{STR-E-Fallback}{
+ \forall(r,\rho,K)\in\mathrm{dom}(F).\quad
+ K\subseteq h_r\ \land\
+ (A.physical.modes[r]=pipe\land r\in\mathrm{dom}(A.physical.hosts)
+ \ \lor\ \rho=Scan\land r\in\mathrm{dom}(A.physical.hosts))
+ \\
+ \forall(r,\rho,K)\in\mathrm{dom}(F).\quad
+ (\rho=Scan\Rightarrow K=\varnothing)\ \land\
+ (\rho=Candidates\Rightarrow(r,K)\in\mathsf{candidates}(t))\ \land\
+ (\rho=Membership\Rightarrow K=h_r\land\exists P.(r,P)\in\mathsf{candidates}(t))
+ \ \land\ (\rho=Result(u)\Rightarrow\exists s.(u,K,s)\in k_r)
+ \\
+ \{Scan,Candidates,Membership\}\cap\{Result(u)\mid u\in\mathrm{Ident}\}=\varnothing
+ \\
+ \forall(r,\rho,K),(r,\rho',K)\in\mathrm{dom}(F).\quad
+ \rho,\rho'\ne Scan\ \land\
+ \mathsf{op}(\rho),\mathsf{op}(\rho')\notin\{Point,Range\}\ \land\
+ (\mathsf{op}(\rho)=Merge\iff\mathsf{op}(\rho')=Merge)
+ \Rightarrow F[r,\rho,K]=F[r,\rho',K]
+}{\mathsf{EntriesFallback}(t,A)}
+
+\Rule{STR-E-Rows}{
+ \forall r.\quad A.physical.modes[r]\ne pipe\ \land\
+ (r\in A.physical.scanned\lor(|B_r|>1\land r\notin Q)
+ \lor A.physical.modes[r]=exists)\Rightarrow r\in R\cup S
+ \\
+ \forall r\in R.\ A.physical.modes[r]\ne pipe
+ \\
+ \forall r\in\mathrm{dom}(A.physical.hosts).\ (r,Scan,\varnothing)\in\mathrm{dom}(F)
+ \\
+ \forall r\in\mathrm{dom}(A.physical.hosts),(u,K,s)\in k_r.\quad
+ K\ne\varnothing\land A.physical.modes[r]=pipe\land u\notin D
+ \Rightarrow(r,Result(u),K)\in\mathrm{dom}(F)\cup\mathrm{dom}(N)
+}{\mathsf{EntriesRows}(t,A)}
+
+\Rule{STR-E-Canon}{
+ \mathrm{dom}(A.canonical)=A.physical.canon
+ \\
+ \mathrm{dom}(A.head\_dedup)=
+ \begin{cases}\{t.physical.returned\}&t.physical.head\_dedup()=true\\
+ \varnothing&t.physical.head\_dedup()=false\end{cases}
+}{\mathsf{EntriesCanon}(t,A)}
+
+\Rule{STR-E-Filtered}{
+ \forall r\in Q.\quad \mathsf{op}(r)\in\{Rename_{\varnothing},Select,Point,Range,Union\}
+ \land A.physical.modes[r]=let
+ \\
+ \forall r\in Q.\quad \mathsf{multi}(r)=false\Rightarrow
+ (r\notin A.physical.scanned\land
+ (r\notin R\lor(A.rows\_held(r)=false\land r\in A.physical.canon))
+ \land |B_r|=1\land\forall(L,T)\in B_r.\ |L|=1)
+ \\
+ \forall r\in Q,\ e\in t.structures.entries.\quad
+ e.name=r\land e.kind=Built\Rightarrow e.filtered=A.filtered[r]
+ \\
+ \forall r\in Q,(u,K,s)\in k_r.\quad
+ s=stream\land\mathsf{op}(u)\in\{Probe_{first},Semi,Anti\}
+ \land\exists(L,T)\in B_r.\ K\in\mathsf{prefixes}(L)
+ \\
+ \forall r\in Q.\quad C_r=\mathsf{constants}(r)\ \land\
+ P_r\subseteq h_r\setminus\mathrm{dom}(C_r)\ \land\
+ |\mathsf{payloadList}(r)|=|P_r|\ \land\
+ |\mathsf{constantList}(r)|=|\mathrm{dom}(C_r)|\ \land\
+ \mathsf{required}(t,A,r)\subseteq P_r\cup\mathrm{dom}(C_r)
+}{\mathsf{EntriesFiltered}(t,A)}
+\end{mathpar}
+Here $P_r,C_r$ are the payload set and constant map recorded in
+$A.filtered[r]$; list lengths reject duplicate declarations.
+$\mathsf{op}(Result(u))$ is the operator of $u$, and other reader tags
+have their own distinct operator tags.
+The function $\ell_t(r)$ rederives lineage in definition order: a
+literal-free rename starts its declared host occurrence; Select, Point and
+Range inherit their input; Project restricts its input map to $h_r$;
+non-lazy Semi inherits its left input. All other operators, canon boundaries,
+computed columns and fused members return $\bot$. A result is retained only
+when its map is total on $h_r$ and injective.
+$\mathsf{spine}(r)$ follows Project inputs, Point/Range inputs and Semi
+left inputs to the first prior selection or rename; it includes $r$ but
+excludes a prior selection endpoint.
+\begin{mathpar}
+\Rule{STR-E-Lineage}{
+ \forall e\in t.structures.entries,\ e.kind\in\{Selection,KeySet,Read\}.\quad
+ \ell_t(e.name)=(H,o,\lambda)\ne\bot\ \land\
+ e.origin.base=H\ \land\ e.origin.columns=\lambda\ \land\
+ |e.origin.columnsList|=|\lambda|\ \land\
+ \lambda:h_{e.name}\hookrightarrow\mathsf{columns}(H)
+}{\mathsf{EntriesLineage}(t,A)}
+
+\Rule{STR-E-Selection}{
+ \forall r\in S.\quad A.physical.modes[r]=let\ \land\
+ \mathsf{op}(r)\in\{Point,Range,Semi\}\ \land\ r\notin R\cup Q
+ \\
+ \forall r\in S,\ u\in\mathsf{spine}(r).\quad
+ (u\ne r\Rightarrow A.physical.modes[u]=pipe)\ \land\
+ \mathsf{op}(u)\in\{Rename,Project,Point,Range,Semi\}\ \land\
+ (\mathsf{op}(u)\in\{Point,Range,Semi\}\Rightarrow u\in D)\ \land\
+ (\mathsf{op}(u)\in\{Point,Range\}\Rightarrow|\mathsf{conditionColumns}(u)|=1)
+ \ \land\
+ (\mathsf{op}(u)=Point\Rightarrow
+ |\mathsf{equalities}(u)|+|\mathsf{constraints}(u)|=1)
+}{\mathsf{EntriesSelection}(t,A)}
+
+\Rule{STR-E-Read}{
+ \forall r\in D.\quad
+ \nexists(s,Result(r),K)\in\mathrm{dom}(F)
+ \\
+ \forall r\in D.\quad
+ \bigl(A.reads[r].predicate=Physical\land
+ \mathsf{op}(r)\in\{Point,Range\}\land
+ c_r=\mathsf{conditionColumn}(r)\land
+ (\mathsf{op}(r)=Point\Rightarrow c_r\in\mathrm{dom}(\mathsf{selectionConstants}(r)))\bigr)
+ \ \lor\
+ \bigl(A.reads[r].predicate=Membership(s,K,\sigma)\land
+ r=Semi_{eager}[K](l,s)\land s<r\land K=\{c_r\}\land
+ (s,K)\in\mathrm{dom}(A.keysets)\land A.keysets[s,K].ownership=owned\bigr)
+ \\
+ \forall r\in D,\ u\in\mathsf{readSpine}(r).\quad
+ A.physical.modes[u]=pipe\land
+ (\mathsf{op}(u)\in\{Rename,Project\}\lor u\in D)
+}{\mathsf{EntriesRead}(t,A)}
+
+\Rule{STR-E-Keysets}{
+ \forall(r,K)\in\mathrm{dom}(A.keysets).\quad
+ A.physical.modes[r]=let\land\varnothing\ne K\subseteq h_r\land
+ |\mathsf{keyList}(r,K)|=|K|\land
+ (A.keysets[r,K].ownership=owned\Rightarrow|K|=1)\land r\in R\cup S
+ \\
+ \forall(r,K)\in\mathrm{dom}(A.keysets).\quad
+ \exists(u,K)\in A.physical.key\_reads[r].\ \mathsf{op}(u)\in\{Semi,Anti\}
+ \\
+ \forall r.\quad
+ |\mathsf{groupEntries}(r)|=
+ \begin{cases}1&\mathsf{op}(r)=Group_{G;Acc}\land G\ne\varnothing\\
+ 0&\mathsf{op}(r)\ne Group\lor G=\varnothing\end{cases}
+}{\mathsf{EntriesKeysets}(t,A)}
+
+\Rule{STR-Entries}{
+ \mathsf{WF}_{Physical}(t.physical)\Downarrow A.physical
+ \\
+ \mathsf{EntriesBuilt}(t,A)\quad\mathsf{EntriesFallback}(t,A)\quad
+ \mathsf{EntriesRows}(t,A)\quad\mathsf{EntriesCanon}(t,A)
+ \\
+ \mathsf{EntriesFiltered}(t,A)\quad\mathsf{EntriesLineage}(t,A)\quad
+ \mathsf{EntriesSelection}(t,A)\quad\mathsf{EntriesRead}(t,A)\quad
+ \mathsf{EntriesKeysets}(t,A)
+}{\mathsf{Entries}(t,A)}
+\end{mathpar}
+In STR-E-Read, $c_r$ is the logical column mapped to the recorded host
+column. $\mathsf{conditionColumn}$ returns the first point key or range
+column, and $\mathsf{selectionConstants}$ includes the proved singleton
+terms (not only reconstructible literals).
+$\mathsf{readSpine}(r)$ starts at the predicate input (the left input for
+Semi), stops before a prior selection, and otherwise follows Project until
+a rename or recorded read. Other operators are included and rejected by
+STR-E-Read. The order $<$ is Physical definition order, so summary edges
+cannot form cycles. Both row and exact summaries require an owned scalar
+keyset; exact summaries additionally incur Rust's
+\code{ExactIntervalMembership} obligation.
+
+The remaining representation and realization laws are not additional
+Structures-checker predicates. Constant columns are reconstructed rather
+than stored; projection follows predicate evaluation and precedes publication
+or upload. Literal-bearing renames use ordinary storage without filtered
+annotations; eligible leading literal keys can use native point access,
+otherwise the source scans and filters. GPU retained occurrence tables are
+built before the query stream kernel.
+Keysets record their provider and ownership without excluding payload indexes.
+Default policy records codec and bitmap budget in the provider type.
+Rust checks codec, key-layout, interval, positional host, marker, key,
+lifetime and provider obligations uniformly through aliases. Every positional
+or join-filter marker must implement \code{ColumnSlot<H,N>} for the
+declaration-order slot derived from lineage; type compatibility or spelling
+does not establish that binding. These trait and storage abstraction laws
+remain semantic premises, not checks performed by the Structures validator.
+A keyed Group's recorded provider is a finite map from keys to declared
+accumulator tuples: \code{Default} creates the empty map,
+\code{entry(k).or\_insert\_with(f)} returns the unique state and invokes $f$
+only on insertion, and owned \code{IntoIterator} enumerates each pair once.
+Rust checks operations and bounds, not these finite-map laws. Realization
+preserves the recorded provider type; \code{group} retyping selects it.
 
 \paragraph{Provider-authored support.}
 Support is recorded with the selected provider layout, bounded by its token's
@@ -238,7 +385,8 @@ This rule does not depend on Rust type spelling or on a preceding selection.
  \text{or }(\mathsf{mode}(r)=pipe\land\mathsf{operator}(r)=merge[C](l,s))}
  {\mathsf{answers}(r,C,merge)}
 
-\Rule{WF-Structures}{\mathsf{Entries}(t,A)\quad\text{all Physical reads answered}\\
+\Rule{WF-Structures}{\mathsf{Entries}(t,A)\quad
+ \forall(r,C,m)\in\mathsf{physicalReads}(t.physical).\ \mathsf{answers}(r,C,m)\\
  \textsc{CK-Return}(t,\Gamma)}
  {\mathsf{WF}_{Structures}(t)\Downarrow A}
 \end{mathpar}

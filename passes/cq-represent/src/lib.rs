@@ -88,6 +88,7 @@ pub fn compile(source: &structures::Program) -> syn::Result<structures::Program>
 }
 
 /// Select all direct scan chains, or the dependency closure of named results.
+/// Formal rule STR-Represent: Preserve Physical and existing entries while appending selected scan-chain representations.
 pub fn compile_with(
     source: &structures::Program,
     arguments: TokenStream,

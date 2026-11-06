@@ -34,6 +34,7 @@ pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> s
     )
 }
 
+/// Formal rule CK-ReduceObligations: Reduction-free source, equal erasure, tree/cut edges, required filtered edges, upward-before-downward and parent/child order, recursively per arm.
 fn check_steps(
     body: &vo::syntax::CommaList<vo::cq::BodyItem>,
     source_steps: &[Step],

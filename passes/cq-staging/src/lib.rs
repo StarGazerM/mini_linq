@@ -129,6 +129,7 @@ pub fn compile(source: &structures::Program) -> syn::Result<structures::Program>
 }
 
 /// `batch(N)` additionally records maximal total segments from for producers.
+/// Formal rule STR-Staging: Preserve Physical and existing entries while appending checked batching boundaries.
 pub fn compile_with(
     source: &structures::Program,
     arguments: TokenStream,

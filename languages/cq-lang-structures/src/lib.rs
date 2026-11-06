@@ -758,6 +758,7 @@ impl Program {
 }
 
 pub mod contract {
+    /// Formal rule STR-Entries: Check Physical and the concrete entry obligations before returning analysis.
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
         let facts = super::analyze(program)?;
         program.check_consumer(&facts)?;
@@ -977,6 +978,7 @@ impl Analysis {
 }
 
 /// The number of leading levels whose union is exactly `wanted`, if any.
+/// Formal rule STR-E-Built: A built read key is the union of a prefix of its distinct heading levels.
 pub fn prefix_depth(levels: &[Vec<String>], wanted: &[String]) -> Option<usize> {
     let mut union: Vec<String> = Vec::new();
     for (depth, level) in levels.iter().enumerate() {
@@ -1068,6 +1070,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
             Structure::Built { keyed, .. } => keyed,
             Structure::Host { reader, keyed, .. } => {
+                // Formal rule STR-E-Fallback: Validate tagged fallback roles and their Physical read keys.
                 if matches!(reader, ReaderRef::Scan) && keyed.supports.is_some() {
                     return error(
                         keyed,
@@ -1229,6 +1232,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 continue;
             }
             Structure::HeadDedup { provider, .. } => {
+                // Formal rule STR-E-Canon: Type exactly the recorded canonical and return dedup boundaries.
                 // PH-HeadDedup: an answer identity index types exactly the
                 // recorded Physical return-boundary obligation (PH-HeadDedup).
                 if name != symbol_name(&program.physical.program.returned)
@@ -1654,6 +1658,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             };
             analysis.canonical.insert(name.clone(), source);
         }
+        // Formal rule STR-E-Rows: Require reusable rows and host adapters for the recorded Physical demands.
         if (analysis.physical.scanned.contains(&name)
             || analysis
                 .built

@@ -67,6 +67,7 @@ use cq_print::{Context, Repr, error, index, sorted};
 /// `analysis` must be the contract result for `module`.
 /// Opted-in host-set facts are certified eagerly over complete declared rows
 /// before any prepared operator can rely on their uniqueness.
+/// Formal rule P-Realize: Prepare the recorded physical sources and built providers without selecting replacement types.
 pub fn sources_with<'a>(
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,

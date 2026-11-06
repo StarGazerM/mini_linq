@@ -28,7 +28,13 @@ make -C doc/formal example
 ```
 
 `check.py` checks rule inventory and unique marker presence, and that every
-conformance row names an existing rule, file and status. It does not
+conformance row names an existing rule, file and status. Its rule coverage
+gate (also `check.py --coverage`; `--coverage --list` prints current rows)
+requires every producer/checker function in `passes/` and `languages/` to
+carry exactly one in-file `Formal rule` marker whose `\Rule` has a
+mathematical premise, except the shrink-only baseline
+[coverage-allowlist.tsv](coverage-allowlist.tsv); the syntactic
+classification is in [CONFORMANCE.md](CONFORMANCE.md#rule-coverage-gate). It does not
 check semantic correspondence between a rule and code, prove conformance, or
 run the examples. Implementation rules summarize structural code checks; trusted semantic
 premises such as Eq/Ord admissibility are not proved by them; abstract rules state mathematical laws or

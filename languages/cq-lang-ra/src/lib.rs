@@ -220,6 +220,7 @@ pub mod contract {
         pub(super) paths: std::collections::BTreeMap<cq_syntax::Occurrence, usize>,
     }
 
+    /// Formal rule RA-H-Heading: Combine local operator typing with the standalone heading contract.
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
         super::check_in(&program.plan.declarations, &program.plan)
     }
@@ -266,6 +267,7 @@ fn check_in<'a>(
             _ => Vec::new(),
         })
         .collect();
+    // Formal rule RA-H-Payloads: Check implicit lexical uses or explicit available scope names and paths.
     let check_uses = |expr: &syn::Expr, heading: &Heading| -> syn::Result<()> {
         if let Some(name) = cq_syntax::rust::known_uses(expr, &logical)
             .difference(heading)
@@ -310,6 +312,7 @@ fn check_in<'a>(
                     .collect();
                 (heading, vec![name])
             }
+            // Formal rule RA-H-Unions: Require matching union schemas and valid block context headings.
             Operator::Union(union) => {
                 if union.operands.len() < 2 {
                     return Err(syn::Error::new_spanned(
@@ -396,6 +399,7 @@ fn check_in<'a>(
             }
             Operator::Unit(_) => (Heading::new(), Vec::new()),
             Operator::Rename(rename) => {
+                // Formal rule RA-H-Renames: Require valid, globally unique rename occurrence paths.
                 rename.occurrence.check()?;
                 let occurrence = &rename.occurrence;
                 if !occurrences.insert(occurrence.clone()) {
@@ -661,6 +665,7 @@ fn check_in<'a>(
         ));
     };
 
+    // Formal rule RA-H-Output: Require variable-only output arguments covering exactly the noncapture input heading.
     if plan.output.head.variables().count() != plan.output.head.args.len() {
         return Err(syn::Error::new_spanned(
             &plan.output.head,
@@ -772,6 +777,7 @@ fn earlier_relation<'a>(
     Ok((name, info))
 }
 
+/// Formal rule RA-H-Declarations: Require declaration validity, earlier unique definitions and full output reachability.
 fn check_all_reachable(
     plan: &Plan,
     relations: &BTreeMap<String, RelationInfo>,

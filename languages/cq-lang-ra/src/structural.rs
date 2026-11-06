@@ -658,6 +658,7 @@ impl Schedule {
         self.push(node)
     }
 
+    /// Formal rule RA-H-Rust: Record lexical free-variable arguments with their exact input column identities.
     fn rust(
         &mut self,
         input: usize,
@@ -1403,6 +1404,7 @@ fn compare_groups(source: &Schedule, target: &Schedule) -> Result<(), String> {
     Ok(())
 }
 
+/// Formal rule CK-RLStructure: Equal head, occurrence multiset, equality closure, bindings modulo equality, predicate shapes and Rust payloads with bindings.
 fn compare(source: &Schedule, target: &Schedule) -> Result<(), String> {
     if source.head != target.head {
         return Err("output head differs from source".into());

@@ -440,3 +440,41 @@ STR-Blocks	implementation	languages/cq-lang-structures/src/blocks.rs	/// Formal 
 STR-BlockPredicate	implementation	languages/cq-lang-structures/src/blocks.rs	/// Formal rule STR-BlockPredicate:	Check exact original Physical predicate, all column/domain lineage and preserved operations, lawful template/pruning/code-test choice, plus exact consumer and canonical carrier demand without replaying selection.
 STR-PreservedOp	implementation	languages/cq-lang-structures/src/blocks.rs	/// Formal rule STR-PreservedOp:	Equality requires injectivity and order requires monotonicity in the same declared domain; S1 translation preserves the complete algebra, while physical frame decode is not logical reconstruction.
 BE-Blocks	implementation	languages/cq-lang-sequence/src/blocks.rs	/// Formal rule BE-Blocks:	Independently check exact phase/consumer coverage, source representation references, bounded block execution and position-preserving canonical keys; no family/domain rediscovery or semantic decode without Structures authorization.
+CK-OrderObligations	implementation	passes/cq-order/src/lib.rs	/// Formal rule CK-OrderObligations:	Per scope: no reductions, every atom read, Coarse one full subatom, Fine at most one introduction, Written introducing order, and restriction consistency.
+CK-ReduceObligations	implementation	passes/cq-reduce/src/correspondence.rs	/// Formal rule CK-ReduceObligations:	Reduction-free source, equal erasure, tree/cut edges, required filtered edges, version provenance and ordering, recursively per arm.
+CK-RLStructure	implementation	languages/cq-lang-ra/src/structural.rs	/// Formal rule CK-RLStructure:	Structural facts of the RL-folded schedule equal the target's: occurrences, equality closure, bindings, predicate shapes, Rust payloads, reduction supports.
+PH-H-Definitions	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-H-Definitions:	Checks definition ordering, rename partitions, binding freshness, visible uses and output reachability.
+PH-H-Keys	implementation	languages/cq-lang-physical/src/lib.rs	/// Formal rule PH-H-Keys:	Checks distinct common join keys, anti subsets and output headings.
+PH-H-Range	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-H-Range:	Checks nonempty closed ordered bounds on one available column.
+PH-H-Union	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-H-Union:	Checks union headings, noncomputed logical type identities, origin interfaces and fused prefix dependencies.
+PH-H-Output	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-H-Output:	Checks equality of all-bare output dependencies and returned heading.
+PH-H-Heading	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-H-Heading:	Combines the five physical heading judgments.
+PH-Modes	implementation	languages/cq-lang-physical/src/lib.rs	// Formal rule PH-Modes:	Requires valid read modes, canon eligibility and empty exists headings.
+IX-Policy	implementation	passes/cq-index-policy/src/lib.rs	/// Formal rule IX-Policy:	Preserves RA and records distinct keyed descriptors with consecutive names in first-use order.
+PH-Lower	implementation	passes/cq-physical-lowering/src/lib.rs	/// Formal rule PH-Lower:	Preserves RA erasure and IX demand coverage under the explicitly supplied Physical context facts.
+STR-Represent	implementation	passes/cq-represent/src/lib.rs	/// Formal rule STR-Represent:	Preserves Physical and all existing entries while appending selected direct-chain positional representations.
+STR-Staging	implementation	passes/cq-staging/src/lib.rs	/// Formal rule STR-Staging:	Preserves Physical and all existing entries while recording checked default probe and requested maximal pipe batching boundaries.
+P-Realize	implementation	passes/cq-physical-realization/src/lib.rs	/// Formal rule P-Realize:	Prepares the recorded Physical sources and emits built-index constructions using exactly their recorded provider types.
+RA-H-Declarations	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule RA-H-Declarations:	Checks declaration validity, unique earlier definitions and output reachability.
+RA-H-Renames	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-H-Renames:	Checks admissible and unique rename occurrence paths.
+RA-H-Payloads	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-H-Payloads:	Checks implicit lexical uses or explicit scope names and paths.
+RA-H-Unions	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-H-Unions:	Checks equal union schemas and block-origin context headings.
+RA-H-Output	implementation	languages/cq-lang-ra/src/lib.rs	// Formal rule RA-H-Output:	Checks variable-only output arguments matching the entire input heading excluding captures.
+RA-H-Rust	implementation	languages/cq-lang-ra/src/structural.rs	/// Formal rule RA-H-Rust:	Records lexical free-variable arguments with input column identities.
+RA-H-Heading	implementation	languages/cq-lang-ra/src/lib.rs	/// Formal rule RA-H-Heading:	Combines operator typing and the six heading clauses.
+STR-E-Built	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-E-Built:	Built levels contain distinct heading columns and serve stream reads by prefix union.
+STR-E-Fallback	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-E-Fallback:	Tagged host fallbacks match Physical reader roles and shared keyed providers agree.
+STR-E-Rows	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-E-Rows:	Recorded scans, multiple unfiltered builds and exists demand reusable rows and host adapters.
+STR-E-Canon	implementation	languages/cq-lang-structures/src/lib.rs	// Formal rule STR-E-Canon:	Canonical references and answer identity entries match recorded Physical boundaries.
+STR-E-Filtered	implementation	languages/cq-lang-structures/src/filtered.rs	// Formal rule STR-E-Filtered:	Filtered projections share layouts and cover downstream demand with payload and proved constants.
+STR-E-Lineage	implementation	languages/cq-lang-structures/src/positional.rs	/// Formal rule STR-E-Lineage:	Recorded origins equal independently derived total injective occurrence lineage.
+STR-E-Selection	implementation	languages/cq-lang-structures/src/positional.rs	// Formal rule STR-E-Selection:	Positional selections require exact reads along an unbroken occurrence-preserving spine.
+STR-E-Read	implementation	languages/cq-lang-structures/src/positional.rs	// Formal rule STR-E-Read:	Positional predicates remain local and membership summaries name earlier scalar owned keysets.
+STR-E-Keysets	implementation	languages/cq-lang-structures/src/positional.rs	/// Formal rule STR-E-Keysets:	Keysets record distinct let keys and ownership with reusable membership demand and keyed groups record one provider.
+STR-Entries	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Entries:	The entry contract combines embedded Physical well-formedness with all nine concrete entry judgments.
+WF-VO-Subatoms	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-Subatoms:	Checks occurrence columns, retained bindings and eventual full-row coverage.
+WF-VO-Predicates	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-Predicates:	Matches source predicates and negations once with bound inputs and no introduced bindings.
+WF-VO-RustSteps	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-RustSteps:	Preserves every Rust payload exactly once with lexical dependencies and pattern bindings.
+WF-VO-Reductions	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-Reductions:	Checks distinct relational operands, exact shared equality-class columns and finite-domain placement.
+WF-VO-Blocks	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO-Blocks:	Checks recursive block schedules and identical source kinds, interfaces, placements and repeated arm plans.
+WF-VO-Restrictions	implementation	languages/cq-lang-vo/src/restrict.rs	/// Formal rule WF-VO-Restrictions:	Checks positive occurrence restrictions with written or implied column predicates before other steps.

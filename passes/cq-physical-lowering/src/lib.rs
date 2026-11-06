@@ -48,6 +48,7 @@ pub fn context(arguments: proc_macro2::TokenStream) -> syn::Result<physical::Con
 }
 
 /// Lower under explicit facts established by the invoking compiler.
+/// Formal rule PH-Lower: Preserve RA erasure and recorded IX demands under the supplied context facts.
 pub fn compile_with(
     source: &ix::Program,
     arguments: proc_macro2::TokenStream,

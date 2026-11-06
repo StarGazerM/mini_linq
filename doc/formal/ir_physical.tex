@@ -18,18 +18,100 @@ Bind retains RA's \code{bind r with [for] Pat [: Type] = (Expr)}
 and unchanged Environment suffix: the optional token is semantic, not a read
 mode. Generator Bind is streamed unnest, never an independent build target.
 
-\paragraph{Contract.} $\mathsf{PHeading}(t,A)$ checks:
-(1)~declarations, unique results, earlier operands, one-to-one renames whose
-mapping and literal bindings partition declared columns,
-fresh bind columns, subset projections, visible expression uses, a defined and
-reachable output;
-(2)~probe/merge/semi keys are duplicate-free and equal the operands' common
-heading; semi and anti keep the left heading; anti's key is a subset of the
-common heading; probe and merge take the union;
-(3)~range is a nonempty conjunction of constant/parameter bounds on one Ord column;
-(4)~union has at least two operands with equal headings and consistent interface
-types; its origin checks free/interface, prefix/domain and witness metadata;
-(5)~an all-bare head's dependencies equal the returned heading.
+\paragraph{Contract.}
+Write $D=(d_1,\ldots,d_n)$ for the definitions, $N$ for their names,
+$h(r)=\operatorname{dom}A.rows[r].bindings$, and $o=t.returned$.
+The functions $\operatorname{operands}$ and $\operatorname{ancestors}$ give
+direct operands and their reflexive transitive closure.
+$L$ is the set of logical names introduced by rename, bind and group;
+$U(e,L)$ is the Rust expression's known uses in $L$.
+$B(b)$ is the list of names introduced by a bind pattern.
+$C(R)$ is the declared column list; $M(r)$ is a rename's source-to-target
+mapping and $K(r)$ its literal-binding list. Sets of list entries below
+forget order; cardinalities of lists retain duplicates.
+$T_r$ is the map of logical type identities in $A.rows[r]$, restricted to
+noncomputed columns. $\operatorname{bounds}(s)$ expands a between constraint
+to two inclusive comparisons and orients comparisons with the column on
+the left; it is undefined for any other constraint.
+$\operatorname{closed}(s)$ is the set of literal and parameter terms of $s$;
+$\operatorname{deps}(e,H)$ is the Rust free-variable dependency set in $H$.
+\[
+ \mathsf{PPath}(p)\triangleq |p|>0\land |p|\bmod 2=1.
+\]
+\begin{mathpar}
+\Rule{PH-H-Definitions}{
+ |\{R.name\mid R\in t.declarations\}|=|t.declarations|
+ \quad\forall R\in t.declarations.\ |C(R)|>0\land|\operatorname{set}C(R)|=|C(R)|\\
+ |N|=n\quad\forall i.\ \operatorname{operands}(d_i)\subseteq\{d_j.name\mid j<i\}\\
+ \forall r=\operatorname{rename}(R)\in D.\ R\in t.declarations\land
+ \mathsf{PPath}(r.path)\land
+ |\operatorname{dom}M(r)|=|M(r)|=|\operatorname{ran}M(r)|\land
+ |\operatorname{sources}K(r)|=|K(r)|\land
+ \operatorname{dom}M(r)\mathbin{\dot\cup}\operatorname{sources}K(r)=\operatorname{set}C(R)\\
+ \forall r=\operatorname{rename}(R)\in D.\ K(r)\ne\bot\Rightarrow
+ (|K(r)|>0\land\forall(c,v)\in K(r).\ v\in\operatorname{LeibnizLiterals})\\
+ \forall b=\operatorname{bind}(s)\in D.\ |\operatorname{set}B(b)|=|B(b)|
+ \land\operatorname{set}B(b)\cap h(s)=\varnothing\\
+ \forall p=\operatorname{project}(s,Q)\in D.\ |Q|=|\operatorname{set}Q|\land\operatorname{set}Q\subseteq h(s)\\
+ \forall d\in D,\ e\in\operatorname{rustPayloads}(d).\ d.environment=\bot\Rightarrow U(e,L)\subseteq h(d.input)\\
+ \forall d\in D.\ d.environment\ne\bot\Rightarrow
+ (|\operatorname{set}d.environment.variables|=|d.environment.variables|
+ \land\operatorname{set}d.environment.variables\subseteq h(d.input)
+ \land(d.environment.path\ne\bot\Rightarrow\mathsf{PPath}(d.environment.path)))\\
+ o\in N\quad N=\operatorname{ancestors}(o)
+ \quad\forall e\in t.head.args.\ U(e,L)\subseteq h(o)}
+ {\mathsf{PHDefinitions}(t,A)}
+
+\Rule{PH-H-Keys}{
+ \forall d\in D_{\{probe,merge,semi,anti\}}.\ |d.key|=|\operatorname{set}d.key|\\
+ \forall d\in D_{\{probe,merge,semi\}}.\ \operatorname{set}d.key=h(d.left)\cap h(d.right)\\
+ \forall d\in D_{anti}.\ \operatorname{set}d.key\subseteq h(d.left)\cap h(d.right)\\
+ \forall d\in D_{\{semi,anti\}}.\ h(d.name)=h(d.left)\\
+ \forall d\in D_{\{probe,merge\}}.\ h(d.name)=h(d.left)\cup h(d.right)}
+ {\mathsf{PHKeys}(t,A)}
+
+\Rule{PH-H-Range}{
+ \forall s\in D_{range}.\ s.condition.equalities=\varnothing\land
+ \exists c,B.\ \operatorname{bounds}(s.condition)=B\land |B|>0
+ \land c\in\operatorname{dom}A.rows[s.input].types
+ \land\forall(c',\theta,v)\in B.\
+ c'=c\land\theta\in\{<,\le,>,\ge\}\land v\in\operatorname{closed}(s.condition)
+ \land\operatorname{deps}(v,\operatorname{dom}A.rows[s.input].types)=\varnothing}
+ {\mathsf{PHRange}(t,A)}
+
+\Rule{PH-H-Union}{
+ \forall u\in D_{union}.\ |u.operands|\ge2\land
+ \forall a,b\in u.operands.\ h(a)=h(b)\land
+ \forall c\in\operatorname{dom}T_a\cap\operatorname{dom}T_b.\ T_a(c)=T_b(c)\\
+ \forall u\in D_{union}.\ u.origin\ne\bot\Rightarrow
+ \bigl(\mathsf{PPath}(u.origin.occurrence)\land
+ h(u.name)=\operatorname{set}(u.origin.free)\cup\operatorname{set}(u.origin.interface)
+ \cup\!\!\bigcup_{p\in\operatorname{prefixes}(u.origin)}h(p)
+ \land(u.origin.interface=\varnothing\iff u.witness\ne\bot)\bigr)\\
+ \forall u\in D_{union}.\ (u.origin=\bot\land u.witness\ne\bot)\Rightarrow h(u.name)=\varnothing\\
+ \forall u\in D_{union}.\ u.fused\Rightarrow
+ \exists p.\ u.origin.over.prefix=p\land
+ \forall a\in u.operands.\ a\ne p\land p\in\operatorname{ancestors}(a)}
+ {\mathsf{PHUnion}(t,A)}
+
+\Rule{PH-H-Output}{
+ (\forall e\in t.head.args.\ e\in\operatorname{BareVariables})\Rightarrow
+ \bigcup_{e\in t.head.args}\operatorname{deps}(e,h(o))=h(o)}
+ {\mathsf{PHOutput}(t,A)}
+
+\Rule{PH-H-Heading}{
+ \mathsf{PHDefinitions}(t,A)\quad\mathsf{PHKeys}(t,A)\quad
+ \mathsf{PHRange}(t,A)\quad\mathsf{PHUnion}(t,A)\quad\mathsf{PHOutput}(t,A)}
+ {\mathsf{PHeading}(t,A)}
+\end{mathpar}
+Here $D_S$ selects definitions whose operator is in $S$,
+$\operatorname{rustPayloads}$ selects bind expressions and guard conditions,
+and $\operatorname{prefixes}$ returns the singleton recorded prefix or the
+empty set. $\operatorname{LeibnizLiterals}$ is the literal set admitted by
+the syntax equality checker. Range checking validates ordered comparison
+syntax, not a Rust \code{Ord} implementation; that requirement is discharged
+by generated code. Union checking here does not independently validate domain
+metadata beyond its recorded prefix and heading.
 The analysis derives rows, source identifiers, types, computed columns, hosts,
 keyed/merge/range reads, scans, reader counts, modes and canon flags. With
 $\mathsf{reads}(r)$ the operand and return uses of $r$:
@@ -45,6 +127,12 @@ $\mathsf{reads}(r)$ the operand and return uses of $r$:
 \Rule{PH-Canon}{r=\mathsf{canon}(\ldots)\quad
  \mathsf{mode}(r)\in\{let,exists\}\ \lor\ (\mathsf{mode}(r)=pipe\land r\text{ is a host rename})}
  {\mathsf{PCanonOK}(r)}
+
+\Rule{PH-Modes}{
+ \forall r\in N.\ \mathsf{PModeOK}(r)\\
+ \forall r\in N.\ r\in A.canon\Rightarrow\mathsf{PCanonOK}(r)\\
+ \forall r\in N.\ \mathsf{mode}(r)=exists\Rightarrow h(r)=\varnothing}
+ {\mathsf{PMode}(t,A)}
 
 \Rule{PH-HeadDedup}{\mathsf{collapses}(H,\mathsf{heading}(r))\quad
  \neg\mathsf{consumerCanonical}\quad\mathsf{return}\ r\ \mathsf{as}\ H}

@@ -22,6 +22,7 @@ use cq_lang_ra as ra;
 
 /// Visit the fixed RA definitions in order, sharing identical descriptors.
 /// Group is copied unchanged; grouping does not request a provider lookup.
+/// Formal rule IX-Policy: Preserve RA and name distinct keyed demands in first-use order.
 pub fn compile(source: &ra::Program) -> syn::Result<ix::Program> {
     let info = ra::contract::check(source)?;
     let mut indexes = cq_lang_ra::syntax::SemicolonList::new();

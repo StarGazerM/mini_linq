@@ -13,6 +13,16 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Rule coverage gate (IR redesign M1): `doc/formal/check.py` classifies every
+  function in `passes/*/src` and `languages/*/src` that constructs output IR or
+  returns `Err` as a decision site and requires exactly one in-file
+  `Formal rule` marker whose `\Rule` premise has no empty or undefined bare
+  predicate; today's 488 uncovered sites and 19 misplaced markers form the
+  shrink-only `doc/formal/coverage-allowlist.tsv`. CK-Order, CK-Reduce and
+  CK-RelationalLowering obligations, CK-Index/CK-Structures, the VO Schedule
+  contract (six rules), RAHeading, PHeading/PMode and Entries are restated as
+  mathematical rules; IX-Policy, PH-Lower, STR-Represent, STR-Staging and
+  P-Realize state the five previously ruleless producers.
 - Preserve realizations across I2 drainage: omit implied zero-column checks,
   realize residual root checks as Unit guards, and retain standalone provider
   phases when a moved check exposes a formerly separated candidate pair.
