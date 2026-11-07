@@ -59,6 +59,18 @@ and runs `python3 tools/check_ir_scope.py --owner <cq-lang-crate> [--allow
 crate it may delete or rename but not add or change grammar. An order-only
 change adds nothing below VO. Seam data a checker needs is a side table the
 lowering returns, never an IR field.
+**Development style (2026-11-07).** (1) One IR per branch, small: a step is
+mergeable in hours, not days; split otherwise. (2) Rules before code: the
+`\Rule` for every decision or refusal the step introduces is written in
+doc/formal first, with a mathematical premise, and the implementing code
+carries its `Formal rule NAME:` marker one-to-one; a contract exists only as
+a checker that rejects or as a type (a lowering is total on well-formed
+input). (3) Deletion-only outside the owner, and an order-only change adds no
+grammar anywhere (`check_ir_scope.py`). (4) Tests are expected-output
+fixtures of the owner IR (input program -> expected printed program) plus
+checker refusals; never wording, never downstream. (5) Seam data is a side
+table returned by the lowering. (6) Read before you measure applies to merge
+batches, where the full gates and the baseline run once.
 Per-step gate for a single-IR change (owner declared, scope check zero):
 the owner crate's tests with expected-output fixtures (input program ->
 expected printed program, and the checker), the IR-level census (re-lower
