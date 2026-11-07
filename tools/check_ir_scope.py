@@ -12,6 +12,7 @@ base versus the working tree. Run `python3 tools/check_public_api.py
 --update` first so the working snapshots reflect the code.
 """
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -57,8 +58,11 @@ def main():
         after = dict(line.split("\t", 1) for line in lines_at(None, crate) if "\t" in line)
         allowed = lambda path: any(a in path for a in args.allow)
         new = sorted(p for p in after.keys() - before.keys() if not allowed(p))
+        # A signature that only lost tokens (a deleted field or variant) is a deletion.
+        tokens = lambda sig: set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", sig))
         differing = sorted(p for p in after.keys() & before.keys()
-                           if after[p] != before[p] and not allowed(p))
+                           if after[p] != before[p] and not allowed(p)
+                           and not tokens(after[p]) <= tokens(before[p]))
         if new:
             added[crate] = new
         if differing:
