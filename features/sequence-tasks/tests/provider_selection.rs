@@ -1,7 +1,40 @@
-use cq_lang_sequence::Program;
+use cq_lang_sequence::structures;
+use quote::ToTokens;
+
+// Authored fixtures retain each language layer independently of Sequence IR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Fixture {
+    physical: structures::physical::Program,
+    structures: structures::Program,
+    program: cq_lang_sequence::Program,
+}
+
+impl syn::parse::Parse for Fixture {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = structures::Program::parse(input, &physical)?;
+        let program = input.parse()?;
+        Ok(Self { physical, structures, program })
+    }
+}
+
+impl From<(structures::physical::Program, structures::Program, cq_lang_sequence::Program)> for Fixture {
+    fn from((physical, structures, program): (structures::physical::Program, structures::Program, cq_lang_sequence::Program)) -> Self {
+        Self { physical, structures, program }
+    }
+}
+
+impl ToTokens for Fixture {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        self.physical.to_tokens(tokens);
+        self.structures.to_tokens(tokens);
+        self.program.to_tokens(tokens);
+    }
+}
+
 use cq_sequence_conformance::{Target, assert_conformant};
 
-fn projected_host_reader() -> Program {
+fn projected_host_reader() -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
@@ -15,6 +48,7 @@ fn projected_host_reader() -> Program {
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
     syn::parse_quote! {
+        #physical
         #structures
         sequence {
             l = rows l;
@@ -34,9 +68,9 @@ fn host_only_provider_survives_an_unavailable_shareable_rewrite() {
         token.levels.retain(|level| level == &["host"]);
         !token.levels.is_empty()
     });
-    let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
-    cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
-    assert_eq!(source.structures.physical, target.structures.physical);
+    let target = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
+    cq_sequence_plan::decompose(&target.physical, &target.structures, &target.program, &cq_sequence_tasks::machine(), &catalog).unwrap();
+    assert_eq!(source.physical, target.physical);
     let original: Vec<_> = source
         .structures
         .structures
@@ -52,7 +86,7 @@ fn host_only_provider_survives_an_unavailable_shareable_rewrite() {
         .filter(|entry| entry.name == "r")
         .collect();
     assert_eq!(original, selected);
-    assert_conformant(&target, &[Target::Sequential, Target::Tasks]);
+    assert_conformant(&target.physical, &target.structures, &target.program, &[Target::Sequential, Target::Tasks]);
 }
 
 #[test]
@@ -60,7 +94,7 @@ fn inapplicable_retention_still_rejects_an_unadmitted_native_reader() {
     let source = projected_host_reader();
     let mut catalog = cq_sequence_tasks::catalog();
     catalog.providers.clear();
-    assert!(cq_sequence_tasks::select_providers(&source, &catalog).is_err());
+    assert!(cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).is_err());
 }
 
 #[test]
@@ -79,33 +113,40 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
     };
     let structures =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(R, S))).unwrap();
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let source = Fixture {
+        program: cq_sequence_lowering::compile(&physical, &structures).unwrap(),
+        physical, structures,
+    };
     // Keep the authored reader publication separate from join-order advice.
-    let source = cq_sequence_plan::rewrites::store(&source, quote::quote!(member)).unwrap();
-    let before = cq_lang_sequence::contract::check(&source).unwrap();
-    assert!(before.structures.reads.contains_key("selected"));
+    let source = Fixture {
+        program: cq_sequence_plan::rewrites::store(&source.physical, &source.structures, &source.program, quote::quote!(member)).unwrap(),
+        ..source
+    };
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let before = structures::contract::check(&source.structures).unwrap();
+    assert!(before.reads.contains_key("selected"));
     assert!(
         before
-            .structures
             .membership
             .contains(&("r".into(), vec!["a".into(), "b".into()]))
     );
     let catalog = cq_sequence_tasks::catalog();
-    let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
-    let facts = cq_lang_sequence::contract::check(&target).unwrap();
-    assert!(facts.structures.host_read("r"));
-    assert!(facts.structures.reads.contains_key("selected"));
-    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let target = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
+    cq_lang_sequence::contract::check(&target.physical, &target.structures, &target.program).unwrap();
+    let facts = structures::contract::check(&target.structures).unwrap();
+    assert!(facts.host_read("r"));
+    assert!(facts.reads.contains_key("selected"));
+    cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
     let planned =
-        cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
+        cq_sequence_plan::decompose(&target.physical, &target.structures, &target.program, &cq_sequence_tasks::machine(), &catalog).unwrap();
     let facts =
-        cq_lang_sequence::check_grading(&planned.program, &cq_sequence_tasks::machine()).unwrap();
+        cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &cq_sequence_tasks::machine()).unwrap();
     assert_eq!(facts.levels["member"], ["host"]);
     assert!(matches!(
         facts.publications.get("s"),
         Some(cq_lang_sequence::Publication::BorrowHost { result, .. }) if result == "s"
     ));
-    let expression = cq_sequence_tasks::translate(&planned.program, &facts).unwrap();
+    let expression = cq_sequence_tasks::translate(&planned.physical, &planned.structures, &planned.program, &facts).unwrap();
     let rendered = quote::ToTokens::to_token_stream(&expression).to_string();
     let keyset = rendered
         .find("let __cq_s_keys_a =")
@@ -138,8 +179,7 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
         quote::quote! { let R: Vec<(i32,i32)> = vec![]; let S: Vec<(i32,)> = vec![]; },
         quote::quote! { let R = vec![(1i32,2i32),(1,2),(2,3)]; let S = vec![(1i32,),(1,)]; },
     ] {
-        cq_sequence_conformance::assert_conformant_with_runtime(
-            &source,
+        cq_sequence_conformance::assert_conformant_with_runtime(&source.physical, &source.structures, &source.program,
             &[Target::Sequential, Target::Tasks],
             &setup,
             &runtime,
@@ -232,7 +272,10 @@ fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Pr
     }
     let error = cq_lang_sequence::structures::contract::check(&invalid).unwrap_err();
     assert!(error.to_string().contains("STR-Positions"), "{error}");
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let source = Fixture {
+        program: cq_sequence_lowering::compile(&physical, &structures).unwrap(),
+        physical, structures,
+    };
     let catalog = cq_sequence_tasks::catalog();
     let mut missing_positions = catalog.clone();
     missing_positions.providers.retain(|entry| {
@@ -241,39 +284,38 @@ fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Pr
         )
     });
     assert!(
-        cq_sequence_plan::rewrites::select_from_catalog(&structures, &missing_positions).is_err(),
+        cq_sequence_plan::rewrites::select_from_catalog(&source.physical, &source.structures, &missing_positions).is_err(),
         "a catalog without positions cannot substitute an ordinary membership provider"
     );
-    let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
+    let target = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
     assert!(
         target.structures.structures.entries.contains(&selection),
         "the positional Selection must not be replaced with a membership-only sharded index"
     );
-    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
     assert!(
-        cq_sequence_plan::rewrites::key_partition(
-            &target,
+        cq_sequence_plan::rewrites::key_partition(&target.physical, &target.structures, &target.program,
             quote::quote!(selected, selected_parts, [order_key], 4),
         )
         .is_err(),
         "authored routing must preserve the native position carrier too"
     );
     let mut invalid = target.clone();
-    let index = invalid.sequence.definitions.iter()
+    let index = invalid.program.sequence.definitions.iter()
         .position(|definition| definition.name == "selected").unwrap();
-    let original = invalid.sequence.definitions[index].term.clone();
-    invalid.sequence.definitions.insert(index, syn::parse_quote! {
+    let original = invalid.program.sequence.definitions[index].term.clone();
+    invalid.program.sequence.definitions.insert(index, syn::parse_quote! {
         selected_snapshot = #original;
     });
-    invalid.sequence.definitions[index + 1].term = syn::parse_quote! {
+    invalid.program.sequence.definitions[index + 1].term = syn::parse_quote! {
         store partition_k [order_key] (4) selected_snapshot
     };
-    assert!(cq_lang_sequence::contract::check(&invalid).is_err());
+    assert!(cq_lang_sequence::contract::check(&invalid.physical, &invalid.structures, &invalid.program).is_err());
     let planned =
-        cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
+        cq_sequence_plan::decompose(&target.physical, &target.structures, &target.program, &cq_sequence_tasks::machine(), &catalog).unwrap();
     let facts =
-        cq_lang_sequence::check_grading(&planned.program, &cq_sequence_tasks::machine()).unwrap();
-    let expression = cq_sequence_tasks::translate(&planned.program, &facts).unwrap();
+        cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &cq_sequence_tasks::machine()).unwrap();
+    let expression = cq_sequence_tasks::translate(&planned.physical, &planned.structures, &planned.program, &facts).unwrap();
     let runtime = cq_testkit::rustc::Runtime::with_dependencies(vec![
         cq_testkit::rustc::linked_dependency::<rayon::ThreadPool>("rayon", "rayon::ThreadPool"),
         cq_testkit::rustc::linked_dependency::<cq_sequence_tasks::Config>(
@@ -329,7 +371,7 @@ fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Pr
     );
 }
 
-fn retained_positional_selection() -> Program {
+fn retained_positional_selection() -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i64,b:i64);
@@ -341,27 +383,33 @@ fn retained_positional_selection() -> Program {
     };
     let structures =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(R))).unwrap();
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
-    let facts = cq_lang_sequence::contract::check(&source).unwrap();
-    assert!(facts.structures.selections.contains_key("selected"));
+    let source = Fixture {
+        program: cq_sequence_lowering::compile(&physical, &structures).unwrap(),
+        physical, structures,
+    };
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let facts = structures::contract::check(&source.structures).unwrap();
+    assert!(facts.selections.contains_key("selected"));
     source
 }
 
 #[test]
 fn positional_selection_keeps_its_recorded_constructor_through_tasks_catalog() {
     let source = retained_positional_selection();
-    let before = cq_lang_sequence::contract::check(&source).unwrap();
-    let recorded = &before.structures.selections["selected"].provider;
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let before = structures::contract::check(&source.structures).unwrap();
+    let recorded = &before.selections["selected"].provider;
     let catalog = cq_sequence_tasks::catalog();
-    let target = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
-    let facts = cq_lang_sequence::contract::check(&target).unwrap();
-    assert_eq!(&facts.structures.selections["selected"].provider, recorded);
-    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+    let target = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
+    cq_lang_sequence::contract::check(&target.physical, &target.structures, &target.program).unwrap();
+    let facts = structures::contract::check(&target.structures).unwrap();
+    assert_eq!(&facts.selections["selected"].provider, recorded);
+    cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
     let planned =
-        cq_sequence_plan::decompose(&target, &cq_sequence_tasks::machine(), &catalog).unwrap();
+        cq_sequence_plan::decompose(&target.physical, &target.structures, &target.program, &cq_sequence_tasks::machine(), &catalog).unwrap();
     let facts =
-        cq_lang_sequence::check_grading(&planned.program, &cq_sequence_tasks::machine()).unwrap();
-    let expression = cq_sequence_tasks::translate(&planned.program, &facts).unwrap();
+        cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &cq_sequence_tasks::machine()).unwrap();
+    let expression = cq_sequence_tasks::translate(&planned.physical, &planned.structures, &planned.program, &facts).unwrap();
     let rendered = quote::ToTokens::to_token_stream(&expression).to_string();
     let ty = &recorded.ty;
     let constructor = quote::quote!(<#ty>::from_positions).to_string();
@@ -382,8 +430,7 @@ fn positional_selection_keeps_its_recorded_constructor_through_tasks_catalog() {
         quote::quote! { let R: Vec<(i64,i64)> = vec![]; },
         quote::quote! { let R = vec![(-1i64,9i64),(1,2),(1,2),(2,3),(0,8)]; },
     ] {
-        cq_sequence_conformance::assert_conformant_with_runtime(
-            &source,
+        cq_sequence_conformance::assert_conformant_with_runtime(&source.physical, &source.structures, &source.program,
             &[Target::Sequential, Target::Tasks],
             &setup,
             &runtime,
@@ -395,13 +442,14 @@ fn positional_selection_keeps_its_recorded_constructor_through_tasks_catalog() {
 #[test]
 fn membership_catalog_entry_cannot_replace_a_positional_constructor() {
     let source = retained_positional_selection();
-    let facts = cq_lang_sequence::contract::check(&source).unwrap();
-    let recorded = &facts.structures.selections["selected"].provider;
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let facts = structures::contract::check(&source.structures).unwrap();
+    let recorded = &facts.selections["selected"].provider;
     let mut catalog = cq_sequence_tasks::catalog();
     catalog.providers.retain(|entry| !entry.covers(recorded));
-    let error = cq_sequence_tasks::select_providers(&source, &catalog).unwrap_err();
+    let error = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap_err();
     assert!(error.to_string().contains("positional selection constructor"));
     let error =
-        cq_sequence_plan::decompose(&source, &cq_sequence_tasks::machine(), &catalog).unwrap_err();
+        cq_sequence_plan::decompose(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::machine(), &catalog).unwrap_err();
     assert!(error.to_string().contains("positional selection constructor"));
 }

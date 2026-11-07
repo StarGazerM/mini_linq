@@ -200,11 +200,13 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
 /// Formal rule GPU-Representation: provider and codec declarations, never
 /// logical Rust type spellings, supply the facts checked by BE-RustRepresentation.
 pub fn record_representation(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     source: &cq_lang_sequence::Program,
 ) -> syn::Result<cq_lang_sequence::Program> {
-    let analysis = cq_lang_structures::contract::check(&source.structures)?;
+    let analysis = cq_lang_structures::contract::check(structures)?;
     let mut hosts = BTreeMap::new();
-    for entry in &source.structures.structures.entries {
+    for entry in &structures.structures.entries {
         let Structure::Host {
             reader: cq_lang_structures::ReaderRef::Scan,
             keyed,
@@ -235,7 +237,7 @@ pub fn record_representation(
     // An authored binding annotation declares the identity of its Rust result.
     // Keep the type tokens opaque: rustc checks its Scalar ABI and supplies the
     // layout when the generated boundary or callable uses that result.
-    for definition in &source.structures.physical.program.definitions {
+    for definition in &physical.program.definitions {
         if let cq_lang_structures::physical::Operator::Bind(bind) = &definition.operator
             && bind.annotation.is_some()
         {
@@ -247,7 +249,7 @@ pub fn record_representation(
             }
         }
     }
-    for definition in &source.structures.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let cq_lang_structures::physical::Operator::Rename(rename) = &definition.operator else {
             continue;
         };
@@ -268,7 +270,7 @@ pub fn record_representation(
             }
         }
     }
-    for entry in &source.structures.structures.entries {
+    for entry in &structures.structures.entries {
         let Structure::Built { keyed, .. } = &entry.structure else {
             continue;
         };
@@ -284,7 +286,7 @@ pub fn record_representation(
             }
         }
     }
-    let codecs = Codecs::check(&source.structures, &analysis.physical.rows)?;
+    let codecs = Codecs::check(structures, &analysis.physical.rows)?;
     for row in analysis.physical.rows.values() {
         for column in row.types.keys() {
             if codecs
@@ -302,10 +304,11 @@ pub fn record_representation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../../tests/support/stack.rs");
 
     #[test]
     fn authored_binding_annotations_record_identity_without_type_inspection() {
-        let program: cq_lang_sequence::Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(x:i64) = (&data.r);
                 r = pipe rename R@0 {x -> x};
@@ -324,10 +327,10 @@ mod tests {
                 output count;
             }
         };
-        let recorded = record_representation(&program).unwrap();
+        let recorded = record_representation(&physical, &structures, &program).unwrap();
         assert!(recorded.representation.identity.contains("value"));
-        let facts = cq_lang_sequence::contract::check(&recorded).unwrap();
-        let mut operator = recorded.structures.physical.program.definitions[1]
+        let facts = cq_lang_sequence::contract::check(&physical, &structures, &recorded).unwrap();
+        let mut operator = physical.program.definitions[1]
             .operator
             .clone();
         assert!(!facts.rust_requires_host(&operator));
@@ -383,7 +386,7 @@ mod tests {
 
     #[test]
     fn declared_logical_ids_drive_representation_and_reject_mismatches() {
-        let program: cq_lang_sequence::Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a: Logical [5], b: Logical [6]) = (&data.r);
                 r = pipe rename R@0 {a -> x, b -> y};
@@ -408,26 +411,26 @@ mod tests {
                 output count;
             }
         };
-        let recorded = record_representation(&program).unwrap();
+        let recorded = record_representation(&physical, &structures, &program).unwrap();
         assert!(recorded.representation.encoded.contains("x"));
         assert!(recorded.representation.encoded.contains("y"));
-        let analysis = cq_lang_structures::contract::check(&program.structures).unwrap();
-        let codecs = Codecs::check(&program.structures, &analysis.physical.rows).unwrap();
+        let analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let codecs = Codecs::check(&physical, &structures, &analysis.physical.rows).unwrap();
         assert_eq!(codecs.column("x"), Some(&syn::parse_quote!(First)));
         assert_eq!(codecs.column("y"), Some(&syn::parse_quote!(Second)));
-        let mut changed = program.clone();
-        let Structure::Host { keyed, .. } = &mut changed.structures.structures.entries[0].structure
+        let mut changed = structures.clone();
+        let Structure::Host { keyed, .. } = &mut changed.structures.entries[0].structure
         else {
             unreachable!()
         };
         keyed.provider.input.as_mut().unwrap().columns[0].logical_type_id =
             Some(cq_syntax::LogicalTypeId(6));
-        assert!(record_representation(&changed).is_err());
+        assert!(record_representation(&physical, &changed, &program).is_err());
     }
 
     #[test]
     fn representation_provenance_does_not_require_single_column_intervals() {
-        let program: cq_lang_sequence::Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data.r);
                 r = pipe rename R@0 {a -> x,b -> y};
@@ -447,10 +450,10 @@ mod tests {
             }
             graded gpu { input at host; result_rows at host.device; }
         };
-        let recorded = record_representation(&program).unwrap();
+        let recorded = record_representation(&physical, &structures, &program).unwrap();
         assert!(recorded.representation.identity.contains("x"));
         assert!(recorded.representation.identity.contains("y"));
-        let analysis = cq_lang_sequence::check_grading(&recorded, &crate::machine()).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &recorded, &crate::machine()).unwrap();
         assert!(analysis.gpu_bindings.native.is_empty());
     }
 
@@ -499,7 +502,7 @@ mod tests {
                 result canon = rows;
             }
         };
-        let target = bind(&source).unwrap();
+        let target = bind(&source.physical, &source).unwrap();
         let Structure::Host { keyed: host, .. } = &source.structures.entries[0].structure else {
             unreachable!()
         };

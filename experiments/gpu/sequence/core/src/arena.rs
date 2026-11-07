@@ -12,11 +12,13 @@ use quote::quote;
 /// and host-only publications require a separate supported publication boundary.
 // Formal rule GPU-Arena: Publish the recorded raw-candidate arena encoding into a retained caller-owned lease.
 pub fn translate_arena(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
     arena: &syn::Expr,
 ) -> syn::Result<syn::Expr> {
-    crate::emit::translate_impl(program, analysis, Some(arena))
+    crate::emit::translate_impl(physical, structures, program, analysis, Some(arena))
 }
 
 pub(crate) struct Packing {

@@ -179,6 +179,7 @@ impl ToTokens for PublicationRecord {
 /// Recorded Sequence facts shared by selection and checking. No storage
 /// policy lives here.
 struct Facts<'a> {
+    structure_analysis: &'a crate::structures::Analysis,
     analysis: &'a Analysis,
     definitions: BTreeMap<String, &'a Term>,
     /// The outermost store of each device dispatch.
@@ -190,7 +191,7 @@ struct Facts<'a> {
 }
 
 impl<'a> Facts<'a> {
-    fn new(program: &'a Program, analysis: &'a Analysis) -> syn::Result<Self> {
+    fn new(physical: &crate::structures::physical::Program, program: &'a Program, structure_analysis: &'a crate::structures::Analysis, analysis: &'a Analysis) -> syn::Result<Self> {
         let definitions: BTreeMap<_, _> = program
             .sequence
             .definitions
@@ -230,11 +231,7 @@ impl<'a> Facts<'a> {
                     .map(|d| symbol_name(&d.name))
             })
             .ok_or_else(|| error("missing terminal publication"))?;
-        let output = program
-            .structures
-            .physical
-            .program
-            .head
+        let output = physical.program.head
             .args
             .iter()
             .map(|arg| {
@@ -244,6 +241,7 @@ impl<'a> Facts<'a> {
             })
             .collect::<syn::Result<Vec<_>>>()?;
         Ok(Self {
+            structure_analysis,
             analysis,
             definitions,
             dispatches,
@@ -330,7 +328,7 @@ impl<'a> Facts<'a> {
                 analysis
                     .results
                     .get(publication)
-                    .and_then(|result| analysis.structures.canonical.get(result))
+                    .and_then(|result| self.structure_analysis.canonical.get(result))
                     .and_then(|canonical| canonical.rows_provider())
                     .map(|provider| &provider.ty)
             })
@@ -452,7 +450,7 @@ impl<'a> Context<'a> {
                 .analysis
                 .results
                 .get(name)
-                .and_then(|result| facts.analysis.structures.physical.headings.get(result))
+                .and_then(|result| facts.structure_analysis.physical.headings.get(result))
                 .map(Vec::as_slice)
                 .ok_or_else(|| error("publication lacks a checked row heading"))
         }
@@ -507,11 +505,13 @@ impl<'a> Context<'a> {
 /// Formal rule GPU-PublicationStorage: upstream records own compact flat layout,
 /// ordered FOR recipes with their bounds sources, and equality granularity.
 pub fn derive(
+    physical: &crate::structures::physical::Program,
     program: &Program,
+    structure_analysis: &crate::structures::Analysis,
     analysis: &Analysis,
 ) -> syn::Result<BTreeMap<String, PublicationRecord>> {
     let context = Context {
-        facts: Facts::new(program, analysis)?,
+        facts: Facts::new(physical, program, structure_analysis, analysis)?,
     };
     let facts = &context.facts;
     let mut records = BTreeMap::new();
@@ -658,11 +658,13 @@ fn root_fold<'a>(facts: &Facts<'a>, term: &'a Term) -> Option<&'a Monoid> {
 /// never invokes storage selection; where several records are sound it
 /// accepts each of them.
 pub fn check(
+    physical: &crate::structures::physical::Program,
     program: &Program,
+    structure_analysis: &crate::structures::Analysis,
     analysis: &Analysis,
     records: &BTreeMap<String, PublicationRecord>,
 ) -> syn::Result<()> {
-    let facts = Facts::new(program, analysis)?;
+    let facts = Facts::new(physical, program, structure_analysis, analysis)?;
     let publications: BTreeSet<_> = facts
         .definitions
         .iter()
@@ -811,7 +813,7 @@ fn check_flat(facts: &Facts, name: &str, term: &Term, rows: &FlatRows) -> syn::R
             .analysis
             .results
             .get(name)
-            .and_then(|result| facts.analysis.structures.physical.headings.get(result))
+            .and_then(|result| facts.structure_analysis.physical.headings.get(result))
             .ok_or_else(|| error("publication lacks a checked row heading"))?
     };
     let payload = facts.deferred_payload(name)?;
@@ -843,7 +845,7 @@ fn check_codec<'a>(
             .analysis
             .results
             .get(name)
-            .and_then(|result| facts.analysis.structures.physical.headings.get(result))
+            .and_then(|result| facts.structure_analysis.physical.headings.get(result))
             .map(Vec::as_slice)
     };
     let fields = codec.fields();

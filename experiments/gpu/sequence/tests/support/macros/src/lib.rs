@@ -1,19 +1,18 @@
 use proc_macro::TokenStream;
 use quote::ToTokens;
 
+include!("../../stack.rs");
+
 /// Expand an authored checked Sequence fixture without planning decisions.
 /// Authored fixtures skip the `stage` pass, so bind target Structures here.
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
-    let mut program = syn::parse_macro_input!(input as cq_lang_sequence::Program);
-    let result = cq_gpu_sequence_core::bind_structures(&program.structures)
+    let Stack { physical, structures, program } = syn::parse_macro_input!(input as Stack);
+    let result = cq_gpu_sequence_core::bind_structures(&physical, &structures)
         .and_then(|structures| {
-            program.structures = structures;
-            cq_gpu_sequence_core::runs::record_representation(&program)
-        })
-        .and_then(|program| {
-            let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
-            cq_gpu_sequence::translate(&program, &analysis)
+            let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program)?;
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine())?;
+            cq_gpu_sequence::translate(&physical, &structures, &program, &analysis)
         });
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -29,7 +28,7 @@ mod h05_program;
 #[path = "../../h05_plans.rs"]
 mod h05_plans;
 
-fn fixture(name: syn::Ident) -> syn::Result<cq_lang_sequence::Program> {
+fn fixture(name: syn::Ident) -> syn::Result<Stack> {
     match name.to_string().as_str() {
         "A" => Ok(h05_plans::a()),
         "B" => Ok(h05_plans::b()),
@@ -46,13 +45,13 @@ fn fixture(name: syn::Ident) -> syn::Result<cq_lang_sequence::Program> {
 pub fn planned_h05(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
     let result = (|| {
-        let authored = fixture(name)?;
-        let source = cq_sequence_lowering::compile(&authored.structures)?;
-        let source = cq_gpu_sequence_core::runs::record_representation(&source)?;
+        let Stack { physical, structures, program: _ } = fixture(name)?;
+        let source = cq_sequence_lowering::compile(&physical, &structures)?;
+        let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source)?;
         let machine = cq_gpu_sequence::machine();
-        let planned = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog())?;
-        let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
-        cq_gpu_sequence::translate(&planned.program, &analysis)
+        let planned = cq_sequence_plan::decompose(&physical, &structures, &source, &machine, &cq_gpu_sequence::catalog())?;
+        let analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
+        cq_gpu_sequence::translate(&planned.physical, &planned.structures, &planned.program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -66,11 +65,12 @@ pub fn h05_physical_reference(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
     let result = (|| {
         let authored = fixture(name)?;
-        let structures = cq_structure_selection::compile(&authored.structures.physical)?;
-        let program = cq_sequence_lowering::compile(&structures)?;
+        let physical = authored.physical;
+        let structures = cq_structure_selection::compile(&physical)?;
+        let program = cq_sequence_lowering::compile(&physical, &structures)?;
         let machine = cq_sequence_pull::machine();
-        let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
-        cq_sequence_pull::translate(&program, &analysis)
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &machine)?;
+        cq_sequence_pull::translate(&physical, &structures, &program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -84,10 +84,10 @@ pub fn h05_physical_reference(input: TokenStream) -> TokenStream {
 pub fn h05(input: TokenStream) -> TokenStream {
     let capacity = syn::parse_macro_input!(input as syn::LitInt);
     let result = (|| {
-        let program = h05_program::program_with_capacity(capacity.base10_parse()?);
-        let program = cq_gpu_sequence_core::runs::record_representation(&program)?;
-        let analysis = cq_lang_sequence::check_grading(&program, &cq_gpu_sequence::machine())?;
-        cq_gpu_sequence::translate(&program, &analysis)
+        let Stack { physical, structures, program } = h05_program::program_with_capacity(capacity.base10_parse()?);
+        let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program)?;
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine())?;
+        cq_gpu_sequence::translate(&physical, &structures, &program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -103,11 +103,12 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
     let capacity = syn::parse_macro_input!(input as syn::LitInt);
     let result = (|| {
         let gpu = h05_program::program_with_capacity(capacity.base10_parse()?);
-        let structures = cq_structure_selection::compile(&gpu.structures.physical)?;
-        let program = cq_sequence_lowering::compile(&structures)?;
+        let physical = gpu.physical;
+        let structures = cq_structure_selection::compile(&physical)?;
+        let program = cq_sequence_lowering::compile(&physical, &structures)?;
         let machine = cq_sequence_pull::machine();
-        let analysis = cq_lang_sequence::check_grading(&program, &machine)?;
-        cq_sequence_pull::translate(&program, &analysis)
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &machine)?;
+        cq_sequence_pull::translate(&physical, &structures, &program, &analysis)
     })();
     match result {
         Ok(expression) => expression.into_token_stream().into(),
@@ -160,11 +161,12 @@ fn arena_hole(
             .structures
             .declare(&cq_gpu_sequence_core::providers::declarations())?;
     }
-    let structures = cq_gpu_sequence_core::runs::bind(&structures)?;
-    let source = cq_sequence_lowering::compile(&structures)?;
-    let source = cq_gpu_sequence_core::runs::record_representation(&source)?;
+    let physical = structures.physical.clone();
+    let structures = cq_gpu_sequence_core::runs::bind(&physical, &structures)?;
+    let source = cq_sequence_lowering::compile(&physical, &structures)?;
+    let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source)?;
     let machine = cq_gpu_sequence::machine();
-    let mut planned = cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog())?;
+    let mut planned = cq_sequence_plan::decompose(&physical, &structures, &source, &machine, &cq_gpu_sequence::catalog())?;
     let terminal = planned.program.sequence.definitions.last_mut().unwrap();
     let cq_lang_sequence::Term::Store { capacity, .. } = &mut terminal.term else {
         return Err(syn::Error::new_spanned(
@@ -178,8 +180,10 @@ fn arena_hole(
         *capacity = Some(1);
     }
     planned.program.sequence.output = Some(output);
-    let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
+    let analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
     cq_gpu_sequence_core::translate_arena(
+        &planned.physical,
+        &planned.structures,
         &planned.program,
         &analysis,
         &syn::parse_quote!(&mut arena),

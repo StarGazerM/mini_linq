@@ -2,7 +2,6 @@
 use cq_lang_sequence::gpu::bindings::{
     Bindings, ColumnBounds, UploadAdapter, UploadBounds, UploadCodec, UploadColumn,
 };
-use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::{
     ReaderRef, Structure,
     physical::{Operator, symbol_name},
@@ -14,10 +13,8 @@ fn error(message: &str) -> syn::Error {
 }
 
 /// Typed `let` capture binders: the columns a capture answer may publish.
-fn capture_types(program: &Program) -> Vec<(String, syn::Type)> {
-    program
-        .structures
-        .physical
+fn capture_types(physical: &cq_lang_structures::physical::Program) -> Vec<(String, syn::Type)> {
+    physical
         .program
         .captures
         .items
@@ -37,11 +34,9 @@ fn capture_types(program: &Program) -> Vec<(String, syn::Type)> {
 /// Resolve recorded logical identities to their declaration payloads. Rust types
 /// remain opaque: inference syntax does not participate in carrier selection.
 fn logical_types(
-    program: &Program,
+    physical: &cq_lang_structures::physical::Program,
 ) -> BTreeMap<cq_lang_structures::syntax::LogicalTypeId, &syn::Type> {
-    program
-        .structures
-        .physical
+    physical
         .program
         .declarations
         .iter()
@@ -63,14 +58,15 @@ fn device_carrier(codecs: &crate::runs::Codecs, column: &str, logical: &syn::Typ
 /// Record the device carrier of every Physical column and capture answer
 /// column; a capture answer publishes one host value of its declared type.
 pub(crate) fn carriers(
-    program: &Program,
-    analysis: &Analysis,
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
 ) -> syn::Result<BTreeMap<String, syn::Type>> {
     let codecs =
-        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
+        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
     let mut carriers = BTreeMap::new();
-    let logicals = logical_types(program);
-    for row in analysis.structures.physical.rows.values() {
+    let logicals = logical_types(physical);
+    for row in structure_analysis.physical.rows.values() {
         for (column, ty) in &row.types {
             let ty = match row.logical_type_ids.get(column) {
                 Some(id) => logicals.get(id).copied().ok_or_else(|| {
@@ -81,7 +77,7 @@ pub(crate) fn carriers(
             carriers.insert(column.clone(), device_carrier(&codecs, column, ty));
         }
     }
-    for (column, ty) in capture_types(program) {
+    for (column, ty) in capture_types(physical) {
         let carrier = device_carrier(&codecs, &column, &ty);
         carriers.insert(column, carrier);
     }
@@ -90,12 +86,17 @@ pub(crate) fn carriers(
 
 /// Every recorded carrier is its column's representation in every row (and
 /// capture binder) that types it, and every typed column has one.
-fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) -> syn::Result<()> {
+fn check_carriers(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
+    records: &Bindings,
+) -> syn::Result<()> {
     let codecs =
-        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
+        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
     let mut typed: BTreeMap<&String, Vec<&syn::Type>> = BTreeMap::new();
-    let logicals = logical_types(program);
-    for row in analysis.structures.physical.rows.values() {
+    let logicals = logical_types(physical);
+    for row in structure_analysis.physical.rows.values() {
         for (column, ty) in &row.types {
             let ty = match row.logical_type_ids.get(column) {
                 Some(id) => logicals.get(id).copied().ok_or_else(|| {
@@ -106,7 +107,7 @@ fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) ->
             typed.entry(column).or_default().push(ty);
         }
     }
-    let captures = capture_types(program);
+    let captures = capture_types(physical);
     for (column, ty) in &captures {
         typed.entry(column).or_default().push(ty);
     }
@@ -134,17 +135,17 @@ fn check_carriers(program: &Program, analysis: &Analysis, records: &Bindings) ->
 }
 
 pub(crate) fn select(
-    program: &Program,
-    analysis: &Analysis,
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     records: &mut Bindings,
 ) -> syn::Result<()> {
     let types = records.carriers.clone();
     let mut unbounded = BTreeSet::new();
-    for row in analysis.structures.physical.rows.values() {
+    for row in structure_analysis.physical.rows.values() {
         unbounded.extend(row.computed.iter().cloned());
     }
-    let resident: BTreeSet<_> = program
-        .structures
+    let resident: BTreeSet<_> = structures
         .structures
         .entries
         .iter()
@@ -154,11 +155,10 @@ pub(crate) fn select(
                 keyed,
                 ..
             } = &entry.structure
-                && analysis.structures.facts(&keyed.provider).bounds
+                && structure_analysis.facts(&keyed.provider).bounds
                     == Some(cq_lang_structures::provider::BoundsSource::ResidentColumns)
             {
-                analysis
-                    .structures
+                structure_analysis
                     .physical
                     .hosts
                     .get(&symbol_name(&entry.name))
@@ -169,13 +169,13 @@ pub(crate) fn select(
         })
         .collect();
     let mut sources: BTreeMap<String, BTreeSet<(String, usize)>> = BTreeMap::new();
-    for definition in &program.structures.physical.program.definitions {
+    for definition in &physical.program.definitions {
         if let Operator::Rename(rename) = &definition.operator {
             let host = symbol_name(&rename.relation);
             for mapping in &rename.mapping {
                 let column = symbol_name(&mapping.target);
                 if resident.contains(&host) {
-                    let index = analysis.structures.host_layouts[&host]
+                    let index = structure_analysis.host_layouts[&host]
                         .iter()
                         .position(|name| name == &symbol_name(&mapping.source))
                         .ok_or_else(|| {
@@ -200,7 +200,7 @@ pub(crate) fn select(
         };
         records.bounds.insert(column.clone(), domain);
     }
-    for (name, layout) in &analysis.structures.layouts {
+    for (name, layout) in &structure_analysis.layouts {
         records.uploads.insert(
             name.clone(),
             if layout.is_empty() {
@@ -225,12 +225,16 @@ pub(crate) fn select(
 }
 
 /// Validate source coverage and carrier legality; never call selection or require its preference.
-pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) -> syn::Result<()> {
-    check_carriers(program, analysis, records)?;
+pub(crate) fn check(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
+    records: &Bindings,
+) -> syn::Result<()> {
+    check_carriers(physical, structures, structure_analysis, records)?;
     let carrier = |column: &String| &records.carriers[column];
-    let captures = capture_types(program);
-    let mut columns: BTreeSet<_> = analysis
-        .structures
+    let captures = capture_types(physical);
+    let mut columns: BTreeSet<_> = structure_analysis
         .physical
         .rows
         .values()
@@ -238,7 +242,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
         .collect();
     columns.extend(captures.iter().map(|(column, _)| column));
     if records.bounds.keys().collect::<BTreeSet<_>>() != columns
-        || records.uploads.len() != analysis.structures.layouts.len()
+        || records.uploads.len() != structure_analysis.layouts.len()
     {
         return Err(error("GPU-Bounds: incomplete bounds or upload records"));
     }
@@ -261,8 +265,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 let recorded: BTreeSet<_> = sources.iter().cloned().collect();
                 if sources.is_empty()
                     || recorded.len() != sources.len()
-                    || analysis
-                        .structures
+                    || structure_analysis
                         .physical
                         .rows
                         .values()
@@ -273,7 +276,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                     ));
                 }
                 let mut required = BTreeSet::new();
-                for definition in &program.structures.physical.program.definitions {
+                for definition in &physical.program.definitions {
                     let Operator::Rename(rename) = &definition.operator else {
                         continue;
                     };
@@ -283,17 +286,17 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                         .filter(|mapping| symbol_name(&mapping.target) == *column)
                     {
                         let host = symbol_name(&rename.relation);
-                        let declared = program.structures.structures.entries.iter().any(|entry|
-                            analysis.structures.physical.hosts.get(&symbol_name(&entry.name)) == Some(&host)
+                        let declared = structures.structures.entries.iter().any(|entry|
+                            structure_analysis.physical.hosts.get(&symbol_name(&entry.name)) == Some(&host)
                                 && matches!(&entry.structure, Structure::Host { reader: ReaderRef::Scan, keyed, .. }
-                                    if analysis.structures.facts(&keyed.provider).bounds
+                                    if structure_analysis.facts(&keyed.provider).bounds
                                         == Some(cq_lang_structures::provider::BoundsSource::ResidentColumns)));
                         if !declared {
                             return Err(error(
                                 "GPU-Bounds: resident bounds omit a nonresident origin",
                             ));
                         }
-                        let layout = &analysis.structures.host_layouts[&host];
+                        let layout = &structure_analysis.host_layouts[&host];
                         let index = layout
                             .iter()
                             .position(|name| name == &symbol_name(&mapping.source))
@@ -309,7 +312,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             }
         }
     }
-    for (name, layout) in &analysis.structures.layouts {
+    for (name, layout) in &structure_analysis.layouts {
         let upload = records
             .uploads
             .get(name)
@@ -342,10 +345,11 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../../tests/support/stack.rs");
 
     #[test]
     fn inferred_output_carrier_uses_the_declared_head_context() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i32) = (&data);
                 relation answer(value:i32);
@@ -377,10 +381,11 @@ mod tests {
             }
             graded gpu { input at host; values at host; output_rows at host.device; }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert!(matches!(
-            analysis.structures.physical.rows["computed"].types["b"],
+            structure_analysis.physical.rows["computed"].types["b"],
             syn::Type::Infer(_)
         ));
         let records = &analysis.gpu_bindings;
@@ -400,22 +405,22 @@ mod tests {
         for ty in [syn::parse_quote!(_), syn::parse_quote!(u32)] {
             let mut wrong = records.clone();
             wrong.carriers.insert("b".into(), ty);
-            assert!(check_carriers(&program, &analysis, &wrong).is_err());
+            assert!(check_carriers(&physical, &structures, &structure_analysis, &wrong).is_err());
         }
         // A different opaque row payload must not override its recorded identity.
-        let mut opaque = analysis.clone();
-        for row in opaque.structures.physical.rows.values_mut() {
+        let mut opaque = structure_analysis.clone();
+        for row in opaque.physical.rows.values_mut() {
             if let Some(ty) = row.types.get_mut("b") {
                 *ty = syn::parse_quote!(OpaqueCarrier);
             }
         }
-        assert_eq!(carriers(&program, &opaque).unwrap()["b"], syn::parse_quote!(i32));
-        check_carriers(&program, &opaque, records).unwrap();
+        assert_eq!(carriers(&physical, &structures, &opaque).unwrap()["b"], syn::parse_quote!(i32));
+        check_carriers(&physical, &structures, &opaque, records).unwrap();
     }
 
     #[test]
     fn bounds_and_upload_records_check_original_provenance() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i64) = (&data);
                 r = pipe rename R@0 {a -> a};
@@ -434,8 +439,9 @@ mod tests {
             }
             graded gpu { input at host; output_rows at host.device; }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let records = &analysis.gpu_bindings;
         assert_eq!(
             records.bounds["a"],
@@ -460,13 +466,13 @@ mod tests {
                 sources: vec![("R".into(), 1)],
             },
         );
-        assert!(check(&program, &analysis, &wrong).is_err());
+        assert!(check(&physical, &structures, &structure_analysis, &wrong).is_err());
         let mut missing = records.clone();
         missing.bounds.clear();
-        assert!(check(&program, &analysis, &missing).is_err());
+        assert!(check(&physical, &structures, &structure_analysis, &missing).is_err());
         let mut wrong = records.clone();
         wrong.uploads.insert("r".into(), UploadAdapter::EmptyRows);
-        assert!(check(&program, &analysis, &wrong).is_err());
+        assert!(check(&physical, &structures, &structure_analysis, &wrong).is_err());
         let mut conservative = records.clone();
         conservative.bounds.insert(
             "a".into(),
@@ -474,6 +480,6 @@ mod tests {
                 ty: syn::parse_quote!(i64),
             },
         );
-        check(&program, &analysis, &conservative).unwrap();
+        check(&physical, &structures, &structure_analysis, &conservative).unwrap();
     }
 }

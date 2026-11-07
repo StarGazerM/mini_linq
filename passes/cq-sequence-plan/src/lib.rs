@@ -1,6 +1,11 @@
 //! Bounded, deterministic Sequence decomposition with replayable rewrite advice.
+//!
+//! Planning takes Physical, Structures and Sequence as distinct inputs. Provider
+//! rewrites return the changed upper programs alongside Sequence; replay must
+//! retain the complete returned stack rather than only its Sequence annotation.
 #![forbid(unsafe_code)]
 
+use cq_lang_sequence::structures::{self, physical};
 use cq_lang_sequence::{Analysis, Catalog, Machine, OutputProtocol, Program, Term};
 use cq_syntax::symbol_name;
 use quote::quote;
@@ -65,32 +70,52 @@ pub enum Advice {
 
 impl Advice {
     /// Replay a checked rewrite; this never bypasses its construction checker.
-    pub fn apply(&self, source: &Program) -> syn::Result<Program> {
-        self.apply_in(&mut Default::default(), source)
+    /// Return the complete stack because key-partition advice can retype providers.
+    pub fn apply(&self, physical: &physical::Program, structures: &structures::Program, source: &Program) -> syn::Result<(physical::Program, structures::Program, Program)> {
+        self.apply_in(&mut Default::default(), physical, structures, source)
     }
 
     pub fn apply_in(
         &self,
         checker: &mut cq_lang_sequence::contract::Checker,
+        physical: &physical::Program,
+        structures: &structures::Program,
         source: &Program,
-    ) -> syn::Result<Program> {
+    ) -> syn::Result<(physical::Program, structures::Program, Program)> {
+        let (upper, program) = self.apply_program_in(checker, physical, structures, source)?;
+        let (physical, structures) = upper.unwrap_or_else(|| (physical.clone(), structures.clone()));
+        Ok((physical, structures, program))
+    }
+
+    fn apply_program_in(
+        &self,
+        checker: &mut cq_lang_sequence::contract::Checker,
+        physical: &physical::Program,
+        structures: &structures::Program,
+        source: &Program,
+    ) -> syn::Result<(Option<(physical::Program, structures::Program)>, Program)> {
         use crate::rewrites;
+        let result = (|| {
+        if let Self::KeyPartition(arguments) = self {
+            return rewrites::key_partition_in(checker, physical, structures, source, arguments)
+                .map(|(physical, structures, program)| (Some((physical, structures)), program));
+        }
         let result = match self {
-            Self::Evidence(evidence) => rewrites::record_evidence_in(checker, source, evidence),
-            Self::KeyPartition(arguments) => rewrites::key_partition_in(checker, source, arguments),
+            Self::Evidence(evidence) => rewrites::record_evidence_in(checker, physical, structures, source, evidence),
+            Self::KeyPartition(_) => unreachable!("handled above"),
             Self::GroupWithoutCanon(name) => {
-                rewrites::group_without_canon_in(checker, source, quote!(#name))
+                rewrites::group_without_canon_in(checker, physical, structures, source, quote!(#name))
             }
-            Self::Store(name) => rewrites::store_in(checker, source, quote!(#name)),
-            Self::StoreLevel(name) => rewrites::store_level_in(checker, source, quote!(#name)),
+            Self::Store(name) => rewrites::store_in(checker, physical, structures, source, quote!(#name)),
+            Self::StoreLevel(name) => rewrites::store_level_in(checker, physical, structures, source, quote!(#name)),
             Self::Retain {
                 name,
                 rows,
                 tile,
                 minimum,
-            } => retain::apply_in(checker, source, name, *rows, *tile, *minimum),
+            } => retain::apply_in(checker, physical, structures, source, name, *rows, *tile, *minimum),
             Self::Publish { name, producer } => {
-                rewrites::publish_in(checker, source, name, producer)
+                rewrites::publish_in(checker, physical, structures, source, name, producer)
             }
             Self::Tile { name, n, items }
             | Self::Partition { name, n, items }
@@ -103,12 +128,12 @@ impl Advice {
                     quote!(#name, #n)
                 };
                 match self {
-                    Self::Tile { .. } => rewrites::tile_in(checker, source, arguments),
-                    Self::Partition { .. } => rewrites::partition_in(checker, source, arguments),
-                    _ => rewrites::segment_in(checker, source, arguments),
+                    Self::Tile { .. } => rewrites::tile_in(checker, physical, structures, source, arguments),
+                    Self::Partition { .. } => rewrites::partition_in(checker, physical, structures, source, arguments),
+                    _ => rewrites::segment_in(checker, physical, structures, source, arguments),
                 }
             }
-            Self::Output(protocol) => rewrites::output_in(checker, source, quote!(#protocol)),
+            Self::Output(protocol) => rewrites::output_in(checker, physical, structures, source, quote!(#protocol)),
             Self::Grade {
                 name,
                 level,
@@ -117,6 +142,8 @@ impl Advice {
                 let mut target = source.clone();
                 rewrites::grade_definitions_in(
                     checker,
+                    physical,
+                    structures,
                     &mut target,
                     machine,
                     &[cq_lang_sequence::Grade {
@@ -127,6 +154,8 @@ impl Advice {
                 .map(|()| target)
             }
         };
+        result.map(|program| (None, program))
+        })();
         result.map_err(|errors| {
             let mut annotated = None;
             for error in errors {
@@ -147,6 +176,8 @@ impl Advice {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Planned {
+    pub physical: physical::Program,
+    pub structures: structures::Program,
     pub program: Program,
     pub trace: Vec<Advice>,
 }
@@ -154,20 +185,24 @@ pub struct Planned {
 /// Fill only execution decomposition, preserving an explicitly authored join order.
 /// Callers with an order-advice phase use this entry rather than selecting another
 /// relational order. Its result has the same checked replay and grading contract.
-pub fn decompose(program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
-    decompose_in(&mut Default::default(), program, machine, catalog, &[])
+pub fn decompose(physical: &physical::Program, structures: &structures::Program, program: &Program, machine: &Machine, catalog: &Catalog) -> syn::Result<Planned> {
+    decompose_in(&mut Default::default(), physical, structures, program, machine, catalog, &[])
 }
 
 fn decompose_in(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &physical::Program,
+    structures: &structures::Program,
     program: &Program,
     machine: &Machine,
     catalog: &Catalog,
     policies: &[KeyPartitionPolicy],
 ) -> syn::Result<Planned> {
-    let analysis = checker.check_shared(program)?;
+    let analysis = checker.check_shared(physical, structures, program)?;
     key_partition::validate(program, policies)?;
     let mut prepared = Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: program.clone(),
         trace: Vec::new(),
     };
@@ -193,7 +228,7 @@ fn decompose_in(
     let mut unique_groups = std::collections::BTreeSet::new();
     for name in groups {
         let advice = Advice::GroupWithoutCanon(name.clone());
-        let target = advice.apply_in(checker, &prepared.program)?;
+        let (_, target) = advice.apply_program_in(checker, &prepared.physical, &prepared.structures, &prepared.program)?;
         unique_groups.insert(symbol_name(&name));
         if target == prepared.program {
             continue;
@@ -201,10 +236,12 @@ fn decompose_in(
         prepared.program = target;
         prepared.trace.push(advice);
     }
-    let analysis = checker.check_shared(&prepared.program)?;
+    let analysis = checker.check_shared(&prepared.physical, &prepared.structures, &prepared.program)?;
     for advice in retain::advise(&prepared.program, &analysis, machine) {
         push(checker, &mut prepared, advice)?;
     }
+    let physical = &prepared.physical;
+    let structures = &prepared.structures;
     let program = &prepared.program;
     let prefix_trace = prepared.trace.clone();
     if machine.items == 0 {
@@ -282,6 +319,8 @@ fn decompose_in(
         let prepared = (|| {
             let mut stores = if stage == 0 {
                 Planned {
+                    physical: physical.clone(),
+                    structures: structures.clone(),
                     program: program.clone(),
                     trace: Vec::new(),
                 }
@@ -289,13 +328,15 @@ fn decompose_in(
                 let single = stage.checked_sub(1).and_then(|index| cuts.get(index));
                 resource_stages(
                     checker,
+                    physical,
+                    structures,
                     program,
                     single.is_some() || stage == cuts.len() + 2,
                     single,
                 )?
             };
             stores.trace.splice(0..0, prefix_trace.iter().cloned());
-            let mut placed = prepare(checker, &stores.program, machine, catalog, parallel)?;
+            let mut placed = prepare(checker, &stores.physical, &stores.structures, &stores.program, machine, catalog, parallel)?;
             stores.trace.append(&mut placed.trace);
             placed.trace = stores.trace;
             Ok::<_, syn::Error>(placed)
@@ -310,9 +351,9 @@ fn decompose_in(
         let segmentable = prepared.program.sequence.definitions.iter().any(|definition| {
             matches!(&definition.term, Term::Flatten(inner) if matches!(inner.as_ref(), Term::Lookup { .. }))
         });
-        let facts = checker.check_shared(&prepared.program)?;
-        let partition_choices = key_partition::choices(&prepared.program, &facts, policies);
-        let keyed_partials = key_partition::has_keyed_partials(&prepared.program, &unique_groups);
+        let facts = checker.check_shared(&prepared.physical, &prepared.structures, &prepared.program)?;
+        let partition_choices = key_partition::choices(&prepared.physical, &prepared.structures, &prepared.program, &facts, policies)?;
+        let keyed_partials = key_partition::has_keyed_partials(&prepared.physical, &prepared.program, &unique_groups);
         for &(width, items) in &schedules {
             let mut best: Option<(Cost, Planned)> = None;
             for segmented in [true, false] {
@@ -345,7 +386,7 @@ fn decompose_in(
                         &unique_groups,
                     ) {
                         Ok((analysis, planned)) => {
-                            let cost = Cost::from_analysis(&planned.program, machine, &analysis)?;
+                            let cost = Cost::from_analysis(&planned.physical, &planned.structures, &planned.program, machine, &analysis)?;
                             if best
                                 .as_ref()
                                 .is_none_or(|(current, _)| cost.better_than(current))
@@ -411,11 +452,15 @@ fn candidate_error(
 
 fn resource_stages(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &physical::Program,
+    structures: &structures::Program,
     source: &Program,
     split_choices: bool,
     single: Option<&Ident>,
 ) -> syn::Result<Planned> {
     let mut planned = Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: source.clone(),
         trace: Vec::new(),
     };
@@ -447,20 +492,24 @@ fn resource_stages(
 
 fn prepare(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &physical::Program,
+    structures: &structures::Program,
     source: &Program,
     machine: &Machine,
     catalog: &Catalog,
     parallel: bool,
 ) -> syn::Result<Planned> {
     let mut planned = Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: source.clone(),
         trace: Vec::new(),
     };
-    let source_facts = checker.check_shared(&planned.program)?;
-    let boundaries = placement::boundaries(&planned.program, machine, &source_facts, catalog);
+    let source_facts = checker.check_shared(&planned.physical, &planned.structures, &planned.program)?;
+    let boundaries = placement::boundaries(&planned.physical, &planned.structures, &planned.program, machine, &source_facts, catalog)?;
     push_all(checker, &mut planned, boundaries)?;
-    let facts = checker.check_shared(&planned.program)?;
-    let placement = placement::advise(&planned.program, machine, parallel, &facts, source, catalog);
+    let facts = checker.check_shared(&planned.physical, &planned.structures, &planned.program)?;
+    let placement = placement::advise(&planned.physical, &planned.structures, &planned.program, machine, parallel, &facts, source, catalog)?;
     push_all(checker, &mut planned, placement)?;
     Ok(planned)
 }
@@ -495,8 +544,10 @@ fn candidate(
     )?;
     if !machine.root.children.is_empty() {
         let mut decomposed =
-            decomposition::advise(checker, &planned.program, machine, width, items, segmented)?;
+            decomposition::advise(checker, &planned.physical, &planned.structures, &planned.program, machine, width, items, segmented)?;
         planned.trace.append(&mut decomposed.trace);
+        planned.physical = decomposed.physical;
+        planned.structures = decomposed.structures;
         planned.program = decomposed.program;
     }
     key_partition::apply(
@@ -525,7 +576,7 @@ fn candidate(
             }
         ) {
             OutputProtocol::Bounded
-        } else if variable_output(&last.term, &planned.program) {
+        } else if variable_output(&planned.physical, &last.term, &planned.program) {
             OutputProtocol::Reserve
         } else {
             OutputProtocol::Count
@@ -533,8 +584,8 @@ fn candidate(
         push(checker, &mut planned, Advice::Output(protocol))?;
     }
     // Formal rule PL-Closure: Each step uses a checked public rewrite; the completed trace satisfies machine grading.
-    let analysis = checker.check_grading(&planned.program, machine)?;
-    catalog::check(&planned.program, &analysis, catalog)?;
+    let analysis = checker.check_grading(&planned.physical, &planned.structures, &planned.program, machine)?;
+    catalog::check(&planned.physical, &planned.structures, &planned.program, &analysis, catalog)?;
     Ok((analysis, planned))
 }
 
@@ -575,7 +626,7 @@ fn push_all(
         }
         // Grades are nonsemantic; the typed checked rewrite validates the
         // complete batch once while the replay trace retains individual steps.
-        crate::rewrites::grade_definitions_in(checker, &mut planned.program, machine, &grades)?;
+        crate::rewrites::grade_definitions_in(checker, &planned.physical, &planned.structures, &mut planned.program, machine, &grades)?;
         planned.trace.extend(trace);
     }
     Ok(())
@@ -594,6 +645,8 @@ fn push(
     {
         crate::rewrites::grade_definitions_in(
             checker,
+            &planned.physical,
+            &planned.structures,
             &mut planned.program,
             machine,
             &[cq_lang_sequence::Grade {
@@ -608,20 +661,23 @@ fn push(
             )
         })?;
     } else {
-        planned.program = advice.apply_in(checker, &planned.program)?;
+        let (upper, program) = advice.apply_program_in(checker, &planned.physical, &planned.structures, &planned.program)?;
+        if let Some((physical, structures)) = upper {
+            planned.physical = physical;
+            planned.structures = structures;
+        }
+        planned.program = program;
     }
     planned.trace.push(advice);
     Ok(())
 }
 
-fn variable_output(term: &Term, program: &Program) -> bool {
+fn variable_output(physical: &physical::Program, term: &Term, program: &Program) -> bool {
     match term {
         Term::Canon(_) | Term::Compact(_, _) => true,
         Term::Rows(_) => false,
         Term::Group(name, inner) => {
-            program
-                .structures
-                .physical
+            physical
                 .program
                 .definitions
                 .iter()
@@ -631,22 +687,22 @@ fn variable_output(term: &Term, program: &Program) -> bool {
                 cq_lang_sequence::structures::physical::Operator::Group(group)
                     if !group.keys.is_empty())
                 })
-                || variable_output(inner, program)
+                || variable_output(physical, inner, program)
         }
         Term::Ref(name) => program
             .sequence
             .definitions
             .iter()
             .find(|d| symbol_name(&d.name) == symbol_name(name))
-            .is_some_and(|d| variable_output(&d.term, program)),
+            .is_some_and(|d| variable_output(physical, &d.term, program)),
         Term::Map(_, t)
         | Term::Flatten(t)
         | Term::Fold(_, t)
         | Term::PartitionK { inner: t, .. }
         | Term::Tile { inner: t, .. }
         | Term::Store { inner: t, .. }
-        | Term::Lookup { inner: t, .. } => variable_output(t, program),
-        Term::Union(terms) => terms.iter().any(|t| variable_output(t, program)),
-        Term::Choose(arms) => arms.iter().any(|(_, t)| variable_output(t, program)),
+        | Term::Lookup { inner: t, .. } => variable_output(physical, t, program),
+        Term::Union(terms) => terms.iter().any(|t| variable_output(physical, t, program)),
+        Term::Choose(arms) => arms.iter().any(|(_, t)| variable_output(physical, t, program)),
     }
 }

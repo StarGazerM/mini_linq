@@ -1,9 +1,10 @@
 use cq_gpu_sequence::machine;
-use cq_lang_sequence::{Program, check_grading};
+use cq_lang_sequence::check_grading;
+include!("support/stack.rs");
 
 #[test]
 fn fold_at_noncollaborative_device_is_rejected() {
-    let program: Program = syn::parse_quote! {
+    let Stack { physical, structures, program } = syn::parse_quote! {
         physical {
             relation R(a:i32) = (&data.r);
             r = let canon rename R@0 {a -> a};
@@ -20,13 +21,13 @@ fn fold_at_noncollaborative_device_is_rejected() {
         }
         graded gpu { input at host; count at device; }
     };
-    let error = check_grading(&program, &machine()).unwrap_err().to_string();
+    let error = check_grading(&physical, &structures, &program, &machine()).unwrap_err().to_string();
     assert!(error.contains("BE-Collective"), "{error}");
 }
 
 #[test]
 fn rust_below_host_requires_identity_representation() {
-    let mut program: Program = syn::parse_quote! {
+    let Stack { physical, mut structures, mut program } = syn::parse_quote! {
         physical {
             relation R(a:i32) = (&data.r);
             r = pipe rename R@0 {a -> a};
@@ -41,47 +42,45 @@ fn rust_below_host_requires_identity_representation() {
         sequence { result = store map bound rows r; }
         graded gpu { result at device; }
     };
-    let error = check_grading(&program, &machine()).unwrap_err().to_string();
+    let error = check_grading(&physical, &structures, &program, &machine()).unwrap_err().to_string();
     assert!(error.contains("BE-RustRepresentation"), "{error}");
     program.representation.encoded.insert("a".into());
-    let error = check_grading(&program, &machine()).unwrap_err().to_string();
+    let error = check_grading(&physical, &structures, &program, &machine()).unwrap_err().to_string();
     assert!(error.contains("BE-RustRepresentation"), "{error}");
     program.representation.encoded.clear();
     program.representation.identity.insert("a".into());
     assert!(
-        check_grading(&program, &machine()).is_ok(),
+        check_grading(&physical, &structures, &program, &machine()).is_ok(),
         "arbitrary total Rust is legal on identity device columns"
     );
     program.representation.identity.clear();
     program.graded = Some(syn::parse_quote!(graded gpu { result at host; }));
     assert!(
-        check_grading(&program, &machine()).is_ok(),
+        check_grading(&physical, &structures, &program, &machine()).is_ok(),
         "opaque Rust remains legal at host"
     );
-    let unknown = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    let unknown = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
     assert!(!unknown.representation.identity.contains("a"));
     assert!(
         unknown.representation.identity.contains("n"),
         "the authored result annotation records identity without admitting unknown inputs"
     );
     assert!(unknown.representation.encoded.is_empty());
-    program.structures.structures.entries[0] = syn::parse_quote!(
+    structures.structures.entries[0] = syn::parse_quote!(
         r host scan = @radix_relation input { keys 1; columns [[0] i32 => i32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,), (), u64, u64, ()> [];
     );
-    program
-        .structures
-        .structures
+    structures.structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    let native = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    let native = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
     assert!(native.representation.identity.contains("a"));
     assert!(!native.representation.encoded.contains("a"));
-    program.structures.structures.entries[0] = syn::parse_quote!(
+    structures.structures.entries[0] = syn::parse_quote!(
         r host scan = @radix_relation input { keys 1; columns [[0] i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec [0] TestCodec] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
             (::gpu_datalog_runtime::Symbol<i32, TestCodec>,), (), u64, u64, ()
         > [];
     );
-    let encoded = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    let encoded = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
     assert!(encoded.representation.encoded.contains("a"));
     assert!(!encoded.representation.identity.contains("a"));
 }
@@ -93,7 +92,7 @@ fn scalar_fold_host_code_parses() {
         quote!(fold count input),
         quote!(fold sum a tile 1024 items 4 input),
     ] {
-        let program: Program = syn::parse2(quote! {
+        let Stack { physical, structures, program } = syn::parse2(quote! {
             physical {
                 relation R(a:i64) = (&data.r);
                 r = let canon rename R@0 {a -> a};
@@ -112,8 +111,8 @@ fn scalar_fold_host_code_parses() {
             graded gpu { input at host; result at device.block; }
         })
         .unwrap();
-        let analysis = check_grading(&program, &machine()).unwrap();
-        let generated = cq_gpu_sequence::translate(&program, &analysis)
+        let analysis = check_grading(&physical, &structures, &program, &machine()).unwrap();
+        let generated = cq_gpu_sequence::translate(&physical, &structures, &program, &analysis)
             .unwrap()
             .to_token_stream()
             .to_string();
@@ -125,7 +124,7 @@ fn scalar_fold_host_code_parses() {
 
 #[test]
 fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
-    let program: Program = syn::parse_quote! {
+    let Stack { physical, structures, program } = syn::parse_quote! {
         physical {
             relation R(a:u32) = (&data.r);
             relation P(a:u32,b:u32) = (&data.p);
@@ -167,10 +166,10 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             result at device;
         }
     };
-    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+    let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
     for column in ["a", "b", "c"] {
         assert!(program.representation.identity.contains(column));
     }
-    let analysis = check_grading(&program, &machine()).unwrap();
-    cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    let analysis = check_grading(&physical, &structures, &program, &machine()).unwrap();
+    cq_gpu_sequence::translate(&physical, &structures, &program, &analysis).unwrap();
 }

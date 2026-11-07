@@ -1,4 +1,4 @@
-use cq_lang_sequence::Program;
+use crate::Stack;
 
 pub const ASIA: i32 = 2;
 pub const DATE_START: i32 = 8766;
@@ -6,12 +6,12 @@ pub const DATE_END: i32 = 9131;
 
 /// The written R-N-C-O-L-S plan. No host-set or key-uniqueness premises.
 /// Both the token tests and CUDA macro compile this exact program.
-pub fn program() -> Program {
+pub fn program() -> Stack {
     program_with_capacity(1024)
 }
 
 /// Capacity is explicit written advice, never inferred by the translator.
-pub fn program_with_capacity(capacity: usize) -> Program {
+pub fn program_with_capacity(capacity: usize) -> Stack {
     syn::parse_quote! {
         physical {
             relation Region(r_regionkey:u32,r_name:i32) = (&data.region);

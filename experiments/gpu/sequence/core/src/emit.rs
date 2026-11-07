@@ -495,6 +495,9 @@ struct Stored {
 }
 
 struct Compiler<'a> {
+    physical: &'a cq_lang_structures::physical::Program,
+    structures: &'a cq_lang_structures::Program,
+    structure_analysis: &'a cq_lang_structures::Analysis,
     program: &'a Program,
     analysis: &'a Analysis,
     rows: Rows,
@@ -588,10 +591,7 @@ impl<'a> Compiler<'a> {
                     unreachable!()
                 };
                 let result = symbol_name(name);
-                let definition = self
-                    .program
-                    .structures
-                    .physical
+                let definition = self.physical
                     .program
                     .definitions
                     .iter()
@@ -651,10 +651,7 @@ impl<'a> Compiler<'a> {
                 }
                 for chain in &mut chains {
                     if !membership {
-                        let result = self
-                            .program
-                            .structures
-                            .physical
+                        let result = self.physical
                             .program
                             .definitions
                             .iter()
@@ -1019,7 +1016,7 @@ impl<'a> Compiler<'a> {
 
     fn lookup_columns(&self, provider: &str) -> syn::Result<Vec<String>> {
         if let Some(source) = self.rows.whole_lookups.get(provider) {
-            return Ok(self.analysis.structures.physical.headings[source]
+            return Ok(self.structure_analysis.physical.headings[source]
                 .iter()
                 .cloned()
                 .collect());
@@ -2054,6 +2051,7 @@ fn publish_host(
 ) -> syn::Result<()> {
     let program = compiler.program;
     let analysis = compiler.analysis;
+    let structure_analysis = compiler.structure_analysis;
     let mut bindings = BTreeMap::new();
     for name in &evaluation.bound {
         let prior = compiler
@@ -2091,8 +2089,8 @@ fn publish_host(
         let fields = format_ident!("__cq_fields_{prior}");
         let mut values = Vec::new();
         let mut types = Vec::new();
-        for column in &analysis.structures.layouts[&stored.result] {
-            let ty = &analysis.structures.physical.rows[&stored.result].types[column];
+        for column in &structure_analysis.layouts[&stored.result] {
+            let ty = &structure_analysis.physical.rows[&stored.result].types[column];
             types.push(ty);
             let code = if let Some(columns) = &stored.packed {
                 let field = columns
@@ -2152,7 +2150,7 @@ fn publish_host(
     launches.push(
         compiler
             .rows
-            .publish_host(program, analysis, result, evaluation, &bindings)?,
+            .publish_host(compiler.physical, compiler.structures, program, structure_analysis, analysis, result, evaluation, &bindings)?,
     );
     Ok(())
 }
@@ -2165,16 +2163,25 @@ fn publish_host(
 // DO NOT replan joins, move predicates, guess from generated names, or select codecs/memory policy.
 /// Translate only checked scheduling facts; no planner is consulted here.
 // Formal rule T-Gpu: Interpret checked Sequence constructors at their recorded GPU grades.
-pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
-    translate_impl(program, analysis, None)
+pub fn translate(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<syn::Expr> {
+    translate_impl(physical, structures, program, analysis, None)
 }
 
 pub(crate) fn translate_impl(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
     arena: Option<&syn::Expr>,
 ) -> syn::Result<syn::Expr> {
     translate_observed(
+        physical,
+        structures,
         program,
         analysis,
         arena,
@@ -2183,6 +2190,8 @@ pub(crate) fn translate_impl(
 }
 
 fn translate_observed(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
     arena: Option<&syn::Expr>,
@@ -2197,9 +2206,10 @@ fn translate_observed(
             "GPU Sequence translation requires checked gpu grading",
         ));
     }
+    let structure_analysis = &cq_lang_structures::contract::check(structures)?;
     // The target-owned Structures stage and terminal enforce the same boundary.
-    crate::check_structures(&program.structures, &analysis.structures)?;
-    cq_lang_sequence::gpu::publication::check(program, analysis, &analysis.gpu_publications)?;
+    crate::check_structures(structures, structure_analysis)?;
+    cq_lang_sequence::gpu::publication::check(physical, program, structure_analysis, analysis, &analysis.gpu_publications)?;
     cq_lang_sequence::gpu::check(program, analysis)?;
     if arena.is_none() && program.sequence.output == Some(OutputProtocol::ReservePrevious) {
         return Err(error("reserve_previous requires the GPU arena terminal"));
@@ -2214,22 +2224,25 @@ fn translate_observed(
     if let Some(directory) = std::env::var_os("CQ_GPU_SEQUENCE_DUMP") {
         // Dump before row translation so an unrealizable program is still visible.
         let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(&quote!(#program).to_string(), &mut fingerprint);
+        std::hash::Hash::hash(&quote!(#physical #structures #program).to_string(), &mut fingerprint);
         let path = std::path::PathBuf::from(directory).join(format!(
             "{:016x}.input.sequence",
             std::hash::Hasher::finish(&fingerprint)
         ));
-        std::fs::write(&path, quote!(#program).to_string()).map_err(|err| {
+        std::fs::write(&path, quote!(#physical #structures #program).to_string()).map_err(|err| {
             error(format!(
                 "cannot dump Sequence program to {}: {err}",
                 path.display()
             ))
         })?;
     }
-    let rows = Rows::new(program, analysis)?;
+    let rows = Rows::new(physical, structures, program, structure_analysis, analysis)?;
     let codecs =
-        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
+        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
     let mut compiler = Compiler {
+        physical,
+        structures,
+        structure_analysis,
         program,
         analysis,
         rows,
@@ -2306,7 +2319,7 @@ fn translate_observed(
     // each expansion its own module, including repeated identical programs.
     static NEXT_MODULE: AtomicUsize = AtomicUsize::new(0);
     let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
-    quote!(#program).to_string().hash(&mut fingerprint);
+    quote!(#physical #structures #program).to_string().hash(&mut fingerprint);
     let expansion = NEXT_MODULE.fetch_add(1, Ordering::Relaxed);
     let module_name = format_ident!(
         "__cq_sequence_kernels_{:016x}_{}",
@@ -2320,7 +2333,7 @@ fn translate_observed(
     let partition = format_ident!("partition_{}", expansion % 16);
     if let Some(directory) = std::env::var_os("CQ_GPU_SEQUENCE_DUMP") {
         let path = std::path::PathBuf::from(directory).join(format!("{module_name}.sequence"));
-        std::fs::write(&path, quote!(#program).to_string()).map_err(|err| {
+        std::fs::write(&path, quote!(#physical #structures #program).to_string()).map_err(|err| {
             error(format!(
                 "cannot dump Sequence program to {}: {err}",
                 path.display()
@@ -2355,9 +2368,7 @@ fn translate_observed(
                 ));
             };
             let result = record.group.clone();
-            let physical = program
-                .structures
-                .physical
+            let physical = physical
                 .program
                 .definitions
                 .iter()
@@ -2552,14 +2563,13 @@ fn translate_observed(
                     };
                     crate::reduce::group(
                         group,
-                        analysis
-                            .structures
+                        structure_analysis
                             .groups
                             .get(&result)
                             .map(|provider| &provider.ty),
                         columns,
                         &compiler.rows.output_columns,
-                        &analysis.structures.physical.rows[&result].types,
+                        &structure_analysis.physical.rows[&result].types,
                         prior,
                         &kernel,
                         direct,
@@ -2579,7 +2589,7 @@ fn translate_observed(
                             "GPU-TerminalGroup: grid partials use the occupancy grid",
                         ));
                     };
-                    if analysis.structures.groups.contains_key(&result) {
+                    if structure_analysis.groups.contains_key(&result) {
                         return Err(error(
                             "GPU-Group: global fold cannot carry a keyed accumulator provider",
                         ));
@@ -2588,7 +2598,7 @@ fn translate_observed(
                         group,
                         columns,
                         &compiler.rows.output_columns,
-                        &analysis.structures.physical.rows[&result].types,
+                        &structure_analysis.physical.rows[&result].types,
                         prior,
                         &format_ident!("__cq_group_partials_{module_name}"),
                         direct,
@@ -2854,8 +2864,7 @@ fn translate_observed(
                     }
                 }
                 if !final_output {
-                    launches.push(compiler.rows.publish_provider(
-                        analysis,
+                    launches.push(compiler.rows.publish_provider(structure_analysis, analysis,
                         result,
                         &publication,
                         index,
@@ -3926,8 +3935,7 @@ fn translate_observed(
             });
         }
         if !final_output {
-            launches.push(compiler.rows.publish_provider(
-                analysis,
+            launches.push(compiler.rows.publish_provider(structure_analysis, analysis,
                 dispatch_result,
                 &publication,
                 index,
@@ -4208,9 +4216,10 @@ fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
 
 #[cfg(test)]
 mod tests {
+    include!("../../tests/support/stack.rs");
     #[test]
     fn expansion_counters_are_opt_in_block_collectives_before_closing() {
-        let program: cq_lang_sequence::Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation Driver(b:i32) = (&data.driver);
                 relation R(a:i32,b:i32) = (&data.r);
@@ -4235,10 +4244,10 @@ mod tests {
             }
             graded gpu { input at host; index at host; result_rows at host.device; }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let plain = super::translate_observed(&program, &analysis, None, false).unwrap();
-        let observed = super::translate_observed(&program, &analysis, None, true).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let plain = super::translate_observed(&physical, &structures, &program, &analysis, None, false).unwrap();
+        let observed = super::translate_observed(&physical, &structures, &program, &analysis, None, true).unwrap();
         let plain = quote::quote!(#plain).to_string();
         let observed = quote::quote!(#observed).to_string();
         assert!(!plain.contains("__cq_expansions"));
@@ -4266,7 +4275,7 @@ mod tests {
 
     #[test]
     fn flat_publication_reads_only_its_recorded_columns() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data);
                 r = let rename R@0 {a -> a,b -> b};
@@ -4294,11 +4303,15 @@ mod tests {
             }
             graded gpu { index at host; input at host; output_rows at device; }
         };
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let compiler = Compiler {
+            physical: &physical,
+            structures: &structures,
+            structure_analysis: &structure_analysis,
             program: &program,
             analysis: &analysis,
-            rows: Rows::new(&program, &analysis).unwrap(),
+            rows: Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap(),
             stored: Vec::new(),
             definitions: BTreeMap::new(),
         };
@@ -4336,7 +4349,7 @@ mod tests {
     }
 
     /// A raw-candidate terminal, or with `canon` a canonical one.
-    fn arena_program(canon: bool) -> Program {
+    fn arena_program(canon: bool) -> Stack {
         let canon = canon.then(|| quote!(canon));
         syn::parse_quote! {
             physical {
@@ -4370,11 +4383,12 @@ mod tests {
 
     #[test]
     fn program_launch_preparation_is_recorded_checked_and_printed() {
-        let program = arena_program(false);
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let Stack { physical, structures, program } = arena_program(false);
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_bindings.realization.launches, [Launch::ProgramOccupancy]);
         let arena: syn::Expr = syn::parse_quote!(arena);
-        let printed = translate_observed(&program, &analysis, Some(&arena), false)
+        let printed = translate_observed(&physical, &structures, &program, &analysis, Some(&arena), false)
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("ProgramLaunchCache"));
         assert!(printed.contains("__cq_prepare_program_"));
@@ -4385,8 +4399,8 @@ mod tests {
 
         let mut alternate = analysis.clone();
         alternate.gpu_bindings.realization.launches[0] = Launch::InvocationOccupancy;
-        crate::realize::check(&program, &alternate, &alternate.gpu_bindings.realization).unwrap();
-        let printed = translate_observed(&program, &alternate, Some(&arena), false)
+        crate::realize::check(&physical, &structures, &program, &structure_analysis, &alternate, &alternate.gpu_bindings.realization).unwrap();
+        let printed = translate_observed(&physical, &structures, &program, &alternate, Some(&arena), false)
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("let __cq_probe"));
         assert!(!printed.contains("__cq_prepare_program_"));
@@ -4394,18 +4408,19 @@ mod tests {
 
         let mut missing = analysis.clone();
         missing.gpu_bindings.realization.launches.clear();
-        assert!(crate::realize::check(&program, &missing, &missing.gpu_bindings.realization).is_err());
-        assert!(translate_observed(&program, &missing, Some(&arena), false).is_err());
+        assert!(crate::realize::check(&physical, &structures, &program, &structure_analysis, &missing, &missing.gpu_bindings.realization).is_err());
+        assert!(translate_observed(&physical, &structures, &program, &missing, Some(&arena), false).is_err());
         let mut wrong_partition = analysis.clone();
         wrong_partition.gpu_bindings.realization.launches[0] = Launch::ProgramOne;
-        assert!(crate::realize::check(&program, &wrong_partition, &wrong_partition.gpu_bindings.realization).is_err());
+        assert!(crate::realize::check(&physical, &structures, &program, &structure_analysis, &wrong_partition, &wrong_partition.gpu_bindings.realization).is_err());
     }
 
     #[test]
     fn arena_encoding_is_recorded_for_raw_terminals_only() {
         use cq_lang_sequence::gpu::publication::{self, ArenaColumn, ArenaRows};
-        let program = arena_program(false);
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let Stack { physical, structures, program } = arena_program(false);
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let records = &analysis.gpu_publications;
         let arena = records["output_rows"].arena.clone().unwrap();
         let i64: syn::Type = syn::parse_quote!(i64);
@@ -4423,7 +4438,7 @@ mod tests {
         let rejected = |mutate: &dyn Fn(&mut BTreeMap<String, publication::PublicationRecord>)| {
             let mut records = records.clone();
             mutate(&mut records);
-            publication::check(&program, &analysis, &records).is_err()
+            publication::check(&physical, &program, &structure_analysis, &analysis, &records).is_err()
         };
         assert!(rejected(&|records| records
             .get_mut("output_rows")
@@ -4453,12 +4468,12 @@ mod tests {
             records.get_mut("index").unwrap().arena = Some(arena.clone());
         }));
         let arena_expr: syn::Expr = syn::parse_quote!(arena);
-        translate_observed(&program, &analysis, Some(&arena_expr), false).unwrap();
+        translate_observed(&physical, &structures, &program, &analysis, Some(&arena_expr), false).unwrap();
         // A canonical terminal publishes no raw candidates into an arena.
-        let program = arena_program(true);
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let Stack { physical, structures, program } = arena_program(true);
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_publications["output_rows"].arena, None);
-        assert!(translate_observed(&program, &analysis, Some(&arena_expr), false).is_err());
+        assert!(translate_observed(&physical, &structures, &program, &analysis, Some(&arena_expr), false).is_err());
     }
 
     /// Identifiers of generated code; independent of token spacing.
@@ -4527,7 +4542,7 @@ mod tests {
         ] {
             // Physical output bindings have distinct temporary attributes;
             // the declared head names still coincide with the input variables.
-            let program: Program = syn::parse2(quote! {
+            let Stack { physical, structures, program } = syn::parse2(quote! {
                 physical {
                     relation R(a:i32,b:i32) = (&data.r);
                     relation answer(#key0:i32,#key1:i32);
@@ -4556,9 +4571,9 @@ mod tests {
                 }
             })
             .unwrap();
-            let program = crate::runs::record_representation(&program).unwrap();
-            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-            let generated = translate(&program, &analysis).unwrap();
+            let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let generated = translate(&physical, &structures, &program, &analysis).unwrap();
 
             struct Bindings<'a> {
                 keys: &'a [syn::Ident; 2],
@@ -4586,9 +4601,10 @@ mod tests {
     }
 
     fn abi_rows() -> Rows {
-        let program = arena_program(false);
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        Rows::new(&program, &analysis).unwrap()
+        let Stack { physical, structures, program } = arena_program(false);
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap()
     }
 
     #[test]
@@ -4844,7 +4860,7 @@ mod tests {
 
     #[test]
     fn publication_storage_and_codec_order_are_recorded_before_printing() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:u32) = (&data);
                 r = let canon rename R@0 {a -> a,b -> b};
@@ -4875,8 +4891,9 @@ mod tests {
                 result at host;
             }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let records = &analysis.gpu_publications;
         let radix_set: syn::Type = syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>);
         assert!(!records.contains_key("packed_feed"));
@@ -4903,7 +4920,7 @@ mod tests {
                 FieldBounds::Column(analysis.gpu_bindings.bounds[&field.column].clone())
             );
         }
-        let names = idents(translate(&program, &analysis).unwrap().to_token_stream());
+        let names = idents(translate(&physical, &structures, &program, &analysis).unwrap().to_token_stream());
         // `packed` canonicalizes; the terminal publishes its candidate keys.
         assert!(names.contains("build_set") && names.contains("packed_columns"));
         assert!(!names.contains("unpack_columns"));
@@ -4913,13 +4930,15 @@ mod tests {
             corrupted.gpu_publications = records;
             assert!(
                 cq_lang_sequence::gpu::publication::check(
+                    &physical,
                     &program,
+                    &structure_analysis,
                     &corrupted,
                     &corrupted.gpu_publications
                 )
                 .is_err()
             );
-            assert!(translate(&program, &corrupted).is_err());
+            assert!(translate(&physical, &structures, &program, &corrupted).is_err());
         };
         let mutate = |name: &str, change: &dyn Fn(&mut PackedKeys)| {
             let mut records = records.clone();
@@ -4988,7 +5007,9 @@ mod tests {
         assert!(printed.contains("block_threads : 256"));
         assert!(!printed.contains("__cq_auxiliary"));
         cq_lang_sequence::gpu::publication::check(
+            &physical,
             &program,
+            &structure_analysis,
             &alternate,
             &alternate.gpu_publications,
         )
@@ -5037,7 +5058,9 @@ mod tests {
         };
         assert!(
             cq_lang_sequence::gpu::publication::check(
+                &physical,
                 &program,
+                &structure_analysis,
                 &deferred,
                 &deferred.gpu_publications
             )
@@ -5092,7 +5115,7 @@ mod tests {
             (quote!(or), 0, 1),
             (quote!(sum a), i64::MIN, i64::MAX),
         ] {
-            let program: Program = syn::parse2(quote! {
+            let Stack { physical, structures, program } = syn::parse2(quote! {
                 physical {
                     relation R(a:i64) = (&data);
                     r = let canon rename R@0 {a -> a};
@@ -5111,14 +5134,15 @@ mod tests {
                 graded gpu { input at host; result at device.block; }
             })
             .unwrap();
-            let program = crate::runs::record_representation(&program).unwrap();
-            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+            let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             let codec = analysis.gpu_publications["result"].storage.codec().unwrap();
             assert_eq!(
                 codec.fields()[0].bounds,
                 FieldBounds::Inclusive { min, max }
             );
-            let names = idents(translate(&program, &analysis).unwrap().to_token_stream());
+            let names = idents(translate(&physical, &structures, &program, &analysis).unwrap().to_token_stream());
             assert!(!names.contains("build_set"));
             let accepts = |bounds: FieldBounds| {
                 let mut corrupt = analysis.clone();
@@ -5131,7 +5155,9 @@ mod tests {
                 };
                 fields[0].bounds = bounds;
                 cq_lang_sequence::gpu::publication::check(
+                    &physical,
                     &program,
+                    &structure_analysis,
                     &corrupt,
                     &corrupt.gpu_publications,
                 )
@@ -5150,9 +5176,9 @@ mod tests {
         }
     }
 
-    fn uploaded_host_program(canonical: bool) -> Program {
+    fn uploaded_host_program(canonical: bool) -> Stack {
         let canon = canonical.then(|| quote!(canon));
-        let program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation Resident(a:i64) = (&data.resident);
                 relation Host(a:i64) = (&data.host);
@@ -5182,21 +5208,21 @@ mod tests {
                 result at host.device;
             }
         };
-        crate::runs::record_representation(&program).unwrap()
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        Stack { physical, structures, program }
     }
 
     #[test]
     fn structures_staging_cannot_be_silently_dropped_by_target_switch() {
-        let mut program = uploaded_host_program(false);
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        assert!(translate(&program, &analysis).is_ok());
-        program
-            .structures
+        let Stack { physical, mut structures, program } = uploaded_host_program(false);
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        assert!(translate(&physical, &structures, &program, &analysis).is_ok());
+        structures
             .structures
             .entries
             .push(syn::parse_quote!(host_input stage = batch 2;));
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        assert!(translate(&program, &analysis).is_err());
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        assert!(translate(&physical, &structures, &program, &analysis).is_err());
     }
 
     #[test]
@@ -5212,7 +5238,7 @@ mod tests {
             let group_map = keyed.then(|| {
                 quote!(group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed };)
             });
-            let program: Program = syn::parse2(quote! {
+            let Stack { physical, structures, program } = syn::parse2(quote! {
                 physical {
                     relation R(id:i64,key:i32,value:i64) = (&data.r);
                     r = pipe rename R@0 {id -> id,key -> key,value -> value};
@@ -5245,10 +5271,11 @@ mod tests {
                 }
             })
             .unwrap();
-            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-            let expression = translate(&program, &analysis).unwrap();
+            let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let expression = translate(&physical, &structures, &program, &analysis).unwrap();
             let generated = expression.to_token_stream().to_string();
-            let expected = keyed.then(|| analysis.structures.groups["grouped"].ty.clone());
+            let expected = keyed.then(|| structure_analysis.groups["grouped"].ty.clone());
             assert_eq!(fold_providers(&expression), vec![expected], "{generated}");
             let names = idents(expression.to_token_stream());
             assert!(!names.contains("upload_numeric_columns"));
@@ -5258,7 +5285,7 @@ mod tests {
 
     #[test]
     fn keyed_group_reads_resident_columns_without_valuation_publication() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(id:i64,key:i32,value:i64) = (&data.r);
                 r = pipe rename R@0 {id -> id,key -> key,value -> value};
@@ -5281,9 +5308,9 @@ mod tests {
             graded gpu { input at host; valuations at host; groups at host; }
             evidence from authored("experiments/gpu/sequence/core/src/emit.rs fixture") { trusted_key R [id]; }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let expression = translate(&program, &analysis).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let expression = translate(&physical, &structures, &program, &analysis).unwrap();
         let names = idents(expression.to_token_stream());
         assert_eq!(
             fold_providers(&expression),
@@ -5310,7 +5337,7 @@ mod tests {
                 quote!(radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation };),
             ),
         ] {
-            let program: Program = syn::parse2(quote! {
+            let Stack { physical, structures, program } = syn::parse2(quote! {
                 physical {
                     relation R(id:i64,raw:i32) = (&data.r);
                     r = pipe rename R@0 {id -> id,raw -> raw};
@@ -5333,10 +5360,10 @@ mod tests {
                 graded gpu { input at host; valuations at host; groups at host; }
                 evidence from authored("experiments/gpu/sequence/core/src/emit.rs fixture") { trusted_key R [id]; }
             }).unwrap();
-            let program = crate::runs::record_representation(&program).unwrap();
-            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             assert!(analysis.gpu_bindings.uploads.contains_key("valuation"));
-            let expression = translate(&program, &analysis).unwrap();
+            let expression = translate(&physical, &structures, &program, &analysis).unwrap();
             let generated = expression.to_token_stream().to_string();
             // Calls in source order: host upload adapters, then folds.
             struct Calls(Vec<&'static str>, bool);
@@ -5379,12 +5406,16 @@ mod tests {
 
     #[test]
     fn host_guard_lengths_use_the_uploaded_publication_count() {
-        let program = uploaded_host_program(false);
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let Stack { physical, structures, program } = uploaded_host_program(false);
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let mut compiler = Compiler {
+            physical: &physical,
+            structures: &structures,
+            structure_analysis: &structure_analysis,
             program: &program,
             analysis: &analysis,
-            rows: Rows::new(&program, &analysis).unwrap(),
+            rows: Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap(),
             stored: Vec::new(),
             definitions: BTreeMap::new(),
         };
@@ -5415,8 +5446,8 @@ mod tests {
     #[test]
     fn host_output_transfer_publishes_without_a_row_dispatch() {
         for canonical in [false, true] {
-            let program = uploaded_host_program(canonical);
-            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let Stack { physical, structures, program } = uploaded_host_program(canonical);
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             assert!(analysis.dispatches.is_empty());
             let record = &analysis.gpu_publications["result"];
             assert_eq!(
@@ -5427,7 +5458,7 @@ mod tests {
                 }]
             );
             assert_eq!(record.storage.canonical_provider().is_some(), canonical);
-            let names = idents(translate(&program, &analysis).unwrap().to_token_stream());
+            let names = idents(translate(&physical, &structures, &program, &analysis).unwrap().to_token_stream());
             assert!(names.contains("__cq_sequence_uploaded_length_host"));
             assert!(names.contains("__cq_host_output_length"));
             assert!(
@@ -5460,17 +5491,17 @@ mod tests {
                     .get_mut("result")
                     .unwrap()
                     .set_build = None;
-                let names = idents(translate(&program, &flipped).unwrap().to_token_stream());
+                let names = idents(translate(&physical, &structures, &program, &flipped).unwrap().to_token_stream());
                 assert!(!names.contains("build_set") && names.contains("packed_columns"));
             } else {
-                assert!(translate(&program, &flipped).is_err());
+                assert!(translate(&physical, &structures, &program, &flipped).is_err());
             }
         }
     }
 
     #[test]
     fn host_read_of_a_device_provider_uses_a_checked_host_adapter() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i64) = (&data.r);
                 relation P(a:i64) = (&data.p);
@@ -5500,17 +5531,18 @@ mod tests {
                 result at host.device;
             }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let adapters = &analysis.gpu_bindings.host_materializations;
         assert_eq!(
             adapters.get(&2),
             Some(&cq_lang_structures::provider::base::declaration("sorted_run").instance()),
         );
-        assert!(translate(&program, &analysis).is_ok());
+        assert!(translate(&physical, &structures, &program, &analysis).is_ok());
         let mut invalid = analysis.gpu_bindings.clone();
         invalid.host_materializations.clear();
-        assert!(crate::bindings::check(&program, &analysis, &invalid).is_err());
+        assert!(crate::bindings::check(&physical, &structures, &program, &structure_analysis, &analysis, &invalid).is_err());
     }
 
     #[test]
@@ -5533,7 +5565,7 @@ mod tests {
                     ),
                 )
             };
-            let program: Program = syn::parse2(quote! {
+            let Stack { physical, structures, program } = syn::parse2(quote! {
                 physical {
                     relation R(a:i64) = (&data.r);
                     r = pipe rename R@0 {a -> a};
@@ -5564,9 +5596,9 @@ mod tests {
                 }
             })
             .unwrap();
-            let program = crate::runs::record_representation(&program).unwrap();
-            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-            let expression = translate(&program, &analysis).unwrap();
+            let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let expression = translate(&physical, &structures, &program, &analysis).unwrap();
             let generated = quote!(#expression).to_string();
             let publication = generated.find("let (__cq_store_rows_0").unwrap();
             let download = generated.find("let __cq_downloaded_0").unwrap();
@@ -5590,7 +5622,7 @@ mod tests {
 
     #[test]
     fn emitter_rejects_drift_from_the_checked_shared_layout() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i64) = (&data.r);
                 r = let canon rename R@0 {a -> a};
@@ -5613,9 +5645,9 @@ mod tests {
                 result at host.device;
             }
         };
-        let mut analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+        let mut analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         analysis.resources.get_mut("result").unwrap().required_bytes += 16;
-        let error = translate(&program, &analysis).unwrap_err().to_string();
+        let error = translate(&physical, &structures, &program, &analysis).unwrap_err().to_string();
         assert!(
             error.contains("shared layout differs from BE-Resource"),
             "{error}"
@@ -5655,7 +5687,7 @@ mod tests {
     fn reduction_templates_keep_the_recorded_scope_and_wide_results() {
         for ty in [syn::parse_quote!(i64), syn::parse_quote!(u32)] {
             let ty: syn::Type = ty;
-            let program: Program = syn::parse_quote! {
+            let Stack { physical, structures, program } = syn::parse_quote! {
                 physical {
                     relation R(a:#ty) = (&data.r);
                     r = let canon rename R@0 {a -> a};
@@ -5669,11 +5701,15 @@ mod tests {
                 sequence { input = store canon rows r; }
                 graded gpu { input at host; }
             };
-            let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
+            let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             let compiler = Compiler {
+                physical: &physical,
+                structures: &structures,
+                structure_analysis: &structure_analysis,
                 program: &program,
                 analysis: &analysis,
-                rows: Rows::new(&program, &analysis).unwrap(),
+                rows: Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap(),
                 stored: Vec::new(),
                 definitions: BTreeMap::new(),
             };

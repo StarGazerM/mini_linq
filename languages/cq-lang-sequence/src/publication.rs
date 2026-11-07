@@ -25,6 +25,8 @@ impl From<&Fact> for Input {
 }
 
 pub(super) fn derive(
+    physical: &crate::structures::physical::Program,
+    structure_analysis: &crate::structures::Analysis,
     program: &Program,
     analysis: &mut Analysis,
     facts: &BTreeMap<String, Input>,
@@ -35,11 +37,10 @@ pub(super) fn derive(
     }
     // A routed provider is a recorded token fact (STR-Routed), never a
     // recognized constructor spelling.
-    for (result, providers) in &analysis.structures.built {
+    for (result, providers) in &structure_analysis.built {
         for (ordinal, (_, provider)) in providers.iter().enumerate() {
             if !matches!(
-                analysis
-                    .structures
+                structure_analysis
                     .providers
                     .get(&provider.token)
                     .and_then(|declaration| declaration.facts.composition),
@@ -68,8 +69,7 @@ pub(super) fn derive(
             .flatten()
             .chain(base.iter().filter(|_| inputs.contains(&name)))
         {
-            if analysis
-                .structures
+            if structure_analysis
                 .natives
                 .keys()
                 .any(|(source, reader, _)| {
@@ -100,18 +100,17 @@ pub(super) fn derive(
         let publication = if fact.depth == 0
             && base.is_some()
             && result.is_some_and(|result| {
-                analysis.structures.physical.hosts.contains_key(result)
+                structure_analysis.physical.hosts.contains_key(result)
                     && (routed
-                        || analysis
-                            .structures
+                        || structure_analysis
                             .built
                             .get(result)
                             .is_none_or(Vec::is_empty))
-                    && !analysis.structures.selections.contains_key(result)
+                    && !structure_analysis.selections.contains_key(result)
             }) {
             let result = result.expect("checked host provenance").clone();
             Publication::BorrowHost {
-                host: analysis.structures.physical.hosts[&result].clone(),
+                host: structure_analysis.physical.hosts[&result].clone(),
                 result,
             }
         } else if fact.depth == 0 && (inputs.contains(&name) || routed) {
@@ -137,12 +136,11 @@ pub(super) fn derive(
             let keys = fact.partition.clone().expect("checked key cover");
             let result = result.expect("routed result");
             for ordinal in analysis.routed_providers[result].keys() {
-                let (levels, ty) = &analysis.structures.built[result][*ordinal];
+                let (levels, ty) = &structure_analysis.built[result][*ordinal];
                 if !levels.first().is_some_and(|outer| {
                     keys.iter().all(|column| {
                         outer.contains(column)
-                            && !analysis
-                                .structures
+                            && !structure_analysis
                                 .filtered
                                 .get(result)
                                 .is_some_and(|filtered| {
@@ -173,13 +171,15 @@ pub(super) fn derive(
         };
         analysis.publications.insert(name, publication);
     }
-    defer_single_consumer_rows(program, analysis, facts);
+    defer_single_consumer_rows(physical, structure_analysis, program, analysis, facts);
     Ok(())
 }
 
 /// Fuse only a total, single-consumer raw Store with its recorded worker
 /// cover. Nested count guards may stage it, but every leaf reuses that input.
 fn defer_single_consumer_rows(
+    physical: &crate::structures::physical::Program,
+    structure_analysis: &crate::structures::Analysis,
     program: &Program,
     analysis: &mut Analysis,
     facts: &BTreeMap<String, Input>,
@@ -194,11 +194,7 @@ fn defer_single_consumer_rows(
         .enumerate()
         .map(|(index, definition)| (symbol_name(&definition.name), (index, &definition.term)))
         .collect();
-    let physical: BTreeMap<_, _> = program
-        .structures
-        .physical
-        .program
-        .definitions
+    let physical: BTreeMap<_, _> = physical.program.definitions
         .iter()
         .map(|definition| (symbol_name(&definition.name), &definition.operator))
         .collect();
@@ -239,8 +235,7 @@ fn defer_single_consumer_rows(
         if facts[&input].result.as_ref() != Some(result)
             || analysis.results.get(&input) != Some(result)
             || analysis.results.get(consumer) != Some(result)
-            || analysis
-                .structures
+            || structure_analysis
                 .built
                 .get(result)
                 .is_none_or(|built| built.len() != 1)
@@ -248,7 +243,7 @@ fn defer_single_consumer_rows(
                 .routed_providers
                 .get(result)
                 .is_none_or(|built| built.len() != 1)
-            || analysis.structures.retained.contains_key(result)
+            || structure_analysis.retained.contains_key(result)
             || analysis
                 .output
                 .as_ref()
@@ -294,13 +289,13 @@ fn defer_single_consumer_rows(
             // Scan filter bindings are shadowed when covering providers are
             // built. Moving their source expression can change the binding it
             // captures, so retain the original Store for any such dependency.
-            if analysis.structures.join_filters.contains_key(&name) {
+            if structure_analysis.join_filters.contains_key(&name) {
                 safe = false;
                 break;
             }
             if let Some(operator) = physical.get(&name) {
                 pending.extend(operator.operands().into_iter().map(symbol_name));
-            } else if !analysis.structures.host_layouts.contains_key(&name) {
+            } else if !structure_analysis.host_layouts.contains_key(&name) {
                 safe = false;
                 break;
             }

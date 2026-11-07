@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 use cq_lang_sequence::{Analysis, Catalog, Program, Term};
+use cq_lang_sequence::structures::{Program as Structures, physical::Program as Physical};
 use cq_syntax::symbol_name;
 use cq_testkit::Database;
 use cq_testkit::conformance::assert_answers_equal;
@@ -21,16 +22,19 @@ pub enum Target {
 /// Automatically plan a Sequence program with the target's machine and catalog.
 /// Authored decomposition is retained; missing order and placement decisions
 /// come only from the shared planner, never from harness-specific preparation.
-pub fn plan(program: &Program, target: Target) -> syn::Result<(Program, Analysis)> {
-    plan_with_catalog(program, target, &Catalog::default())
+/// Returns the updated Physical and Structures programs beside Sequence and its analysis.
+pub fn plan(physical: &Physical, structures: &Structures, program: &Program, target: Target) -> syn::Result<(Physical, Structures, Program, Analysis)> {
+    plan_with_catalog(physical, structures, program, target, &Catalog::default())
 }
 
 /// Plan using the target catalog extended with caller-owned runtime tokens.
 pub fn plan_with_catalog(
+    physical: &Physical,
+    structures: &Structures,
     program: &Program,
     target: Target,
     additions: &Catalog,
-) -> syn::Result<(Program, Analysis)> {
+) -> syn::Result<(Physical, Structures, Program, Analysis)> {
     let (machine, mut catalog) = match target {
         Target::Sequential => (cq_sequence_pull::machine(), cq_sequence_pull::catalog()),
         Target::Tasks => (cq_sequence_tasks::machine(), cq_sequence_tasks::catalog()),
@@ -43,31 +47,33 @@ pub fn plan_with_catalog(
         .extend(additions.providers.iter().cloned());
     catalog.codecs.extend(additions.codecs.iter().cloned());
     let source = match target {
-        Target::Tasks => cq_sequence_tasks::select_providers(program, &catalog)?,
-        Target::Sequential => program.clone(),
+        Target::Tasks => cq_sequence_tasks::select_providers(physical, structures, program, &catalog)?,
+        Target::Sequential => (physical.clone(), structures.clone(), program.clone()),
     };
-    let planned = cq_sequence_plan::decompose(&source, &machine, &catalog)?;
-    let analysis = cq_lang_sequence::check_grading(&planned.program, &machine)?;
-    Ok((planned.program, analysis))
+    let planned = cq_sequence_plan::decompose(&source.0, &source.1, &source.2, &machine, &catalog)?;
+    let analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
+    Ok((planned.physical, planned.structures, planned.program, analysis))
 }
 
 /// Plan and translate with the target's catalog plus caller-owned tokens.
 /// The boolean selects set rather than multiset answer comparison. This is
 /// also usable during macro expansion, without compiling generated sources.
 pub fn translate_with_catalog(
+    physical: &Physical,
+    structures: &Structures,
     program: &Program,
     target: Target,
     catalog: &Catalog,
 ) -> syn::Result<(syn::Expr, bool)> {
-    let (graded, analysis) = plan_with_catalog(program, target, catalog).map_err(|error| {
+    let (physical, structures, graded, analysis) = plan_with_catalog(physical, structures, program, target, catalog).map_err(|error| {
         syn::Error::new(
             error.span(),
             format!("{target:?} planning rejected: {error}"),
         )
     })?;
     let expression = match target {
-        Target::Sequential => cq_sequence_pull::translate(&graded, &analysis),
-        Target::Tasks => cq_sequence_tasks::translate(&graded, &analysis),
+        Target::Sequential => cq_sequence_pull::translate(&physical, &structures, &graded, &analysis),
+        Target::Tasks => cq_sequence_tasks::translate(&physical, &structures, &graded, &analysis),
     }
     .map_err(|error| {
         syn::Error::new(
@@ -75,12 +81,13 @@ pub fn translate_with_catalog(
             format!("{target:?} translation failed: {error}"),
         )
     })?;
-    Ok((expression, output_is_canonical(&graded, &analysis)))
+    let structures_analysis = cq_lang_sequence::structures::contract::check(&structures)?;
+    Ok((expression, output_is_canonical(&physical, &structures_analysis, &graded, &analysis)))
 }
 
 /// Whether the final answer stream has an explicit global canonical boundary.
 /// Partition-local canonicalization does not establish global uniqueness.
-fn output_is_canonical(program: &Program, analysis: &Analysis) -> bool {
+fn output_is_canonical(physical: &Physical, structures_analysis: &cq_lang_sequence::structures::Analysis, program: &Program, analysis: &Analysis) -> bool {
     fn canonical(term: &Term, dimensions: usize, program: &Program, analysis: &Analysis) -> bool {
         match term {
             Term::Canon(_) => dimensions == 1,
@@ -107,13 +114,13 @@ fn output_is_canonical(program: &Program, analysis: &Analysis) -> bool {
         return false;
     };
     if let Some(result) = analysis.results.get(&symbol_name(&last.name)) {
-        if analysis.structures.head_dedup.contains_key(result) {
+        if structures_analysis.head_dedup.contains_key(result) {
             return true;
         }
         // A canonical valuation stream may still project to repeated
         // answers. Only an injective answer map preserves its uniqueness.
-        let head = &program.structures.physical.program.head;
-        if !analysis.structures.physical.headings[result]
+        let head = &physical.program.head;
+        if !structures_analysis.physical.headings[result]
             .iter()
             .all(|column| {
                 head.args
@@ -141,24 +148,22 @@ fn output_is_canonical(program: &Program, analysis: &Analysis) -> bool {
 
 /// Compare translations on deterministic empty, full and sampled binary-domain
 /// databases. Use `assert_conformant_on` for an authored corpus database.
-pub fn assert_conformant(program: &Program, targets: &[Target]) {
+pub fn assert_conformant(physical: &Physical, structures: &Structures, program: &Program, targets: &[Target]) {
     for seed in [0, 1, 7] {
         let database = cq_testkit::databases::binary_relations(
-            program
-                .structures
-                .physical
+            physical
                 .program
                 .declarations
                 .iter()
                 .map(|relation| (symbol_name(&relation.name), relation.columns.len())),
             seed,
         );
-        assert_conformant_on(program, targets, &database);
+        assert_conformant_on(physical, structures, program, targets, &database);
     }
 }
 
 /// Compare translations using exactly one shared finite integer database.
-pub fn assert_conformant_on(program: &Program, targets: &[Target], database: &Database) {
+pub fn assert_conformant_on(physical: &Physical, structures: &Structures, program: &Program, targets: &[Target], database: &Database) {
     let borrowed: Vec<_> = database
         .iter()
         .map(|(name, rows)| {
@@ -172,19 +177,19 @@ pub fn assert_conformant_on(program: &Program, targets: &[Target], database: &Da
         .iter()
         .map(|(name, rows)| (*name, rows.as_slice()))
         .collect();
-    assert_conformant_with_inputs(program, targets, &inputs);
+    assert_conformant_with_inputs(physical, structures, program, targets, &inputs);
 }
 
 /// Compare translations on raw authored inputs (the same representation as
 /// `Case::inputs`), retaining duplicate input rows.
 pub fn assert_conformant_with_inputs(
+    physical: &Physical,
+    structures: &Structures,
     program: &Program,
     targets: &[Target],
     inputs: &[(&str, &[&[i32]])],
 ) {
-    let declarations = program
-        .structures
-        .physical
+    let declarations = physical
         .program
         .declarations
         .iter()
@@ -203,12 +208,14 @@ pub fn assert_conformant_with_inputs(
             quote!(let #name: Vec<(#(#types,)*)> = vec![#(#values),*];)
         })
         .collect::<Vec<_>>();
-    assert_conformant_with_source(program, targets, &quote!(#(#declarations)*));
+    assert_conformant_with_source(physical, structures, program, targets, &quote!(#(#declarations)*));
 }
 
 /// Execute a shared caller-authored input setup, for example the corpus's
 /// map-host fixtures. Setup is inserted unchanged for every translation.
 pub fn assert_conformant_with_source(
+    physical: &Physical,
+    structures: &Structures,
     program: &Program,
     targets: &[Target],
     setup: &proc_macro2::TokenStream,
@@ -221,7 +228,7 @@ pub fn assert_conformant_with_source(
             "cq_storage::sharded::FullKey",
         ),
     ]);
-    assert_conformant_with_runtime(program, targets, setup, &runtime, &Catalog::default());
+    assert_conformant_with_runtime(physical, structures, program, targets, setup, &runtime, &Catalog::default());
 }
 
 /// Reuse a rustc driver with the caller's exact linked provider dependencies.
@@ -231,6 +238,8 @@ pub fn assert_conformant_with_source(
 /// Like `Runtime`, this is a serial driver: do not run simultaneous queries
 /// against one runtime directory.
 pub fn assert_conformant_with_runtime(
+    physical: &Physical,
+    structures: &Structures,
     program: &Program,
     targets: &[Target],
     setup: &proc_macro2::TokenStream,
@@ -243,7 +252,7 @@ pub fn assert_conformant_with_runtime(
     );
     let mut reference: Option<(Target, Vec<String>)> = None;
     for &target in targets {
-        let (expression, canonical) = translate_with_catalog(program, target, catalog)
+        let (expression, canonical) = translate_with_catalog(physical, structures, program, target, catalog)
             .unwrap_or_else(|error| panic!("{error}"));
         let dependencies = if target == Target::Tasks {
             vec![

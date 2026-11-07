@@ -646,6 +646,22 @@ fn cq_constant_only_negation_tests_matching_rows_not_global_emptiness() {
 
 #[test]
 fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation() {
+    fn parse_plan(source: &str) -> (
+        cq_lang_physical::Program,
+        cq_lang_structures::Program,
+        cq_lang_sequence::Program,
+    ) {
+        syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream<'_>| {
+                let physical = input.parse()?;
+                let structures = cq_lang_structures::Program::parse(input, &physical)?;
+                let sequence = input.parse()?;
+                Ok((physical, structures, sequence))
+            },
+            source,
+        )
+        .unwrap()
+    }
     macro_rules! planned {
         ($($planner:ident)::+ $(($($args:tt)*))?; $($output:tt)*) => {
             mini_linq::compile! {
@@ -666,10 +682,10 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
             }
         };
     }
-    let default: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan;)).unwrap();
-    let custom: cq_lang_sequence::Program =
-        syn::parse_str(planned!(core_pass_fixtures::plan_reserve(expected);)).unwrap();
+    let (default_physical, default_structures, default) =
+        parse_plan(planned!(mini_linq::passes::plan;));
+    let (custom_physical, custom_structures, custom) =
+        parse_plan(planned!(core_pass_fixtures::plan_reserve(expected);));
     assert_eq!(
         default.sequence.output,
         Some(cq_lang_sequence::OutputProtocol::Count)
@@ -678,27 +694,28 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
         custom.sequence.output,
         Some(cq_lang_sequence::OutputProtocol::Reserve)
     );
-    cq_lang_sequence::check_rewrite(&default, &custom).unwrap();
-    cq_lang_sequence::check_grading(&custom, &cq_sequence_pull::machine()).unwrap();
-    let authored: cq_lang_sequence::Program =
-        syn::parse_str(planned!(core_pass_fixtures::plan_reserve(expected); output count;))
-            .unwrap();
+    cq_lang_sequence::check_rewrite(
+        &default_physical, &default_structures, &default,
+        &custom_physical, &custom_structures, &custom,
+    ).unwrap();
+    cq_lang_sequence::check_grading(
+        &custom_physical, &custom_structures, &custom, &cq_sequence_pull::machine(),
+    ).unwrap();
+    let (_, _, authored) =
+        parse_plan(planned!(core_pass_fixtures::plan_reserve(expected); output count;));
     assert_eq!(
         authored.sequence.output,
         Some(cq_lang_sequence::OutputProtocol::Count)
     );
-    let delegated: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan(mini_linq::passes::plan_sequential);))
-            .unwrap();
+    let (_, _, delegated) =
+        parse_plan(planned!(mini_linq::passes::plan(mini_linq::passes::plan_sequential);));
     assert_eq!(delegated, default);
-    let decomposed: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan_sequential;)).unwrap();
+    let (_, _, decomposed) = parse_plan(planned!(mini_linq::passes::plan_sequential;));
     assert_eq!(decomposed, default);
-    let preserved: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan(preserve_order);)).unwrap();
+    let (_, _, preserved) = parse_plan(planned!(mini_linq::passes::plan(preserve_order);));
     assert_eq!(preserved, default);
-    let explicitly_decomposed: cq_lang_sequence::Program =
-        syn::parse_str(planned!(mini_linq::passes::plan_sequential(preserve_order);)).unwrap();
+    let (_, _, explicitly_decomposed) =
+        parse_plan(planned!(mini_linq::passes::plan_sequential(preserve_order);));
     assert_eq!(explicitly_decomposed, default);
 
     let rows = [(1,), (1,), (2,)];
@@ -751,12 +768,12 @@ fn facade_observes_every_default_boundary_without_executing_the_query() {
     syn::parse_str::<cq_lang_physical::Program>(observe!(physical)).unwrap();
     syn::parse_str::<cq_lang_structures::Program>(observe!(structures)).unwrap();
     syn::parse_str::<cq_lang_structures::Program>(observe!(represent)).unwrap();
-    syn::parse_str::<cq_lang_structures::Program>(observe!(stage)).unwrap();
+    let staged: cq_lang_structures::Program = syn::parse_str(observe!(stage)).unwrap();
     syn::parse_str::<cq_lang_sequence::Program>(observe!(sequence)).unwrap();
     let decomposed: cq_lang_sequence::Program = syn::parse_str(observe!(decompose)).unwrap();
     let graded: cq_lang_sequence::Program = syn::parse_str(observe!(grade)).unwrap();
     assert_eq!(decomposed, graded);
-    cq_lang_sequence::check_grading(&graded, &cq_sequence_pull::machine()).unwrap();
+    cq_lang_sequence::check_grading(&staged.physical, &staged, &graded, &cq_sequence_pull::machine()).unwrap();
     let rust = observe!(final_rust);
     syn::parse_str::<syn::Expr>(rust).unwrap();
     assert!(rust.contains("profile_select"));

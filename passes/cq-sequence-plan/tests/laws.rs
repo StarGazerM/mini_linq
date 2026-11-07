@@ -1,3 +1,6 @@
+#[macro_use]
+mod support;
+use cq_lang_sequence::structures::{Program as Structures, physical::Program as Physical};
 use cq_lang_sequence::{
     Analysis, Catalog, CodecToken, Guard, Len, LevelNode, Machine, OutputProtocol, Program, Term,
     check_grading, check_rewrite,
@@ -116,8 +119,8 @@ fn catalog(machine: &Machine) -> Catalog {
     catalog
 }
 
-fn scan(sequence: TokenStream) -> Program {
-    syn::parse2(quote! {
+fn scan(sequence: TokenStream) -> (Physical, Structures, Program) {
+    fixture! {
         physical {
             relation R(a:i32);
             r = let canon rename R@0 {a -> a};
@@ -128,12 +131,11 @@ fn scan(sequence: TokenStream) -> Program {
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }
         sequence { #sequence }
-    })
-    .unwrap()
+    }
 }
 
-fn join() -> Program {
-    syn::parse_quote! {
+fn join() -> (Physical, Structures, Program) {
+    fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
@@ -156,8 +158,8 @@ fn join() -> Program {
     }
 }
 
-fn filtered_multi_join() -> Program {
-    let structures = syn::parse_quote! {
+fn filtered_multi_join() -> (Physical, Structures, Program) {
+    let (physical, structures) = structure_fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,rtag:i32); relation S(a:i32,stag:i32);
             relation Q(a:i32,qtag:i32);
@@ -182,11 +184,12 @@ fn filtered_multi_join() -> Program {
             result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
         }
     };
-    cq_sequence_lowering::compile(&structures).unwrap()
+    let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    (physical, structures, program)
 }
 
-fn reorderable_multi_join() -> Program {
-    let structures = syn::parse_quote! {
+fn reorderable_multi_join() -> (Physical, Structures, Program) {
+    let (physical, structures) = structure_fixture! {
         physical {
             relation L(a:i32); relation R(a:i32); relation S(a:i32);
             l = pipe rename L@0 {a -> a};
@@ -202,51 +205,54 @@ fn reorderable_multi_join() -> Program {
             result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
         }
     };
-    cq_sequence_lowering::compile(&structures).unwrap()
+    let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    (physical, structures, program)
 }
 
-fn replay(source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
-    let mut current = source.clone();
+fn replay(physical: &Physical, structures: &Structures, source: &Program, machine: &Machine, planned: &Planned) -> Analysis {
+    let (mut current_physical, mut current_structures, mut current) =
+        (physical.clone(), structures.clone(), source.clone());
     for (index, advice) in planned.trace.iter().enumerate() {
-        let next = advice
-            .apply(&current)
+        let (next_physical, next_structures, next) = advice
+            .apply(&current_physical, &current_structures, &current)
             .unwrap_or_else(|error| panic!("trace step {index} {advice:?}: {error}"));
-        check_rewrite(&current, &next)
+        check_rewrite(&current_physical, &current_structures, &current, &next_physical, &next_structures, &next)
             .unwrap_or_else(|error| panic!("rewrite law at step {index} {advice:?}: {error}"));
-        current = next;
+        (current_physical, current_structures, current) = (next_physical, next_structures, next);
     }
-    assert_eq!(
-        current, planned.program,
-        "trace must reconstruct the exact returned syntax"
-    );
-    check_rewrite(source, &current).expect("the complete trace preserves the source");
-    check_grading(&current, machine).expect("the final replay must satisfy machine grading")
+    assert_eq!(current_physical, planned.physical);
+    assert_eq!(current_structures, planned.structures);
+    assert_eq!(current, planned.program, "trace must reconstruct the exact returned syntax");
+    check_rewrite(physical, structures, source, &current_physical, &current_structures, &current)
+        .expect("the complete trace preserves the source");
+    check_grading(&current_physical, &current_structures, &current, machine)
+        .expect("the final replay must satisfy machine grading")
 }
 
 #[test]
 fn decomposition_preserves_join_order_with_count_evidence() {
-    let source = reorderable_multi_join();
+    let (physical, mut structures, source) = reorderable_multi_join();
     let mut estimated = source.clone();
     estimated.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/laws.rs fixture") {
         count L = 1; count R = 10; count S = 900;
     });
     for machine in machines() {
         let available = catalog(&machine);
-        let ordinary = decompose(&source, &machine, &available).unwrap();
-        let advised = decompose(&estimated, &machine, &available).unwrap();
+        let ordinary = decompose(&physical, &structures, &source, &machine, &available).unwrap();
+        let advised = decompose(&physical, &structures, &estimated, &machine, &available).unwrap();
         assert_eq!(
-            ordinary.program.structures.physical,
-            source.structures.physical
+            ordinary.physical,
+            physical
         );
         assert_eq!(
-            advised.program.structures.physical,
-            source.structures.physical
+            advised.physical,
+            physical
         );
         assert_eq!(advised.program.evidence, estimated.evidence);
-        replay(&source, &machine, &ordinary);
-        replay(&estimated, &machine, &advised);
+        replay(&physical, &structures, &source, &machine, &ordinary);
+        replay(&physical, &structures, &estimated, &machine, &advised);
         assert_eq!(
-            decompose(&estimated, &machine, &available).unwrap(),
+            decompose(&physical, &structures, &estimated, &machine, &available).unwrap(),
             advised
         );
     }
@@ -254,14 +260,14 @@ fn decomposition_preserves_join_order_with_count_evidence() {
 
 #[test]
 fn decomposition_preserves_authored_sequence_and_join_order() {
-    let source = filtered_multi_join();
-    let authored = Advice::Store(syn::parse_quote!(jr)).apply(&source).unwrap();
+    let (physical, mut structures, source) = filtered_multi_join();
+    let (authored_physical, authored_structures, authored) = Advice::Store(syn::parse_quote!(jr)).apply(&physical, &structures, &source).unwrap();
     for machine in machines() {
         let available = catalog(&machine);
-        let planned = decompose(&authored, &machine, &available).unwrap();
+        let planned = decompose(&authored_physical, &authored_structures, &authored, &machine, &available).unwrap();
         assert_eq!(
-            planned.program.structures.physical,
-            authored.structures.physical
+            planned.physical,
+            authored_physical
         );
         assert!(matches!(
             planned
@@ -274,27 +280,27 @@ fn decomposition_preserves_authored_sequence_and_join_order() {
                 .term,
             Term::Store { .. }
         ));
-        replay(&authored, &machine, &planned);
+        replay(&authored_physical, &authored_structures, &authored, &machine, &planned);
 
-        let decomposed = decompose(&source, &machine, &available).unwrap();
+        let decomposed = decompose(&physical, &structures, &source, &machine, &available).unwrap();
         assert_eq!(
-            decomposed.program.structures.physical,
-            source.structures.physical
+            decomposed.physical,
+            physical
         );
-        replay(&source, &machine, &decomposed);
+        replay(&physical, &structures, &source, &machine, &decomposed);
     }
 }
 
 #[test]
 fn pl_closure_replays_every_intermediate_rewrite_and_final_grading() {
     for machine in machines() {
-        for source in [scan(quote!(input = rows r; result = input;)), join()] {
-            let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+        for (physical, structures, source) in [scan(quote!(input = rows r; result = input;)), join()] {
+            let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
             assert!(
                 !planned.trace.is_empty(),
                 "unauthored scheduling needs advice"
             );
-            let analysis = replay(&source, &machine, &planned);
+            let analysis = replay(&physical, &structures, &source, &machine, &planned);
             assert_eq!(
                 analysis.levels.len(),
                 planned.program.sequence.definitions.len()
@@ -311,11 +317,11 @@ fn pl_closure_replays_every_intermediate_rewrite_and_final_grading() {
 fn pl_det_repeated_inputs_produce_identical_programs_and_traces() {
     for machine in machines() {
         let catalog = catalog(&machine);
-        for source in [scan(quote!(input = rows r; result = input;)), join()] {
+        for (physical, structures, source) in [scan(quote!(input = rows r; result = input;)), join()] {
             let before = source.clone();
-            let first = decompose(&source, &machine, &catalog).unwrap();
+            let first = decompose(&physical, &structures, &source, &machine, &catalog).unwrap();
             for _ in 0..4 {
-                assert_eq!(decompose(&source, &machine, &catalog).unwrap(), first);
+                assert_eq!(decompose(&physical, &structures, &source, &machine, &catalog).unwrap(), first);
             }
             assert_eq!(source, before, "planning must not mutate its input");
         }
@@ -325,12 +331,12 @@ fn pl_det_repeated_inputs_produce_identical_programs_and_traces() {
 #[test]
 fn pl_precedence_keeps_authored_grades_while_filling_missing_grades() {
     for machine in machines() {
-        let mut source = scan(quote!(input = store rows r; result = store input;));
+        let (physical, mut structures, mut source) = scan(quote!(input = store rows r; result = store input;));
         let machine_name = &machine.name;
         source.graded =
             Some(syn::parse2(quote!(graded #machine_name { result at host; })).unwrap());
         let authored = source.graded.as_ref().unwrap().grades[0].clone();
-        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
         let grades = &planned.program.graded.as_ref().unwrap().grades;
         assert_eq!(
             grades
@@ -346,25 +352,25 @@ fn pl_precedence_keeps_authored_grades_while_filling_missing_grades() {
                 .iter()
                 .any(|advice| matches!(advice, Advice::Grade { name, .. } if name == "result"))
         );
-        replay(&source, &machine, &planned);
+        replay(&physical, &structures, &source, &machine, &planned);
     }
 }
 
 #[test]
 fn pl_precedence_keeps_authored_tile_width_and_items() {
     for machine in machines() {
-        let source = scan(quote! {
+        let (physical, mut structures, source) = scan(quote! {
             input = store rows r;
             result = store tile 7 items 3 input;
         });
         let authored = source.sequence.definitions[1].term.clone();
-        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
         assert_eq!(planned.program.sequence.definitions[1].term, authored);
         assert!(!planned.trace.iter().any(|advice| matches!(advice,
             Advice::Tile { name, .. } | Advice::Partition { name, .. } | Advice::Segment { name, .. }
                 if name == "result"
         )));
-        replay(&source, &machine, &planned);
+        replay(&physical, &structures, &source, &machine, &planned);
     }
 }
 
@@ -376,12 +382,12 @@ fn pl_precedence_keeps_each_authored_output_protocol_and_capacity() {
             OutputProtocol::Reserve,
             OutputProtocol::Bounded,
         ] {
-            let mut source = scan(quote! {
+            let (physical, mut structures, mut source) = scan(quote! {
                 input = store rows r;
                 result = store capacity 123 input;
             });
             source.sequence.output = Some(protocol.clone());
-            let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+            let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
             assert_eq!(planned.program.sequence.output, Some(protocol));
             assert!(matches!(
                 planned.program.sequence.definitions.last().unwrap().term,
@@ -396,7 +402,7 @@ fn pl_precedence_keeps_each_authored_output_protocol_and_capacity() {
                     .iter()
                     .any(|advice| matches!(advice, Advice::Output(_)))
             );
-            replay(&source, &machine, &planned);
+            replay(&physical, &structures, &source, &machine, &planned);
         }
     }
 }
@@ -404,7 +410,7 @@ fn pl_precedence_keeps_each_authored_output_protocol_and_capacity() {
 #[test]
 fn pl_precedence_fully_authored_schedule_is_an_exact_fixed_point() {
     for machine in machines() {
-        let mut source = scan(quote! {
+        let (physical, mut structures, mut source) = scan(quote! {
             input = store rows r;
             result = store tile 7 items 3 input;
             output reserve;
@@ -422,22 +428,22 @@ fn pl_precedence_fully_authored_schedule_is_an_exact_fixed_point() {
             })
             .unwrap(),
         );
-        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
         assert_eq!(planned.program, source);
         assert!(
             planned.trace.is_empty(),
             "fully authored decisions need no replacement advice"
         );
-        replay(&source, &machine, &planned);
+        replay(&physical, &structures, &source, &machine, &planned);
     }
 }
 
 #[test]
 fn pl_precedence_rejects_replacing_an_authored_machine() {
     for machine in machines() {
-        let mut source = scan(quote!(result = store rows r;));
+        let (physical, mut structures, mut source) = scan(quote!(result = store rows r;));
         source.graded = Some(syn::parse_quote!(graded other_machine { result at host; }));
-        let error = decompose(&source, &machine, &catalog(&machine))
+        let error = decompose(&physical, &structures, &source, &machine, &catalog(&machine))
             .unwrap_err()
             .to_string();
         assert!(error.contains("PL-Precedence"), "{error}");
@@ -446,69 +452,69 @@ fn pl_precedence_rejects_replacing_an_authored_machine() {
 
 #[test]
 fn catalog_rejects_an_unmet_provider_obligation() {
-    let source = join();
+    let (physical, mut structures, source) = join();
     for machine in machines() {
         let mut available = catalog(&machine);
-        decompose(&source, &machine, &available)
+        decompose(&physical, &structures, &source, &machine, &available)
             .expect("the complete local catalog discharges the lookup");
         available.providers.clear();
-        assert!(decompose(&source, &machine, &available).is_err());
+        assert!(decompose(&physical, &structures, &source, &machine, &available).is_err());
     }
 }
 
 #[test]
 fn catalog_rejects_an_unmet_codec_obligation() {
-    let source = join();
+    let (physical, mut structures, source) = join();
     for machine in machines() {
         let mut available = catalog(&machine);
         available.codecs.clear();
-        assert!(decompose(&source, &machine, &available).is_err());
+        assert!(decompose(&physical, &structures, &source, &machine, &available).is_err());
     }
 }
 
 #[test]
 fn catalog_rejects_an_unmet_canon_obligation() {
-    let source = scan(quote!(input = store rows r; result = store canon input;));
+    let (physical, mut structures, source) = scan(quote!(input = store rows r; result = store canon input;));
     for machine in machines() {
         let mut available = catalog(&machine);
-        decompose(&source, &machine, &available)
+        decompose(&physical, &structures, &source, &machine, &available)
             .expect("the complete local catalog discharges canonicalization");
         available
             .providers
             .retain(|entry| entry.provider.token != "sort");
-        assert!(decompose(&source, &machine, &available).is_err());
+        assert!(decompose(&physical, &structures, &source, &machine, &available).is_err());
     }
 }
 
 #[test]
 fn no_provider_catalog_still_supports_a_simple_scan() {
-    let source = scan(quote!(input = rows r; result = input;));
+    let (physical, mut structures, source) = scan(quote!(input = rows r; result = input;));
     for machine in machines() {
         let mut available = catalog(&machine);
         available.providers.clear();
         assert_eq!(available.codecs[0].codec, None);
-        let planned = decompose(&source, &machine, &available).unwrap();
-        replay(&source, &machine, &planned);
+        let planned = decompose(&physical, &structures, &source, &machine, &available).unwrap();
+        replay(&physical, &structures, &source, &machine, &planned);
     }
 }
 
 #[test]
 fn catalog_provider_scope_is_the_read_level_not_the_host_store() {
     let machine = machines().pop().unwrap();
-    let source = join();
+    let (physical, mut structures, source) = join();
     let mut available = catalog(&machine);
     available.providers[0].levels = vec![vec!["host".into()]];
-    let planned = decompose(&source, &machine, &available).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &available).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert_eq!(analysis.levels["result"], ["host"]);
     // An unauthored read can move to host; an explicitly authored descendant
     // read remains a catalog error rather than silently changing its grade.
     let authored =
-        cq_sequence_plan::rewrites::grade(&source, quote!(gpu, result at device)).unwrap();
-    assert!(decompose(&authored, &machine, &available).is_err());
+        cq_sequence_plan::rewrites::grade(&physical, &structures, &source, quote!(gpu, result at device)).unwrap();
+    assert!(decompose(&physical, &structures, &authored, &machine, &available).is_err());
     available.providers[0].levels = vec![vec!["host".into(), "device".into(), "block".into()]];
-    let planned = decompose(&source, &machine, &available).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &available).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert_eq!(analysis.levels["provider"], ["host"]);
     assert!(!analysis.dispatches.is_empty());
 }
@@ -516,12 +522,12 @@ fn catalog_provider_scope_is_the_read_level_not_the_host_store() {
 #[test]
 fn host_views_are_not_materialized_before_an_existing_host_store() {
     for machine in machines() {
-        let source = scan(quote! {
+        let (physical, mut structures, source) = scan(quote! {
             input = rows r;
             retained = store input;
             result = store retained;
         });
-        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+        let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
         assert!(matches!(
             planned.program.sequence.definitions[0].term,
             cq_lang_sequence::Term::Rows(_)
@@ -532,13 +538,13 @@ fn host_views_are_not_materialized_before_an_existing_host_store() {
                 .iter()
                 .any(|advice| matches!(advice, Advice::Store(name) if name == "input"))
         );
-        replay(&source, &machine, &planned);
+        replay(&physical, &structures, &source, &machine, &planned);
     }
 }
 
 #[test]
 fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
-    let source: Program = syn::parse_quote! {
+    let (physical, structures, source) = fixture! {
         physical {
             relation L(a:i32); relation R(a:i32); relation P(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
@@ -565,12 +571,12 @@ fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
         }
     };
     let machine = machines().pop().unwrap();
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
     assert_eq!(
         planned,
-        decompose(&source, &machine, &catalog(&machine)).unwrap()
+        decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap()
     );
-    let analysis = replay(&source, &machine, &planned);
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert_eq!(analysis.levels["joined"], ["host"]);
     assert_eq!(analysis.levels["left"], ["host"]);
     assert_eq!(analysis.levels["right"], ["host"]);
@@ -593,7 +599,7 @@ fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
 
 #[test]
 fn rust_without_identity_facts_and_its_feeds_stay_host() {
-    let source: Program = syn::parse_quote! {
+    let (physical, structures, source) = fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
             l = pipe rename L@0 {a -> a};
@@ -620,8 +626,8 @@ fn rust_without_identity_facts_and_its_feeds_stay_host() {
         }
     };
     let machine = machines().pop().unwrap();
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     for name in ["l", "joined", "selected"] {
         assert_eq!(analysis.levels[name], ["host"], "{name}");
     }
@@ -641,7 +647,7 @@ fn rust_without_identity_facts_and_its_feeds_stay_host() {
 
 #[test]
 fn relational_code_predicates_do_not_imply_host_placement() {
-    let source: Program = syn::parse_quote! {
+    let (physical, structures, source) = fixture! {
         physical {
             relation R(a:i32,s:StringCode);
             r = pipe rename R@0 {a -> a,s -> s};
@@ -662,8 +668,8 @@ fn relational_code_predicates_do_not_imply_host_placement() {
         }
     };
     let machine = machines().pop().unwrap();
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert!(analysis.levels["selected"].len() > 1);
     assert!(analysis.levels["numeric"].len() > 1);
 }
@@ -685,15 +691,15 @@ fn host_opaque_filter_uploads_projected_index_before_device_lookups() {
     let machine = machines().pop().unwrap();
     let available = catalog(&machine);
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let structures = cq_sequence_plan::select_from_catalog(&structures, &available).unwrap();
-    let facts = cq_lang_sequence::structures::contract::check(&structures).unwrap();
+    let (physical, structures) = cq_sequence_plan::select_from_catalog(&physical, &structures, &available).unwrap();
+    let facts = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
     assert_eq!(facts.layouts["selected"], ["a"]);
-    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    let mut source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     // The target records the projected key's device representation; the
     // unrepresented code payload remains available only to the host guard.
     source.representation.identity.insert("a".into());
-    let planned = decompose(&source, &machine, &available).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &available).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert_eq!(analysis.levels["__sequence_host_selected"], ["host"]);
     assert_eq!(analysis.levels["selected"], ["host", "device"]);
     assert_eq!(analysis.levels["joined"], ["host", "device", "block"]);
@@ -744,18 +750,18 @@ fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
     let machine = machines().pop().unwrap();
     let available = catalog(&machine);
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let structures = cq_sequence_plan::select_from_catalog(&structures, &available).unwrap();
-    let mut source = cq_sequence_lowering::compile(&structures).unwrap();
+    let (physical, structures) = cq_sequence_plan::select_from_catalog(&physical, &structures, &available).unwrap();
+    let mut source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/laws.rs fixture") {
         count Part = 200000; count Orders = 1500000; count Lineitem = 6001215;
         count PartSupp = 800000; count Supplier = 10000; count Nation = 25;
     });
-    let planned = decompose(&source, &machine, &available).unwrap();
+    let planned = decompose(&physical, &structures, &source, &machine, &available).unwrap();
     assert_eq!(
-        planned.program.structures.physical,
-        source.structures.physical
+        planned.physical,
+        physical
     );
-    let analysis = replay(&source, &machine, &planned);
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert_eq!(analysis.levels["p"], ["host"]);
     assert_eq!(analysis.levels["green"], ["host"]);
     assert!(!analysis.dispatches.is_empty());
@@ -763,7 +769,7 @@ fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
 
 #[test]
 fn host_predicate_publishes_a_retained_lookup_without_moving_its_producer() {
-    let source: Program = syn::parse_quote! {
+    let (physical, structures, source) = fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
@@ -786,8 +792,8 @@ fn host_predicate_publishes_a_retained_lookup_without_moving_its_producer() {
         }
     };
     let machine = machines().pop().unwrap();
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert_eq!(analysis.levels["joined"], ["host"]);
     assert_eq!(analysis.levels["selected"], ["host"]);
     assert_eq!(
@@ -821,7 +827,7 @@ fn host_choice_publishes_counts_even_when_arms_do_not_read_the_counted_rows() {
             )),
         ),
     ] {
-        let mut source = join();
+        let (physical, mut structures, mut source) = join();
         let mut counted = source.sequence.definitions.last().unwrap().clone();
         counted.name = syn::parse_quote!(counted);
         source.sequence.definitions.insert(2, counted);
@@ -834,8 +840,8 @@ fn host_choice_publishes_counts_even_when_arms_do_not_read_the_counted_rows() {
             (Guard::Else, *inner.clone()),
         ]);
         source.graded = Some(syn::parse_quote!(graded gpu { result at host; }));
-        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-        let analysis = replay(&source, &machine, &planned);
+        let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+        let analysis = replay(&physical, &structures, &source, &machine, &planned);
         assert_eq!(analysis.levels["result"], ["host"]);
         assert_eq!(analysis.levels["counted"], ["host"]);
         assert_eq!(
@@ -859,7 +865,7 @@ fn retained_row_comparisons_publish_before_provider_lookup() {
         (quote!(value = bound), true),
         (quote!(value < 10), false),
     ] {
-        let source: Program = syn::parse2(quote! {
+        let (physical, structures, source) = fixture! {
             physical {
                 relation Driver(a:i32);
                 relation Provider(a:i32,value:i32,bound:i32);
@@ -884,10 +890,9 @@ fn retained_row_comparisons_publish_before_provider_lookup() {
                 present = compact present lookup selected [a] input;
                 result = store canon map answer present;
             }
-        })
-        .unwrap();
-        let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-        let analysis = replay(&source, &machine, &planned);
+        };
+        let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+        let analysis = replay(&physical, &structures, &source, &machine, &planned);
         assert_eq!(analysis.levels["provider_input"], ["host"]);
         if row_bound {
             assert_eq!(analysis.levels["index"], ["host", "device"]);
@@ -912,8 +917,8 @@ fn retained_row_comparisons_publish_before_provider_lookup() {
     }
 }
 
-fn expanding_resource_fixture() -> Program {
-    syn::parse_quote! {
+fn expanding_resource_fixture() -> (Physical, Structures, Program) {
+    fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             relation S(b:i32,c:i32); relation T(c:i32,d:i32);
@@ -942,7 +947,7 @@ fn expanding_resource_fixture() -> Program {
 
 #[test]
 fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
-    let source = expanding_resource_fixture();
+    let (physical, mut structures, source) = expanding_resource_fixture();
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(1);
     machine.layout = Some(|shape| {
@@ -958,8 +963,8 @@ fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
             })
             .count())
     });
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert!(
         planned
             .trace
@@ -977,12 +982,12 @@ fn resource_bounded_planning_separates_expanding_stages_with_checked_stores() {
 
 #[test]
 fn resource_recovery_prefers_smaller_items_before_smaller_tiles() {
-    let source = expanding_resource_fixture();
+    let (physical, mut structures, source) = expanding_resource_fixture();
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(1);
     machine.layout = Some(|shape| Ok(shape.items));
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert!(
         analysis
             .resources
@@ -1007,12 +1012,12 @@ fn resource_recovery_prefers_smaller_items_before_smaller_tiles() {
 
 #[test]
 fn resource_recovery_uses_smaller_machine_derived_tiles() {
-    let source = expanding_resource_fixture();
+    let (physical, mut structures, source) = expanding_resource_fixture();
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(16);
     machine.layout = Some(|shape| Ok(shape.tile.unwrap_or(1)));
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-    replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+    replay(&physical, &structures, &source, &machine, &planned);
     assert!(planned.trace.iter().any(|step| matches!(
         step,
         Advice::Partition {
@@ -1032,7 +1037,7 @@ fn resource_recovery_uses_smaller_machine_derived_tiles() {
 #[test]
 fn resource_rejection_handles_nested_diagnostics() {
     const COMPONENTS: [&str; 2] = ["first layout failure", "second layout failure"];
-    let source = expanding_resource_fixture();
+    let (physical, mut structures, source) = expanding_resource_fixture();
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(1);
     machine.layout = Some(|_| {
@@ -1043,7 +1048,7 @@ fn resource_rejection_handles_nested_diagnostics() {
         ));
         Err(errors)
     });
-    let errors = decompose(&source, &machine, &catalog(&machine))
+    let errors = decompose(&physical, &structures, &source, &machine, &catalog(&machine))
         .err()
         .expect("the supplied layout rejects every candidate");
     let diagnostics: Vec<_> = errors.into_iter().map(|error| error.to_string()).collect();
@@ -1059,7 +1064,7 @@ fn resource_rejection_handles_nested_diagnostics() {
 
 #[test]
 fn resource_recovery_splits_only_one_boundary_when_two_dispatches_fit() {
-    let source = expanding_resource_fixture();
+    let (physical, mut structures, source) = expanding_resource_fixture();
     let mut machine = machines().pop().unwrap();
     machine.root.children[0].children[0].shared_bytes = Some(2);
     machine.layout = Some(|shape| {
@@ -1075,8 +1080,8 @@ fn resource_recovery_splits_only_one_boundary_when_two_dispatches_fit() {
             })
             .count())
     });
-    let planned = decompose(&source, &machine, &catalog(&machine)).unwrap();
-    let analysis = replay(&source, &machine, &planned);
+    let planned = decompose(&physical, &structures, &source, &machine, &catalog(&machine)).unwrap();
+    let analysis = replay(&physical, &structures, &source, &machine, &planned);
     assert_eq!(
         planned
             .trace
@@ -1099,15 +1104,15 @@ fn resource_recovery_splits_only_one_boundary_when_two_dispatches_fit() {
 fn program_declaration_differing_from_the_catalog_is_rejected() {
     for machine in machines() {
         let available = catalog(&machine);
-        decompose(&join(), &machine, &available).unwrap();
+        let (physical, structures, source) = join();
+        decompose(&physical, &structures, &source, &machine, &available).unwrap();
         for declaration in [
             quote!(index = Index { reads [exact, range, membership], build inferred };),
             quote!(index = OtherIndex { reads [exact, range, membership, ordered], build inferred };),
             quote!(index = Index { reads [exact, range, membership, ordered], build typed };),
         ] {
-            let mut source = join();
-            let index = source
-                .structures
+            let (physical, mut structures, mut source) = join();
+            let index = structures
                 .structures
                 .providers
                 .declarations
@@ -1115,7 +1120,7 @@ fn program_declaration_differing_from_the_catalog_is_rejected() {
                 .find(|declaration| declaration.token == "index")
                 .unwrap();
             *index = syn::parse2(declaration).unwrap();
-            let error = decompose(&source, &machine, &available)
+            let error = decompose(&physical, &structures, &source, &machine, &available)
                 .unwrap_err()
                 .to_string();
             assert!(error.contains("PL-Catalog"), "{error}");

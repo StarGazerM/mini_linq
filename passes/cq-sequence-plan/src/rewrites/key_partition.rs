@@ -1,6 +1,7 @@
 //! Checked key-disjoint decomposition; routing choices remain explicit advice.
 //! A single-use named Canon feeding Group moves inside the same key-disjoint
 //! parts as an inline Canon. Shared producers and explicit stores stay intact.
+use cq_lang_sequence::structures::{self, physical};
 use cq_lang_sequence::{Definition, Guard, Len, Program, Term};
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
@@ -283,6 +284,8 @@ fn streaming_partial_group(
 /// Bound actual Sequence occurrences, not merely their Physical set support.
 /// Every traversed map must also have a nonexpanding Physical driver path.
 fn nonexpanding_host(
+    physical: &physical::Program,
+    structures_analysis: &structures::Analysis,
     source: &Program,
     analysis: &cq_lang_sequence::Analysis,
     term: &Term,
@@ -290,8 +293,8 @@ fn nonexpanding_host(
 ) -> Option<String> {
     use cq_lang_sequence::structures::physical::Operator;
     fn extends<'a>(
-        source: &'a Program,
-        analysis: &cq_lang_sequence::Analysis,
+        physical: &'a physical::Program,
+        structures_analysis: &structures::Analysis,
         mut result: &'a Ident,
         input: &Ident,
     ) -> bool {
@@ -299,9 +302,7 @@ fn nonexpanding_host(
             if result == input {
                 return true;
             }
-            let Some(definition) = source
-                .structures
-                .physical
+            let Some(definition) = physical
                 .program
                 .definitions
                 .iter()
@@ -311,8 +312,7 @@ fn nonexpanding_host(
             };
             result = match &definition.operator {
                 Operator::Rename(_) => {
-                    return analysis
-                        .structures
+                    return structures_analysis
                         .physical
                         .hosts
                         .get(&symbol_name(result))
@@ -334,6 +334,8 @@ fn nonexpanding_host(
         }
     }
     fn bound<'a>(
+        physical: &'a physical::Program,
+        structures_analysis: &'a structures::Analysis,
         source: &'a Program,
         analysis: &'a cq_lang_sequence::Analysis,
         term: &'a Term,
@@ -359,21 +361,18 @@ fn nonexpanding_host(
                 {
                     return None;
                 }
-                let host = analysis
-                    .structures
+                let host = structures_analysis
                     .physical
                     .hosts
                     .get(&result)
                     .map(String::as_str)
                     .or_else(|| {
-                        analysis
-                            .structures
+                        structures_analysis
                             .host_layouts
                             .get_key_value(&result)
                             .map(|(host, _)| host.as_str())
                     })?;
-                analysis
-                    .structures
+                structures_analysis
                     .host_layouts
                     .contains_key(host)
                     .then_some((host, name))
@@ -383,6 +382,8 @@ fn nonexpanding_host(
                     .iter()
                     .position(|definition| definition.name == *name)?;
                 bound(
+                    physical,
+                    structures_analysis,
                     source,
                     analysis,
                     &source.sequence.definitions[index].term,
@@ -392,7 +393,7 @@ fn nonexpanding_host(
             Term::Store { inner, .. }
             | Term::Tile { inner, .. }
             | Term::Flatten(inner)
-            | Term::Canon(inner) => bound(source, analysis, inner, before),
+            | Term::Canon(inner) => bound(physical, structures_analysis, source, analysis, inner, before),
             Term::Map(name, inner) | Term::Compact(name, inner) => {
                 let child = if matches!(term, Term::Compact(_, _)) {
                     match inner.as_ref() {
@@ -402,15 +403,15 @@ fn nonexpanding_host(
                 } else {
                     inner.as_ref()
                 };
-                let (host, input) = bound(source, analysis, child, before)?;
-                extends(source, analysis, name, input).then_some((host, name))
+                let (host, input) = bound(physical, structures_analysis, source, analysis, child, before)?;
+                extends(physical, structures_analysis, name, input).then_some((host, name))
             }
             Term::Choose(arms) => {
                 let (_, first) = arms.first()?;
-                let first = bound(source, analysis, first, before)?;
+                let first = bound(physical, structures_analysis, source, analysis, first, before)?;
                 arms.iter()
                     .skip(1)
-                    .all(|(_, arm)| bound(source, analysis, arm, before) == Some(first))
+                    .all(|(_, arm)| bound(physical, structures_analysis, source, analysis, arm, before) == Some(first))
                     .then_some(first)
             }
             Term::Union(_)
@@ -420,21 +421,24 @@ fn nonexpanding_host(
             | Term::PartitionK { .. } => None,
         }
     }
-    bound(source, analysis, term, before).map(|(host, _)| host.to_owned())
+    bound(physical, structures_analysis, source, analysis, term, before).map(|(host, _)| host.to_owned())
 }
 
-pub fn key_partition(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    key_partition_in(&mut Default::default(), source, &syn::parse2(arguments)?)
+pub fn key_partition(physical: &physical::Program, structures: &structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<(physical::Program, structures::Program, Program)> {
+    key_partition_in(&mut Default::default(), physical, structures, source, &syn::parse2(arguments)?)
 }
 
 /// Introduce a named publication before routing. Grading separately proves that
 /// publication is at an ancestor of the fixed-width separated pool.
 pub fn key_partition_in(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &physical::Program,
+    structures: &structures::Program,
     source: &Program,
     advice: &KeyPartition,
-) -> syn::Result<Program> {
-    let analysis = checker.check_shared(source)?;
+) -> syn::Result<(physical::Program, structures::Program, Program)> {
+    let analysis = checker.check_shared(physical, structures, source)?;
+    let structures_analysis = structures::contract::check(structures)?;
     let index = super::definition(source, &advice.name)?;
     if advice.parts == 0 {
         return Err(syn::Error::new_spanned(
@@ -521,9 +525,11 @@ pub fn key_partition_in(
                 inner: Box::new(output),
             }
         };
-        return super::checked_in(checker, source, target);
+        return super::checked_in(checker, physical, structures, source, target)
+            .map(|target| (physical.clone(), structures.clone(), target));
     }
     fn split(
+        physical: &physical::Program,
         term: &Term,
         advice: &KeyPartition,
         source: &Program,
@@ -547,7 +553,7 @@ pub fn key_partition_in(
                 Term::Flatten(Box::new(Term::Canon(Box::new(routed())))),
             )),
             Term::Group(group, inner) => {
-                let global = source.structures.physical.program.definitions.iter()
+                let global = physical.program.definitions.iter()
                     .find(|definition| definition.name == *group)
                     .is_some_and(|definition| matches!(&definition.operator,
                         cq_lang_sequence::structures::physical::Operator::Group(group) if group.keys.is_empty()));
@@ -577,7 +583,7 @@ pub fn key_partition_in(
             Term::Store { capacity, inner } => {
                 let (input, output) =
                     if matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)) {
-                        split(inner, advice, source, host_bound, counts, updates)?
+                        split(physical, inner, advice, source, host_bound, counts, updates)?
                     } else {
                         let output = if let Some(threshold) = advice.threshold {
                             let single_worker = if let Some(cache) = advice.cache_threshold {
@@ -630,6 +636,8 @@ pub fn key_partition_in(
         .cache_threshold
         .and_then(|_| {
             nonexpanding_host(
+                physical,
+                &structures_analysis,
                 source,
                 &analysis,
                 &source.sequence.definitions[index].term,
@@ -646,6 +654,7 @@ pub fn key_partition_in(
         });
     let mut updates = Vec::new();
     let (input, output) = split(
+        physical,
         &source.sequence.definitions[index].term,
         advice,
         source,
@@ -668,17 +677,15 @@ pub fn key_partition_in(
     if matches!(&source.sequence.definitions[index].term, Term::Store { inner, .. }
         if !matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)))
     {
-        let analysis = checker.check_shared(source)?;
         let result = analysis.results.get(&symbol_name(&advice.name));
-        if result.is_some_and(|result| analysis.structures.selections.contains_key(result)) {
+        if result.is_some_and(|result| structures_analysis.selections.contains_key(result)) {
             return Err(syn::Error::new_spanned(
                 &advice.name,
                 "BE-KeyPartProvider: a native position snapshot requires its selected carrier",
             ));
         }
         if result.is_some_and(|result| {
-            analysis
-                .structures
+            structures_analysis
                 .physical
                 .fused
                 .values()
@@ -719,8 +726,7 @@ pub fn key_partition_in(
             ));
         }
         if result.is_some_and(|result| {
-            analysis
-                .structures
+            structures_analysis
                 .filtered
                 .get(result)
                 .is_some_and(|filtered| {
@@ -759,9 +765,10 @@ pub fn key_partition_in(
     for (index, term) in updates {
         target.sequence.definitions[index].term = term;
     }
+    let mut target_structures = structures.clone();
     if let Some(provider) = provider {
         let mut found = false;
-        for (entry_index, entry) in source.structures.structures.entries.iter().enumerate() {
+        for (entry_index, entry) in structures.structures.entries.iter().enumerate() {
             if symbol_name(&entry.name) != provider {
                 continue;
             }
@@ -777,8 +784,7 @@ pub fn key_partition_in(
                 ));
             }
             if matches!(
-                source
-                    .structures
+                structures
                     .structures
                     .providers
                     .get(&keyed.provider.token)
@@ -800,8 +806,8 @@ pub fn key_partition_in(
                 .then(|| quote!(supports[keys]));
             let routed = cq_lang_sequence::structures::provider::base::declaration("sharded")
                 .compose(keyed.provider.clone())?;
-            target.structures = cq_structure_selection::retype(
-                &target.structures,
+            target_structures = cq_structure_selection::retype(
+                &target_structures,
                 quote!(entry(#entry_index) => #routed #supports),
             )?;
             found = true;
@@ -827,5 +833,7 @@ pub fn key_partition_in(
             },
         },
     );
-    super::checked_in(checker, source, target)
+    cq_lang_sequence::blocks::record_routing(&target_structures, &mut target)?;
+    checker.check_rewrite_in(physical, structures, source, physical, &target_structures, &target)?;
+    Ok((physical.clone(), target_structures, target))
 }

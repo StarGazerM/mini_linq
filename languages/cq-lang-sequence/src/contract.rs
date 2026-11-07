@@ -57,6 +57,7 @@ type LookupIndex = BTreeMap<String, BTreeMap<Vec<String>, Vec<(usize, String)>>>
 
 struct StructuresProof {
     program: cq_lang_structures::Program,
+    physical_program: physical::Program,
     analysis: cq_lang_structures::Analysis,
     physical: BTreeMap<String, usize>,
     lookups: LookupIndex,
@@ -100,14 +101,15 @@ impl Checker {
 
     /// Seed an invocation with its checked source. Opaque syntax stays in the
     /// prefix proof; subsequent Sequence proofs refer to that interned identity.
-    pub fn new(program: &Program) -> syn::Result<Self> {
+    pub fn new(physical: &physical::Program, structures: &cq_lang_structures::Program, program: &Program) -> syn::Result<Self> {
         let mut checker = Self::default();
-        checker.check_shared(program)?;
+        checker.check_shared(physical, structures, program)?;
         Ok(checker)
     }
 
     fn structures(
         &self,
+        physical: &physical::Program,
         program: &cq_lang_structures::Program,
     ) -> syn::Result<std::rc::Rc<StructuresProof>> {
         if let Some(proof) = self
@@ -115,12 +117,12 @@ impl Checker {
             .borrow()
             .iter()
             .rev()
-            .find(|proof| proof.program == *program)
+            .find(|proof| proof.program == *program && proof.physical_program == *physical)
         {
             return Ok(proof.clone());
         }
         let mut lookups = LookupIndex::new();
-        for (index, definition) in program.physical.program.definitions.iter().enumerate() {
+        for (index, definition) in physical.program.definitions.iter().enumerate() {
             if let Operator::Probe(_, keyed) | Operator::Merge(_, keyed) = &definition.operator {
                 let mut keys: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
                 keys.sort();
@@ -133,7 +135,7 @@ impl Checker {
             }
         }
         let analysis = cq_lang_structures::contract::check(program)?;
-        let queries = self.support.queries(&program.physical, &analysis.physical);
+        let queries = self.support.queries(physical, &analysis.physical);
         // BE-Code obligations name a column's codec: the one its logical type's
         // input columns declare; differing declarations leave it ambiguous.
         let mut codecs: Vec<(
@@ -170,9 +172,9 @@ impl Checker {
         }
         let proof = std::rc::Rc::new(StructuresProof {
             program: program.clone(),
+            physical_program: physical.clone(),
             analysis,
-            physical: program
-                .physical
+            physical: physical
                 .program
                 .definitions
                 .iter()
@@ -194,26 +196,28 @@ impl Checker {
 
     /// Borrow immutable checked facts without cloning their complete analysis.
     /// Only structural facts are shared; machine grading is always rechecked.
-    pub fn check_shared(&mut self, program: &Program) -> syn::Result<std::rc::Rc<Analysis>> {
-        analyze(program, self).map(|checked| checked.analysis.clone())
+    pub fn check_shared(&mut self, physical: &physical::Program, structures: &cq_lang_structures::Program, program: &Program) -> syn::Result<std::rc::Rc<Analysis>> {
+        analyze(physical, structures, program, self).map(|checked| checked.analysis.clone())
     }
 
-    pub fn check(&mut self, program: &Program) -> syn::Result<Analysis> {
-        self.check_shared(program)
+    pub fn check(&mut self, physical: &physical::Program, structures: &cq_lang_structures::Program, program: &Program) -> syn::Result<Analysis> {
+        self.check_shared(physical, structures, program)
             .map(|analysis| (*analysis).clone())
     }
 
-    pub fn check_rewrite_in(&mut self, source: &Program, target: &Program) -> syn::Result<()> {
-        check_rewrite_in(source, target, self)
+    pub fn check_rewrite_in(&mut self, source_physical: &physical::Program, source_structures: &cq_lang_structures::Program, source: &Program, target_physical: &physical::Program, target_structures: &cq_lang_structures::Program, target: &Program) -> syn::Result<()> {
+        check_rewrite_in(source_physical, source_structures, source, target_physical, target_structures, target, self)
     }
 
     pub fn check_grading(
         &mut self,
+        physical: &physical::Program,
+        structures: &cq_lang_structures::Program,
         program: &Program,
         machine: &crate::Machine,
     ) -> syn::Result<Analysis> {
-        let analysis = self.check(program)?;
-        crate::grading::check_grading_in(program, machine, analysis)
+        let proof = analyze(physical, structures, program, self)?;
+        crate::grading::check_grading_in(physical, structures, program, machine, (*proof.analysis).clone(), &proof.prefix.analysis)
     }
 }
 
@@ -221,9 +225,9 @@ fn fail<T>(term: &impl ToTokens, rule: &str, message: &str) -> syn::Result<T> {
     Err(syn::Error::new_spanned(term, format!("{rule}: {message}")))
 }
 
-/// Check the complete Structures prefix and derive the Sequence facts.
-pub fn check(program: &Program) -> syn::Result<Analysis> {
-    Checker::default().check(program)
+/// Check a Sequence annotation against its separately supplied base programs.
+pub fn check(physical: &physical::Program, structures: &cq_lang_structures::Program, program: &Program) -> syn::Result<Analysis> {
+    Checker::default().check(physical, structures, program)
 }
 
 fn check_native_read(
@@ -252,9 +256,9 @@ fn check_native_read(
     Ok(())
 }
 
-pub(crate) fn check_native_grading(analysis: &Analysis) -> syn::Result<()> {
+pub(crate) fn check_native_grading(structures: &cq_lang_structures::Analysis, analysis: &Analysis) -> syn::Result<()> {
     for (key, required) in &analysis.lookup_capabilities {
-        if let Some(native) = analysis.structures.natives.get(key) {
+        if let Some(native) = structures.natives.get(key) {
             let provider = Ident::new(&key.0, proc_macro2::Span::call_site());
             check_native_read(&provider, native.read, required)?;
         }
@@ -262,8 +266,8 @@ pub(crate) fn check_native_grading(analysis: &Analysis) -> syn::Result<()> {
     Ok(())
 }
 
-fn analyze(program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<CheckedProof>> {
-    let prefix = context.structures(&program.structures)?;
+fn analyze(physical: &physical::Program, structures: &cq_lang_structures::Program, program: &Program, context: &Checker) -> syn::Result<std::rc::Rc<CheckedProof>> {
+    let prefix = context.structures(physical, structures)?;
     analyze_in(program, context, prefix)
 }
 
@@ -287,7 +291,7 @@ fn analyze_in(
     if let Some(proof) = previous {
         return Ok(proof);
     }
-    crate::blocks::check(program)?;
+    crate::blocks::check(&prefix.physical_program, &prefix.program, program)?;
     let representation = &program.representation;
     if !representation.identity.is_disjoint(&representation.encoded) {
         return fail(
@@ -319,7 +323,6 @@ fn analyze_in(
         program,
         lookup_slots: crate::lookup_slots(&program.sequence),
         analysis: Analysis {
-            structures: prefix.analysis.clone(),
             evidence: program.evidence.clone(),
             representation: program.representation.clone(),
             results: BTreeMap::new(),
@@ -327,7 +330,7 @@ fn analyze_in(
             shapes: BTreeMap::new(),
             tilings: BTreeMap::new(),
             partial_groups: BTreeMap::new(),
-            prefix_bounds: crate::bounds::record(program),
+            prefix_bounds: crate::bounds::record(&prefix.physical_program, program),
             canon_free_groups: BTreeSet::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
@@ -356,7 +359,7 @@ fn analyze_in(
         prefix: &prefix,
         support: &context.support,
     };
-    crate::bounds::check(program, &checker.analysis.prefix_bounds)?;
+    crate::bounds::check(&prefix.physical_program, program, &checker.analysis.prefix_bounds)?;
     let mut publication_facts = BTreeMap::new();
     for definition in &program.sequence.definitions {
         let name = symbol_name(&definition.name);
@@ -371,9 +374,7 @@ fn analyze_in(
         if matches!(definition.term, Term::Store { .. }) {
             publication_facts.insert(name.clone(), publication::Input::from(&fact));
         }
-        if checker
-            .analysis
-            .structures
+        if checker.prefix.analysis
             .physical
             .headings
             .contains_key(&name)
@@ -451,10 +452,10 @@ fn analyze_in(
             "output protocol requires a final store",
         );
     }
-    publication::derive(program, &mut checker.analysis, &publication_facts)?;
-    checker.analysis.task_execution = crate::task_execution::analyze(program, &checker.analysis);
-    crate::blocks::check_task_covers(program, &checker.analysis)?;
-    program.evidence.check(program, &checker.analysis)?;
+    publication::derive(&prefix.physical_program, &prefix.analysis, program, &mut checker.analysis, &publication_facts)?;
+    checker.analysis.task_execution = crate::task_execution::analyze(&prefix.physical_program, &prefix.analysis, program, &checker.analysis);
+    crate::blocks::check_task_covers(&prefix.program, program, &prefix.analysis, &checker.analysis)?;
+    program.evidence.check(&prefix.physical_program, &prefix.analysis, &checker.analysis)?;
     Ok(context.remember(CheckedProof {
         prefix: prefix.clone(),
         sequence: program.sequence.clone(),
@@ -478,9 +479,7 @@ fn has_capacity(term: &Term) -> bool {
 impl Checked<'_> {
     fn require_store(&self, name: &Ident) -> syn::Result<()> {
         let result = symbol_name(name);
-        if !self
-            .analysis
-            .structures
+        if !self.prefix.analysis
             .physical
             .hosts
             .contains_key(&result)
@@ -499,7 +498,7 @@ impl Checked<'_> {
         self.prefix
             .physical
             .get(&symbol_name(name))
-            .map(|&index| &self.program.structures.physical.program.definitions[index])
+            .map(|&index| &self.prefix.physical_program.program.definitions[index])
             .ok_or_else(|| syn::Error::new_spanned(name, "BE-Alpha: unknown Physical result"))
     }
 
@@ -510,8 +509,8 @@ impl Checked<'_> {
         left == right
             || matches!((left, right),
             (Meaning::Result(left), Meaning::Result(right))
-            if self.analysis.structures.physical.headings[left]
-                == self.analysis.structures.physical.headings[right]
+            if self.prefix.analysis.physical.headings[left]
+                == self.prefix.analysis.physical.headings[right]
                 && self.support.equal_in(
                     &self.prefix.queries,
                     left,
@@ -521,10 +520,8 @@ impl Checked<'_> {
 
     fn heading(&self, meaning: &Meaning) -> Vec<String> {
         match meaning {
-            Meaning::Result(name) => self.analysis.structures.physical.headings[name].clone(),
-            Meaning::Host(name) => self
-                .analysis
-                .structures
+            Meaning::Result(name) => self.prefix.analysis.physical.headings[name].clone(),
+            Meaning::Host(name) => self.prefix.analysis
                 .host_layouts
                 .get(name)
                 .cloned()
@@ -532,7 +529,7 @@ impl Checked<'_> {
             Meaning::Lookup(provider, _, inner) => {
                 let mut heading = self.heading(inner);
                 heading.extend(
-                    self.analysis.structures.physical.headings[provider]
+                    self.prefix.analysis.physical.headings[provider]
                         .iter()
                         .cloned(),
                 );
@@ -554,9 +551,7 @@ impl Checked<'_> {
             Vec<String>,
         )> = Vec::new();
         for column in columns {
-            let declared = self
-                .analysis
-                .structures
+            let declared = self.prefix.analysis
                 .physical
                 .rows
                 .values()
@@ -630,8 +625,8 @@ impl Checked<'_> {
         }
         physical::inherited_key(
             &definition.operator,
-            &self.analysis.structures.physical.headings[&symbol_name(name)],
-            &self.program.structures.physical.program.host_sets,
+            &self.prefix.analysis.physical.headings[&symbol_name(name)],
+            &self.prefix.physical_program.program.host_sets,
             |operand| {
                 let result = symbol_name(operand);
                 if let Some((meaning, unique)) = input
@@ -658,10 +653,7 @@ impl Checked<'_> {
                 if facts.iter().any(|fact| fact.max_depth != 0) {
                     return fail(term, "BE-Alpha", "union requires flat arms");
                 }
-                let definition = self
-                    .program
-                    .structures
-                    .physical
+                let definition = self.prefix.physical_program
                     .program
                     .definitions
                     .iter()
@@ -694,11 +686,11 @@ impl Checked<'_> {
             }
             Term::Rows(name) => {
                 let name_string = symbol_name(name);
-                let physical = &self.analysis.structures.physical;
+                let physical = &self.prefix.analysis.physical;
                 let meaning = if physical.headings.contains_key(&name_string) {
                     if !physical.hosts.contains_key(&name_string)
                         && physical.modes[&name_string] != ModeKind::Let
-                        && !self.analysis.structures.retained.contains_key(&name_string)
+                        && !self.prefix.analysis.retained.contains_key(&name_string)
                         && !matches!(self.physical(name)?.operator, Operator::Unit(_))
                     {
                         return fail(name, "BE-Alpha", "rows requires a retained result or host");
@@ -707,9 +699,7 @@ impl Checked<'_> {
                         self.require_store(name)?;
                     }
                     Meaning::Result(name_string.clone())
-                } else if self
-                    .analysis
-                    .structures
+                } else if self.prefix.analysis
                     .host_layouts
                     .contains_key(&name_string)
                 {
@@ -787,7 +777,7 @@ impl Checked<'_> {
                     let keyed = match &definition.operator {
                         Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => keyed,
                         Operator::Probe(_, keyed)
-                            if self.analysis.structures.membership.contains(&(
+                            if self.prefix.analysis.membership.contains(&(
                                 symbol_name(provider),
                                 {
                                     let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
@@ -855,7 +845,7 @@ impl Checked<'_> {
                         .prefix
                         .physical
                         .get(&current)
-                        .map(|&index| &self.program.structures.physical.program.definitions[index])
+                        .map(|&index| &self.prefix.physical_program.program.definitions[index])
                         .ok_or_else(|| {
                             syn::Error::new_spanned(
                                 name,
@@ -1016,7 +1006,7 @@ impl Checked<'_> {
                 self.physical(provider)?;
                 let mut names: Vec<_> = keys.iter().map(symbol_name).collect();
                 names.sort();
-                let heading = &self.analysis.structures.physical.headings[&provider_name];
+                let heading = &self.prefix.analysis.physical.headings[&provider_name];
                 let input_heading = self.heading(&fact.meaning);
                 if names.windows(2).any(|pair| pair[0] == pair[1])
                     || names
@@ -1038,7 +1028,7 @@ impl Checked<'_> {
                     .flatten()
                     .filter_map(|(index, input)| {
                         let definition =
-                            &self.program.structures.physical.program.definitions[*index];
+                            &self.prefix.physical_program.program.definitions[*index];
                         self.same_meaning(&fact.meaning, &Meaning::Result(input.clone()))
                             .then_some(definition)
                     })
@@ -1057,9 +1047,7 @@ impl Checked<'_> {
                         cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
                     );
                 }
-                let capability = if self
-                    .analysis
-                    .structures
+                let capability = if self.prefix.analysis
                     .membership
                     .contains(&(provider_name.clone(), names.clone()))
                 {
@@ -1079,7 +1067,7 @@ impl Checked<'_> {
                     // The ordered left stream is already carried by this term;
                     // only the independently probed right needs a prior store.
                     let left_name = symbol_name(&left);
-                    let ordered_stream = self.analysis.structures.physical.modes[&left_name]
+                    let ordered_stream = self.prefix.analysis.physical.modes[&left_name]
                         == ModeKind::Pipe
                         && matches!(&self.physical(&left)?.operator, Operator::Merge(_, keyed)
                         if {
@@ -1163,7 +1151,7 @@ impl Checked<'_> {
                             })
                         {
                             let definition =
-                                &self.program.structures.physical.program.definitions[*index];
+                                &self.prefix.physical_program.program.definitions[*index];
                             fact.meaning = Meaning::Result(symbol_name(&definition.name));
                         }
                     }
@@ -1288,7 +1276,7 @@ impl Checked<'_> {
                 // Formal rule BE-Canon: Canonicalize innermost rows; providers remain trait obligations.
                 let mut fact = self.term(inner, owner)?;
                 let canonical = match &fact.meaning {
-                    Meaning::Result(name) => self.analysis.structures.canonical.get(name).cloned(),
+                    Meaning::Result(name) => self.prefix.analysis.canonical.get(name).cloned(),
                     _ => None,
                 };
                 // Formal rule BE-CanonOrdered: the proof carrier belongs to this
@@ -1305,7 +1293,7 @@ impl Checked<'_> {
                 // The returned answer boundary reads its recorded identity index.
                 let answer_index = match (&canonical, &fact.meaning) {
                     (None, Meaning::Result(name)) => {
-                        self.analysis.structures.head_dedup.get(name).cloned()
+                        self.prefix.analysis.head_dedup.get(name).cloned()
                     }
                     _ => None,
                 };
@@ -1340,7 +1328,7 @@ impl Checked<'_> {
                 let mut fact = self.term(inner, owner)?;
                 if fact.partitioned
                     && let Meaning::Result(result) = &fact.meaning
-                    && self.analysis.structures.selections.contains_key(result)
+                    && self.prefix.analysis.selections.contains_key(result)
                 {
                     return fail(
                         term,
@@ -1449,9 +1437,7 @@ impl Checked<'_> {
         let key = (name.clone(), keys.to_vec());
         // Whole-relation access was established by Structures; no keyed trait
         // is required. Retention was checked by provider().
-        if self
-            .analysis
-            .structures
+        if self.prefix.analysis
             .read_accesses
             .get(&name)
             .and_then(|reads| reads.get(keys))
@@ -1477,7 +1463,7 @@ impl Checked<'_> {
         // Check the actual reader before using a capability cached for another
         // reader or a retained provider recorded for the same result and keys.
         let native = reader.and_then(|reader| {
-            self.analysis.structures.natives.get(&(
+            self.prefix.analysis.natives.get(&(
                 name.clone(),
                 cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
                 keys.to_vec(),
@@ -1496,9 +1482,9 @@ impl Checked<'_> {
             return Ok(());
         }
         if let Some(reader) = reader
-            && self.analysis.structures.built_on(&name, keys).is_none()
-            && !self.analysis.structures.keysets.contains_key(&key)
-            && !self.analysis.structures.fallbacks.contains_key(&(
+            && self.prefix.analysis.built_on(&name, keys).is_none()
+            && !self.prefix.analysis.keysets.contains_key(&key)
+            && !self.prefix.analysis.fallbacks.contains_key(&(
                 name.clone(),
                 cq_lang_structures::ReaderRef::Result(symbol_name(reader)),
                 keys.to_vec(),
@@ -1520,7 +1506,7 @@ impl Checked<'_> {
             // already hold. Repeated inherited reads add no stronger premise.
             return Ok(());
         }
-        if required != Capability::Membership && self.analysis.structures.membership.contains(&key)
+        if required != Capability::Membership && self.prefix.analysis.membership.contains(&key)
         {
             return fail(
                 provider,
@@ -1528,23 +1514,19 @@ impl Checked<'_> {
                 "enumeration requires Exact/Range/Ordered, not Membership capability",
             );
         }
-        let ty = self
-            .analysis
-            .structures
+        let ty = self.prefix.analysis
             .built_on(&name, keys)
             .map(|(ty, _)| ty.clone())
             .or_else(|| {
                 let operator = |consumer: &str| {
-                    self.program
-                        .structures
-                        .physical
+                    self.prefix.physical_program
                         .program
                         .definitions
                         .iter()
                         .find(|definition| symbol_name(&definition.name) == consumer)
                         .map(|definition| &definition.operator)
                 };
-                let fallbacks = self.analysis.structures.fallbacks.iter().filter(
+                let fallbacks = self.prefix.analysis.fallbacks.iter().filter(
                     |((result, reader, columns), _)| {
                         *result == name
                             && columns == keys
@@ -1576,8 +1558,7 @@ impl Checked<'_> {
                     .map(|(_, ty)| ty.clone())
             })
             .or_else(|| {
-                self.analysis
-                    .structures
+                self.prefix.analysis
                     .keysets
                     .get(&key)
                     .map(|keyset| keyset.provider.clone())
@@ -1615,9 +1596,7 @@ impl Checked<'_> {
     fn statistic(&self, read: &crate::stats::Guard) -> syn::Result<()> {
         use cq_lang_structures::stats::{Placement, Unit};
         let reference = &read.reference;
-        let Some(publication) = self
-            .analysis
-            .structures
+        let Some(publication) = self.prefix.analysis
             .publications
             .get(&symbol_name(&reference.publication))
         else {
@@ -1681,13 +1660,11 @@ impl Checked<'_> {
         match len {
             Len::Input(name)
                 if self.facts.contains_key(name)
-                    || self
-                        .analysis
-                        .structures
+                    || self.prefix.analysis
                         .physical
                         .headings
                         .contains_key(name)
-                    || self.analysis.structures.host_layouts.contains_key(name) =>
+                    || self.prefix.analysis.host_layouts.contains_key(name) =>
             {
                 Ok(())
             }
@@ -1759,11 +1736,11 @@ fn constant_len(len: &Len) -> Option<usize> {
 
 /// Rewrites preserve final support by construction and preserve the Physical
 /// plan, except for independently checked catalog retention.
-pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    Checker::default().check_rewrite_in(source, target)
+pub fn check_rewrite(source_physical: &physical::Program, source_structures: &cq_lang_structures::Program, source: &Program, target_physical: &physical::Program, target_structures: &cq_lang_structures::Program, target: &Program) -> syn::Result<()> {
+    Checker::default().check_rewrite_in(source_physical, source_structures, source, target_physical, target_structures, target)
 }
 
-fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> syn::Result<()> {
+fn check_rewrite_in(source_physical: &physical::Program, source_structures: &cq_lang_structures::Program, source: &Program, target_physical: &physical::Program, target_structures: &cq_lang_structures::Program, target: &Program, context: &Checker) -> syn::Result<()> {
     if !source
         .representation
         .identity
@@ -1782,12 +1759,8 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     // Resolve complete Structures syntax once per distinct endpoint. All
     // subsequent proof comparisons use the interned prefix identity rather
     // than revisiting opaque Rust tokens for each candidate Sequence proof.
-    let source_prefix = context.structures(&source.structures)?;
-    let target_prefix = if std::ptr::eq(source, target) {
-        source_prefix.clone()
-    } else {
-        context.structures(&target.structures)?
-    };
+    let source_prefix = context.structures(source_physical, source_structures)?;
+    let target_prefix = context.structures(target_physical, target_structures)?;
     let unchanged = std::rc::Rc::ptr_eq(&source_prefix, &target_prefix);
     let source_facts = analyze_in(source, context, source_prefix)?;
     if unchanged
@@ -1814,7 +1787,7 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
     // Catalog selection may retain host renames and replace their keyed
     // fallbacks, while preserving opaque syntax and the original scans.
     let storage_retyped = !unchanged
-        && cq_lang_structures::check_retention_rewrite(&source.structures, &target.structures)
+        && cq_lang_structures::check_retention_rewrite(source_structures, target_structures)
             .is_ok();
     // Formal rule BE-PhysicalPreserved: Only checked catalog retention may change the prefix.
     if !unchanged && !storage_retyped {
@@ -1858,6 +1831,21 @@ fn check_rewrite_in(source: &Program, target: &Program, context: &Checker) -> sy
 mod tests {
     use super::*;
 
+    struct Fixture {
+        physical: physical::Program,
+        structures: cq_lang_structures::Program,
+        program: Program,
+    }
+
+    impl syn::parse::Parse for Fixture {
+        fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+            let physical = input.parse()?;
+            let structures = cq_lang_structures::Program::parse(input, &physical)?;
+            let program = input.parse()?;
+            Ok(Self { physical, structures, program })
+        }
+    }
+
     #[test]
     fn native_lookup_capabilities_require_printable_recorded_reads() {
         use cq_syntax::host::HostRead;
@@ -1894,7 +1882,7 @@ mod tests {
 
     #[test]
     fn indexed_publication_keys_preserve_lexical_fact_order() {
-        let program: Program = syn::parse_quote! {
+        let fixture: Fixture = syn::parse_quote! {
             physical {
                 relation R(k:i32, value:i64);
                 r = let canon rename R@0 {k -> k, value -> value};
@@ -1917,7 +1905,7 @@ mod tests {
                 last = rows grouped;
             }
         };
-        let proof = analyze(&program, &Checker::default()).unwrap();
+        let proof = analyze(&fixture.physical, &fixture.structures, &fixture.program, &Checker::default()).unwrap();
         assert_eq!(proof.facts["before"].unique, Some(vec!["k".into()]));
         for name in ["after", "last"] {
             assert_eq!(proof.facts[name].unique, Some(vec!["k".into(), "n".into()]));
@@ -1926,7 +1914,7 @@ mod tests {
 
     #[test]
     fn indexed_publication_keys_do_not_promote_unstored_views() {
-        let program: Program = syn::parse_quote! {
+        let fixture: Fixture = syn::parse_quote! {
             physical {
                 relation R(a:i32);
                 r = pipe rename R@0 {a -> a};
@@ -1942,7 +1930,7 @@ mod tests {
                 output = canon map output after;
             }
         };
-        let proof = analyze(&program, &Checker::default()).unwrap();
+        let proof = analyze(&fixture.physical, &fixture.structures, &fixture.program, &Checker::default()).unwrap();
         assert_eq!(proof.facts["before"].unique, None);
         assert_eq!(proof.facts["after"].unique, Some(vec!["a".into()]));
     }

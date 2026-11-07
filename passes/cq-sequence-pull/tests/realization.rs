@@ -10,9 +10,9 @@ fn text(tokens: impl ToTokens) -> String {
 }
 
 fn sequence_rows(module: &structures::Program) -> syn::Result<syn::Expr> {
-    let program = cq_sequence_lowering::compile(module)?;
-    let analysis = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine())?;
-    let expression = cq_sequence_pull::translate(&program, &analysis)?;
+    let program = cq_sequence_lowering::compile(&module.physical, module)?;
+    let analysis = cq_lang_sequence::check_grading(&module.physical, module, &program, &cq_sequence_pull::machine())?;
+    let expression = cq_sequence_pull::translate(&module.physical, module, &program, &analysis)?;
     Ok(syn::parse_quote!((#expression).into_iter()))
 }
 
@@ -62,7 +62,7 @@ fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() 
     );
     selected.structures.publications.0.push(publication.clone());
     structures::stats::record_constructions(&mut selected).unwrap();
-    let mut program = cq_sequence_lowering::compile(&selected).unwrap();
+    let mut program = cq_sequence_lowering::compile(&physical, &selected).unwrap();
     let reference = publication.reference();
     let guard: Guard = syn::parse_quote!(stat r (#reference) < 10);
     let last = program.sequence.definitions.last_mut().unwrap();
@@ -71,8 +71,10 @@ fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() 
         #guard => tile 1 #original,
         else => tile 2 #original
     ]);
-    let analysis = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&physical, &selected, &program, &cq_sequence_pull::machine()).unwrap();
     let expression = cq_sequence_pull::translate_with(
+        &physical,
+        &selected,
         &program,
         &analysis,
         syn::parse_quote!(1usize),
@@ -158,7 +160,7 @@ fn selected_construction_publishes_real_rows_and_group_maxima() {
         );
         selected.structures.publications.0.push(publication.clone());
         structures::stats::record_constructions(&mut selected).unwrap();
-        let mut program = cq_sequence_lowering::compile(&selected).unwrap();
+        let mut program = cq_sequence_lowering::compile(&physical, &selected).unwrap();
         let reference = publication.reference();
         let guard: Guard = syn::parse_quote!(stat r (#reference) < 3);
         let last = program.sequence.definitions.last_mut().unwrap();
@@ -167,9 +169,9 @@ fn selected_construction_publishes_real_rows_and_group_maxima() {
             #guard => tile 1 #original,
             else => tile 2 #original
         ]);
-        let facts = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+        let facts = cq_lang_sequence::check_grading(&physical, &selected, &program, &cq_sequence_pull::machine()).unwrap();
         let expression = cq_sequence_pull::translate_with(
-            &program, &facts, syn::parse_quote!(1usize),
+            &physical, &selected, &program, &facts, syn::parse_quote!(1usize),
             cq_sequence_pull::CanonTarget::Sequential,
             |term, _, _, output, _, _| {
                 if let Term::Tile { n, .. } = term {
@@ -283,7 +285,7 @@ fn equal_support_choice_reheads_before_a_downstream_projection() {
         return out as answer(b);
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let source = cq_sequence_lowering::compile(&selected).unwrap();
+    let source = cq_sequence_lowering::compile(&physical, &selected).unwrap();
     let mut target = source.clone();
     target
         .sequence
@@ -301,10 +303,10 @@ fn equal_support_choice_reheads_before_a_downstream_projection() {
             cq_lang_sequence::Term::Ref(syn::parse_quote!(no)),
         ),
     ]);
-    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
-    let analysis = cq_lang_sequence::contract::check(&target).unwrap();
+    cq_lang_sequence::check_rewrite(&physical, &selected, &source, &physical, &selected, &target).unwrap();
+    let analysis = cq_lang_sequence::contract::check(&physical, &selected, &target).unwrap();
     assert_eq!(analysis.results["combined"], "combined");
-    let expression = cq_sequence_pull::translate(&target, &analysis).unwrap();
+    let expression = cq_sequence_pull::translate(&physical, &selected, &target, &analysis).unwrap();
     let source = quote!(
         fn main() {
             let keys = &[(1i32,), (2,)][..];
@@ -409,17 +411,19 @@ fn worker_guards_use_serial_or_explicit_target_worker_counts() {
         return r as answer(a);
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let mut program = cq_sequence_lowering::compile(&selected).unwrap();
+    let mut program = cq_sequence_lowering::compile(&physical, &selected).unwrap();
     program.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(
         store flatten choose [
             workers < 2 => tile 1 rows r,
             else => tile 2 rows r
         ]
     );
-    let analysis = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
-    let serial = cq_sequence_pull::translate(&program, &analysis).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&physical, &selected, &program, &cq_sequence_pull::machine()).unwrap();
+    let serial = cq_sequence_pull::translate(&physical, &selected, &program, &analysis).unwrap();
     assert!(text(&serial).contains(&text(quote!((1usize) < 2usize))));
     let target = cq_sequence_pull::translate_with(
+        &physical,
+        &selected,
         &program,
         &analysis,
         syn::parse_quote!(available_workers),
@@ -434,6 +438,8 @@ fn worker_guards_use_serial_or_explicit_target_worker_counts() {
     )
     .unwrap();
     let profiled = cq_sequence_pull::translate_profile_with(
+        &physical,
+        &selected,
         &program,
         &analysis,
         syn::parse_quote!(available_workers),
@@ -521,19 +527,21 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
                     )])
                     .unwrap();
             }
-            let mut program = cq_sequence_lowering::compile(&structures).unwrap();
+            let mut program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
             if tiled {
                 program.sequence.definitions[0].term = syn::parse_quote!(tile 2 rows l);
             }
             let analysis =
-                cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
+                cq_lang_sequence::check_grading(&physical, &structures, &program, &cq_sequence_pull::machine()).unwrap();
+            let structures_analysis = structures::contract::check(&structures).unwrap();
             assert!(
-                analysis
-                    .structures
+                structures_analysis
                     .membership
                     .contains(&("r".into(), vec!["a".into()]))
             );
             let expression = cq_sequence_pull::translate_with(
+                &physical,
+                &structures,
                 &program,
                 &analysis,
                 syn::parse_quote!(1usize),
@@ -1274,9 +1282,9 @@ fn expansion_counters_measure_children_before_closing_predicates() {
         return result as answer(k,v,w);
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let program = cq_sequence_lowering::compile(&selected).unwrap();
-    let analysis = cq_lang_sequence::check_grading(&program, &cq_sequence_pull::machine()).unwrap();
-    let expression = cq_sequence_pull::translate_profile(&program, &analysis).unwrap();
+    let program = cq_sequence_lowering::compile(&physical, &selected).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&physical, &selected, &program, &cq_sequence_pull::machine()).unwrap();
+    let expression = cq_sequence_pull::translate_profile(&physical, &selected, &program, &analysis).unwrap();
     let source = quote! {
         fn main() {
             let keys = &[(1i32,), (2,)];
@@ -1355,7 +1363,7 @@ fn blocked_predicates_execute_exact_formulas_and_own_only_demanded_fields() {
     let complete = sequence_rows(&selected).unwrap();
     // Exercise the checked streaming prefix before its mandatory canonical
     // answer consumer, rather than weakening the complete query's semantics.
-    let sequence = cq_sequence_lowering::compile(&selected).unwrap();
+    let sequence = cq_sequence_lowering::compile(&physical, &selected).unwrap();
     let facts = structures::contract::check(&selected).unwrap();
     let mut context = cq_print::Context::new(&selected, &facts);
     context.blocked_runs = sequence.representation.blocks.runs.clone();

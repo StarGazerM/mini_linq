@@ -144,26 +144,25 @@ pub fn decompose(input: TokenStream) -> TokenStream {
 }
 
 fn expand_decompose(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    cq_stage::Sequence::<Physical, Structures, Sequence>::rewrite(input, |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::rewrite(input, |physical: &Physical, structures: &Structures, source: &Sequence, arguments| {
         let declarations = syn::parse2::<CodecDeclarations>(arguments)?;
         let mut catalog = cq_gpu_sequence_core::catalog();
         catalog.codecs.extend(declarations.0);
-        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
+        let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
         let target =
-            cq_sequence_plan::decompose(&source, &cq_gpu_sequence_core::machine(), &catalog)?
-                .program;
-        Ok((target.structures.physical.clone(), target.structures.clone(), target))
+            cq_sequence_plan::decompose(physical, structures, &source, &cq_gpu_sequence_core::machine(), &catalog)?;
+        Ok((target.physical, target.structures, target.program))
     })
 }
 
 /// Check the authored grades against the GPU machine without choosing grades.
 #[proc_macro]
 pub fn machine_grade(input: TokenStream) -> TokenStream {
-    cq_stage::Sequence::<Physical, Structures, Sequence>::rewrite(input.into(), |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::rewrite(input.into(), |physical: &Physical, structures: &Structures, source: &Sequence, arguments| {
         no_arguments(arguments)?;
-        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
-        cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
-        Ok((source.structures.physical.clone(), source.structures.clone(), source))
+        let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
+        cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
+        Ok((physical.clone(), structures.clone(), source))
     })
     .into()
 }
@@ -171,11 +170,11 @@ pub fn machine_grade(input: TokenStream) -> TokenStream {
 /// Translate a checked, explicitly graded Sequence program to CUDA.
 #[proc_macro]
 pub fn translate(input: TokenStream) -> TokenStream {
-    cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |physical: &Physical, structures: &Structures, source: &Sequence, arguments| {
         no_arguments(arguments)?;
-        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
-        let analysis = cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
-        cq_gpu_sequence_core::translate(&source, &analysis)
+        let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
+        let analysis = cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
+        cq_gpu_sequence_core::translate(physical, structures, &source, &analysis)
     })
     .into()
 }
@@ -186,7 +185,7 @@ pub fn translate(input: TokenStream) -> TokenStream {
 /// recorded output protocol still controls counting and capacity retries.
 #[proc_macro]
 pub fn translate_arena(input: TokenStream) -> TokenStream {
-    cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |physical: &Physical, structures: &Structures, source: &Sequence, arguments| {
         if arguments.is_empty() {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
@@ -194,9 +193,9 @@ pub fn translate_arena(input: TokenStream) -> TokenStream {
             ));
         }
         let arena = syn::parse2::<syn::Expr>(arguments)?;
-        let source = cq_gpu_sequence_core::runs::record_representation(source)?;
-        let analysis = cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
-        cq_gpu_sequence_core::translate_arena(&source, &analysis, &arena)
+        let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
+        let analysis = cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
+        cq_gpu_sequence_core::translate_arena(physical, structures, &source, &analysis, &arena)
     })
     .into()
 }
@@ -222,10 +221,10 @@ pub fn bind_runs(input: TokenStream) -> TokenStream {
 pub fn select_catalog(input: TokenStream) -> TokenStream {
     cq_stage::Structures::<Physical, Structures>::pass::<cq_stage::Structures<Physical, Structures>>(
         input.into(),
-        |_physical: &Physical, source: &Structures, arguments| {
+        |physical: &Physical, source: &Structures, arguments| {
             no_arguments(arguments)?;
-            let target = cq_sequence_plan::select_from_catalog(source, &cq_gpu_sequence_core::catalog())?;
-            Ok(cq_stage::Structures::new(target.physical.clone(), target))
+            let (physical, structures) = cq_sequence_plan::select_from_catalog(physical, source, &cq_gpu_sequence_core::catalog())?;
+            Ok(cq_stage::Structures::new(physical, structures))
         },
     )
     .into()
@@ -243,13 +242,14 @@ pub fn capture_constants(input: TokenStream) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
+    include!("../../tests/support/stack.rs");
     use super::*;
     use cq_lang_structures::provider::CodecId;
     use quote::quote;
 
     #[test]
     fn grouped_answer_gate_is_one_checked_diagnostic_expression() {
-        let mut program: cq_lang_sequence::Program = syn::parse_quote! {
+        let Stack { mut physical, mut structures, mut program } = syn::parse_quote! {
             physical {
                 relation R(k:u32) = (data);
                 r = let canon rename R@0 {k -> k};
@@ -293,28 +293,26 @@ mod tests {
                 source at host; feed at device.block; valuations at host; result at host;
             }
         };
-        program.structures = cq_gpu_sequence_core::bind_structures(&program.structures).unwrap();
-        program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
+        structures = cq_gpu_sequence_core::bind_structures(&structures).unwrap();
+        program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
         let machine = cq_gpu_sequence_core::machine();
-        cq_lang_sequence::check_grading(&program, &machine).unwrap();
+        cq_lang_sequence::check_grading(&physical, &structures, &program, &machine).unwrap();
 
         // The same grouped publication reaches its continuation without a gate.
-        let accepted = expand_decompose(quote!(pipeline { continuation }; #program));
+        let accepted = expand_decompose(quote!(pipeline { continuation }; #physical #structures #program));
         let accepted: syn::ExprMacro = syn::parse2(accepted).unwrap();
         assert!(accepted.mac.path.is_ident("continuation"));
 
-        program
-            .structures
-            .physical
+        physical
             .program
             .captures
             .items
             .push(syn::parse_quote!(if (limit != 3)));
-        assert!(cq_lang_sequence::check_grading(&program, &machine).is_err());
+        assert!(cq_lang_sequence::check_grading(&physical, &structures, &program, &machine).is_err());
 
         // Exercise the actual decompose ABI adapter, not a printer or a copy of
         // the checker. Candidate failures must not escape as adjacent macros.
-        let rejected = expand_decompose(quote!(pipeline { continuation }; #program));
+        let rejected = expand_decompose(quote!(pipeline { continuation }; #physical #structures #program));
         let expression: syn::ExprBlock = syn::parse2(rejected.clone()).unwrap();
         assert_eq!(expression.block.stmts.len(), 1);
         let syn::Stmt::Macro(diagnostic) = &expression.block.stmts[0] else {

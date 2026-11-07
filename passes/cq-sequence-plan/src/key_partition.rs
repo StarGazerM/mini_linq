@@ -2,6 +2,7 @@
 //! their keys; global groups route complete valuations before per-part Canon,
 //! or use contiguous tiles when BE-GroupKey already proves global uniqueness.
 use crate::rewrites::KeyPartition;
+use cq_lang_sequence::structures::{self, physical};
 use crate::{Advice, Planned};
 use cq_lang_sequence::structures::physical::Operator;
 use cq_lang_sequence::{Analysis, Catalog, Machine, Program, Term};
@@ -42,12 +43,14 @@ impl quote::ToTokens for KeyPartitionPolicy {
 /// Decompose with forced/forbidden key-partition decisions. The returned trace
 /// contains the same public checked rewrites as ordinary automatic planning.
 pub fn decompose_with_key_partitions(
+    physical: &physical::Program,
+    structures: &structures::Program,
     program: &Program,
     machine: &Machine,
     catalog: &Catalog,
     policies: &[KeyPartitionPolicy],
 ) -> syn::Result<Planned> {
-    super::decompose_in(&mut Default::default(), program, machine, catalog, policies)
+    super::decompose_in(&mut Default::default(), physical, structures, program, machine, catalog, policies)
 }
 
 pub(crate) fn validate(program: &Program, policies: &[KeyPartitionPolicy]) -> syn::Result<()> {
@@ -78,17 +81,20 @@ pub(crate) fn validate(program: &Program, policies: &[KeyPartitionPolicy]) -> sy
 /// A provider build can profit even when routing a downstream canon would
 /// move its producer out of an existing tiled segment.
 pub(crate) fn choices(
+    physical: &physical::Program,
+    structures: &structures::Program,
     program: &Program,
     facts: &Analysis,
     policies: &[KeyPartitionPolicy],
-) -> Vec<Vec<KeyPartitionPolicy>> {
+) -> syn::Result<Vec<Vec<KeyPartitionPolicy>>> {
+    let structures_analysis = structures::contract::check(structures)?;
     let names: Vec<_> = program
         .sequence
         .definitions
         .iter()
         .filter(|definition| !policies.iter().any(|policy| policy.name == definition.name))
         .filter(|definition| !provider_store(&definition.term))
-        .filter(|definition| keys(program, facts, &definition.name, &definition.term).is_some())
+        .filter(|definition| keys(physical, structures, &structures_analysis, facts, &definition.name, &definition.term).is_some())
         .map(|definition| definition.name.clone())
         .collect();
     let mut choices = vec![policies.to_vec()];
@@ -112,7 +118,7 @@ pub(crate) fn choices(
         }));
         choices.push(forced_only);
     }
-    choices
+    Ok(choices)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -159,10 +165,11 @@ pub(crate) fn apply(
     };
     // Decomposition may require range cursors even when construction needed
     // only exact lookup. Provider routing must inspect the completed schedule.
+    let structures_analysis = structures::contract::check(&planned.structures)?;
     let facts = if providers {
-        std::rc::Rc::new(checker.check_grading(&planned.program, machine)?)
+        std::rc::Rc::new(checker.check_grading(&planned.physical, &planned.structures, &planned.program, machine)?)
     } else {
-        checker.check_shared(&planned.program)?
+        checker.check_shared(&planned.physical, &planned.structures, &planned.program)?
     };
     let mut candidates = Vec::new();
     let mut names: BTreeSet<_> = planned
@@ -188,12 +195,12 @@ pub(crate) fn apply(
         if provider != providers || (!enabled && !provider) {
             continue;
         }
-        let Some(mut keys) = keys(&planned.program, &facts, &definition.name, &definition.term)
+        let Some(mut keys) = keys(&planned.physical, &planned.structures, &structures_analysis, &facts, &definition.name, &definition.term)
         else {
             continue;
         };
         if group_name(&definition.term).is_some()
-            && (partial_groups || !keyed_group(&planned.program, &definition.term))
+            && (partial_groups || !keyed_group(&planned.physical, &definition.term))
         {
             // BE-GroupKey was checked once before candidate enumeration.
             if unique_groups.contains(&symbol_name(&definition.name)) {
@@ -206,7 +213,7 @@ pub(crate) fn apply(
             let result = &facts.results[&symbol_name(&definition.name)];
             // A native position snapshot is not a replayable routed-row
             // carrier. Preserve the selected publication and its read ABI.
-            if facts.structures.selections.contains_key(result) {
+            if structures_analysis.selections.contains_key(result) {
                 continue;
             }
             // A type/layout belongs to the physical provider, not to one of its
@@ -216,9 +223,7 @@ pub(crate) fn apply(
             }) {
                 continue;
             }
-            let supported = planned
-                .program
-                .structures
+            let supported = planned.structures
                 .structures
                 .entries
                 .iter()
@@ -249,7 +254,7 @@ pub(crate) fn apply(
                             capability,
                             ..
                         } if provider == result => crate::catalog::provider_available(
-                            &facts, catalog, provider, capability, &routed,
+                            &structures_analysis, &facts, catalog, provider, capability, &routed,
                         ),
                         _ => true,
                     })
@@ -510,13 +515,12 @@ fn provider_store(term: &Term) -> bool {
         if !matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)))
 }
 
-fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Option<Vec<Ident>> {
+fn keys(physical: &physical::Program, structures: &structures::Program, structures_analysis: &structures::Analysis, facts: &Analysis, name: &Ident, term: &Term) -> Option<Vec<Ident>> {
     match term {
         Term::Canon(_) => {
             let result = facts.results.get(&symbol_name(name))?;
             Some(
-                facts
-                    .structures
+                structures_analysis
                     .physical
                     .headings
                     .get(result)?
@@ -525,17 +529,14 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
                     .collect(),
             )
         }
-        Term::Group(group, _) => program
-            .structures
-            .physical
+        Term::Group(group, _) => physical
             .program
             .definitions
             .iter()
             .find(|d| d.name == *group)
             .and_then(|d| match &d.operator {
                 Operator::Group(group) if group.keys.is_empty() => Some(
-                    facts
-                        .structures
+                    structures_analysis
                         .physical
                         .headings
                         .get(&symbol_name(&group.input))?
@@ -549,7 +550,7 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
         Term::Store { inner, .. }
             if matches!(inner.as_ref(), Term::Canon(_) | Term::Group(_, _)) =>
         {
-            keys(program, facts, name, inner)
+            keys(physical, structures, structures_analysis, facts, name, inner)
         }
         Term::Store { inner, .. } if !contains_partition(inner) => {
             // BE-KeyPart consumes flat valuations, not an existing tiled or
@@ -565,8 +566,7 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
             // Fused arms are constructed inside each prefix-row invocation.
             // Their flat Sequence definitions are deferred by the interpreter,
             // so rewriting that Store cannot supply a routed constructor.
-            if facts
-                .structures
+            if structures_analysis
                 .physical
                 .fused
                 .values()
@@ -591,9 +591,8 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
             // Filtered native layouts may reconstruct constant keys that are
             // absent from their carried valuations. Routing cannot read them.
             if first.iter().any(|key| {
-                !facts.structures.physical.headings[result].contains(key)
-                    || facts
-                        .structures
+                !structures_analysis.physical.headings[result].contains(key)
+                    || structures_analysis
                         .filtered
                         .get(result)
                         .is_some_and(|filtered| {
@@ -617,8 +616,7 @@ fn keys(program: &Program, facts: &Analysis, name: &Ident, term: &Term) -> Optio
             }) {
                 return None;
             }
-            let layout = program
-                .structures
+            let layout = structures
                 .structures
                 .entries
                 .iter()
@@ -655,11 +653,9 @@ fn group_name(term: &Term) -> Option<&Ident> {
     }
 }
 
-fn keyed_group(program: &Program, term: &Term) -> bool {
+fn keyed_group(physical: &physical::Program, term: &Term) -> bool {
     group_name(term).is_some_and(|name| {
-        program
-            .structures
-            .physical
+        physical
             .program
             .definitions
             .iter()
@@ -671,10 +667,10 @@ fn keyed_group(program: &Program, term: &Term) -> bool {
     })
 }
 
-pub(crate) fn has_keyed_partials(program: &Program, unique_groups: &BTreeSet<String>) -> bool {
+pub(crate) fn has_keyed_partials(physical: &physical::Program, program: &Program, unique_groups: &BTreeSet<String>) -> bool {
     program.sequence.definitions.iter().any(|definition| {
         unique_groups.contains(&symbol_name(&definition.name))
-            && keyed_group(program, &definition.term)
+            && keyed_group(physical, &definition.term)
     })
 }
 

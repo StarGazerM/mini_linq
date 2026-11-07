@@ -16,9 +16,9 @@ pub struct Machine {
     /// replace a stream root smaller than one root tile as the distributed root.
     pub retain_prefix_rows: usize,
     /// Target refinement records concrete provider/storage bindings upstream.
-    pub bindings: fn(&Program, &Analysis) -> syn::Result<bindings::Bindings>,
+    pub bindings: fn(&crate::structures::physical::Program, &crate::structures::Program, &Program, &crate::structures::Analysis, &Analysis) -> syn::Result<bindings::Bindings>,
     /// Target realization after publication storage is recorded.
-    pub realize: fn(&Program, &Analysis) -> syn::Result<realization::Realization>,
+    pub realize: fn(&crate::structures::physical::Program, &crate::structures::Program, &Program, &crate::structures::Analysis, &Analysis) -> syn::Result<realization::Realization>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,6 +150,8 @@ pub const SHARED_TILES: usize = 2048;
 /// Formal rule GPU-Launch: grading records partition, fold completion and
 /// synchronization before emission; target realization owns launch preparation.
 pub(crate) fn derive(
+    physical: &crate::structures::physical::Program,
+    structure_analysis: &crate::structures::Analysis,
     program: &Program,
     analysis: &Analysis,
     machine: &Machine,
@@ -161,11 +163,7 @@ pub(crate) fn derive(
         ));
     }
     let (definitions, published, sources) = chain_sources(program, analysis);
-    let physical: BTreeMap<_, _> = program
-        .structures
-        .physical
-        .program
-        .definitions
+    let physical: BTreeMap<_, _> = physical.program.definitions
         .iter()
         .map(|d| (symbol_name(&d.name), &d.operator))
         .collect();
@@ -274,7 +272,7 @@ pub(crate) fn derive(
                     && Some(name) != final_name.as_ref()
                     && !host_references.contains(name)
                     && analysis.results.get(name).is_some_and(|result| {
-                        !analysis.structures.built.contains_key(result)
+                        !structure_analysis.built.contains_key(result)
                             && !host_results.contains(result)
                     })
                 {
@@ -291,7 +289,7 @@ pub(crate) fn derive(
                                 matches!(o,
                                 Obligation::Provider { provider: p, keys: k, instance, .. }
                                 if p == provider && k == keys
-                                    && analysis.structures.providers.get(&instance.token)
+                                    && structure_analysis.providers.get(&instance.token)
                                         .is_some_and(|declaration| declaration.facts.contiguous_range))
                             }) {
                                 execution.publication = Publication::DeferredRange {

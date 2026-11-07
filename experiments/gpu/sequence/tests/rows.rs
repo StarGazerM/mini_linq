@@ -1,7 +1,8 @@
-use cq_lang_sequence::{Program, check_grading};
+use cq_lang_sequence::check_grading;
+include!("support/stack.rs");
 use quote::{ToTokens, quote};
 
-fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
+fn filtered_probe(condition: proc_macro2::TokenStream) -> Stack {
     syn::parse2(quote! {
         physical {
             relation Driver(a:i32, value:i32, bound:i32) = (&data.driver);
@@ -45,10 +46,11 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
     .unwrap()
 }
 
-fn translate(program: &Program) -> String {
-    let program = cq_gpu_sequence_core::runs::record_representation(program).unwrap();
-    let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
-    cq_gpu_sequence::translate(&program, &analysis)
+fn translate(stack: &Stack) -> String {
+    let Stack { physical, structures, program } = stack;
+    let program = cq_gpu_sequence_core::runs::record_representation(physical, structures, program).unwrap();
+    let analysis = check_grading(physical, structures, &program, &cq_gpu_sequence::machine()).unwrap();
+    cq_gpu_sequence::translate(physical, structures, &program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string()
@@ -113,7 +115,7 @@ fn encoded_integer_disjunction_is_a_device_or_condition() {
 #[test]
 fn published_row_bound_filter_is_not_rebuilt_as_a_host_interval() {
     let mut program = filtered_probe(quote!(value > bound));
-    for definition in &mut program.sequence.definitions {
+    for definition in &mut program.program.sequence.definitions {
         if definition.name == "filtered_rows" {
             let inner = &definition.term;
             definition.term = syn::parse2(quote!(store #inner)).unwrap();
@@ -124,7 +126,7 @@ fn published_row_bound_filter_is_not_rebuilt_as_a_host_interval() {
             );
         }
     }
-    for grade in &mut program.graded.as_mut().unwrap().grades {
+    for grade in &mut program.program.graded.as_mut().unwrap().grades {
         if grade.name == "filtered_rows" {
             grade.level.pop();
         }
@@ -138,7 +140,7 @@ fn published_row_bound_filter_is_not_rebuilt_as_a_host_interval() {
 #[test]
 fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() {
     for (operator, negated) in [(quote!(semi), false), (quote!(anti), true)] {
-        let program: Program = syn::parse2(quote! {
+        let program: Stack = syn::parse2(quote! {
             physical {
                 relation Driver(a:i32, b:i32) = (&data.driver);
                 relation Provider(a:i32, b:i32) = (&data.provider);
@@ -186,7 +188,7 @@ fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() 
 
 #[test]
 fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
-    let source: Program = syn::parse_quote! {
+    let Stack { physical, structures, program: source } = syn::parse_quote! {
         physical {
             relation Driver(a:i32) = (&data.driver);
             relation Provider(a:i32,value:i32,bound:i32) = (&data.provider);
@@ -214,12 +216,12 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
         }
     };
     let machine = cq_gpu_sequence::machine();
-    let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
+    let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source).unwrap();
     let planned =
-        cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
-    let analysis = check_grading(&planned.program, &machine).unwrap();
+        cq_sequence_plan::decompose(&physical, &structures, &source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let analysis = check_grading(&planned.physical, &planned.structures, &planned.program, &machine).unwrap();
     assert_eq!(analysis.levels["index"], ["host", "device"]);
-    let generated = translate(&planned.program);
+    let generated = translate(&Stack { physical: planned.physical, structures: planned.structures, program: planned.program });
     assert!(generated.contains("let value = &"));
     assert!(generated.contains("let bound = &"));
     assert!(generated.contains("* value < * bound"));
@@ -228,7 +230,7 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
     assert!(!generated.contains("__row"));
 }
 
-fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
+fn segmented_binding(expression: proc_macro2::TokenStream) -> Stack {
     syn::parse_quote! {
         physical {
             relation Driver(a:i32) = (&data.driver);
@@ -270,11 +272,10 @@ fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
 #[test]
 fn rust_bindings_use_recorded_scalar_bounds_without_expression_recognition() {
     for expression in [quote!(*value), quote!(*value * 2)] {
-        let program =
-            cq_gpu_sequence_core::runs::record_representation(&segmented_binding(expression))
-                .unwrap();
-        assert!(program.representation.identity.contains("doubled"));
-        assert!(!program.representation.encoded.contains("doubled"));
+        let mut program = segmented_binding(expression);
+        program.program = cq_gpu_sequence_core::runs::record_representation(&program.physical, &program.structures, &program.program).unwrap();
+        assert!(program.program.representation.identity.contains("doubled"));
+        assert!(!program.program.representation.encoded.contains("doubled"));
         let generated = translate(&program);
         assert!(
             generated.contains("< i32 as :: gpu_datalog_runtime :: Scalar > :: MIN"),

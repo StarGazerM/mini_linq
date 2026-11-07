@@ -94,9 +94,15 @@ fn supported_auxiliary(record: &Auxiliary) -> bool {
 /// Formal rule GPU-Realization: select source access, publication steps,
 /// terminal grouping, transfers, auxiliary geometry, descriptor bounds and
 /// captures once, before printing.
-pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Realization> {
+pub(crate) fn select(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    structure_analysis: &cq_lang_structures::Analysis,
+    analysis: &Analysis,
+) -> syn::Result<Realization> {
     let selected: syn::Result<Realization> = (|| {
-        let facts = Facts::new(program, analysis)?;
+        let facts = Facts::new(physical, structures, program, structure_analysis, analysis)?;
         let captures = captures(&facts)?;
         let reusable = analysis.gpu_publications.values().any(|record| record.arena.is_some());
         let launches = analysis.dispatches.iter().map(|dispatch| {
@@ -152,20 +158,21 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Real
             ..Realization::default()
         },
     };
-    check(program, analysis, &realization)?;
+    check(physical, structures, program, structure_analysis, analysis, &realization)?;
     Ok(realization)
 }
 
 /// The radix layout of `side` read as `[prefix][column]`, with its recorded
 /// Candidates read and declared `candidates` reads.
 fn candidate_layout<'a>(
+    structure_analysis: &cq_lang_structures::Analysis,
     analysis: &'a Analysis,
     side: &str,
     prefix: &[String],
     column: &str,
 ) -> Option<&'a cq_lang_sequence::gpu::bindings::ProviderLayout> {
     let layouts = analysis.gpu_bindings.providers.get(side)?;
-    let built = analysis.structures.built.get(side)?;
+    let built = structure_analysis.built.get(side)?;
     layouts
         .iter()
         .zip(built)
@@ -176,8 +183,7 @@ fn candidate_layout<'a>(
                 && levels.len() == 2
                 && leading == prefix
                 && levels[1] == [column.to_owned()]
-                && analysis
-                    .structures
+                && structure_analysis
                     .facts(provider)
                     .reads(&cq_lang_structures::provider::Capability::Candidates)
                 && layout.radix.as_ref().is_some_and(|radix| {
@@ -197,10 +203,10 @@ fn candidate_layout<'a>(
 /// target rejects it (never a First probe).
 fn smallest(facts: &Facts) -> syn::Result<BTreeMap<String, SmallestRealization>> {
     use cq_lang_structures::physical::{Choice, Operator};
-    let physical = &facts.program.structures.physical;
+    let physical = facts.physical;
     let candidates = cq_lang_structures::physical::candidate_prefixes(
         physical,
-        &facts.analysis.structures.physical,
+        &facts.structure_analysis.physical,
     );
     let mut realized = BTreeMap::new();
     for definition in &physical.program.definitions {
@@ -221,7 +227,7 @@ fn smallest(facts: &Facts) -> syn::Result<BTreeMap<String, SmallestRealization>>
             .ok_or_else(rejection)?;
         let mut sides = Vec::new();
         for (side, prefix) in &candidate.sides {
-            candidate_layout(facts.analysis, side, prefix, &candidate.column)
+            candidate_layout(facts.structure_analysis, facts.analysis, side, prefix, &candidate.column)
                 .ok_or_else(rejection)?;
             sides.push(SmallestSide {
                 provider: side.clone(),
@@ -250,10 +256,10 @@ fn check_smallest(
     records: &BTreeMap<String, SmallestRealization>,
 ) -> syn::Result<()> {
     use cq_lang_structures::physical::{Choice, Operator};
-    let physical = &facts.program.structures.physical;
+    let physical = facts.physical;
     let candidates = cq_lang_structures::physical::candidate_prefixes(
         physical,
-        &facts.analysis.structures.physical,
+        &facts.structure_analysis.physical,
     );
     let probes: BTreeSet<_> = physical
         .program
@@ -295,7 +301,7 @@ fn check_smallest(
                 .any(|(side, (build, prefix))| {
                     side.provider != *build
                         || side.prefix != *prefix
-                        || candidate_layout(facts.analysis, build, prefix, column).is_none()
+                        || candidate_layout(facts.structure_analysis, facts.analysis, build, prefix, column).is_none()
                 })
         {
             return Err(error(
@@ -308,6 +314,8 @@ fn check_smallest(
 
 /// Checked facts shared by selection and checking. No realization policy.
 struct Facts<'a> {
+    physical: &'a cq_lang_structures::physical::Program,
+    structure_analysis: &'a cq_lang_structures::Analysis,
     program: &'a Program,
     analysis: &'a Analysis,
     definitions: BTreeMap<String, Definition>,
@@ -324,10 +332,14 @@ struct Facts<'a> {
 }
 
 impl<'a> Facts<'a> {
-    fn new(program: &'a Program, analysis: &'a Analysis) -> syn::Result<Self> {
-        let definitions: BTreeMap<_, _> = program
-            .structures
-            .physical
+    fn new(
+        physical: &'a cq_lang_structures::physical::Program,
+        structures: &cq_lang_structures::Program,
+        program: &'a Program,
+        structure_analysis: &'a cq_lang_structures::Analysis,
+        analysis: &'a Analysis,
+    ) -> syn::Result<Self> {
+        let definitions: BTreeMap<_, _> = physical
             .program
             .definitions
             .iter()
@@ -340,15 +352,14 @@ impl<'a> Facts<'a> {
             .map(|d| (symbol_name(&d.name), &d.term))
             .collect();
         let codecs =
-            crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
+            crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
         let carriers = &analysis.gpu_bindings.carriers;
         let mut resident = BTreeSet::new();
         let mut runs = BTreeSet::new();
-        for input in program.structures.physical.inputs() {
+        for input in physical.inputs() {
             let name = symbol_name(&input.name);
-            for entry in &program.structures.structures.entries {
-                if analysis
-                    .structures
+            for entry in &structures.structures.entries {
+                if structure_analysis
                     .physical
                     .hosts
                     .get(&symbol_name(&entry.name))
@@ -361,12 +372,12 @@ impl<'a> Facts<'a> {
                     if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                         continue;
                     }
-                    if analysis.structures.facts(&keyed.provider).abi
+                    if structure_analysis.facts(&keyed.provider).abi
                         == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                     {
                         runs.insert(name.clone());
                         resident.insert(name.clone());
-                    } else if analysis.structures.facts(&keyed.provider).abi
+                    } else if structure_analysis.facts(&keyed.provider).abi
                         == Some(cq_lang_structures::provider::NativeAbi::Columns)
                     {
                         resident.insert(name.clone());
@@ -429,6 +440,8 @@ impl<'a> Facts<'a> {
             .filter_map(|publication| analysis.results.get(&publication).cloned())
             .collect();
         Ok(Self {
+            physical,
+            structure_analysis,
             program,
             analysis,
             definitions,
@@ -521,9 +534,10 @@ impl<'a> Facts<'a> {
 /// callables once per program, in Physical definition order.
 fn captures(facts: &Facts) -> syn::Result<Captures> {
     let analysis = facts.analysis;
+    let structure_analysis = facts.structure_analysis;
     // Contract 7 (DESIGN anchor contract7-gpu-rows): only identity reads admit
     // device Rust; encoded predicates stay relational `where` captures.
-    let query = &facts.program.structures.physical.program.captures;
+    let query = &facts.physical.program.captures;
     let mut captures = crate::capture::Captures::new(query);
     if query
         .items
@@ -545,7 +559,7 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
     };
     for (name, definition) in &facts.definitions {
         captures.used.clear();
-        if !analysis.rust_requires_host(&definition.operator)
+        if !analysis.rust_requires_host(&structure_analysis.physical, &definition.operator)
             && (matches!(&definition.operator, Operator::Guard(guard) if guard.capture.is_some())
                 || matches!(&definition.operator, Operator::Bind(bind) if bind.capture.is_some()))
         {
@@ -555,8 +569,8 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
             ));
         }
         let expression = match &definition.operator {
-            Operator::Guard(guard) if !analysis.rust_requires_host(&definition.operator) => {
-                let row = &analysis.structures.physical.rows[&symbol_name(&guard.input)];
+            Operator::Guard(guard) if !analysis.rust_requires_host(&structure_analysis.physical, &definition.operator) => {
+                let row = &structure_analysis.physical.rows[&symbol_name(&guard.input)];
                 captures.rust_expression(
                     &guard.condition,
                     &row.types,
@@ -567,17 +581,17 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
                     &facts.codecs,
                 )
             }
-            Operator::Bind(bind) if !analysis.rust_requires_host(&definition.operator) => {
-                let row = &analysis.structures.physical.rows[&symbol_name(&bind.input)];
+            Operator::Bind(bind) if !analysis.rust_requires_host(&structure_analysis.physical, &definition.operator) => {
+                let row = &structure_analysis.physical.rows[&symbol_name(&bind.input)];
                 let names = cq_syntax::rust::bindings(&bind.pattern);
                 let output =
-                    &analysis.structures.physical.rows[name].types[&symbol_name(&names[0])];
+                    &structure_analysis.physical.rows[name].types[&symbol_name(&names[0])];
                 captures.rust_expression(
                     &bind.expression,
                     &row.types,
                     &row.bindings,
                     output,
-                    analysis.structures.physical.rows[name]
+                    structure_analysis.physical.rows[name]
                         .logical_type_ids
                         .get(&symbol_name(&names[0]))
                         .copied(),
@@ -586,7 +600,7 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
                 )
             }
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
-                let types = &analysis.structures.physical.rows[&symbol_name(&select.input)].types;
+                let types = &structure_analysis.physical.rows[&symbol_name(&select.input)].types;
                 captures.relational(&select.condition, types, &facts.codecs)?
             }
             _ => continue,
@@ -598,7 +612,7 @@ fn captures(facts: &Facts) -> syn::Result<Captures> {
         if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
             &definition.operator
         {
-            let types = &analysis.structures.physical.rows[&symbol_name(&select.input)].types;
+            let types = &structure_analysis.physical.rows[&symbol_name(&select.input)].types;
             let mut condition = select.condition.clone();
             captures.host_relational(&mut condition, types, &facts.codecs);
             records.host.insert(name.clone(), condition);
@@ -635,7 +649,7 @@ fn resident_transfers(
     let hosts: BTreeSet<_> = dependencies
         .iter()
         .filter(|result| !bound.contains(*result))
-        .filter_map(|result| facts.analysis.structures.physical.hosts.get(result))
+        .filter_map(|result| facts.structure_analysis.physical.hosts.get(result))
         .filter(|host| facts.resident.contains(*host))
         .collect();
     hosts
@@ -651,10 +665,11 @@ fn resident_transfers(
 /// acquire a device read, from which origin, with which access and phase.
 fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, SourceRealization>> {
     let analysis = facts.analysis;
+    let structure_analysis = facts.structure_analysis;
     // Only checked device consumers require resident source adapters.
     // A host store can retain arbitrary Rust values (for example nullable
     // aggregates); it is not itself a host-to-device publication.
-    let required = crate::rows::device_source_results(facts.program, analysis);
+    let required = crate::rows::device_source_results(facts.program, facts.structure_analysis, analysis);
     let host_bound = host_bound(&facts.definitions, captures);
     let demands = crate::rows::lookup_demands(facts.program);
     let mut sources = BTreeMap::new();
@@ -672,8 +687,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
             continue;
         }
         let needs_host = dependencies.iter().any(|result| {
-            analysis
-                .structures
+            structure_analysis
                 .physical
                 .hosts
                 .get(result)
@@ -687,7 +701,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 bound: Vec::new(),
                 transfers: resident_transfers(facts, &dependencies, &BTreeSet::new()),
             };
-            let columns = analysis.structures.layouts[name]
+            let columns = structure_analysis.layouts[name]
                 .iter()
                 .map(|column| (column.clone(), column.clone()))
                 .collect();
@@ -706,15 +720,15 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                     continue;
                 }
                 let mut providers = Vec::new();
-                if let Some(layouts) = analysis.structures.built.get(name) {
+                if let Some(layouts) = structure_analysis.built.get(name) {
                     if layouts.len() != 1
-                        || analysis.structures.facts(&layouts[0].1).abi
+                        || structure_analysis.facts(&layouts[0].1).abi
                             == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                     {
                         providers.push(name.clone());
                     }
                 } else {
-                    for ((result, reader, keys), ty) in &analysis.structures.fallbacks {
+                    for ((result, reader, keys), ty) in &structure_analysis.fallbacks {
                         if result != name || matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                             continue;
                         }
@@ -723,7 +737,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                         if !demands.contains(&(result.clone(), sorted.clone())) {
                             continue;
                         }
-                        if analysis.structures.facts(ty).abi
+                        if structure_analysis.facts(ty).abi
                             != Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                         {
                             return Err(error(
@@ -768,7 +782,7 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
                 .is_some_and(|layouts| {
                     layouts.iter().any(|layout| layout.abi != ProviderAbi::Host)
                 })
-            && analysis.structures.built.contains_key(name);
+            && structure_analysis.built.contains_key(name);
         let access = if built {
             SourceAccess::Provider { selection }
         } else if let Some(selection) = selection {
@@ -856,7 +870,7 @@ impl<'f, 'a> Steps<'f, 'a> {
             let SourceOrigin::RadixRelation { host, .. } = &source.origin else {
                 continue;
             };
-            for original in &facts.analysis.structures.host_layouts[host] {
+            for original in &facts.structure_analysis.host_layouts[host] {
                 let Some((column, _)) = source.columns.iter().find(|(_, o)| *o == original) else {
                     continue;
                 };
@@ -871,10 +885,10 @@ impl<'f, 'a> Steps<'f, 'a> {
         for (name, source) in sources {
             let (host, layout, upload) = match &source.origin {
                 SourceOrigin::Resident { host } => {
-                    (host, &facts.analysis.structures.host_layouts[host], false)
+                    (host, &facts.structure_analysis.host_layouts[host], false)
                 }
                 SourceOrigin::Uploaded { .. } => {
-                    (name, &facts.analysis.structures.layouts[name], true)
+                    (name, &facts.structure_analysis.layouts[name], true)
                 }
                 SourceOrigin::RadixRelation { .. } => continue,
             };
@@ -908,7 +922,7 @@ impl<'f, 'a> Steps<'f, 'a> {
                 .columns
                 .insert(column, (BaseBounds::Union(union), Vec::new()));
         }
-        for row in facts.analysis.structures.physical.rows.values() {
+        for row in facts.structure_analysis.physical.rows.values() {
             for column in &row.computed {
                 bounds.columns.entry(column.clone()).or_insert_with(|| {
                     (
@@ -1117,7 +1131,7 @@ impl<'f, 'a> Steps<'f, 'a> {
     /// An upload publishes its layout columns; their bounds merge pairwise.
     fn upload(&mut self, result: &str) {
         self.uploaded.insert(result.to_owned());
-        for (index, column) in self.facts.analysis.structures.layouts[result]
+        for (index, column) in self.facts.structure_analysis.layouts[result]
             .iter()
             .enumerate()
         {
@@ -1163,7 +1177,7 @@ impl<'f, 'a> Steps<'f, 'a> {
     }
 
     fn provider(&self, result: &str) -> Option<ProviderBuild> {
-        self.facts.analysis.structures.built.get(result)?;
+        self.facts.structure_analysis.built.get(result)?;
         let layouts = self.facts.analysis.gpu_bindings.providers.get(result)?;
         let selected: Vec<_> = layouts
             .iter()
@@ -1232,7 +1246,7 @@ impl<'f, 'a> Steps<'f, 'a> {
         let mut host = shape.stored.is_none() && !self.has_source(&shape.source);
         for (map, input) in &shape.maps {
             for definition in facts.map_definitions(map, input)? {
-                host |= facts.analysis.rust_requires_host(&definition.operator);
+                host |= facts.analysis.rust_requires_host(&facts.structure_analysis.physical, &definition.operator);
             }
         }
         let input = if host {
@@ -1291,7 +1305,7 @@ impl<'f, 'a> Steps<'f, 'a> {
             .sequence
             .get(&final_name)
             .and_then(|term| grouped_boundary(term, &facts.sequence));
-        let device_sources = crate::rows::device_source_results(facts.program, analysis);
+        let device_sources = crate::rows::device_source_results(facts.program, facts.structure_analysis, analysis);
         let mut steps = Vec::new();
         let mut output = false;
         for definition in &facts.program.sequence.definitions {
@@ -1438,17 +1452,20 @@ impl<'f, 'a> Steps<'f, 'a> {
 /// stated invariants. The checker never calls `select` or its helpers; it
 /// accepts any sound record.
 pub(crate) fn check(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     analysis: &Analysis,
     records: &Realization,
 ) -> syn::Result<()> {
-    let query = &program.structures.physical.program.captures;
+    let query = &physical.program.captures;
     if query
         .items
         .iter()
         .any(|item| matches!(item, cq_syntax::Capture::Guard(_)))
     {
-        let facts = Facts::new(program, analysis)?;
+        let facts = Facts::new(physical, structures, program, structure_analysis, analysis)?;
         if facts
             .sequence
             .get(&facts.final_name()?)
@@ -1486,10 +1503,11 @@ pub(crate) fn check(
             "auxiliary kernel geometry is missing or unsupported by the runtime families",
         ));
     }
-    let facts = Facts::new(program, analysis)?;
+    let facts = Facts::new(physical, structures, program, structure_analysis, analysis)?;
     crate::capture::check(
         &records.captures,
         &facts.definitions,
+        structure_analysis,
         analysis,
         &facts.codecs,
     )?;
@@ -1522,8 +1540,7 @@ pub(crate) fn check(
         }
         let dependencies = crate::rows::host_dependencies(name, &facts.definitions);
         let nonresident = dependencies.iter().any(|result| {
-            analysis
-                .structures
+            structure_analysis
                 .physical
                 .hosts
                 .get(result)
@@ -1545,7 +1562,7 @@ pub(crate) fn check(
                         return Err(error("run source names an unrecorded native lookup"));
                     }
                 }
-                &analysis.structures.host_layouts[host]
+                &structure_analysis.host_layouts[host]
             }
             SourceOrigin::Uploaded { evaluation } => {
                 if !nonresident || source.phase != Phase::Build || !evaluation.bound.is_empty() {
@@ -1554,7 +1571,7 @@ pub(crate) fn check(
                     ));
                 }
                 CheckState::default().evaluation(&facts, evaluation, name)?;
-                &analysis.structures.layouts[name]
+                &structure_analysis.layouts[name]
             }
         };
         if (source.phase == Phase::Build) != matches!(source.origin, SourceOrigin::Uploaded { .. })
@@ -1978,7 +1995,7 @@ impl CheckState {
         let read: BTreeSet<_> = dependencies
             .iter()
             .filter(|dependency| !bound.contains_key(*dependency))
-            .filter_map(|dependency| facts.analysis.structures.physical.hosts.get(dependency))
+            .filter_map(|dependency| facts.structure_analysis.physical.hosts.get(dependency))
             .filter(|host| facts.resident.contains(*host))
             .cloned()
             .collect();
@@ -2004,7 +2021,7 @@ impl CheckState {
         terminal: bool,
     ) -> syn::Result<()> {
         let required = !terminal
-            && facts.analysis.structures.built.contains_key(result)
+            && facts.structure_analysis.built.contains_key(result)
             && facts
                 .analysis
                 .gpu_bindings
@@ -2083,10 +2100,10 @@ impl CheckState {
             for (name, source) in &records.sources {
                 let (publication, layout, upload) = match &source.origin {
                     SourceOrigin::Resident { host } => {
-                        (host, &facts.analysis.structures.host_layouts[host], false)
+                        (host, &facts.structure_analysis.host_layouts[host], false)
                     }
                     SourceOrigin::Uploaded { .. } => {
-                        (name, &facts.analysis.structures.layouts[name], true)
+                        (name, &facts.structure_analysis.layouts[name], true)
                     }
                     SourceOrigin::RadixRelation { .. } => continue,
                 };
@@ -2136,7 +2153,7 @@ impl CheckState {
                 .uploads
                 .iter()
                 .filter_map(|upload| {
-                    let index = facts.analysis.structures.layouts[upload]
+                    let index = facts.structure_analysis.layouts[upload]
                         .iter()
                         .position(|c| c == column)?;
                     Some(BoundSource::Upload {
@@ -2406,10 +2423,7 @@ fn publishes(facts: &Facts, source: &BoundSource, column: &str) -> bool {
     match source {
         BoundSource::Resident { host, index } => {
             facts.resident.contains(host)
-                && facts
-                    .program
-                    .structures
-                    .physical
+                && facts.physical
                     .program
                     .definitions
                     .iter()
@@ -2420,14 +2434,12 @@ fn publishes(facts: &Facts, source: &BoundSource, column: &str) -> bool {
                         symbol_name(&rename.relation) == *host
                             && rename.mapping.iter().any(|mapping| {
                                 symbol_name(&mapping.target) == column
-                                    && facts.analysis.structures.host_layouts[host].get(*index)
+                                    && facts.structure_analysis.host_layouts[host].get(*index)
                                         == Some(&symbol_name(&mapping.source))
                             })
                     })
         }
-        BoundSource::Upload { publication, index } => facts
-            .analysis
-            .structures
+        BoundSource::Upload { publication, index } => facts.structure_analysis
             .layouts
             .get(publication)
             .is_some_and(|layout| layout.get(*index).is_some_and(|c| c == column)),
@@ -2436,20 +2448,21 @@ fn publishes(facts: &Facts, source: &BoundSource, column: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    include!("../../tests/support/stack.rs");
     use super::*;
     use cq_lang_sequence::gpu::realization::IntervalBound;
 
     /// The store `r` publishes the resident rename `r` below host (its inner
     /// store result equals its outer source), and `r` records a Range provider.
-    fn republished() -> (Program, Analysis) {
+    fn republished() -> (Stack, Analysis) {
         republished_after(false)
     }
 
     /// With `late`, the lookup of `r` precedes its republication.
-    fn republished_after(late: bool) -> (Program, Analysis) {
+    fn republished_after(late: bool) -> (Stack, Analysis) {
         let early = (!late).then(|| quote::quote!(r = store rows r;));
         let late = late.then(|| quote::quote!(r = store rows r;));
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data);
                 r = let rename R@0 {a -> a,b -> b};
@@ -2478,15 +2491,16 @@ mod tests {
             }
             graded gpu { r at host.device; input at host; output_rows at device; }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        (program, analysis)
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        (Stack { physical, structures, program }, analysis)
     }
 
     #[test]
     fn publication_step_is_the_only_provider_owner() {
-        let (program, analysis) = republished();
-        let realization = select(&program, &analysis).unwrap();
+        let (Stack { physical, structures, program }, analysis) = republished();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert_eq!(realization.rejection, None);
         assert!(realization.steps.iter().any(|(publication, step)| {
             publication == "r"
@@ -2518,17 +2532,18 @@ mod tests {
             panic!("recorded provider owner");
         };
         provider.layouts.clear();
-        assert!(check(&program, &analysis, &missing_layout).is_err());
+        assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &missing_layout).is_err());
         let mut duplicated = realization;
         duplicated.sources.get_mut("r").unwrap().access =
             SourceAccess::Provider { selection: None };
-        assert!(check(&program, &analysis, &duplicated).is_err());
+        assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &duplicated).is_err());
     }
 
     #[test]
     fn a_reader_before_the_publication_keeps_the_source_owner() {
-        let (program, analysis) = republished_after(true);
-        let realization = select(&program, &analysis).unwrap();
+        let (Stack { physical, structures, program }, analysis) = republished_after(true);
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert_eq!(realization.rejection, None);
         assert!(matches!(
             realization.sources["r"].access,
@@ -2545,7 +2560,7 @@ mod tests {
         assert_eq!(*provider, None);
         // Moving ownership to the later publication leaves the reader unserved.
         let built = Steps::new(
-            &Facts::new(&program, &analysis).unwrap(),
+            &Facts::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap(),
             &realization.sources,
         )
         .provider("r")
@@ -2557,17 +2572,17 @@ mod tests {
                 *provider = Some(built.clone());
             }
         }
-        assert!(check(&program, &analysis, &late_owner).is_err());
+        assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &late_owner).is_err());
     }
 
-    fn graded(program: Program) -> (Program, Analysis) {
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        (program, analysis)
+    fn graded(Stack { physical, structures, program }: Stack) -> (Stack, Analysis) {
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        (Stack { physical, structures, program }, analysis)
     }
 
     /// Two published dispatches concatenated by a host union.
-    fn union() -> (Program, Analysis) {
+    fn union() -> (Stack, Analysis) {
         graded(syn::parse_quote! {
             physical {
                 relation R(a:u32) = (&data.r);
@@ -2604,7 +2619,7 @@ mod tests {
 
     /// A probe of a provider uploaded from a host scan, or with `selected` of
     /// a contiguous key selection over a resident input.
-    fn probe(selected: bool) -> (Program, Analysis) {
+    fn probe(selected: bool) -> (Stack, Analysis) {
         let (reader, target, index) = if selected {
             (
                 quote::quote!(provider host scan = @device_columns input { keys 0; columns [i32 => i32, i32 => i32] } as ::cq_gpu_runtime::DeviceColumns [];),
@@ -2665,17 +2680,18 @@ mod tests {
 
     /// Every mutation of a selected realization is rejected by the checker,
     /// which accepts the unmutated record.
-    fn rejects(fixture: (Program, Analysis), mutations: &[&dyn Fn(&mut Realization)]) {
-        let (program, analysis) = fixture;
-        let realization = select(&program, &analysis).unwrap();
+    fn rejects(fixture: (Stack, Analysis), mutations: &[&dyn Fn(&mut Realization)]) {
+        let (Stack { physical, structures, program }, analysis) = fixture;
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert_eq!(realization.rejection, None);
-        check(&program, &analysis, &realization).unwrap();
+        check(&physical, &structures, &program, &structure_analysis, &analysis, &realization).unwrap();
         for (index, mutate) in mutations.iter().enumerate() {
             let mut mutated = realization.clone();
             mutate(&mut mutated);
             assert_ne!(mutated, realization, "mutation {index} is a no-op");
             assert!(
-                check(&program, &analysis, &mutated).is_err(),
+                check(&physical, &structures, &program, &structure_analysis, &analysis, &mutated).is_err(),
                 "mutation {index} was accepted"
             );
         }
@@ -2730,8 +2746,9 @@ mod tests {
 
     #[test]
     fn checker_rejects_union_consumers_with_incompatible_flat_slots() {
-        let (program, analysis) = union();
-        let realization = select(&program, &analysis).unwrap();
+        let (Stack { physical, structures, program }, analysis) = union();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         for missing in [false, true] {
             let mut changed = analysis.clone();
             let cq_lang_sequence::gpu::publication::PublicationStorage::FlatRows(layout) =
@@ -2743,7 +2760,7 @@ mod tests {
             } else {
                 layout.width += 1;
             }
-            assert!(check(&program, &changed, &realization).is_err());
+            assert!(check(&physical, &structures, &program, &structure_analysis, &changed, &realization).is_err());
         }
     }
 

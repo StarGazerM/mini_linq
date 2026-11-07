@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 
-use cq_lang_sequence::structures::physical::Operator;
+use cq_lang_sequence::structures::{self, physical::{self, Operator}};
 use cq_lang_sequence::{
     Analysis, Len, LevelNode, Machine, OutputProtocol, Program, Publication, Term, Tiling,
 };
@@ -36,18 +36,29 @@ pub struct Cost {
 
 /// Check grading and derive cost from authored count estimates where available;
 /// absent input counts remain symbolic. Estimates guide schedules, not semantics.
-pub fn cost(program: &Program, machine: &Machine) -> syn::Result<Cost> {
-    let analysis = cq_lang_sequence::check_grading(program, machine)?;
-    Cost::from_analysis(program, machine, &analysis)
+/// Physical and Structures facts are checked independently of Sequence analysis.
+pub fn cost(
+    physical: &physical::Program,
+    structures: &structures::Program,
+    program: &Program,
+    machine: &Machine,
+) -> syn::Result<Cost> {
+    let analysis = cq_lang_sequence::check_grading(physical, structures, program, machine)?;
+    Cost::from_analysis(physical, structures, program, machine, &analysis)
 }
 
 impl Cost {
     pub(crate) fn from_analysis(
+        physical: &physical::Program,
+        structures: &structures::Program,
         program: &Program,
         machine: &Machine,
         analysis: &Analysis,
     ) -> syn::Result<Self> {
+        let structures_analysis = structures::contract::check(structures)?;
         let mut evaluator = Evaluator {
+            physical,
+            structures_analysis: &structures_analysis,
             program,
             analysis,
             facts: BTreeMap::new(),
@@ -86,9 +97,8 @@ impl Cost {
                     | Publication::Parts { .. },
                 ) => true,
                 Some(Publication::OwnRows { staged: false }) => {
-                    analysis.structures.retained.contains_key(&fact.result)
-                        || analysis
-                            .structures
+                    structures_analysis.retained.contains_key(&fact.result)
+                        || structures_analysis
                             .physical
                             .modes
                             .get(&fact.result)
@@ -534,6 +544,8 @@ struct ConstructorCursor {
 }
 
 struct Evaluator<'a> {
+    physical: &'a physical::Program,
+    structures_analysis: &'a structures::Analysis,
     program: &'a Program,
     analysis: &'a Analysis,
     facts: BTreeMap<String, Fact>,
@@ -546,8 +558,6 @@ impl Evaluator<'_> {
             return Size::Constant(rows as u128);
         }
         if let Some(definition) = self
-            .program
-            .structures
             .physical
             .program
             .definitions
@@ -628,8 +638,7 @@ impl Evaluator<'_> {
                             | Publication::DeferredRows { .. }
                     )
                 ) && self
-                    .analysis
-                    .structures
+                    .structures_analysis
                     .built
                     .get(&fact.result)
                     .is_some_and(|providers| !providers.is_empty())
@@ -725,7 +734,7 @@ impl Evaluator<'_> {
                 let mut keys: Vec<_> = keys.iter().map(symbol_name).collect();
                 keys.sort();
                 let provider = symbol_name(provider);
-                let result = self.program.structures.physical.program.definitions.iter().find(|definition| {
+                let result = self.physical.program.definitions.iter().find(|definition| {
                     matches!(&definition.operator, Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
                         if symbol_name(&keyed.left) == fact.result && symbol_name(&keyed.right) == provider
                         && { let mut columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect(); columns.sort(); columns == keys })
@@ -765,8 +774,6 @@ impl Evaluator<'_> {
                 let mut nested = false;
                 while current != fact.result {
                     let Some(definition) = self
-                        .program
-                        .structures
                         .physical
                         .program
                         .definitions
@@ -824,8 +831,6 @@ impl Evaluator<'_> {
                     fact.partition = None;
                 }
                 let global = self
-                    .program
-                    .structures
                     .physical
                     .program
                     .definitions
@@ -1077,6 +1082,8 @@ impl fmt::Display for Sum {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../tests/support/mod.rs");
+    use cq_lang_sequence::structures::{Program as Structures, physical::Program as Physical};
     use quote::quote;
 
     fn sequential() -> Machine {
@@ -1099,8 +1106,8 @@ mod tests {
         }
     }
 
-    fn program(body: proc_macro2::TokenStream) -> Program {
-        syn::parse2(quote! {
+    fn program(body: proc_macro2::TokenStream) -> (Physical, Structures, Program) {
+        fixture! {
             physical {
                 relation R(a:i32);
                 r = pipe canon rename R@0 {a -> a};
@@ -1108,15 +1115,17 @@ mod tests {
             }
             structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; } r host scan = @reader as Reader []; r canon = host; }
             sequence { #body }
-        })
-        .unwrap()
+        }
     }
 
     #[test]
     fn only_growing_flattens_contribute_lookup_inversions() {
-        let source = program(quote!(input = rows r;));
-        let analysis = cq_lang_sequence::contract::check(&source).unwrap();
+        let (source_physical, source_structures, source) = program(quote!(input = rows r;));
+        let analysis = cq_lang_sequence::contract::check(&source_physical, &source_structures, &source).unwrap();
+        let structures_analysis = structures::contract::check(&source_physical, &source_structures).unwrap();
         let evaluator = Evaluator {
+            physical: &source_physical,
+            structures_analysis: &structures_analysis,
             program: &source,
             analysis: &analysis,
             facts: BTreeMap::new(),
@@ -1183,7 +1192,7 @@ mod tests {
 
     #[test]
     fn real_key_input_copies_pay_retained_traffic_but_aliases_do_not() {
-        let mut alias = program(quote! {
+        let (alias_physical, alias_structures, mut alias) = program(quote! {
             source = store canon rows r;
             source_parts = partition_k[a](4) source;
             out = store source;
@@ -1199,8 +1208,8 @@ mod tests {
         machine.root.children[0].width = Some(4);
         let mut copied = alias.clone();
         copied.sequence.definitions[2].term = syn::parse_quote!(store flatten tile 8 source);
-        let alias_analysis = cq_lang_sequence::contract::check(&alias).unwrap();
-        let copied_analysis = cq_lang_sequence::contract::check(&copied).unwrap();
+        let alias_analysis = cq_lang_sequence::contract::check(&alias_physical, &alias_structures, &alias).unwrap();
+        let copied_analysis = cq_lang_sequence::contract::check(&alias_physical, &alias_structures, &copied).unwrap();
         assert_eq!(
             alias_analysis.publications["out"],
             Publication::Alias {
@@ -1211,8 +1220,8 @@ mod tests {
             copied_analysis.publications["out"],
             Publication::OwnRows { staged: true },
         );
-        let alias = cost(&alias, &machine).unwrap();
-        let copied = cost(&copied, &machine).unwrap();
+        let alias = cost(&alias_physical, &alias_structures, &alias, &machine).unwrap();
+        let copied = cost(&alias_physical, &alias_structures, &copied, &machine).unwrap();
         assert_eq!(alias.work, copied.work, "copying is not a row expression");
         assert_eq!(alias.span, copied.span);
         assert_eq!(alias.copies.compare(&copied.copies), Some(Ordering::Less));
@@ -1221,7 +1230,7 @@ mod tests {
 
     #[test]
     fn deferred_raw_rows_keep_worst_case_owned_publication_cost() {
-        let program: Program = syn::parse_quote! {
+        let (physical, structures, program) = fixture! {
             physical {
                 relation R(a:i32); relation P(a:i32);
                 r = pipe canon rename R@0 {a -> a};
@@ -1255,30 +1264,30 @@ mod tests {
         };
         let mut machine = gpu();
         machine.root.children[0].width = Some(4);
-        let mut analysis = cq_lang_sequence::check_grading(&program, &machine).unwrap();
+        let mut analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &machine).unwrap();
         assert_eq!(
             analysis.publications["input"],
             Publication::DeferredRows {
                 consumer: "selected".into()
             }
         );
-        let deferred = Cost::from_analysis(&program, &machine, &analysis).unwrap();
+        let deferred = Cost::from_analysis(&physical, &structures, &program, &machine, &analysis).unwrap();
         analysis
             .publications
             .insert("input".into(), Publication::OwnRows { staged: true });
-        let owned = Cost::from_analysis(&program, &machine, &analysis).unwrap();
+        let owned = Cost::from_analysis(&physical, &structures, &program, &machine, &analysis).unwrap();
         assert_eq!(deferred, owned, "fusion is not a planner cost discount");
         assert_ne!(deferred.copies, Sum::default());
     }
 
     #[test]
     fn aliases_and_partition_views_do_not_add_evaluated_positions() {
-        let plain = program(quote!(a = store rows r; output reserve;));
-        let aliased = program(quote!(source = rows r; a = store source; output reserve;));
-        let tiled = program(quote!(a = store flatten tile 8 rows r; output reserve;));
-        let expected = cost(&plain, &sequential()).unwrap();
-        assert_eq!(cost(&aliased, &sequential()).unwrap(), expected);
-        let tiled = cost(&tiled, &sequential()).unwrap();
+        let (plain_physical, plain_structures, plain) = program(quote!(a = store rows r; output reserve;));
+        let (aliased_physical, aliased_structures, aliased) = program(quote!(source = rows r; a = store source; output reserve;));
+        let (tiled_physical, tiled_structures, tiled) = program(quote!(a = store flatten tile 8 rows r; output reserve;));
+        let expected = cost(&plain_physical, &plain_structures, &plain, &sequential()).unwrap();
+        assert_eq!(cost(&aliased_physical, &aliased_structures, &aliased, &sequential()).unwrap(), expected);
+        let tiled = cost(&tiled_physical, &tiled_structures, &tiled, &sequential()).unwrap();
         assert_eq!(tiled.work, expected.work);
         assert_eq!(expected.span, tiled.span);
         assert_eq!(expected.copies.compare(&tiled.copies), Some(Ordering::Less));
@@ -1286,8 +1295,8 @@ mod tests {
 
     #[test]
     fn a_fold_evaluates_its_input_not_its_single_output() {
-        let folded = program(quote!(a = store fold count rows r; output reserve;));
-        let evaluated = cost(&folded, &sequential()).unwrap();
+        let (folded_physical, folded_structures, folded) = program(quote!(a = store fold count rows r; output reserve;));
+        let evaluated = cost(&folded_physical, &folded_structures, &folded, &sequential()).unwrap();
         let mut expected = Sum::positions(&Size::Input("r".into())).unwrap();
         expected.add(&expected.clone()).unwrap();
         assert_eq!(evaluated.work, expected);
@@ -1300,12 +1309,12 @@ mod tests {
 
     #[test]
     fn independent_definitions_take_maximum_span_not_sum() {
-        let independent = program(quote!(
+        let (independent_physical, independent_structures, independent) = program(quote!(
             a = store rows r;
             b = store rows r;
             output reserve;
         ));
-        let evaluated = cost(&independent, &sequential()).unwrap();
+        let evaluated = cost(&independent_physical, &independent_structures, &independent, &sequential()).unwrap();
         let one = Sum::positions(&Size::Input("r".into())).unwrap();
         let mut two = one.clone();
         two.add(&one).unwrap();
@@ -1316,21 +1325,20 @@ mod tests {
 
     #[test]
     fn unused_pure_views_are_not_evaluated() {
-        let plain = program(quote!(a = store rows r; output reserve;));
-        let unused = program(quote!(unused = map r rows r; a = store rows r; output reserve;));
+        let (plain_physical, plain_structures, plain) = program(quote!(a = store rows r; output reserve;));
+        let (unused_physical, unused_structures, unused) = program(quote!(unused = map r rows r; a = store rows r; output reserve;));
         assert_eq!(
-            cost(&plain, &sequential()).unwrap(),
-            cost(&unused, &sequential()).unwrap()
+            cost(&plain_physical, &plain_structures, &plain, &sequential()).unwrap(),
+            cost(&unused_physical, &unused_structures, &unused, &sequential()).unwrap()
         );
     }
 
     #[test]
     fn count_records_producer_replay_but_not_materialized_dependencies() {
-        let reserve =
-            program(quote!(source = store rows r; a = store map r source; output reserve;));
-        let count = program(quote!(source = store rows r; a = store map r source; output count;));
-        let first = cost(&reserve, &sequential()).unwrap();
-        let second = cost(&count, &sequential()).unwrap();
+        let (reserve_physical, reserve_structures, reserve) = program(quote!(source = store rows r; a = store map r source; output reserve;));
+        let (count_physical, count_structures, count) = program(quote!(source = store rows r; a = store map r source; output count;));
+        let first = cost(&reserve_physical, &reserve_structures, &reserve, &sequential()).unwrap();
+        let second = cost(&count_physical, &count_structures, &count, &sequential()).unwrap();
         let mut expected = first.work.clone();
         expected
             .add(&Sum::positions(&Size::Input("r".into())).unwrap())
@@ -1370,8 +1378,8 @@ mod tests {
         machine
     }
 
-    fn join(body: proc_macro2::TokenStream) -> Program {
-        syn::parse2(quote! {
+    fn join(body: proc_macro2::TokenStream) -> (Physical, Structures, Program) {
+        fixture! {
             physical {
                 relation L(a:i32); relation R(a:i32,b:i32);
                 l = pipe rename L@0 {a -> a};
@@ -1393,21 +1401,23 @@ mod tests {
                 output reserve;
             }
             graded target { left at host; right at host; result at device; }
-        })
-        .unwrap()
+        }
     }
 
     #[test]
     fn segmented_b_and_r_like_schedules_dominate_single_part_a() {
-        let a = join(quote!(store canon flatten lookup r [a] left));
-        let b = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
-        let r = join(quote!(
+        let (a_physical, a_structures, a) = join(quote!(store canon flatten lookup r [a] left));
+        let (b_physical, b_structures, b) = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
+        let (r_physical, r_structures, r) = join(quote!(
             store canon flatten flatten tile 32 items 4
                 store flatten lookup r [a] tile 8 left
         ));
-        let a = cost(&a, &gpu()).unwrap();
-        for candidate in [b, r] {
-            let candidate = cost(&candidate, &gpu()).unwrap();
+        let a = cost(&a_physical, &a_structures, &a, &gpu()).unwrap();
+        for (candidate_physical, candidate_structures, candidate) in [
+            (b_physical, b_structures, b),
+            (r_physical, r_structures, r),
+        ] {
+            let candidate = cost(&candidate_physical, &candidate_structures, &candidate, &gpu()).unwrap();
             assert_eq!(
                 candidate.work, a.work,
                 "partitioning preserves evaluated positions"
@@ -1419,8 +1429,8 @@ mod tests {
 
     #[test]
     fn named_views_preserve_the_enclosing_publication_partition() {
-        let inline = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
-        let mut named = join(quote!(store canon flatten expanded));
+        let (inline_physical, inline_structures, inline) = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
+        let (named_physical, named_structures, mut named) = join(quote!(store canon flatten expanded));
         named.sequence.definitions.insert(
             2,
             cq_lang_sequence::Definition {
@@ -1446,20 +1456,20 @@ mod tests {
             },
         ]);
         assert_eq!(
-            cost(&named, &gpu()).unwrap(),
-            cost(&inline, &gpu()).unwrap()
+            cost(&named_physical, &named_structures, &named, &gpu()).unwrap(),
+            cost(&inline_physical, &inline_structures, &inline, &gpu()).unwrap()
         );
     }
 
     #[test]
     fn unnamed_strip_store_uses_the_store_tiebreaker() {
-        let plain = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
-        let segmented = join(quote!(
+        let (plain_physical, plain_structures, plain) = join(quote!(store canon flatten flatten lookup r [a] tile 8 left));
+        let (segmented_physical, segmented_structures, segmented) = join(quote!(
             store canon flatten flatten tile 32 items 4
                 store flatten lookup r [a] tile 8 left
         ));
-        let plain = cost(&plain, &gpu()).unwrap();
-        let segmented = cost(&segmented, &gpu()).unwrap();
+        let plain = cost(&plain_physical, &plain_structures, &plain, &gpu()).unwrap();
+        let segmented = cost(&segmented_physical, &segmented_structures, &segmented, &gpu()).unwrap();
         assert_eq!(plain.work, segmented.work);
         assert_eq!(plain.span.compare(&segmented.span), Some(Ordering::Equal));
         assert!(plain.better_than(&segmented));
@@ -1467,16 +1477,16 @@ mod tests {
 
     #[test]
     fn item_count_does_not_invent_lanes_and_nested_stores_are_counted() {
-        let one = join(quote!(
+        let (one_physical, one_structures, one) = join(quote!(
             store canon flatten flatten tile 32 items 1
                 store flatten lookup r [a] tile 8 left
         ));
-        let four = join(quote!(
+        let (four_physical, four_structures, four) = join(quote!(
             store canon flatten flatten tile 32 items 4
                 store flatten lookup r [a] tile 8 left
         ));
-        let one = cost(&one, &gpu()).unwrap();
-        let four = cost(&four, &gpu()).unwrap();
+        let one = cost(&one_physical, &one_structures, &one, &gpu()).unwrap();
+        let four = cost(&four_physical, &four_structures, &four, &gpu()).unwrap();
         assert_eq!(one, four);
         assert_eq!(one.stores, 4);
         assert!(one.to_string().contains("maxpart("));

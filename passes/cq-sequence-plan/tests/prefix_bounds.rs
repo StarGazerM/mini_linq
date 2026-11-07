@@ -1,8 +1,11 @@
+#[macro_use]
+mod support;
+use cq_lang_sequence::structures::{Program as Structures, physical::Program as Physical};
 use cq_lang_sequence::{Program, bounds, contract};
 use cq_sequence_plan::Advice;
 
-fn program() -> Program {
-    syn::parse_quote! {
+fn program() -> (Physical, Structures, Program) {
+    fixture! {
         physical {
             relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,c:i32);
             r = pipe rename R@0 {a -> a};
@@ -41,22 +44,22 @@ fn program() -> Program {
 
 #[test]
 fn prefix_bound_checker_accepts_weaker_records_and_rejects_missing_premises() {
-    let source = program();
-    let analysis = contract::check(&source).unwrap();
+    let (physical, structures, source) = program();
+    let analysis = contract::check(&physical, &structures, &source).unwrap();
     assert_eq!(analysis.prefix_bounds["joined"].rows, Some(100));
     let mut alternative = analysis.prefix_bounds.clone();
     alternative.get_mut("joined").unwrap().rows = Some(101);
-    bounds::check(&source, &alternative).unwrap();
+    bounds::check(&physical, &structures, &source, &alternative).unwrap();
     alternative.get_mut("joined").unwrap().rows = Some(99);
-    assert!(bounds::check(&source, &alternative).is_err());
+    assert!(bounds::check(&physical, &structures, &source, &alternative).is_err());
     let mut unsupported = analysis.prefix_bounds.clone();
     unsupported.get_mut("r").unwrap().keys.clear();
-    assert!(bounds::check(&source, &unsupported).is_err());
+    assert!(bounds::check(&physical, &structures, &source, &unsupported).is_err());
 }
 
 #[test]
 fn retention_checks_policy_and_chain_premises_without_replaying_advice() {
-    let source = program();
+    let (physical, structures, source) = program();
     // Independent policy records are legal; neither is required to equal a
     // producer's preferred machine geometry.
     for (tile, minimum) in [(32, 50), (64, 100)] {
@@ -66,7 +69,7 @@ fn retention_checks_policy_and_chain_premises_without_replaying_advice() {
             tile,
             minimum,
         }
-        .apply(&source)
+        .apply(&physical, &structures, &source)
         .unwrap();
     }
     for (rows, tile, minimum) in [(99, 32, 50), (100, 1, 50), (100, 32, 101)] {
@@ -77,13 +80,13 @@ fn retention_checks_policy_and_chain_premises_without_replaying_advice() {
                 tile,
                 minimum
             }
-            .apply(&source)
+            .apply(&physical, &structures, &source)
             .is_err()
         );
     }
     let mut no_follower = source.clone();
     no_follower.sequence.definitions[4].term = syn::parse_quote!(store flatten lookup t [b] joined);
-    contract::check(&no_follower).unwrap();
+    contract::check(&physical, &structures, &no_follower).unwrap();
     assert!(
         Advice::Retain {
             name: syn::parse_quote!(joined),
@@ -91,7 +94,7 @@ fn retention_checks_policy_and_chain_premises_without_replaying_advice() {
             tile: 32,
             minimum: 50,
         }
-        .apply(&no_follower)
+        .apply(&physical, &structures, &no_follower)
         .is_err()
     );
 }

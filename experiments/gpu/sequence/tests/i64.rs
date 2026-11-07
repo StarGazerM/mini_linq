@@ -1,9 +1,10 @@
-use cq_lang_sequence::{Program, check_grading};
+use cq_lang_sequence::check_grading;
+include!("support/stack.rs");
 use quote::ToTokens;
 
 #[test]
 fn triangle_retains_i64_payloads_and_its_recorded_plan() {
-    let program: Program = syn::parse_quote! {
+    let Stack { physical, structures, program } = syn::parse_quote! {
         physical {
             relation E(src:i64,dst:i64) = (edges);
             l = pipe rename E@0 {src -> a,dst -> b};
@@ -34,10 +35,10 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
         }
         graded gpu { Edges at host; ByB at host; ByA at host; result at device; }
     };
-    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
-    let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
+    let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
+    let analysis = check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine()).unwrap();
     assert_eq!(analysis.dispatches.len(), 1);
-    let translated = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    let translated = cq_gpu_sequence::translate(&physical, &structures, &program, &analysis).unwrap();
     let generated = translated.to_token_stream().to_string();
     assert!(generated.contains("PayloadKind :: I64"), "{generated}");
     assert!(
@@ -53,12 +54,11 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
     // An authored smallest probe is not permission to emit a first-probe
     // fallback: a non-radix side (here a Range provider) has no exact
     // candidate reads, so GPU-Smallest rejects the program.
-    let mut smallest = program.clone();
-    smallest.structures.physical.program.definitions[3].operator =
+    let mut smallest_physical = physical.clone();
+    let mut smallest_structures = structures.clone();
+    smallest_physical.program.definitions[3].operator =
         syn::parse_quote!(probe smallest [b] l,r);
-    let provider = smallest
-        .structures
-        .structures
+    let provider = smallest_structures.structures
         .entries
         .iter_mut()
         .find(|entry| {
@@ -71,13 +71,11 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
         .unwrap();
     *provider =
         syn::parse_quote!(r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b][c];);
-    smallest
-        .structures
-        .structures
+    smallest_structures.structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    let analysis = check_grading(&smallest, &cq_gpu_sequence::machine()).unwrap();
-    let error = cq_gpu_sequence::translate(&smallest, &analysis).unwrap_err();
+    let analysis = check_grading(&smallest_physical, &smallest_structures, &program, &cq_gpu_sequence::machine()).unwrap();
+    let error = cq_gpu_sequence::translate(&smallest_physical, &smallest_structures, &program, &analysis).unwrap_err();
     assert!(
         error
             .to_string()

@@ -2,6 +2,9 @@
 //!
 //! Views are iterator expressions; only `store` publishes a replayable Vec.
 //! Physical adapters supply row functions, never a second program translation.
+//! Physical, Structures, and Sequence programs are supplied separately. The
+//! supplied analysis contains Sequence facts; Structures facts are checked once
+//! per translation and shared by the row adapters.
 use std::collections::BTreeMap;
 
 use cq_lang_sequence::structures::Capability;
@@ -111,6 +114,9 @@ impl Value {
 /// Shared host adapters for target-specific structural folds.
 pub struct Emitter<'a> {
     pub analysis: &'a Analysis,
+    pub structures_analysis: &'a cq_lang_structures::Analysis,
+    physical: &'a cq_lang_structures::physical::Program,
+    structures: &'a cq_lang_structures::Program,
     program: &'a Program,
     adapters: RowEmitter<'a>,
     values: BTreeMap<String, Value>,
@@ -125,11 +131,17 @@ pub struct Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    pub fn new(program: &'a Program, analysis: &'a Analysis) -> Self {
-        let mut context = Context::new(&program.structures, &analysis.structures);
+    pub fn new(
+        physical: &'a cq_lang_structures::physical::Program,
+        structures: &'a cq_lang_structures::Program,
+        program: &'a Program,
+        structures_analysis: &'a cq_lang_structures::Analysis,
+        analysis: &'a Analysis,
+    ) -> Self {
+        let mut context = Context::new(structures, structures_analysis);
         context.blocked_runs = program.representation.blocks.runs.clone();
         context.blocked_routing = program.representation.blocks.routing.clone();
-        context.certify_host_sets(&program.structures);
+        context.certify_host_sets(structures);
         let mut partial_groups = BTreeMap::new();
         for definition in &program.sequence.definitions {
             let mut nodes = Vec::new();
@@ -141,6 +153,9 @@ impl<'a> Emitter<'a> {
         }
         Self {
             analysis,
+            physical,
+            structures,
+            structures_analysis,
             program,
             adapters: RowEmitter::new(context),
             values: BTreeMap::new(),
@@ -161,10 +176,7 @@ impl<'a> Emitter<'a> {
         if std::env::var_os("CQ_EXPANSION_COUNTERS").is_none() {
             return rows;
         }
-        let definition = self
-            .program
-            .structures
-            .physical
+        let definition = self.physical
             .program
             .returned
             .to_string();
@@ -249,8 +261,8 @@ impl<'a> Emitter<'a> {
                 }
                 if let Some(host) = self.context().hosts.get(name) {
                     let host = &host.value;
-                    if self.program.structures.encoded.blocks.scans.values().any(|scan| {
-                        self.program.structures.encoded.obligations.sources[&scan.source].relation == *name
+                    if self.structures.encoded.blocks.scans.values().any(|scan| {
+                        self.structures.encoded.obligations.sources[&scan.source].relation == *name
                     }) {
                         return Ok(quote!(#host.len()));
                     }
@@ -292,7 +304,7 @@ impl<'a> Emitter<'a> {
                 Ok(quote!((#workers) < #threshold))
             }
             Guard::Statistic(read) => {
-                let publication = &self.analysis.structures.publications
+                let publication = &self.structures_analysis.publications
                     [&cq_lang_structures::symbol_name(&read.reference.publication)];
                 let levels: Vec<Vec<String>> = publication
                     .layout
@@ -330,7 +342,7 @@ impl<'a> Emitter<'a> {
     pub fn own_task_answer(&mut self, result: &str, rows: TokenStream) -> TokenStream {
         self.owned_answer = true;
         self.adapters
-            .head(result, &self.program.structures.physical.program.head, rows)
+            .head(result, &self.physical.program.head, rows)
     }
 
     fn register(&mut self, name: &str) {
@@ -347,9 +359,7 @@ impl<'a> Emitter<'a> {
                 value.rows.clone()
             } else if matches!(self.context().physical[&result].operator, Operator::Unit(_)) {
                 quote!(::core::iter::once(()))
-            } else if self
-                .analysis
-                .structures
+            } else if self.structures_analysis
                 .physical
                 .hosts
                 .contains_key(&result)
@@ -435,7 +445,7 @@ impl<'a> Emitter<'a> {
                 partitioned: partition,
             });
         }
-        if self.analysis.structures.selections.contains_key(&result) {
+        if self.structures_analysis.selections.contains_key(&result) {
             let selection = self.context_mut().selection_source(&result)?;
             let repr = self.context_mut().materialize(&result, selection);
             self.context_mut().reprs.insert(result.clone(), repr);
@@ -463,7 +473,7 @@ impl<'a> Emitter<'a> {
                 input = self.map(parent, input, expand)?;
             }
             let positional = !partition
-                && self.analysis.structures.reads.contains_key(&result)
+                && self.structures_analysis.reads.contains_key(&result)
                 && matches!(
                     self.context().reprs.get(&parent_name),
                     Some(Repr::Host | Repr::Positions(_) | Repr::Selection { .. })
@@ -634,9 +644,7 @@ impl<'a> Emitter<'a> {
             })?
             .clone();
         self.register(&result);
-        if self
-            .analysis
-            .structures
+        if self.structures_analysis
             .physical
             .fused
             .contains_key(&result)
@@ -715,9 +723,7 @@ impl<'a> Emitter<'a> {
                 .clone();
             return self.map(&Ident::new(&result, provider.span()), input, true);
         }
-        let result = self
-            .analysis
-            .structures
+        let result = self.structures_analysis
             .physical
             .key_reads
             .get(&right)
@@ -753,7 +759,7 @@ impl<'a> Emitter<'a> {
                 .context()
                 .forcing_witness(&result, &right, &columns)
                 .is_some()
-            || self.analysis.structures.stages.contains_key(&result)
+            || self.structures_analysis.stages.contains_key(&result)
         {
             return self.map(&Ident::new(&result, provider.span()), input, true);
         }
@@ -968,7 +974,7 @@ impl<'a> Emitter<'a> {
         let canonical = input
             .result
             .as_ref()
-            .and_then(|name| self.analysis.structures.canonical.get(name))
+            .and_then(|name| self.structures_analysis.canonical.get(name))
             .or_else(|| {
                 self.analysis
                     .obligations
@@ -988,7 +994,7 @@ impl<'a> Emitter<'a> {
                 )
             })?;
         let stored = input.result.as_ref().is_some_and(|result| {
-            self.analysis.structures.physical.modes[result]
+            self.structures_analysis.physical.modes[result]
                 == cq_lang_structures::physical::ModeKind::Let
         });
         let rows = match canonical {
@@ -1038,7 +1044,7 @@ impl<'a> Emitter<'a> {
         // STR-RowsByValue: a single-consumer rows record is not Physical
         // storage, so a nested store of it collects its part like a pipe's.
         let physical_store = input.result.as_ref().is_some_and(|result| {
-            let structures = &self.analysis.structures;
+            let structures = &self.structures_analysis;
             input.depth == 0
                 && structures.physical.modes[result] != cq_lang_structures::physical::ModeKind::Pipe
                 && !structures.rows_by_value(result)
@@ -1070,7 +1076,7 @@ impl<'a> Emitter<'a> {
             && value.depth == 0
             && let Some(result) = value.result.clone()
             && self.analysis.results.get(&symbol_name(name)) == Some(&result)
-            && self.analysis.structures.rows_by_value(&result)
+            && self.structures_analysis.rows_by_value(&result)
         {
             value.rows = self.context().rows_by_value(&result, value.rows);
             value.stored = false;
@@ -1083,9 +1089,9 @@ impl<'a> Emitter<'a> {
                 .as_ref()
                 .filter(|result| {
                     value.depth == 0
-                        && self.analysis.structures.physical.modes[*result]
+                        && self.structures_analysis.physical.modes[*result]
                             != cq_lang_structures::physical::ModeKind::Pipe
-                        && !self.analysis.structures.rows_by_value(result)
+                        && !self.structures_analysis.rows_by_value(result)
                 })
                 .cloned();
             if let Some(result) = physical_store {
@@ -1158,7 +1164,7 @@ impl<'a> Emitter<'a> {
         }
         let answer = format!(
             "{}.answer",
-            self.program.structures.physical.program.returned
+            self.physical.program.returned
         );
         self.context_mut().profile_label(
             &answer,
@@ -1169,7 +1175,7 @@ impl<'a> Emitter<'a> {
         rows = self.context().profile_input(&answer, rows);
         if !self.owned_answer {
             if let Some(result) = value.result {
-                let head = &self.program.structures.physical.program.head;
+                let head = &self.physical.program.head;
                 rows = self.adapters.head(&result, head, rows);
             }
         }
@@ -1241,16 +1247,32 @@ impl<'a> Emitter<'a> {
 // DO NOT choose join order, move predicates, or buffer/replay rows without a recorded publication.
 /// Emit a host-only checked Sequence iterator. Analysis belongs to this program.
 /// Formal rule T-Pull: interpret host rows and recorded choice/publication modes without changing support.
-pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
-    translate_host(program, analysis, false)
+pub fn translate(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<syn::Expr> {
+    translate_host(physical, structures, program, analysis, false)
 }
 
 /// Emit the host interpretation with operator, build, and answer counters.
-pub fn translate_profile(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
-    translate_host(program, analysis, true)
+pub fn translate_profile(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<syn::Expr> {
+    translate_host(physical, structures, program, analysis, true)
 }
 
-fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn::Result<syn::Expr> {
+fn translate_host(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+    profile: bool,
+) -> syn::Result<syn::Expr> {
     if program.sequence.output == Some(cq_lang_sequence::OutputProtocol::ReservePrevious) {
         return Err(syn::Error::new_spanned(
             program,
@@ -1268,6 +1290,8 @@ fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn:
         ));
     }
     translate_with_profile(
+        physical,
+        structures,
         program,
         analysis,
         syn::parse_quote!(1usize),
@@ -1285,6 +1309,8 @@ fn translate_host(program: &Program, analysis: &Analysis, profile: bool) -> syn:
 /// `canon_target` realizes the recorded canonical index build for the selected CPU target,
 /// including the final answer-head boundary.
 pub fn translate_with(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
     workers: syn::Expr,
@@ -1298,7 +1324,7 @@ pub fn translate_with(
         usize,
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
-    translate_with_profile(program, analysis, workers, false, false, canon_target, hook)
+    translate_with_profile(physical, structures, program, analysis, workers, false, false, canon_target, hook)
 }
 
 /// Target-hook interpretation with real operator counters and disjoint host
@@ -1306,6 +1332,8 @@ pub fn translate_with(
 /// phases include each concurrent segment only once, including its join.
 /// `workers` has the same uniform target-wide contract as in [`translate_with`].
 pub fn translate_profile_with(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
     workers: syn::Expr,
@@ -1319,10 +1347,12 @@ pub fn translate_profile_with(
         usize,
     ) -> syn::Result<()>,
 ) -> syn::Result<syn::Expr> {
-    translate_with_profile(program, analysis, workers, true, false, canon_target, hook)
+    translate_with_profile(physical, structures, program, analysis, workers, true, false, canon_target, hook)
 }
 
 fn translate_with_profile(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
     workers: syn::Expr,
@@ -1424,9 +1454,7 @@ fn translate_with_profile(
             })?,
             Term::Union(arms) => {
                 let fused = emitter.analysis.results.get(owner).is_some_and(|result| {
-                    emitter
-                        .analysis
-                        .structures
+                    emitter.structures_analysis
                         .physical
                         .fused
                         .contains_key(result)
@@ -1508,18 +1536,18 @@ fn translate_with_profile(
         hook(node, emitter, child.as_ref(), &mut value, owner, tiles)?;
         Ok(value)
     }
-    let mut emitter = Emitter::new(program, analysis);
+    let structures_analysis = cq_lang_structures::contract::check(structures)?;
+    let mut emitter = Emitter::new(physical, structures, program, &structures_analysis, analysis);
     emitter.adapters.set_canon_target(canon_target);
     emitter.pull = pull;
     emitter.workers = workers;
     if profile {
-        emitter.context_mut().enable_profile(&program.structures);
+        emitter.context_mut().enable_profile(structures);
     }
     let mut output = None;
     // Recorded fused arms are emitted inside their prefix row's scope, not
     // prepared eagerly as independent top-level streams.
-    let deferred: std::collections::BTreeSet<_> = analysis
-        .structures
+    let deferred: std::collections::BTreeSet<_> = structures_analysis
         .physical
         .fused
         .values()

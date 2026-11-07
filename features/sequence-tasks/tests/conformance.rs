@@ -1,12 +1,45 @@
-use cq_lang_sequence::Program;
+use cq_lang_sequence::structures;
+use quote::ToTokens;
+
+// Authored fixtures retain each language layer independently of Sequence IR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Fixture {
+    physical: structures::physical::Program,
+    structures: structures::Program,
+    program: cq_lang_sequence::Program,
+}
+
+impl syn::parse::Parse for Fixture {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = structures::Program::parse(input, &physical)?;
+        let program = input.parse()?;
+        Ok(Self { physical, structures, program })
+    }
+}
+
+impl From<(structures::physical::Program, structures::Program, cq_lang_sequence::Program)> for Fixture {
+    fn from((physical, structures, program): (structures::physical::Program, structures::Program, cq_lang_sequence::Program)) -> Self {
+        Self { physical, structures, program }
+    }
+}
+
+impl ToTokens for Fixture {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        self.physical.to_tokens(tokens);
+        self.structures.to_tokens(tokens);
+        self.program.to_tokens(tokens);
+    }
+}
+
 use cq_sequence_conformance::{Target, assert_conformant, assert_conformant_with_inputs};
 
 const TARGETS: &[Target] = &[Target::Sequential, Target::Tasks];
 
 // Complete the authored provider packet before target-specific planning.
-fn program(mut program: Program) -> Program {
+fn program(mut program: Fixture) -> Fixture {
     let authored = program.structures.structures.clone();
-    program.structures = cq_structure_selection::compile(&program.structures.physical).unwrap();
+    program.structures = cq_structure_selection::compile(&program.physical).unwrap();
     for provider in authored.entries {
         program.structures.structures.entries.retain(|entry| {
             entry.name != provider.name
@@ -39,7 +72,7 @@ fn named_tile_pipeline_preserves_rows_across_join() {
             result = store canon map out renamed_rows;
         }
     });
-    assert_conformant_with_inputs(&program, TARGETS, &[("R", &[&[3], &[1], &[3], &[2], &[9]])]);
+    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program, TARGETS, &[("R", &[&[3], &[1], &[3], &[2], &[9]])]);
 }
 
 #[test]
@@ -61,14 +94,13 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
             result = store joined;
         }
     });
-    let (_, analysis) = cq_sequence_conformance::plan(&program, Target::Tasks).unwrap();
+    let (_, _, _, analysis) = cq_sequence_conformance::plan(&program.physical, &program.structures, &program.program, Target::Tasks).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
         cq_lang_sequence::structures::Capability::Exact,
     );
-    assert_conformant(&program, TARGETS);
-    assert_conformant_with_inputs(
-        &program,
+    assert_conformant(&program.physical, &program.structures, &program.program, TARGETS);
+    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program,
         TARGETS,
         &[
             ("L", &[&[1], &[1], &[2]]),
@@ -93,9 +125,8 @@ fn join() {
             result = store tile 2 canon flatten lookup r [a] input;
         }
     });
-    assert_conformant(&program, TARGETS);
-    assert_conformant_with_inputs(
-        &program,
+    assert_conformant(&program.physical, &program.structures, &program.program, TARGETS);
+    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program,
         TARGETS,
         &[
             ("L", &[&[1], &[2], &[1], &[9]]),
@@ -126,8 +157,7 @@ fn chain() {
             result = store tile 2 canon flatten lookup s [b] flatten lookup r [a] input;
         }
     });
-    assert_conformant_with_inputs(
-        &program,
+    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program,
         TARGETS,
         &[
             ("L", &[&[1], &[2], &[3]]),
@@ -153,8 +183,7 @@ fn semi() {
             result = store tile 2 canon compact j lookup r [a] input;
         }
     });
-    assert_conformant_with_inputs(
-        &program,
+    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program,
         TARGETS,
         &[("L", &[&[1], &[2], &[1], &[3]]), ("R", &[&[1], &[1], &[3]])],
     );
@@ -178,7 +207,7 @@ fn canon_sorts_the_whole_stream_across_task_boundaries() {
     // Duplicate rows straddle Rayon partition boundaries.
     let rows: Vec<_> = (0..5000).map(|index| [index % 7]).collect();
     let borrowed: Vec<_> = rows.iter().map(|row| row.as_slice()).collect();
-    assert_conformant_with_inputs(&program, TARGETS, &[("R", &borrowed)]);
+    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program, TARGETS, &[("R", &borrowed)]);
 }
 
 #[test]
@@ -196,6 +225,6 @@ fn empty_and_partial_tiles_have_equal_answers() {
         &[&[4][..]][..],
         &[&[3][..], &[1], &[4], &[2], &[5]][..],
     ] {
-        assert_conformant_with_inputs(&program, TARGETS, &[("R", rows)]);
+        assert_conformant_with_inputs(&program.physical, &program.structures, &program.program, TARGETS, &[("R", rows)]);
     }
 }

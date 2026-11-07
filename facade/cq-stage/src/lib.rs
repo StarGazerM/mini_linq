@@ -63,9 +63,14 @@
 //! printed programs. Their pass/rewrite closures receive Physical, Structures,
 //! and (where present) Sequence as separate typed arguments. Continuations use
 //! `realization { physical { ... } structures { ... } sequence { ... } }`,
-//! omitting Sequence before its lowering. The temporary IR embeddings must
-//! agree with the separate programs. Observers and calibration still identify
-//! only the selected IR, not this transport envelope.
+//! omitting Sequence before its lowering. [`Annotation`] parses and checks each
+//! annotation against its separately supplied upper programs. Observers print
+//! only the selected IR; calibration records that IR with its separate bases.
+//! Authored entry parses Physical, then Structures against Physical, then Sequence
+//! against both bases; annotations do not embed upper programs. The carrier checks
+//! these actual seams rather than comparing printed token prefixes. Calibration
+//! keeps the selected layer's language/program identity and records bases in order:
+//! `[P]` for Structures, `[P, S]` for Sequence, and none for flat languages.
 //!
 //! Restricted context facts enter only through [`pass_with_context`] (the
 //! lower/select adapters). Checked continuations carry a separate
@@ -86,7 +91,7 @@
 pub mod calibration;
 
 mod realization;
-pub use realization::{Sequence, Structures};
+pub use realization::{Annotation, Sequence, Structures};
 
 use std::collections::BTreeSet;
 
@@ -110,8 +115,10 @@ mod kw {
     syn::custom_keyword!(calibration_trace);
 }
 
-/// Public contract implemented by each IR language. Rust expressions terminate
-/// the pipeline; raw token streams are used only by surface expansion passes.
+/// Public contract implemented by standalone IR languages and realization carriers.
+/// Annotation layers implement [`Annotation`] against their separate bases instead.
+/// Rust expressions terminate the pipeline; raw token streams are used only by
+/// surface expansion passes.
 pub trait Language: Parse + ToTokens {
     fn check(&self) -> syn::Result<()>;
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()>;
@@ -119,6 +126,8 @@ pub trait Language: Parse + ToTokens {
     fn program_tokens(&self) -> TokenStream {
         self.to_token_stream()
     }
+    /// Selected language/program identity and the separate bases needed to check it.
+    /// Flat languages need no bases; annotation carriers record their upper programs.
     fn calibration_stage(&self) -> calibration::Stage {
         calibration::Stage::of(self)
     }

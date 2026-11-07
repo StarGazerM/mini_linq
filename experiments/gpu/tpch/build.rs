@@ -592,10 +592,10 @@ fn compile_stage(
     } else {
         cq_gpu_sequence::machine()
     };
-    let mut structures = checked(
+    let (physical, mut structures) = checked(
         "catalog selection",
         &selected,
-        cq_sequence_plan::select_from_catalog(&selected, &catalog),
+        cq_sequence_plan::select_from_catalog(&physical, &selected, &catalog),
     )?;
     let facts = checked(
         "Structures check",
@@ -611,10 +611,10 @@ fn compile_stage(
             .any(|input| input.nullable.iter().any(|value| *value))
     {
         let nullable = nullable_inputs(&normal, Some(publications));
-        let host_structures = checked(
+        let (_, host_structures) = checked(
             "nullable host provider selection",
             &selected,
-            cq_sequence_plan::select_from_catalog(&selected, &cq_sequence_pull::catalog()),
+            cq_sequence_plan::select_from_catalog(&physical, &selected, &cq_sequence_pull::catalog()),
         )?;
         for index in 0..structures.structures.entries.len() {
             let entry = &structures.structures.entries[index];
@@ -729,7 +729,7 @@ fn compile_stage(
     let mut sequence = checked(
         "Sequence lowering",
         &structures,
-        cq_sequence_lowering::compile(&structures),
+        cq_sequence_lowering::compile(&physical, &structures),
     )?;
     // Loader/provider facts, never host type spellings, justify device Rust.
     let origins = kernel.variable_origins().map_err(|error| Rejected {
@@ -779,13 +779,13 @@ fn compile_stage(
         sequence = checked(
             "target representation binding",
             &sequence,
-            cq_gpu_sequence::record_representation(&sequence),
+            cq_gpu_sequence::record_representation(&physical, &structures, &sequence),
         )?;
     }
     checked(
         "Sequence lowering check",
         &sequence,
-        cq_sequence_lowering::check(&structures, &sequence),
+        cq_sequence_lowering::check(&physical, &structures, &sequence),
     )?;
     if !pipeline.complete {
         let evidence = cq_lang_sequence::Evidence {
@@ -838,22 +838,26 @@ fn compile_stage(
     let mut authored = checked(
         "Sequence advice",
         &sequence,
-        advice::apply_sequence(&sequence, &pipeline.sequence),
+        advice::apply_sequence(&physical, &structures, &sequence, &pipeline.sequence),
     )?;
     let planned = checked(
         "decompose(machine)",
         &authored.program,
         if pipeline.complete {
             Ok(cq_sequence_plan::Planned {
+                physical: authored.physical.clone(),
+                structures: authored.structures.clone(),
                 program: authored.program.clone(),
                 trace: Vec::new(),
             })
         } else if host {
-            cq_sequence_plan::decompose(&authored.program, &machine, &catalog)
+            cq_sequence_plan::decompose(&authored.physical, &authored.structures, &authored.program, &machine, &catalog)
         } else if let Some(schedule) = &recipe.schedule {
-            advice::hand_schedule(&authored.program, schedule)
+            advice::hand_schedule(&authored.physical, &authored.structures, &authored.program, schedule)
         } else {
             cq_sequence_plan::decompose(
+                &authored.physical,
+                &authored.structures,
                 &authored.program,
                 &cq_gpu_sequence::machine(),
                 &cq_gpu_sequence::catalog(),
@@ -873,16 +877,20 @@ fn compile_stage(
         "pipeline": pipeline,
         "recipe_input": recipe,
         "publication_facts": publication,
+        "physical_input": physical.to_token_stream().to_string(),
+        "structures_input": structures.to_token_stream().to_string(),
+        "physical_planned": planned.physical.to_token_stream().to_string(),
+        "structures_planned": planned.structures.to_token_stream().to_string(),
         "sequence_input": sequence.to_token_stream().to_string(),
         "sequence_trace": trace,
         "sequence_planned": planned.program.to_token_stream().to_string(),
         "cost": checked("PL-Cost", &planned.program,
-            cq_sequence_plan::cost(&planned.program, &machine))?.to_string(),
+            cq_sequence_plan::cost(&planned.physical, &planned.structures, &planned.program, &machine))?.to_string(),
     });
     let analysis = checked(
         "machine_grade",
         &planned.program,
-        cq_lang_sequence::check_grading(&planned.program, &machine),
+        cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine),
     )?;
     // The checked GPU publication records (storage layout, union staging, set
     // build, arena), printed as recorded.
@@ -895,13 +903,13 @@ fn compile_stage(
         checked(
             "host translate",
             &planned.program,
-            cq_sequence_pull::translate(&planned.program, &analysis),
+            cq_sequence_pull::translate(&planned.physical, &planned.structures, &planned.program, &analysis),
         )?
     } else {
         checked(
             "translate",
             &planned.program,
-            cq_gpu_sequence::translate(&planned.program, &analysis),
+            cq_gpu_sequence::translate(&planned.physical, &planned.structures, &planned.program, &analysis),
         )?
     };
 
@@ -911,18 +919,20 @@ fn compile_stage(
     // restore the discarded Cartesian prefixes instead of testing this plan.
     let cpu_structures = checked(
         "Sequential structure selection",
-        &planned.program.structures.physical,
-        cq_structure_selection::compile(&planned.program.structures.physical),
+        &planned.physical,
+        cq_structure_selection::compile(&planned.physical),
     )?;
     let cpu_sequence = checked(
         "Sequential lowering",
         &cpu_structures,
-        cq_sequence_lowering::compile(&cpu_structures),
+        cq_sequence_lowering::compile(&planned.physical, &cpu_structures),
     )?;
     let cpu_plan = checked(
         "Sequential plan",
         &cpu_sequence,
         cq_sequence_plan::decompose(
+            &planned.physical,
+            &cpu_structures,
             &cpu_sequence,
             &cq_sequence_pull::machine(),
             &cq_sequence_pull::catalog(),
@@ -931,12 +941,12 @@ fn compile_stage(
     let cpu_analysis = checked(
         "Sequential grade",
         &cpu_plan.program,
-        cq_lang_sequence::check_grading(&cpu_plan.program, &cq_sequence_pull::machine()),
+        cq_lang_sequence::check_grading(&cpu_plan.physical, &cpu_plan.structures, &cpu_plan.program, &cq_sequence_pull::machine()),
     )?;
     let cpu = checked(
         "Sequential translate",
         &cpu_plan.program,
-        cq_sequence_pull::translate(&cpu_plan.program, &cpu_analysis),
+        cq_sequence_pull::translate(&cpu_plan.physical, &cpu_plan.structures, &cpu_plan.program, &cpu_analysis),
     )?;
 
     let fields: Vec<_> = kernel.relations.iter().map(|r| &r.name).collect();

@@ -2,6 +2,9 @@ use cq_lang_sequence::{Program, check_rewrite, contract};
 use cq_sequence_plan::rewrites::{choose, grade, output, partition, segment, store_level, tile};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
+use cq_lang_sequence::structures::{Program as Structures, physical::Program as Physical};
+
+type Stack = cq_stage::Sequence<Physical, Structures, Program>;
 
 macro_rules! capture {
     (arguments {}; pipeline {}; realization {
@@ -37,7 +40,7 @@ macro_rules! apply_macro {
     };
 }
 
-fn source() -> Program {
+fn source() -> Stack {
     syn::parse2(quote! {
         physical {
             relation R(a:i32);
@@ -55,7 +58,7 @@ fn source() -> Program {
     .unwrap()
 }
 
-type Rewrite = fn(&Program, TokenStream) -> syn::Result<Program>;
+type Rewrite = fn(&Physical, &Structures, &Program, TokenStream) -> syn::Result<Program>;
 
 #[test]
 fn every_registered_macro_applies_and_round_trips() {
@@ -104,9 +107,9 @@ fn every_registered_macro_applies_and_round_trips() {
     let source = source();
     for (captured, pass, advice) in cases {
         let target: Program = syn::parse_str(captured).unwrap();
-        assert_eq!(target, pass(&source, advice).unwrap());
-        contract::check(&target).unwrap();
-        check_rewrite(&source, &target).unwrap();
+        assert_eq!(target, pass(&source.physical, &source.structures, &source.sequence, advice).unwrap());
+        contract::check(&source.physical, &source.structures, &target).unwrap();
+        check_rewrite(&source.physical, &source.structures, &source.sequence, &source.physical, &source.structures, &target).unwrap();
         assert_eq!(target, syn::parse2(target.to_token_stream()).unwrap());
     }
 }
@@ -127,9 +130,9 @@ fn rejected_advice_stops_each_macro_before_continuation() {
             quote! {
                 arguments { #advice }; pipeline { forbidden_continuation }; #source
             },
-            |_physical, _structures, source, arguments| {
-                let target = pass(source, arguments)?;
-                Ok((target.structures.physical.clone(), target.structures.clone(), target))
+            |physical, structures, source, arguments| {
+                let target = pass(physical, structures, source, arguments)?;
+                Ok((physical.clone(), structures.clone(), target))
             },
         )
         .to_string();
@@ -163,11 +166,13 @@ fn registered_macros_chain_and_forward_advice() {
         }
     };
     let source = source();
-    let expected = store_level(&source, quote!(b)).unwrap();
-    let expected = tile(&expected, quote!(b, 4)).unwrap();
-    let expected = choose(&expected, quote!(c, len r < 32 => a, else => b)).unwrap();
-    let expected = output(&expected, quote!(reserve)).unwrap();
+    let expected = store_level(&source.physical, &source.structures, &source.sequence, quote!(b)).unwrap();
+    let expected = tile(&source.physical, &source.structures, &expected, quote!(b, 4)).unwrap();
+    let expected = choose(&source.physical, &source.structures, &expected, quote!(c, len r < 32 => a, else => b)).unwrap();
+    let expected = output(&source.physical, &source.structures, &expected, quote!(reserve)).unwrap();
     let expected = grade(
+        &source.physical,
+        &source.structures,
         &expected,
         quote!(custom, a at host, b at host, c at host, d at host),
     )

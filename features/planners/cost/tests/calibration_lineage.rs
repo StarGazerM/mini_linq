@@ -1,6 +1,7 @@
 #![cfg(feature = "planner-calibration")]
-use cq_cost::calibration::lineage::nodes;
+use cq_cost::calibration::lineage::{checked_sequence, checked_structures, nodes};
 use cq_stage::calibration::{Coverage, Seed, Stage, Trace};
+use quote::ToTokens;
 
 #[test]
 fn actual_checked_boundaries_preserve_local_origins() {
@@ -27,12 +28,37 @@ fn actual_checked_boundaries_preserve_local_origins() {
     assert_eq!(nodes(trace.current().unwrap()).unwrap(), physical_nodes);
     trace.advance(Stage::of(&physical));
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    trace.advance(Stage::of(&structures));
+    let structures_stage = Stage::annotation(
+        &structures, vec![physical.to_token_stream().to_string()],
+    );
+    let checked = checked_structures(&structures_stage).unwrap();
+    assert_eq!(checked.physical.to_token_stream().to_string(), structures_stage.bases[0]);
+    assert_eq!(checked.structures.to_token_stream().to_string(), structures_stage.program);
+    assert!(nodes(&Stage::of(&structures)).is_err());
+    trace.advance(structures_stage);
     assert_eq!(trace.coverage(nodes).unwrap(), original_coverage);
     assert_eq!(nodes(trace.current().unwrap()).unwrap().len(), physical.program.definitions.len());
-    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-    trace.advance(Stage::of(&sequence));
+    let sequence = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let sequence_stage = Stage::annotation(&sequence, vec![
+        physical.to_token_stream().to_string(), structures.to_token_stream().to_string(),
+    ]);
+    let checked = checked_sequence(&sequence_stage).unwrap();
+    assert_eq!(checked.physical.to_token_stream().to_string(), sequence_stage.bases[0]);
+    assert_eq!(checked.structures.to_token_stream().to_string(), sequence_stage.bases[1]);
+    assert_eq!(checked.sequence.to_token_stream().to_string(), sequence_stage.program);
+    assert!(nodes(&Stage::of(&sequence)).is_err());
+    let mut missing_base = sequence_stage.clone();
+    missing_base.bases.pop();
+    assert!(nodes(&missing_base).is_err());
+    let mut malformed_base = sequence_stage.clone();
+    malformed_base.bases[1] = "not_a_structures_annotation".into();
+    assert!(nodes(&malformed_base).is_err());
+    trace.advance(sequence_stage);
     assert_eq!(trace.coverage(nodes).unwrap(), original_coverage);
+    let descriptor = trace.descriptor().unwrap();
+    let restored = Trace::parse_descriptor(&descriptor).unwrap();
+    assert_eq!(restored, trace);
+    assert_eq!(restored.coverage(nodes).unwrap(), original_coverage);
 }
 
 #[test]

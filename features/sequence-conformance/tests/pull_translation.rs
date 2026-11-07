@@ -3,14 +3,15 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 fn assert_answers(
+    physical: &cq_lang_structures::physical::Program,
     structures: cq_lang_structures::Program,
     data: TokenStream,
     expected: TokenStream,
 ) -> TokenStream {
-    let program = cq_sequence_lowering::compile(&structures).unwrap();
-    cq_sequence_lowering::check(&structures, &program).unwrap();
-    let analysis = contract::check(&program).unwrap();
-    let sequence = cq_sequence_pull::translate(&program, &analysis)
+    let program = cq_sequence_lowering::compile(physical, &structures).unwrap();
+    cq_sequence_lowering::check(physical, &structures, &program).unwrap();
+    let analysis = contract::check(physical, &structures, &program).unwrap();
+    let sequence = cq_sequence_pull::translate(physical, &structures, &program, &analysis)
         .unwrap_or_else(|error| panic!("{error}\n{}", program.to_token_stream()));
     quote!({
         #data
@@ -33,7 +34,7 @@ fn run(source: TokenStream) {
     runtime.run(&source.to_string());
 }
 
-fn simple(body: TokenStream) -> Program {
+fn simple(body: TokenStream) -> (cq_lang_structures::physical::Program, cq_lang_structures::Program, Program) {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i32);
@@ -41,23 +42,24 @@ fn simple(body: TokenStream) -> Program {
             return r as answer(a);
         }
     };
-    Program {
-        structures: cq_structure_selection::compile(&physical).unwrap(),
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let program = Program {
         sequence: syn::parse2(quote!(sequence { #body })).unwrap(),
         graded: None,
         evidence: Default::default(),
         representation: Default::default(),
-    }
+    };
+    (physical, structures, program)
 }
 
 #[test]
 fn sequential_and_tasks_share_the_sequence_answer_contract() {
     use cq_sequence_conformance::{Target, assert_conformant};
-    let program = simple(quote! {
+    let (physical, structures, program) = simple(quote! {
         input = store rows r;
         out = store tile 2 canon input;
     });
-    assert_conformant(&program, &[Target::Sequential, Target::Tasks]);
+    assert_conformant(&physical, &structures, &program, &[Target::Sequential, Target::Tasks]);
 }
 
 #[test]
@@ -81,9 +83,9 @@ fn retained_union_fallback_readers_keep_their_recorded_providers() {
     };
     let physical = pipeline.physical(&source).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let program = cq_sequence_lowering::compile(&structures).unwrap();
-    let analysis = contract::check(&program).unwrap();
-    let output = cq_sequence_pull::translate(&program, &analysis)
+    let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let analysis = contract::check(&physical, &structures, &program).unwrap();
+    let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis)
         .unwrap_or_else(|error| panic!("{error}\n{}", program.to_token_stream()));
     run(quote!(
         fn main() {
@@ -119,6 +121,7 @@ fn computed_branch_merges_use_the_retained_ordered_index() {
     let physical = pipeline.physical(&source).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
     let check = assert_answers(
+        &physical,
         structures,
         quote! {
             let r0 = vec![(1i32,), (2,), (1,), (3,)];

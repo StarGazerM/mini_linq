@@ -203,6 +203,7 @@ fn value_key(
 pub(crate) fn check(
     records: &cq_lang_sequence::gpu::realization::Captures,
     definitions: &BTreeMap<String, cq_lang_structures::physical::Definition>,
+    structure_analysis: &cq_lang_structures::Analysis,
     analysis: &cq_lang_sequence::Analysis,
     codecs: &crate::runs::Codecs,
 ) -> syn::Result<()> {
@@ -213,7 +214,7 @@ pub(crate) fn check(
             format!("GPU-Capture: {message}"),
         )
     };
-    let rows = &analysis.structures.physical.rows;
+    let rows = &structure_analysis.physical.rows;
     let columns: BTreeSet<_> = rows
         .values()
         .flat_map(|row| row.types.keys().cloned())
@@ -265,7 +266,7 @@ pub(crate) fn check(
         let uses = records.uses.get(name);
         match &definition.operator {
             Operator::Guard(_) | Operator::Bind(_)
-                if !analysis.rust_requires_host(&definition.operator) =>
+                if !analysis.rust_requires_host(&structure_analysis.physical, &definition.operator) =>
             {
                 let (expression, input, output): (&Expr, _, Type) = match &definition.operator {
                     Operator::Guard(guard) => {
@@ -1015,6 +1016,7 @@ impl Captures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../../tests/support/stack.rs");
 
     #[test]
     fn closed_relational_forms_capture_only_the_host_boolean() {
@@ -1250,7 +1252,7 @@ mod tests {
             ..Default::default()
         };
         let definitions = BTreeMap::new();
-        let program: cq_lang_sequence::Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i32);
                 r = pipe rename R@0 {a -> a};
@@ -1271,8 +1273,9 @@ mod tests {
                 output count;
             }
         };
-        let analysis = cq_lang_sequence::contract::check(&program).unwrap();
-        assert!(check(&records, &definitions, &analysis, &codecs).is_ok());
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
+        assert!(check(&records, &definitions, &structure_analysis, &analysis, &codecs).is_ok());
         for change_identity in [true, false] {
             let mut changed = records.clone();
             let Capture::Value {
@@ -1286,7 +1289,7 @@ mod tests {
             } else {
                 *codec = Some(syn::parse_quote!(DifferentPayload));
             }
-            assert!(check(&changed, &definitions, &analysis, &codecs).is_err());
+            assert!(check(&changed, &definitions, &structure_analysis, &analysis, &codecs).is_err());
         }
     }
 

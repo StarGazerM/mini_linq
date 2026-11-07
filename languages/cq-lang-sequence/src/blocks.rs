@@ -34,18 +34,18 @@ pub struct Execution {
 }
 impl Execution {
     pub fn is_empty(&self) -> bool { self.scans.is_empty() && self.predicates.is_empty() && self.reads.is_empty() && self.runs.is_empty() && self.routing.is_empty() }
-    pub fn record(source: &structures::Program) -> Self {
+    pub fn record(physical: &structures::physical::Program, source: &structures::Program) -> Self {
         let blocks = &source.encoded.blocks;
         if blocks.scans.is_empty() { return Self::default(); }
-        let definitions: BTreeMap<_, _> = source.physical.program.definitions.iter().map(|d| (structures::symbol_name(&d.name), d)).collect();
+        let definitions: BTreeMap<_, _> = physical.program.definitions.iter().map(|d| (structures::symbol_name(&d.name), d)).collect();
         let mut uses = BTreeMap::<String, usize>::new();
-        for definition in &source.physical.program.definitions {
+        for definition in &physical.program.definitions {
             for operand in definition.operator.operands() { *uses.entry(structures::symbol_name(operand)).or_default() += 1; }
         }
-        *uses.entry(structures::symbol_name(&source.physical.program.returned)).or_default() += 1;
+        *uses.entry(structures::symbol_name(&physical.program.returned)).or_default() += 1;
         let mut roots = BTreeMap::<String, String>::new();
         let mut runs = BTreeMap::<String, Vec<String>>::new();
-        for definition in &source.physical.program.definitions {
+        for definition in &physical.program.definitions {
             let name = structures::symbol_name(&definition.name);
             if blocks.scans.contains_key(&name) { roots.insert(name.clone(), name); continue; }
             let inherited = definition.operator.input().and_then(|input| {
@@ -146,9 +146,9 @@ impl ToTokens for Execution {
 /// Formal rule BE-Blocks: independently check exact phase/consumer coverage,
 /// native occurrence positions, bounded scratch and aligned task source covers.
 /// Neither this checker nor correspondence invokes the execution producer.
-pub fn check(program: &Program) -> syn::Result<()> {
+pub fn check(physical: &structures::physical::Program, structures: &structures::Program, program: &Program) -> syn::Result<()> {
     let execution = &program.representation.blocks;
-    let blocks = &program.structures.encoded.blocks;
+    let blocks = &structures.encoded.blocks;
     let invalid = || syn::Error::new_spanned(program, "BE-Blocks: invalid source cover, phase order or materialization point");
     if !execution.scans.keys().eq(blocks.scans.keys()) || !execution.predicates.keys().eq(blocks.predicates.keys()) || !execution.reads.iter().eq(blocks.reads.keys()) { return Err(invalid()); }
     for (name, scan) in &execution.scans {
@@ -156,13 +156,12 @@ pub fn check(program: &Program) -> syn::Result<()> {
         if scan.source != source.source || scan.tile_rows != 1024 || scan.scratch_rows != scan.tile_rows || blocks.sources[&source.source].block_rows % scan.tile_rows as u64 != 0 { return Err(invalid()); }
     }
     if execution.predicates.values().any(|phases| phases != &[Phase::Prune, Phase::Exact, Phase::Positions]) { return Err(invalid()); }
-    let physical = &program.structures.physical.program;
-    let definitions: BTreeMap<_, _> = physical.definitions.iter().map(|d| (structures::symbol_name(&d.name), d)).collect();
+    let definitions: BTreeMap<_, _> = physical.program.definitions.iter().map(|d| (structures::symbol_name(&d.name), d)).collect();
     let mut uses = BTreeMap::<String, usize>::new();
-    for definition in &physical.definitions {
+    for definition in &physical.program.definitions {
         for operand in definition.operator.operands() { *uses.entry(structures::symbol_name(operand)).or_default() += 1; }
     }
-    *uses.entry(structures::symbol_name(&physical.returned)).or_default() += 1;
+    *uses.entry(structures::symbol_name(&physical.program.returned)).or_default() += 1;
     let mut covered = BTreeSet::new();
     for (root, names) in &execution.runs {
         if names.is_empty() || (!execution.scans.contains_key(root) && names.first() != Some(root)) { return Err(invalid()); }
@@ -210,12 +209,12 @@ pub fn check(program: &Program) -> syn::Result<()> {
         let canonical = format!("canon:{}", structures::symbol_name(&definition.name));
         if execution.reads.contains(&canonical) && has_canon(&definition.term) { consumers.insert(canonical); }
     }
-    let answer = structures::symbol_name(&physical.head.relation);
-    let returned = structures::symbol_name(&physical.returned);
+    let answer = structures::symbol_name(&physical.program.head.relation);
+    let returned = structures::symbol_name(&physical.program.returned);
     for (name, read) in &blocks.reads {
         use structures::encoded::{Consumer, ReadPurpose};
         if read.input != returned { continue; }
-        let at_output = match (&program.structures.consumer, &read.consumer, read.purpose) {
+        let at_output = match (&structures.consumer, &read.consumer, read.purpose) {
             (Some(demand), Consumer::Relational(consumer), ReadPurpose::PreserveCarrier)
             | (Some(demand), Consumer::OpaqueRust(consumer), ReadPurpose::OpaqueRustRead) =>
                 *consumer == demand.original_consumer,
@@ -225,8 +224,8 @@ pub fn check(program: &Program) -> syn::Result<()> {
         };
         if at_output { consumers.insert(name.clone()); }
     }
-    let returned_canon = format!("canon:{}", structures::symbol_name(&physical.returned));
-    if physical.return_canon.is_some() && execution.reads.contains(&returned_canon)
+    let returned_canon = format!("canon:{}", structures::symbol_name(&physical.program.returned));
+    if physical.program.return_canon.is_some() && execution.reads.contains(&returned_canon)
         && program.sequence.definitions.last().is_some_and(|definition| has_canon(&definition.term))
     {
         consumers.insert(returned_canon);
@@ -237,9 +236,9 @@ pub fn check(program: &Program) -> syn::Result<()> {
 
 /// A task partitions the borrowed source itself. Its contiguous row ranges
 /// are disjoint, aligned, and clipped only at the source's live final extent.
-pub fn check_task_covers(program: &Program, analysis: &crate::Analysis) -> syn::Result<()> {
+pub fn check_task_covers(structures: &structures::Program, program: &Program, structure_analysis: &structures::Analysis, analysis: &crate::Analysis) -> syn::Result<()> {
     if program.representation.blocks.is_empty() { return Ok(()); }
-    check_routing(program, &analysis.structures)?;
+    check_routing(structures, program, structure_analysis)?;
     let terms = analysis.task_execution.terms(program);
     fn unstored_source(term: &Term, program: &Program) -> bool {
         match term {
@@ -313,15 +312,15 @@ fn routing_sites(program: &Program) -> Vec<(String, Vec<String>)> {
 /// Producer-side refinement after a Sequence rewrite introduces or moves a
 /// routing constructor. Existing source/predicate/materialization facts remain
 /// unchanged; the independent checker below never calls this producer.
-pub fn record_routing(program: &mut Program) -> syn::Result<()> {
+pub fn record_routing(structures: &structures::Program, program: &mut Program) -> syn::Result<()> {
     if program.representation.blocks.scans.is_empty() { return Ok(()); }
-    let facts = structures::contract::check(&program.structures)?;
-    let origins = structures::representation_bases(&program.structures, &facts);
+    let facts = structures::contract::check(structures)?;
+    let origins = structures::representation_bases(structures, &facts);
     let mut routing = BTreeMap::<String, BTreeMap<String, structures::encoded::RepresentationId>>::new();
     for (result, keys) in routing_sites(program) {
         for column in keys {
             let representation = origins.get(&result).into_iter().flatten().find_map(|origin| {
-                let scan = program.structures.encoded.blocks.scans.get(&origin.occurrence)?;
+                let scan = structures.encoded.blocks.scans.get(&origin.occurrence)?;
                 scan.columns.get(origin.columns.get(&column)?).copied()
             });
             if let Some(representation) = representation {
@@ -333,9 +332,9 @@ pub fn record_routing(program: &mut Program) -> syn::Result<()> {
     Ok(())
 }
 
-fn check_routing(program: &Program, facts: &structures::Analysis) -> syn::Result<()> {
-    let origins = structures::representation_bases(&program.structures, facts);
-    let encoded = &program.structures.encoded;
+fn check_routing(structures: &structures::Program, program: &Program, facts: &structures::Analysis) -> syn::Result<()> {
+    let origins = structures::representation_bases(structures, facts);
+    let encoded = &structures.encoded;
     let mut used = BTreeSet::new();
     let invalid = || syn::Error::new_spanned(program, "BE-Blocks: routing key lacks its exact retained ordinal representation");
     for (result, keys) in routing_sites(program) {

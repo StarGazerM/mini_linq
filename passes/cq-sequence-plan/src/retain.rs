@@ -146,13 +146,15 @@ pub(crate) fn advise(program: &Program, analysis: &Analysis, machine: &Machine) 
 /// Check a recorded retention against the recorded evidence, then store it.
 pub(crate) fn apply_in(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     source: &Program,
     name: &syn::Ident,
     rows: u128,
     tile: usize,
     minimum: usize,
 ) -> syn::Result<Program> {
-    let analysis = checker.check_shared(source)?;
+    let analysis = checker.check_shared(physical, structures, source)?;
     let bound = analysis
         .prefix_bounds
         .get(&symbol_name(name))
@@ -204,5 +206,5 @@ pub(crate) fn apply_in(
             "GR-RetainPrefix: recorded prefix violates root, threshold, first-bound or following-expansion premises",
         ));
     }
-    crate::rewrites::store_level_in(checker, source, quote::quote!(#name))
+    crate::rewrites::store_level_in(checker, physical, structures, source, quote::quote!(#name))
 }

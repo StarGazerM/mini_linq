@@ -1,7 +1,38 @@
-use cq_lang_sequence::{Program, check_grading};
+use cq_lang_sequence::{check_grading, structures};
 use cq_sequence_tasks::{machine, translate};
 use quote::ToTokens;
 use syn::visit_mut::{self, VisitMut};
+
+// Authored fixtures retain each language layer independently of Sequence IR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Fixture {
+    physical: structures::physical::Program,
+    structures: structures::Program,
+    program: cq_lang_sequence::Program,
+}
+
+impl syn::parse::Parse for Fixture {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = structures::Program::parse(input, &physical)?;
+        let program = input.parse()?;
+        Ok(Self { physical, structures, program })
+    }
+}
+
+impl From<(structures::physical::Program, structures::Program, cq_lang_sequence::Program)> for Fixture {
+    fn from((physical, structures, program): (structures::physical::Program, structures::Program, cq_lang_sequence::Program)) -> Self {
+        Self { physical, structures, program }
+    }
+}
+
+impl ToTokens for Fixture {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        self.physical.to_tokens(tokens);
+        self.structures.to_tokens(tokens);
+        self.program.to_tokens(tokens);
+    }
+}
 
 #[test]
 fn machine_cache_cutoff_defaults_overrides_and_accepts_below_low_cutoff() {
@@ -31,7 +62,7 @@ fn machine_cache_cutoff_rejects_zero() {
     });
 }
 
-fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Program {
+fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Fixture {
     syn::parse2(quote::quote! {
         physical {
             relation R(a:i32);
@@ -73,15 +104,12 @@ fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
     let mut checks = Vec::new();
     for (sequence, grades) in cases {
         let program = program(sequence, grades);
-        let facts = check_grading(&program, &machine()).unwrap();
-        let expression = cq_sequence_tasks::translate_with(
-            &program,
-            &facts,
-            cq_sequence_tasks::Config {
-                grain: 127,
-                ..Default::default()
-            },
-        )
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+        let expression = cq_sequence_tasks::translate_with(&program.physical, &program.structures, &program.program, &facts,
+        cq_sequence_tasks::Config {
+            grain: 127,
+            ..Default::default()
+        },)
         .unwrap();
         let rendered = expression.to_token_stream().to_string();
         assert!(
@@ -168,7 +196,8 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
         })
         .unwrap();
         let structures = cq_structure_selection::compile(&physical).unwrap();
-        let program: Program = syn::parse2(quote::quote! {
+        let program: Fixture = syn::parse2(quote::quote! {
+            #physical
             #structures
             sequence {
                 input = store rows r;
@@ -183,15 +212,15 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
             }
         })
         .unwrap();
-        let facts = check_grading(&program, &machine()).unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+        let structures_facts = structures::contract::check(&program.structures).unwrap();
         assert!(
-            facts
-                .structures
+            structures_facts
                 .head_dedup
                 .contains_key(&returned.to_string())
         );
-        let expression = translate(&program, &facts).unwrap();
-        let profiled = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+        let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
+        let profiled = cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
         for expression in [expression, profiled] {
             let rendered = expression.to_token_stream().to_string();
             assert!(
@@ -244,7 +273,8 @@ fn tasks_wide_valuation_canon_compares_every_field() {
     })
     .unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let program: Program = syn::parse2(quote::quote! {
+    let program: Fixture = syn::parse2(quote::quote! {
+        #physical
         #structures
         sequence {
             r = store rows r;
@@ -254,8 +284,8 @@ fn tasks_wide_valuation_canon_compares_every_field() {
         graded tasks { r at host; input at host; result at host; }
     })
     .unwrap();
-    let facts = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(
         rendered.contains("dedup :: Sort > :: par_sort"),
@@ -308,7 +338,7 @@ fn checked_publication_owns_rows_once_and_aliases_without_copying() {
             alias at host; parts at pool; joined at host; result at host;
         },
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert!(matches!(
         facts.publications["borrowed"],
         Publication::BorrowHost { .. }
@@ -323,7 +353,7 @@ fn checked_publication_owns_rows_once_and_aliases_without_copying() {
             source: "retained".into()
         }
     );
-    let tasks = translate(&program, &facts).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let tokens = tasks.to_token_stream().to_string();
     assert!(
         tokens.contains("let __cq_key_source_retained ="),
@@ -370,7 +400,7 @@ fn collective_at_separated_pool_is_rejected() {
         quote::quote!(input = store rows r; result = fold count input;),
         quote::quote!(input at host; result at pool;),
     );
-    let error = check_grading(&program, &machine()).unwrap_err();
+    let error = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap_err();
     assert!(error.to_string().contains("BE-Collective"), "{error}");
 }
 
@@ -380,8 +410,8 @@ fn leaf_task_fold_is_a_sequential_loop() {
         quote::quote!(input = store rows r; result = store fold count input;),
         quote::quote!(input at host; result at pool.task;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &analysis)
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -396,7 +426,7 @@ fn flatten_at_pool_is_rejected_even_with_tile() {
         quote::quote!(input at host; result at pool;),
     );
     // Strip-mining does not make the separated pool collaborative.
-    let error = check_grading(&program, &machine()).unwrap_err();
+    let error = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap_err();
     assert!(error.to_string().contains("BE-Collective"), "{error}");
 }
 
@@ -406,8 +436,8 @@ fn host_placement_does_not_emit_parallel_operations() {
         quote::quote!(input = store rows r; result = store input;),
         quote::quote!(input at host; result at host;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &analysis)
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -420,8 +450,8 @@ fn pool_tile_and_store_emit_indexed_parallel_buffers() {
         quote::quote!(input = store rows r; result = store tile 64 input;),
         quote::quote!(input at host; result at pool;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &analysis).unwrap();
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("tile_rows (64usize)"), "{rendered}");
     assert!(!rendered.contains("rayon :: prelude"), "{rendered}");
@@ -459,7 +489,7 @@ fn worker_bodies(expression: &syn::Expr) -> Vec<syn::Expr> {
     workers.0
 }
 
-fn segment_program() -> Program {
+fn segment_program() -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,x:i32); relation R(a:i32,b:i32);
@@ -474,7 +504,7 @@ fn segment_program() -> Program {
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
-    let provider: Program = syn::parse_quote! {
+    let provider: Fixture = syn::parse_quote! {
         #physical
         structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
         sequence { input = store rows l; result = store input; }
@@ -492,6 +522,7 @@ fn segment_program() -> Program {
         .structures
         .declare(&provider.structures.structures.providers.declarations).unwrap();
     syn::parse_quote! {
+        #physical
         #structures
         sequence {
             r = store rows r;
@@ -507,12 +538,12 @@ fn segment_program() -> Program {
 #[test]
 fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
     let program = segment_program();
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert_eq!(
         analysis.tilings["parts"],
         vec![cq_lang_sequence::Tiling::Distribute]
     );
-    let expression = translate(&program, &analysis).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let workers = worker_bodies(&expression);
     assert_eq!(workers.len(), 1, "{}", expression.to_token_stream());
     let worker = workers[0].to_token_stream().to_string();
@@ -542,14 +573,14 @@ fn distributing_tile_keeps_the_whole_segment_inside_the_worker() {
 #[test]
 fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
     let program = segment_program();
-    let analysis = check_grading(&program, &machine()).unwrap();
-    let tasks = translate(&program, &analysis).unwrap();
+    let analysis = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &analysis).unwrap();
     let mut sequential = program.clone();
-    sequential.graded = Some(syn::parse_quote! {
+    sequential.program.graded = Some(syn::parse_quote! {
         graded tasks { r at host; input at host; parts at host; result at host; }
     });
-    let facts = check_grading(&sequential, &machine()).unwrap();
-    let pull = cq_sequence_pull::translate(&sequential, &facts).unwrap();
+    let facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &facts).unwrap();
     let source = quote::quote! {
         fn main() {
             let R: &[(i32,i32)] = &[(1,10),(1,11),(2,20),(3,-30)];
@@ -579,7 +610,7 @@ fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
     run_partition_fixture(source);
 }
 
-fn grouped_program(global: bool) -> Program {
+fn grouped_program(global: bool) -> Fixture {
     let keys = if global {
         quote::quote!()
     } else {
@@ -606,6 +637,7 @@ fn grouped_program(global: bool) -> Program {
     .unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
     syn::parse2(quote::quote! {
+        #physical
         #structures
         sequence {
             r = store canon rows r;
@@ -621,13 +653,13 @@ fn grouped_program(global: bool) -> Program {
 fn grouped_fold_requires_host_even_at_a_sequential_task_leaf() {
     for level in [quote::quote!(pool), quote::quote!(pool.task)] {
         let mut program = grouped_program(false);
-        program.graded = Some(
+        program.program.graded = Some(
             syn::parse2(quote::quote! {
                 graded tasks { r at host; groups at #level; output_rows at host; }
             })
             .unwrap(),
         );
-        let error = check_grading(&program, &machine()).unwrap_err();
+        let error = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap_err();
         assert!(error.to_string().contains("BE-Group"), "{error}");
     }
 }
@@ -636,12 +668,12 @@ fn grouped_fold_requires_host_even_at_a_sequential_task_leaf() {
 fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
     let keyed = grouped_program(false);
     let global = grouped_program(true);
-    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
-    let global_facts = check_grading(&global, &machine()).unwrap();
-    let keyed_tasks = translate(&keyed, &keyed_facts).unwrap();
-    let global_tasks = translate(&global, &global_facts).unwrap();
-    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
-    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    let keyed_facts = check_grading(&keyed.physical, &keyed.structures, &keyed.program, &machine()).unwrap();
+    let global_facts = check_grading(&global.physical, &global.structures, &global.program, &machine()).unwrap();
+    let keyed_tasks = translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_tasks = translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     assert!(!keyed_tasks.to_token_stream().to_string().contains("rayon"));
     let source = quote::quote! {
         fn main() {
@@ -675,8 +707,8 @@ fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
 fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
     let keyed = grouped_program(false);
     let global = grouped_program(true);
-    let translate_tiled = |mut program: Program| {
-        program.sequence = syn::parse_quote! {
+    let translate_tiled = |mut program: Fixture| {
+        program.program.sequence = syn::parse_quote! {
             sequence {
                 input = store rows r;
                 parts = store flatten tile 64 input;
@@ -686,27 +718,27 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
                 output_rows = store groups;
             }
         };
-        program.graded = Some(syn::parse_quote! {
+        program.program.graded = Some(syn::parse_quote! {
             graded tasks {
                 input at host; parts at pool; joined at host;
                 r at host; groups at host; output_rows at host;
             }
         });
-        let facts = check_grading(&program, &machine()).unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
         assert_eq!(
             facts.tilings["parts"],
             vec![cq_lang_sequence::Tiling::Distribute]
         );
-        let expression = translate(&program, &facts).unwrap();
+        let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         assert_eq!(worker_bodies(&expression).len(), 1);
         expression
     };
     let keyed_tasks = translate_tiled(keyed.clone());
     let global_tasks = translate_tiled(global.clone());
-    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
-    let global_facts = check_grading(&global, &machine()).unwrap();
-    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
-    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    let keyed_facts = check_grading(&keyed.physical, &keyed.structures, &keyed.program, &machine()).unwrap();
+    let global_facts = check_grading(&global.physical, &global.structures, &global.program, &machine()).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     let source = quote::quote! {
         fn main() {
             // Repeated complete valuations span several 64-row tiles. Different
@@ -775,27 +807,27 @@ fn run_partition_fixture(source: proc_macro2::TokenStream) {
 fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() {
     let keyed = grouped_program(false);
     let global = grouped_program(true);
-    let translate_partitioned = |mut program: Program, global: bool| {
+    let translate_partitioned = |mut program: Fixture, global: bool| {
         let body = if global {
             quote::quote!(group grouped canon partition_k[k,witness,value](64) input)
         } else {
             quote::quote!(flatten group grouped canon partition_k[k](64) input)
         };
-        program.sequence = syn::parse_quote! {
+        program.program.sequence = syn::parse_quote! {
             sequence {
                 input = store rows r;
                 parts = store #body;
                 output_rows = store parts;
             }
         };
-        program.graded = Some(syn::parse_quote! {
+        program.program.graded = Some(syn::parse_quote! {
             graded tasks { input at host; parts at pool; output_rows at host; }
         });
-        let facts = check_grading(&program, &machine()).unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
         if global {
             assert_eq!(facts.shapes["parts"], vec![cq_lang_sequence::Len::Lit(1)]);
         }
-        let expression = translate(&program, &facts).unwrap();
+        let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         let rendered = expression.to_token_stream().to_string();
         assert!(rendered.contains("combine :: route_by"), "{rendered}");
         assert!(rendered.contains("combine :: map_parts"), "{rendered}");
@@ -811,10 +843,10 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
     };
     let keyed_tasks = translate_partitioned(keyed.clone(), false);
     let global_tasks = translate_partitioned(global.clone(), true);
-    let keyed_facts = check_grading(&keyed, &machine()).unwrap();
-    let global_facts = check_grading(&global, &machine()).unwrap();
-    let keyed_pull = cq_sequence_pull::translate(&keyed, &keyed_facts).unwrap();
-    let global_pull = cq_sequence_pull::translate(&global, &global_facts).unwrap();
+    let keyed_facts = check_grading(&keyed.physical, &keyed.structures, &keyed.program, &machine()).unwrap();
+    let global_facts = check_grading(&global.physical, &global.structures, &global.program, &machine()).unwrap();
+    let keyed_pull = cq_sequence_pull::translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
+    let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             // Duplicates span several routing chunks; only two of the 64
@@ -858,18 +890,18 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
 #[test]
 fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
     let mut program = grouped_program(true);
-    program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
-    program.sequence = syn::parse_quote! {
+    program.program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
+    program.program.sequence = syn::parse_quote! {
         sequence {
             input = store rows r;
             partials = store group grouped tile 64 input;
             output_rows = store partials;
         }
     };
-    program.graded = Some(syn::parse_quote! {
+    program.program.graded = Some(syn::parse_quote! {
         graded tasks { input at host; partials at pool; output_rows at host; }
     });
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert_eq!(
         facts.shapes["partials"],
         vec![cq_lang_sequence::Len::Lit(1)]
@@ -878,7 +910,7 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
         facts.tilings["partials"],
         vec![cq_lang_sequence::Tiling::Distribute]
     );
-    let expression = translate(&program, &facts).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("let __cq_partials"), "{rendered}");
     assert!(rendered.contains("parallel :: map_index"), "{rendered}");
@@ -905,7 +937,7 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
     });
 }
 
-fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Program {
+fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
@@ -917,7 +949,7 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
-    let authored: Program = syn::parse_quote! {
+    let authored: Fixture = syn::parse_quote! {
         #physical
         structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host required build single, keys: keys distinct_keys exact hash_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host required build single ] }; }
             r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
@@ -950,6 +982,7 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Pr
         )
     };
     syn::parse_quote! {
+        #physical
         #structures
         sequence {
             provider_input = store rows r;
@@ -972,7 +1005,7 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
         for named in [false, true] {
             for width in [1, 64] {
                 let mut program = routed_provider_program(routing.clone(), named);
-                let definition = program
+                let definition = program.program
                     .sequence
                     .definitions
                     .iter_mut()
@@ -986,12 +1019,12 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
                     panic!("partition fixture");
                 };
                 *parts = width;
-                let facts = check_grading(&program, &machine()).unwrap();
+                let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
                 assert_eq!(
                     facts.capabilities[&("r".into(), vec!["a".into(), "b".into()])],
                     cq_lang_sequence::structures::Capability::Exact,
                 );
-                let expression = translate(&program, &facts).unwrap();
+                let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
                 let description = format!("routing [{routing}], named={named}, width={width}");
                 checks.push(quote::quote! {
                     let actual: Vec<(i32,i32,i32)> = pool.install(|| {
@@ -1027,7 +1060,7 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
 
 #[test]
 fn catalog_retention_materializes_new_providers_and_preserves_native_entry_identity() {
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
             l = pipe rename L@0 {a -> a};
@@ -1060,9 +1093,9 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
         }
     };
     let target =
-        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
     assert!(
-        target
+        target.program
             .sequence
             .definitions
             .iter()
@@ -1092,19 +1125,19 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
             cq_lang_sequence::structures::Structure::Rows { provider, .. }
                 if provider.ty == syn::parse_quote!(::std::vec::Vec<_>)))
     );
-    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
-    let facts = check_grading(&target, &machine()).unwrap();
-    translate(&target, &facts).unwrap();
+    cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
+    let facts = check_grading(&target.physical, &target.structures, &target.program, &machine()).unwrap();
+    translate(&target.physical, &target.structures, &target.program, &facts).unwrap();
 }
 
 #[test]
 fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
     let mut source = segment_program();
-    source
+    source.program
         .sequence
         .definitions
         .retain(|definition| definition.name != "input" && definition.name != "result");
-    source
+    source.program
         .graded
         .as_mut()
         .unwrap()
@@ -1123,9 +1156,9 @@ fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
             _ => {}
         }
     }
-    inline(&mut source.sequence.definitions.last_mut().unwrap().term);
-    let analysis = check_grading(&source, &machine()).unwrap();
-    let rendered = translate(&source, &analysis)
+    inline(&mut source.program.sequence.definitions.last_mut().unwrap().term);
+    let analysis = check_grading(&source.physical, &source.structures, &source.program, &machine()).unwrap();
+    let rendered = translate(&source.physical, &source.structures, &source.program, &analysis)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -1138,7 +1171,7 @@ fn base_relation_tile_uses_borrowed_rows_and_keeps_the_joined_answer() {
 #[test]
 fn paired_flatten_fuses_the_following_stream_until_publication() {
     let mut source = segment_program();
-    source
+    source.program
         .sequence
         .definitions
         .iter_mut()
@@ -1146,8 +1179,8 @@ fn paired_flatten_fuses_the_following_stream_until_publication() {
         .unwrap()
         .term = syn::parse_quote!(store map projected map mapped compact selected
             flatten lookup r [a] flatten tile 64 input);
-    let analysis = check_grading(&source, &machine()).unwrap();
-    let expression = translate(&source, &analysis).unwrap();
+    let analysis = check_grading(&source.physical, &source.structures, &source.program, &machine()).unwrap();
+    let expression = translate(&source.physical, &source.structures, &source.program, &analysis).unwrap();
     let workers = worker_bodies(&expression);
     assert_eq!(workers.len(), 1);
     let body = workers[0].to_token_stream().to_string();
@@ -1166,7 +1199,7 @@ fn paired_flatten_fuses_the_following_stream_until_publication() {
 
 #[test]
 fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             consumer canonical;
@@ -1187,9 +1220,9 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
         }
     };
     let target =
-        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
     assert!(
-        target
+        target.program
             .sequence
             .definitions
             .iter()
@@ -1223,7 +1256,8 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             r = rows r;
@@ -1236,8 +1270,8 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
         }
     };
     let target =
-        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
-    cq_lang_sequence::check_rewrite(&source, &target).unwrap();
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
+    cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
     let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
     assert!(target.structures.structures.entries.iter().any(|entry| {
         entry.name == "r"
@@ -1253,11 +1287,11 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
                 if !matches!(reader, cq_lang_sequence::structures::ReaderRef::Scan))
     }));
     assert!(matches!(
-        target.sequence.definitions[0].term,
+        target.program.sequence.definitions[0].term,
         cq_lang_sequence::Term::Store { .. }
     ));
-    let facts = check_grading(&target, &machine()).unwrap();
-    let tasks = translate(&target, &facts).unwrap();
+    let facts = check_grading(&target.physical, &target.structures, &target.program, &machine()).unwrap();
+    let tasks = translate(&target.physical, &target.structures, &target.program, &facts).unwrap();
     assert_eq!(worker_bodies(&tasks).len(), 1);
     assert!(
         !tasks
@@ -1266,13 +1300,13 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
             .contains("dispatch :: Lazy")
     );
     let mut sequential = target;
-    sequential.graded = Some(syn::parse_quote! {
+    sequential.program.graded = Some(syn::parse_quote! {
         graded tasks {
             r at host; input at host; parts at host; output_rows at host;
         }
     });
-    let facts = check_grading(&sequential, &machine()).unwrap();
-    let pull = cq_sequence_pull::translate(&sequential, &facts).unwrap();
+    let facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             let populated = [(1, 10), (2, 20), (1, 10), (3, 30), (4, 40)];
@@ -1299,7 +1333,7 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
 
 #[test]
 fn membership_projected_probes_keep_native_keysets() {
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64);
             consumer canonical;
@@ -1319,7 +1353,7 @@ fn membership_projected_probes_keep_native_keysets() {
         }
     };
     let target =
-        cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
     let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveKeySet<_, ::cq_storage::BorrowedI64TupleCodec, 16777216>);
     assert!(
         target
@@ -1336,7 +1370,7 @@ fn membership_projected_probes_keep_native_keysets() {
 
 #[test]
 fn type_directed_membership_keeps_routed_provider_construction() {
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64);
             consumer canonical;
@@ -1356,23 +1390,20 @@ fn type_directed_membership_keeps_routed_provider_construction() {
         }
     };
     let catalog = cq_sequence_tasks::catalog();
-    let source = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
-    let planned = cq_sequence_plan::decompose_with_key_partitions(
-        &source,
-        &machine(),
-        &catalog,
-        &[cq_sequence_plan::KeyPartitionPolicy {
-            name: syn::parse_quote!(r),
-            select: true,
-        }],
-    )
+    let source = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
+    let planned = cq_sequence_plan::decompose_with_key_partitions(&source.physical, &source.structures, &source.program, &machine(),
+    &catalog,
+    &[cq_sequence_plan::KeyPartitionPolicy {
+        name: syn::parse_quote!(r),
+        select: true,
+    }],)
     .unwrap();
-    let facts = check_grading(&planned.program, &machine()).unwrap();
+    let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
     let native: syn::Type = syn::parse_quote!(::cq_storage::AdaptiveMembership<_, 16777216>);
     let inner = &facts.routed_providers["r"][&0];
     assert_eq!(inner.token, "adaptive_membership");
     assert_eq!(inner.ty, native);
-    let rendered = translate(&planned.program, &facts)
+    let rendered = translate(&planned.physical, &planned.structures, &planned.program, &facts)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -1392,7 +1423,7 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
         parts,
         inner: Box::new(Term::Ref(syn::parse_quote!(provider_input))),
     };
-    program
+    program.program
         .sequence
         .definitions
         .iter_mut()
@@ -1412,8 +1443,8 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
             (Guard::Else, part(64)),
         ])),
     };
-    let facts = check_grading(&program, &machine()).unwrap();
-    let mut expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let mut expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("ProviderParts :: new"), "{rendered}");
     assert_eq!(
@@ -1423,7 +1454,7 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
     );
     assert!(rendered.contains(". source () . map"), "{rendered}");
     let mut forced = program.clone();
-    forced
+    forced.program
         .sequence
         .definitions
         .iter_mut()
@@ -1433,25 +1464,19 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
         capacity: None,
         inner: Box::new(part(64)),
     };
-    let forced_facts = check_grading(&forced, &machine()).unwrap();
-    let mut forced_expression = translate(&forced, &forced_facts).unwrap();
-    let mut configured_one = cq_sequence_tasks::translate_with(
-        &program,
-        &facts,
-        cq_sequence_tasks::Config {
-            threads: Some(1),
-            ..Default::default()
-        },
-    )
+    let forced_facts = check_grading(&forced.physical, &forced.structures, &forced.program, &machine()).unwrap();
+    let mut forced_expression = translate(&forced.physical, &forced.structures, &forced.program, &forced_facts).unwrap();
+    let mut configured_one = cq_sequence_tasks::translate_with(&program.physical, &program.structures, &program.program, &facts,
+    cq_sequence_tasks::Config {
+        threads: Some(1),
+        ..Default::default()
+    },)
     .unwrap();
-    let mut configured_many = cq_sequence_tasks::translate_with(
-        &program,
-        &facts,
-        cq_sequence_tasks::Config {
-            threads: Some(24),
-            ..Default::default()
-        },
-    )
+    let mut configured_many = cq_sequence_tasks::translate_with(&program.physical, &program.structures, &program.program, &facts,
+    cq_sequence_tasks::Config {
+        threads: Some(24),
+        ..Default::default()
+    },)
     .unwrap();
     struct ObserveBuild;
     impl VisitMut for ObserveBuild {
@@ -1553,7 +1578,7 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
     });
 }
 
-fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
+fn deferred_provider_program(tiled: bool, host_bound: bool) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
@@ -1566,7 +1591,7 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
         }
     };
     let mut structures = cq_structure_selection::compile(&physical).unwrap();
-    let authored: Program = syn::parse_quote! {
+    let authored: Fixture = syn::parse_quote! {
         #physical
         structures { providers { sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared }; sharded_index = ::cq_storage::sharded::Index<_, _> { reads [exact, membership], supports [keys], build typed, join_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host required build single, keys: keys distinct_keys exact hash_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host required build single ] }; }
             r = @sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>, _> [a,b];
@@ -1608,6 +1633,7 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Program {
         }
     });
     syn::parse_quote! {
+        #physical
         #structures
         sequence {
             #source
@@ -1717,22 +1743,22 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
             let deferred = matches!(mode, "deferred" | "opaque");
             let forced = mode == "forced";
             if mode == "shared" {
-                let provider = program
+                let provider = program.program
                     .sequence
                     .definitions
                     .iter()
                     .position(|definition| definition.name == "provider")
                     .unwrap();
-                program
+                program.program
                     .sequence
                     .definitions
                     .insert(provider, syn::parse_quote!(shared = provider_input;));
-                let grades = &mut program.graded.as_mut().unwrap().grades;
+                let grades = &mut program.program.graded.as_mut().unwrap().grades;
                 let mut grade = grades[0].clone();
                 grade.name = syn::parse_quote!(shared);
                 grades.push(grade);
             } else if mode == "opaque" {
-                let definitions = &mut program.structures.physical.program.definitions;
+                let definitions = &mut program.physical.program.definitions;
                 let selected = definitions
                     .iter()
                     .position(|definition| definition.name == "r")
@@ -1743,7 +1769,7 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
                     syn::parse_quote!(guarded = pipe guard raw if (opaque_positive(c));),
                 );
             } else if forced {
-                program
+                program.program
                     .sequence
                     .definitions
                     .iter_mut()
@@ -1751,7 +1777,7 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
                     .unwrap()
                     .term = syn::parse_quote!(store partition_k[a,b](64) provider_input);
             }
-            let facts = check_grading(&program, &machine()).unwrap();
+            let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
             assert_eq!(
                 facts.publications["provider_input"],
                 if deferred {
@@ -1762,7 +1788,7 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
                     cq_lang_sequence::Publication::OwnRows { staged: true }
                 }
             );
-            let mut expression = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+            let mut expression = cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
             if tiled {
                 // All Rust is total and retains the distributing task schedule.
                 assert_eq!(
@@ -1777,7 +1803,7 @@ fn deferred_provider_source_is_once_only_and_profiles_only_real_staging() {
             };
             observer.visit_expr_mut(&mut expression);
             assert_eq!(observer.factories, usize::from(deferred));
-            let mut plain = translate(&program, &facts).unwrap();
+            let mut plain = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
             let mut plain_observer = ObserveDeferred {
                 factories: 0,
                 deferred,
@@ -1910,8 +1936,8 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
     let mut executions = Vec::new();
     for stored_parts in [false, true] {
         let mut program = grouped_program(false);
-        program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
-        program.sequence = if stored_parts {
+        program.program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
+        program.program.sequence = if stored_parts {
             syn::parse_quote!(sequence {
                 input = store tile 64 rows r;
                 partials = store group grouped input;
@@ -1924,13 +1950,13 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
                 output_rows = store partials;
             })
         };
-        program.graded = Some(syn::parse_quote! {
+        program.program.graded = Some(syn::parse_quote! {
             graded tasks { input at host; partials at pool; output_rows at host; }
         });
-        let facts = check_grading(&program, &machine()).unwrap();
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
         assert_eq!(facts.partial_groups["partials"], vec![true]);
         assert_eq!(facts.shapes["partials"].len(), 1);
-        let tasks = translate(&program, &facts).unwrap();
+        let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         let rendered = tasks.to_token_stream().to_string();
         assert!(rendered.contains("parallel :: map_index"), "{rendered}");
         assert!(
@@ -1947,13 +1973,13 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
         if stored_parts {
             assert!(rendered.contains("combine :: owned_tiles"), "{rendered}");
         }
-        cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+        cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
         let mut sequential = program.clone();
-        sequential.graded = Some(syn::parse_quote! {
+        sequential.program.graded = Some(syn::parse_quote! {
             graded tasks { input at host; partials at host; output_rows at host; }
         });
-        let sequential_facts = check_grading(&sequential, &machine()).unwrap();
-        let pull = cq_sequence_pull::translate(&sequential, &sequential_facts).unwrap();
+        let sequential_facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+        let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &sequential_facts).unwrap();
         executions.push(quote::quote! {
             let mut actual: Vec<_> = (#tasks).map(|(key,n,sum,low,high)| (*key,n,sum,low,high)).collect();
             actual.sort();
@@ -1962,9 +1988,9 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
             sequential.sort();
             assert_eq!(sequential, expected);
         });
-        program.evidence = Default::default();
+        program.program.evidence = Default::default();
         assert!(
-            check_grading(&program, &machine())
+            check_grading(&program.physical, &program.structures, &program.program, &machine())
                 .unwrap_err()
                 .to_string()
                 .contains("BE-GroupPartial")
@@ -1995,7 +2021,7 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
     });
 }
 
-fn late_covering_program(input: proc_macro2::TokenStream) -> Program {
+fn late_covering_program(input: proc_macro2::TokenStream) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i64,b:i64); relation R(c:i64,d:i64);
@@ -2010,7 +2036,8 @@ fn late_covering_program(input: proc_macro2::TokenStream) -> Program {
     };
     let structures =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(L, R))).unwrap();
-    let source = syn::parse2(quote::quote! {
+    let source: Fixture = syn::parse2(quote::quote! {
+        #physical
         #structures
         sequence {
             input = store #input;
@@ -2020,7 +2047,7 @@ fn late_covering_program(input: proc_macro2::TokenStream) -> Program {
         graded tasks { input at host; b at host; result at host; }
     })
     .unwrap();
-    cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap()
+    cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap()
 }
 
 #[test]
@@ -2064,11 +2091,11 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
     // fast path. Both precede the covering provider in Sequence order.
     for input in [quote::quote!(rows l), quote::quote!(map l rows l)] {
         let program = late_covering_program(input);
-        let facts = check_grading(&program, &machine()).unwrap();
-        assert!(!facts.structures.join_filters["l"].is_empty());
-        let context = cq_print::Context::new(&program.structures, &facts.structures);
-        let filters = facts
-            .structures
+        let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+        let structures_facts = structures::contract::check(&program.structures).unwrap();
+        assert!(!structures_facts.join_filters["l"].is_empty());
+        let context = cq_print::Context::new(&program.structures, &structures_facts);
+        let filters = structures_facts
             .join_filters
             .iter()
             .flat_map(|(scan, filters)| {
@@ -2077,7 +2104,7 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
                     .map(move |index| context.join_filter_ident(scan, index).to_string())
             })
             .collect();
-        let mut expression = translate(&program, &facts).unwrap();
+        let mut expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
         Bindings {
             filters,
             declared: BTreeSet::new(),
@@ -2089,8 +2116,8 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
 #[test]
 fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
     let mut source = late_covering_program(quote::quote!(rows l));
-    source.graded = None;
-    cq_lang_sequence::contract::check(&source).unwrap();
+    source.program.graded = None;
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
     use cq_lang_sequence::structures::provider::base::{declaration, declarations};
     // One declared token with several opaque spellings: no check reads them.
     let opaque: cq_lang_sequence::structures::Declaration = syn::parse_quote!(
@@ -2127,7 +2154,7 @@ fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
             // Structure checks validate the covering relation, key and declared
             // support, not the opaque provider spelling. Construction-attached
             // sidecar and lookup obligations are Rust's; no scalar ABI is guessed.
-            cq_lang_sequence::contract::check(&candidate).unwrap();
+            cq_lang_sequence::contract::check(&candidate.physical, &candidate.structures, &candidate.program).unwrap();
         }
     }
 }
@@ -2141,12 +2168,12 @@ fn tiled_folds_count_rows_within_each_tile_not_joined_tile_iterators() {
         },
         quote::quote!(input at host; result at pool;),
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert_eq!(
         facts.tilings["result"],
         vec![cq_lang_sequence::Tiling::Distribute]
     );
-    let tasks = translate(&program, &facts).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             for R in [&[][..], &[(1i32,)][..], &[(1,), (2,), (3,), (4,), (5,)][..]] {
@@ -2158,7 +2185,7 @@ fn tiled_folds_count_rows_within_each_tile_not_joined_tile_iterators() {
     });
 }
 
-fn constant_key_provider_program() -> Program {
+fn constant_key_provider_program() -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
@@ -2171,7 +2198,8 @@ fn constant_key_provider_program() -> Program {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let source = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             provider = store map r rows raw;
@@ -2179,28 +2207,29 @@ fn constant_key_provider_program() -> Program {
             result = store flatten lookup r [a,b] input;
         }
     };
-    cq_sequence_tasks::select_providers(&source, &cq_sequence_tasks::catalog()).unwrap()
+    cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap()
 }
 
 #[test]
 fn planner_does_not_route_on_constant_bound_provider_keys() {
     let source = constant_key_provider_program();
-    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let structures_facts = structures::contract::check(&source.structures).unwrap();
     assert!(
-        facts.structures.filtered["r"]
+        structures_facts.filtered["r"]
             .constants
             .iter()
             .any(|binding| binding.column == "a")
     );
     let planned =
-        cq_sequence_plan::decompose(&source, &machine(), &cq_sequence_tasks::catalog()).unwrap();
+        cq_sequence_plan::decompose(&source.physical, &source.structures, &source.program, &machine(), &cq_sequence_tasks::catalog()).unwrap();
     assert!(!planned.trace.iter().any(|advice| {
         matches!(advice, cq_sequence_plan::Advice::KeyPartition(partition)
             if partition.name == "provider")
     }));
     assert!(
         cq_sequence_plan::decompose_with_key_partitions(
-            &source,
+            &source.physical, &source.structures, &source.program,
             &machine(),
             &cq_sequence_tasks::catalog(),
             &[cq_sequence_plan::KeyPartitionPolicy {
@@ -2238,7 +2267,7 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
         .structures
         .structures
         .declare(&cq_lang_sequence::structures::provider::base::declarations()).unwrap();
-    program.sequence = syn::parse_quote! {
+    program.program.sequence = syn::parse_quote! {
         sequence {
             provider_input = store map r rows raw;
             provider = store partition_k[b](64) provider_input;
@@ -2246,13 +2275,13 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
             result = store flatten lookup r [a,b] input;
         }
     };
-    program.graded = Some(syn::parse_quote! {
+    program.program.graded = Some(syn::parse_quote! {
         graded tasks {
             provider_input at host; provider at pool; input at host; result at host;
         }
     });
-    let facts = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             let probes = [(7, 2), (8, 2), (7, 3), (7, 9)];
@@ -2281,15 +2310,15 @@ fn nested_tiles_keep_canonicalization_at_the_innermost_rows() {
         },
         quote::quote!(input at host; result at pool;),
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert!(facts.tilings["result"].contains(&cq_lang_sequence::Tiling::Distribute));
-    let tasks = translate(&program, &facts).unwrap();
+    let tasks = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let mut sequential = program.clone();
-    sequential.graded = Some(syn::parse_quote! {
+    sequential.program.graded = Some(syn::parse_quote! {
         graded tasks { input at host; result at host; }
     });
-    let sequential_facts = check_grading(&sequential, &machine()).unwrap();
-    let pull = cq_sequence_pull::translate(&sequential, &sequential_facts).unwrap();
+    let sequential_facts = check_grading(&sequential.physical, &sequential.structures, &sequential.program, &machine()).unwrap();
+    let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &sequential_facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             for R in [&[][..], &[(1i32,)][..], &[(1,), (1,), (2,), (2,), (1,)][..]] {
@@ -2312,7 +2341,8 @@ fn literal_filtered_host_tiles_retain_the_source_predicate() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let program = syn::parse_quote! {
+    let program: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             input = store rows r;
@@ -2320,8 +2350,8 @@ fn literal_filtered_host_tiles_retain_the_source_predicate() {
         }
         graded tasks { input at host; result at pool; }
     };
-    let facts = check_grading(&program, &machine()).unwrap();
-    let expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     assert!(!worker_bodies(&expression).is_empty());
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -2345,7 +2375,8 @@ fn flattened_key_covers_restore_positional_reads() {
     };
     let structures =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(R))).unwrap();
-    let program = syn::parse_quote! {
+    let program: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             input = store rows r;
@@ -2355,9 +2386,10 @@ fn flattened_key_covers_restore_positional_reads() {
         }
         graded tasks { input at host; parts at pool; joined at host; result at host; }
     };
-    let facts = check_grading(&program, &machine()).unwrap();
-    assert!(facts.structures.reads.contains_key("selected"));
-    let mut expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let structures_facts = structures::contract::check(&program.structures).unwrap();
+    assert!(structures_facts.reads.contains_key("selected"));
+    let mut expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     struct Reads(usize);
     impl VisitMut for Reads {
         fn visit_expr_path_mut(&mut self, path: &mut syn::ExprPath) {
@@ -2391,7 +2423,7 @@ fn flattened_key_covers_restore_positional_reads() {
 #[test]
 fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
     let mut program = late_covering_program(quote::quote!(rows l));
-    program.sequence = syn::parse_quote! {
+    program.program.sequence = syn::parse_quote! {
         sequence {
             b = store map b map s rows r;
             parts = store map out flatten lookup b [x] flatten tile 64 rows l;
@@ -2399,12 +2431,13 @@ fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
             result = store canon joined;
         }
     };
-    program.graded = Some(syn::parse_quote! {
+    program.program.graded = Some(syn::parse_quote! {
         graded tasks { b at host; parts at pool; joined at host; result at host; }
     });
-    let facts = check_grading(&program, &machine()).unwrap();
-    assert!(!facts.structures.join_filters["l"].is_empty());
-    let expression = translate(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let structures_facts = structures::contract::check(&program.structures).unwrap();
+    assert!(!structures_facts.join_filters["l"].is_empty());
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("position_range"), "{rendered}");
     assert!(
@@ -2454,12 +2487,12 @@ fn borrowed_host_key_cover_uses_host_tiles_without_input_collection() {
             input at host; parts at pool; joined at host; result at host;
         },
     );
-    let facts = check_grading(&program, &machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert!(matches!(
         facts.publications["input"],
         cq_lang_sequence::Publication::BorrowHost { .. }
     ));
-    let expression = translate(&program, &facts).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
     assert!(rendered.contains("__cq_route_source"), "{rendered}");
     assert!(
@@ -2503,7 +2536,8 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let source: Program = syn::parse_quote! {
+    let source: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             input = rows r;
@@ -2517,26 +2551,27 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
         }
     };
     let catalog = cq_sequence_tasks::catalog();
-    let source = cq_sequence_tasks::select_providers(&source, &catalog).unwrap();
-    let facts = cq_lang_sequence::contract::check(&source).unwrap();
+    let source = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
+    cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
+    let structures_facts = structures::contract::check(&source.structures).unwrap();
     assert!(
-        facts.structures.physical.fused["answer"]
+        structures_facts.physical.fused["answer"]
             .members
             .contains("positive")
     );
     assert!(
         cq_sequence_plan::rewrites::key_partition(
-            &source,
+            &source.physical, &source.structures, &source.program,
             quote::quote!(positive, staged, [a], 64),
         )
         .is_err()
     );
-    let planned = cq_sequence_plan::decompose(&source, &machine(), &catalog).unwrap();
+    let planned = cq_sequence_plan::decompose(&source.physical, &source.structures, &source.program, &machine(), &catalog).unwrap();
     assert!(!planned.trace.iter().any(|advice| matches!(advice,
         cq_sequence_plan::Advice::KeyPartition(partition) if partition.name == "positive"
     )));
-    let facts = check_grading(&planned.program, &machine()).unwrap();
-    let expression = translate(&planned.program, &facts).unwrap();
+    let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
+    let expression = translate(&planned.physical, &planned.structures, &planned.program, &facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
             for threads in [1,4] {
@@ -2581,7 +2616,8 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
     structures
         .structures
         .declare(&cq_lang_sequence::structures::provider::base::declarations()).unwrap();
-    let program: Program = syn::parse_quote! {
+    let program: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             right = store rows right;
@@ -2597,8 +2633,8 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
             parts at pool; joined_rows at host; output_rows at host;
         }
     };
-    let facts = check_grading(&program, &machine()).unwrap();
-    let expression = cq_sequence_tasks::translate_profile(&program, &facts).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
+    let expression = cq_sequence_tasks::translate_profile(&program.physical, &program.structures, &program.program, &facts).unwrap();
     assert!(!worker_bodies(&expression).is_empty());
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -2638,9 +2674,10 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
     let structures = cq_structure_selection::compile_with(&physical, quote::quote!(
         blocks(R { block_rows 1024; summary minmax; columns [a:bytes u64,b:plain u64]; })
     )).unwrap();
-    let lowered = cq_sequence_lowering::compile(&structures).unwrap();
+    let lowered = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     let representation = lowered.representation.clone();
-    let program: Program = syn::parse_quote! {
+    let program: Fixture = syn::parse_quote! {
+        #physical
         #structures
         sequence {
             parts = store flatten map v map g map q map p tile 1024 rows r;
@@ -2652,40 +2689,40 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
         graded tasks { parts at pool; collected at host; out at host; answer_stream at host; }
         #representation
     };
-    let facts = check_grading(&program,&machine()).unwrap();
+    let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     assert!(facts.task_execution.definitions["parts"].iter().any(|node| node.borrowed_host.as_deref() == Some("r")));
-    let expression = translate(&program,&facts).unwrap();
+    let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let mut forged = program.clone();
-    forged.sequence.definitions[0].term = syn::parse_quote!(store flatten map v map g map q map p tile 17 rows r);
-    assert!(check_grading(&forged,&machine()).is_err());
-    let selected = cq_sequence_tasks::select_providers(&lowered,&cq_sequence_tasks::catalog()).unwrap();
-    let planned = cq_sequence_plan::decompose(&selected,&machine(),&cq_sequence_tasks::catalog()).unwrap().program;
-    let planned_facts = check_grading(&planned,&machine()).unwrap();
+    forged.program.sequence.definitions[0].term = syn::parse_quote!(store flatten map v map g map q map p tile 17 rows r);
+    assert!(check_grading(&forged.physical, &forged.structures, &forged.program, &machine()).is_err());
+    let selected = cq_sequence_tasks::select_providers(&physical, &structures, &lowered, &cq_sequence_tasks::catalog()).map(Fixture::from).unwrap();
+    let planned = cq_sequence_plan::decompose(&selected.physical, &selected.structures, &selected.program, &machine(),&cq_sequence_tasks::catalog()).unwrap();
+    let planned_facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
     assert!(planned_facts.task_execution.definitions.values().flatten().any(|node| node.borrowed_host.as_deref() == Some("r"))
-        || (planned.representation.blocks.routing.contains_key("r")
+        || (planned.program.representation.blocks.routing.contains_key("r")
             && planned_facts.publications.values().any(|publication| matches!(publication, cq_lang_sequence::Publication::BorrowHost { result, .. } if result == "r"))));
-    let planned_expression = translate(&planned,&planned_facts).unwrap();
+    let planned_expression = translate(&planned.physical, &planned.structures, &planned.program, &planned_facts).unwrap();
     let mut routed = program.clone();
-    routed.sequence.definitions[0].term = syn::parse_quote!(
+    routed.program.sequence.definitions[0].term = syn::parse_quote!(
         store flatten map v map g map q map p partition_k[x](64) source
     );
-    routed.sequence.definitions.insert(0, cq_lang_sequence::Definition {
+    routed.program.sequence.definitions.insert(0, cq_lang_sequence::Definition {
         name: syn::parse_quote!(source),
         term: syn::parse_quote!(store rows r),
     });
-    routed.graded.as_mut().unwrap().grades.insert(0, syn::parse_quote!(source at host;));
-    cq_lang_sequence::blocks::record_routing(&mut routed).unwrap();
-    let routed_facts = check_grading(&routed, &machine()).unwrap();
-    let routed_expression = translate(&routed, &routed_facts).unwrap();
+    routed.program.graded.as_mut().unwrap().grades.insert(0, syn::parse_quote!(source at host;));
+    cq_lang_sequence::blocks::record_routing(&routed.structures, &mut routed.program).unwrap();
+    let routed_facts = check_grading(&routed.physical, &routed.structures, &routed.program, &machine()).unwrap();
+    let routed_expression = translate(&routed.physical, &routed.structures, &routed.program, &routed_facts).unwrap();
     let printed = routed.to_token_stream();
-    assert_eq!(syn::parse2::<Program>(printed).unwrap(), routed);
+    assert_eq!(syn::parse2::<Fixture>(printed).unwrap(), routed);
     let mut missing_read = routed.clone();
-    missing_read.representation.blocks.routing.clear();
-    assert!(check_grading(&missing_read, &machine()).is_err());
+    missing_read.program.representation.blocks.routing.clear();
+    assert!(check_grading(&missing_read.physical, &missing_read.structures, &missing_read.program, &machine()).is_err());
     let mut wrong_field = routed;
     let other = wrong_field.structures.encoded.blocks.scans["r"].columns["b"];
-    wrong_field.representation.blocks.routing.get_mut("r").unwrap().insert("x".into(), other);
-    assert!(check_grading(&wrong_field, &machine()).is_err());
+    wrong_field.program.representation.blocks.routing.get_mut("r").unwrap().insert("x".into(), other);
+    assert!(check_grading(&wrong_field.physical, &wrong_field.structures, &wrong_field.program, &machine()).is_err());
     run_partition_fixture(quote::quote! {
         use cq_storage::scan::*;
         use cq_storage::scan::format::{Domain,DomainId};

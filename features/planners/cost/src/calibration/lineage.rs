@@ -1,11 +1,11 @@
 //! Dependency graphs of the stages the facade recorded. The calibrator parses and
 //! checks each printed program itself; it never infers lineage from generated Rust.
-use cq_stage::Language;
+use cq_stage::{Annotation, Language};
 use cq_stage::calibration::{Node, Stage};
 use cq_syntax::symbol_name;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
-use syn::Ident;
+use syn::{Ident, parse::Parser};
 
 /// Parse and check a recorded stage as language `L`.
 pub fn checked<L: Language>(stage: &Stage) -> syn::Result<L> {
@@ -18,8 +18,45 @@ pub fn checked<L: Language>(stage: &Stage) -> syn::Result<L> {
     Ok(value)
 }
 
+/// Reparse an independently recorded Structures annotation against its Physical base.
+pub fn checked_structures(stage: &Stage) -> syn::Result<cq_stage::Structures<cq_lang_physical::Program, cq_lang_structures::Program>> {
+    let [physical] = stage.bases.as_slice() else {
+        return Err(syn::Error::new(Span::call_site(), "ST-Calibration: Structures requires one Physical base"));
+    };
+    if !stage.is::<cq_lang_structures::Program>() {
+        return Err(syn::Error::new(Span::call_site(), "ST-Calibration: expected a Structures annotation"));
+    }
+    let physical = syn::parse_str(physical)?;
+    let structures = (|input: syn::parse::ParseStream<'_>| {
+        <cq_lang_structures::Program as Annotation<&cq_lang_physical::Program>>::parse(input, &physical)
+    }).parse_str(&stage.program)?;
+    let stack = cq_stage::Structures::new(physical, structures);
+    stack.check()?;
+    Ok(stack)
+}
+
+/// Reparse Sequence against its separately recorded Physical and Structures bases.
+pub fn checked_sequence(stage: &Stage) -> syn::Result<cq_stage::Sequence<cq_lang_physical::Program, cq_lang_structures::Program, cq_lang_sequence::Program>> {
+    let [physical, structures] = stage.bases.as_slice() else {
+        return Err(syn::Error::new(Span::call_site(), "ST-Calibration: Sequence requires Physical and Structures bases"));
+    };
+    if !stage.is::<cq_lang_sequence::Program>() {
+        return Err(syn::Error::new(Span::call_site(), "ST-Calibration: expected a Sequence annotation"));
+    }
+    let physical = syn::parse_str(physical)?;
+    let structures = (|input: syn::parse::ParseStream<'_>| {
+        <cq_lang_structures::Program as Annotation<&cq_lang_physical::Program>>::parse(input, &physical)
+    }).parse_str(structures)?;
+    let sequence = (|input: syn::parse::ParseStream<'_>| {
+        <cq_lang_sequence::Program as Annotation<(&cq_lang_physical::Program, &cq_lang_structures::Program)>>::parse(input, (&physical, &structures))
+    }).parse_str(&stage.program)?;
+    let stack = cq_stage::Sequence::new(physical, structures, sequence);
+    stack.check()?;
+    Ok(stack)
+}
+
 /// Named dependency graph of a recorded VO, RA, IX, Physical, Structures or
-/// Sequence stage. IX, Structures and Sequence retain their source definitions.
+/// Sequence stage. Annotation stages retain source definitions in separate bases.
 pub fn nodes(stage: &Stage) -> syn::Result<Vec<Node>> {
     if stage.is::<cq_lang_vo::Program>() {
         Ok(vo(&checked(stage)?))
@@ -30,9 +67,9 @@ pub fn nodes(stage: &Stage) -> syn::Result<Vec<Node>> {
     } else if stage.is::<cq_lang_physical::Program>() {
         Ok(physical(&checked(stage)?))
     } else if stage.is::<cq_lang_structures::Program>() {
-        Ok(physical(&checked::<cq_lang_structures::Program>(stage)?.physical))
+        Ok(physical(&checked_structures(stage)?.physical))
     } else if stage.is::<cq_lang_sequence::Program>() {
-        Ok(physical(&checked::<cq_lang_sequence::Program>(stage)?.structures.physical))
+        Ok(physical(&checked_sequence(stage)?.physical))
     } else {
         Err(syn::Error::new(Span::call_site(), "ST-Calibration: language has no checked trace adapter"))
     }

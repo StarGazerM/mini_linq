@@ -50,14 +50,17 @@ struct Checker<'a> {
 /// Check placement, then derive dispatch boundaries and runtime failure obligations.
 /// A successful check records a required failure channel; it does not certify an
 /// emitter's implementation of that channel.
-pub fn check_grading(program: &Program, machine: &Machine) -> syn::Result<Analysis> {
-    crate::contract::Checker::default().check_grading(program, machine)
+pub fn check_grading(physical: &crate::structures::physical::Program, structures: &crate::structures::Program, program: &Program, machine: &Machine) -> syn::Result<Analysis> {
+    crate::contract::Checker::default().check_grading(physical, structures, program, machine)
 }
 
 pub(crate) fn check_grading_in(
+    physical: &crate::structures::physical::Program,
+    structures: &crate::structures::Program,
     program: &Program,
     machine: &Machine,
     mut analysis: Analysis,
+    structure_analysis: &crate::structures::Analysis,
 ) -> syn::Result<Analysis> {
     // Formal rule BE-Abort: every below-host dispatch records a channel to the
     // distinguished host root, to be discharged by the target's emitter/runtime.
@@ -154,22 +157,18 @@ pub(crate) fn check_grading_in(
         analysis.levels.insert(name, levels[level].path.clone());
         grades.push(level);
     }
-    let physical = program
-        .structures
-        .physical
-        .program
-        .definitions
+    let physical_definitions = physical.program.definitions
         .iter()
         .map(|definition| (symbol_name(&definition.name), definition))
         .collect();
     let mut checker = Checker {
         program,
-        physical_facts: &analysis.structures.physical,
+        physical_facts: &structure_analysis.physical,
         identity: &analysis.representation.identity,
         levels,
         grades,
         definitions,
-        physical,
+        physical: physical_definitions,
         roots: Vec::with_capacity(program.sequence.definitions.len()),
         nodes: Vec::new(),
         collectives: Vec::new(),
@@ -212,7 +211,7 @@ pub(crate) fn check_grading_in(
             .or_else(|| analysis.levels.get(result.as_str()));
         let Some(graded) = graded else {
             return Err(syn::Error::new(
-                program.structures.physical.program.returned.span(),
+                physical.program.returned.span(),
                 format!("BE-Canon: canon boundary `{result}` has no graded level"),
             ));
         };
@@ -248,7 +247,7 @@ pub(crate) fn check_grading_in(
             }
         }
     }
-    crate::contract::check_native_grading(&analysis)?;
+    crate::contract::check_native_grading(structure_analysis, &analysis)?;
     for (dispatch, unit) in analysis.dispatches.iter().enumerate() {
         analysis.obligations.push(Obligation::Failure {
             dispatch,
@@ -256,16 +255,16 @@ pub(crate) fn check_grading_in(
         });
     }
     if let Some(gpu) = &machine.gpu {
-        let executions = crate::gpu::derive(program, &analysis, gpu)?;
+        let executions = crate::gpu::derive(physical, structure_analysis, program, &analysis, gpu)?;
         for (dispatch, execution) in analysis.dispatches.iter_mut().zip(executions) {
             dispatch.gpu = Some(execution);
         }
         crate::gpu::check(program, &analysis)?;
         // Publication codecs copy the column bounds sources recorded by bindings.
-        analysis.gpu_bindings = (gpu.bindings)(program, &analysis)?;
-        analysis.gpu_publications = crate::gpu::publication::derive(program, &analysis)?;
-        crate::gpu::publication::check(program, &analysis, &analysis.gpu_publications)?;
-        analysis.gpu_bindings.realization = (gpu.realize)(program, &analysis)?;
+        analysis.gpu_bindings = (gpu.bindings)(physical, structures, program, structure_analysis, &analysis)?;
+        analysis.gpu_publications = crate::gpu::publication::derive(physical, program, structure_analysis, &analysis)?;
+        crate::gpu::publication::check(physical, program, structure_analysis, &analysis, &analysis.gpu_publications)?;
+        analysis.gpu_bindings.realization = (gpu.realize)(physical, structures, program, structure_analysis, &analysis)?;
     }
     // Check the target layout of the recorded resource demands against capacity.
     for dispatch in &analysis.dispatches {
@@ -285,7 +284,7 @@ pub(crate) fn check_grading_in(
                 "BE-Resource: a bounded machine resource needs a target layout model",
             )
         })?;
-        let shape = crate::resources::dispatch_shape(program, &analysis, dispatch, machine)?;
+        let shape = crate::resources::dispatch_shape(physical, structures, structure_analysis, program, &analysis, dispatch, machine)?;
         let required_bytes = layout(&shape).map_err(|errors| {
             let mut annotated = None;
             for error in errors {
@@ -320,8 +319,8 @@ pub(crate) fn check_grading_in(
             },
         );
     }
-    analysis.task_execution = crate::task_execution::analyze(program, &analysis);
-    crate::blocks::check_task_covers(program, &analysis)?;
+    analysis.task_execution = crate::task_execution::analyze(physical, structure_analysis, program, &analysis);
+    crate::blocks::check_task_covers(structures, program, structure_analysis, &analysis)?;
     Ok(analysis)
 }
 

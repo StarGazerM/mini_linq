@@ -7,6 +7,11 @@ one level below Structures, shared by every back end,
 and states what below it is not a level: placement is a grading on Sequence
 terms, the machine is a parameter of that grading, and each emitter is a
 translation. The level names no data structure, no algorithm and no machine.
+Sequence is an annotation over separately supplied Physical $P$ and Structures
+$S$ programs. Its printed syntax contains neither base program. Checking,
+grading, rewriting and translation receive $(P,S,Q)$ explicitly; named row
+functions and providers resolve in those bases. The private structural-proof
+cache is derived from these parameters, not stored in Sequence Analysis.
 
 \subsection{Why one level, and why this one}
 A level is justified when its denotation changes: it adds or forgets an
@@ -819,8 +824,8 @@ strict improvement replaces the earlier candidate, preserving stable ties.
 Dispatch splitting is a last resort, never a substitute for an admissible
 single-dispatch segmentation. All tiers retain authored tiles, grades and stores.
 
-A planning invocation may reuse a structural proof only for an equal complete
-Structures prefix and equal Sequence and evidence syntax. Machine grading is
+A planning invocation may reuse a structural proof only for equal complete
+Physical and Structures programs and equal Sequence and evidence syntax. Machine grading is
 checked separately for every requested grade. The join-support certificate
 interns relation and column names into invocation-local integer identities;
 its cache keys retain the complete ordered graph, headings and query atoms.
@@ -883,13 +888,13 @@ key layout, not entry position: retention removes fallback entries and
 appends indexes, changing their positions.
 The native Tasks target preserves retained row-buffer types separately:
 replayable rows use the row collection ABI, not a keyed range-provider family.
-Sequence rewrites preserve the Structures prefix unless the complete change
+Sequence rewrites preserve the Physical and Structures programs unless the complete change
 has the checked catalog-retention certificate above. In particular,
 equivalent relational support does not authorize reordering Physical joins.
 \begin{mathpar}
 \Rule{BE-PhysicalPreserved}
- {S'=S\ \lor\ \mathsf{checkedRetention}(S,S')}
- {\mathsf{SequenceRewrite}(S,t;S',t')\text{ may proceed to the final-support check}}
+ {(P',S')=(P,S)\ \lor\ \mathsf{checkedRetention}(P,S;P',S')}
+ {\mathsf{SequenceRewrite}(P,S,t;P',S',t')\text{ may proceed to the final-support check}}
 \end{mathpar}
 Placement propagates unavailable device representations and their unstored
 feeds to host. A Rust expression may read only identity-represented device
@@ -1000,8 +1005,8 @@ propagates Rust failure by unwinding.
 
 \subsection{Passes}
 \begin{mathpar}
-\Rule{L-Sequence}{s\text{ checked Structures}}
- {\mathsf{lower}(s):\ \text{host rename}\mapsto\mathsf{rows};\
+\Rule{L-Sequence}{P,S\text{ checked Physical and Structures}}
+ {\mathsf{lower}(P,S):\ \text{host rename}\mapsto\mathsf{rows};\
   \text{unary step}\mapsto\mathsf{map}/\mathsf{compact};\
   \text{probe, merge}\mapsto\mathsf{flatten}(\mathsf{lookup});\
   \text{semi, anti}\mapsto\mathsf{compact}(\mathsf{lookup}_{\rm membership});\
@@ -1938,7 +1943,7 @@ partial host fragment with written-order meaning above a total device
 fragment.
 
 \paragraph{Invocation-local proof reuse.}
-Planner enumeration may share a checked Structures prefix, its support graph,
+Planner enumeration may share checked Physical and Structures programs, their support graph,
 and immutable structural analysis between candidates. Cache hits require
 complete syntax equality; interned proof identities are introduced only after
 that comparison. Evidence changes revalidate evidence obligations, and grading

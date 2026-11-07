@@ -80,10 +80,9 @@ mod kw {
     syn::custom_keyword!(blocks);
 }
 
-/// A complete Structures program and its sequence refinement.
+/// A sequence refinement of separately supplied Physical and Structures programs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
-    pub structures: cq_lang_structures::Program,
     pub sequence: Sequence,
     pub graded: Option<Graded>,
     pub evidence: Evidence,
@@ -539,7 +538,6 @@ pub enum Publication {
 /// Checked facts consumed by rewrites and target translations.
 #[derive(Clone, Debug)]
 pub struct Analysis {
-    pub structures: cq_lang_structures::Analysis,
     /// Physical result denoted by each definition, when it is a row result.
     pub results: BTreeMap<String, String>,
     pub lengths: BTreeMap<String, Len>,
@@ -596,12 +594,14 @@ impl Analysis {
     /// Rust row expressions require identity representations for every read column.
     /// Closed captures are evaluated by the host and do not read encoded rows.
     /// An unannotated computed binding has no authored device result layout.
-    pub fn rust_requires_host(&self, operator: &cq_lang_structures::physical::Operator) -> bool {
+    pub fn rust_requires_host(
+        &self,
+        physical: &cq_lang_structures::physical::Analysis,
+        operator: &cq_lang_structures::physical::Operator,
+    ) -> bool {
         matches!(operator, cq_lang_structures::physical::Operator::Bind(bind)
             if bind.annotation.is_none())
-            || self
-                .structures
-                .physical
+            || physical
                 .rust_reads(operator)
                 .is_some_and(|reads| !reads.is_subset(&self.representation.identity))
     }
@@ -610,7 +610,6 @@ impl Analysis {
 impl Parse for Program {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         Ok(Self {
-            structures: input.parse()?,
             sequence: input.parse()?,
             graded: if input.peek(kw::graded) {
                 Some(input.parse()?)
@@ -634,14 +633,13 @@ impl Parse for Program {
 impl ToTokens for Program {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
-            structures,
             sequence,
             graded,
             evidence,
             representation,
         } = self;
         let evidence = (!evidence.facts.is_empty()).then_some(evidence);
-        tokens.extend(quote! { #structures #sequence #graded #evidence #representation });
+        tokens.extend(quote! { #sequence #graded #evidence #representation });
     }
 }
 
@@ -1083,16 +1081,21 @@ impl ToTokens for OutputProtocol {
     }
 }
 
-impl cq_stage::Language for Program {
-    fn context(&self) -> cq_stage::Context {
-        cq_stage::Language::context(&self.structures)
+impl<'a> cq_stage::Annotation<(&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program)> for Program {
+    fn parse(input: ParseStream<'_>, _base: (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program)) -> syn::Result<Self> {
+        <Self as Parse>::parse(input)
     }
 
-    fn check(&self) -> syn::Result<()> {
-        contract::check(self).map(|_| ())
+    fn check(&self, (physical, structures): (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program)) -> syn::Result<()> {
+        contract::check(physical, structures, self).map(|_| ())
     }
 
-    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+    fn check_rewrite(
+        (source_physical, source_structures): (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program),
+        source: &Self,
+        (target_physical, target_structures): (&'a cq_lang_structures::physical::Program, &'a cq_lang_structures::Program),
+        target: &Self,
+    ) -> syn::Result<()> {
+        check_rewrite(source_physical, source_structures, source, target_physical, target_structures, target)
     }
 }

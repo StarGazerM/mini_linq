@@ -90,7 +90,7 @@ fn code_reader(retained: bool) -> structures::Program {
 fn code_carrying_reader_selects_the_first_token_declaring_its_reads() {
     for retained in [false, true] {
         let source = code_reader(retained);
-        let selected = select_from_catalog(&source, &catalog()).unwrap();
+        let selected = select_from_catalog(&source.physical, &source, &catalog()).map(|(_, structures)| structures).unwrap();
         let facts = structures::contract::check(&selected).unwrap();
         assert_eq!(facts.layouts["r"], ["a", "b"]);
         assert_eq!(
@@ -104,23 +104,23 @@ fn code_carrying_reader_selects_the_first_token_declaring_its_reads() {
         unavailable
             .providers
             .retain(|entry| entry.provider.token == "sort");
-        assert!(select_from_catalog(&source, &unavailable).is_err());
+        assert!(select_from_catalog(&source.physical, &source, &unavailable).is_err());
     }
 }
 
-fn assert_replay(source: &Program, planned: &cq_sequence_plan::Planned) {
-    let mut replay = source.clone();
+fn assert_replay(structures: &structures::Program, source: &Program, planned: &cq_sequence_plan::Planned) {
+    let mut replay = (structures.physical.clone(), structures.clone(), source.clone());
     for advice in &planned.trace {
-        replay = advice.apply(&replay).unwrap();
+        replay = advice.apply(&replay.0, &replay.1, &replay.2).unwrap();
     }
-    assert_eq!(planned.program, replay);
-    check_rewrite(source, &planned.program).unwrap();
-    check_grading(&planned.program, &machine()).unwrap();
+    assert_eq!((&planned.physical, &planned.structures, &planned.program), (&replay.0, &replay.1, &replay.2));
+    check_rewrite(&structures.physical, structures, source, &planned.physical, &planned.structures, &planned.program).unwrap();
+    check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
 }
 
 #[test]
 fn numeric_lookup_is_published_before_host_code_expansion() {
-    let structures = syn::parse_quote! {
+    let structures: structures::Program = syn::parse_quote! {
         physical {
             relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,label:StringCode);
             r = pipe rename R@0 {a -> a};
@@ -138,8 +138,8 @@ fn numeric_lookup_is_published_before_host_code_expansion() {
             answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
         }
     };
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
-    let planned = decompose(&source, &machine(), &catalog()).unwrap();
+    let source = cq_sequence_lowering::compile(&structures.physical, &structures).unwrap();
+    let planned = decompose(&structures.physical, &structures, &source, &machine(), &catalog()).unwrap();
     assert!(
         planned
             .trace
@@ -152,16 +152,15 @@ fn numeric_lookup_is_published_before_host_code_expansion() {
             .iter()
             .any(|advice| matches!(advice, Advice::Publish { name, .. } if name == "numeric"))
     );
-    let facts = check_grading(&planned.program, &machine()).unwrap();
+    let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
     assert_eq!(facts.levels["numeric"], ["host"]);
     assert_eq!(
-        facts
-            .structures
+        structures::contract::check(&planned.structures).unwrap()
             .built_on("s", &["a".into()])
             .map(|(provider, _)| provider),
         Some(&syn::parse_quote!(@range_provider as RangeProvider)),
     );
-    assert_replay(&source, &planned);
+    assert_replay(&structures, &source, &planned);
 }
 
 #[test]
@@ -193,14 +192,14 @@ fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let selected = select_from_catalog(&structures, &catalog()).unwrap();
-    let mut source = cq_sequence_lowering::compile(&selected).unwrap();
+    let selected = select_from_catalog(&structures.physical, &structures, &catalog()).map(|(_, structures)| structures).unwrap();
+    let mut source = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
     source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/catalog_host_reads.rs fixture") {
         count Part = 20; count Orders = 150; count Lineitem = 600;
         count PartSupp = 80; count Supplier = 10; count Nation = 2;
     });
-    let planned = decompose(&source, &machine(), &catalog()).unwrap();
-    assert_replay(&source, &planned);
+    let planned = decompose(&selected.physical, &selected, &source, &machine(), &catalog()).unwrap();
+    assert_replay(&selected, &source, &planned);
 }
 
 #[test]
@@ -244,24 +243,21 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_code_readers() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let selected = select_from_catalog(&structures, &catalog()).unwrap();
-    let mut source = cq_sequence_lowering::compile(&selected).unwrap();
+    let selected = select_from_catalog(&structures.physical, &structures, &catalog()).map(|(_, structures)| structures).unwrap();
+    let mut source = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
     source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/catalog_host_reads.rs fixture") {
         count Supplier = 10; count Lineitem = 600; count Orders = 150;
         count Customer = 15; count Nation = 2;
     });
-    let planned = decompose(&source, &machine(), &catalog()).unwrap();
-    assert_eq!(
-        planned.program.structures.physical,
-        source.structures.physical
-    );
-    assert_replay(&source, &planned);
+    let planned = decompose(&selected.physical, &selected, &source, &machine(), &catalog()).unwrap();
+    assert_eq!(planned.physical, selected.physical);
+    assert_replay(&selected, &source, &planned);
 }
 
 #[test]
 fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     let source = code_reader(false);
-    let mut selected = select_from_catalog(&source, &catalog()).unwrap();
+    let mut selected = select_from_catalog(&source.physical, &source, &catalog()).map(|(_, structures)| structures).unwrap();
     for entry in &mut selected.structures.entries {
         if entry.name == "answer"
             && let structures::Structure::Rows { provider, .. } = &mut entry.structure
@@ -278,10 +274,8 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
     // The ordinary Structures-only contract remains exact.
     assert!(structures::check_rewrite(&source, &selected).is_err());
     structures::check_retention_rewrite(&source, &selected).unwrap();
-    let sequence = cq_sequence_lowering::compile(&source).unwrap();
-    let mut target = sequence.clone();
-    target.structures = selected.clone();
-    check_rewrite(&sequence, &target).unwrap();
+    let sequence = cq_sequence_lowering::compile(&source.physical, &source).unwrap();
+    check_rewrite(&source.physical, &source, &sequence, &selected.physical, &selected, &sequence).unwrap();
 
     let mut changed_reader = selected.clone();
     if let structures::Structure::Host { keyed, .. } =
@@ -342,10 +336,10 @@ fn catalog_preserves_admitted_raw_host_membership_without_enumeration() {
     let available = membership_catalog(syn::parse_quote!(
         host_membership = HostMembership { reads [membership], build inferred };
     ));
-    let selected = select_from_catalog(&source, &available).unwrap();
+    let selected = select_from_catalog(&source.physical, &source, &available).map(|(_, structures)| structures).unwrap();
     assert_eq!(selected, source);
-    let lowered = cq_sequence_lowering::compile(&selected).unwrap();
-    cq_sequence_lowering::check(&selected, &lowered).unwrap();
+    let lowered = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
+    cq_sequence_lowering::check(&selected.physical, &selected, &lowered).unwrap();
     assert_eq!(
         lowered.sequence.definitions[2].term,
         syn::parse_quote!(canon compact answer lookup r [a] l)
@@ -358,7 +352,7 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
     let available = membership_catalog(syn::parse_quote!(
         membership_index = MembershipIndex { reads [membership], build inferred };
     ));
-    let selected = select_from_catalog(&source, &available).unwrap();
+    let selected = select_from_catalog(&source.physical, &source, &available).map(|(_, structures)| structures).unwrap();
     let facts = structures::contract::check(&selected).unwrap();
     assert!(facts.membership.contains(&("r".into(), vec!["a".into()])));
     assert_eq!(
@@ -373,16 +367,16 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
                 if keyed.membership.is_some() && keyed.filtered.is_none())
     }));
     structures::check_retention_rewrite(&source, &selected).unwrap();
-    let before = cq_sequence_lowering::compile(&source).unwrap();
-    let after = cq_sequence_lowering::compile(&selected).unwrap();
-    cq_sequence_lowering::check(&selected, &after).unwrap();
-    check_rewrite(&before, &after).unwrap();
+    let before = cq_sequence_lowering::compile(&source.physical, &source).unwrap();
+    let after = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
+    cq_sequence_lowering::check(&selected.physical, &selected, &after).unwrap();
+    check_rewrite(&source.physical, &source, &before, &selected.physical, &selected, &after).unwrap();
     assert_eq!(
         before.sequence.definitions[2].term,
         after.sequence.definitions[2].term
     );
     assert_eq!(
-        cq_lang_sequence::contract::check(&after)
+        cq_lang_sequence::contract::check(&selected.physical, &selected, &after)
             .unwrap()
             .capabilities[&("r".into(), vec!["a".into()])],
         Capability::Membership
@@ -395,7 +389,7 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
         .find(|declaration| declaration.token == "membership_index")
         .unwrap();
     index.facts.reads = vec![Capability::Exact, Capability::Range];
-    assert!(select_from_catalog(&source, &unavailable).is_err());
+    assert!(select_from_catalog(&source.physical, &source, &unavailable).is_err());
 }
 
 #[test]

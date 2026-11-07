@@ -32,7 +32,7 @@ pub struct Execution {
 }
 
 /// Formal rule BE-TaskProducer: term ancestry, never emitted identifiers, determines task ownership.
-pub fn analyze(program: &Program, analysis: &Analysis) -> Execution {
+pub fn analyze(physical: &crate::structures::physical::Program, structure_analysis: &crate::structures::Analysis, program: &Program, analysis: &Analysis) -> Execution {
     fn input_result(term: &Term, analysis: &Analysis) -> Option<String> {
         match term {
             Term::Rows(name) => Some(symbol_name(name)),
@@ -46,7 +46,8 @@ pub fn analyze(program: &Program, analysis: &Analysis) -> Execution {
         owner: &str,
         ordinal: &mut usize,
         tile: &mut usize,
-        program: &Program,
+        physical: &crate::structures::physical::Program,
+        structure_analysis: &crate::structures::Analysis,
         analysis: &Analysis,
         named: &BTreeMap<String, BTreeSet<TermId>>,
         nodes: &mut Vec<Node>,
@@ -74,14 +75,14 @@ pub fn analyze(program: &Program, analysis: &Analysis) -> Execution {
                 .filter(|source| source.is_some())
                 .and_then(|_| input_result(inner, analysis))
                 .filter(|result| {
-                    analysis.structures.physical.hosts.contains_key(result)
-                        && !analysis.structures.selections.contains_key(result)
-                        && program.structures.physical.program.definitions.iter().any(
+                    structure_analysis.physical.hosts.contains_key(result)
+                        && !structure_analysis.selections.contains_key(result)
+                        && physical.program.definitions.iter().any(
                             |definition| {
                                 symbol_name(&definition.name) == *result
                                     && matches!(&definition.operator,
                                     crate::structures::physical::Operator::Rename(rename)
-                                    if !matches!(analysis.structures.repr.get(result),
+                                    if !matches!(structure_analysis.repr.get(result),
                                         Some(crate::structures::Repr::Positions { .. }))
                                         || rename.constants.is_none())
                             },
@@ -101,14 +102,14 @@ pub fn analyze(program: &Program, analysis: &Analysis) -> Execution {
             Term::Choose(arms) => {
                 for (_, arm) in arms {
                     producers.extend(visit(
-                        arm, owner, ordinal, tile, program, analysis, named, nodes,
+                        arm, owner, ordinal, tile, physical, structure_analysis, analysis, named, nodes,
                     ));
                 }
             }
             Term::Union(arms) => {
                 for arm in arms {
                     producers.extend(visit(
-                        arm, owner, ordinal, tile, program, analysis, named, nodes,
+                        arm, owner, ordinal, tile, physical, structure_analysis, analysis, named, nodes,
                     ));
                 }
             }
@@ -122,7 +123,7 @@ pub fn analyze(program: &Program, analysis: &Analysis) -> Execution {
             | Term::Group(_, inner)
             | Term::Canon(inner)
             | Term::Store { inner, .. } => {
-                producers = visit(inner, owner, ordinal, tile, program, analysis, named, nodes);
+                producers = visit(inner, owner, ordinal, tile, physical, structure_analysis, analysis, named, nodes);
             }
         }
         if distributing {
@@ -152,7 +153,8 @@ pub fn analyze(program: &Program, analysis: &Analysis) -> Execution {
             &owner,
             &mut 0,
             &mut 0,
-            program,
+            physical,
+            structure_analysis,
             analysis,
             &named,
             &mut nodes,

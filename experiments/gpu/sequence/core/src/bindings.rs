@@ -42,11 +42,9 @@ fn relation_read(provider: &cq_lang_structures::Provider, host: &str) -> syn::Re
 
 /// Whether the Sequence lookup `(name, keys)` is the bound-prefix read of a
 /// PH-Smallest probe, which its recorded Candidates read realizes instead.
-fn smallest_reader(program: &Program, name: &str, keys: &[String]) -> bool {
+fn smallest_reader(physical: &cq_lang_structures::physical::Program, name: &str, keys: &[String]) -> bool {
     use cq_lang_structures::physical::{Choice, Operator};
-    program
-        .structures
-        .physical
+    physical
         .program
         .definitions
         .iter()
@@ -64,7 +62,8 @@ fn smallest_reader(program: &Program, name: &str, keys: &[String]) -> bool {
 /// Sequence lookups whose keys are a leading prefix of its keys, and the
 /// PH-Smallest sides `[prefix][column]` it supplies.
 fn radix_reads(
-    program: &Program,
+    physical: &cq_lang_structures::physical::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     analysis: &Analysis,
     name: &str,
     keys: &[String],
@@ -75,7 +74,7 @@ fn radix_reads(
         if provider != name
             || lookup.len() > keys.len()
             || lookup.iter().collect::<BTreeSet<_>>() != leading
-            || smallest_reader(program, name, lookup)
+            || smallest_reader(physical, name, lookup)
         {
             continue;
         }
@@ -87,8 +86,8 @@ fn radix_reads(
         reads.push((lookup.clone(), form));
     }
     for candidate in cq_lang_structures::physical::candidate_prefixes(
-        &program.structures.physical,
-        &analysis.structures.physical,
+        physical,
+        &structure_analysis.physical,
     ) {
         for (side, prefix) in &candidate.sides {
             let mut leading = keys[..keys.len().saturating_sub(1)].to_vec();
@@ -111,7 +110,8 @@ fn radix_reads(
 /// Formal rule GPU-RadixProvider: `K`/`V` lanes are the recorded carriers
 /// of the key and payload columns; `W`/`O`/params are the instance's advice.
 fn radix_realization(
-    program: &Program,
+    physical: &cq_lang_structures::physical::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     analysis: &Analysis,
     carriers: &BTreeMap<String, syn::Type>,
     name: &str,
@@ -140,7 +140,7 @@ fn radix_realization(
             merge_tile_rows: advice.merge_tile,
             block_threads: crate::BLOCK_THREADS,
         },
-        reads: radix_reads(program, analysis, name, keys),
+        reads: radix_reads(physical, structure_analysis, analysis, name, keys),
     })
 }
 
@@ -153,7 +153,8 @@ fn radix_realization(
 /// prefix is every key but the last, which is the candidate column. Every
 /// such lookup and side of the layout is read exactly once.
 fn check_radix(
-    program: &Program,
+    physical: &cq_lang_structures::physical::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     analysis: &Analysis,
     carriers: &BTreeMap<String, syn::Type>,
     name: &str,
@@ -183,8 +184,8 @@ fn check_radix(
     let mut prefix = keys[..keys.len() - 1].to_vec();
     prefix.sort();
     let candidates = cq_lang_structures::physical::candidate_prefixes(
-        &program.structures.physical,
-        &analysis.structures.physical,
+        physical,
+        &structure_analysis.physical,
     );
     let mut seen = BTreeSet::new();
     for (lookup, form) in &radix.reads {
@@ -197,7 +198,7 @@ fn check_radix(
                         && analysis
                             .capabilities
                             .contains_key(&(name.to_owned(), lookup.clone()))
-                        && !smallest_reader(program, name, lookup)
+                        && !smallest_reader(physical, name, lookup)
                 }
                 RadixRead::Candidates { column } => {
                     keys.last() == Some(column)
@@ -220,7 +221,7 @@ fn check_radix(
         })
     };
     let lookups_covered = analysis.capabilities.keys().all(|(owner, lookup)| {
-        owner != name || !leading(lookup) || smallest_reader(program, name, lookup) || read(lookup)
+        owner != name || !leading(lookup) || smallest_reader(physical, name, lookup) || read(lookup)
     });
     let sides_covered = candidates.iter().all(|candidate| {
         candidate.sides.iter().all(|(side, side_prefix)| {
@@ -252,7 +253,13 @@ fn check_radix(
 
 /// Formal rule GPU-ProviderLayout: catalog selection records construction ABI,
 /// complete native permutations, download adapters and directory policy upstream.
-pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bindings> {
+pub(crate) fn select(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    structure_analysis: &cq_lang_structures::Analysis,
+    analysis: &Analysis,
+) -> syn::Result<Bindings> {
     let mut result = Bindings::default();
     let catalog = crate::catalog();
     let scanned: BTreeSet<_> = analysis
@@ -266,13 +273,13 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                 .unwrap_or_else(|| dispatch.outer_store.clone())
         })
         .collect();
-    let context = cq_print::Context::new(&program.structures, &analysis.structures);
-    result.carriers = crate::domains::carriers(program, analysis)?;
-    for (name, layouts) in &analysis.structures.built {
+    let context = cq_print::Context::new(structures, structure_analysis);
+    result.carriers = crate::domains::carriers(physical, structures, structure_analysis)?;
+    for (name, layouts) in &structure_analysis.built {
         let mut recorded = Vec::new();
         for (levels, provider) in layouts {
             let keys: Vec<_> = levels.iter().flatten().cloned().collect();
-            let (abi, directory) = match analysis.structures.facts(provider).abi {
+            let (abi, directory) = match structure_analysis.facts(provider).abi {
                 Some(native @ (NativeAbi::Range | NativeAbi::RadixRelation)) => {
                     catalog
                         .providers
@@ -305,7 +312,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
                 _ => (ProviderAbi::Host, None),
             };
             let payload = if scanned.contains(name) || abi != ProviderAbi::Range {
-                analysis.structures.layouts[name].clone()
+                structure_analysis.layouts[name].clone()
             } else {
                 let mut payload = context.built_payload(name, levels);
                 payload.retain(|column| keys.first() != Some(column));
@@ -316,9 +323,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             };
             let radix = (abi == ProviderAbi::Radix)
                 .then(|| {
-                    radix_realization(
-                        program,
-                        analysis,
+                    radix_realization(physical, structure_analysis, analysis,
                         &result.carriers,
                         name,
                         provider,
@@ -338,14 +343,14 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         }
         result.providers.insert(name.clone(), recorded);
     }
-    for (index, entry) in program.structures.structures.entries.iter().enumerate() {
+    for (index, entry) in structures.structures.entries.iter().enumerate() {
         let (provider, adapter) = match &entry.structure {
             Structure::Rows { provider, .. } => (provider, "vec"),
             Structure::Built { keyed, .. } => (&keyed.provider, "sorted_run"),
             _ => continue,
         };
         if matches!(
-            analysis.structures.facts(provider).abi,
+            structure_analysis.facts(provider).abi,
             Some(NativeAbi::Range | NativeAbi::RadixRelation | NativeAbi::Radix)
         ) {
             result.host_materializations.insert(
@@ -354,22 +359,20 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             );
         }
     }
-    let definitions: BTreeMap<_, _> = program
-        .structures
-        .physical
+    let definitions: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
         .map(|d| (symbol_name(&d.name), d.clone()))
         .collect();
     let mut native_hosts = BTreeSet::new();
-    for entry in &program.structures.structures.entries {
+    for entry in &structures.structures.entries {
         let Structure::Host { reader, keyed, .. } = &entry.structure else {
             continue;
         };
         let name = symbol_name(&entry.name);
-        if let Some(host) = analysis.structures.physical.hosts.get(&name) {
-            if analysis.structures.facts(&keyed.provider).abi == Some(NativeAbi::RadixRelation) {
+        if let Some(host) = structure_analysis.physical.hosts.get(&name) {
+            if structure_analysis.facts(&keyed.provider).abi == Some(NativeAbi::RadixRelation) {
                 native_hosts.insert(host.clone());
                 if matches!(reader, ReaderRef::Scan) {
                     let fact = relation_read(&keyed.provider, host)?;
@@ -380,7 +383,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             }
             if matches!(reader, ReaderRef::Scan)
                 && matches!(
-                    analysis.structures.facts(&keyed.provider).abi,
+                    structure_analysis.facts(&keyed.provider).abi,
                     Some(NativeAbi::RadixRelation | NativeAbi::Columns)
                 )
             {
@@ -392,15 +395,15 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         }
     }
     for name in definitions.keys() {
-        let native_lookup = analysis.structures.built.get(name).is_some_and(|layouts| {
+        let native_lookup = structure_analysis.built.get(name).is_some_and(|layouts| {
             layouts.iter().any(|(_, provider)| {
-                analysis.structures.facts(provider).abi == Some(NativeAbi::RadixRelation)
+                structure_analysis.facts(provider).abi == Some(NativeAbi::RadixRelation)
             })
-        }) || analysis.structures.fallbacks.iter().any(
+        }) || structure_analysis.fallbacks.iter().any(
             |((owner, reader, _), provider)| {
                 owner == name
                     && !matches!(reader, ReaderRef::Scan)
-                    && analysis.structures.facts(provider).abi == Some(NativeAbi::RadixRelation)
+                    && structure_analysis.facts(provider).abi == Some(NativeAbi::RadixRelation)
             },
         );
         if !native_lookup {
@@ -412,7 +415,7 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
         if !native_hosts.contains(&origin.host) || origin.selection.is_some() {
             continue;
         }
-        let source = analysis.structures.host_layouts[&origin.host]
+        let source = structure_analysis.host_layouts[&origin.host]
             .iter()
             .map(|column| {
                 origin
@@ -479,18 +482,18 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             );
             Ok(())
         };
-        if let Some(layouts) = analysis.structures.built.get(name) {
+        if let Some(layouts) = structure_analysis.built.get(name) {
             if layouts.len() == 1
                 && layouts[0].1.input.is_some()
-                && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::RadixRelation)
+                && structure_analysis.facts(&layouts[0].1).abi == Some(NativeAbi::RadixRelation)
             {
                 record(name.clone(), layouts[0].0.concat())?;
             }
         } else {
-            for ((owner, reader, keys), provider) in &analysis.structures.fallbacks {
+            for ((owner, reader, keys), provider) in &structure_analysis.fallbacks {
                 if owner != name
                     || matches!(reader, ReaderRef::Scan)
-                    || analysis.structures.facts(provider).abi != Some(NativeAbi::RadixRelation)
+                    || structure_analysis.facts(provider).abi != Some(NativeAbi::RadixRelation)
                     || provider.input.is_none()
                 {
                     continue;
@@ -501,21 +504,28 @@ pub(crate) fn select(program: &Program, analysis: &Analysis) -> syn::Result<Bind
             }
         }
     }
-    crate::domains::select(program, analysis, &mut result)?;
-    check(program, analysis, &result)?;
+    crate::domains::select(physical, structures, structure_analysis, &mut result)?;
+    check(physical, structures, program, structure_analysis, analysis, &result)?;
     Ok(result)
 }
 
 /// Validate recorded facts without selecting providers or replaying selection.
-pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) -> syn::Result<()> {
+pub(crate) fn check(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    structure_analysis: &cq_lang_structures::Analysis,
+    analysis: &Analysis,
+    records: &Bindings,
+) -> syn::Result<()> {
     let catalog = crate::catalog();
-    crate::domains::check(program, analysis, records)?;
-    let context = cq_print::Context::new(&program.structures, &analysis.structures);
+    crate::domains::check(physical, structures, structure_analysis, records)?;
+    let context = cq_print::Context::new(structures, structure_analysis);
     let mut input_hosts = BTreeSet::new();
-    for entry in &program.structures.structures.entries {
+    for entry in &structures.structures.entries {
         let Structure::Host { reader: ReaderRef::Scan, keyed, .. } = &entry.structure else { continue };
-        if analysis.structures.facts(&keyed.provider).abi != Some(NativeAbi::RadixRelation) { continue; }
-        let host = analysis.structures.physical.hosts.get(&symbol_name(&entry.name))
+        if structure_analysis.facts(&keyed.provider).abi != Some(NativeAbi::RadixRelation) { continue; }
+        let host = structure_analysis.physical.hosts.get(&symbol_name(&entry.name))
             .ok_or_else(|| error("GPU-RadixRelation: input has no host provenance"))?;
         input_hosts.insert(host.clone());
         let read = records.relation_inputs.get(host)
@@ -541,12 +551,11 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     if records.relation_inputs.keys().cloned().collect::<BTreeSet<_>>() != input_hosts {
         return Err(error("GPU-RadixRelation: extraneous input read facts"));
     }
-    if records.providers.len() != analysis.structures.built.len() {
+    if records.providers.len() != structure_analysis.built.len() {
         return Err(error("GPU-ProviderLayout: incomplete provider records"));
     }
     for (name, layouts) in &records.providers {
-        let source = analysis
-            .structures
+        let source = structure_analysis
             .built
             .get(name)
             .ok_or_else(|| error("GPU-ProviderLayout: unknown provider"))?;
@@ -559,7 +568,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 || layout
                     .payload
                     .iter()
-                    .any(|column| !analysis.structures.layouts[name].contains(column))
+                    .any(|column| !structure_analysis.layouts[name].contains(column))
             {
                 return Err(error("GPU-ProviderLayout: stale provider schema"));
             }
@@ -571,7 +580,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                     == name
             });
             if scanned || layout.abi != ProviderAbi::Range {
-                if layout.payload != analysis.structures.layouts[name] {
+                if layout.payload != structure_analysis.layouts[name] {
                     return Err(error(
                         "GPU-ProviderLayout: scan payload differs from its complete layout",
                     ));
@@ -594,14 +603,14 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 ProviderAbi::Range => {
                     catalog.providers.iter().any(|token| {
                         token.provider.same_token(provider)
-                            && analysis.structures.facts(provider).abi == Some(NativeAbi::Range)
+                            && structure_analysis.facts(provider).abi == Some(NativeAbi::Range)
                     }) && layout.directory
                         == Some(DirectoryPolicy::DenseU32 {
                             terminal_entries: 1,
                         })
                 }
                 ProviderAbi::RadixRelation => {
-                    analysis.structures.facts(provider).abi == Some(NativeAbi::RadixRelation)
+                    structure_analysis.facts(provider).abi == Some(NativeAbi::RadixRelation)
                         && provider.input.is_some()
                         && catalog
                             .providers
@@ -610,16 +619,14 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                         && layout.directory.is_none()
                 }
                 ProviderAbi::Radix => {
-                    analysis.structures.facts(provider).abi == Some(NativeAbi::Radix)
+                    structure_analysis.facts(provider).abi == Some(NativeAbi::Radix)
                         && catalog
                             .providers
                             .iter()
                             .any(|token| token.provider.same_token(provider))
                         && layout.directory.is_none()
                         && layout.radix.as_ref().is_some_and(|radix| {
-                            check_radix(
-                                program,
-                                analysis,
+                            check_radix(physical, structure_analysis, analysis,
                                 &records.carriers,
                                 name,
                                 provider,
@@ -631,7 +638,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
                 ProviderAbi::Host => {
                     layout.directory.is_none()
                         && !matches!(
-                            analysis.structures.facts(provider).abi,
+                            structure_analysis.facts(provider).abi,
                             Some(NativeAbi::Range | NativeAbi::RadixRelation | NativeAbi::Radix)
                         )
                 }
@@ -646,7 +653,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             }
         }
     }
-    let definitions: BTreeMap<_, _> = program.structures.physical.program.definitions.iter()
+    let definitions: BTreeMap<_, _> = physical.program.definitions.iter()
         .map(|definition| (symbol_name(&definition.name), definition.clone())).collect();
     let mut required_native = BTreeSet::new();
     let mut check_lookup = |name: &str, id: String, keys: Vec<String>| -> syn::Result<()> {
@@ -656,7 +663,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
         }
         let lookup = records.native.get(&id)
             .ok_or_else(|| error("GPU-RadixRelation: missing native prefix read"))?;
-        let physical = &analysis.structures.host_layouts[&origin.host];
+        let physical = &structure_analysis.host_layouts[&origin.host];
         if lookup.keys != keys || lookup.host != origin.host
             || lookup.source.len() != physical.len()
             || lookup.source.iter().zip(physical)
@@ -667,16 +674,16 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
         required_native.insert(id);
         Ok(())
     };
-    for (name, layouts) in &analysis.structures.built {
+    for (name, layouts) in &structure_analysis.built {
         if layouts.len() == 1
-            && analysis.structures.facts(&layouts[0].1).abi == Some(NativeAbi::RadixRelation)
+            && structure_analysis.facts(&layouts[0].1).abi == Some(NativeAbi::RadixRelation)
         {
             check_lookup(name, name.clone(), layouts[0].0.concat())?;
         }
     }
-    for ((name, reader, keys), provider) in &analysis.structures.fallbacks {
-        if analysis.structures.built.contains_key(name) || matches!(reader, ReaderRef::Scan)
-            || analysis.structures.facts(provider).abi != Some(NativeAbi::RadixRelation) { continue; }
+    for ((name, reader, keys), provider) in &structure_analysis.fallbacks {
+        if structure_analysis.built.contains_key(name) || matches!(reader, ReaderRef::Scan)
+            || structure_analysis.facts(provider).abi != Some(NativeAbi::RadixRelation) { continue; }
         let mut sorted = keys.clone();
         sorted.sort();
         check_lookup(name, format!("{name}__{}", sorted.join("__")), keys.clone())?;
@@ -771,14 +778,14 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     // memory.
     let host_scan = cq_lang_structures::provider::base::declaration("host_scan").instance();
     let device_scan = |name: &str| {
-        program.structures.structures.entries.iter().any(|entry| {
+        structures.structures.entries.iter().any(|entry| {
             symbol_name(&entry.name) == name
                 && matches!(&entry.structure, Structure::Host {
                     reader: ReaderRef::Scan,
                     keyed,
                     ..
                 } if matches!(
-                    analysis.structures.facts(&keyed.provider).abi,
+                    structure_analysis.facts(&keyed.provider).abi,
                     Some(NativeAbi::RadixRelation | NativeAbi::Columns)
                 ))
         })
@@ -788,7 +795,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
             return Err(error("GPU-NativeAbi: invalid download adapter"));
         }
     }
-    if program.structures.structures.entries.iter().any(|entry| {
+    if structures.structures.entries.iter().any(|entry| {
         let name = symbol_name(&entry.name);
         device_scan(&name) && !records.downloads.contains_key(&name)
     }) {
@@ -800,14 +807,14 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     // separately recorded host adapter. Its collection protocol is determined
     // by the Structures entry, never by inspecting its Rust type spelling.
     let mut required = BTreeSet::new();
-    for (index, entry) in program.structures.structures.entries.iter().enumerate() {
+    for (index, entry) in structures.structures.entries.iter().enumerate() {
         let (provider, collection) = match &entry.structure {
             Structure::Rows { provider, .. } => (provider, true),
             Structure::Built { keyed, .. } => (&keyed.provider, false),
             _ => continue,
         };
         if !matches!(
-            analysis.structures.facts(provider).abi,
+            structure_analysis.facts(provider).abi,
             Some(NativeAbi::Range | NativeAbi::RadixRelation | NativeAbi::Radix)
         ) {
             continue;
@@ -826,18 +833,18 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, records: &Bindings) 
     if records.host_materializations.keys().any(|index| !required.contains(index)) {
         return Err(error("GPU-HostMaterialization: adapter names no device collection"));
     }
-    let host = host_structures(program, records)?;
-    cq_lang_structures::check_rewrite(&program.structures, &host)?;
+    let host = host_structures(structures, records)?;
+    cq_lang_structures::check_rewrite(structures, &host)?;
     cq_lang_structures::contract::check(&host)?;
     Ok(())
 }
 
 /// Apply recorded adapters without selecting a provider or inspecting Rust.
 pub(crate) fn host_structures(
-    program: &Program,
+    structures: &cq_lang_structures::Program,
     records: &Bindings,
 ) -> syn::Result<cq_lang_structures::Program> {
-    let mut host = program.structures.clone();
+    let mut host = structures.clone();
     for (index, entry) in host.structures.entries.iter_mut().enumerate() {
         if let Some(provider) = records.host_materializations.get(&index) {
             match &mut entry.structure {
