@@ -28,57 +28,6 @@ anchor | premises | code behaviour | status | invariant):
 moved file fails the check. `unverified` marks a revised contract/implementation
 obligation without claiming that integration checks were exercised.
 
-## Rule coverage gate
-
-`python3 doc/formal/check.py` (or `--coverage` alone; `--coverage --list`
-prints the current rows) enumerates decision sites and fails unless each is
-covered or listed in [coverage-allowlist.tsv](coverage-allowlist.tsv). The
-classification is syntactic and deterministic:
-
-- **Functions.** Every `fn` item with a body (free, method, trait default, nested)
-  in `passes/*/src/**/*.rs` and `languages/*/src/**/*.rs`, excluding items under
-  `#[test]`/`#[cfg(test)]` and anything inside macro invocations. A function's
-  *own body* excludes nested `fn` items. Its key is
-  `path::Impl-or-mod::…::name` (`#N` suffix for the N-th repeat in one file).
-- **Output IR types.** For `languages/X`, the `pub struct`/`pub enum` names
-  declared in X. For a pass, those of its output language (`OUTPUT_IR` in
-  `check.py`: order/reduce → VO; relational-lowering/ra-rewrites → RA;
-  index-policy → IX; physical-lowering → Physical; structure-selection,
-  represent, staging → Structures; sequence-lowering/plan → Sequence) minus
-  names the pass declares itself; printers (print, physical-realization,
-  sequence-pull) output Rust tokens.
-- **(a) Producer decision**: the own body contains, outside `matches!`, a
-  struct literal `T {`, tuple-struct call `T(` or variant `E::V` of an output
-  type not in pattern position (not followed, after one optional group, by
-  `=>`, `|`, `if` or `=`, nor next to `==`/`!=`, nor after `struct enum impl
-  for trait -> type :`); or `parse_quote!`/`parse_quote_spanned!`; or
-  `.definitions|entries|steps.push(`; or, in a printer, `quote!`/`quote_spanned!`.
-- **(b) Checker condition**: the own body contains, outside
-  `quote!`/`parse_quote!`/`matches!`, `Err(` not in pattern position,
-  `bail!`, `Error::new`/`Error::new_spanned`, or a call of a crate error helper.
-  An *error helper* is a function whose whole body is one `Err(..)` expression;
-  it is itself no site (it decides no condition).
-- **Covered** iff the attached comments (doc/comment lines and attributes
-  directly before the item) plus own-body comments contain exactly one
-  `Formal rule NAME` marker, NAME resolves in `rules.tsv` (marker text
-  `Formal rule NAME`, else rule name NAME) with a row whose path is this file,
-  and that rule's `\Rule` premise is mathematical.
-- **Mathematical premise.** Split the premise on `\\`, `\quad`, `\qquad`,
-  `\and`. It is rejected if empty, or if some conjunct is a bare *prose
-  predicate*: only `\mathsf{Name}` with optional `_{..}`, arguments `(..)` and
-  `\Downarrow X`, where `\mathsf{Name}` occurs in no `\Rule` conclusion and is
-  defined by no displayed definition (`\[..\]`, `$$..$$`, `align`/`equation`/
-  `gather`/`displaymath` containing `\mathsf{Name}(..)` followed by
-  `\triangleq`, `:=`, `\coloneqq`, `\iff`, `\Leftrightarrow`, `\equiv`,
-  `\defeq` or `=`). `\text{..}` phrases are not detected.
-- **Markers** naming an unregistered rule fail. A marker outside every
-  registered file of its rule is *misplaced*; it never covers a site and must
-  be listed as a `misplaced` row `path#NAME` (one row per copy).
-
-The allowlist only shrinks: an unlisted uncovered site or misplaced marker
-fails, and so does a listed row that is now covered or gone. A cover is
-per function, so a long function with one marker counts as covered.
-
 ## Rules whose implementation is not exact
 
 Verified by reading both the rule and the anchor (✓) or reported by the audit
