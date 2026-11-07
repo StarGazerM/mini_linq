@@ -774,11 +774,13 @@ pub fn disjoint_unions(program: &Program) -> syn::Result<BTreeSet<String>> {
 
 /// Check local contracts and fixed structural obligations of an RA rewrite.
 ///
-/// A localized identity certificate also accepts absorption of a reduced
-/// operand when exact named-result lineage supplies all shared columns.
-/// It checks the RHS substitution first, then the LHS against the surviving RHS.
-/// It preserves the remaining definitions, Rust payloads and negative ancestry;
-/// independent projected witnesses are never merged to establish containment.
+/// A named identity certificate accepts absorption along a single-consumer,
+/// noncanonicalizing, key-retaining pipe to a later join with the exact support
+/// in its other operand's lineage. It checks successive substitutions from the
+/// current source DAG, preserving remaining definitions and payloads by name.
+/// Shared reductions may also be bypassed when every use is a direct absorbing
+/// join; all uses are replaced together, never only some shared consumers.
+/// Neither earlier VO positions nor topological serialization order are evidence.
 /// For entirely Rust-free, block-free positive programs, a separate certificate
 /// replays dead expansion to a semijoin and bypass of a support
 /// already witnessed by exact named lineage. Source-side demand preserves

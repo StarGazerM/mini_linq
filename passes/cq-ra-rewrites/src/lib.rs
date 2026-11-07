@@ -10,18 +10,17 @@ mod reductions;
 
 /// Simplify already elaborated reductions using exact named-result lineage.
 ///
-/// In either operand of a semijoin or natural join, `R semijoin T`
-/// may be replaced by `R` when the other operand is contained in `T` on
-/// every column shared by `R` and `T`. Right-side support pruning takes
-/// precedence; a left-side bypass must be justified by the surviving RHS.
-/// This is a local pass, not a maximal fixed-point guarantee.
-/// Containment follows only the same
-/// named result through projections, selections, semijoin left inputs and
-/// natural-join inputs; it never identifies independent projected witnesses
-/// or infers facts from types, data, predicates or source occurrence numbers.
-/// A shared restricted support is bypassed only when every bypassed result
-/// becomes unreachable. Otherwise its consumers keep the same materialized
-/// row witness, preserving independent projections' correlation obligations.
+/// Apply direct-consumer RA-Absorb to a fixed point on the current RA DAG.
+/// A reduction `P semijoin L` is bypassed only when every use is an operand
+/// of a semijoin or natural join whose other operand witnesses the same named
+/// `L`, retaining every shared column. All uses are bypassed together.
+/// No intervening operator is crossed: un-pushing a filter is a separate cost decision.
+/// The independent checker accepts the broader legal key-retaining pipe law.
+///
+/// The witness lineage may follow projections, selections, semijoin left
+/// inputs and either natural-join input, retaining all constrained columns.
+/// Independent projected witnesses are never identified. No type, data,
+/// source occurrence or former VO position participates in this decision.
 ///
 /// Opaque Rust operators and negative-operand ancestry are not rewritten.
 /// Reductions containing Rust are not bypassed, and all remaining operator

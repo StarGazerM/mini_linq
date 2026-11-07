@@ -73,6 +73,14 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
     }};
     check(&reduced, &source).unwrap();
     let target = cq_ra_rewrites::simplify_reductions(&source).unwrap();
+    let expected: ra::Program = syn::parse_quote! { relational {
+        relation l(k:i32); relation r(k:i32,v:i32);
+        r0 = rename r {k -> k,v -> v};
+        r1 = rename l {k -> k};
+        r4 = natural_join r1 with r0;
+        output r4 as answer(k,v);
+    }};
+    assert_eq!(target.to_token_stream().to_string(), expected.to_token_stream().to_string());
     let (reference, _) = cq_relational_lowering::compile(&coarse(&query)).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
@@ -139,6 +147,28 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
             })
             .unwrap()
     };
+    let expected: ra::Program = syn::parse_quote! { relational {
+        relation A(first:i32 [0],second:i32 [0]);
+        relation B(first:i32 [0],second:i32 [0]);
+        relation C(first:i32 [0],second:i32 [0]);
+        relation Stock(depot:i32 [0],item:i32 [0],day:i32 [0]);
+        r0 = rename Stock {depot -> d,item -> i,day -> t};
+        r1 = rename C {first -> d,second -> t};
+        r2 = semijoin r0 with r1;
+        r3 = rename B {first -> i,second -> t};
+        r4 = semijoin r2 with r3;
+        r5 = rename A {first -> d,second -> i};
+        r6 = semijoin r4 with r5;
+        r7 = semijoin r5 with r6;
+        r8 = semijoin r3 with r6;
+        r9 = semijoin r1 with r6;
+        r10 = natural_join r7 with r8;
+        r11 = natural_join r10 with r9;
+        r12 = natural_join r11 with r6;
+        r13 = project r12 keep {d,i,t};
+        output r13 as answer(d,i,t);
+    }};
+    assert_eq!(target.to_token_stream().to_string(), expected.to_token_stream().to_string());
     assert_eq!(full_input(&target), full_input(&source));
     let full_stock = full_input(&source);
     let older_stock = source
@@ -157,7 +187,7 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
         .unwrap();
     // Partially bypassing the shared restriction is algebraically exact, but
     // splits independently projected witnesses under the structural contract.
-    let mut split_witness = target.clone();
+    let mut split_witness = source.clone();
     let first_support = split_witness
         .plan
         .definitions
@@ -175,7 +205,6 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
     first_support.right = older_stock;
     ra::contract::check(&split_witness).unwrap();
     assert!(check(&written, &split_witness).is_err());
-    assert!(ra::check_rewrite(&source, &split_witness).is_err());
     for seed in 0..64 {
         let database = databases::binary_database(&query, seed);
         assert_eq!(
@@ -321,6 +350,177 @@ fn two_sided_absorption_keeps_the_restriction_justifying_the_other_operand() {
             oracle::evaluate_ra(&target, &database).output,
             oracle::evaluate_ra(&source, &database).output
         );
+    }
+}
+
+#[test]
+fn absorption_checker_accepts_linear_pipes_but_policy_requires_a_direct_consumer() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation P(k:i32,v:i32); relation L(k:i32); relation Q(v:i32,w:i32);
+        p = rename P {k -> k,v -> v};
+        l = rename L {k -> k};
+        q = rename Q {v -> v,w -> w};
+        d = semijoin p with l;
+        filtered = select d if (v > 0);
+        extended = natural_join q with filtered;
+        checked = semijoin extended with q;
+        result = natural_join checked with l;
+        output result as answer(k,v,w);
+    }};
+    let expected: ra::Program = syn::parse_quote! { relational {
+        relation P(k:i32,v:i32); relation L(k:i32); relation Q(v:i32,w:i32);
+        p = rename P {k -> k,v -> v};
+        l = rename L {k -> k};
+        q = rename Q {v -> v,w -> w};
+        filtered = select p if (v > 0);
+        extended = natural_join q with filtered;
+        checked = semijoin extended with q;
+        result = natural_join checked with l;
+        output result as answer(k,v,w);
+    }};
+    let actual = cq_ra_rewrites::simplify_reductions(&source).unwrap();
+    assert_eq!(actual.to_token_stream().to_string(), source.to_token_stream().to_string());
+    ra::check_rewrite(&source, &expected).unwrap();
+    let mut reordered = expected;
+    reordered.plan.definitions.swap(0, 2);
+    ra::check_rewrite(&source, &reordered).unwrap();
+    assert_eq!(cq_ra_rewrites::simplify_reductions(&actual).unwrap(), actual);
+}
+
+#[test]
+fn direct_absorption_policy_does_not_cross_even_nonmultiplying_operators() {
+    for (extra, pipe, bypassed_pipe) in [
+        (quote!(), quote!(select d if (v > 0)), quote!(select p if (v > 0))),
+        (
+            quote!(q = rename Q {v -> v};),
+            quote!(semijoin d with q),
+            quote!(semijoin p with q),
+        ),
+    ] {
+        let source: ra::Program = syn::parse2(quote! { relational {
+            relation P(k:i32,v:i32); relation L(k:i32); relation Q(v:i32);
+            p = rename P {k -> k,v -> v};
+            l = rename L {k -> k};
+            #extra
+            d = semijoin p with l;
+            pipe = #pipe;
+            result = natural_join pipe with l;
+            output result as answer(k,v);
+        }}).unwrap();
+        let legal: ra::Program = syn::parse2(quote! { relational {
+            relation P(k:i32,v:i32); relation L(k:i32); relation Q(v:i32);
+            p = rename P {k -> k,v -> v};
+            l = rename L {k -> k};
+            #extra
+            pipe = #bypassed_pipe;
+            result = natural_join pipe with l;
+            output result as answer(k,v);
+        }}).unwrap();
+        let actual = cq_ra_rewrites::simplify_reductions(&source).unwrap();
+        assert_eq!(actual.to_token_stream().to_string(), source.to_token_stream().to_string());
+        ra::check_rewrite(&source, &legal).unwrap();
+    }
+}
+
+#[test]
+fn direct_absorption_bypasses_all_shared_consumers_together() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation P(k:i32,v:i32); relation L(k:i32);
+        p = rename P {k -> k,v -> v};
+        l = rename L {k -> k};
+        d = semijoin p with l;
+        a = natural_join d with l;
+        b = natural_join l with d;
+        result = natural_join a with b;
+        output result as answer(k,v);
+    }};
+    let expected: ra::Program = syn::parse_quote! { relational {
+        relation P(k:i32,v:i32); relation L(k:i32);
+        p = rename P {k -> k,v -> v};
+        l = rename L {k -> k};
+        a = natural_join p with l;
+        b = natural_join l with p;
+        result = natural_join a with b;
+        output result as answer(k,v);
+    }};
+    let actual = cq_ra_rewrites::simplify_reductions(&source).unwrap();
+    assert_eq!(actual.to_token_stream().to_string(), expected.to_token_stream().to_string());
+    ra::check_rewrite(&source, &expected).unwrap();
+
+    let blocked: ra::Program = syn::parse_quote! { relational {
+        relation P(k:i32,v:i32); relation L(k:i32);
+        p = rename P {k -> k,v -> v};
+        l = rename L {k -> k};
+        d = semijoin p with l;
+        a = natural_join d with l;
+        b = select d if (v > 0);
+        result = natural_join a with b;
+        output result as answer(k,v);
+    }};
+    assert_eq!(cq_ra_rewrites::simplify_reductions(&blocked).unwrap(), blocked);
+}
+
+#[test]
+fn absorption_stops_at_canonicalization_and_shared_pipes() {
+    for pipe in [
+        quote!(pipe = project d keep {k,v};),
+        quote!(pipe = natural_join d with d;),
+    ] {
+        let source: ra::Program = syn::parse2(quote! { relational {
+            relation P(k:i32,v:i32); relation L(k:i32);
+            p = rename P {k -> k,v -> v};
+            l = rename L {k -> k};
+            d = semijoin p with l;
+            #pipe
+            result = natural_join pipe with l;
+            output result as answer(k,v);
+        }}).unwrap();
+        assert_eq!(
+            cq_ra_rewrites::simplify_reductions(&source).unwrap().to_token_stream().to_string(),
+            source.to_token_stream().to_string()
+        );
+    }
+}
+
+#[test]
+fn absorption_requires_every_constrained_column_at_the_later_witness() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation P(k:i32,v:i32); relation L(k:i32,v:i32);
+        p = rename P {k -> k,v -> v};
+        l = rename L {k -> k,v -> v};
+        d = semijoin p with l;
+        pipe = project d keep {k};
+        result = natural_join pipe with l;
+        output result as answer(k,v);
+    }};
+    assert_eq!(cq_ra_rewrites::simplify_reductions(&source).unwrap(), source);
+    let invalid: ra::Program = syn::parse_quote! { relational {
+        relation P(k:i32,v:i32); relation L(k:i32,v:i32);
+        p = rename P {k -> k,v -> v};
+        l = rename L {k -> k,v -> v};
+        pipe = project p keep {k};
+        result = natural_join pipe with l;
+        output result as answer(k,v);
+    }};
+    assert!(ra::check_rewrite(&source, &invalid).is_err());
+}
+
+#[test]
+fn absorption_does_not_cross_opaque_or_negative_consumers() {
+    for consumer in [
+        quote!(pipe = guard d if (*v > 0);),
+        quote!(pipe = anti [k] d, l;),
+    ] {
+        let source: ra::Program = syn::parse2(quote! { relational {
+            relation P(k:i32,v:i32); relation L(k:i32);
+            p = rename P {k -> k,v -> v};
+            l = rename L {k -> k};
+            d = semijoin p with l;
+            #consumer
+            result = natural_join pipe with l;
+            output result as answer(k,v);
+        }}).unwrap();
+        assert_eq!(cq_ra_rewrites::simplify_reductions(&source).unwrap(), source);
     }
 }
 

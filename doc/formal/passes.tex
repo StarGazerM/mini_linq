@@ -1628,18 +1628,65 @@ outer-rooted reduction tree (R-Masks) and by exact atom-to-block cuts; every
 branch is its own scope. Reduction compilation is independently checked before
 elaboration, and elaboration is checked against the reduced VO schedule. The
 external Hypergraph and Transfer planners additionally apply a checked RA
-realization rewrite. It uses
-$L\ltimes(R\ltimes L)=L\ltimes R$ and
-$L'\bowtie(R\ltimes L)=L'\bowtie R$ only when the required shared columns of $L'$
-are proven contained in $L$ by reduction lineage. The corresponding left-operand
-law removes $(L\ltimes R)\bowtie R$'s duplicate membership test (and similarly
-for a semijoin consumer). Right-side support pruning takes precedence; the
-left-side law must be proved using the surviving RHS, not a discarded
-restriction. This is local absorption, not a maximal fixed-point guarantee.
-Dead reduced copies are removed; independent consumers that still need a
-reduction keep the same restricted witness alive.
-The rewrite is checked against the original RA and does not alter the reduction
-algorithm.
+realization rewrite. Its policy absorbs only at a \emph{direct consumer},
+iterating on the current named RA DAG, never on an earlier VO position.
+Write $H(r)$ for a result heading and $u(r)$ for its number of operand uses,
+including output and block-metadata references. For $d=P\ltimes L$, put
+$K=H(P)\cap H(L)$. Define $W_K(r,L)$ by a path backwards from $r$ to the
+\emph{same named result} $L$, retaining $K$ at every vertex, following selection,
+projection, either natural-join operand, or the left semijoin operand.
+Let $\mathsf{Pipe}_K(d,J)$ mean that the forward path
+$d=x_0,x_1,\ldots,x_n,J$ has $u(x_i)=1$ and $K\subseteq H(x_i)$ for every $i$.
+Each internal $x_i$ is a selection, a natural join, or a semijoin whose
+\emph{left} operand is $x_{i-1}$; natural joins may use either operand.
+In particular projection (row canonicalization), grouping, opaque Rust,
+negative operators, blocks, shared consumers and output are barriers.
+The endpoint $J$ is a natural join, or a semijoin, using $x_n$ on either
+side; its other operand $q$ must satisfy $W_K(q,L)$. No changed definition
+may be in negative ancestry, and $d$ has no opaque/group ancestry.
+\begin{mathpar}
+\Rule{RA-Absorb}{
+ d=P\ltimes L \quad K=H(P)\cap H(L) \quad
+ \mathsf{Pipe}_K(d,J) \quad W_K(q,L)
+}{
+ G \equiv G[d:=P]\setminus\mathsf{Dead}
+}
+\end{mathpar}
+The substitution rewires the sole consumer and removes unreachable definitions.
+Since the pipe retains $K$, a row rejected by $d$ cannot survive $J$; no
+canonicalization or opaque execution observes the extra intermediate rows.
+The independent checker certifies successive substitutions from source and
+target RA alone, preserving all remaining definitions and payloads by name.
+Topological serialization order is not part of the certificate.
+Legality does not imply that every legal absorption should be produced.
+A semijoin is a pushed-down filter: deleting it is a strict filtering win
+only when nothing lies between it and the join repeating its filtering.
+Crossing intermediates un-pushes that filter, a separate cost decision outside
+this policy. For direct absorption, sharing is harmless only when \emph{every}
+use is bypassed together. Let $U(d)$ list all operand uses, including output
+and metadata uses, and let $\mathsf{Other}(J,d)$ name the opposite operand
+of that particular use. With the same negative/opaque ancestry exclusions:
+\begin{mathpar}
+\Rule{RA-AbsorbDirect}{
+ d=P\ltimes L \quad K=H(P)\cap H(L) \quad U(d)\ne\varnothing \\
+ \forall u\in U(d).\ u=(J,\mathsf{side})\ \land\
+ \mathsf{op}(J)\in\{\bowtie,\ltimes\}\ \land\ W_K(\mathsf{Other}(J,d),L)
+}{
+ G\equiv G[d:=P]\setminus\mathsf{Dead}
+}
+\end{mathpar}
+Define $G\longrightarrow_{\mathrm{direct}}G'$ by RA-AbsorbDirect: all direct
+consumers witness the same support, all uses are replaced together, and no
+intermediate definition is crossed. The checker also retains RA-Absorb's
+general linear-path legality above; the producer selects only the direct rule.
+\begin{mathpar}
+\Rule{RA-AbsorbPolicy}{
+ G\mathrel{\longrightarrow_{\mathrm{direct}}^{*}}G'
+ \quad \nexists G''.\ G'\longrightarrow_{\mathrm{direct}}G''
+}{
+ \mathsf{simplifyReductions}(G)=G'
+}
+\end{mathpar}
 
 For LE's checked RA \code{cq_ra_rewrites::simplify_expansions} pass, let $H_L,H_R$ be the
 source operand headings, $K=H_L\cap H_R$, and $D_s(r)$ the demanded columns of source result

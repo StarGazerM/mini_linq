@@ -493,3 +493,6 @@ WF-VO-RustSteps	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF
 WF-VO-Reductions	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-Reductions:	Checks distinct relational operands, exact shared equality-class columns and finite-domain placement.
 WF-VO-Blocks	implementation	languages/cq-lang-vo/src/lib.rs	/// Formal rule WF-VO-Blocks:	Checks recursive block schedules and identical source kinds, interfaces, placements and repeated arm plans.
 WF-VO-Restrictions	implementation	languages/cq-lang-vo/src/restrict.rs	/// Formal rule WF-VO-Restrictions:	Checks positive occurrence restrictions with written or implied column predicates before other steps.
+RA-Absorb	implementation	languages/cq-lang-ra/src/structural/reductions.rs	// Formal rule RA-Absorb:	Certify linear key-retaining pipes to a current named support witness, independent of serialization order.
+RA-AbsorbPolicy	implementation	passes/cq-ra-rewrites/src/reductions.rs	// Formal rule RA-AbsorbPolicy:	Absorb only when every use is a direct absorbing join, replacing all uses together to a fixed point.
+RA-AbsorbDirect	implementation	languages/cq-lang-ra/src/structural/reductions.rs	// Formal rule RA-AbsorbDirect:	Certify simultaneous bypass of every direct absorbing use of a shared reduction.

@@ -3,117 +3,79 @@ use std::collections::{BTreeMap, BTreeSet};
 use cq_lang_ra::{self as ra, Operator, symbol_name};
 use syn::Ident;
 
+// Formal rule RA-AbsorbPolicy: Absorb only when every use is a direct absorbing join, replacing all uses together to a fixed point.
 pub(super) fn simplify(source: &ra::Program) -> syn::Result<ra::Program> {
-    let analysis = ra::contract::check(source)?;
-    let definitions = &source.plan.definitions;
-    let indices: BTreeMap<_, _> = definitions
-        .iter()
-        .enumerate()
-        .map(|(index, definition)| (symbol_name(&definition.result), index))
-        .collect();
-    let dependencies: Vec<Vec<usize>> = definitions
-        .iter()
-        .map(|definition| {
-            let mut inputs = Vec::new();
-            operands(&definition.operator, |input| {
-                inputs.push(indices[&symbol_name(input)]);
-            });
-            inputs
-        })
-        .collect();
-    let mut negative = vec![false; definitions.len()];
-    let mut opaque = vec![false; definitions.len()];
-    for (index, definition) in definitions.iter().enumerate() {
-        if let Operator::Anti(anti) = &definition.operator {
-            negative[indices[&symbol_name(&anti.right)]] = true;
-        }
-        opaque[index] = matches!(
-            definition.operator,
-            Operator::Bind(_) | Operator::Guard(_) | Operator::Group(_)
-        ) || dependencies[index].iter().any(|input| opaque[*input]);
-    }
-    for index in (0..definitions.len()).rev() {
-        if negative[index] {
-            for input in &dependencies[index] {
-                negative[*input] = true;
-            }
-        }
-    }
-    let headings: Vec<_> = definitions
-        .iter()
-        .map(|definition| &analysis[&symbol_name(&definition.result)].heading)
-        .collect();
-    let proof = Lineage {
-        definitions,
-        dependencies: &dependencies,
-        headings,
-        negative,
-        opaque,
-    };
     let mut target = source.clone();
-    for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
-        if proof.negative[index] {
-            continue;
-        }
-        let (left, right) = match &mut definition.operator {
-            Operator::Semijoin(join) => (&mut join.left, &mut join.right),
-            Operator::NaturalJoin(join) => (&mut join.left, &mut join.right),
-            _ => continue,
-        };
-        // Prune backward support versions first: their removal can restore
-        // piped scans and filters. Then remove a duplicate left reduction only
-        // when the surviving RHS proves it redundant.
-        let reduced_right = proof.absorb(dependencies[index][1], dependencies[index][0]);
-        let reduced_left = proof.absorb(dependencies[index][0], reduced_right);
-        *right = definitions[reduced_right].result.clone();
-        *left = definitions[reduced_left].result.clone();
-    }
-    // Partial absorption of a shared restricted result gives its projected
-    // consumers different row witnesses. Keep that shared materialization
-    // unless every bypassed result becomes dead. Restoring one operand can
-    // revive another bypassed result, so propagate restoration to a fixed point.
-    let mut reachable = vec![false; definitions.len()];
     loop {
-        reachable.fill(false);
-        reachable[indices[&symbol_name(&target.plan.output.input)]] = true;
-        for (index, definition) in target.plan.definitions.iter().enumerate().rev() {
-            if reachable[index] {
-                operands(&definition.operator, |input| {
-                    reachable[indices[&symbol_name(input)]] = true;
-                });
+        let analysis = ra::contract::check(&target)?;
+        let definitions = &target.plan.definitions;
+        let indices: BTreeMap<_, _> = definitions
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (symbol_name(&d.result), i))
+            .collect();
+        let dependencies: Vec<Vec<usize>> = definitions
+            .iter()
+            .map(|d| {
+                let mut inputs = Vec::new();
+                operands(&d.operator, |input| inputs.push(indices[&symbol_name(input)]));
+                inputs
+            })
+            .collect();
+        let mut negative = vec![false; definitions.len()];
+        let mut opaque = vec![false; definitions.len()];
+        for (i, d) in definitions.iter().enumerate() {
+            if matches!(d.operator, Operator::Anti(_)) {
+                negative[dependencies[i][1]] = true;
             }
+            opaque[i] = matches!(
+                d.operator,
+                Operator::Bind(_) | Operator::Guard(_) | Operator::Group(_)
+            ) || dependencies[i].iter().any(|&input| opaque[input]);
         }
-        let mut restored = false;
-        for (index, definition) in target.plan.definitions.iter_mut().enumerate() {
-            let (left, right) = match &mut definition.operator {
-                Operator::Semijoin(join) => (&mut join.left, &mut join.right),
-                Operator::NaturalJoin(join) => (&mut join.left, &mut join.right),
-                _ => continue,
-            };
-            for (side, operand) in [left, right].into_iter().enumerate() {
-                let original = dependencies[index][side];
-                let replacement = indices[&symbol_name(operand)];
-                let mut bypassed = original;
-                while bypassed != replacement {
-                    if reachable[bypassed] {
-                        *operand = definitions[original].result.clone();
-                        restored = true;
-                        break;
-                    }
-                    bypassed = dependencies[bypassed][0];
+        let output = indices[&symbol_name(&target.plan.output.input)];
+        for i in (0..definitions.len()).rev() {
+            if negative[i] {
+                for &input in &dependencies[i] {
+                    negative[input] = true;
                 }
             }
         }
-        if !restored {
-            break;
+        let lineage = Lineage {
+            definitions,
+            dependencies: &dependencies,
+            headings: definitions
+                .iter()
+                .map(|d| &analysis[&symbol_name(&d.result)].heading)
+                .collect(),
+        };
+        let reduction = (0..definitions.len()).rev().find(|&d| {
+            !negative[d] && !opaque[d] && lineage.all_consumers_absorb(d, output)
+        });
+        let Some(d) = reduction else { break };
+        let old = definitions[d].result.clone();
+        let base = definitions[dependencies[d][0]].result.clone();
+        let mut live = vec![false; definitions.len()];
+        for (i, inputs) in dependencies.iter().enumerate() {
+            if inputs.contains(&d) {
+                replace_operand(&mut target.plan.definitions[i].operator, &old, &base);
+            }
         }
+        live[indices[&symbol_name(&target.plan.output.input)]] = true;
+        for (i, definition) in target.plan.definitions.iter().enumerate().rev() {
+            if live[i] {
+                operands(&definition.operator, |input| {
+                    live[indices[&symbol_name(input)]] = true;
+                });
+            }
+        }
+        let mut i = 0;
+        target.plan.definitions.retain(|_| {
+            let keep = live[i];
+            i += 1;
+            keep
+        });
     }
-    let mut index = 0;
-    target.plan.definitions.retain(|_| {
-        let keep = reachable[index];
-        index += 1;
-        keep
-    });
     ra::check_rewrite(source, &target)?;
     Ok(target)
 }
@@ -122,39 +84,42 @@ struct Lineage<'a> {
     definitions: &'a [ra::Definition],
     dependencies: &'a [Vec<usize>],
     headings: Vec<&'a BTreeSet<String>>,
-    negative: Vec<bool>,
-    opaque: Vec<bool>,
 }
 
 impl Lineage<'_> {
-    fn absorb(&self, mut reduced: usize, other: usize) -> usize {
-        while matches!(self.definitions[reduced].operator, Operator::Semijoin(_))
-            && !self.negative[reduced]
-            && !self.opaque[reduced]
-        {
-            let [base, support] = self.dependencies[reduced][..] else {
-                unreachable!("semijoin has two operands")
-            };
-            let shared: Vec<_> = self.headings[base]
-                .intersection(self.headings[support])
-                .collect();
-            if !self.contained(other, support, &shared) {
-                break;
-            }
-            reduced = base;
+    fn all_consumers_absorb(&self, d: usize, output: usize) -> bool {
+        if d == output || !matches!(self.definitions[d].operator, Operator::Semijoin(_)) {
+            return false;
         }
-        reduced
+        let [base, support] = self.dependencies[d][..] else {
+            unreachable!("semijoin has two operands")
+        };
+        let keys: Vec<_> = self.headings[base]
+            .intersection(self.headings[support])
+            .collect();
+        let mut used = false;
+        for (consumer, inputs) in self.dependencies.iter().enumerate() {
+            for (side, &input) in inputs.iter().enumerate() {
+                if input != d {
+                    continue;
+                }
+                if !matches!(
+                    self.definitions[consumer].operator,
+                    Operator::NaturalJoin(_) | Operator::Semijoin(_)
+                ) || !self.witness(inputs[1 - side], support, &keys) {
+                    return false;
+                }
+                used = true;
+            }
+        }
+        used
     }
 
-    fn contained(&self, other: usize, support: usize, shared: &[&String]) -> bool {
+    fn witness(&self, other: usize, support: usize, keys: &[&String]) -> bool {
         let mut pending = vec![other];
         let mut seen = BTreeSet::new();
         while let Some(index) = pending.pop() {
-            if !seen.insert(index)
-                || shared
-                    .iter()
-                    .any(|name| !self.headings[index].contains(*name))
-            {
+            if !seen.insert(index) || keys.iter().any(|key| !self.headings[index].contains(*key)) {
                 continue;
             }
             if index == support {
