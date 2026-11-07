@@ -57,7 +57,6 @@ fn transfer_preserves_partial_guard_domain_while_connecting_later_atoms() {
     }
 }
 
-
 #[test]
 fn transfer_keeps_early_membership_with_conjoined_reducer_restrictions() {
     let source: cq::Program = syn::parse_quote! {

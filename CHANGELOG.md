@@ -36,6 +36,18 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   serializes them into the owned planning invocation (DL-OrderingInputs).
   `DriverPolicy` is defined by DL-Incremental. Printed VO loses only the
   embedded CQ header's `ordering(...)` line.
+- Ordering is total (IR redesign M2c). `cq_order::order`, `order_unrestricted`,
+  `order_written`, `order_advised` and `evidence::order` take a WF-NF witness
+  (`Normal`) and resolved advice (`Advice`, from `resolve`, rule
+  O-AdviceResolve) and return the VO without an error type; the producer no
+  longer checks its own output. The `compile*` functions are the fronts: WF-NF
+  check, advice/evidence resolution, then the total ordering. Output
+  invariants are checked once by the pipeline: CK-Order, CK-EvidenceLe, and the
+  new `cq_order::check_advice` (CK-StepAdvice) on the facade's explicit-order
+  route. `Known::place` resolves its negation, read level and bindings first
+  (O-KnownResolve). O-BlockPlacement correlates a Rust-free union whose arm
+  cannot place from no seed (a nested union needing a domain), which every
+  ordering previously refused.
 
 - Explicit order advice now delegates dependency, subatom and phase legality to
   the VO and lookup/expand checkers instead of duplicating producer-side errors.

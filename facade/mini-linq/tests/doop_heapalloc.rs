@@ -109,26 +109,24 @@ fn default_plan_is_output_bounded() {
 
 #[test]
 fn explicit_written_order_rejects_the_disconnected_cross_product() {
-    // Written is exempt from tie-breaking only, not the universal I3 rule.
+    // Written is exempt from tie-breaking only, not the universal I3 rule:
+    // the ordering is total and its checkers refuse the schedule.
     let source: cq::Program = syn::parse_str(SOURCE).unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
-    assert!(
-        cq_order::compile(
-            &normal,
-            &cq_order::Options {
-                heuristic: cq_order::Heuristic::Written,
-                split: cq_order::Split::Coarse,
-            },
-        )
-        .is_err()
-    );
+    let options = cq_order::Options {
+        heuristic: cq_order::Heuristic::Written,
+        split: cq_order::Split::Coarse,
+    };
+    let written = cq_order::compile(&normal, &options).unwrap();
+    assert!(cq_order::check(&normal, &written, &options).is_err());
     let selectors = [
         syn::parse_quote!(Alloc@0),
         syn::parse_quote!(Alloc@1),
         syn::parse_quote!(Component),
         syn::parse_quote!(Super),
     ];
-    assert!(cq_order::compile_explicit(&normal, &selectors).is_err());
+    let advised = cq_order::compile_explicit(&normal, &selectors).unwrap();
+    assert!(cq_order::check_advice(&normal, &advised, &selectors).is_err());
 }
 
 #[test]

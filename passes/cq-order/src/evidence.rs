@@ -36,8 +36,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    BodyItem, Clause, Options, OrderAtom, check, clauses, compile_explicit, compile_steps, cq, le,
-    ready, rust, symbol_name, valuation,
+    Advice, BodyItem, Clause, Normal, Options, check, clauses, cq, le, order_advised, ready, rust,
+    symbol_name, valuation,
 };
 
 struct Scope<'a> {
@@ -224,14 +224,26 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// Formal rule O-EvidenceLe: With a recorded count for every top-level occurrence, stream the largest-count key-functional root that dominates the written root (no smaller count, no stronger filter, no neighbour besides the written root filtered as strongly), expand keyed reads by filter rank and look up other ready filtered keyed reads first; otherwise keep the default order. Record the evidence.
+/// Front: check WF-NF and WF-Evidence (user-authored input), then [`order`]
+/// (total).
 pub fn compile(
     source: &cq::Program,
     evidence: &valuation::Evidence,
     options: &Options,
 ) -> syn::Result<valuation::Program> {
-    let default = super::compile(source, options)?;
-    let scope = Scope::of(source, evidence);
+    let normal = Normal::check(source)?;
+    evidence.check(source)?;
+    Ok(order(normal, evidence, options))
+}
+
+/// Formal rule O-EvidenceLe: With a recorded count for every top-level occurrence, stream the largest-count key-functional root that dominates the written root (no smaller count, no stronger filter, no neighbour besides the written root filtered as strongly), expand keyed reads by filter rank and look up other ready filtered keyed reads first; otherwise keep the default order. Record the evidence.
+pub fn order(
+    source: Normal<'_>,
+    evidence: &valuation::Evidence,
+    options: &Options,
+) -> valuation::Program {
+    let default = super::order(source, options);
+    let scope = Scope::of(source.program(), evidence);
     let reads = scope.as_ref().and_then(|scope| {
         let (&root, _) = scope
             .dominating()
@@ -239,8 +251,8 @@ pub fn compile(
             .min_by_key(|&(&clause, &rows)| (std::cmp::Reverse(rows), clause))?;
         scope.plan(root)
     });
-    let mut program = match (scope, reads) {
-        (Some(scope), Some(reads)) => {
+    let mut program = match reads {
+        Some(reads) => {
             let written: Vec<_> = default
                 .valuation
                 .steps
@@ -254,26 +266,23 @@ pub fn compile(
             if !lookups && reads.iter().map(|(clause, _)| *clause).eq(written) {
                 default
             } else {
-                let selectors: Vec<_> = reads
-                    .into_iter()
-                    .map(|(clause, columns)| OrderAtom {
-                        relation: scope.atom(clause).relation.clone(),
-                        occurrence: Some(clause),
-                        columns,
-                    })
-                    .collect();
-                if lookups {
-                    compile_steps(source, &selectors)?
-                } else {
-                    compile_explicit(source, &selectors)?
-                }
+                // Planned reads name top-level positive atoms and subsets of
+                // their variables: resolved advice by construction.
+                let advice = Advice {
+                    reads: reads
+                        .into_iter()
+                        .map(|(clause, columns)| {
+                            (clause, columns.map(|columns| columns.iter().map(symbol_name).collect()))
+                        })
+                        .collect(),
+                };
+                order_advised(source, &advice)
             }
         }
-        _ => default,
+        None => default,
     };
     program.valuation.evidence = Some(evidence.clone());
-    valuation::contract::check(&program)?;
-    Ok(program)
+    program
 }
 
 /// Formal rule CK-EvidenceLe: Given recorded evidence, a scope with a functional root dominating its written root must stream such a root of maximal recorded count, read every other occurrence first through a recorded key, look up only filtered occurrences, and pass WF-VO with CK-Le phases; other scopes pass the default ordering check.
@@ -335,6 +344,6 @@ pub fn check_evidence(
     if lookups.is_empty() {
         check(source, target, options)
     } else {
-        le::check_advice(source, target, &lookups)
+        le::check_advice(source, target, &analysis, &lookups)
     }
 }

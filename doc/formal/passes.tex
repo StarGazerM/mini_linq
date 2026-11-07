@@ -210,7 +210,7 @@ expression or a generator yielding no names.
 Identities and constraints require their variables and provide none
 (D-Constraint). A Rust-free block provides its free/interface heading; a Rust
 block requires its free names and is Rust. Heuristics repeatedly place the
-least-ranked ready clause; an empty ready set is an error. Connectivity counts
+least-ranked ready clause until none is ready. Connectivity counts
 only names actually shared after normalization, $s_i=|O_i\cap B|$: an unsolved
 equality class (A-Alias declined) is not a realizable join key.
 Let $a_i=[O_i\not\subseteq B]$. The scheduler first minimizes $a_i$,
@@ -218,6 +218,25 @@ then the structural rank below, so ready nonintroducing work precedes
 introducing lets as well as introducing atoms. A final stable drainage
 applies the same I2 obligation to assembled Fine and authored schedules
 without changing projected subatoms or introducing choices.
+
+\emph{Totality.} Ordering is a total function of a WF-NF query and resolved
+advice; it never checks its output. User-authored inputs are resolved at the
+front (O-AdviceResolve, O-KnownResolve, WF-Evidence), and the pipeline checks
+the produced schedule once (CK-Order, CK-StepAdvice or CK-EvidenceLe, each
+including WF-VO and VO-Order). The ready set is never empty while clauses
+remain. In a seeded scope, the written-earliest pending clause $c$ is ready:
+CQ-Where, CQ-Neg and IF-Environment bound every predicate, negation and Rust
+input of $c$ by its written prefix, CQ-Bind and CQ-For make every Rust binder
+fresh for its prefix (so a let-bound atom column is bound by an earlier
+clause), and every earlier clause is placed. A hoisted arm without a finite
+domain starts from no seed, and O-BlockPlacement hoists such a block only when
+every arm is $\mathsf{Placeable}_\varnothing$. Placeability is the least
+fixpoint of C-Ready, $P_{n+1}=\{i\mid R_i\subseteq S\cup\bigcup_{j\in P_n}O_j\}$,
+which no ranking changes, so every ranked schedule places every clause. Fine
+binds an eligible variable at every step for the same reason, and its binder
+exists by the eligibility filter. Elimination ranks an atom by the numbered
+variables it provides (S-Elimination); a free column of a nested block that
+the scope analysis does not number contributes nothing, so the rank is total.
 \begin{mathpar}
 \Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=\mathsf{drain}_{I2}([0,\ldots,m-1])}
 
@@ -241,7 +260,7 @@ without changing projected subatoms or introducing choices.
  {\mathsf{rank}_{r}(i,B)=(a_i,1,[s_i=0],|B\cup O_i|,i)}
 
 \Rule{S-Elimination}{c_i\text{ atom}\quad E=\mathsf{analysis}(q).\mathit{elimination\_order}\\
- e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\}\cup\{|E|\})}
+ e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\cap E\}\cup\{|E|\})}
  {\mathsf{rank}_{Elimination}(i,B)=(a_i,1,[|O_i\cap B|=0],e_i,i)}
 
 \Rule{O-Coarse}{\mathit{seq}\text{ chosen}}
@@ -262,23 +281,31 @@ without changing projected subatoms or introducing choices.
 \Rule{VO-CheckPhase}{s_k=R@i(K)\ \code{check}}
  {K\subseteq P_k\quad\mathsf{candidateProvider}(s_k)=\mathsf{false}}
 
-\Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering}}
- {b.placement={\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\\
+\Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering, free heading }F,\ \text{arms }b_1,\ldots,b_m}
+ {b.placement={\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\lor
+ (\neg\mathsf{domain}(b)\land\exists j.\ \neg\mathsf{Placeable}_{\varnothing}(\mathsf{clauses}_F(b_j)))\\
  \mathsf{hoisted}&\text{otherwise}\end{cases}}}
 
 \Rule{O-WrittenBlocks}{t=\mathsf{WrittenCoarse}(s)}
  {\mathsf{compileWritten}_{order}(s)=
  t[\forall b\text{ recursively}.\ b.placement:=\mathsf{correlated}]}
 
-\Rule{O-StepAdvice}{n=N(q)\quad
- \forall c.\ |\{a\in A\mid \mathsf{resolve}(a)=c\land\mathsf{full}(a)\}|\le 1\\
- t=\mathsf{authorSteps}(n,A)\quad
- \mathsf{erase}(t)=n\\
- \mathsf{WF}_{VO}(t)\quad\mathsf{VOOrder}(t)\\
- (L\ne\varnothing\Rightarrow\mathsf{CK\text{-}Le}(n,t,L))}
- {\mathsf{orderAdvice}(q,A)=t}
-% Resolution checks the selector reference set; the output checkers, not
-% the planning walk, diagnose dependency, subatom, and occurrence-phase errors.
+\Rule{O-AdviceResolve}{\forall a\in\bar a.\ c_a=\mathsf{resolve}(a)\text{ names one top-level positive atom or block of }n\\
+ \forall a.\ K_a\ne\bot\Rightarrow c_a\text{ positive}\land K_a\subseteq\mathsf{vars}(c_a)\land K_a\text{ distinct}\\
+ \forall c.\ |\{a\in\bar a\mid c_a=c\land\mathsf{full}(a)\}|\le 1}
+ {\mathsf{resolve}(n,\bar a)=[(c_a,K_a)]_{a\in\bar a}}
+
+\Rule{O-StepAdvice}{n=N(q)\quad A=\mathsf{resolve}(n,\bar a)\quad
+ t=\mathsf{authorSteps}(n,A)}
+ {\mathsf{orderAdvice}(q,A)=\mathsf{restrict}(\mathsf{drain}_{I2}(t))}
+
+\Rule{CK-StepAdvice}{A=\mathsf{resolve}(n,\bar a)\quad\mathsf{WF}_{VO}(t)\quad\mathsf{VOOrder}(t)\\
+ L=\{c\mid (c,K)\text{ the first partial read of }c\text{ in }A,\
+ K=\varnothing\lor\mathsf{introduces}_t(\mathsf{firstRead}_t(c,K))=\varnothing\}\quad
+ \mathsf{CK\text{-}Le}(n,t,L)}
+ {\mathsf{checkAdvice}(n,\bar a,t)\Downarrow\ok}
+% Resolution checks the selector reference set; CK-StepAdvice, not the
+% planning walk, diagnoses dependency, subatom, and occurrence-phase errors.
 
 \Rule{O-EvidenceLe}{n=N(q)\quad \mathcal{E}\text{ recorded counts and keys}\quad
  \forall i\in\mathsf{occ}(n).\ \mathsf{count}_{\mathcal{E}}(i)\text{ defined}\\
@@ -300,10 +327,15 @@ without changing projected subatoms or introducing choices.
  \mathcal{E}=\{\mathsf{count}\ R=n_{SF1}(T_R),\ \mathsf{key}\ R\ [\mathit{pk}(T_R)]\mid R\ \text{a base relation of }q\}\ne\varnothing}
  {\mathsf{plan}(q)=\mathsf{order}^{\mathcal{E}}(q)}
 
-\Rule{O-KnownAt}{\neg R(\bar x)\text{ at top-level clause }i\quad
- t'=t\text{ with }\neg R(\bar x)\text{ moved after the }k\text{-th positive read}\\
- \mathsf{WFBindings}(t')\quad t''=\mathsf{drain}_{I2}(t')\quad\mathsf{WF}_{VO}(t'')}
- {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=t''}
+\Rule{O-KnownResolve}{\mathsf{WFBindings}(t)\quad \neg R(\bar x)\text{ at top-level clause }i\text{ of }t.cq\quad
+ 1\le k\le|\{j\mid s_j\text{ a top-level positive read}\}|\\
+ p=\mathsf{boundary}_k(t\setminus\neg R(\bar x))\quad
+ \mathsf{logical}(\bar x)\subseteq B_p}
+ {\mathsf{resolve}(R@i\ \mathsf{at}\ k,t)=p}
+
+\Rule{O-KnownAt}{p=\mathsf{resolve}(R@i\ \mathsf{at}\ k,t)\quad
+ t'=t\text{ with }\neg R(\bar x)\text{ moved to position }p}
+ {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=\mathsf{drain}_{I2}(t')}
 \end{mathpar}
 A read of occurrence $i$ is \emph{keyed} under bound variables $B$
 ($\mathsf{keyBound}_{\mathcal{E}}(i,B)$) when every column of some recorded key

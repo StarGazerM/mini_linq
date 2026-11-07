@@ -226,7 +226,9 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
         split: Split::Coarse,
     };
     let mut plan = if let Some(relations) = &args.order {
-        cq_order::compile_explicit(&normal, relations)?
+        let plan = cq_order::compile_explicit(&normal, relations)?;
+        cq_order::check_advice(&normal, &plan, relations)?;
+        plan
     } else if let Some(evidence) = &args.evidence {
         let plan = cq_order::evidence::compile(&normal, evidence, &ordering)?;
         cq_order::evidence::check_evidence(&normal, &plan, &ordering)?;
