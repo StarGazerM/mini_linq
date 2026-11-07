@@ -69,29 +69,32 @@ use cq_print::{Context, Repr, error, index, sorted};
 /// before any prepared operator can rely on their uniqueness.
 /// Formal rule P-Realize: Prepare the recorded physical sources and built providers without selecting replacement types.
 pub fn sources_with<'a>(
+    physical: &'a physical::Program,
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
     prepared: impl FnMut(&str, &Repr),
 ) -> syn::Result<Context<'a>> {
-    sources_prepared(module, analysis, false, prepared)
+    sources_prepared(physical, module, analysis, false, prepared)
 }
 
 /// Prepare the same sources with the existing physical operator counters enabled.
 pub fn sources_profile_with<'a>(
+    physical: &'a physical::Program,
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
     prepared: impl FnMut(&str, &Repr),
 ) -> syn::Result<Context<'a>> {
-    sources_prepared(module, analysis, true, prepared)
+    sources_prepared(physical, module, analysis, true, prepared)
 }
 
 fn sources_prepared<'a>(
+    physical: &'a physical::Program,
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
     profile: bool,
     mut prepared: impl FnMut(&str, &Repr),
 ) -> syn::Result<Context<'a>> {
-    for definition in &module.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         let Some(structures::Repr::Positions { bases, owned, .. }) = analysis.repr.get(&name)
         else {
@@ -136,7 +139,7 @@ fn sources_prepared<'a>(
         }
     }
     let mut printer = Printer {
-        context: Context::new(module, analysis),
+        context: Context::new(physical, module, analysis),
         active_prefixes: BTreeMap::new(),
         consumer: None,
         input: None,
@@ -144,10 +147,10 @@ fn sources_prepared<'a>(
         canon_target: CanonTarget::Sequential,
     };
     if profile {
-        printer.context.enable_profile(module);
+        printer.context.enable_profile(physical, module);
     }
-    printer.certify_host_sets(module);
-    let definitions = &module.physical.program.definitions;
+    printer.certify_host_sets(physical);
+    let definitions = &physical.program.definitions;
     let mut position = 0;
     let deferred: std::collections::BTreeSet<_> = analysis
         .physical

@@ -284,9 +284,8 @@ pub fn condition_column(op: &Operator) -> Option<String> {
     }
 }
 
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
-    let defs: BTreeMap<_, _> = program
-        .physical
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<()> {
+    let defs: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -478,7 +477,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             }
         }
     }
-    check_join_filters(program, facts)?;
+    check_join_filters(physical, program, facts)?;
     Ok(())
 }
 

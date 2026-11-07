@@ -87,16 +87,17 @@ fn physical_and_structures_correspondence_reject_changes_in_meaning() {
     changed.program.head.relation = syn::parse_quote!(wrong);
     assert!(cq_lang_physical::check_rewrite(&source, &changed).is_err());
     let structured = cq_structure_selection::compile(&source).unwrap();
-    let mut changed = structured.clone();
-    changed.physical = changed.physical.clone();
-    changed.physical.program.head.relation = syn::parse_quote!(wrong);
-    assert!(cq_lang_structures::check_rewrite(&structured, &changed).is_err());
+    let mut changed_physical = source.clone();
+    changed_physical.program.head.relation = syn::parse_quote!(wrong);
+    assert!(cq_lang_structures::check_rewrite(
+        &source, &structured, &changed_physical, &structured
+    ).is_err());
     let mut changed = structured.clone();
     changed
         .structures
         .entries
         .retain(|e| !matches!(e.structure, cq_lang_structures::Structure::Dedup { .. }));
-    assert!(cq_lang_structures::check_rewrite(&structured, &changed).is_err());
+    assert!(cq_lang_structures::check_rewrite(&source, &structured, &source, &changed).is_err());
 }
 
 #[test]
@@ -199,7 +200,7 @@ fn ordered_host_fallback_capabilities_are_rustc_obligations() {
         .unwrap();
     // The record preserves the ordered read and key. Rust, not syn::Type
     // inspection, checks whether the chosen provider implements that access.
-    cq_lang_structures::check_rewrite(&structured, &alternate_provider).unwrap();
+    cq_lang_structures::check_rewrite(&source, &structured, &source, &alternate_provider).unwrap();
 }
 
 macro_rules! capture_plan {
@@ -748,10 +749,16 @@ fn facade_observes_every_default_boundary_without_executing_the_query() {
         cq_planning::compile_prefix(&source, &Default::default()).unwrap()
     );
     syn::parse_str::<cq_lang_ix::Program>(observe!(index_requirements)).unwrap();
-    syn::parse_str::<cq_lang_physical::Program>(observe!(physical)).unwrap();
-    syn::parse_str::<cq_lang_structures::Program>(observe!(structures)).unwrap();
-    syn::parse_str::<cq_lang_structures::Program>(observe!(represent)).unwrap();
-    syn::parse_str::<cq_lang_structures::Program>(observe!(stage)).unwrap();
+    let physical = syn::parse_str::<cq_lang_physical::Program>(observe!(physical)).unwrap();
+    for observed in [observe!(structures), observe!(represent), observe!(stage)] {
+        syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream<'_>| {
+                cq_lang_structures::Program::parse(input, &physical)
+            },
+            observed,
+        )
+        .unwrap();
+    }
     syn::parse_str::<cq_lang_sequence::Program>(observe!(sequence)).unwrap();
     let decomposed: cq_lang_sequence::Program = syn::parse_str(observe!(decompose)).unwrap();
     let graded: cq_lang_sequence::Program = syn::parse_str(observe!(grade)).unwrap();

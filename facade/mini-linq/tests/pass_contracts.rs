@@ -513,11 +513,12 @@ fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
     assert_eq!(source.declarations, ix.ra.plan.declarations);
     assert_eq!(source.declarations, physical.program.declarations);
     assert_eq!(
-        source.declarations,
-        structures.physical.program.declarations
-    );
-    assert_eq!(
-        syn::parse2::<cq_lang_structures::Program>(structures.to_token_stream()).unwrap(),
+        syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream<'_>| {
+                cq_lang_structures::Program::parse(input, &physical)
+            },
+            structures.to_token_stream(),
+        ).unwrap(),
         structures
     );
     let replacements: [RelationDecl; 2] = [
@@ -540,9 +541,11 @@ fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
         let mut t = physical.clone();
         t.program.declarations[0] = replacement.clone();
         assert!(cq_physical_lowering::check(&ix, &t).is_err());
-        let mut t = structures.clone();
-        t.physical.program.declarations[0] = replacement;
-        assert!(cq_structure_selection::check(&physical, &t).is_err());
+        let mut changed_physical = physical.clone();
+        changed_physical.program.declarations[0] = replacement;
+        assert!(cq_lang_structures::check_rewrite(
+            &physical, &structures, &changed_physical, &structures,
+        ).is_err());
     }
 }
 

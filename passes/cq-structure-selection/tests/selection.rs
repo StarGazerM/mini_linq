@@ -1,3 +1,17 @@
+fn parse_annotations(physical: &physical::Program, tokens: proc_macro2::TokenStream) -> structures::Program {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| structures::Program::parse(input, physical)).parse2(tokens).unwrap()
+}
+
+fn parse_fixture(tokens: proc_macro2::TokenStream) -> (cq_lang_physical::Program, cq_lang_structures::Program) {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let structures = cq_lang_structures::Program::parse(input, &physical)?;
+        Ok((physical, structures))
+    }).parse2(tokens).unwrap()
+}
+
 use cq_lang_physical as physical;
 use cq_lang_structures as structures;
 use cq_structure_selection::compile;
@@ -20,8 +34,8 @@ fn check(source: &physical::Program, target: &structures::Program) -> syn::Resul
     cq_structure_selection::check(source, &declared(target))
 }
 
-fn contract(program: &structures::Program) -> syn::Result<structures::Analysis> {
-    structures::contract::check(&declared(program))
+fn contract(physical: &physical::Program, program: &structures::Program) -> syn::Result<structures::Analysis> {
+    structures::contract::check(physical, &declared(program))
 }
 
 #[test]
@@ -35,7 +49,7 @@ fn cartesian_probe_scans_retained_rows_and_rejects_empty_key_indexes() {
         return result as answer(v0,v2);
     });
     let mut target = compile(&source).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert!(facts.built.get("right").is_none_or(Vec::is_empty));
     check(&source, &target).unwrap();
     target.structures.entries.push(syn::parse_quote!(
@@ -53,12 +67,12 @@ fn nonleading_native_point_uses_scan_and_rejects_authored_native() {
         return p as answer(x,y);
     });
     let mut target = compile(&source).unwrap();
-    let analysis = contract(&target).unwrap();
+    let analysis = contract(&source, &target).unwrap();
     assert!(analysis.natives.is_empty());
     target.structures.entries.push(syn::parse_quote!(
         r native result(p) = exact [y];
     ));
-    assert!(contract(&target).is_err());
+    assert!(contract(&source, &target).is_err());
 }
 
 #[test]
@@ -74,7 +88,7 @@ fn full_row_positive_probes_record_membership_without_a_filtered_source() {
             return result as answer(id);
         }};
         let target = compile(&source).unwrap();
-        let facts = contract(&target).unwrap();
+        let facts = contract(&source, &target).unwrap();
         assert!(facts.membership.contains(&("r".into(), vec!["x".into()])));
         assert!(!facts.filtered.contains_key("r"));
         let provider = facts
@@ -99,7 +113,7 @@ fn full_row_positive_probes_record_membership_without_a_filtered_source() {
 
 #[test]
 fn raw_membership_proof_rejects_unbound_payload_columns() {
-    let mut source: structures::Program = syn::parse_quote! {
+    let (physical, mut source) = parse_fixture(quote::quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
             l = pipe rename L@0 {a -> x};
@@ -115,12 +129,12 @@ fn raw_membership_proof_rejects_unbound_payload_columns() {
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             result rows = @sort as ::cq_storage::dedup::Sort; result canon = rows;
         }
-    };
-    assert!(contract(&source).is_err());
+    });
+    assert!(contract(&physical, &source).is_err());
     source.structures.entries[0] = syn::parse_quote!(
         r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [x];
     );
-    contract(&source).unwrap();
+    contract(&physical, &source).unwrap();
 }
 #[test]
 fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
@@ -139,7 +153,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     }};
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert_eq!(facts.unique["valuations"], ["id", "k", "v"]);
     assert_eq!(facts.unique["grouped"], ["k"]);
     assert!(facts.canonical.contains_key("valuations"));
@@ -158,16 +172,16 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
         .unwrap();
     let mut missing = target.clone();
     missing.structures.entries.remove(group_entry);
-    assert!(contract(&missing).is_err());
+    assert!(contract(&source, &missing).is_err());
     let mut duplicate = target.clone();
     duplicate
         .structures
         .entries
         .push(target.structures.entries[group_entry].clone());
-    assert!(contract(&duplicate).is_err());
+    assert!(contract(&source, &duplicate).is_err());
     let mut misplaced = target.clone();
     misplaced.structures.entries[group_entry].name = syn::parse_quote!(valuations);
-    assert!(contract(&misplaced).is_err());
+    assert!(contract(&source, &misplaced).is_err());
     assert_eq!(facts.layouts["valuations"], ["id", "k", "v"]);
     assert_eq!(
         facts.physical.rows["grouped"]
@@ -179,7 +193,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     );
     assert!(!facts.lineage.contains_key("grouped"));
     assert_eq!(
-        syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
+        parse_annotations(&source, target.to_token_stream()),
         target
     );
 
@@ -200,7 +214,7 @@ fn global_group_is_unique_by_the_empty_key() {
         return grouped as answer(n,total,lo,hi);
     }};
     let target = compile(&source).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert!(facts.unique["grouped"].is_empty());
     assert!(!facts.canonical.contains_key("grouped"));
     assert!(facts.groups.is_empty());
@@ -213,7 +227,7 @@ fn global_group_is_unique_by_the_empty_key() {
         .structures
         .declare(&[cq_lang_structures::provider::base::declaration("group_map")])
         .unwrap();
-    assert!(contract(&extra).is_err());
+    assert!(contract(&source, &extra).is_err());
 }
 
 #[test]
@@ -224,12 +238,12 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
         return r as answer(x);
     }};
     let selected = compile(&scanned).unwrap();
-    let facts = contract(&selected).unwrap();
+    let facts = contract(&scanned, &selected).unwrap();
     assert!(facts.retained.contains_key("r"));
     assert!(!facts.filtered.contains_key("r"));
     assert!(!facts.lineage.contains_key("r"));
     assert_eq!(
-        syn::parse2::<structures::Program>(selected.to_token_stream()).unwrap(),
+        parse_annotations(&scanned, selected.to_token_stream()),
         selected
     );
     let probed: physical::Program = syn::parse_quote! { physical {
@@ -240,7 +254,7 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
         return j as answer(x);
     }};
     let selected = compile(&probed).unwrap();
-    let facts = contract(&selected).unwrap();
+    let facts = contract(&probed, &selected).unwrap();
     assert_eq!(facts.built["r"].len(), 1);
     assert!(!facts.filtered.contains_key("r"));
     assert!(!facts.retained.contains_key("r"));
@@ -248,7 +262,7 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
     let mut membership = probed;
     membership.program.definitions[2] = syn::parse_quote!(j = let canon semi eager [x] l,r;);
     let selected = compile(&membership).unwrap();
-    let facts = contract(&selected).unwrap();
+    let facts = contract(&membership, &selected).unwrap();
     assert_eq!(
         facts.built["r"][0].1,
         syn::parse_quote!(@hash_set as ::cq_storage::HashSet<_>)
@@ -269,7 +283,7 @@ fn literal_occurrences_retain_ordinary_rows_for_multiple_indices() {
         return j as answer(x,y);
     }};
     let selected = compile(&source).unwrap();
-    let facts = contract(&selected).unwrap();
+    let facts = contract(&source, &selected).unwrap();
     assert_eq!(facts.built["r"].len(), 2);
     assert!(facts.retained.contains_key("r"));
     assert!(!facts.filtered.contains_key("r"));
@@ -290,7 +304,7 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
         result = let canon project joined keep {x}; return result as answer(x);
     }};
     let target = compile(&source).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert!(
         facts
             .membership
@@ -372,7 +386,7 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     }
     let grouped = compile(&grouped_types).unwrap();
     assert!(
-        contract(&grouped)
+        contract(&grouped_types, &grouped)
             .unwrap()
             .membership
             .contains(&("selected".into(), vec!["x".into()]))
@@ -403,7 +417,7 @@ fn composite_filtered_keys_retain_their_original_provider() {
         let mut source = source.clone();
         source.program.definitions[3].operator = reader;
         let target = compile(&source).unwrap();
-        let facts = contract(&target).unwrap();
+        let facts = contract(&source, &target).unwrap();
         assert!(facts.filtered.contains_key("selected"));
         assert!(
             !facts
@@ -427,7 +441,7 @@ fn reconstructed_key_constants_do_not_disable_singleton_membership() {
         return result as answer(x,y);
     }};
     let target = compile(&source).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert!(
         facts
             .membership
@@ -504,7 +518,7 @@ fn head_dedup_types_exactly_the_recorded_physical_obligation() {
             .filter(|entry| matches!(entry.structure, structures::Structure::HeadDedup { .. }))
             .cloned(),
     );
-    assert!(contract(&extra).is_err());
+    assert!(contract(&plain, &extra).is_err());
 }
 
 /// STR-ReaderChoice: the host key set records token `keyset` for eager and
@@ -545,7 +559,7 @@ fn reader_choice_prints_the_keyset_laziness() {
             recorded,
             Some(syn::parse_quote!(@keyset as ::cq_storage::dispatch::KeySet<_>))
         );
-        let facts = contract(&target).unwrap();
+        let facts = contract(&source, &target).unwrap();
         let printed: syn::Type = syn::parse2(printed).unwrap();
         assert!(
             facts
@@ -562,7 +576,7 @@ fn reader_choice_prints_the_keyset_laziness() {
                 keyed.provider.ty = printed.clone();
             }
         }
-        assert!(contract(&spelled).is_err());
+        assert!(contract(&source, &spelled).is_err());
     }
 }
 
@@ -575,7 +589,7 @@ fn independent_union_indices_share_canonical_rows() {
         j = pipe probe first [x] l,d; q = pipe project j keep {y}; out = let canon semi eager [y] q,d; return out as answer(y);
     }};
     let target = compile(&source).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert_eq!(facts.built["d"].len(), 2);
     assert_eq!(
         facts.retained["d"],
@@ -599,7 +613,7 @@ fn union_curried_indices_and_an_explicit_scan_keep_both_decisions() {
         aux = let project d keep {x,y}; out = let canon semi eager [x,y] j,aux; result = let canon project out keep {x,z}; return result as answer(x,z);
     }};
     let target = compile(&source).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert!(facts.retained.contains_key("d"));
     assert!(facts.filtered.contains_key("d"));
     assert_eq!(facts.built["d"][0].0.len(), 2);
@@ -630,9 +644,9 @@ fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
         let source = syn::parse_str(case.physical).unwrap();
         let target = compile(&source).unwrap();
         check(&source, &target).unwrap();
-        let mut changed = target;
-        changed.physical.program.head.relation = syn::parse_quote!(mutated);
-        assert!(check(&source, &changed).is_err());
+        let mut changed = source.clone();
+        changed.program.head.relation = syn::parse_quote!(mutated);
+        assert!(structures::check_rewrite(&source, &target, &changed, &target).is_err());
     }
 }
 
@@ -668,9 +682,9 @@ fn concrete_types_and_preservation_are_checked_independently() {
         .entries
         .push(syn::parse_quote!(s = @std_hash_set as ::std::collections::HashSet<_> [b];));
     assert!(check(&source, &q).is_err());
-    let mut q = target;
-    q.physical.program.declarations[0].value = Some(syn::parse_quote!(= (rows())));
-    assert!(check(&source, &q).is_err());
+    let mut changed = source.clone();
+    changed.program.declarations[0].value = Some(syn::parse_quote!(= (rows())));
+    assert!(structures::check_rewrite(&source, &target, &changed, &target).is_err());
 }
 
 #[test]
@@ -786,7 +800,7 @@ fn smallest_shared_full_key_adapters_retain_one_seek_representation() {
         return result as answer(a,b,c);
     }};
     let target = compile(&source).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&source, &target).unwrap();
     assert!(
         !facts
             .membership
@@ -885,7 +899,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
         physical::contract::check(&source).unwrap();
         let target = compile(&source).unwrap();
         check(&source, &target).unwrap();
-        assert_eq!(target.physical, source);
+        assert!(!target.to_token_stream().to_string().contains("physical"));
         assert_eq!(
             built_entries(&target),
             syn::parse_str::<structures::Structures>(&format!(
@@ -899,7 +913,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             .unwrap()
         );
         assert_eq!(
-            syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
+            parse_annotations(&source, target.to_token_stream()),
             target
         );
 
@@ -911,7 +925,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
             .unwrap();
         let mut missing = target.clone();
         missing.structures.entries.remove(entry);
-        assert!(contract(&missing).is_err());
+        assert!(contract(&source, &missing).is_err());
         assert!(check(&source, &missing).is_err());
         for replacement in [
             format!("{retained} = @hash_index as ::cq_storage::HashIndex<'_, _, _> [{prefix},c];"),
@@ -921,7 +935,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
         ] {
             let mut changed = target.clone();
             changed.structures.entries[entry] = syn::parse_str(&replacement).unwrap();
-            assert!(contract(&changed).is_err(), "{replacement}");
+            assert!(contract(&source, &changed).is_err(), "{replacement}");
             assert!(check(&source, &changed).is_err(), "{replacement}");
         }
         let mut alternate_provider = target.clone();
@@ -940,7 +954,7 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
                 !(e.name == host
                     && matches!(&e.structure, structures::Structure::Host { reader: r, .. } if r == &reader))
             });
-            assert!(contract(&missing).is_err(), "{host}/{reader:?}");
+            assert!(contract(&source, &missing).is_err(), "{host}/{reader:?}");
             assert!(check(&source, &missing).is_err(), "{host}/{reader:?}");
         }
     }
@@ -968,7 +982,7 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
     reordered.structures.entries.reverse();
     for target in [&target, &reordered] {
         check(&source, target).unwrap();
-        let analysis = contract(target).unwrap();
+        let analysis = contract(&source, target).unwrap();
         assert!(analysis.candidate_on("r", &["b".into()], "c").is_some());
         assert_eq!(
             analysis.built_on("r", &["b".into(), "c".into()]).unwrap().1,
@@ -1022,7 +1036,7 @@ fn nonemptiness_scans_rows_beside_a_nonempty_keyed_membership_index() {
         return result as answer(x);
     }};
     let target = compile(&p).unwrap();
-    let facts = contract(&target).unwrap();
+    let facts = contract(&p, &target).unwrap();
     assert!(facts.retained.contains_key("r"));
     assert_eq!(facts.built["r"].len(), 1);
     assert_eq!(facts.built["r"][0].0, vec![vec!["x".to_owned()]]);
@@ -1057,7 +1071,7 @@ fn filtered_source() -> physical::Program {
 fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
     let source = filtered_source();
     let target = compile(&source).unwrap();
-    let analysis = contract(&target).unwrap();
+    let analysis = contract(&source, &target).unwrap();
     assert!(!analysis.retained.contains_key("selected"));
     assert_eq!(analysis.built["selected"].len(), 1);
     let entry = target
@@ -1075,7 +1089,7 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         Some(syn::parse_quote!(payload [k,value] constants {tag = "a"}))
     );
     assert_eq!(
-        syn::parse2::<structures::Program>(target.to_token_stream()).unwrap(),
+        parse_annotations(&source, target.to_token_stream()),
         target
     );
     for replacement in [
@@ -1087,34 +1101,32 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         let mut bad = target.clone();
         bad.structures.entries[entry] = replacement;
         assert!(check(&source, &bad).is_err());
-        assert!(structures::check_rewrite(&target, &bad).is_err());
+        assert!(structures::check_rewrite(&source, &target, &source, &bad).is_err());
     }
     let mut bad = target.clone();
     bad.structures
         .entries
         .push(syn::parse_quote!(selected rows = @vec as ::std::vec::Vec<_>;));
     assert!(check(&source, &bad).is_err());
-    let mut changed_occurrence = target.clone();
+    let mut changed_occurrence = source.clone();
     let physical::Operator::Rename(rename) =
-        &mut changed_occurrence.physical.program.definitions[1].operator
+        &mut changed_occurrence.program.definitions[1].operator
     else {
         unreachable!()
     };
     rename.occurrence = syn::parse_quote!(2);
     // The filtered layout still covers every read; correspondence must also
     // preserve the identity of the source occurrence supplying those rows.
-    contract(&changed_occurrence).unwrap();
-    assert!(check(&source, &changed_occurrence).is_err());
-    assert!(structures::check_rewrite(&target, &changed_occurrence).is_err());
-    let mut reordered = target.clone();
-    reordered.physical.program.definitions.swap(0, 1);
+    contract(&changed_occurrence, &target).unwrap();
+    assert!(structures::check_rewrite(&source, &target, &changed_occurrence, &target).is_err());
+    let mut reordered = source.clone();
+    reordered.program.definitions.swap(0, 1);
     // Structures is representation-only, including definition order.
-    assert!(check(&source, &reordered).is_err());
-    assert!(structures::check_rewrite(&target, &reordered).is_err());
-    let mut wrong_graph = target;
-    wrong_graph.physical.program.definitions[2].operator =
+    assert!(structures::check_rewrite(&source, &target, &reordered, &target).is_err());
+    let mut wrong_graph = source.clone();
+    wrong_graph.program.definitions[2].operator =
         syn::parse_quote!(point select r if (tag = "b"));
-    assert!(structures::check_rewrite(&reordered, &wrong_graph).is_err());
+    assert!(structures::check_rewrite(&reordered, &target, &wrong_graph, &target).is_err());
 }
 
 #[test]
@@ -1123,7 +1135,7 @@ fn scanned_selections_keep_rows_and_reject_a_missing_rows_decision() {
     // The selection supplies outer rows too, so it needs a reusable row scan.
     source.program.definitions[3].operator = syn::parse_quote!(probe first [k] selected,l);
     let target = compile(&source).unwrap();
-    let analysis = contract(&target).unwrap();
+    let analysis = contract(&source, &target).unwrap();
     assert!(analysis.retained.contains_key("selected"));
     assert!(!analysis.filtered.contains_key("selected"));
     let mut bad = target;
@@ -1140,7 +1152,7 @@ fn range_filters_project_only_columns_demanded_downstream() {
     source.program.definitions[7].operator = syn::parse_quote!(project again keep {k});
     source.program.head = syn::parse_quote!(answer(k));
     let target = compile(&source).unwrap();
-    let analysis = contract(&target).unwrap();
+    let analysis = contract(&source, &target).unwrap();
     assert!(!analysis.retained.contains_key("selected"));
     assert_eq!(
         analysis.filtered["selected"],
@@ -1162,7 +1174,7 @@ fn filtered_payload_covers_rust_uses_and_keeps_opaque_environments() {
         );
         source.program.definitions[5].operator = syn::parse_quote!(project guarded keep {k});
         let target = compile(&source).unwrap();
-        let analysis = contract(&target).unwrap();
+        let analysis = contract(&source, &target).unwrap();
         let payload: Vec<_> = analysis.filtered["selected"]
             .payload
             .columns
@@ -1183,7 +1195,7 @@ fn a_later_merge_does_not_remove_an_earlier_scan_requirement() {
         out = let canon project joined keep {a}; return out as answer(a);
     });
     let target = compile(&source).unwrap();
-    let analysis = contract(&target).unwrap();
+    let analysis = contract(&source, &target).unwrap();
     assert!(analysis.physical.scanned.contains("r"));
     assert!(analysis.retained.contains_key("r"));
     let mut bad = target;
@@ -1200,19 +1212,19 @@ fn selection_records_context_before_choosing_dedup_types() {
         r = let canon rename R@0 {a -> x};
         return dedup r as answer(*x % 2);
     }};
-    let selected = cq_structure_selection::compile_with(
+    let (selected_physical, selected) = cq_structure_selection::compile_with(
         &source,
         quote::quote!(consumer = canonical, host_set R discharged,),
     )
     .unwrap();
-    let facts = contract(&selected).unwrap();
+    let facts = contract(&selected_physical, &selected).unwrap();
     assert!(facts.physical.consumer_canonical);
     assert!(facts.physical.discharged_host_sets.contains("R"));
     assert!(facts.canonical.is_empty());
     assert!(facts.head_dedup.is_empty());
-    assert!(selected.physical.program.definitions[0].canon.is_none());
-    check(&selected.physical, &selected).unwrap();
-    assert!(check(&source, &selected).is_err());
+    assert!(selected_physical.program.definitions[0].canon.is_none());
+    check(&selected_physical, &selected).unwrap();
+    assert!(structures::check_rewrite(&source, &compile(&source).unwrap(), &selected_physical, &selected).is_err());
     let context = cq_structure_selection::context(quote::quote!(
         host_set R discharged, positional(R), consumer = canonical,
     ))
@@ -1220,7 +1232,8 @@ fn selection_records_context_before_choosing_dedup_types() {
     assert!(context.consumer_canonical);
     assert!(context.discharged_host_sets.contains("R"));
     let ordinary = compile(&source).unwrap();
-    let empty = cq_structure_selection::compile_with(&source, Default::default()).unwrap();
+    let (empty_physical, empty) = cq_structure_selection::compile_with(&source, Default::default()).unwrap();
+    assert_eq!(empty_physical, source);
     assert_eq!(
         ordinary.to_token_stream().to_string(),
         empty.to_token_stream().to_string()
@@ -1242,13 +1255,13 @@ fn redundant_context_packets_preserve_explicit_canon() {
         quote::quote!(host_set R discharged),
         quote::quote!(host_set R discharged, consumer = canonical),
     ] {
-        let selected = cq_structure_selection::compile_with(&source, arguments).unwrap();
-        assert_eq!(selected.physical, source);
+        let (selected_physical, selected) = cq_structure_selection::compile_with(&source, arguments).unwrap();
+        assert_eq!(selected_physical, source);
         assert_eq!(
             selected.to_token_stream().to_string(),
             ordinary.to_token_stream().to_string()
         );
-        let facts = contract(&selected).unwrap();
+        let facts = contract(&selected_physical, &selected).unwrap();
         assert!(facts.canonical.contains_key("r"));
         assert!(facts.head_dedup.is_empty());
     }
@@ -1266,7 +1279,7 @@ fn named_host_consumers_do_not_alias_reader_roles() {
             return #result as answer(x,y);
         }};
         let selected = compile(&source).unwrap();
-        let facts = contract(&selected).unwrap();
+        let facts = contract(&source, &selected).unwrap();
         assert!(
             facts
                 .fallbacks
@@ -1283,7 +1296,7 @@ fn named_host_consumers_do_not_alias_reader_roles() {
                 .to_string()
                 .contains(&format!("host result ({name})"))
         );
-        let reparsed = syn::parse2::<structures::Program>(printed).unwrap();
+        let reparsed = parse_annotations(&source, printed);
         assert_eq!(selected, reparsed);
         check(&source, &reparsed).unwrap();
     }

@@ -4,7 +4,7 @@ use quote::quote;
 /// `z` is bound by the root scan, `a` only by the first probe. `c` is read on
 /// `[z]` (probe) and `[a, z]` (semijoin); `d` on `[a, z]` (probe). Names are
 /// chosen so alphabetical order (`a` before `z`) differs from binding order.
-fn program() -> ir::Program {
+fn program() -> (ir::physical::Program, ir::Program) {
     let physical: ir::physical::Program = syn::parse_quote! { physical {
         relation A(z:u32); relation C(z:u32,a:u32); relation D(a:u32,z:u32,w:u32);
         x = pipe rename A@0 {z -> z};
@@ -15,7 +15,8 @@ fn program() -> ir::Program {
         q = let canon probe first [a, z] s, d;
         return q as answer(z, a, w);
     } };
-    cq_structure_selection::compile(&physical).unwrap()
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    (physical, structures)
 }
 
 fn layouts(program: &ir::Program, result: &str) -> Vec<(Vec<Vec<String>>, String)> {
@@ -42,10 +43,9 @@ fn layouts(program: &ir::Program, result: &str) -> Vec<(Vec<Vec<String>>, String
 
 #[test]
 fn default_layouts_cover_reads_in_binding_order() {
-    let source = program();
-    let target = cq_rewrite_passes::sorted_indexes(&source, quote!()).unwrap();
-    ir::check_rewrite(&source, &target).unwrap();
-    assert_eq!(target.physical, source.physical, "Physical is unchanged");
+    let (physical, source) = program();
+    let target = cq_rewrite_passes::sorted_indexes(&physical, &source, quote!()).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     // A payload probe must read a whole layout, so the probe on [z] cannot
     // share the semijoin's [z][a]: two layouts, the semijoin's a set.
     assert_eq!(
@@ -71,15 +71,15 @@ fn default_layouts_cover_reads_in_binding_order() {
     );
     // Idempotent on its own output.
     assert_eq!(
-        cq_rewrite_passes::sorted_indexes(&target, quote!()).unwrap(),
+        cq_rewrite_passes::sorted_indexes(&physical, &target, quote!()).unwrap(),
         target
     );
 }
 
 #[test]
 fn an_explicit_layout_overrides_the_default_but_must_serve_every_read() {
-    let source = program();
-    let target = cq_rewrite_passes::sorted_indexes(&source, quote!(D => [a][z])).unwrap();
+    let (physical, source) = program();
+    let target = cq_rewrite_passes::sorted_indexes(&physical, &source, quote!(D => [a][z])).unwrap();
     assert_eq!(
         layouts(&target, "d")[0].0,
         [vec!["a".to_string()], vec!["z".to_string()]]
@@ -90,12 +90,12 @@ fn an_explicit_layout_overrides_the_default_but_must_serve_every_read() {
         "other results keep the default"
     );
     // `c` is probed on [z]; one layout [a][z] cannot serve that read.
-    assert!(cq_rewrite_passes::sorted_indexes(&source, quote!(C => [a][z])).is_err());
+    assert!(cq_rewrite_passes::sorted_indexes(&physical, &source, quote!(C => [a][z])).is_err());
     // Levels must be single columns of the result.
-    assert!(cq_rewrite_passes::sorted_indexes(&source, quote!(D => [a, z])).is_err());
-    assert!(cq_rewrite_passes::sorted_indexes(&source, quote!(D => [a][missing])).is_err());
+    assert!(cq_rewrite_passes::sorted_indexes(&physical, &source, quote!(D => [a, z])).is_err());
+    assert!(cq_rewrite_passes::sorted_indexes(&physical, &source, quote!(D => [a][missing])).is_err());
     // A choice naming nothing built is an error, not ignored.
-    assert!(cq_rewrite_passes::sorted_indexes(&source, quote!(Nothing => [z])).is_err());
+    assert!(cq_rewrite_passes::sorted_indexes(&physical, &source, quote!(Nothing => [z])).is_err());
 }
 
 #[test]

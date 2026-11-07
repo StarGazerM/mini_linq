@@ -12,6 +12,7 @@ use quote::ToTokens;
 /// Bind only the input layouts explicitly supplied by the checked Round invocation.
 /// This is a Structures refinement, not a query planner or an index builder.
 pub fn bind_inputs(
+    physical: &cq_lang_structures::physical::Program,
     source: &cq_lang_structures::Program,
     args: proc_macro2::TokenStream,
 ) -> syn::Result<cq_lang_structures::Program> {
@@ -42,7 +43,7 @@ pub fn bind_inputs(
         }
     }
     let bindings = syn::parse2::<Bindings>(args)?;
-    let analysis = cq_lang_structures::contract::check(source)?;
+    let analysis = cq_lang_structures::contract::check(physical, source)?;
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
         if !matches!(entry.structure, cq_lang_structures::Structure::Host { .. }) {
@@ -63,6 +64,6 @@ pub fn bind_inputs(
     target
         .structures
         .declare(&bindings.providers.declarations)?;
-    cq_lang_structures::contract::check(&target)?;
+    cq_lang_structures::contract::check(physical, &target)?;
     Ok(target)
 }

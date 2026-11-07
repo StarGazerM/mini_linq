@@ -708,10 +708,9 @@ impl Structures {
     }
 }
 
-/// Physical execution paired with all required storage choices.
+/// Storage annotations over a separately supplied Physical program.
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Program {
-    pub physical: physical::Program,
     pub structures: Structures,
     /// Immutable original value demand bound by the selection stage. This is a
     /// consumer obligation, never permission to remove the returned set boundary.
@@ -721,14 +720,12 @@ pub struct Program {
     pub encoded: encoded::Contract,
 }
 
-impl syn::parse::Parse for Program {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let physical: physical::Program = input.parse()?;
+impl Program {
+    pub fn parse(input: syn::parse::ParseStream<'_>, physical: &physical::Program) -> syn::Result<Self> {
         let structures = Structures::parse_declared(input, &physical.program.declarations)?;
         let consumer = OutputConsumer::parse_optional(input)?;
         let encoded = encoded::Contract::parse_optional(input)?;
         Ok(Self {
-            physical,
             structures,
             consumer,
             encoded,
@@ -737,21 +734,21 @@ impl syn::parse::Parse for Program {
 }
 
 impl Program {
-    fn check_consumer(&self, facts: &Analysis) -> syn::Result<()> {
-        let Some(consumer) = &self.consumer else {
+    fn check_consumer(physical: &physical::Program, program: &Self, facts: &Analysis) -> syn::Result<()> {
+        let Some(consumer) = &program.consumer else {
             return Ok(());
         };
         consumer.check()?;
-        let body = &self.physical.program;
+        let body = &physical.program;
         let head: Vec<_> = body.head.variables().map(symbol_name).collect();
         if head.len() != body.head.args.len() || consumer.head != head {
-            return error(self, "STR-Consumer: original head identities must match the emitted head exactly");
+            return error(program, "STR-Consumer: original head identities must match the emitted head exactly");
         }
         let returned = &facts.physical.rows[&symbol_name(&body.returned)];
         if consumer.head.iter().any(|name| {
             !returned.bindings.contains_key(name) && !body.captures.contains(name)
         }) {
-            return error(self, "STR-Consumer: head fields must name returned values or original captures");
+            return error(program, "STR-Consumer: head fields must name returned values or original captures");
         }
         Ok(())
     }
@@ -759,10 +756,10 @@ impl Program {
 
 pub mod contract {
     /// Formal rule STR-Entries: Check Physical and the concrete entry obligations before returning analysis.
-    pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
-        let facts = super::analyze(program)?;
-        program.check_consumer(&facts)?;
-        super::encoded::check(program, &facts)?;
+    pub fn check(physical: &super::physical::Program, program: &super::Program) -> syn::Result<super::Analysis> {
+        let facts = super::analyze(physical, program)?;
+        super::Program::check_consumer(physical, program, &facts)?;
+        super::encoded::check(physical, program, &facts)?;
         Ok(facts)
     }
 }
@@ -1002,15 +999,14 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
 /// Formal rule STR-Key: Answer probe and semi reads by host dispatch or a built level prefix.
 /// Formal rule STR-Merge: Answer each merge side by ordered storage or a same-key merge pipe.
 /// Formal rule CK-Return: A canonical consumer may own the returned set boundary.
-fn analyze(program: &Program) -> syn::Result<Analysis> {
+fn analyze(physical: &crate::physical::Program, program: &Program) -> syn::Result<Analysis> {
     let module = &program.structures;
     provider::check(module)?;
     let mut analysis = Analysis {
-        physical: physical::contract::check(&program.physical)?,
+        physical: physical::contract::check(physical)?,
         providers: module.providers.clone(),
         publications: BTreeMap::new(),
-        host_layouts: program
-            .physical
+        host_layouts: physical
             .inputs()
             .map(|r| {
                 (
@@ -1044,8 +1040,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         layouts: BTreeMap::new(),
         unique: BTreeMap::new(),
     };
-    analysis.lineage = lineages(&program.physical, &analysis.physical);
-    let candidates = physical::candidate_prefixes(&program.physical, &analysis.physical);
+    analysis.lineage = lineages(physical, &analysis.physical);
+    let candidates = physical::candidate_prefixes(physical, &analysis.physical);
     let mut seen = BTreeSet::new();
     let mut references: BTreeMap<String, (&Entry, &CanonIndex)> = BTreeMap::new();
     for entry in &module.entries {
@@ -1056,7 +1052,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         if positional::entry(program, entry, &mut analysis)? {
             continue;
         }
-        if native::entry(program, entry, &mut analysis)? {
+        if native::entry(physical, program, entry, &mut analysis)? {
             continue;
         }
         let keyed = match &entry.structure {
@@ -1095,8 +1091,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                     let Some(host) = analysis.physical.hosts.get(&name) else {
                         return error(keyed, "GPU-NativeAbi: input schema has no host origin");
                     };
-                    let source = program
-                        .physical
+                    let source = physical
                         .inputs()
                         .find(|relation| symbol_name(&relation.name) == *host)
                         .expect("checked host input");
@@ -1197,7 +1192,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 // choice prints the provider's declared choice argument.
                 let provider = match analysis.facts(&keyed.provider).choice {
                     Some(slot) => {
-                        let lazy = program.physical.program.definitions.iter().any(|d| {
+                        let lazy = physical.program.definitions.iter().any(|d| {
                             matches!(&reader_name, ReaderRef::Result(r) if symbol_name(&d.name) == *r)
                                 && matches!(&d.operator, Operator::Semi(_, k) | Operator::Anti(_, k)
                                     if matches!(k.choice, Some(physical::Choice::Lazy(_))))
@@ -1216,7 +1211,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 continue;
             }
             Structure::Group { provider, .. } => {
-                check_group(program, entry)?;
+                check_group(physical, program, entry)?;
                 if analysis.groups.insert(name, provider.clone()).is_some() {
                     return error(entry, "duplicate group accumulator type");
                 }
@@ -1235,8 +1230,8 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 // Formal rule STR-E-Canon: Type exactly the recorded canonical and return dedup boundaries.
                 // PH-HeadDedup: an answer identity index types exactly the
                 // recorded Physical return-boundary obligation (PH-HeadDedup).
-                if name != symbol_name(&program.physical.program.returned)
-                    || !program.physical.program.head_dedup()
+                if name != symbol_name(&physical.program.returned)
+                    || !physical.program.head_dedup()
                 {
                     return error(
                         entry,
@@ -1381,11 +1376,11 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             }
         }
     }
-    positional::check(program, &analysis)?;
-    analysis.shares = share::check(program, &analysis)?;
-    analysis.witnesses = repr::check_witnesses(program, &analysis)?;
-    analysis.repr = repr::check(program, &analysis)?;
-    analysis.stages = stage::check(program, &analysis)?;
+    positional::check(physical, program, &analysis)?;
+    analysis.shares = share::check(physical, program, &analysis)?;
+    analysis.witnesses = repr::check_witnesses(physical, program, &analysis)?;
+    analysis.repr = repr::check(physical, program, &analysis)?;
+    analysis.stages = stage::check(physical, program, &analysis)?;
     analysis.expands = program
         .structures
         .entries
@@ -1401,20 +1396,20 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         })
         .map(|entry| symbol_name(&entry.name))
         .collect();
-    filtered::check(program, &analysis)?;
-    analysis.layouts = filtered::layouts(program, &analysis);
+    filtered::check(physical, program, &analysis)?;
+    analysis.layouts = filtered::layouts(physical, program, &analysis);
     native::check(&analysis)?;
     let mut shared: BTreeMap<(String, Vec<String>, bool), &Provider> = BTreeMap::new();
     for ((name, reader, columns), provider) in &analysis.fallbacks {
         if matches!(reader, ReaderRef::Scan)
-            || program.physical.program.definitions.iter().any(|d| {
+            || physical.program.definitions.iter().any(|d| {
                 matches!(reader, ReaderRef::Result(result) if symbol_name(&d.name) == *result)
                     && matches!(d.operator, Operator::Point(..) | Operator::Range(..))
             })
         {
             continue;
         }
-        let ordered = program.physical.program.definitions.iter().any(|d| {
+        let ordered = physical.program.definitions.iter().any(|d| {
             matches!(reader, ReaderRef::Result(result) if symbol_name(&d.name) == *result)
                 && matches!(d.operator, Operator::Merge(..))
         });
@@ -1479,7 +1474,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             {
                 continue;
             }
-            let membership = program.physical.program.definitions.iter().any(|d| {
+            let membership = physical.program.definitions.iter().any(|d| {
                 symbol_name(&d.name) == *reader
                     && matches!(d.operator, Operator::Semi(..) | Operator::Anti(..))
             });
@@ -1497,14 +1492,14 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                 );
             }
             if let Some((ty, depth)) = analysis.built_on(result, columns) {
-                let payload = program.physical.program.definitions.iter().any(|d| {
+                let payload = physical.program.definitions.iter().any(|d| {
                     symbol_name(&d.name) == *reader && matches!(d.operator, Operator::Probe(..))
                 });
                 if payload {
                     let ((levels, _), _) = analysis
                         .selected_built(result, columns)
                         .expect("selected build");
-                    if depth != levels.len() && !program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *reader && matches!(&d.operator, Operator::Probe(_,k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))) {
+                    if depth != levels.len() && !physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *reader && matches!(&d.operator, Operator::Probe(_,k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))) {
                         return error(ty, "a payload probe must read all built levels");
                     }
                 }
@@ -1530,8 +1525,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
         }
     }
     // Merge sides: ordered on the key by Γ, or a pipe sorted on it by its own merge.
-    let merge_key: BTreeMap<String, Vec<String>> = program
-        .physical
+    let merge_key: BTreeMap<String, Vec<String>> = physical
         .program
         .definitions
         .iter()
@@ -1558,7 +1552,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
     }
 
     // Uniqueness by key inference, then the canonical return.
-    for definition in &program.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         if matches!(&definition.operator, Operator::Group(group) if !group.keys.is_empty())
             && !analysis.groups.contains_key(&name)
@@ -1600,7 +1594,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
                                 && (analysis
                                     .membership
                                     .contains(&(name.clone(), columns.clone()))
-                                    || program.physical.program.definitions.iter().any(|d| {
+                                    || physical.program.definitions.iter().any(|d| {
                                         symbol_name(&d.name) == *reader
                                             && matches!(
                                                 d.operator,
@@ -1713,7 +1707,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             );
         };
         let key =
-            physical::inherited_key(op, &heading, &program.physical.program.host_sets, |id| {
+            physical::inherited_key(op, &heading, &physical.program.host_sets, |id| {
                 analysis.unique.get(&symbol_name(id)).cloned()
             });
         let key = match key {
@@ -1725,9 +1719,9 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             analysis.unique.insert(name, key);
         }
     }
-    let returned = symbol_name(&program.physical.program.returned);
+    let returned = symbol_name(&physical.program.returned);
     if !analysis.unique.contains_key(&returned)
-        && program.physical.program.return_canon.is_none()
+        && physical.program.return_canon.is_none()
         && !analysis.physical.consumer_canonical
     {
         return error(
@@ -1737,14 +1731,14 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
             ),
         );
     }
-    if program.physical.program.head_dedup() && !analysis.head_dedup.contains_key(&returned) {
+    if physical.program.head_dedup() && !analysis.head_dedup.contains_key(&returned) {
         return error(
-            &program.physical.program.returned,
+            &physical.program.returned,
             "missing answer identity index",
         );
     }
-    coalesce_join_filters(program, &mut analysis);
-    check_items(program, &analysis)?;
+    coalesce_join_filters(physical, program, &mut analysis);
+    check_items(physical, program, &analysis)?;
     stats::check(program, &mut analysis)?;
     Ok(analysis)
 }
@@ -1752,7 +1746,7 @@ fn analyze(program: &Program) -> syn::Result<Analysis> {
 /// Formal rule STR-ItemLayout: an item layout belongs to a one-level payload
 /// build; a column layout splits a payload of at least two fields. The payload
 /// is the filtered schema, else the carried columns, without the key.
-fn check_items(program: &Program, analysis: &Analysis) -> syn::Result<()> {
+fn check_items(physical: &crate::physical::Program, program: &Program, analysis: &Analysis) -> syn::Result<()> {
     let mut carried = None;
     for entry in &program.structures.entries {
         let Structure::Built { keyed, .. } = &entry.structure else {
@@ -1775,7 +1769,7 @@ fn check_items(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             let key = keyed.level_names().concat();
             let payload = match analysis.filtered.get(&name) {
                 Some(filtered) => filtered.payload.columns.iter().map(symbol_name).collect(),
-                None => carried.get_or_insert_with(|| demand::carried_columns(program, analysis))
+                None => carried.get_or_insert_with(|| demand::carried_columns(physical, program, analysis))
                     [&name]
                     .clone(),
             };
@@ -1796,9 +1790,8 @@ fn check_items(program: &Program, analysis: &Analysis) -> syn::Result<()> {
 }
 
 /// Formal rule STR-Group: Exactly keyed Group results record a concrete accumulator table.
-fn check_group(program: &Program, entry: &Entry) -> syn::Result<()> {
-    if !program
-        .physical
+fn check_group(physical: &crate::physical::Program, _program: &Program, entry: &Entry) -> syn::Result<()> {
+    if !physical
         .program
         .definitions
         .iter()
@@ -1832,9 +1825,10 @@ pub fn concrete_type(ty: &syn::Type) -> syn::Result<()> {
 }
 
 /// Structures rewrites preserve Physical and discharge every read and boundary.
-pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    contract::check(source)?;
-    contract::check(target)?;
+pub fn check_rewrite(source_physical: &physical::Program, source: &Program, target_physical: &physical::Program, target: &Program) -> syn::Result<()> {
+    contract::check(source_physical, source)?;
+    contract::check(target_physical, target)?;
+    physical::check_rewrite(source_physical, target_physical)?;
     if source.consumer != target.consumer {
         return error(target, "Structures rewrite must preserve original consumer obligations");
     }
@@ -1843,12 +1837,12 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     {
         return error(target, "Structures rewrite must preserve original encoded source obligations");
     }
-    if source.physical != target.physical
-        || quote::ToTokens::to_token_stream(&source.physical).to_string()
-            != quote::ToTokens::to_token_stream(&target.physical).to_string()
+    if source_physical != target_physical
+        || quote::ToTokens::to_token_stream(source_physical).to_string()
+            != quote::ToTokens::to_token_stream(target_physical).to_string()
     {
         return error(
-            &target.physical,
+            target_physical,
             "Structures rewrite must preserve Physical AST and tokens exactly",
         );
     }
@@ -1888,9 +1882,9 @@ pub fn storage_layout_eq(left: &Entry, right: &Entry) -> bool {
 /// to move from `pipe` to `let`, replacing keyed fallbacks with built indexes.
 /// Operators, their order, opaque syntax, scan adapters and existing layouts
 /// remain unchanged. Storage implementations may be retyped.
-pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    contract::check(source)?;
-    let facts = contract::check(target)?;
+pub fn check_retention_rewrite(source_physical: &physical::Program, source: &Program, target_physical: &physical::Program, target: &Program) -> syn::Result<()> {
+    contract::check(source_physical, source)?;
+    let facts = contract::check(target_physical, target)?;
     if source.consumer != target.consumer {
         return error(target, "catalog retention must preserve original consumer obligations");
     }
@@ -1899,15 +1893,14 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
     {
         return error(target, "catalog retention must preserve original encoded source obligations");
     }
-    let mut normalized = target.physical.clone();
-    if source.physical.program.definitions.len() != normalized.program.definitions.len() {
+    let mut normalized = target_physical.clone();
+    if source_physical.program.definitions.len() != normalized.program.definitions.len() {
         return error(
             target,
             "catalog retention cannot add or remove Physical definitions",
         );
     }
-    for (old, new) in source
-        .physical
+    for (old, new) in source_physical
         .program
         .definitions
         .iter()
@@ -1930,15 +1923,15 @@ pub fn check_retention_rewrite(source: &Program, target: &Program) -> syn::Resul
             new.mode = old.mode.clone();
         }
     }
-    if normalized != source.physical
-        || normalized.to_token_stream().to_string() != source.physical.to_token_stream().to_string()
+    if normalized != *source_physical
+        || normalized.to_token_stream().to_string() != source_physical.to_token_stream().to_string()
     {
         return error(
             target,
             "catalog retention must preserve all non-mode Physical syntax exactly",
         );
     }
-    physical::check_rewrite(&source.physical, &target.physical)?;
+    physical::check_rewrite(source_physical, target_physical)?;
     let same_entry = storage_layout_eq;
     for entry in &source.structures.entries {
         if target
@@ -2005,17 +1998,20 @@ mod stage;
 mod filtered;
 pub use filtered::{reconstructible_constants, required_columns, selection_constants};
 
-impl cq_stage::Language for Program {
+impl<'a> cq_stage::Annotation<&'a physical::Program> for Program {
+    fn parse(input: syn::parse::ParseStream<'_>, physical: &'a physical::Program) -> syn::Result<Self> {
+        Self::parse(input, physical)
+    }
+
     fn output_consumer(&self) -> Option<&OutputConsumer> {
         self.consumer.as_ref()
     }
-    fn context(&self) -> cq_stage::Context {
-        cq_stage::Language::context(&self.physical)
+
+    fn check(&self, physical: &'a physical::Program) -> syn::Result<()> {
+        contract::check(physical, self).map(|_| ())
     }
-    fn check(&self) -> syn::Result<()> {
-        contract::check(self).map(|_| ())
-    }
-    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+
+    fn check_rewrite(source_physical: &'a physical::Program, source: &Self, target_physical: &'a physical::Program, target: &Self) -> syn::Result<()> {
+        check_rewrite(source_physical, source, target_physical, target)
     }
 }

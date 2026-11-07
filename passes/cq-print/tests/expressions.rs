@@ -55,7 +55,7 @@ fn capture_ownership_clones_values_at_every_closure_level() {
     assert!(printed.starts_with("{ inspect (c) ;"));
 }
 
-fn membership_plan() -> cq_lang_structures::Program {
+fn membership_plan() -> (cq_lang_structures::physical::Program, cq_lang_structures::Program) {
     let source = syn::parse_quote! { physical {
         relation L(a: ::opaque::KeyAlias); relation R(a: ::opaque::KeyAlias,b:i64);
         l = pipe rename L@0 {a -> x};
@@ -91,7 +91,7 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
         ),
     ];
     for (declaration, provider) in providers {
-        let mut program = membership_plan();
+        let (physical, mut program) = membership_plan();
         for entry in &mut program.structures.entries {
             if entry.name == "selected"
                 && let cq_lang_structures::Structure::Built { keyed, .. } = &mut entry.structure
@@ -107,9 +107,9 @@ fn explicit_providers_dispatch_build_capabilities_without_type_recognition() {
             }
         }
         program.structures.declare(&[declaration]).unwrap();
-        let facts = cq_lang_structures::contract::check(&program).unwrap();
+        let facts = cq_lang_structures::contract::check(&physical, &program).unwrap();
         assert!(facts.join_filters.is_empty());
-        let mut context = cq_print::Context::new(&program, &facts);
+        let mut context = cq_print::Context::new(&physical, &program, &facts);
         context.register("selected");
         context.materialize("selected", quote!(source_rows));
         let statements = &context.statements;
@@ -164,8 +164,8 @@ fn raw_membership_fallback_dispatches_build_with_inferred_provider_output() {
             };),
             ])
             .unwrap();
-        let facts = cq_lang_structures::contract::check(&program).unwrap();
-        let mut context = cq_print::Context::new(&program, &facts);
+        let facts = cq_lang_structures::contract::check(&physical, &program).unwrap();
+        let mut context = cq_print::Context::new(&physical, &program, &facts);
         context.register("r");
         context.prepare_host("r");
         let statements = &context.statements;
@@ -194,8 +194,8 @@ fn lazy_host_fallback_omits_unrequested_maximum_without_forcing_build() {
         return canon joined as answer(x,y);
     }};
     let program = cq_structure_selection::compile(&physical).unwrap();
-    let facts = cq_lang_structures::contract::check(&program).unwrap();
-    let mut context = cq_print::Context::new(&program, &facts);
+    let facts = cq_lang_structures::contract::check(&physical, &program).unwrap();
+    let mut context = cq_print::Context::new(&physical, &program, &facts);
     context.register("r");
     context.prepare_host("r");
     let statements = &context.statements;
@@ -218,10 +218,10 @@ fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates()
         result = let canon project joined keep {x,y};
         return result as answer(x,y);
     }};
-    let program = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
-    let facts = cq_lang_structures::contract::check(&program).unwrap();
+    let (physical, program) = cq_structure_selection::compile_with(&source, quote!(positional(L, R))).unwrap();
+    let facts = cq_lang_structures::contract::check(&physical, &program).unwrap();
     assert_eq!(facts.join_filters["l"].len(), 1);
-    let mut context = cq_print::Context::new(&program, &facts);
+    let mut context = cq_print::Context::new(&physical, &program, &facts);
     let statements = &context.statements;
     let identity = quote!(#(#statements)*).to_string();
     assert!(identity.contains("cq_storage :: NoJoinFilter"));
@@ -245,8 +245,8 @@ fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates()
             "sharded_index",
         )])
         .unwrap();
-    let task_facts = cq_lang_structures::contract::check(&task_provider).unwrap();
-    let task_context = cq_print::Context::new(&task_provider, &task_facts);
+    let task_facts = cq_lang_structures::contract::check(&physical, &task_provider).unwrap();
+    let task_context = cq_print::Context::new(&physical, &task_provider, &task_facts);
     let task_statements = &task_context.statements;
     assert_eq!(identity, quote!(#(#task_statements)*).to_string());
     context.register("selected");
@@ -265,14 +265,14 @@ fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates()
         "{printed}"
     );
     assert!(!printed.contains("NoDense"));
-    let borrowed = cq_structure_selection::retype(&program, quote!(
+    let borrowed = cq_structure_selection::retype(&physical, &program, quote!(
         selected => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]
     )).unwrap();
-    let borrowed = cq_structure_selection::retype(&borrowed, quote!(
+    let borrowed = cq_structure_selection::retype(&physical, &borrowed, quote!(
         l join_filter => @borrowed_run_filter as ::cq_storage::RunFilterView<'_, _, _>
     )).unwrap();
-    let borrowed_facts = cq_lang_structures::contract::check(&borrowed).unwrap();
-    let mut borrowed_context = cq_print::Context::new(&borrowed, &borrowed_facts);
+    let borrowed_facts = cq_lang_structures::contract::check(&physical, &borrowed).unwrap();
+    let mut borrowed_context = cq_print::Context::new(&physical, &borrowed, &borrowed_facts);
     borrowed_context.register("selected");
     borrowed_context.materialize("selected", quote!(source_rows));
     let statements = &borrowed_context.statements;
@@ -280,11 +280,11 @@ fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates()
     assert!(printed.contains("RunFilterView") && printed.contains(":: new"), "{printed}");
     assert!(!printed.contains("distinct_keys"), "{printed}");
     assert!(!printed.contains("BuildSidecar"), "{printed}");
-    let attached = cq_structure_selection::retype(&program, quote!(
+    let attached = cq_structure_selection::retype(&physical, &program, quote!(
         l join_filter => @attached_join_filter_membership as ::cq_storage::AttachedDenseMembership<_, 67108864>
     )).unwrap();
-    let attached_facts = cq_lang_structures::contract::check(&attached).unwrap();
-    let mut attached_context = cq_print::Context::new(&attached, &attached_facts);
+    let attached_facts = cq_lang_structures::contract::check(&physical, &attached).unwrap();
+    let mut attached_context = cq_print::Context::new(&physical, &attached, &attached_facts);
     attached_context.register("selected");
     attached_context.materialize("selected", quote!(source_rows));
     let statements = &attached_context.statements;
@@ -314,7 +314,7 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
     ];
     for inner in providers {
         for borrowed_singleton in [false, true] {
-            let mut program = membership_plan();
+            let (physical, mut program) = membership_plan();
             for entry in &mut program.structures.entries {
                 if entry.name == "selected"
                     && let cq_lang_structures::Structure::Built { keyed, .. } = &mut entry.structure
@@ -329,8 +329,8 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
                     declaration(&inner.token.to_string()),
                 ])
                 .unwrap();
-            let facts = cq_lang_structures::contract::check(&program).unwrap();
-            let mut context = cq_print::Context::new(&program, &facts);
+            let facts = cq_lang_structures::contract::check(&physical, &program).unwrap();
+            let mut context = cq_print::Context::new(&physical, &program, &facts);
             context.register("selected");
             let routed = [(0, inner.clone())].into();
             if borrowed_singleton {
@@ -381,7 +381,8 @@ fn routed_builds_dispatch_inner_capabilities_without_changing_routing() {
 #[test]
 fn scalar_accumulation_requires_selected_publications() {
     use quote::quote;
-    let original = cq_structure_selection::retype(&membership_plan(), quote!(
+    let (physical, selected) = membership_plan();
+    let original = cq_structure_selection::retype(&physical, &selected, quote!(
         selected => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]
     )).unwrap();
     for (selected_rows, selected_maximum) in [(false, false), (false, true), (true, false), (true, true)] {
@@ -402,9 +403,9 @@ fn scalar_accumulation_requires_selected_publications() {
                         stat_max_group host required build single;
             ));
         }
-        cq_lang_structures::stats::record_constructions(&mut program).unwrap();
-        let facts = cq_lang_structures::contract::check(&program).unwrap();
-        let mut context = cq_print::Context::new(&program, &facts);
+        cq_lang_structures::stats::record_constructions(&physical, &mut program).unwrap();
+        let facts = cq_lang_structures::contract::check(&physical, &program).unwrap();
+        let mut context = cq_print::Context::new(&physical, &program, &facts);
         context.register("selected");
         context.materialize("selected", quote!(source_rows));
         let statements = &context.statements;
@@ -423,15 +424,15 @@ fn scalar_accumulation_requires_selected_publications() {
 #[test]
 fn native_constant_scan_emits_its_point_guard() {
     use quote::quote;
-    let source = syn::parse_quote! { physical {
+    let physical = syn::parse_quote! { physical {
         relation R(a:i32,b:i32) host [a] reads [exact];
         r = let rename R@0 {b -> y} constants {a = 7};
         return canon r as answer(y);
     }};
-    let program = cq_structure_selection::compile(&source).unwrap();
-    let facts = cq_lang_structures::contract::check(&program).unwrap();
+    let program = cq_structure_selection::compile(&physical).unwrap();
+    let facts = cq_lang_structures::contract::check(&physical, &program).unwrap();
     assert_eq!(facts.natives.len(), 1);
-    let mut context = cq_print::Context::new(&program, &facts);
+    let mut context = cq_print::Context::new(&physical, &program, &facts);
     context.prepare_host("r");
     let statements = &context.statements;
     // The guard's recorded key uses the declaration's literal column, which

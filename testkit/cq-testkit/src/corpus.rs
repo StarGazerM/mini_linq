@@ -16,7 +16,7 @@ pub struct Scenario {
     /// Index-demand suffix to append to `ra`.
     pub ix: &'static str,
     pub physical: &'static str,
-    /// Storage-choice suffix to append to `physical`.
+    /// Storage-choice suffix parsed against an explicit Physical program.
     pub structures: &'static str,
 }
 
@@ -41,8 +41,9 @@ impl Scenario {
         syn::parse_str(self.physical)
     }
 
-    pub fn parse_structures(&self) -> syn::Result<crate::structures::Program> {
-        syn::parse_str(&format!("{}\n{}", self.physical, self.structures))
+    pub fn parse_structures(&self, physical: &crate::physical::Program) -> syn::Result<crate::structures::Program> {
+        use syn::parse::Parser;
+        (|input: syn::parse::ParseStream<'_>| crate::structures::Program::parse(input, physical)).parse_str(self.structures)
     }
 
     /// Find authored data for this scenario, including alternative plans.
@@ -64,6 +65,16 @@ impl Scenario {
             .chain(crate::blocks::CASES)
             .find(|case| case.name == name)
     }
+}
+
+/// Parse a test capture of the distinct Physical and Structures stack entries.
+pub fn parse_structures_capture(text: &str) -> syn::Result<(crate::physical::Program, crate::structures::Program)> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let structures = crate::structures::Program::parse(input, &physical)?;
+        Ok((physical, structures))
+    }).parse_str(text)
 }
 
 macro_rules! scenario {

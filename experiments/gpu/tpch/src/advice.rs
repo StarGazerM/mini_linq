@@ -417,14 +417,16 @@ pub fn physical(
 }
 
 pub fn structures(
+    physical: &cq_lang_physical::Program,
     source: &cq_lang_structures::Program,
     invocations: &[String],
 ) -> syn::Result<cq_lang_structures::Program> {
     let mut current = source.clone();
     for invocation in invocations {
         let invocation: cq_stage::Invocation = syn::parse_str(invocation)?;
-        current =
-            cq_rewrite_passes::invoke_structures(&current, &invocation.path, invocation.arguments)?;
+        current = cq_rewrite_passes::invoke_structures(
+            physical, &current, &invocation.path, invocation.arguments,
+        )?;
     }
     Ok(current)
 }
@@ -511,15 +513,16 @@ pub fn joined_prefix(program: &cq_lang_physical::Program, relation: &str) -> syn
 /// logical heading may still contain dead strings; only Structures' proven
 /// layout, never an assumed projection, determines the uploaded carrier.
 pub fn filtered_leaf(
+    physical: &cq_lang_physical::Program,
     program: &cq_lang_structures::Program,
     relation: &str,
 ) -> syn::Result<Option<Ident>> {
-    let facts = cq_lang_structures::contract::check(program)?;
-    for definition in &program.physical.program.definitions {
+    let facts = cq_lang_structures::contract::check(physical, program)?;
+    for definition in &physical.program.definitions {
         if !matches!(
             definition.operator,
             cq_lang_physical::Operator::Project(_) | cq_lang_physical::Operator::Guard(_)
-        ) || !relation_of(&program.physical, &definition.name)
+        ) || !relation_of(physical, &definition.name)
             .is_some_and(|name| name == relation)
         {
             continue;
@@ -610,10 +613,13 @@ pub fn hand_physical(
 
 /// Choose full-key providers only when the checked live layout has no payload.
 /// This includes cycle-closing Probe operators as well as explicit semijoins.
-pub fn hand_membership(program: &cq_lang_structures::Program) -> syn::Result<Vec<String>> {
-    let facts = cq_lang_structures::contract::check(program)?;
+pub fn hand_membership(
+    physical: &cq_lang_physical::Program,
+    program: &cq_lang_structures::Program,
+) -> syn::Result<Vec<String>> {
+    let facts = cq_lang_structures::contract::check(physical, program)?;
     let mut providers = std::collections::BTreeSet::new();
-    for definition in &program.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let (cq_lang_physical::Operator::Semi(_, key)
         | cq_lang_physical::Operator::Anti(_, key)
         | cq_lang_physical::Operator::Probe(_, key)) = &definition.operator
@@ -624,7 +630,7 @@ pub fn hand_membership(program: &cq_lang_structures::Program) -> syn::Result<Vec
         // Current filtered-storage certificates reject constant-bearing host
         // renames (notably H08 Region and H21 finalized Orders). Keep their
         // accepted RangeProvider rather than pretending membership was proved.
-        if program.physical.program.definitions.iter().any(|d| {
+        if physical.program.definitions.iter().any(|d| {
             d.name == key.right
                 && matches!(&d.operator, cq_lang_physical::Operator::Rename(rename)
                 if rename.constants.is_some())

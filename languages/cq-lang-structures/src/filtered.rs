@@ -146,12 +146,11 @@ pub fn reconstructible_constants(select: &syntax::algebra::Select) -> BTreeMap<S
 
 /// Formal rule STR-Existential: A projected full-key index can replace payload
 /// enumeration with membership when every observed column is a key or constant.
-pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
+pub(super) fn check(physical: &crate::physical::Program, program: &Program, analysis: &Analysis) -> syn::Result<()> {
     // Formal rule STR-E-Filtered: Check shared projections, permitted readers, proven constants and downstream coverage.
-    let required = required_columns(&program.physical, &analysis.physical);
+    let required = required_columns(physical, &analysis.physical);
     for (name, filtered) in &analysis.filtered {
-        let definition = program
-            .physical
+        let definition = physical
             .program
             .definitions
             .iter()
@@ -210,8 +209,7 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
             .into_iter()
             .flatten()
         {
-            let reader = program
-                .physical
+            let reader = physical
                 .program
                 .definitions
                 .iter()
@@ -309,10 +307,10 @@ pub(super) fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
     Ok(())
 }
 
-pub(super) fn layouts(program: &Program, analysis: &Analysis) -> BTreeMap<String, Vec<String>> {
-    let required = required_columns(&program.physical, &analysis.physical);
+pub(super) fn layouts(physical: &crate::physical::Program, _program: &Program, analysis: &Analysis) -> BTreeMap<String, Vec<String>> {
+    let required = required_columns(physical, &analysis.physical);
     let mut layouts: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for definition in &program.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         let input_layout = |input: &Ident| layouts[&symbol_name(input)].clone();
         let mut columns = match &definition.operator {
@@ -380,7 +378,7 @@ mod tests {
 
     #[test]
     fn guard_output_drops_dead_columns_without_changing_its_input_domain() {
-        let source: Program = syn::parse_quote! {
+        let physical: physical::Program = syn::parse_quote! {
             physical {
                 relation R(a:i32, label:StringCode);
                 r = pipe rename R@0 { a -> a, label -> label };
@@ -388,17 +386,22 @@ mod tests {
                 projected = let canon project selected keep {a};
                 return projected as answer(a);
             }
+        };
+        let source = syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream<'_>| Program::parse(input, &physical),
+            quote::quote! {
             structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; rows = Rows { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
                 r host scan = @reader as Reader [];
                 selected rows = @rows as Rows;
                 projected rows = @sort as ::cq_storage::dedup::Sort; projected canon = rows;
             }
-        };
-        let facts = crate::contract::check(&source).unwrap();
+            },
+        ).unwrap();
+        let facts = crate::contract::check(&physical, &source).unwrap();
         assert_eq!(facts.layouts["r"], ["a", "label"]);
         assert_eq!(facts.layouts["selected"], ["a"]);
         assert_eq!(facts.physical.headings["selected"], ["a", "label"]);
-        let needed = required_columns(&source.physical, &facts.physical);
+        let needed = required_columns(&physical, &facts.physical);
         assert!(needed["r"].contains("label"));
         assert!(!needed["selected"].contains("label"));
     }

@@ -75,12 +75,13 @@ macro_rules! physical_dispatch {
 macro_rules! structures_dispatch {
     ($($name:ident => $implementation:path;)*) => {
         pub fn invoke_structures(
+            physical: &cq_lang_physical::Program,
             source: &cq_lang_structures::Program,
             path: &syn::Path,
             arguments: proc_macro2::TokenStream,
         ) -> syn::Result<cq_lang_structures::Program> {
             let name = registered_name(path)?;
-            $(if name == stringify!($name) { return $implementation(source, arguments); })*
+            $(if name == stringify!($name) { return $implementation(physical, source, arguments); })*
             Err(syn::Error::new_spanned(path, "unregistered Structures rewrite"))
         }
     };

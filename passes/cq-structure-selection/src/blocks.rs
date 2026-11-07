@@ -49,17 +49,17 @@ impl Parse for Advice {
     }
 }
 
-pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::Result<()> {
-    let facts = structures::contract::check(target)?;
-    let origins = structures::representation_bases(target, &facts);
+pub(super) fn choose(physical: &structures::physical::Program, target: &mut structures::Program, advice: &Advice) -> syn::Result<()> {
+    let facts = structures::contract::check(physical, target)?;
+    let origins = structures::representation_bases(physical, target, &facts);
     let mut matched = BTreeSet::new();
     let mut next = 1u64;
-    for definition in &target.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let Operator::Rename(rename) = &definition.operator else { continue; };
         let base = symbol_name(&rename.relation);
         let Some(binding) = advice.0.get(&base) else { continue; };
         let occurrence = symbol_name(&definition.name);
-        let relation = target.physical.inputs().find(|r| symbol_name(&r.name) == base).unwrap();
+        let relation = physical.inputs().find(|r| symbol_name(&r.name) == base).unwrap();
         let names: BTreeSet<_> = relation.columns.iter().map(|c| symbol_name(&c.name)).collect();
         if binding.columns.keys().cloned().collect::<BTreeSet<_>>() != names { return Err(syn::Error::new_spanned(&definition.name, "blocks must declare every source column exactly once")); }
         let provider = facts.fallbacks.iter().find(|((name, reader, key), _)| name == &occurrence && matches!(reader, structures::ReaderRef::Scan) && key.is_empty()).map(|(_, p)| symbol_name(&p.token)).ok_or_else(|| syn::Error::new_spanned(&definition.name, "blocks require an explicit scan provider"))?;
@@ -91,10 +91,10 @@ pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::
         target.encoded.blocks.scans.insert(occurrence, b::Scan { source, columns: selected });
         matched.insert(base);
     }
-    if matched != advice.0.keys().cloned().collect() { return Err(syn::Error::new_spanned(&target.physical, "blocks names an unused or unknown source")); }
+    if matched != advice.0.keys().cloned().collect() { return Err(syn::Error::new_spanned(&physical, "blocks names an unused or unknown source")); }
     let mut active = BTreeSet::new();
     let mut entries = Vec::new();
-    for definition in &target.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         let input = definition.operator.input().map(symbol_name);
         let inherited = input.as_ref().is_some_and(|i| active.contains(i));
@@ -144,10 +144,10 @@ pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::
             target.encoded.blocks.reads.insert(format!("canon:{name}"), read);
         }
     }
-    let returned = symbol_name(&target.physical.program.returned);
+    let returned = symbol_name(&physical.program.returned);
     if active.contains(&returned) {
         let canonical_key = format!("canon:{returned}");
-        if target.physical.program.return_canon.is_some() && !target.encoded.blocks.reads.contains_key(&canonical_key) {
+        if physical.program.return_canon.is_some() && !target.encoded.blocks.reads.contains_key(&canonical_key) {
             let mut read = make_read(target, &facts, &origins, &returned, &returned, facts.physical.headings[&returned].iter().cloned().collect(), false, next)?;
             next += 1;
             read.consumer = e::Consumer::Relational(returned.clone());
@@ -155,7 +155,7 @@ pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::
             for field in read.fields.values_mut() { field.action = b::ReadAction::Ordinal; }
             target.encoded.blocks.reads.insert(canonical_key, read);
         }
-        let consumer = symbol_name(&target.physical.program.head.relation);
+        let consumer = symbol_name(&physical.program.head.relation);
         if let Some(demand) = &target.consumer {
             for (role, purpose) in [("carrier", e::ReadPurpose::PreserveCarrier), ("read", e::ReadPurpose::OpaqueRustRead)] {
                 let fields = demand.head.iter().filter(|field| {
@@ -172,13 +172,13 @@ pub(super) fn choose(target: &mut structures::Program, advice: &Advice) -> syn::
                 target.encoded.blocks.reads.insert(format!("output:{consumer}:{role}"), read);
             }
         } else {
-            let fields = target.physical.program.head.args.iter().flat_map(|e| structures::demand::columns_used_rust(e, &facts.physical.headings[&returned], None)).collect();
+            let fields = physical.program.head.args.iter().flat_map(|e| structures::demand::columns_used_rust(e, &facts.physical.headings[&returned], None)).collect();
             let read = make_read(target, &facts, &origins, &consumer, &returned, fields, true, next)?;
             target.encoded.blocks.reads.insert(consumer, read);
         }
     }
     target.structures.entries.extend(entries);
-    structures::contract::check(target)?;
+    structures::contract::check(physical, target)?;
     Ok(())
 }
 fn make_read(target: &structures::Program, facts: &structures::Analysis, origins: &BTreeMap<String, Vec<structures::Lineage>>, name: &str, input: &str, fields: BTreeSet<String>, final_answer: bool, id: u64) -> syn::Result<b::Read> {

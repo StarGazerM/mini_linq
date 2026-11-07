@@ -6,9 +6,9 @@
 //! facade crate. External feature crates can use the same API.
 //!
 //! * `corpus` embeds 30 scenarios at CQ, valuation order (VO), relational algebra
-//!   (RA), index demands (IX), Physical, and Structures stages. The IX and
-//!   Structures texts are suffix fragments; their parsed accessors join them to
-//!   the preceding stage. Parsing does not imply language contract validation.
+//!   (RA), index demands (IX), Physical, and Structures stages. The IX text
+//!   is joined to RA; Structures is parsed with an explicit Physical context.
+//!   Parsing does not imply language contract validation.
 //!   No policy fixtures are included. `cases` retains the 25 independently authored
 //!   input/answer cases, including raw duplicate inputs. `Scenario::case` maps five
 //!   alternative plans to their original authored cases.

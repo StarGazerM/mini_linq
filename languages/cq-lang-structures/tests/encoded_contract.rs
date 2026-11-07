@@ -4,12 +4,32 @@ use cq_syntax::DomainId;
 use quote::ToTokens;
 use std::collections::{BTreeMap, BTreeSet};
 
+type Fixture = (structures::physical::Program, structures::Program);
+
+fn parse_fixture(tokens: proc_macro2::TokenStream) -> syn::Result<Fixture> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let annotations = structures::Program::parse(input, &physical)?;
+        Ok((physical, annotations))
+    }).parse2(tokens)
+}
+
+fn parse_annotations(physical: &structures::physical::Program, tokens: proc_macro2::TokenStream) -> syn::Result<structures::Program> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| structures::Program::parse(input, physical)).parse2(tokens)
+}
+
+macro_rules! fixture_quote {
+    ($($tokens:tt)*) => { parse_fixture(quote::quote!($($tokens)*)).unwrap() };
+}
+
 fn fields(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|name| (*name).to_owned()).collect()
 }
 
-fn fixture() -> structures::Program {
-    let mut program: structures::Program = syn::parse_quote! {
+fn fixture() -> Fixture {
+    let mut program: Fixture = fixture_quote! {
         physical {
             relation R(a: u32 in [7] (symbols), b: u32 in [7] (symbols));
             r = pipe rename R@0 {a -> x, b -> y};
@@ -114,7 +134,7 @@ fn fixture() -> structures::Program {
         purpose: ReadPurpose::OpaqueRustRead,
         fields: fields(&["x"]),
     };
-    program.encoded = Contract {
+    program.1.encoded = Contract {
         obligations: Obligations {
             declarations: [(DeclarationId(1), declaration)].into(),
             sources: [(
@@ -157,8 +177,8 @@ fn fixture() -> structures::Program {
     program
 }
 
-fn check(program: &structures::Program) -> syn::Result<structures::Analysis> {
-    structures::contract::check(program)
+fn check(program: &Fixture) -> syn::Result<structures::Analysis> {
+    structures::contract::check(&program.0, &program.1)
 }
 
 #[test]
@@ -166,25 +186,25 @@ fn host_opaque_read_preserves_other_carriers_and_round_trips() {
     let program = fixture();
     check(&program).unwrap();
     assert_eq!(
-        program.encoded.records.reads[&ReadId(1)].fields,
+        program.1.encoded.records.reads[&ReadId(1)].fields,
         fields(&["x"])
     );
     assert_eq!(
-        program.encoded.records.publications[&PublicationId(1)]
+        program.1.encoded.records.publications[&PublicationId(1)]
             .fields
             .len(),
         2
     );
-    let reparsed: structures::Program = syn::parse2(program.to_token_stream()).unwrap();
-    assert_eq!(reparsed, program);
-    check(&reparsed).unwrap();
+    let reparsed = parse_annotations(&program.0, program.1.to_token_stream()).unwrap();
+    assert_eq!(reparsed, program.1);
+    structures::contract::check(&program.0, &reparsed).unwrap();
 }
 
 #[test]
 fn unrelated_declared_provider_cannot_supply_representation_guarantees() {
     let mut program = fixture();
     program
-        .encoded
+        .1.encoded
         .obligations
         .declarations
         .get_mut(&DeclarationId(1))
@@ -196,11 +216,11 @@ fn unrelated_declared_provider_cannot_supply_representation_guarantees() {
 #[test]
 fn ordinary_program_has_no_encoded_tokens_or_default_choices() {
     let mut program = fixture();
-    program.encoded = Contract::default();
+    program.1.encoded = Contract::default();
     check(&program).unwrap();
-    assert!(program.encoded.to_token_stream().is_empty());
-    let reparsed: structures::Program = syn::parse2(program.to_token_stream()).unwrap();
-    assert_eq!(reparsed, program);
+    assert!(program.1.encoded.to_token_stream().is_empty());
+    let reparsed = parse_annotations(&program.0, program.1.to_token_stream()).unwrap();
+    assert_eq!(reparsed, program.1);
     assert_eq!(reparsed.encoded, Contract::default());
 }
 
@@ -217,11 +237,11 @@ fn changed_read_identity_purpose_or_fields_are_rejected() {
     ];
     for mutate in mutations {
         let mut program = fixture();
-        mutate(program.encoded.records.reads.get_mut(&ReadId(1)).unwrap());
+        mutate(program.1.encoded.records.reads.get_mut(&ReadId(1)).unwrap());
         assert!(check(&program).is_err());
     }
     let mut missing = fixture();
-    missing.encoded.records.reads.clear();
+    missing.1.encoded.records.reads.clear();
     assert!(check(&missing).is_err());
 }
 
@@ -237,15 +257,15 @@ fn changed_domain_dictionary_role_preservation_and_snapshot_are_rejected() {
     ];
     for mutate in mutations {
         let mut program = fixture();
-        let mut different = program.encoded.obligations.declarations[&DeclarationId(1)].clone();
+        let mut different = program.1.encoded.obligations.declarations[&DeclarationId(1)].clone();
         mutate(&mut different);
         program
-            .encoded
+            .1.encoded
             .obligations
             .declarations
             .insert(DeclarationId(2), different);
         program
-            .encoded
+            .1.encoded
             .records
             .representations
             .get_mut(&RepresentationId(0))
@@ -255,7 +275,7 @@ fn changed_domain_dictionary_role_preservation_and_snapshot_are_rejected() {
     }
     let mut stale = fixture();
     stale
-        .encoded
+        .1.encoded
         .records
         .representations
         .get_mut(&RepresentationId(0))
@@ -264,7 +284,7 @@ fn changed_domain_dictionary_role_preservation_and_snapshot_are_rejected() {
     assert!(check(&stale).is_err());
     let mut lineage = fixture();
     lineage
-        .encoded
+        .1.encoded
         .obligations
         .sources
         .get_mut(&SourceId(1))
@@ -277,7 +297,7 @@ fn changed_domain_dictionary_role_preservation_and_snapshot_are_rejected() {
 fn missing_or_cross_column_buffers_and_unretained_sources_are_rejected() {
     let mut missing = fixture();
     missing
-        .encoded
+        .1.encoded
         .records
         .publications
         .get_mut(&PublicationId(1))
@@ -287,7 +307,7 @@ fn missing_or_cross_column_buffers_and_unretained_sources_are_rejected() {
     assert!(check(&missing).is_err());
     let mut missing_buffer = fixture();
     missing_buffer
-        .encoded
+        .1.encoded
         .records
         .publications
         .get_mut(&PublicationId(1))
@@ -299,10 +319,10 @@ fn missing_or_cross_column_buffers_and_unretained_sources_are_rejected() {
         .remove(&BufferKind::Headers);
     assert!(check(&missing_buffer).is_err());
     let mut wrong_buffer = fixture();
-    let buffer = wrong_buffer.encoded.records.publications[&PublicationId(1)].fields["y"].buffers
+    let buffer = wrong_buffer.1.encoded.records.publications[&PublicationId(1)].fields["y"].buffers
         [&BufferKind::Payload];
     wrong_buffer
-        .encoded
+        .1.encoded
         .records
         .publications
         .get_mut(&PublicationId(1))
@@ -315,7 +335,7 @@ fn missing_or_cross_column_buffers_and_unretained_sources_are_rejected() {
     assert!(check(&wrong_buffer).is_err());
     let mut unretained = fixture();
     unretained
-        .encoded
+        .1.encoded
         .obligations
         .boundaries
         .get_mut(&BoundaryId(1))
@@ -325,7 +345,7 @@ fn missing_or_cross_column_buffers_and_unretained_sources_are_rejected() {
     assert!(check(&unretained).is_err());
     let mut stale = fixture();
     stale
-        .encoded
+        .1.encoded
         .obligations
         .sources
         .get_mut(&SourceId(1))
@@ -337,16 +357,16 @@ fn missing_or_cross_column_buffers_and_unretained_sources_are_rejected() {
 #[test]
 fn different_lawful_family_passes_without_selector_equality() {
     let mut program = fixture();
-    let mut alternative = program.encoded.obligations.declarations[&DeclarationId(1)].clone();
+    let mut alternative = program.1.encoded.obligations.declarations[&DeclarationId(1)].clone();
     alternative.family = Family::Plain;
     alternative.carrier = Carrier::U64;
     program
-        .encoded
+        .1.encoded
         .obligations
         .declarations
         .insert(DeclarationId(2), alternative);
     check(&program).unwrap();
-    for representation in program.encoded.records.representations.values_mut() {
+    for representation in program.1.encoded.records.representations.values_mut() {
         representation.declaration = DeclarationId(2);
     }
     check(&program).unwrap();
@@ -356,7 +376,7 @@ fn different_lawful_family_passes_without_selector_equality() {
 fn device_opaque_read_requires_explicit_semantic_identity() {
     let mut program = fixture();
     program
-        .encoded
+        .1.encoded
         .obligations
         .boundaries
         .get_mut(&BoundaryId(1))
@@ -364,7 +384,7 @@ fn device_opaque_read_requires_explicit_semantic_identity() {
         .location = Location::Device;
     assert!(check(&program).is_err());
     let declaration = program
-        .encoded
+        .1.encoded
         .obligations
         .declarations
         .get_mut(&DeclarationId(1))
@@ -373,7 +393,7 @@ fn device_opaque_read_requires_explicit_semantic_identity() {
     // Plain dictionary codes are still not logical Rust values.
     assert!(check(&program).is_err());
     program
-        .encoded
+        .1.encoded
         .obligations
         .declarations
         .get_mut(&DeclarationId(1))
@@ -382,12 +402,12 @@ fn device_opaque_read_requires_explicit_semantic_identity() {
     check(&program).unwrap();
 }
 
-fn transport() -> structures::Program {
+fn transport() -> Fixture {
     let mut program = fixture();
-    let mut destination = program.encoded.obligations.boundaries[&BoundaryId(1)].clone();
+    let mut destination = program.1.encoded.obligations.boundaries[&BoundaryId(1)].clone();
     destination.location = Location::Device;
     destination.readiness = "upload_done".into();
-    let demanded = program.encoded.records.publications[&PublicationId(1)].fields["x"]
+    let demanded = program.1.encoded.records.publications[&PublicationId(1)].fields["x"]
         .buffers
         .values()
         .copied()
@@ -407,7 +427,7 @@ fn transport() -> structures::Program {
         })
         .collect();
     program
-        .encoded
+        .1.encoded
         .obligations
         .boundaries
         .insert(BoundaryId(2), destination);
@@ -419,11 +439,11 @@ fn transport() -> structures::Program {
         buffers,
     };
     program
-        .encoded
+        .1.encoded
         .obligations
         .copies
         .insert(CopyId(1), copy.clone());
-    program.encoded.records.copies.insert(CopyId(1), copy);
+    program.1.encoded.records.copies.insert(CopyId(1), copy);
     let read = ReadPacket {
         publication: PublicationId(1),
         boundary: BoundaryId(1),
@@ -432,11 +452,11 @@ fn transport() -> structures::Program {
         fields: fields(&["x"]),
     };
     program
-        .encoded
+        .1.encoded
         .obligations
         .reads
         .insert(ReadId(2), read.clone());
-    program.encoded.records.reads.insert(ReadId(2), read);
+    program.1.encoded.records.reads.insert(ReadId(2), read);
     program
 }
 
@@ -444,11 +464,11 @@ fn transport() -> structures::Program {
 fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
     let program = transport();
     check(&program).unwrap();
-    assert_eq!(program.encoded.records.copies[&CopyId(1)].buffers.len(), 3);
-    let mutations: &[fn(&mut structures::Program)] = &[
+    assert_eq!(program.1.encoded.records.copies[&CopyId(1)].buffers.len(), 3);
+    let mutations: &[fn(&mut Fixture)] = &[
         |program| {
             program
-                .encoded
+                .1.encoded
                 .records
                 .copies
                 .get_mut(&CopyId(1))
@@ -457,7 +477,7 @@ fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
         },
         |program| {
             program
-                .encoded
+                .1.encoded
                 .records
                 .copies
                 .get_mut(&CopyId(1))
@@ -467,7 +487,7 @@ fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
         },
         |program| {
             program
-                .encoded
+                .1.encoded
                 .obligations
                 .boundaries
                 .get_mut(&BoundaryId(2))
@@ -480,7 +500,7 @@ fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
         },
         |program| {
             program
-                .encoded
+                .1.encoded
                 .obligations
                 .boundaries
                 .get_mut(&BoundaryId(2))
@@ -489,7 +509,7 @@ fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
         },
         |program| {
             program
-                .encoded
+                .1.encoded
                 .obligations
                 .boundaries
                 .get_mut(&BoundaryId(2))
@@ -499,7 +519,7 @@ fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
         },
         |program| {
             program
-                .encoded
+                .1.encoded
                 .obligations
                 .boundaries
                 .get_mut(&BoundaryId(2))
@@ -520,17 +540,17 @@ fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
     // Even matching forged copy records/obligations cannot broaden original
     // field demand into an all-column copy.
     let mut extra = program.clone();
-    let buffer = extra.encoded.records.publications[&PublicationId(1)].fields["y"].buffers
+    let buffer = extra.1.encoded.records.publications[&PublicationId(1)].fields["y"].buffers
         [&BufferKind::Payload];
     extra
-        .encoded
+        .1.encoded
         .obligations
         .copies
         .get_mut(&CopyId(1))
         .unwrap()
         .buffers
         .insert(buffer, BufferId(199));
-    extra.encoded.records.copies = extra.encoded.obligations.copies.clone();
+    extra.1.encoded.records.copies = extra.1.encoded.obligations.copies.clone();
     assert!(check(&extra).is_err());
 }
 
@@ -538,13 +558,13 @@ fn cross_device_transport_copies_only_exact_demanded_initialized_buffers() {
 fn transport_never_authorizes_final_answer_reconstruction() {
     let mut program = transport();
     program
-        .encoded
+        .1.encoded
         .obligations
         .reads
         .get_mut(&ReadId(2))
         .unwrap()
         .purpose = ReadPurpose::FinalHostAnswer;
-    program.encoded.records.reads = program.encoded.obligations.reads.clone();
+    program.1.encoded.records.reads = program.1.encoded.obligations.reads.clone();
     assert!(check(&program).is_err());
 }
 
@@ -552,7 +572,7 @@ fn transport_never_authorizes_final_answer_reconstruction() {
 fn final_answer_is_host_only_with_exact_output_fields() {
     let mut program = fixture();
     program
-        .encoded
+        .1.encoded
         .obligations
         .publications
         .get_mut(&PublicationId(1))
@@ -565,12 +585,12 @@ fn final_answer_is_host_only_with_exact_output_fields() {
         purpose: ReadPurpose::FinalHostAnswer,
         fields: fields(&["x", "y"]),
     };
-    program.encoded.obligations.reads = [(ReadId(1), answer.clone())].into();
-    program.encoded.records.reads = [(ReadId(1), answer)].into();
+    program.1.encoded.obligations.reads = [(ReadId(1), answer.clone())].into();
+    program.1.encoded.records.reads = [(ReadId(1), answer)].into();
     check(&program).unwrap();
     let mut wrong = program.clone();
     wrong
-        .encoded
+        .1.encoded
         .obligations
         .boundaries
         .get_mut(&BoundaryId(1))
@@ -579,14 +599,14 @@ fn final_answer_is_host_only_with_exact_output_fields() {
     assert!(check(&wrong).is_err());
     let mut missing = program.clone();
     missing
-        .encoded
+        .1.encoded
         .obligations
         .reads
         .get_mut(&ReadId(1))
         .unwrap()
         .fields
         .remove("y");
-    missing.encoded.records.reads = missing.encoded.obligations.reads.clone();
+    missing.1.encoded.records.reads = missing.1.encoded.obligations.reads.clone();
     assert!(check(&missing).is_err());
 }
 
@@ -594,14 +614,14 @@ fn final_answer_is_host_only_with_exact_output_fields() {
 fn original_opaque_demand_is_rederived_even_if_both_packets_change() {
     let mut program = fixture();
     program
-        .encoded
+        .1.encoded
         .obligations
         .reads
         .get_mut(&ReadId(1))
         .unwrap()
         .fields
         .insert("y".into());
-    program.encoded.records.reads = program.encoded.obligations.reads.clone();
+    program.1.encoded.records.reads = program.1.encoded.obligations.reads.clone();
     assert!(check(&program).is_err());
 }
 
@@ -616,19 +636,19 @@ fn preserved_carriers_chain_without_opaque_device_permission() {
         fields: fields(&["y"]),
     };
     program
-        .encoded
+        .1.encoded
         .obligations
         .reads
         .insert(ReadId(2), preserved.clone());
-    program.encoded.records.reads.insert(ReadId(2), preserved);
+    program.1.encoded.records.reads.insert(ReadId(2), preserved);
     check(&program).unwrap();
-    let duplicate = program.encoded.records.reads[&ReadId(2)].clone();
+    let duplicate = program.1.encoded.records.reads[&ReadId(2)].clone();
     program
-        .encoded
+        .1.encoded
         .obligations
         .reads
         .insert(ReadId(3), duplicate.clone());
-    program.encoded.records.reads.insert(ReadId(3), duplicate);
+    program.1.encoded.records.reads.insert(ReadId(3), duplicate);
     assert!(check(&program).is_err());
 }
 
@@ -636,7 +656,7 @@ fn preserved_carriers_chain_without_opaque_device_permission() {
 fn index_role_requires_existing_byte_addressable_layout() {
     let mut program = fixture();
     for field in program
-        .encoded
+        .1.encoded
         .obligations
         .publications
         .get_mut(&PublicationId(1))
@@ -647,7 +667,7 @@ fn index_role_requires_existing_byte_addressable_layout() {
         field.role = Role::IndexRun;
     }
     let declaration = program
-        .encoded
+        .1.encoded
         .obligations
         .declarations
         .get_mut(&DeclarationId(1))
@@ -655,7 +675,7 @@ fn index_role_requires_existing_byte_addressable_layout() {
     declaration.role = Role::IndexRun;
     assert!(check(&program).is_err());
     let declaration = program
-        .encoded
+        .1.encoded
         .obligations
         .declarations
         .get_mut(&DeclarationId(1))
@@ -663,7 +683,7 @@ fn index_role_requires_existing_byte_addressable_layout() {
     declaration.family = Family::IndexByteAddressable;
     declaration.layout = Layout::ProviderIndex;
     assert!(check(&program).is_err());
-    program.physical = syn::parse_quote! {
+    program.0 = syn::parse_quote! {
         physical {
             relation L(a: u32 in [7] (symbols));
             relation R(a: u32 in [7] (symbols), b: u32 in [7] (symbols));
@@ -673,36 +693,36 @@ fn index_role_requires_existing_byte_addressable_layout() {
             return canon s as answer(x,y);
         }
     };
-    program.structures.entries.push(syn::parse_quote!(
+    program.1.structures.entries.push(syn::parse_quote!(
         l host scan = @input as ArbitraryName [];
     ));
     program
-        .structures
+        .1.structures
         .providers
         .declarations
         .push(syn::parse_quote!(
             index = Index { reads [exact, range, membership], build typed };
         ));
     program
-        .structures
+        .1.structures
         .entries
         .push(syn::parse_quote!(r = @index as Index [x];));
     program
-        .encoded
+        .1.encoded
         .obligations
         .declarations
         .get_mut(&DeclarationId(1))
         .unwrap()
         .provider = "index".into();
     let read = program
-        .encoded
+        .1.encoded
         .obligations
         .reads
         .get_mut(&ReadId(1))
         .unwrap();
     read.consumer = Consumer::Relational("s".into());
     read.purpose = ReadPurpose::PreserveCarrier;
-    program.encoded.records.reads = program.encoded.obligations.reads.clone();
+    program.1.encoded.records.reads = program.1.encoded.obligations.reads.clone();
     check(&program).unwrap();
 }
 
@@ -714,7 +734,7 @@ fn block_and_vector_summary_buffers_are_distinct_exact_demands() {
         .enumerate()
     {
         program
-            .encoded
+            .1.encoded
             .obligations
             .declarations
             .get_mut(&DeclarationId(1))
@@ -724,7 +744,7 @@ fn block_and_vector_summary_buffers_are_distinct_exact_demands() {
         for (index, (logical, column)) in [("x", "a"), ("y", "b")].into_iter().enumerate() {
             let buffer = BufferId(200 + (offset * 2 + index) as u64);
             program
-                .encoded
+                .1.encoded
                 .records
                 .publications
                 .get_mut(&PublicationId(1))
@@ -735,7 +755,7 @@ fn block_and_vector_summary_buffers_are_distinct_exact_demands() {
                 .buffers
                 .insert(kind, buffer);
             program
-                .encoded
+                .1.encoded
                 .obligations
                 .boundaries
                 .get_mut(&BoundaryId(1))
@@ -758,7 +778,7 @@ fn block_and_vector_summary_buffers_are_distinct_exact_demands() {
     }
     check(&program).unwrap();
     program
-        .encoded
+        .1.encoded
         .records
         .publications
         .get_mut(&PublicationId(1))
@@ -777,10 +797,10 @@ fn optional_encoded_envelope_leaves_following_pipeline_syntax_untouched() {
     for present in [false, true] {
         let mut program = fixture();
         if !present {
-            program.encoded = Contract::default();
+            program.1.encoded = Contract::default();
         }
         let parser = |input: syn::parse::ParseStream<'_>| -> syn::Result<structures::Program> {
-            let program = input.parse()?;
+            let program = structures::Program::parse(input, &program.0)?;
             let next: syn::Ident = input.parse()?;
             assert_eq!(next, "sequence");
             let body;
@@ -788,14 +808,15 @@ fn optional_encoded_envelope_leaves_following_pipeline_syntax_untouched() {
             assert!(body.is_empty());
             Ok(program)
         };
-        let parsed = parser.parse2(quote::quote!(#program sequence {})).unwrap();
-        assert_eq!(parsed, program);
+        let annotations = &program.1;
+        let parsed = parser.parse2(quote::quote!(#annotations sequence {})).unwrap();
+        assert_eq!(parsed, program.1);
     }
 }
 
-fn blocked_fixture() -> structures::Program {
+fn blocked_fixture() -> Fixture {
     use structures::blocks as b;
-    let mut program: structures::Program = syn::parse_quote! {
+    let mut program: Fixture = fixture_quote! {
         physical {
             relation R(a: Alias [42], b: Alias [42]);
             r = pipe rename R@0 { a -> x, b -> y };
@@ -817,7 +838,7 @@ fn blocked_fixture() -> structures::Program {
         }
     };
     let source = SourceId(1);
-    program.encoded.obligations.sources.insert(source, Source {
+    program.1.encoded.obligations.sources.insert(source, Source {
         relation: "R".into(), occurrence: "r".into(), snapshot: SnapshotId(9),
     });
     let mut columns = BTreeMap::new();
@@ -825,14 +846,14 @@ fn blocked_fixture() -> structures::Program {
     for (slot, name) in ["a", "b"].into_iter().enumerate() {
         let declaration = DeclarationId(slot as u64 + 1);
         let representation = RepresentationId(slot as u64);
-        program.encoded.obligations.declarations.insert(declaration, Declaration {
+        program.1.encoded.obligations.declarations.insert(declaration, Declaration {
             provider: "input".into(), domain: Domain { code: None, dictionary: None },
             role: Role::ScanColumn, family: Family::Bytes, layout: Layout::S1,
             carrier: Carrier::U32, identity: false,
             preserves: [Preservation::Equality, Preservation::Order].into(),
             buffers: [BufferKind::Payload, BufferKind::Headers, BufferKind::BlockSummaries].into(),
         });
-        program.encoded.records.representations.insert(representation, Representation {
+        program.1.encoded.records.representations.insert(representation, Representation {
             declaration, source, column: name.into(), snapshot: SnapshotId(9),
         });
         columns.insert(name.into(), b::Column {
@@ -841,21 +862,21 @@ fn blocked_fixture() -> structures::Program {
         });
         selected.insert(name.into(), representation);
     }
-    program.encoded.blocks.sources.insert(source, b::Source {
+    program.1.encoded.blocks.sources.insert(source, b::Source {
         block_rows: 1024, summary: b::Summary::MinMax, columns,
     });
-    program.encoded.blocks.scans.insert("r".into(), b::Scan { source, columns: selected });
-    program.encoded.blocks.predicates.insert("p".into(), b::Predicate {
+    program.1.encoded.blocks.scans.insert("r".into(), b::Scan { source, columns: selected });
+    program.1.encoded.blocks.predicates.insert("p".into(), b::Predicate {
         input: "r".into(), source, columns: [("x".into(), RepresentationId(0))].into(),
         prune: b::Prune::MinMax, test: b::Test::Encoded, strategy: b::Strategy::Window,
         translation: b::Translation::S1Ordinal, preserves: [Preservation::Order].into(),
     });
-    program.encoded.blocks.reads.insert("g".into(), b::Read {
+    program.1.encoded.blocks.reads.insert("g".into(), b::Read {
         id: 1, input: "p".into(), consumer: Consumer::OpaqueRust("g".into()),
         purpose: ReadPurpose::OpaqueRustRead,
         fields: [("x".into(), b::FieldRead { representation: RepresentationId(0), action: b::ReadAction::Owned })].into(),
     });
-    program.encoded.blocks.reads.insert("answer".into(), b::Read {
+    program.1.encoded.blocks.reads.insert("answer".into(), b::Read {
         id: 2, input: "g".into(), consumer: Consumer::FinalAnswer("answer".into()),
         purpose: ReadPurpose::FinalHostAnswer,
         fields: [
@@ -863,7 +884,7 @@ fn blocked_fixture() -> structures::Program {
             ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Owned }),
         ].into(),
     });
-    program.encoded.blocks.reads.insert("canon:g".into(), b::Read {
+    program.1.encoded.blocks.reads.insert("canon:g".into(), b::Read {
         id: 3, input: "g".into(), consumer: Consumer::Relational("g".into()),
         purpose: ReadPurpose::PreserveCarrier,
         fields: [
@@ -878,9 +899,9 @@ fn blocked_fixture() -> structures::Program {
 fn blocks_independent_authored_contract_roundtrips() {
     let program = blocked_fixture();
     check(&program).unwrap();
-    let parsed: structures::Program = syn::parse2(program.to_token_stream()).unwrap();
-    assert_eq!(parsed, program);
-    check(&parsed).unwrap();
+    let parsed = parse_annotations(&program.0, program.1.to_token_stream()).unwrap();
+    assert_eq!(parsed, program.1);
+    structures::contract::check(&program.0, &parsed).unwrap();
 }
 
 #[test]
@@ -889,23 +910,23 @@ fn blocks_mutations_cannot_change_source_predicate_or_read_obligations() {
     for mutation in 0..17 {
         let mut p = blocked_fixture();
         match mutation {
-            0 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().slot = 1,
-            1 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().logical = cq_syntax::LogicalTypeId(99),
-            2 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().block_rows = 0,
-            3 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().widths.insert(8).then_some(()).unwrap(),
-            4 => p.encoded.records.representations.get_mut(&RepresentationId(0)).unwrap().snapshot = SnapshotId(88),
-            5 => p.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().domain.code = Some(DomainId(77)),
-            6 => p.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().provider = "sort".into(),
-            7 => { p.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().preserves.remove(&Preservation::Order); }
-            8 => { p.encoded.blocks.predicates.remove("p"); }
-            9 => { p.encoded.blocks.predicates.get_mut("p").unwrap().columns.clear(); }
-            10 => p.encoded.blocks.predicates.get_mut("p").unwrap().input = "g".into(),
-            11 => p.encoded.blocks.predicates.get_mut("p").unwrap().strategy = b::Strategy::Point,
-            12 => p.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = b::Summary::None,
-            13 => { p.encoded.blocks.reads.get_mut("g").unwrap().fields.clear(); }
-            14 => p.encoded.blocks.reads.get_mut("answer").unwrap().fields.get_mut("y").unwrap().action = b::ReadAction::BorrowedScoped,
-            15 => p.encoded.blocks.reads.get_mut("g").unwrap().purpose = ReadPurpose::PreserveCarrier,
-            16 => { p.encoded.blocks.scans.get_mut("r").unwrap().columns.remove("b"); }
+            0 => p.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().slot = 1,
+            1 => p.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().logical = cq_syntax::LogicalTypeId(99),
+            2 => p.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().block_rows = 0,
+            3 => p.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.get_mut("a").unwrap().widths.insert(8).then_some(()).unwrap(),
+            4 => p.1.encoded.records.representations.get_mut(&RepresentationId(0)).unwrap().snapshot = SnapshotId(88),
+            5 => p.1.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().domain.code = Some(DomainId(77)),
+            6 => p.1.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().provider = "sort".into(),
+            7 => { p.1.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap().preserves.remove(&Preservation::Order); }
+            8 => { p.1.encoded.blocks.predicates.remove("p"); }
+            9 => { p.1.encoded.blocks.predicates.get_mut("p").unwrap().columns.clear(); }
+            10 => p.1.encoded.blocks.predicates.get_mut("p").unwrap().input = "g".into(),
+            11 => p.1.encoded.blocks.predicates.get_mut("p").unwrap().strategy = b::Strategy::Point,
+            12 => p.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = b::Summary::None,
+            13 => { p.1.encoded.blocks.reads.get_mut("g").unwrap().fields.clear(); }
+            14 => p.1.encoded.blocks.reads.get_mut("answer").unwrap().fields.get_mut("y").unwrap().action = b::ReadAction::BorrowedScoped,
+            15 => p.1.encoded.blocks.reads.get_mut("g").unwrap().purpose = ReadPurpose::PreserveCarrier,
+            16 => { p.1.encoded.blocks.scans.get_mut("r").unwrap().columns.remove("b"); }
             _ => unreachable!(),
         }
         assert!(check(&p).is_err(), "blocked mutation {mutation}");
@@ -916,19 +937,19 @@ fn blocks_mutations_cannot_change_source_predicate_or_read_obligations() {
 fn blocks_accept_legal_nonpreferred_physical_code_tests_and_plain() {
     use structures::blocks as b;
     let mut program = blocked_fixture();
-    let predicate = program.encoded.blocks.predicates.get_mut("p").unwrap();
+    let predicate = program.1.encoded.blocks.predicates.get_mut("p").unwrap();
     predicate.prune = b::Prune::None;
     predicate.test = b::Test::DecodeCodes;
     predicate.strategy = b::Strategy::Formula;
-    program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = b::Summary::None;
-    for declaration in program.encoded.obligations.declarations.values_mut() {
+    program.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = b::Summary::None;
+    for declaration in program.1.encoded.obligations.declarations.values_mut() {
         declaration.family = Family::Plain;
     }
-    for column in program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.values_mut() {
+    for column in program.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.values_mut() {
         column.widths = [4].into();
     }
     check(&program).unwrap();
-    program.encoded.blocks.reads.get_mut("g").unwrap().fields.get_mut("x").unwrap().action = b::ReadAction::BorrowedScoped;
+    program.1.encoded.blocks.reads.get_mut("g").unwrap().fields.get_mut("x").unwrap().action = b::ReadAction::BorrowedScoped;
     check(&program).unwrap();
 }
 
@@ -936,24 +957,24 @@ fn blocks_accept_legal_nonpreferred_physical_code_tests_and_plain() {
 fn blocks_source_obligations_are_immutable_across_rewrites() {
     let source = blocked_fixture();
     let mut target = source.clone();
-    target.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().block_rows = 3072;
+    target.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().block_rows = 3072;
     // A separately authored provider may use three vectors per block. It is
     // not permission for a rewrite to change the original bound source.
     check(&target).unwrap();
-    assert!(structures::check_rewrite(&source, &target).is_err());
-    assert!(structures::check_retention_rewrite(&source, &target).is_err());
+    assert!(structures::check_rewrite(&source.0, &source.1, &target.0, &target.1).is_err());
+    assert!(structures::check_retention_rewrite(&source.0, &source.1, &target.0, &target.1).is_err());
 }
 
-fn blocked_external_fixture() -> structures::Program {
+fn blocked_external_fixture() -> Fixture {
     use structures::blocks as b;
     let mut program = blocked_fixture();
-    program.consumer = Some(structures::OutputConsumer {
+    program.1.consumer = Some(structures::OutputConsumer {
         original_consumer: "outer".into(),
         head: vec!["x".into(), "y".into()],
         value_reads: vec![],
     });
-    program.encoded.blocks.reads.remove("answer");
-    program.encoded.blocks.reads.insert("output:answer:carrier".into(), b::Read {
+    program.1.encoded.blocks.reads.remove("answer");
+    program.1.encoded.blocks.reads.insert("output:answer:carrier".into(), b::Read {
         id: 2, input: "g".into(), consumer: Consumer::Relational("outer".into()),
         purpose: ReadPurpose::PreserveCarrier,
         fields: [
@@ -961,7 +982,7 @@ fn blocked_external_fixture() -> structures::Program {
             ("y".into(), b::FieldRead { representation: RepresentationId(1), action: b::ReadAction::Ordinal }),
         ].into(),
     });
-    program.encoded.blocks.reads.insert("output:answer:read".into(), b::Read {
+    program.1.encoded.blocks.reads.insert("output:answer:read".into(), b::Read {
         id: 4, input: "g".into(), consumer: Consumer::OpaqueRust("outer".into()),
         purpose: ReadPurpose::OpaqueRustRead,
         fields: BTreeMap::new(),
@@ -974,24 +995,24 @@ fn blocks_external_consumer_checks_exact_roles_and_injective_value_codes() {
     use structures::blocks as b;
     let program = blocked_external_fixture();
     check(&program).unwrap();
-    let parsed: structures::Program = syn::parse2(program.to_token_stream()).unwrap();
-    assert_eq!(parsed, program);
-    check(&parsed).unwrap();
+    let parsed = parse_annotations(&program.0, program.1.to_token_stream()).unwrap();
+    assert_eq!(parsed, program.1);
+    structures::contract::check(&program.0, &parsed).unwrap();
     for mutation in 0..9 {
         let mut forged = program.clone();
         match mutation {
-            0 => forged.consumer.as_mut().unwrap().value_reads.push("x".into()),
-            1 => forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.get_mut("y").unwrap().action = b::ReadAction::Owned,
-            2 => forged.encoded.blocks.reads.get_mut("output:answer:read").unwrap().purpose = ReadPurpose::FinalHostAnswer,
-            3 => forged.encoded.blocks.reads.get_mut("output:answer:read").unwrap().consumer = Consumer::OpaqueRust("invented".into()),
-            4 => { forged.encoded.obligations.declarations.get_mut(&DeclarationId(2)).unwrap().preserves.remove(&Preservation::Equality); }
-            5 => forged.encoded.obligations.declarations.get_mut(&DeclarationId(2)).unwrap().layout = Layout::ProviderIndex,
-            6 => forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.get_mut("y").unwrap().representation = RepresentationId(0),
-            7 => { forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.clear(); }
+            0 => forged.1.consumer.as_mut().unwrap().value_reads.push("x".into()),
+            1 => forged.1.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.get_mut("y").unwrap().action = b::ReadAction::Owned,
+            2 => forged.1.encoded.blocks.reads.get_mut("output:answer:read").unwrap().purpose = ReadPurpose::FinalHostAnswer,
+            3 => forged.1.encoded.blocks.reads.get_mut("output:answer:read").unwrap().consumer = Consumer::OpaqueRust("invented".into()),
+            4 => { forged.1.encoded.obligations.declarations.get_mut(&DeclarationId(2)).unwrap().preserves.remove(&Preservation::Equality); }
+            5 => forged.1.encoded.obligations.declarations.get_mut(&DeclarationId(2)).unwrap().layout = Layout::ProviderIndex,
+            6 => forged.1.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.get_mut("y").unwrap().representation = RepresentationId(0),
+            7 => { forged.1.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.clear(); }
             8 => {
-                forged.consumer.as_mut().unwrap().value_reads.push("x".into());
-                let field = forged.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.remove("x").unwrap();
-                forged.encoded.blocks.reads.get_mut("output:answer:read").unwrap().fields.insert("x".into(), b::FieldRead { action: b::ReadAction::Owned, ..field });
+                forged.1.consumer.as_mut().unwrap().value_reads.push("x".into());
+                let field = forged.1.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().fields.remove("x").unwrap();
+                forged.1.encoded.blocks.reads.get_mut("output:answer:read").unwrap().fields.insert("x".into(), b::FieldRead { action: b::ReadAction::Owned, ..field });
             }
             _ => unreachable!(),
         }
@@ -1003,22 +1024,22 @@ fn blocks_external_consumer_checks_exact_roles_and_injective_value_codes() {
 fn blocks_external_demand_cannot_be_forged_together_with_read_records() {
     let source = blocked_external_fixture();
     let mut target = source.clone();
-    target.consumer.as_mut().unwrap().original_consumer = "different_outer".into();
-    target.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().consumer = Consumer::Relational("different_outer".into());
-    target.encoded.blocks.reads.get_mut("output:answer:read").unwrap().consumer = Consumer::OpaqueRust("different_outer".into());
+    target.1.consumer.as_mut().unwrap().original_consumer = "different_outer".into();
+    target.1.encoded.blocks.reads.get_mut("output:answer:carrier").unwrap().consumer = Consumer::Relational("different_outer".into());
+    target.1.encoded.blocks.reads.get_mut("output:answer:read").unwrap().consumer = Consumer::OpaqueRust("different_outer".into());
     // Locally valid for a DIFFERENT original consumer; not a rewrite of this one.
     check(&target).unwrap();
-    assert!(structures::check_rewrite(&source, &target).is_err());
-    assert!(structures::check_retention_rewrite(&source, &target).is_err());
+    assert!(structures::check_rewrite(&source.0, &source.1, &target.0, &target.1).is_err());
+    assert!(structures::check_retention_rewrite(&source.0, &source.1, &target.0, &target.1).is_err());
 }
 
 #[test]
 fn blocks_external_value_codes_accept_plain_nonpreferred_representation() {
     let mut program = blocked_external_fixture();
-    for declaration in program.encoded.obligations.declarations.values_mut() {
+    for declaration in program.1.encoded.obligations.declarations.values_mut() {
         declaration.family = Family::Plain;
     }
-    for column in program.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.values_mut() {
+    for column in program.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().columns.values_mut() {
         column.widths = [4].into();
     }
     check(&program).unwrap();

@@ -84,11 +84,12 @@ pub fn capture_physical(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Capture checked Structures IR; compile pipelines must set `print_input = structures`.
+
+/// Capture both independent stack entries for rewrite correspondence tests.
 #[proc_macro]
-pub fn capture_structures(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<cq_testkit::physical::Program, cq_testkit::structures::Program>::pass::<syn::Expr>(input.into(), |_physical, p, _| {
-        let text = p.to_token_stream().to_string();
+pub fn capture_structures_stack(input: TokenStream) -> TokenStream {
+    cq_stage::Structures::<cq_testkit::physical::Program, cq_testkit::structures::Program>::pass::<syn::Expr>(input.into(), |physical, structures, _| {
+        let text = quote!(#physical #structures).to_string();
         Ok(syn::parse_quote!(#text))
     })
     .into()

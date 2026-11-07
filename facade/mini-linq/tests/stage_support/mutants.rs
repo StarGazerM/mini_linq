@@ -117,11 +117,13 @@ impl Tally {
         if cq_structure_selection::check(physical, &selected).is_err() {
             return;
         }
-        for mutant in mutate::structures(&selected, carriers) {
+        for mutant in mutate::structures(physical, &selected, carriers) {
             if mutant.site.starts_with("physical ") {
                 continue; // judged above on the Physical record itself
             }
-            let accepted = cq_structure_selection::check(physical, &mutant.program).is_ok();
+            let (mutant_physical, mutant_structures) = &mutant.program;
+            let accepted =
+                cq_structure_selection::check(mutant_physical, mutant_structures).is_ok();
             let map = if accepted {
                 &mut self.structures_accepted
             } else {

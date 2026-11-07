@@ -41,6 +41,7 @@ pub fn columns_used_rust(
 }
 
 pub fn carried_columns(
+    physical: &crate::physical::Program,
     module: &crate::Program,
     analysis: &crate::Analysis,
 ) -> BTreeMap<String, Vec<String>> {
@@ -49,8 +50,8 @@ pub fn carried_columns(
         .keys()
         .map(|n| (n.clone(), BTreeSet::new()))
         .collect();
-    let returned = symbol_name(&module.physical.program.returned);
-    for expression in &module.physical.program.head.args {
+    let returned = symbol_name(&physical.program.returned);
+    for expression in &physical.program.head.args {
         used.get_mut(&returned).unwrap().extend(columns_used_rust(
             expression,
             &analysis.layouts[&returned],
@@ -59,7 +60,7 @@ pub fn carried_columns(
     }
     // Canonical boundaries compare the complete logical valuation. Recorded
     // storage keys/payloads likewise remain independent of downstream projection.
-    for definition in &module.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         if definition.canon.is_some() {
             used.get_mut(&name)
@@ -91,17 +92,18 @@ pub fn carried_columns(
     for (name, key) in analysis.keysets.keys() {
         used.get_mut(name).unwrap().extend(key.iter().cloned());
     }
-    propagate_columns(module, analysis, used)
+    propagate_columns(physical, module, analysis, used)
 }
 
 /// Propagate demanded columns backwards through every consumer, from the
 /// answer to the sources. Callers may add demands before propagation.
 pub fn propagate_columns(
-    module: &crate::Program,
+    physical: &crate::physical::Program,
+    _module: &crate::Program,
     analysis: &crate::Analysis,
     mut used: BTreeMap<String, BTreeSet<String>>,
 ) -> BTreeMap<String, Vec<String>> {
-    for definition in module.physical.program.definitions.iter().rev() {
+    for definition in physical.program.definitions.iter().rev() {
         let name = symbol_name(&definition.name);
         let output = used[&name].clone();
         let mut demand = |input: &Ident, extra: BTreeSet<String>| {

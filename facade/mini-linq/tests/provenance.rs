@@ -416,10 +416,10 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
     let smallest = authored::smallest(&physical).unwrap();
     cq_lang_physical::check_rewrite(&physical, &smallest).unwrap();
     cq_physical_lowering::check(&ix, &smallest).unwrap();
-    let selected =
+    let (selected_physical, selected) =
         cq_structure_selection::compile_with(&smallest, quote!(positional(r0, r1, r2, r3)))
             .unwrap();
-    let before = cq_lang_structures::contract::check(&selected).unwrap();
+    let before = cq_lang_structures::contract::check(&selected_physical, &selected).unwrap();
     assert!(
         !before.join_filters.is_empty(),
         "the seed must exercise a real positional join filter"
@@ -476,9 +476,11 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
         "a join filter must enumerate a retyped single-level provider"
     );
     custom.structures.declare(&[custom_index]).unwrap();
-    cq_lang_structures::record_join_filter_policies(&mut custom).unwrap();
-    cq_lang_structures::check_rewrite(&selected, &custom).unwrap();
-    cq_structure_selection::check(&smallest, &custom).unwrap();
+    cq_lang_structures::record_join_filter_policies(&selected_physical, &mut custom).unwrap();
+    cq_lang_structures::check_rewrite(
+        &selected_physical, &selected, &selected_physical, &custom,
+    ).unwrap();
+    cq_structure_selection::check(&selected_physical, &custom).unwrap();
     let sequence = cq_sequence_lowering::compile(&custom).unwrap();
     cq_sequence_lowering::check(&custom, &sequence).unwrap();
     let machine = cq_sequence_pull::machine();

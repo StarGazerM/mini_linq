@@ -13,8 +13,9 @@ fn every_corpus_stage_parses_and_satisfies_its_language_contract() {
             vo::contract::check(&scenario.parse_vo()?)?;
             ra::contract::check(&scenario.parse_ra()?)?;
             ix::contract::check(&scenario.parse_ix()?)?;
-            physical::contract::check(&scenario.parse_physical()?)?;
-            structures::contract::check(&scenario.parse_structures()?)?;
+            let physical = scenario.parse_physical()?;
+            physical::contract::check(&physical)?;
+            structures::contract::check(&physical, &scenario.parse_structures(&physical)?)?;
             Ok(())
         };
         check().unwrap_or_else(|error| panic!("{}: {error}", scenario.name));

@@ -310,9 +310,9 @@ macro_rules! structures_rewrites {
     ($($name:ident => $implementation:path;)*) => {$(
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, arguments| {
-                let target = $implementation(source, arguments)?;
-                Ok((target.physical.clone(), target))
+            cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, arguments| {
+                let target = $implementation(physical, source, arguments)?;
+                Ok((physical.clone(), target))
             }).into()
         }
     )*};

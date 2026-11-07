@@ -13,6 +13,13 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Calibration descriptor version 3 records separately printed base programs in
+  `calibration::Stage::bases`: Physical for Structures, and Physical plus
+  Structures for Sequence. `Stage::annotation` retains the selected layer's
+  language and printed-program identity; continuation agreement also compares
+  bases. Flat stages have no bases. Version 2 descriptors are no longer accepted.
+  Structures no longer embeds Physical: its parser receives Physical explicitly,
+  its printer emits only annotations, and readers/checkers take separate programs.
 - Calibration stage observation moved out of the IR crates (IR redesign M2d):
   `cq_stage::Language` no longer has `calibration_snapshot`; the facade records
   each checked stage as `calibration::Stage { language, program }` (Rust type

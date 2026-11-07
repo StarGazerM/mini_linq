@@ -1,3 +1,12 @@
+fn parse_fixture(tokens: proc_macro2::TokenStream) -> (cq_lang_structures::physical::Program, cq_lang_structures::Program) {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let structures = cq_lang_structures::Program::parse(input, &physical)?;
+        Ok((physical, structures))
+    }).parse2(tokens).unwrap()
+}
+
 use quote::{ToTokens, quote};
 
 #[test]
@@ -14,11 +23,11 @@ fn native_canon_emits_sort_without_set_provider_state() {
     assert!(!printed.contains("HashSet"), "{printed}");
 }
 
-fn source_tokens(module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
-    let analysis = cq_lang_structures::contract::check(module)?;
-    let context = cq_physical_realization::sources_with(module, &analysis, |_, _| {})?;
+fn source_tokens(physical: &cq_lang_structures::physical::Program, module: &cq_lang_structures::Program) -> syn::Result<proc_macro2::TokenStream> {
+    let analysis = cq_lang_structures::contract::check(physical, module)?;
+    let context = cq_physical_realization::sources_with(physical, module, &analysis, |_, _| {})?;
     let mut emitter = cq_physical_realization::RowEmitter::new(context);
-    let rows = emitter.scan(&module.physical.program.returned)?;
+    let rows = emitter.scan(&physical.program.returned)?;
     let statements = &emitter.context().statements;
     Ok(quote!(#(#statements)* #rows))
 }
@@ -36,8 +45,8 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
         return grouped as answer(k,n,total,lo,hi);
     }};
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let facts = cq_lang_structures::contract::check(&selected).unwrap();
-    let mut context = cq_print::Context::new(&selected, &facts);
+    let facts = cq_lang_structures::contract::check(&physical, &selected).unwrap();
+    let mut context = cq_print::Context::new(&physical, &selected, &facts);
     context.register("r");
     context.register("grouped");
     assert_eq!(context.carried("r"), ["id", "k", "v"]);
@@ -58,23 +67,25 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     assert!(printed.contains("Option :: Some"), "{printed}");
     assert!(printed.contains("< __cq_previous"), "{printed}");
     assert!(printed.contains("> __cq_previous"), "{printed}");
-    let complete = source_tokens(&selected).unwrap();
+    let complete = source_tokens(&physical, &selected).unwrap();
     syn::parse2::<syn::Expr>(quote!({ #complete })).unwrap();
     let authored = cq_structure_selection::retype(
+        &physical,
         &selected,
         quote!(group => @group_map as ::std::collections::BTreeMap<_, (usize,i32,Option<i32>,Option<i32>)>),
     )
     .unwrap();
-    let printed = source_tokens(&authored).unwrap().to_string();
+    let printed = source_tokens(&physical, &authored).unwrap().to_string();
     assert!(printed.contains("BTreeMap"), "{printed}");
     assert!(!printed.contains("HashMap"), "{printed}");
     assert!(printed.contains("Default :: default"), "{printed}");
     let standard = cq_structure_selection::retype(
+        &physical,
         &selected,
         quote!(group => @group_map as ::std::collections::HashMap<_, (usize,i32,Option<i32>,Option<i32>)>),
     )
     .unwrap();
-    let printed = source_tokens(&standard).unwrap().to_string();
+    let printed = source_tokens(&physical, &standard).unwrap().to_string();
     assert!(
         printed.contains("std :: collections :: HashMap"),
         "{printed}"
@@ -95,8 +106,8 @@ fn global_group_emits_an_identity_row_even_when_the_input_loop_is_empty() {
         return grouped as answer(n,total,lo,hi);
     }};
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let facts = cq_lang_structures::contract::check(&selected).unwrap();
-    let mut context = cq_print::Context::new(&selected, &facts);
+    let facts = cq_lang_structures::contract::check(&physical, &selected).unwrap();
+    let mut context = cq_print::Context::new(&physical, &selected, &facts);
     context.register("r");
     context.register("grouped");
     let mut emitter = cq_physical_realization::RowEmitter::new(context);
@@ -128,8 +139,8 @@ fn positions_print_fetches_and_tuple_boundaries_after_probes() {
         }
     };
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let represented = cq_represent::compile_with(&selected, quote!(positions)).unwrap();
-    let printed = source_tokens(&represented)
+    let represented = cq_represent::compile_with(&physical, &selected, quote!(positions)).unwrap();
+    let printed = source_tokens(&physical, &represented)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -140,12 +151,12 @@ fn positions_print_fetches_and_tuple_boundaries_after_probes() {
     unsupported.structures.entries.push(syn::parse_quote! {
         j repr = positions { L lineage { k -> k }, R lineage { k -> k, v -> v } } owned [];
     });
-    assert!(source_tokens(&unsupported).is_err());
+    assert!(source_tokens(&physical, &unsupported).is_err());
 }
 
 #[test]
 fn retained_lookup_is_a_pruned_non_column_cursor() {
-    let program: cq_lang_structures::Program = syn::parse_quote! {
+    let (physical, program) = parse_fixture(quote::quote! {
         physical {
             relation L(k:i32); relation R(k:i32,v:i32);
             l = pipe rename L@0 {k -> k};
@@ -166,15 +177,15 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
             p stage = batch 4 expand;
             out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
-    };
-    let analysis = cq_lang_structures::contract::check(&program).unwrap();
-    let context = cq_print::Context::new(&program, &analysis);
+    });
+    let analysis = cq_lang_structures::contract::check(&physical, &program).unwrap();
+    let context = cq_print::Context::new(&physical, &program, &analysis);
     for result in ["s", "kept", "projected"] {
         assert_eq!(context.carried_witnesses[result], ["s"]);
         assert_eq!(context.carried(result), ["k"]);
     }
     assert!(context.carried_witnesses["p"].is_empty());
-    let printed = source_tokens(&program)
+    let printed = source_tokens(&physical, &program)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -200,7 +211,7 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         .structures
         .entries
         .retain(|entry| !matches!(entry.structure, cq_lang_structures::Structure::Stage { .. }));
-    let printed = source_tokens(&scalar)
+    let printed = source_tokens(&physical, &scalar)
         .unwrap()
         .to_token_stream()
         .to_string();
@@ -217,13 +228,13 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
         .find(|entry| matches!(entry.structure, cq_lang_structures::Structure::Repr { .. }))
         .unwrap();
     *witness = syn::parse_quote!(s repr = tuples witness { r [k] at s as _ };);
-    let inferred = source_tokens(&scalar).unwrap().to_string();
+    let inferred = source_tokens(&physical, &scalar).unwrap().to_string();
     assert!(inferred.contains("let __cq_witness_s : _"), "{inferred}");
 }
 
 #[test]
 fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected() {
-    let program: cq_lang_structures::Program = syn::parse_quote! {
+    let (physical, program) = parse_fixture(quote::quote! {
         physical {
             relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
             l = pipe rename L@0 {a -> a,b -> b};
@@ -248,9 +259,9 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             pre_r repr = tuples witness { r [b] at pre_r as ::cq_storage::RunCursor<'_, _> };
             pre_s repr = tuples witness { s [a] at pre_s as ::cq_storage::RunCursor<'_, _> };
         }
-    };
-    let analysis = cq_lang_structures::contract::check(&program).unwrap();
-    let context = cq_print::Context::new(&program, &analysis);
+    });
+    let analysis = cq_lang_structures::contract::check(&physical, &program).unwrap();
+    let context = cq_print::Context::new(&physical, &program, &analysis);
     assert_eq!(context.carried_witnesses["pre_s"], ["pre_r", "pre_s"]);
     for (build, key, first) in [("r", "b", "pre_r"), ("s", "a", "pre_s")] {
         assert_eq!(
@@ -273,7 +284,7 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
             .forcing_witness("candidate", "l", &["b".into()])
             .is_none()
     );
-    assert!(source_tokens(&program).is_err());
+    assert!(source_tokens(&physical, &program).is_err());
     let mut staged = program;
     staged.structures.entries.retain(|entry| {
         !matches!(
@@ -286,12 +297,12 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
         .structures
         .entries
         .push(syn::parse_quote!(candidate stage = batch 4 expand;));
-    assert!(source_tokens(&staged).is_err());
+    assert!(source_tokens(&physical, &staged).is_err());
 }
 
 #[test]
 fn retained_host_fallback_is_shared_and_consumes_the_same_cursor() {
-    let program: cq_lang_structures::Program = syn::parse_quote! {
+    let (physical, program) = parse_fixture(quote::quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
             l = pipe rename L@0 {a -> x};
@@ -309,8 +320,8 @@ fn retained_host_fallback_is_shared_and_consumes_the_same_cursor() {
             p stage = batch 4 expand;
             p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows;
         }
-    };
-    let printed = source_tokens(&program).unwrap().to_string();
+    });
+    let printed = source_tokens(&physical, &program).unwrap().to_string();
     // No native read is recorded: both readers use the one recorded fallback.
     assert!(!printed.contains("dispatch :: retained ("), "{printed}");
     assert!(printed.contains("__cq_r_fallback_x"), "{printed}");

@@ -2,8 +2,28 @@
 use cq_lang_structures::{self as structures, stats::*};
 use quote::ToTokens;
 
-fn program() -> structures::Program {
-    syn::parse_quote! {
+type Fixture = (structures::physical::Program, structures::Program);
+
+fn parse_fixture(tokens: proc_macro2::TokenStream) -> syn::Result<Fixture> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let annotations = structures::Program::parse(input, &physical)?;
+        Ok((physical, annotations))
+    }).parse2(tokens)
+}
+
+fn parse_annotations(physical: &structures::physical::Program, tokens: proc_macro2::TokenStream) -> syn::Result<structures::Program> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| structures::Program::parse(input, physical)).parse2(tokens)
+}
+
+macro_rules! fixture_quote {
+    ($($tokens:tt)*) => { parse_fixture(quote::quote!($($tokens)*)).unwrap() };
+}
+
+fn program() -> Fixture {
+    fixture_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
             l = pipe rename L@0 {a -> x,b -> y};
@@ -39,19 +59,19 @@ fn program() -> structures::Program {
     }
 }
 
-fn rejected(program: &structures::Program) {
-    structures::physical::contract::check(&program.physical).unwrap();
-    assert!(structures::contract::check(program).is_err());
+fn rejected(program: &Fixture) {
+    structures::physical::contract::check(&program.0).unwrap();
+    assert!(structures::contract::check(&program.0, &program.1).is_err());
 }
 
 #[test]
 fn publication_and_consumer_identity_roundtrip() {
     let program = program();
-    let checked = structures::contract::check(&program).unwrap();
+    let checked = structures::contract::check(&program.0, &program.1).unwrap();
     assert_eq!(checked.publications.len(), 2);
     assert_eq!(
-        syn::parse2::<structures::Program>(program.to_token_stream()).unwrap(),
-        program
+        parse_annotations(&program.0, program.1.to_token_stream()).unwrap(),
+        program.1
     );
     for publication in checked.publications.values() {
         let reference = publication.reference();
@@ -77,16 +97,16 @@ fn publication_and_consumer_identity_roundtrip() {
 #[test]
 fn unselected_statistics_default_empty_and_emit_no_publications() {
     let mut program = program();
-    program.structures.publications.0.clear();
-    for provider in &mut program.structures.providers.declarations {
+    program.1.structures.publications.0.clear();
+    for provider in &mut program.1.structures.providers.declarations {
         provider.facts.statistics.clear();
     }
-    let tokens = program.to_token_stream();
+    let tokens = program.1.to_token_stream();
     assert!(!tokens.to_string().contains("publications"));
     assert!(!tokens.to_string().contains("statistics"));
-    let parsed: structures::Program = syn::parse2(tokens).unwrap();
+    let parsed = parse_annotations(&program.0, tokens).unwrap();
     assert!(
-        structures::contract::check(&parsed)
+        structures::contract::check(&program.0, &parsed)
             .unwrap()
             .publications
             .is_empty()
@@ -104,11 +124,11 @@ fn unselected_statistics_default_empty_and_emit_no_publications() {
 #[test]
 fn declarations_alone_do_not_select_statistics() {
     let mut program = program();
-    program.structures.publications.0.clear();
-    let checked = structures::contract::check(&program).unwrap();
+    program.1.structures.publications.0.clear();
+    let checked = structures::contract::check(&program.0, &program.1).unwrap();
     assert!(checked.publications.is_empty());
     assert_eq!(
-        program.structures.providers.declarations[1]
+        program.1.structures.providers.declarations[1]
             .facts
             .statistics
             .len(),
@@ -116,8 +136,8 @@ fn declarations_alone_do_not_select_statistics() {
     );
 }
 
-fn build_provider(program: &mut structures::Program) -> &mut structures::Provider {
-    program.structures.entries.iter_mut().find_map(|entry| match &mut entry.structure {
+fn build_provider(program: &mut Fixture) -> &mut structures::Provider {
+    program.1.structures.entries.iter_mut().find_map(|entry| match &mut entry.structure {
         structures::Structure::Built { keyed, .. } if entry.name == "r" => Some(&mut keyed.provider),
         _ => None,
     }).unwrap()
@@ -127,17 +147,17 @@ fn build_provider(program: &mut structures::Program) -> &mut structures::Provide
 fn construction_is_selected_from_declared_support_and_publication_demand() {
     for (rows, max_group) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut selected = program();
-        let declaration = &mut selected.structures.providers.declarations[1];
+        let declaration = &mut selected.1.structures.providers.declarations[1];
         declaration.facts.statistics_build = BuildDemand { rows: true, max_group: true };
         let maximum: StatDeclaration = syn::parse_quote!(
             maximum: max_group max_bucket_occurrences exact run_finalize max_stat host optional build single
         );
         declaration.facts.statistics.push(maximum.clone());
         if !rows {
-            selected.structures.publications.0.retain(|publication| publication.statistic.field != Field::Rows);
+            selected.1.structures.publications.0.retain(|publication| publication.statistic.field != Field::Rows);
         }
         if max_group {
-            selected.structures.publications.0.push(syn::parse_quote!(
+            selected.1.structures.publications.0.push(syn::parse_quote!(
                 maximum_r = build r provider index layout [x,y] columns [x,y]
                     domains [x: identity integers 0,y: dictionary names 7] stat #maximum;
             ));
@@ -145,14 +165,14 @@ fn construction_is_selected_from_declared_support_and_publication_demand() {
         if rows || max_group {
             rejected(&selected);
         }
-        record_constructions(&mut selected).unwrap();
+        record_constructions(&selected.0, &mut selected.1).unwrap();
         let expected = if rows || max_group {
             Construction::Statistics(BuildDemand { rows, max_group })
         } else {
             Construction::Ordinary
         };
         assert_eq!(build_provider(&mut selected).construction, expected);
-        assert_eq!(syn::parse2::<structures::Program>(selected.to_token_stream()).unwrap(), selected);
+        assert_eq!(parse_annotations(&selected.0, selected.1.to_token_stream()).unwrap(), selected.1);
         let mut stale = selected.clone();
         build_provider(&mut stale).construction = Construction::Statistics(BuildDemand {
             rows: !rows, max_group,
@@ -160,10 +180,10 @@ fn construction_is_selected_from_declared_support_and_publication_demand() {
         rejected(&stale);
         if rows || max_group {
             let mut unsupported = selected.clone();
-            unsupported.structures.providers.declarations[1].facts.statistics_build = BuildDemand::default();
+            unsupported.1.structures.providers.declarations[1].facts.statistics_build = BuildDemand::default();
             rejected(&unsupported);
             let mut missing = selected.clone();
-            missing.structures.publications.0.clear();
+            missing.1.structures.publications.0.clear();
             rejected(&missing);
         }
     }
@@ -172,7 +192,7 @@ fn construction_is_selected_from_declared_support_and_publication_demand() {
 #[test]
 fn ordinary_protocol_does_not_require_a_statistic_builder_for_cheap_accessors() {
     let mut selected = program();
-    record_constructions(&mut selected).unwrap();
+    record_constructions(&selected.0, &mut selected.1).unwrap();
     assert_eq!(build_provider(&mut selected).construction, Construction::Ordinary);
     let provider: structures::Provider = syn::parse_quote!(@index construct ordinary as Index);
     assert_eq!(provider.construction, Construction::Ordinary);
@@ -187,7 +207,7 @@ fn ordinary_protocol_does_not_require_a_statistic_builder_for_cheap_accessors() 
 fn publication_rejects_wrong_build_provider_and_ordered_layout() {
     for mutation in 0..4 {
         let mut program = program();
-        let publication = &mut program.structures.publications.0[0];
+        let publication = &mut program.1.structures.publications.0[0];
         match mutation {
             0 => publication.build = syn::parse_quote!(j),
             1 => publication.build = syn::parse_quote!(old_round),
@@ -201,13 +221,13 @@ fn publication_rejects_wrong_build_provider_and_ordered_layout() {
 #[test]
 fn publication_rejects_wrong_key_component_and_missing_domain_epoch() {
     let mut wrong = program();
-    wrong.structures.publications.0[1].columns = syn::parse_quote!([x]);
+    wrong.1.structures.publications.0[1].columns = syn::parse_quote!([x]);
     rejected(&wrong);
     let mut wrong = program();
-    wrong.structures.publications.0[1].columns = syn::parse_quote!([x, z]);
+    wrong.1.structures.publications.0[1].columns = syn::parse_quote!([x, z]);
     rejected(&wrong);
     let mut wrong = program();
-    wrong.structures.publications.0[1].domains.pop();
+    wrong.1.structures.publications.0[1].domains.pop();
     rejected(&wrong);
     assert!(syn::parse_str::<Domain>("x: dictionary names").is_err());
     assert!(syn::parse_str::<Domain>("x: dictionary names -1").is_err());
@@ -217,7 +237,7 @@ fn publication_rejects_wrong_key_component_and_missing_domain_epoch() {
 fn publication_cannot_relabel_unit_precision_abi_or_producer() {
     for mutation in 0..6 {
         let mut program = program();
-        let stat = &mut program.structures.publications.0[0].statistic;
+        let stat = &mut program.1.structures.publications.0[0].statistic;
         match mutation {
             0 => stat.unit = Unit::DistinctKeys,
             1 => stat.precision = Precision::Estimate,
@@ -233,18 +253,18 @@ fn publication_cannot_relabel_unit_precision_abi_or_producer() {
 #[test]
 fn declaration_checks_units_duplicate_slots_and_overlapping_exact_claims() {
     let mut wrong = program();
-    wrong.structures.providers.declarations[1].facts.statistics[0].unit = Unit::DistinctKeys;
+    wrong.1.structures.providers.declarations[1].facts.statistics[0].unit = Unit::DistinctKeys;
     rejected(&wrong);
     let mut wrong = program();
-    let duplicate = wrong.structures.providers.declarations[1].facts.statistics[0].clone();
-    wrong.structures.providers.declarations[1]
+    let duplicate = wrong.1.structures.providers.declarations[1].facts.statistics[0].clone();
+    wrong.1.structures.providers.declarations[1]
         .facts
         .statistics
         .push(duplicate);
     rejected(&wrong);
     for field in [Field::Keys, Field::MaxGroup] {
         let mut wrong = program();
-        let declaration = &mut wrong.structures.providers.declarations[1].facts.statistics[1];
+        let declaration = &mut wrong.1.structures.providers.declarations[1].facts.statistics[1];
         declaration.field = field;
         declaration.unit = if field == Field::Keys {
             Unit::DistinctKeys
@@ -252,7 +272,7 @@ fn declaration_checks_units_duplicate_slots_and_overlapping_exact_claims() {
             Unit::MaxBucketOccurrences
         };
         declaration.aggregation = Aggregation::Overlapping;
-        wrong.structures.publications.0[1].statistic = declaration.clone();
+        wrong.1.structures.publications.0[1].statistic = declaration.clone();
         rejected(&wrong);
     }
 }
@@ -261,7 +281,7 @@ fn declaration_checks_units_duplicate_slots_and_overlapping_exact_claims() {
 fn overlapping_keys_require_bound_or_recorded_computation() {
     for realization in 0..3 {
         let mut program = program();
-        let declaration = &mut program.structures.providers.declarations[1]
+        let declaration = &mut program.1.structures.providers.declarations[1]
             .facts
             .statistics[1];
         declaration.aggregation = Aggregation::Overlapping;
@@ -273,23 +293,23 @@ fn overlapping_keys_require_bound_or_recorded_computation() {
                 declaration.producer = Producer::MergeFinalize;
             }
         }
-        program.structures.publications.0[1].statistic = declaration.clone();
-        structures::contract::check(&program).unwrap();
+        program.1.structures.publications.0[1].statistic = declaration.clone();
+        structures::contract::check(&program.0, &program.1).unwrap();
     }
 }
 
 #[test]
 fn duplicate_names_fields_and_conflicting_epochs_are_rejected() {
     let mut wrong = program();
-    wrong.structures.publications.0[1].name = syn::parse_quote!(rows_r);
+    wrong.1.structures.publications.0[1].name = syn::parse_quote!(rows_r);
     rejected(&wrong);
     let mut wrong = program();
-    let mut duplicate = wrong.structures.publications.0[1].clone();
+    let mut duplicate = wrong.1.structures.publications.0[1].clone();
     duplicate.name = syn::parse_quote!(another_name);
-    wrong.structures.publications.0.push(duplicate);
+    wrong.1.structures.publications.0.push(duplicate);
     rejected(&wrong);
     let mut wrong = program();
-    wrong.structures.publications.0.push(syn::parse_quote!(
+    wrong.1.structures.publications.0.push(syn::parse_quote!(
         bounds_r = build r provider index layout [x,y] columns [y]
             domains [y: dictionary names 6]
             stat extrema: bounds code_bounds exact run_finalize bounds_stat host optional build single;
@@ -299,7 +319,7 @@ fn duplicate_names_fields_and_conflicting_epochs_are_rejected() {
 
 #[test]
 fn reference_identity_detects_stale_version_domain_layout_precision_and_units() {
-    let publication = program().structures.publications.0.remove(1);
+    let publication = program().1.structures.publications.0.remove(1);
     let expected = publication.reference();
     for mutation in 0..7 {
         let mut reference = expected.clone();
@@ -320,9 +340,9 @@ fn reference_identity_detects_stale_version_domain_layout_precision_and_units() 
 fn selected_statistics_are_a_physical_preserving_refinement() {
     let target = program();
     let mut source = target.clone();
-    source.structures.publications.0.clear();
-    structures::check_rewrite(&source, &target).unwrap();
-    assert_eq!(source.physical, target.physical);
+    source.1.structures.publications.0.clear();
+    structures::check_rewrite(&source.0, &source.1, &target.0, &target.1).unwrap();
+    assert_eq!(source.0, target.0);
 }
 
 #[test]
@@ -352,15 +372,15 @@ fn declaration_parser_covers_all_units_targets_and_statuses() {
 #[test]
 fn equality_only_provider_cannot_declare_code_bounds() {
     let mut wrong = program();
-    wrong.structures.providers.declarations[1]
+    wrong.1.structures.providers.declarations[1]
         .facts
         .reads
         .retain(|capability| *capability != structures::Capability::Ordered);
     rejected(&wrong);
     // Point membership and count publication remain valid without an ordered law.
-    wrong.structures.providers.declarations[1]
+    wrong.1.structures.providers.declarations[1]
         .facts
         .statistics
         .retain(|statistic| statistic.field != Field::Bounds);
-    structures::contract::check(&wrong).unwrap();
+    structures::contract::check(&wrong.0, &wrong.1).unwrap();
 }

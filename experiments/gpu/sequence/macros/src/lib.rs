@@ -127,12 +127,12 @@ impl syn::parse::Parse for CodecDeclarations {
 /// Keep GPU scheduling in Sequence rather than inheriting CPU batch decisions.
 #[proc_macro]
 pub fn stage(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<Physical, Structures>::rewrite(input.into(), |_physical: &Physical, source: &Structures, arguments| {
+    cq_stage::Structures::<Physical, Structures>::rewrite(input.into(), |physical: &Physical, source: &Structures, arguments| {
         no_arguments(arguments)?;
-        let target = cq_gpu_sequence_core::bind_structures(source)?;
-        let analysis = cq_lang_structures::contract::check(&target)?;
-        cq_gpu_sequence_core::check_structures(&target, &analysis)?;
-        Ok((target.physical.clone(), target))
+        let target = cq_gpu_sequence_core::bind_structures(physical, source)?;
+        let analysis = cq_lang_structures::contract::check(physical, &target)?;
+        cq_gpu_sequence_core::check_structures(physical, &target, &analysis)?;
+        Ok((physical.clone(), target))
     })
     .into()
 }
@@ -204,10 +204,10 @@ pub fn translate_arena(input: TokenStream) -> TokenStream {
 /// Bind declared native run inputs before lowering Structures to Sequence.
 #[proc_macro]
 pub fn bind_runs(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<Physical, Structures>::rewrite(input.into(), |_physical: &Physical, source: &Structures, arguments| {
+    cq_stage::Structures::<Physical, Structures>::rewrite(input.into(), |physical: &Physical, source: &Structures, arguments| {
         no_arguments(arguments)?;
-        let target = cq_gpu_sequence_core::runs::bind(source)?;
-        Ok((target.physical.clone(), target))
+        let target = cq_gpu_sequence_core::runs::bind(physical, source)?;
+        Ok((physical.clone(), target))
     })
     .into()
 }
@@ -222,10 +222,10 @@ pub fn bind_runs(input: TokenStream) -> TokenStream {
 pub fn select_catalog(input: TokenStream) -> TokenStream {
     cq_stage::Structures::<Physical, Structures>::pass::<cq_stage::Structures<Physical, Structures>>(
         input.into(),
-        |_physical: &Physical, source: &Structures, arguments| {
+        |physical: &Physical, source: &Structures, arguments| {
             no_arguments(arguments)?;
-            let target = cq_sequence_plan::select_from_catalog(source, &cq_gpu_sequence_core::catalog())?;
-            Ok(cq_stage::Structures::new(target.physical.clone(), target))
+            let (physical, structures) = cq_sequence_plan::select_from_catalog(physical, source, &cq_gpu_sequence_core::catalog())?;
+            Ok(cq_stage::Structures::new(physical, structures))
         },
     )
     .into()

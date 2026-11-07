@@ -1,3 +1,8 @@
+fn parse_annotations(physical: &physical::Program, tokens: proc_macro2::TokenStream) -> ir::Program {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| ir::Program::parse(input, physical)).parse2(tokens).unwrap()
+}
+
 use cq_lang_structures::{self as ir, Structure, physical};
 use cq_rewrite_passes::join_filter;
 use cq_structure_selection::retype;
@@ -15,7 +20,7 @@ fn provider_alias() -> ir::Declaration {
     )
 }
 
-fn source() -> ir::Program {
+fn source() -> (physical::Program, ir::Program) {
     let p: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
         l = pipe rename L@0 {a -> x,b -> y};
@@ -25,29 +30,30 @@ fn source() -> ir::Program {
         j = pipe probe first [x] l,b;
         out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
     }};
-    cq_structure_selection::compile(&p).unwrap()
+    let structures = cq_structure_selection::compile(&p).unwrap();
+    (p, structures)
 }
 
 #[test]
 fn advisory_insertion_and_retyping_preserve_every_other_decision() {
-    let before = source();
+    let (physical, before) = source();
     assert!(
-        ir::contract::check(&before)
+        ir::contract::check(&physical, &before)
             .unwrap()
             .join_filters
             .is_empty()
     );
-    let added = join_filter(&before, quote!(l)).unwrap();
-    assert_eq!(added.physical, before.physical);
-    assert_eq!(join_filter(&added, quote!(l)).unwrap(), added);
+    let added = join_filter(&physical, &before, quote!(l)).unwrap();
+
+    assert_eq!(join_filter(&physical, &added, quote!(l)).unwrap(), added);
     let declared = filter_alias();
     for args in [
         quote!(#declared l join_filter => @filter_alias as FilterAlias),
         quote!(#declared join_filter => @filter_alias as FilterAlias),
     ] {
-        let changed = retype(&added, args).unwrap();
-        assert_eq!(changed.physical, before.physical);
-        let facts = ir::contract::check(&changed).unwrap();
+        let changed = retype(&physical, &added, args).unwrap();
+
+        let facts = ir::contract::check(&physical, &changed).unwrap();
         assert_eq!(facts.join_filters["l"].len(), 1);
         assert_eq!(
             facts.join_filters["l"][0].provider,
@@ -55,7 +61,7 @@ fn advisory_insertion_and_retyping_preserve_every_other_decision() {
         );
         assert_eq!(facts.join_filters["l"][0].covering, "j");
         assert_eq!(
-            syn::parse2::<ir::Program>(changed.to_token_stream()).unwrap(),
+            parse_annotations(&physical, changed.to_token_stream()),
             changed
         );
         assert_eq!(
@@ -65,6 +71,7 @@ fn advisory_insertion_and_retyping_preserve_every_other_decision() {
     }
     assert!(
         retype(
+            &physical,
             &before,
             quote!(#declared l join_filter => @filter_alias as FilterAlias)
         )
@@ -72,19 +79,22 @@ fn advisory_insertion_and_retyping_preserve_every_other_decision() {
     );
     assert!(
         retype(
+            &physical,
             &added,
             quote!(#declared b join_filter => @filter_alias as FilterAlias)
         )
         .is_err()
     );
-    assert!(join_filter(&before, quote!(r)).is_err());
+    assert!(join_filter(&physical, &before, quote!(r)).is_err());
 }
 
 #[test]
 fn contract_rejects_missing_cover_rust_between_and_anti() {
-    let good = join_filter(&source(), quote!(l)).unwrap();
+    let (physical, source) = source();
+    let good = join_filter(&physical, &source, quote!(l)).unwrap();
     for mutation in 0..4 {
         let mut bad = good.clone();
+        let mut bad_physical = physical.clone();
         match mutation {
             0 => {
                 for entry in &mut bad.structures.entries {
@@ -94,7 +104,7 @@ fn contract_rejects_missing_cover_rust_between_and_anti() {
                 }
             }
             1 => {
-                let defs = &mut bad.physical.program.definitions;
+                let defs = &mut bad_physical.program.definitions;
                 let i = defs.iter().position(|d| d.name == "j").unwrap();
                 defs.insert(
                     i,
@@ -105,8 +115,7 @@ fn contract_rejects_missing_cover_rust_between_and_anti() {
                 }
             }
             2 => {
-                let d = bad
-                    .physical
+                let d = bad_physical
                     .program
                     .definitions
                     .iter_mut()
@@ -116,15 +125,14 @@ fn contract_rejects_missing_cover_rust_between_and_anti() {
             }
             _ => {
                 // A filter may not become the sole check of the join constraint.
-                bad.physical
+                bad_physical
                     .program
                     .definitions
                     .retain(|d| d.name == "l" || d.name == "out");
             }
         }
         if mutation >= 2 {
-            let out = bad
-                .physical
+            let out = bad_physical
                 .program
                 .definitions
                 .iter_mut()
@@ -132,16 +140,16 @@ fn contract_rejects_missing_cover_rust_between_and_anti() {
                 .unwrap();
             let input = if mutation == 2 { quote!(j) } else { quote!(l) };
             out.operator = syn::parse2(quote!(project #input keep {x,y})).unwrap();
-            bad.physical.program.head.args = syn::parse_quote!(x, y);
+            bad_physical.program.head.args = syn::parse_quote!(x, y);
         }
-        physical::contract::check(&bad.physical).expect("mutation remains valid Physical");
-        assert!(ir::contract::check(&bad).is_err(), "mutation {mutation}");
+        physical::contract::check(&bad_physical).expect("mutation remains valid Physical");
+        assert!(ir::contract::check(&bad_physical, &bad).is_err(), "mutation {mutation}");
     }
 }
 
 #[test]
 fn explicit_advice_can_cover_a_total_unfiltered_build() {
-    let mut p = source().physical;
+    let (mut p, _) = source();
     let s = p
         .program
         .definitions
@@ -149,45 +157,47 @@ fn explicit_advice_can_cover_a_total_unfiltered_build() {
         .find(|d| d.name == "s")
         .unwrap();
     s.operator = syn::parse_quote!(project r keep {x,z});
-    let selected = cq_structure_selection::compile_with(&p, quote!(positional(L, R))).unwrap();
+    let (physical, selected) = cq_structure_selection::compile_with(&p, quote!(positional(L, R))).unwrap();
     assert!(
-        ir::contract::check(&selected)
+        ir::contract::check(&physical, &selected)
             .unwrap()
             .join_filters
             .is_empty()
     );
-    let advised = join_filter(&selected, quote!(l)).unwrap();
-    assert_eq!(advised.physical, selected.physical);
-    assert_eq!(ir::contract::check(&advised).unwrap().join_filters.len(), 1);
+    let advised = join_filter(&physical, &selected, quote!(l)).unwrap();
+
+    assert_eq!(ir::contract::check(&physical, &advised).unwrap().join_filters.len(), 1);
 }
 
 #[test]
 fn routed_exact_provider_retyping_preserves_join_filter_obligations() {
-    let before = join_filter(&source(), quote!(l)).unwrap();
-    let expected = ir::contract::check(&before).unwrap().join_filters;
+    let (physical, source) = source();
+    let before = join_filter(&physical, &source, quote!(l)).unwrap();
+    let expected = ir::contract::check(&physical, &before).unwrap().join_filters;
     for provider in [
         quote!(@sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>),
         quote!(@sharded(@sorted_run as ::cq_storage::SortedRun<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>>),
         quote!(@sharded(@sorted_run as ::cq_storage::SortedRun<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>, _>),
         quote!(@sharded(@radix_run as ::cq_storage::RadixRun<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::RadixRun<_, _>>),
     ] {
-        let changed = retype(&before, quote!(b => #provider supports [keys])).unwrap();
-        assert_eq!(changed.physical, before.physical);
-        let facts = ir::contract::check(&changed).unwrap();
+        let changed = retype(&physical, &before, quote!(b => #provider supports [keys])).unwrap();
+
+        let facts = ir::contract::check(&physical, &changed).unwrap();
         for filter in facts.join_filters.values().flatten() {
             assert!(!facts.facts(&filter.provider).borrowed_filter);
             assert!(!facts.facts(&filter.provider).attached_filter);
         }
         assert_eq!(facts.join_filters, expected);
-        assert_eq!(ir::join_filter_candidates(&changed, &facts, "j").len(), 1);
-        assert_eq!(changed, syn::parse2(changed.to_token_stream()).unwrap());
+        assert_eq!(ir::join_filter_candidates(&physical, &changed, &facts, "j").len(), 1);
+        assert_eq!(changed, parse_annotations(&physical, changed.to_token_stream()));
     }
 }
 
 #[test]
 fn routed_filter_eligibility_uses_declared_support_not_type_names() {
-    let before = join_filter(&source(), quote!(l)).unwrap();
-    let expected = ir::contract::check(&before).unwrap().join_filters;
+    let (physical, source) = source();
+    let before = join_filter(&physical, &source, quote!(l)).unwrap();
+    let expected = ir::contract::check(&physical, &before).unwrap().join_filters;
     let declared = quote!(providers {
         provider_alias = ProviderAlias { reads [exact, membership], supports [keys], build inferred };
         membership_only = MembershipOnly { reads [membership], supports [keys], build inferred };
@@ -212,23 +222,24 @@ fn routed_filter_eligibility_uses_declared_support_not_type_names() {
     ] {
         // Opaque Rust types do not establish capabilities. Recorded layout
         // and declared support establish eligibility; rustc checks the traits.
-        assert!(retype(&before, quote!(#declared b => #provider)).is_err());
-        let changed = retype(&before, quote!(#declared b => #provider supports [keys])).unwrap();
-        let facts = ir::contract::check(&changed).unwrap();
-        assert_eq!(changed.physical, before.physical);
+        assert!(retype(&physical, &before, quote!(#declared b => #provider)).is_err());
+        let changed = retype(&physical, &before, quote!(#declared b => #provider supports [keys])).unwrap();
+        let facts = ir::contract::check(&physical, &changed).unwrap();
+
         assert_eq!(facts.join_filters, expected);
-        assert_eq!(ir::join_filter_candidates(&changed, &facts, "j").len(), 1);
+        assert_eq!(ir::join_filter_candidates(&physical, &changed, &facts, "j").len(), 1);
     }
     let routed_twice = quote!(
         @sharded(@sharded(@sharded_index as ::cq_storage::sharded::Index<_, _>) as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>)
             as ::cq_storage::sharded::Sharded<::cq_storage::sharded::Sharded<::cq_storage::sharded::Index<_, _>>>
     );
-    assert!(retype(&before, quote!(b => #routed_twice supports [keys])).is_err());
+    assert!(retype(&physical, &before, quote!(b => #routed_twice supports [keys])).is_err());
 }
 
 #[test]
 fn join_filter_requires_a_recorded_single_level_exact_layout() {
-    let before = join_filter(&source(), quote!(l)).unwrap();
+    let (physical, source) = source();
+    let before = join_filter(&physical, &source, quote!(l)).unwrap();
     for replacement in [
         syn::parse_quote!(b = @provider_alias as ProviderAlias [x][z];),
         syn::parse_quote!(b = @provider_alias as ProviderAlias [x] membership;),
@@ -242,13 +253,13 @@ fn join_filter_requires_a_recorded_single_level_exact_layout() {
             .unwrap();
         *slot = replacement;
         changed.structures.declare(&[provider_alias()]).unwrap();
-        assert!(ir::contract::check(&changed).is_err());
+        assert!(ir::contract::check(&physical, &changed).is_err());
     }
 }
 
 #[test]
 fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
-    let source: physical::Program = syn::parse_quote! { physical {
+    let physical: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
         l = pipe rename L@0 {a -> x,b -> y};
         r = pipe rename R@1 {c -> x,d -> z};
@@ -258,9 +269,9 @@ fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
         j = pipe probe first [x] q,b;
         out = let canon project j keep {x,y,z}; return out as answer(x,y,z);
     }};
-    let selected = cq_structure_selection::compile(&source).unwrap();
-    let advised = join_filter(&selected, quote!(l)).unwrap();
-    assert_eq!(advised.physical, source);
+    let selected = cq_structure_selection::compile(&physical).unwrap();
+    let advised = join_filter(&physical, &selected, quote!(l)).unwrap();
+
     assert_eq!(
         advised
             .structures
@@ -271,19 +282,20 @@ fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
         2
     );
     assert_eq!(
-        ir::contract::check(&advised).unwrap().join_filters["l"].len(),
+        ir::contract::check(&physical, &advised).unwrap().join_filters["l"].len(),
         1
     );
-    assert_eq!(join_filter(&advised, quote!(l)).unwrap(), advised);
+    assert_eq!(join_filter(&physical, &advised, quote!(l)).unwrap(), advised);
     let declared = filter_alias();
     let retyped = retype(
+        &physical,
         &advised,
         quote!(#declared l join_filter => @filter_alias as FilterAlias),
     )
     .unwrap();
     assert_eq!(
-        ir::contract::check(&retyped).unwrap().join_filters["l"].len(),
+        ir::contract::check(&physical, &retyped).unwrap().join_filters["l"].len(),
         1
     );
-    assert_eq!(join_filter(&retyped, quote!(l)).unwrap(), retyped);
+    assert_eq!(join_filter(&physical, &retyped, quote!(l)).unwrap(), retyped);
 }

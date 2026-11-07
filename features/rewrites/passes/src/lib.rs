@@ -1,6 +1,10 @@
 //! External, checked transformations for Physical and Structures programs.
 //!
 //! These functions accept the same opaque argument tokens as their proc macros.
+//! Structures rewrites take the separate Physical program first, followed by
+//! Structures annotations and argument tokens, and return only the annotations.
+//! Callers retain the supplied Physical program; no Physical program is embedded
+//! in the Structures result.
 //! They preserve declarations, graph, Rust expressions, keys, and unrelated
 //! decisions. `retain_streams` records explicit retention. Shared `retype` and
 //! `build_host_reads` helpers are owned by `cq_structure_selection`.

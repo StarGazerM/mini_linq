@@ -25,15 +25,15 @@ fn rewritten_corpus_physical_flows_into_the_default_selector() {
         fine_triangle; pipeline {
             cq_rewrites::canon_prefixes(r1),
             mini_linq::passes::select,
-            cq_rewrite_test_driver::capture_structures
+            cq_rewrite_test_driver::capture_structures_stack
         }
     };
-    let output: cq_testkit::structures::Program = syn::parse_str(captured).unwrap();
+    let (physical, output) = cq_testkit::corpus::parse_structures_capture(captured).unwrap();
     assert_eq!(
-        output.physical,
+        physical,
         syn::parse_str(include_str!("fixtures/canon.physical")).unwrap()
     );
-    let facts = cq_testkit::structures::contract::check(&output).unwrap();
+    let facts = cq_testkit::structures::contract::check(&physical, &output).unwrap();
     assert_eq!(facts.canonical.len(), 2);
     for canonical in facts.canonical.values() {
         assert_eq!(

@@ -14,12 +14,13 @@ use structures::physical::{ModeKind, Operator};
 use structures::syntax::symbol_name;
 use syn::parse::{Parse, Parser};
 fn eligible(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     facts: &structures::Analysis,
 ) -> BTreeMap<String, Result<Option<String>, &'static str>> {
-    let origins = structures::representation_bases(source, facts);
+    let origins = structures::representation_bases(physical, source, facts);
     let mut decisions = BTreeMap::new();
-    for definition in &source.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         let decision = if facts.physical.modes[&name] != ModeKind::Pipe {
             Err("retained results use tuple carriers")
@@ -83,17 +84,18 @@ fn representation(
 }
 
 /// Leave representation decisions unchanged unless explicitly requested.
-pub fn compile(source: &structures::Program) -> syn::Result<structures::Program> {
-    compile_with(source, TokenStream::new())
+pub fn compile(physical: &structures::physical::Program, source: &structures::Program) -> syn::Result<structures::Program> {
+    compile_with(physical, source, TokenStream::new())
 }
 
 /// Select all direct scan chains, or the dependency closure of named results.
 /// Formal rule STR-Represent: Preserve Physical and existing entries while appending selected scan-chain representations.
 pub fn compile_with(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     arguments: TokenStream,
 ) -> syn::Result<structures::Program> {
-    let facts = structures::contract::check(source)?;
+    let facts = structures::contract::check(physical, source)?;
     if arguments.is_empty() {
         return Ok(source.clone());
     }
@@ -115,7 +117,7 @@ pub fn compile_with(
         Ok(names)
     })
     .parse2(arguments)?;
-    let eligible = eligible(source, &facts);
+    let eligible = eligible(physical, source, &facts);
     let mut selected = BTreeSet::new();
     if let Some(names) = names {
         for ident in names {
@@ -149,9 +151,9 @@ pub fn compile_with(
                 .map(|(name, _)| name.clone()),
         );
     }
-    let origins = structures::representation_bases(source, &facts);
+    let origins = structures::representation_bases(physical, source, &facts);
     let mut target = source.clone();
-    for definition in &source.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         if !selected.contains(&name) || facts.repr.contains_key(&name) {
             continue;
@@ -163,16 +165,16 @@ pub fn compile_with(
             .entries
             .push(syn::parse2(quote!(#ident repr = #repr;))?);
     }
-    check(source, &target)?;
+    check(physical, source, &target)?;
     Ok(target)
 }
 
 /// Check additive decisions structurally, without invoking the compiler policy.
-pub fn check(source: &structures::Program, target: &structures::Program) -> syn::Result<()> {
-    structures::check_rewrite(source, target)?;
-    let facts = structures::contract::check(source)?;
-    let eligible = eligible(source, &facts);
-    let origins = structures::representation_bases(source, &facts);
+pub fn check(physical: &structures::physical::Program, source: &structures::Program, target: &structures::Program) -> syn::Result<()> {
+    structures::check_rewrite(physical, source, physical, target)?;
+    let facts = structures::contract::check(physical, source)?;
+    let eligible = eligible(physical, source, &facts);
+    let origins = structures::representation_bases(physical, source, &facts);
     let before = &source.structures.entries;
     let after = &target.structures.entries;
     if after.len() < before.len() || after[..before.len()] != before[..] {

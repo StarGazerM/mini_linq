@@ -25,7 +25,7 @@ fn host_set_text_round_trips_and_removes_only_implied_canon() {
     );
     assert_eq!(host_sets(&target, quote!(E)).unwrap(), target);
     let selected = cq_structure_selection::compile(&target).unwrap();
-    let facts = cq_testkit::structures::contract::check(&selected).unwrap();
+    let facts = cq_testkit::structures::contract::check(&target, &selected).unwrap();
     assert_eq!(facts.unique["p"], ["x", "y"]);
     assert!(facts.physical.canon.is_empty());
     assert!(host_sets(&source, quote!(missing)).is_err());

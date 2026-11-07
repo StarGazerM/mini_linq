@@ -32,10 +32,10 @@ fn packed_canon_retypes_canonical_rows_and_preserves_answers() {
     let captured = distinct!(rows;
         structures = [cq_rewrites::packed_canon];
         print_input = structures;
-        print = cq_rewrite_test_driver::capture_structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
     );
-    let program: ir::Program = syn::parse_str(captured).unwrap();
-    let facts = ir::contract::check(&program).unwrap();
+    let (physical, program) = cq_testkit::corpus::parse_structures_capture(captured).unwrap();
+    let facts = ir::contract::check(&physical, &program).unwrap();
     assert!(facts.canonical.values().any(|source| {
         source.rows_provider().is_some_and(|provider| {
             provider.token == "packed"
@@ -43,8 +43,8 @@ fn packed_canon_retypes_canonical_rows_and_preserves_answers() {
         })
     }));
     assert!(!rows_records(&program).contains(&"sort".to_owned()));
-    assert_eq!(packed_canon(&program, quote!()).unwrap(), program);
-    assert!(packed_canon(&program, quote!(all)).is_err());
+    assert_eq!(packed_canon(&physical, &program, quote!()).unwrap(), program);
+    assert!(packed_canon(&physical, &program, quote!(all)).is_err());
 
     let rows: Vec<(i64, u32, i64)> = (0..400_i64)
         .map(|i| ((i * 7919) % 13 - 6, (i % 5) as u32, i64::MIN + (i % 9)))

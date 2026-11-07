@@ -622,7 +622,7 @@ impl ToTokens for Construction {
 
 /// Select construction from publication demand and declared protocol support.
 /// This producer is explicit; neither checking nor printing calls it.
-pub fn record_constructions(program: &mut Program) -> syn::Result<()> {
+pub fn record_constructions(physical: &crate::physical::Program, program: &mut Program) -> syn::Result<()> {
     for entry in &mut program.structures.entries {
         let Structure::Built { keyed, .. } = &mut entry.structure else {
             continue;
@@ -649,7 +649,7 @@ pub fn record_constructions(program: &mut Program) -> syn::Result<()> {
             Construction::Statistics(demand)
         };
     }
-    contract::check(program)?;
+    contract::check(physical, program)?;
     Ok(())
 }
 

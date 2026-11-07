@@ -144,8 +144,8 @@ impl Parse for Retype {
 /// A built payload entry of a token declaring an item-layout argument states
 /// its layout with a trailing `items rows|columns` (STR-ItemLayout); omitting
 /// it clears the previous layout.
-pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    let analysis = ir::contract::check(source)?;
+pub fn retype(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    let analysis = ir::contract::check(physical, source)?;
     let request: Retype = syn::parse2(arguments)?;
     for declaration in &request.declared.declarations {
         if source
@@ -180,7 +180,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                         )
                 }
                 Selector::Result(ref result) => {
-                    name == symbol_name(result) && keyed_read(&entry.structure, source)
+                    name == symbol_name(result) && keyed_read(physical, &entry.structure)
                 }
                 Selector::JoinFilter(ref result) => {
                     name == symbol_name(result)
@@ -201,7 +201,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                     Structure::Host { reader, .. } => {
                         matches!(kind, Kind::Membership)
                             && matches!(reader, cq_lang_structures::ReaderRef::Membership)
-                            || source.physical.program.definitions.iter().any(|d| {
+                            || physical.program.definitions.iter().any(|d| {
                                 reader.result() == Some(&d.name) && kind.reads(&d.operator)
                             })
                     }
@@ -222,7 +222,7 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
                                         return false;
                                     }
                                     ir::prefix_depth(&keyed.level_names(), columns).is_some()
-                                        && source.physical.program.definitions.iter().any(|d| {
+                                        && physical.program.definitions.iter().any(|d| {
                                             symbol_name(&d.name) == *reader
                                                 && kind.reads(&d.operator)
                                         })
@@ -275,18 +275,18 @@ pub fn retype(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::P
     let mut declared = request.declared.declarations;
     declared.extend(cq_lang_structures::provider::base::declarations());
     target.structures.declare(&declared)?;
-    ir::record_join_filter_policies(&mut target)?;
-    ir::check_rewrite(source, &target)?;
+    ir::record_join_filter_policies(physical, &mut target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
-fn keyed_read(structure: &Structure, source: &ir::Program) -> bool {
+fn keyed_read(physical: &ir::physical::Program, structure: &Structure) -> bool {
     match structure {
         Structure::Built { .. } | Structure::KeySet { .. } => true,
         Structure::Host { reader, .. } => {
             matches!(reader, cq_lang_structures::ReaderRef::Membership)
                 || matches!(reader, cq_lang_structures::ReaderRef::Candidates)
-                || source.physical.program.definitions.iter().any(|d| {
+                || physical.program.definitions.iter().any(|d| {
                     reader.result() == Some(&d.name)
                         && matches!(
                             d.operator,

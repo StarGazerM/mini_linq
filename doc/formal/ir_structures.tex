@@ -1,9 +1,11 @@
 \section{Structures: concrete representations}
 \label{sec:structures}
 
-\paragraph{Grammar.} Structures extends a complete Physical program.
+\paragraph{Grammar.} Structures annotates a separately supplied complete Physical
+program $p$, referring to its definitions by name. Parsing and checking receive
+$p$ explicitly; the Structures program neither embeds nor prints it.
 \begin{lstlisting}
-Structures ::= Physical structures { providers { Decl* } Entry* }
+Structures ::= structures { providers { Decl* } Entry* }
 Decl ::= x = Type { Fact, ... };
 Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | typed)
        | accounting (rows | keys) | (nested | routed) N | join_filter
@@ -68,8 +70,8 @@ provider columns use \code{[id] Logical => Storage codec [id] Codec}.
 Ids may be omitted at declaration boundaries: interning preserves explicit
 ids and shares automatically interned equal spellings once, without merging
 explicitly different ids. Source/provider logical-id mismatches are rejected.
-Parsing a complete Structures program seeds its input declaration table with
-the Physical relation identities, so input encounter order cannot renumber
+Parsing Structures with its supplied Physical program seeds the input declaration
+table with that program's relation identities, so input encounter order cannot renumber
 logical types. Standalone Structures declarations intern in their own table;
 programmatic producers copy the source declaration identities.
 RA and Physical rows carry a sparse \code{logical\_type\_ids} map.

@@ -538,7 +538,7 @@ fn compile_stage(
         if let Some(leaf) = checked(
             "filtered Part retention",
             &selected,
-            advice::filtered_leaf(&selected, relation),
+            advice::filtered_leaf(&physical, &selected, relation),
         )? {
             pipeline
                 .physical
@@ -574,13 +574,13 @@ fn compile_stage(
         pipeline.structures.extend(checked(
             "hand membership layout",
             &default_structures,
-            advice::hand_membership(&default_structures),
+            advice::hand_membership(&physical, &default_structures),
         )?);
     }
     let selected = checked(
         "Structures advice",
         &default_structures,
-        advice::structures(&default_structures, &pipeline.structures),
+        advice::structures(&physical, &default_structures, &pipeline.structures),
     )?;
     let catalog = if host {
         cq_sequence_pull::catalog()
@@ -600,7 +600,7 @@ fn compile_stage(
     let facts = checked(
         "Structures check",
         &structures,
-        cq_lang_structures::contract::check(&structures),
+        cq_lang_structures::contract::check(&physical, &structures),
     )?;
     // Nullable publication payloads have no device scalar ABI. A join carrying
     // one from either side needs a host-readable index, until a later projection
@@ -649,7 +649,7 @@ fn compile_stage(
                 });
             if matches!(entry.structure, cq_lang_structures::Structure::Built { .. })
                 && (nullable_reader
-                    || advice::relation_of(&structures.physical, &entry.name)
+                    || advice::relation_of(&physical, &entry.name)
                         .and_then(|relation| publications.get(&relation.to_string()))
                         .is_some_and(|input| input.nullable.iter().any(|value| *value)))
             {
@@ -662,7 +662,7 @@ fn compile_stage(
                 structures = checked(
                     "nullable host provider",
                     &structures,
-                    cq_structure_selection::retype(&structures, quote!(entry(#index) => #provider)),
+                    cq_structure_selection::retype(&physical, &structures, quote!(entry(#index) => #provider)),
                 )?;
             }
         }
@@ -705,6 +705,7 @@ fn compile_stage(
                 "loader host adapter",
                 &structures,
                 cq_structure_selection::retype(
+                    &physical,
                     &structures,
                     if kernel
                         .published
@@ -723,7 +724,7 @@ fn compile_stage(
         structures = checked(
             "target provider binding",
             &structures,
-            cq_gpu_sequence::bind_structures(&structures),
+            cq_gpu_sequence::bind_structures(&physical, &structures),
         )?;
     }
     let mut sequence = checked(

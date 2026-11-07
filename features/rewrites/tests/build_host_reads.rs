@@ -20,8 +20,8 @@ fn retains_host_without_changing_graph_or_keys() {
     ir::check_rewrite(&source, &actual).unwrap();
     assert_eq!(build_host_reads(&actual, quote!(r)).unwrap(), actual);
     let selected = cq_structure_selection::compile(&actual).unwrap();
-    let selected = cq_rewrite_passes::sorted_runs(&selected, TokenStream::new()).unwrap();
-    let facts = cq_testkit::structures::contract::check(&selected).unwrap();
+    let selected = cq_rewrite_passes::sorted_runs(&actual, &selected, TokenStream::new()).unwrap();
+    let facts = cq_testkit::structures::contract::check(&actual, &selected).unwrap();
     assert!(facts.built.contains_key("r"));
     assert!(
         !facts.fallbacks.keys().any(|(host, reader, _)| host == "r"
@@ -46,7 +46,7 @@ fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
     assert_eq!(target.program.definitions[2], source.program.definitions[2]);
     ir::check_rewrite(&source, &target).unwrap();
     let selected = cq_structure_selection::compile(&target).unwrap();
-    cq_testkit::structures::contract::check(&selected).unwrap();
+    cq_testkit::structures::contract::check(&target, &selected).unwrap();
 }
 
 #[test]

@@ -632,18 +632,21 @@ fn keyed_of(structure: &mut structures::Structure) -> Option<&mut structures::Ke
     }
 }
 
-/// Every one-fact mutant of a Structures program, including every Physical
-/// mutant of its embedded Physical program.
+/// Every one-fact mutant of the distinct Physical and Structures stack entries.
 pub fn structures(
+    physical: &physical::Program,
     program: &structures::Program,
     types: &CarrierTypes,
-) -> Vec<Mutant<structures::Program>> {
+) -> Vec<Mutant<(physical::Program, structures::Program)>> {
+    let mut out: Vec<_> = self::physical(physical, types)
+        .into_iter()
+        .map(|mutant| Mutant {
+            operator: mutant.operator,
+            site: format!("physical {}", mutant.site),
+            program: (mutant.program, program.clone()),
+        })
+        .collect();
     let mut c = Collector::new(program);
-    for mutant in physical(&program.physical, types) {
-        let mut m = program.clone();
-        m.physical = mutant.program;
-        c.push(mutant.operator, format!("physical {}", mutant.site), m);
-    }
     let entries = &program.structures.entries;
     for (e, entry) in entries.iter().enumerate() {
         let site = |what: &str| format!("{}: {what}", entry.name);
@@ -692,7 +695,12 @@ pub fn structures(
         m.structures.entries.remove(e);
         c.push(Operator::DropFlag, site("drop entry"), m);
     }
-    c.out
+    out.extend(c.out.into_iter().map(|mutant| Mutant {
+        operator: mutant.operator,
+        site: mutant.site,
+        program: (physical.clone(), mutant.program),
+    }));
+    out
 }
 
 #[cfg(test)]

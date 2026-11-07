@@ -39,7 +39,7 @@ fn membership_step(operator: &Operator, facts: &Analysis) -> bool {
         }
 }
 
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, usize>> {
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, usize>> {
     let mut stages = BTreeMap::new();
     let mut expands = BTreeSet::new();
     for entry in &program.structures.entries {
@@ -57,8 +57,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
             expands.insert(symbol_name(&entry.name));
         }
     }
-    let definitions: BTreeMap<_, _> = program
-        .physical
+    let definitions: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -72,8 +71,8 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap
         .collect();
     // ST-Expand: The selected provider declares finite, exact-size retained
     // cursors. This law does not confer ordering or contiguous range placement.
-    let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
-    let ordered = &program.physical.program.definitions;
+    let candidates = physical::candidate_prefixes(physical, &facts.physical);
+    let ordered = &physical.program.definitions;
     let smallest_forces: BTreeSet<_> = ordered
         .iter()
         .enumerate()

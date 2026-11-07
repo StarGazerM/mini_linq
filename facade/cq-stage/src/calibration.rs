@@ -1,9 +1,10 @@
 //! Optional checked continuation diagnostics. These records never select code.
 //!
-//! The facade observes every checked stage and records only its language and
-//! printed program. The calibrator reads the versioned token descriptor with
+//! The facade observes every checked stage and records its language, selected
+//! printed program, and the base programs needed to check an annotation.
+//! The calibrator reads the versioned token descriptor with
 //! `Trace::parse_descriptor`, independently re-parses and checks each recorded
-//! program, and supplies its dependency graph to `Trace::coverage`. Step
+//! program with its bases, and supplies its dependency graph to `Trace::coverage`. Step
 //! identities are slash-separated VO step/branch/step paths; `$output` denotes
 //! lowering's return/unit work, not a fabricated VO index.
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,11 +16,14 @@ use syn::{Token, bracketed, parenthesized};
 pub const OUTPUT: &str = "$output";
 
 /// A checked stage as observed by the facade: the Rust type of its language
-/// and its printed program.
+/// and its printed program, plus separately printed bases for annotations.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stage {
     pub language: String,
     pub program: String,
+    /// Programs needed to parse/check this layer, in stack order.
+    /// These are continuation premises, not the selected program's identity.
+    pub bases: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
@@ -67,8 +71,16 @@ fn fail(message: &str) -> syn::Error {
     syn::Error::new(Span::call_site(), format!("ST-Calibration: {message}"))
 }
 impl Stage {
+    /// Record a flat language program, with no separately supplied bases.
     pub fn of<L: ToTokens>(program: &L) -> Self {
-        Self { language: std::any::type_name::<L>().into(), program: program.to_token_stream().to_string() }
+        Self::annotation(program, Vec::new())
+    }
+    /// Record the selected annotation's identity and its checking premises.
+    /// Bases are printed in stack order: `[Physical]` for Structures and
+    /// `[Physical, Structures]` for Sequence. They participate in continuation
+    /// agreement, but not in `Snapshot`'s selected-program identity.
+    pub fn annotation<L: ToTokens>(program: &L, bases: Vec<String>) -> Self {
+        Self { language: std::any::type_name::<L>().into(), program: program.to_token_stream().to_string(), bases }
     }
     pub fn is<L>(&self) -> bool {
         self.language == std::any::type_name::<L>()
@@ -288,15 +300,16 @@ impl Parse for Stage {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let b; parenthesized!(b in input);
         let language = text(&b)?; b.parse::<Token![,]>()?;
-        let program = text(&b)?;
+        let program = text(&b)?; b.parse::<Token![,]>()?;
+        let bases = strings(&b)?;
         if !b.is_empty() { return Err(b.error("unexpected stage data")); }
-        Ok(Self {language, program})
+        Ok(Self {language, program, bases})
     }
 }
 impl ToTokens for Stage {
     fn to_tokens(&self, out: &mut TokenStream) {
-        let Self {language, program} = self;
-        out.extend(quote!((#language, #program)));
+        let Self {language, program, bases} = self;
+        out.extend(quote!((#language, #program, [#(#bases),*])));
     }
 }
 impl Parse for Coverage {
@@ -336,7 +349,7 @@ impl Parse for Trace {
         input.parse::<crate::kw::calibration_trace>()?;
         let b; syn::braced!(b in input);
         let version: syn::LitInt = b.parse()?;
-        if version.base10_parse::<u32>()? != 2 { return Err(b.error("unsupported calibration descriptor version")); }
+        if version.base10_parse::<u32>()? != 3 { return Err(b.error("unsupported calibration descriptor version")); }
         b.parse::<Token![;]>()?;
         let mut seeds: Vec<Seed> = list(&b)?;
         if seeds.len() > 1 { return Err(b.error("duplicate calibration seed")); }
@@ -352,6 +365,6 @@ impl ToTokens for Trace {
     fn to_tokens(&self, out: &mut TokenStream) {
         let seed = self.seed.iter();
         let stages = &self.stages;
-        out.extend(quote!(calibration_trace { 2; [#(#seed),*]; [#(#stages),*] }));
+        out.extend(quote!(calibration_trace { 3; [#(#seed),*]; [#(#stages),*] }));
     }
 }

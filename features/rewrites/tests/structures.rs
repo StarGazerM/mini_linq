@@ -3,6 +3,26 @@ use cq_structure_selection::retype;
 use cq_testkit::PassCase;
 use quote::{ToTokens, quote};
 
+type Fixture = (ir::physical::Program, ir::Program);
+
+fn parse_fixture(tokens: proc_macro2::TokenStream) -> syn::Result<Fixture> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let annotations = ir::Program::parse(input, &physical)?;
+        Ok((physical, annotations))
+    }).parse2(tokens)
+}
+
+fn parse_annotations(physical: &ir::physical::Program, tokens: proc_macro2::TokenStream) -> syn::Result<ir::Program> {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| ir::Program::parse(input, physical)).parse2(tokens)
+}
+
+macro_rules! fixture_quote {
+    ($($tokens:tt)*) => { parse_fixture(quote::quote!($($tokens)*)).unwrap() };
+}
+
 /// Declares a custom test token whose spelling no pass inspects.
 fn custom(token: &str, ty: proc_macro2::TokenStream, build: &str) -> ir::Declaration {
     let token = syn::Ident::new(token, proc_macro2::Span::call_site());
@@ -17,7 +37,7 @@ fn replacement(ty: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
 
 #[test]
 fn membership_advice_preserves_a_fully_bound_physical_probe() {
-    let source: ir::Program = syn::parse_quote! { physical {
+    let (physical, source): Fixture = fixture_quote! { physical {
         relation L(a:u32,b:u32); relation R(a:u32,b:u32);
         l = pipe rename L@0 {a -> x,b -> y};
         r = let rename R@1 {a -> x,b -> y};
@@ -29,28 +49,27 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
         joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
     }};
-    let target = cq_rewrite_passes::membership(&source, quote!(r)).unwrap();
-    assert_eq!(target.physical, source.physical);
-    ir::check_rewrite(&source, &target).unwrap();
+    let target = cq_rewrite_passes::membership(&physical, &source, quote!(r)).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     assert!(target.structures.entries.iter().all(|entry| !matches!(
         &entry.structure, Structure::Built { keyed, .. } if keyed.supports.is_some()
     )));
     assert!(
-        ir::contract::check(&target)
+        ir::contract::check(&physical, &target)
             .unwrap()
             .membership
             .contains(&("r".into(), vec!["x".into(), "y".into()]))
     );
     assert_eq!(
-        cq_rewrite_passes::membership(&target, quote!(r)).unwrap(),
+        cq_rewrite_passes::membership(&physical, &target, quote!(r)).unwrap(),
         target
     );
-    assert!(cq_rewrite_passes::membership(&source, quote!(missing)).is_err());
+    assert!(cq_rewrite_passes::membership(&physical, &source, quote!(missing)).is_err());
 }
 
 #[test]
 fn membership_advice_cannot_discard_a_demanded_payload() {
-    let source: ir::Program = syn::parse_quote! { physical {
+    let (physical, source): Fixture = fixture_quote! { physical {
         relation L(a:u32); relation R(a:u32,b:u32);
         l = pipe rename L@0 {a -> x};
         r = let rename R@1 {a -> x,b -> y};
@@ -62,11 +81,11 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
         joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
     }};
-    assert!(cq_rewrite_passes::membership(&source, quote!(r)).is_err());
+    assert!(cq_rewrite_passes::membership(&physical, &source, quote!(r)).is_err());
 }
 
-fn smallest_expand_source() -> ir::Program {
-    syn::parse_quote! { physical {
+fn smallest_expand_source() -> Fixture {
+    fixture_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
         l = pipe rename L@0 {a -> a,b -> b};
         r = let rename R@1 {b -> b,c -> c};
@@ -88,10 +107,10 @@ fn smallest_expand_source() -> ir::Program {
 
 #[test]
 fn entry_retype_changes_only_one_provider_and_checks_the_result() {
-    let source = smallest_expand_source();
+    let (physical, source) = smallest_expand_source();
     let device_columns = custom("device_columns", quote!(DeviceColumns), "inferred");
     let target = retype(
-        &source,
+        &physical, &source,
         quote!(providers { #device_columns } entry(4) => @device_columns as DeviceColumns),
     )
     .unwrap();
@@ -103,11 +122,11 @@ fn entry_retype_changes_only_one_provider_and_checks_the_result() {
         .declare(&[device_columns.clone()])
         .unwrap();
     assert_eq!(target, expected);
-    ir::check_rewrite(&source, &target).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     for selector in [quote!(entry(100)), quote!(entry(4, 5))] {
         assert!(
             retype(
-                &source,
+                &physical, &source,
                 quote!(providers { #device_columns } #selector => @device_columns as DeviceColumns)
             )
             .is_err()
@@ -117,25 +136,24 @@ fn entry_retype_changes_only_one_provider_and_checks_the_result() {
 
 #[test]
 fn expand_lookups_records_only_the_first_supported_smallest_probe() {
-    let source = smallest_expand_source();
-    let target = cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap();
+    let (physical, source) = smallest_expand_source();
+    let target = cq_rewrite_passes::expand_lookups(&physical, &source, quote!(256)).unwrap();
     let mut expected = source.clone();
     expected
         .structures
         .entries
         .push(syn::parse_quote!(candidate stage = batch 256 expand;));
     assert_eq!(target, expected);
-    ir::check_rewrite(&source, &target).unwrap();
-    assert_eq!(target.physical, source.physical);
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     assert_eq!(
-        syn::parse2::<ir::Program>(target.to_token_stream()).unwrap(),
+        parse_annotations(&physical, target.to_token_stream()).unwrap(),
         target
     );
     assert_eq!(
-        cq_rewrite_passes::expand_lookups(&target, quote!(256)).unwrap(),
+        cq_rewrite_passes::expand_lookups(&physical, &target, quote!(256)).unwrap(),
         target
     );
-    let facts = ir::contract::check(&target).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert!(facts.expands.contains("candidate"));
     assert!(!facts.expands.contains("checked"));
 }
@@ -154,35 +172,36 @@ fn expand_lookups_skips_unrecorded_range_capabilities_without_retyping() {
             syn::parse_quote!(r = @sorted_run as ::cq_storage::SortedRun<_, _> [b][c];),
         ),
     ] {
-        let mut source = smallest_expand_source();
+        let (physical, mut source) = smallest_expand_source();
         source.structures.entries[index] = entry;
         source.structures.declare(&declared).unwrap();
-        ir::contract::check(&source).unwrap();
+        ir::contract::check(&physical, &source).unwrap();
         assert_eq!(
-            cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap(),
+            cq_rewrite_passes::expand_lookups(&physical, &source, quote!(256)).unwrap(),
             source
         );
     }
-    let mut mixed = smallest_expand_source();
+    let (physical, mut mixed) = smallest_expand_source();
     mixed.structures.entries[1] = syn::parse_quote!(s = @other_trie as OtherTrie [a][c];);
     mixed
         .structures
         .entries
         .push(syn::parse_quote!(r = @sorted_run as ::cq_storage::SortedRun<_, _> [b];));
     mixed.structures.declare(&declared).unwrap();
-    ir::contract::check(&mixed).unwrap();
+    ir::contract::check(&physical, &mixed).unwrap();
     assert_eq!(
-        cq_rewrite_passes::expand_lookups(&mixed, quote!(256)).unwrap(),
+        cq_rewrite_passes::expand_lookups(&physical, &mixed, quote!(256)).unwrap(),
         mixed
     );
-    let mut missing = smallest_expand_source();
+    let (physical, mut missing) = smallest_expand_source();
     missing.structures.entries.remove(1);
-    assert!(cq_rewrite_passes::expand_lookups(&missing, quote!(256)).is_err());
-    assert!(cq_rewrite_passes::expand_lookups(&smallest_expand_source(), quote!(0)).is_err());
+    assert!(cq_rewrite_passes::expand_lookups(&physical, &missing, quote!(256)).is_err());
+    let (physical, source) = smallest_expand_source();
+    assert!(cq_rewrite_passes::expand_lookups(&physical, &source, quote!(0)).is_err());
 }
 
-fn membership_bridge_source() -> ir::Program {
-    syn::parse_quote! { physical {
+fn membership_bridge_source() -> Fixture {
+    fixture_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
         relation M(b:i64,tag:i64); relation S(b:i64,c:i64); relation T(c:i64,d:i64);
         l = pipe rename L@0 {a -> a};
@@ -214,8 +233,8 @@ fn membership_bridge_source() -> ir::Program {
 
 #[test]
 fn expand_lookups_crosses_certified_bitmap_membership_bridges() {
-    let source = membership_bridge_source();
-    let target = cq_rewrite_passes::expand_lookups(&source, quote!(256, depth 3)).unwrap();
+    let (physical, source) = membership_bridge_source();
+    let target = cq_rewrite_passes::expand_lookups(&physical, &source, quote!(256, depth 3)).unwrap();
     let mut expected = source.clone();
     expected.structures.entries.extend([
         syn::parse_quote!(first stage = batch 256 expand;),
@@ -223,35 +242,34 @@ fn expand_lookups_crosses_certified_bitmap_membership_bridges() {
         syn::parse_quote!(last stage = batch 256 expand;),
     ]);
     assert_eq!(target, expected);
-    ir::check_rewrite(&source, &target).unwrap();
-    assert_eq!(target.physical, source.physical);
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     assert_eq!(
-        cq_rewrite_passes::expand_lookups(&target, quote!(256, depth 3)).unwrap(),
+        cq_rewrite_passes::expand_lookups(&physical, &target, quote!(256, depth 3)).unwrap(),
         target
     );
-    let facts = ir::contract::check(&target).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert!(!facts.expands.contains("member"));
     assert_eq!(facts.filtered["selected"].constants.len(), 1);
 }
 
 #[test]
 fn expand_lookups_limits_nested_frames_without_retyping_deeper_probes() {
-    let source = membership_bridge_source();
+    let (physical, source) = membership_bridge_source();
     for (arguments, expected) in [
         (quote!(256), vec!["after", "first"]),
         (quote!(256, depth 1), vec!["first"]),
         (quote!(256, depth 3), vec!["after", "first", "last"]),
     ] {
-        let target = cq_rewrite_passes::expand_lookups(&source, arguments.clone()).unwrap();
-        let facts = ir::contract::check(&target).unwrap();
+        let target = cq_rewrite_passes::expand_lookups(&physical, &source, arguments.clone()).unwrap();
+        let facts = ir::contract::check(&physical, &target).unwrap();
         assert_eq!(
             facts.expands.iter().map(String::as_str).collect::<Vec<_>>(),
             expected
         );
-        assert_eq!(target.physical, source.physical);
-        assert_eq!(facts.built, ir::contract::check(&source).unwrap().built);
+        ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
+        assert_eq!(facts.built, ir::contract::check(&physical, &source).unwrap().built);
         assert_eq!(
-            cq_rewrite_passes::expand_lookups(&target, arguments).unwrap(),
+            cq_rewrite_passes::expand_lookups(&physical, &target, arguments).unwrap(),
             target
         );
     }
@@ -260,13 +278,13 @@ fn expand_lookups_limits_nested_frames_without_retyping_deeper_probes() {
         quote!(256, frames 2),
         quote!(256, depth 2,),
     ] {
-        assert!(cq_rewrite_passes::expand_lookups(&source, arguments).is_err());
+        assert!(cq_rewrite_passes::expand_lookups(&physical, &source, arguments).is_err());
     }
 }
 
 #[test]
 fn expand_lookups_stops_at_uncertified_payload_probe_bridges() {
-    let mut source = membership_bridge_source();
+    let (physical, mut source) = membership_bridge_source();
     source.structures.entries[0] = syn::parse_quote!(
         selected = @hash_index as ::cq_storage::HashIndex<'_,_,_> [b] payload [b] constants {tag = 7};
     );
@@ -274,43 +292,43 @@ fn expand_lookups_stops_at_uncertified_payload_probe_bridges() {
         .structures
         .declare(&cq_lang_structures::provider::base::declarations())
         .unwrap();
-    ir::contract::check(&source).unwrap();
-    let target = cq_rewrite_passes::expand_lookups(&source, quote!(256)).unwrap();
+    ir::contract::check(&physical, &source).unwrap();
+    let target = cq_rewrite_passes::expand_lookups(&physical, &source, quote!(256)).unwrap();
     let mut expected = source.clone();
     expected
         .structures
         .entries
         .push(syn::parse_quote!(first stage = batch 256 expand;));
     assert_eq!(target, expected);
-    assert_eq!(target.physical, source.physical);
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
 }
 
-fn fixture(suffix: &str) -> ir::Program {
-    syn::parse_str(&format!(
+fn fixture(suffix: &str) -> Fixture {
+    cq_testkit::corpus::parse_structures_capture(&format!(
         "{}\n{suffix}",
         include_str!("fixtures/representations.physical")
     ))
     .unwrap()
 }
 
-fn source() -> ir::Program {
+fn source() -> Fixture {
     let source = fixture(include_str!("fixtures/representations.structures"));
     // This authored fixture explicitly retains buffers so the rows selector
     // remains covered independently of the default retention policy.
-    ir::contract::check(&source).unwrap();
+    ir::contract::check(&source.0, &source.1).unwrap();
     source
 }
 
-fn missing_storage(target: &ir::Program) -> ir::Program {
+fn missing_storage(target: &Fixture) -> Fixture {
     let mut target = target.clone();
-    target.structures.entries.remove(0);
+    target.1.structures.entries.remove(0);
     target
 }
 
-fn changed_physical(target: &ir::Program) -> ir::Program {
+fn changed_physical(target: &Fixture) -> Fixture {
     let mut target = target.clone();
-    target.physical.program.head.args = target
-        .physical
+    target.0.program.head.args = target
+        .0
         .program
         .head
         .args
@@ -369,19 +387,19 @@ fn every_selector_has_a_pinned_ir_and_independent_mutation_checks() {
         let checked = PassCase {
             source: source(),
             expected_next: Some(fixture(expected)),
-            compile: Box::new(|p| retype(p, arguments.clone())),
-            check: Box::new(ir::check_rewrite),
+            compile: Box::new(|p| Ok((p.0.clone(), retype(&p.0, &p.1, arguments.clone())?))),
+            check: Box::new(|source, target| ir::check_rewrite(&source.0, &source.1, &target.0, &target.1)),
             mutations: vec![Box::new(missing_storage), Box::new(changed_physical)],
             answers: None,
         }
         .run(None)
         .unwrap();
-        assert_eq!(checked.physical, source().physical);
+        assert_eq!(checked.0, source().0);
         assert_eq!(
-            syn::parse2::<ir::Program>(checked.to_token_stream()).unwrap(),
-            checked
+            parse_annotations(&checked.0, checked.1.to_token_stream()).unwrap(),
+            checked.1
         );
-        assert_eq!(retype(&checked, arguments).unwrap(), checked);
+        assert_eq!(retype(&checked.0, &checked.1, arguments).unwrap(), checked.1);
     }
 }
 
@@ -390,72 +408,73 @@ fn sorted_runs_preserves_the_observation_contract_and_records_only_eligible_type
     let checked = PassCase {
         source: source(),
         expected_next: Some(fixture(include_str!("fixtures/sorted_runs.structures"))),
-        compile: Box::new(|p| cq_rewrite_passes::sorted_runs(p, quote!())),
-        check: Box::new(ir::check_rewrite),
+        compile: Box::new(|p| Ok((p.0.clone(), cq_rewrite_passes::sorted_runs(&p.0, &p.1, quote!())?))),
+        check: Box::new(|source, target| ir::check_rewrite(&source.0, &source.1, &target.0, &target.1)),
         mutations: vec![Box::new(missing_storage), Box::new(changed_physical)],
         answers: None,
     }
     .run(None)
     .unwrap();
     assert_eq!(
-        cq_rewrite_passes::sorted_runs(&checked, quote!()).unwrap(),
-        checked
+        cq_rewrite_passes::sorted_runs(&checked.0, &checked.1, quote!()).unwrap(),
+        checked.1
     );
-    assert!(cq_rewrite_passes::sorted_runs(&source(), quote!(unexpected)).is_err());
+    let (physical, source) = source();
+    assert!(cq_rewrite_passes::sorted_runs(&physical, &source, quote!(unexpected)).is_err());
 }
 
 #[test]
 fn selectors_are_by_recorded_reads_and_levels_not_old_type_spelling() {
-    let original = source();
+    let (physical, original) = source();
     let result = replacement(quote!(Replacement<'_, _, _>));
     assert_eq!(
         retype(
-            &original,
+            &physical, &original,
             quote!(#result r#r => @replacement as Replacement<'_, _, _>)
         )
         .unwrap(),
-        fixture(include_str!("fixtures/retype_result.structures"))
+        fixture(include_str!("fixtures/retype_result.structures")).1
     );
     let alias = custom("alias", quote!(Alias<'_, _, _>), "typed");
     let renamed = retype(
-        &original,
+        &physical, &original,
         quote!(providers { #alias } trie => @alias as Alias<'_, _, _>),
     )
     .unwrap();
     let trie = replacement(quote!(Replacement<'_, _, Inner<_>>));
     let target = retype(
-        &renamed,
+        &physical, &renamed,
         quote!(#trie trie => @replacement as Replacement<'_, _, Inner<_>>),
     )
     .unwrap();
     assert_eq!(
         target,
-        fixture(include_str!("fixtures/retype_trie.structures"))
+        fixture(include_str!("fixtures/retype_trie.structures")).1
     );
     assert_eq!(
         retype(
-            &original,
+            &physical, &original,
             quote!(#result result(r) => @replacement as Replacement<'_, _, _>)
         )
         .unwrap(),
-        fixture(include_str!("fixtures/retype_result.structures"))
+        fixture(include_str!("fixtures/retype_result.structures")).1
     );
     assert_eq!(
         retype(
-            &original,
+            &physical, &original,
             quote!(
                 providers { vec_deque = ::std::collections::VecDeque<_> { reads [], build typed }; }
                 kind(rows) => @vec_deque as ::std::collections::VecDeque<_>
             )
         )
         .unwrap(),
-        fixture(include_str!("fixtures/retype_rows.structures"))
+        fixture(include_str!("fixtures/retype_rows.structures")).1
     );
 }
 
 #[test]
 fn unmatched_or_malformed_selectors_are_errors() {
-    let source = source();
+    let (physical, source) = source();
     for arguments in [
         quote!(dedup => @hash_index as _),
         quote!(dedup => @hash_index as some_macro!()),
@@ -471,22 +490,22 @@ fn unmatched_or_malformed_selectors_are_errors() {
         quote!(payload => @hash_index as Valid<_>;),
         quote!(),
     ] {
-        assert!(retype(&source, arguments.clone()).is_err(), "{arguments}");
+        assert!(retype(&physical, &source, arguments.clone()).is_err(), "{arguments}");
     }
 }
 
 #[test]
 fn provider_trait_compatibility_is_not_inferred_from_type_spelling() {
-    let source = source();
+    let (physical, source) = source();
     for arguments in [
         quote!(payload => @std_hash_set as ::std::collections::HashSet<_>),
         quote!(ordered => @hash_index as ::cq_storage::HashIndex<'_, _, _>),
     ] {
         // Retyping preserves the recorded layout. Rust trait checking, not
         // matching a provider's name, decides whether it can serve the reads.
-        let target = retype(&source, arguments).unwrap();
-        ir::check_rewrite(&source, &target).unwrap();
-        assert_eq!(source.physical, target.physical);
+        let target = retype(&physical, &source, arguments).unwrap();
+        ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
+        ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     }
 }
 
@@ -496,8 +515,9 @@ fn computed_head_uses_sort_without_touching_physical() {
         relation R(a:i32); r = let canon rename R@0 {a -> x};
         return dedup r as answer(*x % 2);
     });
-    let source = cq_structure_selection::compile(&source).unwrap();
-    let expected: ir::Program = syn::parse_quote! {
+    let physical = source;
+    let source = cq_structure_selection::compile(&physical).unwrap();
+    let (_, expected): Fixture = fixture_quote! {
         physical {
             relation R(a:i32); r = let canon rename R@0 {a -> x};
             return dedup r as answer(*x % 2);
@@ -509,7 +529,7 @@ fn computed_head_uses_sort_without_touching_physical() {
         }
     };
     assert_eq!(source, expected);
-    ir::contract::check(&source).unwrap();
+    ir::contract::check(&physical, &source).unwrap();
 }
 
 #[test]
@@ -520,21 +540,22 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         s = pipe semi eager [x] l,r;
         p = let canon probe first [x] s,r; return p as answer(x);
     });
-    let source = cq_structure_selection::compile(&source).unwrap();
+    let physical = source;
+    let source = cq_structure_selection::compile(&physical).unwrap();
     let shared_index = custom("shared_index", quote!(Shared<'_, _, _>), "typed");
     assert!(
         retype(
-            &source,
+            &physical, &source,
             quote!(providers { #shared_index } payload => @shared_index as Shared<'_, _, _>)
         )
         .is_err()
     );
     let target = retype(
-        &source,
+        &physical, &source,
         quote!(providers { #shared_index } r => @shared_index as Shared<'_, _, _>),
     )
     .unwrap();
-    let expected: ir::Program = syn::parse_quote! {
+    let (_, expected): Fixture = fixture_quote! {
         physical {
             relation L(a:i32); relation R(a:i32);
             l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
@@ -556,7 +577,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
     };
     assert_eq!(target, expected);
     // Retyping the shared provider preserves STR-FullKey existence reads.
-    ir::check_rewrite(&source, &target).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     assert!(matches!(
         target.structures.entries[1].structure,
         Structure::Host { .. }
@@ -573,42 +594,42 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
         u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
         out = let canon project j keep {x,y}; return out as answer(x,y);
     }};
-    let source = cq_structure_selection::compile_with(&physical, quote!(positional(L, R))).unwrap();
+    let (physical, source) = cq_structure_selection::compile_with(&physical, quote!(positional(L, R))).unwrap();
     let membership = retype(
-        &source,
+        &physical, &source,
         quote!(kind(membership) => @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
     )
     .unwrap();
     assert_eq!(
-        ir::contract::check(&source).unwrap().built,
-        ir::contract::check(&membership).unwrap().built,
+        ir::contract::check(&physical, &source).unwrap().built,
+        ir::contract::check(&physical, &membership).unwrap().built,
         "supplementary keysets serve membership without retyping payload indices"
     );
     assert!(
         retype(
-            &source,
+            &physical, &source,
             quote!(providers { mask = Mask<_> { reads [], build typed }; } kind(selection) => @mask as Mask<_>),
         )
         .is_err()
     );
     let target = retype(
-        &source,
+        &physical, &source,
         quote!(providers { mask = Mask<_> { reads [positions], build typed }; } kind(selection) => @mask as Mask<_>),
     )
     .unwrap();
-    assert_eq!(source.physical, target.physical);
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     let target = retype(
-        &source,
+        &physical, &source,
         quote!(kind(keyset) => @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64>),
     )
     .unwrap();
-    assert_eq!(source.physical, target.physical);
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     let target = retype(
-        &source,
+        &physical, &source,
         quote!(kind(membership) => @std_hash_set as ::std::collections::HashSet<_>),
     )
     .unwrap();
-    assert_eq!(source.physical, target.physical);
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     // Positional selection needs no ordinary rows buffers; only the output's
     // canonical rows provider is eligible for the rows selector.
     let rows: Vec<_> = source
@@ -620,16 +641,16 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
         .collect();
     assert_eq!(rows, ["out"]);
     let canonical = retype(
-        &source,
+        &physical, &source,
         quote!(
             providers { canonical_rows = CanonicalRows { reads [distinct], build inferred }; }
             kind(rows) => @canonical_rows as CanonicalRows
         ),
     )
     .unwrap();
-    assert_eq!(canonical.physical, source.physical);
+    ir::check_rewrite(&physical, &source, &physical, &canonical).unwrap();
     assert_eq!(
-        ir::contract::check(&canonical).unwrap().canonical["out"],
+        ir::contract::check(&physical, &canonical).unwrap().canonical["out"],
         ir::CanonSource::Rows(syn::parse_quote!(@canonical_rows as CanonicalRows)),
     );
     let mut row_only = source.clone();
@@ -643,11 +664,11 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
         }
     }
     let row_only = retype(
-        &row_only,
+        &physical, &row_only,
         quote!(kind(keyset) => @std_hash_set as ::std::collections::HashSet<_>),
     )
     .unwrap();
-    ir::check_rewrite(&source, &row_only).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &row_only).unwrap();
 }
 
 #[test]
@@ -667,9 +688,9 @@ fn sorted_runs_keeps_two_column_payload_keys_hashed() {
                     && keyed.provider.token == "hash_index"
                     && keyed.provider.ty == syn::parse_quote!(::cq_storage::HashIndex<'_, _, _>))
     }));
-    let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
+    let target = cq_rewrite_passes::sorted_runs(&physical, &source, quote!()).unwrap();
     assert_eq!(target, source);
-    ir::check_rewrite(&source, &target).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
 }
 
 #[test]
@@ -682,18 +703,18 @@ fn hashed_runs_records_composite_keys_and_preserves_single_key_selection() {
         return p as answer(x,y,z);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
-    let target = cq_rewrite_passes::hashed_runs(&source, quote!()).unwrap();
-    ir::check_rewrite(&source, &target).unwrap();
+    let target = cq_rewrite_passes::hashed_runs(&physical, &source, quote!()).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     let text = target.to_token_stream().to_string();
     assert!(
         text.contains("cq_gpu_runtime :: HashedRun < _ , _ > [x , y]"),
         "{text}"
     );
     assert_eq!(
-        cq_rewrite_passes::hashed_runs(&target, quote!()).unwrap(),
+        cq_rewrite_passes::hashed_runs(&physical, &target, quote!()).unwrap(),
         target
     );
-    assert!(cq_rewrite_passes::hashed_runs(&source, quote!(unexpected)).is_err());
+    assert!(cq_rewrite_passes::hashed_runs(&physical, &source, quote!(unexpected)).is_err());
 }
 
 #[test]
@@ -707,17 +728,17 @@ fn sorted_runs_records_owned_singleton_probe_as_automatic_codec_request() {
         return p as answer(x,y);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
-    let target = cq_rewrite_passes::sorted_runs(&source, quote!()).unwrap();
+    let target = cq_rewrite_passes::sorted_runs(&physical, &source, quote!()).unwrap();
     let text = target.to_token_stream().to_string();
     assert!(
         text.contains("SortedRun < _ , _ , :: cq_storage :: I64Codec > [x]"),
         "{text}"
     );
     assert_eq!(
-        cq_rewrite_passes::hashed_runs(&target, quote!()).unwrap(),
+        cq_rewrite_passes::hashed_runs(&physical, &target, quote!()).unwrap(),
         target
     );
-    ir::check_rewrite(&source, &target).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
 }
 
 #[test]
@@ -737,8 +758,8 @@ fn hashed_runs_leaves_scalar_encoding_to_rust_traits() {
             return p as answer(x,y,z);
         }};
         let source = cq_structure_selection::compile(&physical).unwrap();
-        let target = cq_rewrite_passes::hashed_runs(&source, quote!()).unwrap();
+        let target = cq_rewrite_passes::hashed_runs(&physical, &source, quote!()).unwrap();
         assert!(target.to_token_stream().to_string().contains("HashedRun"));
-        ir::check_rewrite(&source, &target).unwrap();
+        ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
     }
 }

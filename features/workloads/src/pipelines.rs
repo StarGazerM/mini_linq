@@ -113,8 +113,8 @@ impl Pipeline {
         } else {
             TokenStream::new()
         };
-        let structures = match cq_structure_selection::compile_with(target, advice) {
-            Ok(structures) => structures,
+        let (physical, structures) = match cq_structure_selection::compile_with(target, advice) {
+            Ok(selected) => selected,
             Err(error) if error.to_string().ends_with(SMALLEST_LAYOUT_REJECTION) => {
                 return Ok(Some(SMALLEST_LAYOUT_REJECTION));
             }
@@ -131,7 +131,7 @@ impl Pipeline {
                 "push printer refuses ordered merge or smallest intersection",
             ));
         }
-        let analysis = cq_lang_structures::contract::check(&structures)?;
+        let analysis = cq_lang_structures::contract::check(&physical, &structures)?;
         for (result, reads) in &analysis.physical.merge_reads {
             if !analysis.host_read(result) {
                 continue;

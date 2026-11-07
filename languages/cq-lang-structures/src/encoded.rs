@@ -266,7 +266,7 @@ fn get<'a, K: Ord, V>(map: &'a BTreeMap<K, V>, key: &K, message: &str) -> syn::R
 
 /// Formal rule STR-CarrierRead: check original obligations and recorded facts,
 /// not equality to a preferred realization. No selector is called here.
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<()> {
     if program.encoded == Contract::default() {
         return Ok(());
     }
@@ -281,7 +281,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
     )?;
     require(r.reads.keys().eq(o.reads.keys()), "read coverage")?;
     require(r.copies.keys().eq(o.copies.keys()), "copy coverage")?;
-    let origins = representation_bases(program, facts);
+    let origins = representation_bases(physical, program, facts);
     for declaration in o.declarations.values() {
         require(
             facts
@@ -346,7 +346,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             )?;
         }
     }
-    let mut used = crate::blocks::check(program, facts)?;
+    let mut used = crate::blocks::check(physical, program, facts)?;
     for (id, publication) in &r.publications {
         let expected = &o.publications[id];
         require(
@@ -416,8 +416,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                 demand.preserves.is_subset(&declaration.preserves),
                 "missing preserved operation",
             )?;
-            let column = program
-                .physical
+            let column = physical
                 .program
                 .declarations
                 .iter()
@@ -592,8 +591,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             }
             (Consumer::Relational(consumer), ReadPurpose::PreserveCarrier) => {
                 require(
-                    program
-                        .physical
+                    physical
                         .program
                         .definitions
                         .iter()
@@ -610,8 +608,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
                 )?;
             }
             (Consumer::OpaqueRust(consumer), ReadPurpose::OpaqueRustRead) => {
-                let definition = program
-                    .physical
+                let definition = physical
                     .program
                     .definitions
                     .iter()
@@ -642,12 +639,11 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<()> {
             (Consumer::FinalAnswer(consumer), ReadPurpose::FinalHostAnswer) => {
                 require(
                     boundary.location == Location::Host
-                        && expected.producer == symbol_name(&program.physical.program.returned)
-                        && consumer == &symbol_name(&program.physical.program.head.relation),
+                        && expected.producer == symbol_name(&physical.program.returned)
+                        && consumer == &symbol_name(&physical.program.head.relation),
                     "final reconstruction requires the actual host answer consumer",
                 )?;
-                let fields = program
-                    .physical
+                let fields = physical
                     .program
                     .head
                     .args

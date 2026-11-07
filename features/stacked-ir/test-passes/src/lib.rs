@@ -101,7 +101,7 @@ pub fn smallest(input: TokenStream) -> TokenStream {
 }
 #[proc_macro]
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, args| {
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, args| {
         no_arguments(args)?;
         let sorted_index: cq_lang_structures::Declaration = syn::parse_quote!(
             sorted_index = SortedIndex<_, _> { reads [exact, membership], build typed };
@@ -114,7 +114,7 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
             }
         }
         target.structures.declare(&[sorted_index])?;
-        Ok((target.physical.clone(), target))
+        Ok((physical.clone(), target))
     })
     .into()
 }

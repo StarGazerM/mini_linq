@@ -160,7 +160,7 @@ ST-Context	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Context:
 ST-Sequence	implementation	facade/mini-linq-macros/src/lib.rs	// Formal rule ST-Sequence:	Default sequence lowering checks Structures correspondence; sequential grading validates the host-only machine unchanged; translate_pull emits the terminal Sequence iterator, including profile counters.
 ST-Endpoint	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Endpoint:	Terminal routing consumes declared input language, never macro path spelling; actual source and target are checked by the pass protocol.
 ST-Observe	implementation	facade/cq-stage/src/lib.rs	/// Formal rule ST-Observe:	Observe a selected resolved queue prefix only after its ordinary contracts, correspondence and context checks; capture terminal Rust after translation.
-ST-Realization	implementation	facade/cq-stage/src/realization.rs	// Formal rule ST-Realization:	Check separately printed Physical and Structures programs against the temporary embeddings before invoking consumers and before forwarding producers.
+ST-Realization	implementation	facade/cq-stage/src/realization.rs	// Formal rule ST-Realization:	Check annotation references against the separately supplied upper programs before invoking consumers and before forwarding producers.
 DR-Explain	implementation	features/workloads/xtask/src/explain.rs	/// Formal rule DR-Explain:	Generate facade stage observations through the requested boundary, including shared VO, Sequence, decomposition, grading and terminal Rust, without a second compiler composition.
 IF-Surface	implementation	languages/cq-lang-cq/src/lib.rs	// Formal rule IF-Surface:	Reject every remaining extension clause by name.
 IF-Input	implementation	languages/cq-syntax/src/lib.rs	/// Formal rule IF-Input:	Check declaration names and arity; declaration order is layout.
@@ -474,7 +474,7 @@ STR-E-Lineage	implementation	languages/cq-lang-structures/src/positional.rs	/// 
 STR-E-Selection	implementation	languages/cq-lang-structures/src/positional.rs	// Formal rule STR-E-Selection:	Positional selections require exact reads along an unbroken occurrence-preserving spine.
 STR-E-Read	implementation	languages/cq-lang-structures/src/positional.rs	// Formal rule STR-E-Read:	Positional predicates remain local and membership summaries name earlier scalar owned keysets.
 STR-E-Keysets	implementation	languages/cq-lang-structures/src/positional.rs	/// Formal rule STR-E-Keysets:	Keysets record distinct let keys and ownership with reusable membership demand and keyed groups record one provider.
-STR-Entries	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Entries:	The entry contract combines embedded Physical well-formedness with all nine concrete entry judgments.
+STR-Entries	implementation	languages/cq-lang-structures/src/lib.rs	/// Formal rule STR-Entries:	The entry contract combines supplied Physical well-formedness with all nine concrete entry judgments.
 WF-VO-Subatoms	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-Subatoms:	Checks occurrence columns, retained bindings and eventual full-row coverage; a partial subatom introduces at most one variable.
 WF-VO-Predicates	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-Predicates:	Matches source predicates and negations once with bound inputs and no introduced bindings.
 WF-VO-RustSteps	implementation	languages/cq-lang-vo/src/lib.rs	// Formal rule WF-VO-RustSteps:	Preserves every Rust payload exactly once with lexical dependencies and pattern bindings.

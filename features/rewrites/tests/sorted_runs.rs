@@ -16,18 +16,18 @@ macro_rules! triangle {
 
 #[test]
 fn public_pipeline_records_sorted_runs_and_executes_default_answers() {
-    let baseline: ir::Program = syn::parse_str(triangle!(r, s, t;
+    let (baseline_physical, baseline) = cq_testkit::corpus::parse_structures_capture(triangle!(r, s, t;
         print_input = structures;
-        print = cq_rewrite_test_driver::capture_structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
     ))
     .unwrap();
-    let rewritten: ir::Program = syn::parse_str(triangle!(r, s, t;
+    let (rewritten_physical, rewritten) = cq_testkit::corpus::parse_structures_capture(triangle!(r, s, t;
         structures = [cq_rewrites::sorted_runs];
         print_input = structures;
-        print = cq_rewrite_test_driver::capture_structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
     ))
     .unwrap();
-    ir::check_rewrite(&baseline, &rewritten).unwrap();
+    ir::check_rewrite(&baseline_physical, &baseline, &rewritten_physical, &rewritten).unwrap();
     // A relational predicate exposes the filtered build to storage selection;
     // an opaque Rust `if` carries no relational planning information.
     assert!(

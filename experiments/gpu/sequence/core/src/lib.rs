@@ -26,20 +26,22 @@ pub use emit::translate;
 /// The only grouping selection site: pipelines reach it through `stage`, the
 /// TPC-H build before Sequence lowering, and authored fixtures explicitly.
 pub fn bind_structures(
+    physical: &cq_lang_structures::physical::Program,
     source: &cq_lang_structures::Program,
 ) -> syn::Result<cq_lang_structures::Program> {
-    grouping::bind(source)
+    grouping::bind(physical, source)
 }
 
 /// Validate the Structures boundary without selecting CPU batching.
 /// GPU batching and storage scheduling are recorded later in Sequence.
 pub fn check_structures(
-    source: &cq_lang_structures::Program,
+    physical: &cq_lang_structures::physical::Program,
+    _source: &cq_lang_structures::Program,
     analysis: &cq_lang_structures::Analysis,
 ) -> syn::Result<()> {
     // PH-Smallest is admitted here; GPU-Smallest realization records it or
     // rejects it before printing (never as a First probe).
-    grouping::check(source, analysis)?;
+    grouping::check(physical, analysis)?;
     if !analysis.witnesses.is_empty()
         || !analysis.stages.is_empty()
         || !analysis.join_filters.is_empty()

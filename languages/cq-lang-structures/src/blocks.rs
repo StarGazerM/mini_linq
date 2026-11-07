@@ -89,21 +89,21 @@ pub fn preserved_operations(condition: &cq_syntax::algebra::Theta) -> BTreeSet<P
 
 /// Formal rule STR-Blocks: independently discharge original source/schema obligations.
 /// Formal rule STR-BlockPredicate: retain the exact Physical formula and demand.
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet<RepresentationId>> {
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<BTreeSet<RepresentationId>> {
     let contract = &program.encoded.blocks;
     let encoded = &program.encoded;
     let mut used = BTreeSet::new();
     if contract == &Contract::default() { return Ok(used); }
-    let origins = crate::representation_bases(program, facts);
+    let origins = crate::representation_bases(physical, program, facts);
     let mut source_coverage = BTreeSet::new();
     for (occurrence, scan) in &contract.scans {
         let binding = contract.sources.get(&scan.source).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing blocked source binding"))?;
         let source = encoded.obligations.sources.get(&scan.source).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing encoded source"))?;
         require(source.occurrence == *occurrence, "source occurrence changed")?;
-        require(!program.physical.program.host_sets.iter().any(|fact| symbol_name(&fact.relation) == source.relation && fact.discharged.is_none()), "blocked source cannot use borrowed-row host_set certification")?;
+        require(!physical.program.host_sets.iter().any(|fact| symbol_name(&fact.relation) == source.relation && fact.discharged.is_none()), "blocked source cannot use borrowed-row host_set certification")?;
         require(binding.block_rows > 0 && binding.block_rows <= u32::MAX as u64 && binding.block_rows % 1024 == 0, "invalid block geometry")?;
-        let relation = program.physical.inputs().find(|r| symbol_name(&r.name) == source.relation).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked relation"))?;
-        let definition = program.physical.program.definitions.iter().find(|d| symbol_name(&d.name) == *occurrence).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked occurrence"))?;
+        let relation = physical.inputs().find(|r| symbol_name(&r.name) == source.relation).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked relation"))?;
+        let definition = physical.program.definitions.iter().find(|d| symbol_name(&d.name) == *occurrence).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked occurrence"))?;
         require(!facts.physical.fused.values().any(|group| group.prefix == *occurrence || group.members.contains(occurrence)), "blocked source cannot enter a fused scope")?;
         require(matches!(&definition.operator, Operator::Rename(r) if symbol_name(&r.relation) == source.relation && r.constants.is_none()), "blocked source must be its actual unrestricted rename")?;
         let names: BTreeSet<_> = relation.columns.iter().map(|c| symbol_name(&c.name)).collect();
@@ -133,7 +133,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
     let mut expected_reads = BTreeSet::new();
     let mut read_ids = BTreeSet::new();
     let mut active = BTreeSet::new();
-    for definition in &program.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let name = symbol_name(&definition.name);
         let is_scan = contract.scans.contains_key(&name);
         let input = definition.operator.input().map(symbol_name);
@@ -202,27 +202,27 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
         if inherited {
             if let Some(fields) = facts.physical.rust_reads(&definition.operator) {
                 let input = input.as_ref().unwrap();
-                check_read(program, facts, &origins, &name, input, fields, Consumer::OpaqueRust(name.clone()), ReadPurpose::OpaqueRustRead, &mut read_ids)?;
+                check_read(physical, program, facts, &origins, &name, input, fields, Consumer::OpaqueRust(name.clone()), ReadPurpose::OpaqueRustRead, &mut read_ids)?;
                 expected_reads.insert(name.clone());
             }
         }
         if carry && definition.canon.is_some() {
             require(matches!(facts.canonical.get(&name), Some(crate::CanonSource::Rows(provider)) if symbol_name(&provider.token) == "sort"), "blocked canonical boundary requires recorded comparator rows")?;
             let key = format!("canon:{name}");
-            check_read(program, facts, &origins, &key, &name, facts.physical.headings[&name].iter().cloned().collect(), Consumer::Relational(name.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;
+            check_read(physical, program, facts, &origins, &key, &name, facts.physical.headings[&name].iter().cloned().collect(), Consumer::Relational(name.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;
             expected_reads.insert(key);
         }
     }
-    let returned = symbol_name(&program.physical.program.returned);
+    let returned = symbol_name(&physical.program.returned);
     if active.contains(&returned) {
-        if program.physical.program.return_canon.is_some() {
+        if physical.program.return_canon.is_some() {
             require(facts.head_dedup.get(&returned).is_some_and(|provider| symbol_name(&provider.token) == "sort"), "blocked return canonical boundary requires recorded comparator rows")?;
             let key = format!("canon:{returned}");
             if expected_reads.insert(key.clone()) {
-                check_read(program, facts, &origins, &key, &returned, facts.physical.headings[&returned].iter().cloned().collect(), Consumer::Relational(returned.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;
+                check_read(physical, program, facts, &origins, &key, &returned, facts.physical.headings[&returned].iter().cloned().collect(), Consumer::Relational(returned.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;
             }
         }
-        let consumer = symbol_name(&program.physical.program.head.relation);
+        let consumer = symbol_name(&physical.program.head.relation);
         if let Some(demand) = &program.consumer {
             // The original checked consumer fixes roles, independently of the
             // selected packets. Captures are host values, not row reads.
@@ -241,12 +241,12 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
                 } else {
                     Consumer::OpaqueRust(demand.original_consumer.clone())
                 };
-                check_read(program, facts, &origins, &key, &returned, fields, expected_consumer, purpose, &mut read_ids)?;
+                check_read(physical, program, facts, &origins, &key, &returned, fields, expected_consumer, purpose, &mut read_ids)?;
                 expected_reads.insert(key);
             }
         } else {
-            let fields = program.physical.program.head.args.iter().flat_map(|e| crate::demand::columns_used_rust(e, &facts.physical.headings[&returned], None)).collect();
-            check_read(program, facts, &origins, &consumer, &returned, fields, Consumer::FinalAnswer(consumer.clone()), ReadPurpose::FinalHostAnswer, &mut read_ids)?;
+            let fields = physical.program.head.args.iter().flat_map(|e| crate::demand::columns_used_rust(e, &facts.physical.headings[&returned], None)).collect();
+            check_read(physical, program, facts, &origins, &consumer, &returned, fields, Consumer::FinalAnswer(consumer.clone()), ReadPurpose::FinalHostAnswer, &mut read_ids)?;
             expected_reads.insert(consumer);
         }
     }
@@ -254,7 +254,7 @@ pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeSet
     require(expected_reads.iter().eq(contract.reads.keys()), "materialization decision coverage")?;
     Ok(used)
 }
-fn check_read(program: &Program, facts: &Analysis, origins: &BTreeMap<String, Vec<crate::Lineage>>, name: &str, input: &str, fields: BTreeSet<String>, expected_consumer: Consumer, purpose: ReadPurpose, ids: &mut BTreeSet<u64>) -> syn::Result<()> {
+fn check_read(physical: &crate::physical::Program, program: &Program, facts: &Analysis, origins: &BTreeMap<String, Vec<crate::Lineage>>, name: &str, input: &str, fields: BTreeSet<String>, expected_consumer: Consumer, purpose: ReadPurpose, ids: &mut BTreeSet<u64>) -> syn::Result<()> {
     let contract = &program.encoded.blocks;
     let read = contract.reads.get(name).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing blocked materialization authorization"))?;
     require(read.id <= u32::MAX as u64 && ids.insert(read.id), "duplicate or invalid consumer identity")?;
@@ -277,7 +277,7 @@ fn check_read(program: &Program, facts: &Analysis, origins: &BTreeMap<String, Ve
                 "carrier publication requires injective global value codes")?;
         }
         if field.action == ReadAction::BorrowedScoped {
-            require(purpose == ReadPurpose::OpaqueRustRead && program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == name && matches!(d.operator, Operator::Guard(_))), "borrowed temporary cannot escape read scope")?;
+            require(purpose == ReadPurpose::OpaqueRustRead && physical.program.definitions.iter().any(|d| symbol_name(&d.name) == name && matches!(d.operator, Operator::Guard(_))), "borrowed temporary cannot escape read scope")?;
         }
     }
     Ok(())

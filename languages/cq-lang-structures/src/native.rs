@@ -46,7 +46,8 @@ impl Native {
 
 /// The capability a reader's operator needs from a native host read.
 fn needed(
-    program: &Program,
+    physical: &crate::physical::Program,
+    _program: &Program,
     analysis: &Analysis,
     name: &str,
     reader: &ReaderRef<String>,
@@ -57,8 +58,7 @@ fn needed(
         ReaderRef::Candidates => vec![HostRead::Candidates],
         ReaderRef::Membership => vec![HostRead::Membership],
         ReaderRef::Result(result) => {
-            let Some(definition) = program
-                .physical
+            let Some(definition) = physical
                 .program
                 .definitions
                 .iter()
@@ -90,6 +90,7 @@ fn needed(
 /// Formal rule STR-NativeHost: check one `native` entry against its host
 /// declaration and record it. Returns false for other entries.
 pub(crate) fn entry(
+    physical: &crate::physical::Program,
     program: &Program,
     entry: &Entry,
     analysis: &mut Analysis,
@@ -106,8 +107,7 @@ pub(crate) fn entry(
         );
     }
     let input = &analysis.physical.hosts[&name];
-    let declaration = program
-        .physical
+    let declaration = physical
         .inputs()
         .find(|input_decl| symbol_name(&input_decl.name) == *input)
         .expect("checked host input");
@@ -171,8 +171,7 @@ pub(crate) fn entry(
     let reader_name = reader.key();
     let valid = match &reader_name {
         ReaderRef::Scan => {
-            let Some(Operator::Rename(rename)) = program
-                .physical
+            let Some(Operator::Rename(rename)) = physical
                 .program
                 .definitions
                 .iter()
@@ -197,7 +196,7 @@ pub(crate) fn entry(
             prefix == key
         }
         ReaderRef::Candidates | ReaderRef::Membership => {
-            physical::candidate_prefixes(&program.physical, &analysis.physical)
+            physical::candidate_prefixes(physical, &analysis.physical)
                 .iter()
                 .flat_map(|candidate| &candidate.sides)
                 .any(|(side, prefix)| {
@@ -218,14 +217,14 @@ pub(crate) fn entry(
                 .into_iter()
                 .flatten()
                 .any(|(r, columns, _)| r == result && *columns == key);
-            let point = program.physical.program.definitions.iter().any(|d| {
+            let point = physical.program.definitions.iter().any(|d| {
                 symbol_name(&d.name) == *result
                     && matches!(&d.operator, Operator::Point(_, select)
                     if select.condition.constant_keys().is_some_and(|keys| {
                         keys.keys().cloned().collect::<Vec<_>>() == key
                     }))
             });
-            let range = program.physical.program.definitions.iter().any(|d| {
+            let range = physical.program.definitions.iter().any(|d| {
                 symbol_name(&d.name) == *result
                     && matches!(&d.operator, Operator::Range(_, select)
                         if select.condition.range_bounds().is_some_and(|(column, _)| [column] == *key))
@@ -236,7 +235,7 @@ pub(crate) fn entry(
     if !valid {
         return error(reader, "native read does not match a host read on its key");
     }
-    if !needed(program, analysis, &name, &reader_name, &key).contains(&capability) {
+    if !needed(physical, program, analysis, &name, &reader_name, &key).contains(&capability) {
         return error(
             &read.read,
             format!(
@@ -247,7 +246,7 @@ pub(crate) fn entry(
     }
     let prefix = declaration.prefix(&host_key);
     if capability == HostRead::Ordered
-        && matches!(&reader_name, ReaderRef::Result(result) if program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *result && matches!(d.operator, Operator::Merge(..))))
+        && matches!(&reader_name, ReaderRef::Result(result) if physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *result && matches!(d.operator, Operator::Merge(..))))
     {
         // A merge reads keys in sorted column order; the host's order is its
         // declaration order, so both must agree.
@@ -278,7 +277,7 @@ pub(crate) fn entry(
             .expect("checked declared column")
     });
     if slot.is_some()
-        && matches!(&reader_name, ReaderRef::Result(result) if program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *result && matches!(d.operator, Operator::Point(..))))
+        && matches!(&reader_name, ReaderRef::Result(result) if physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *result && matches!(d.operator, Operator::Point(..))))
     {
         return error(&read.key, "a native point reads a leading host key");
     }
@@ -313,7 +312,7 @@ pub(crate) fn entry(
     }
     // A full-row-key native membership probe observes existence only.
     if capability == HostRead::Membership
-        && matches!(&reader_name, ReaderRef::Result(result) if program.physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *result && matches!(d.operator, Operator::Probe(..))))
+        && matches!(&reader_name, ReaderRef::Result(result) if physical.program.definitions.iter().any(|d| symbol_name(&d.name) == *result && matches!(d.operator, Operator::Probe(..))))
     {
         analysis.membership.insert((name.clone(), key.clone()));
     }

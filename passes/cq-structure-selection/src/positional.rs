@@ -13,16 +13,16 @@ use structures::{Origin, Structure};
 
 /// Formal rule SEL-Positional: Record only statically eligible reads of explicitly positional hosts.
 pub(super) fn choose(
+    physical: &physical::Program,
     target: &mut structures::Program,
     bases: &BTreeSet<String>,
 ) -> syn::Result<()> {
-    let facts = structures::contract::check(target)?;
+    let facts = structures::contract::check(physical, target)?;
     let lineage = &facts.lineage;
-    let defs = &target.physical.program.definitions;
+    let defs = &physical.program.definitions;
     let origin = |name: &str| -> syn::Result<Origin> {
         let l = &lineage[name];
-        let input = target
-            .physical
+        let input = physical
             .inputs()
             .find(|r| symbol_name(&r.name) == l.base)
             .expect("checked base");
@@ -42,7 +42,7 @@ pub(super) fn choose(
     for base in bases {
         if !facts.host_layouts.contains_key(base) {
             return Err(syn::Error::new_spanned(
-                &target.physical,
+                &physical,
                 format!("unknown positional host `{base}`"),
             ));
         }
@@ -127,8 +127,7 @@ pub(super) fn choose(
                 .position(|c| c == host_column)
                 .unwrap(),
         );
-        let input = target
-            .physical
+        let input = physical
             .inputs()
             .find(|r| symbol_name(&r.name) == l.base)
             .expect("checked base");
@@ -330,9 +329,9 @@ pub(super) fn choose(
     target
         .structures
         .declare(&cq_lang_structures::provider::base::declarations())?;
-    choose_join_filters(target, bases)?;
-    structures::record_join_filter_policies(target)?;
-    structures::contract::check(target)?;
+    choose_join_filters(physical, target, bases)?;
+    structures::record_join_filter_policies(physical, target)?;
+    structures::contract::check(physical, target)?;
     Ok(())
 }
 trait KeyNames {
@@ -372,13 +371,13 @@ fn positional_source(
 
 /// Formal rule SEL-JoinFilter: Choose a projected exact key set for each eligible covered scalar key column of a filtered build, at its scan; source retyping preserves this default, while borrowed and attached realizations require explicit advice.
 fn choose_join_filters(
+    physical: &physical::Program,
     target: &mut structures::Program,
     bases: &BTreeSet<String>,
 ) -> syn::Result<()> {
-    let facts = structures::contract::check(target)?;
+    let facts = structures::contract::check(physical, target)?;
     let named = |name: &str| {
-        &target
-            .physical
+        &physical
             .program
             .definitions
             .iter()
@@ -389,12 +388,12 @@ fn choose_join_filters(
     let mut entries = Vec::new();
     // Record every admissible covering witness. The contract checks all of
     // them before coalescing equivalent scan/build/key/layout runtime filters.
-    for d in &target.physical.program.definitions {
+    for d in &physical.program.definitions {
         let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &d.operator else {
             continue;
         };
         let columns: Vec<_> = keyed.columns.iter().map(symbol_name).collect();
-        for candidate in structures::join_filter_candidates(target, &facts, &symbol_name(&d.name)) {
+        for candidate in structures::join_filter_candidates(physical, target, &facts, &symbol_name(&d.name)) {
             let origin = &facts.lineage[&candidate.scan];
             if !candidate.filtered
                 || !bases.contains(&origin.base)

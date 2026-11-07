@@ -15,8 +15,8 @@ type Sequence = cq_stage::Sequence<
     cq_lang_sequence::Program,
 >;
 
-fn structures_stack(target: cq_lang_structures::Program) -> Structures {
-    Structures::new(target.physical.clone(), target)
+fn structures_stack((physical, structures): (cq_lang_physical::Program, cq_lang_structures::Program)) -> Structures {
+    Structures::new(physical, structures)
 }
 
 fn sequence_parts(target: cq_lang_sequence::Program) -> (
@@ -295,18 +295,18 @@ pub fn select(input: TokenStream) -> TokenStream {
 /// Structures → Structures representation decisions; `positions` opts in.
 #[proc_macro]
 pub fn represent(input: TokenStream) -> TokenStream {
-    Structures::rewrite(input.into(), |_physical, source, args| {
-        let target = cq_represent::compile_with(source, args)?;
-        Ok((target.physical.clone(), target))
+    Structures::rewrite(input.into(), |physical, source, args| {
+        let target = cq_represent::compile_with(physical, source, args)?;
+        Ok((physical.clone(), target))
     }).into()
 }
 
 /// Structures → Structures total lookahead; `batch(N)` opts into scan staging.
 #[proc_macro]
 pub fn stage(input: TokenStream) -> TokenStream {
-    Structures::rewrite(input.into(), |_physical, source, args| {
-        let target = cq_staging::compile_with(source, args)?;
-        Ok((target.physical.clone(), target))
+    Structures::rewrite(input.into(), |physical, source, args| {
+        let target = cq_staging::compile_with(physical, source, args)?;
+        Ok((physical.clone(), target))
     }).into()
 }
 
@@ -652,7 +652,7 @@ mod tests {
             let physical = physical(facts);
             rejects_printed_entry(&physical);
             let structures = cq_structure_selection::compile(&physical).unwrap();
-            rejects_printed_entry(&structures);
+            rejects_printed_entry(&super::Structures::new(physical.clone(), structures.clone()));
             let sequence = cq_sequence_lowering::compile(&structures).unwrap();
             assert_eq!(sequence.context(), physical.context());
             rejects_printed_entry(&sequence);
@@ -730,10 +730,9 @@ mod tests {
         let invocation: syn::Macro = syn::parse2(output).unwrap();
         let output = super::Structures::pass::<syn::Expr>(
             invocation.tokens,
-            |physical, source, args| {
-                assert_eq!(physical, &source.physical);
+            |physical, _source, args| {
                 assert!(args.is_empty());
-                let context = source.context();
+                let context = physical.context();
                 assert!(context.consumer_canonical);
                 assert_eq!(context.discharged_host_sets, ["R".to_owned()].into());
                 Ok(syn::parse_quote!(42))
@@ -762,31 +761,36 @@ mod tests {
                 .map(super::structures_stack),
         );
         let invocation: syn::Macro = syn::parse2(output).unwrap();
-        let selected: cq_lang_structures::Program = syn::parse2(invocation.tokens).unwrap();
+        let selected = syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream<'_>| cq_lang_structures::Program::parse(input, &physical),
+            invocation.tokens,
+        ).unwrap();
         assert_eq!(selected.consumer.as_ref(), Some(&demand));
-        assert!(selected.context().is_empty());
-        assert!(selected.physical.program.return_canon.is_some());
+        assert!(physical.context().is_empty());
+        assert!(physical.program.return_canon.is_some());
         let ordinary = cq_structure_selection::compile(&physical).unwrap();
         assert_eq!(selected.structures, ordinary.structures);
-        let roundtrip: cq_lang_structures::Program =
-            syn::parse2(selected.to_token_stream()).unwrap();
-        cq_lang_structures::contract::check(&roundtrip).unwrap();
+        let roundtrip = syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream<'_>| cq_lang_structures::Program::parse(input, &physical),
+            selected.to_token_stream(),
+        ).unwrap();
+        cq_lang_structures::contract::check(&physical, &roundtrip).unwrap();
         assert_eq!(roundtrip, selected);
         let mut forged = selected.clone();
         forged.consumer.as_mut().unwrap().head.swap(0, 1);
-        assert!(cq_lang_structures::contract::check(&forged).is_err());
+        assert!(cq_lang_structures::contract::check(&physical, &forged).is_err());
         let mut forged = selected.clone();
         forged.consumer.as_mut().unwrap().value_reads.clear();
         // Locally valid demand is not authority to change the original consumer.
-        cq_lang_structures::contract::check(&forged).unwrap();
-        assert!(cq_lang_structures::check_rewrite(&selected, &forged).is_err());
-        assert!(cq_lang_structures::check_retention_rewrite(&selected, &forged).is_err());
+        cq_lang_structures::contract::check(&physical, &forged).unwrap();
+        assert!(cq_lang_structures::check_rewrite(&physical, &selected, &physical, &forged).is_err());
+        assert!(cq_lang_structures::check_retention_rewrite(&physical, &selected, &physical, &forged).is_err());
         let output = cq_stage::pass_with_output_consumer::<
             cq_lang_physical::Program, super::Structures
         >(
             quote!(pipeline {} observe { inspect } #demand; #physical),
             cq_structure_selection::context,
-            |_, _, _| Ok(super::structures_stack(forged)),
+            |_, _, _| Ok(super::structures_stack((physical.clone(), forged))),
         );
         assert!(output.to_string().contains("ST-Consumer"));
     }
@@ -817,7 +821,7 @@ mod tests {
             let selected = cq_structure_selection::compile_with_consumer(
                 &physical, Default::default(), Some(&demand),
             ).unwrap();
-            assert_eq!(render(&selected), expected);
+            assert_eq!(render(&selected.1), expected);
         }
     }
     #[test]

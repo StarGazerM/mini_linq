@@ -254,8 +254,8 @@ impl<'a> Context<'a> {
     /// reads. `Rows` preserves declaration layout, including columns discarded
     /// by later projections. Only opted-in hosts require `Eq + Hash`; the set
     /// stores borrowed column tuples and is dropped before query evaluation.
-    pub fn certify_host_sets(&mut self, module: &structures::Program) {
-        for fact in &module.physical.program.host_sets {
+    pub fn certify_host_sets(&mut self, physical: &physical::Program) {
+        for fact in &physical.program.host_sets {
             if fact.discharged.is_some() {
                 continue;
             }
@@ -276,22 +276,24 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// Construct printer state from the complete program and its checked analysis.
-    pub fn new(module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
-        Self::capture_scope(module, analysis, false, None)
+    /// Construct printer state from separate Physical/Structures programs and checked analysis.
+    pub fn new(physical: &'a physical::Program, module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
+        Self::capture_scope(physical, module, analysis, false, None)
     }
 
     /// Construct a host subplan inside an already evaluated query scope.
     /// The caller owns input bindings, capture bindings and answer gates.
     pub fn with_bound_captures(
+        physical: &'a physical::Program,
         module: &'a structures::Program,
         analysis: &'a structures::Analysis,
         inputs: &BTreeMap<String, syn::Ident>,
     ) -> Self {
-        Self::capture_scope(module, analysis, true, Some(inputs))
+        Self::capture_scope(physical, module, analysis, true, Some(inputs))
     }
 
     fn capture_scope(
+        physical: &'a physical::Program,
         module: &'a structures::Program,
         analysis: &'a structures::Analysis,
         bound_captures: bool,
@@ -314,7 +316,8 @@ impl<'a> Context<'a> {
         }
         let mut used = std::collections::BTreeSet::new();
         names(module.to_token_stream(), &mut used);
-        for input in module.physical.inputs() {
+        names(physical.to_token_stream(), &mut used);
+        for input in physical.inputs() {
             let value = if let Some(value) =
                 bound_inputs.and_then(|inputs| inputs.get(&symbol_name(&input.name)))
             {
@@ -413,7 +416,7 @@ impl<'a> Context<'a> {
         let mut captures = BTreeMap::new();
         let mut gates = Vec::new();
         let mut captured_values = Vec::new();
-        for item in &module.physical.program.captures.items {
+        for item in &physical.program.captures.items {
             let mut n = captures.len() + gates.len();
             while used.contains(&format!("__cq_capture_{n}")) {
                 n += 1;
@@ -443,7 +446,7 @@ impl<'a> Context<'a> {
         // Formal rule IF-Parameter: Bind each captured relational value once outside all query loops.
         // A closed operand naming a capture reads its existing reference.
         let mut parameters = captures.clone();
-        for definition in &module.physical.program.definitions {
+        for definition in &physical.program.definitions {
             let theta = match &definition.operator {
                 Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => &s.condition,
                 _ => continue,
@@ -482,10 +485,10 @@ impl<'a> Context<'a> {
             }
         }
         let binding_functions =
-            ownership::binding_captures(module, analysis, &mut statements, &mut used);
+            ownership::binding_captures(physical, analysis, &mut statements, &mut used);
         bound |= !binding_functions.is_empty();
         let mut candidate_reads: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
-        for candidate in physical::candidate_prefixes(&module.physical, &analysis.physical) {
+        for candidate in physical::candidate_prefixes(&physical, &analysis.physical) {
             for (name, prefix) in candidate.sides {
                 candidate_reads.entry(name).or_default().push(prefix);
             }
@@ -493,15 +496,14 @@ impl<'a> Context<'a> {
         let mut context = Context {
             profile: None,
             physical_analysis: &analysis.physical,
-            physical_definitions: &module.physical.program.definitions,
+            physical_definitions: &physical.program.definitions,
             analysis,
             encoded: &module.encoded,
             blocked_runs: BTreeMap::new(),
             blocked_routing: BTreeMap::new(),
             providers: &module.structures,
             infos: analysis.physical.rows.clone(),
-            physical: module
-                .physical
+            physical: physical
                 .program
                 .definitions
                 .iter()
@@ -513,8 +515,8 @@ impl<'a> Context<'a> {
             gates,
             binding_functions,
             idents: BTreeMap::new(),
-            carried_columns: structures::demand::carried_columns(module, analysis),
-            carried_witnesses: columns::carried_witnesses(module, analysis),
+            carried_columns: structures::demand::carried_columns(physical, module, analysis),
+            carried_witnesses: columns::carried_witnesses(physical, analysis),
             reprs: BTreeMap::new(),
             statements,
             deferred_owners: Vec::new(),
@@ -524,7 +526,7 @@ impl<'a> Context<'a> {
             owned: Vec::new(),
             captured_values,
             candidate_reads,
-            intersect: module.physical.program.definitions.iter().any(|d| {
+            intersect: physical.program.definitions.iter().any(|d| {
                 matches!(&d.operator,
                 Operator::Probe(_, k) if matches!(k.choice, Some(physical::Choice::Smallest(_))))
             }),

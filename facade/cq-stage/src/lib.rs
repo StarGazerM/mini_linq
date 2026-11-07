@@ -63,8 +63,8 @@
 //! printed programs. Their pass/rewrite closures receive Physical, Structures,
 //! and (where present) Sequence as separate typed arguments. Continuations use
 //! `realization { physical { ... } structures { ... } sequence { ... } }`,
-//! omitting Sequence before its lowering. The temporary IR embeddings must
-//! agree with the separate programs. Observers and calibration still identify
+//! omitting Sequence before its lowering. Annotation references are checked
+//! against the supplied upper programs. Observers and calibration identify
 //! only the selected IR, not this transport envelope.
 //!
 //! Restricted context facts enter only through [`pass_with_context`] (the
@@ -86,7 +86,7 @@
 pub mod calibration;
 
 mod realization;
-pub use realization::{Sequence, Structures};
+pub use realization::{Annotation, Sequence, Structures};
 
 use std::collections::BTreeSet;
 

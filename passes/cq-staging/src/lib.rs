@@ -36,12 +36,12 @@ fn entry(name: &syn::Ident, size: usize) -> structures::Entry {
 }
 
 fn decisions(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     batch: Option<usize>,
 ) -> syn::Result<BTreeMap<String, usize>> {
-    let facts = structures::contract::check(source)?;
-    let definitions: BTreeMap<_, _> = source
-        .physical
+    let facts = structures::contract::check(physical, source)?;
+    let definitions: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -56,7 +56,7 @@ fn decisions(
             .structures
             .entries
             .push(entry(&definitions[name].name, size));
-        structures::contract::check(&candidate).is_ok()
+        structures::contract::check(physical, &candidate).is_ok()
     };
     let scan_spine = |mut name: String| {
         loop {
@@ -124,20 +124,21 @@ fn decisions(
 }
 
 /// Preserve current probe batching, with scalar evaluation elsewhere.
-pub fn compile(source: &structures::Program) -> syn::Result<structures::Program> {
-    compile_with(source, TokenStream::new())
+pub fn compile(physical: &structures::physical::Program, source: &structures::Program) -> syn::Result<structures::Program> {
+    compile_with(physical, source, TokenStream::new())
 }
 
 /// `batch(N)` additionally records maximal total segments from for producers.
 /// Formal rule STR-Staging: Preserve Physical and existing entries while appending checked batching boundaries.
 pub fn compile_with(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     arguments: TokenStream,
 ) -> syn::Result<structures::Program> {
     let policy: Policy = syn::parse2(arguments)?;
-    let decisions = decisions(source, policy.0)?;
+    let decisions = decisions(physical, source, policy.0)?;
     let mut target = source.clone();
-    for definition in &source.physical.program.definitions {
+    for definition in &physical.program.definitions {
         if let Some(&size) = decisions.get(&symbol_name(&definition.name)) {
             target
                 .structures
@@ -145,16 +146,16 @@ pub fn compile_with(
                 .push(entry(&definition.name, size));
         }
     }
-    structures::contract::check(&target)?;
+    structures::contract::check(physical, &target)?;
     Ok(target)
 }
 
 /// Check the recorded policy structurally, never by rerunning compilation.
 /// A non-default batch size is carried by the additional boundary entries.
-pub fn check(source: &structures::Program, target: &structures::Program) -> syn::Result<()> {
-    structures::check_rewrite(source, target)?;
-    let source_facts = structures::contract::check(source)?;
-    let target_facts = structures::contract::check(target)?;
+pub fn check(physical: &structures::physical::Program, source: &structures::Program, target: &structures::Program) -> syn::Result<()> {
+    structures::check_rewrite(physical, source, physical, target)?;
+    let source_facts = structures::contract::check(physical, source)?;
+    let target_facts = structures::contract::check(physical, target)?;
     let unchanged: Vec<_> = target
         .structures
         .entries
@@ -175,11 +176,11 @@ pub fn check(source: &structures::Program, target: &structures::Program) -> syn:
         .into_iter()
         .filter(|(name, _)| !source_facts.stages.contains_key(name))
         .collect();
-    if added == decisions(source, None)? {
+    if added == decisions(physical, source, None)? {
         return Ok(());
     }
     for size in added.values().copied().collect::<BTreeSet<_>>() {
-        if added == decisions(source, Some(size))? {
+        if added == decisions(physical, source, Some(size))? {
             return Ok(());
         }
     }

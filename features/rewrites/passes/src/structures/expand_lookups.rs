@@ -40,7 +40,7 @@ impl Parse for Advice {
 /// `N, depth D` limits nested expansion frames on one stream (default D = 2).
 /// Deeper probes retain lane-local traversal. This is staging advice, not a
 /// representation change or a claim that arbitrary frames fit every device.
-pub fn expand_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn expand_lookups(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let Advice { size, depth } = syn::parse2(arguments)?;
     if size.base10_parse::<usize>()? == 0 {
         return Err(syn::Error::new_spanned(
@@ -48,17 +48,16 @@ pub fn expand_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             "expand_lookups batch size must be positive",
         ));
     }
-    let facts = ir::contract::check(source)?;
+    let facts = ir::contract::check(physical, source)?;
     let mut target = source.clone();
-    let definitions: std::collections::BTreeMap<_, _> = source
-        .physical
+    let definitions: std::collections::BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
         .map(|definition| (symbol_name(&definition.name), definition))
         .collect();
     let mut expands = facts.expands.clone();
-    for definition in &source.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let Operator::Probe(_, probe) = &definition.operator else {
             continue;
         };
@@ -87,12 +86,12 @@ pub fn expand_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             .structures
             .entries
             .push(syn::parse_quote!(#name stage = batch #size expand;));
-        if ir::contract::check(&target).is_err() {
+        if ir::contract::check(physical, &target).is_err() {
             target.structures.entries.pop();
         } else {
             expands.insert(symbol_name(name));
         }
     }
-    ir::check_rewrite(source, &target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }

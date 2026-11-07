@@ -69,8 +69,8 @@ fn authored_block_programs_check_at_every_stage_and_match_all_oracles() {
         cq_testkit::ix::contract::check(&ix).unwrap();
         let physical = scenario.parse_physical().unwrap();
         cq_testkit::physical::contract::check(&physical).unwrap();
-        let structures = scenario.parse_structures().unwrap();
-        cq_testkit::structures::contract::check(&structures).unwrap();
+        let structures = scenario.parse_structures(&physical).unwrap();
+        cq_testkit::structures::contract::check(&physical, &structures).unwrap();
         let case = scenario.case().unwrap();
         let database = case.database();
         assert_eq!(

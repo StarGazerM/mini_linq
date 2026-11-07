@@ -782,7 +782,6 @@ pub fn compile(source: &physical::Program) -> syn::Result<structures::Program> {
         }
     }
     let target = structures::Program {
-        physical: source.clone(),
         structures: selected,
         encoded: Default::default(),
         consumer: None,
@@ -809,33 +808,35 @@ mod blocks;
 
 /// Select with comma-separated context facts and/or `positional(R, S)`.
 /// Record facts before choosing representations and checking correspondence.
+/// Return the separately recorded Physical program and its provider annotations.
 pub fn compile_with(
     source: &physical::Program,
     arguments: TokenStream,
-) -> syn::Result<structures::Program> {
+) -> syn::Result<(physical::Program, structures::Program)> {
     compile_with_consumer(source, arguments, None)
 }
 
 /// Bind a transported outer-consumer requirement before selecting any reads.
 /// This requirement is not optimization advice and cannot discharge set demand.
+/// The returned pair carries context facts without embedding Physical in Structures.
 pub fn compile_with_consumer(
     source: &physical::Program,
     arguments: TokenStream,
     consumer: Option<&structures::OutputConsumer>,
-) -> syn::Result<structures::Program> {
+) -> syn::Result<(physical::Program, structures::Program)> {
     let arguments: Arguments = syn::parse2(arguments)?;
     let mut recorded = source.clone();
     arguments.facts.apply(&mut recorded)?;
     let mut target = compile(&recorded)?;
     target.consumer = consumer.cloned();
     if let Some(hosts) = arguments.hosts {
-        positional::choose(&mut target, &hosts)?;
+        positional::choose(&recorded, &mut target, &hosts)?;
     }
     if let Some(blocks) = arguments.blocks {
-        blocks::choose(&mut target, &blocks)?;
+        blocks::choose(&recorded, &mut target, &blocks)?;
     }
     check(&recorded, &target)?;
-    Ok(target)
+    Ok((recorded, target))
 }
 
 /// Context premises authorized by this pass's explicit argument packet.

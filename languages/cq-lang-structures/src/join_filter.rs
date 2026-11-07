@@ -137,13 +137,13 @@ pub const JOIN_FILTER_ABANDON_PERCENT: usize = 35;
 /// and recorded evidence supports no veto (`doc/PLANNING-REDESIGN.md` P7).
 /// Selecting passes call this after their last join-filter or positional
 /// decision.
-pub fn record_join_filter_policies(program: &mut Program) -> syn::Result<()> {
+pub fn record_join_filter_policies(physical: &crate::physical::Program, program: &mut Program) -> syn::Result<()> {
     for entry in &mut program.structures.entries {
         if let Structure::JoinFilter { filter, .. } = &mut entry.structure {
             filter.policy = Policy::always();
         }
     }
-    let facts = contract::check(program)?;
+    let facts = contract::check(physical, program)?;
     let positional = positional_bases(&facts);
     let percent = proc_macro2::Literal::usize_unsuffixed(JOIN_FILTER_ABANDON_PERCENT);
     for entry in &mut program.structures.entries {
@@ -160,7 +160,7 @@ pub fn record_join_filter_policies(program: &mut Program) -> syn::Result<()> {
         let realization = facts.facts(&filter.provider);
         let statistic = (realization.borrowed_filter || realization.attached_filter)
             .then(|| {
-                let definition = program.physical.program.definitions.iter()
+                let definition = physical.program.definitions.iter()
                     .find(|definition| definition.name == filter.covering)?;
                 let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &definition.operator else {
                     return None;
@@ -242,12 +242,12 @@ pub struct JoinFilterCandidate {
 /// exclusive pipe spine of selections, projections and eager probes/semijoins,
 /// carrying the key column from the scan's lineage.
 pub fn join_filter_candidates(
-    program: &Program,
+    physical: &crate::physical::Program,
+    _program: &Program,
     facts: &Analysis,
     covering: &str,
 ) -> Vec<JoinFilterCandidate> {
-    let defs: BTreeMap<_, _> = program
-        .physical
+    let defs: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -375,7 +375,7 @@ pub fn join_filter_candidates(
 }
 
 /// Formal rule STR-JoinFilter: A conservative scan filter is covered by an exact probe or semijoin on a key containing it, along an exclusive pipe spine; projected construction is the default, while explicit borrowed and attached realizations are mutually exclusive and borrowing requires a complete scalar run key.
-pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Result<()> {
+pub(crate) fn check_join_filters(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<()> {
     for (scan, filters) in &facts.join_filters {
         for filter in filters {
             let covering = symbol_name(&filter.covering);
@@ -388,7 +388,7 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                 key: key.clone(),
                 filtered: false,
             };
-            if !join_filter_candidates(program, facts, &covering)
+            if !join_filter_candidates(physical, program, facts, &covering)
                 .iter()
                 .any(|c| {
                     JoinFilterCandidate {
@@ -405,8 +405,7 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
             concrete_type(&filter.marker)?;
             if facts.facts(&filter.provider).borrowed_filter {
                 let build = symbol_name(&filter.build);
-                let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &program
-                    .physical.program.definitions.iter()
+                let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &physical.program.definitions.iter()
                     .find(|definition| symbol_name(&definition.name) == covering)
                     .expect("checked covering operator").operator else { unreachable!() };
                 let columns = names(&keyed.columns);
@@ -417,7 +416,7 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
                     return error(filter, "STR-JoinFilter: borrowed filter requires a declared run view on its complete scalar key");
                 }
             }
-            check_policy(program, facts, filter)?;
+            check_policy(physical, program, facts, filter)?;
         }
     }
     Ok(())
@@ -427,13 +426,13 @@ pub(crate) fn check_join_filters(program: &Program, facts: &Analysis) -> syn::Re
 /// `abandon P of B` needs 1 ≤ P ≤ 100 and B the build's positional lineage base,
 /// and an optional statistic accessor must be the covering build provider's
 /// declared exact host Keys statistic. Legality only: no selection is rerun.
-fn check_policy(program: &Program, facts: &Analysis, filter: &JoinFilter) -> syn::Result<()> {
+fn check_policy(physical: &crate::physical::Program, _program: &Program, facts: &Analysis, filter: &JoinFilter) -> syn::Result<()> {
     let Some(abandon) = filter.policy.abandon() else {
         return Ok(());
     };
     let percent: usize = abandon.percent.base10_parse()?;
     let build = symbol_name(&filter.build);
-    let definition = program.physical.program.definitions.iter()
+    let definition = physical.program.definitions.iter()
         .find(|definition| definition.name == filter.covering).expect("checked cover");
     let (Operator::Probe(_, keyed) | Operator::Semi(_, keyed)) = &definition.operator else { unreachable!() };
     let Some((provider, _)) = facts.built_on(&build, &names(&keyed.columns)) else {
@@ -466,12 +465,11 @@ fn check_policy(program: &Program, facts: &Analysis, filter: &JoinFilter) -> syn
 /// Validate every recorded witness before sharing its runtime work. A build
 /// name identifies one Physical version; its complete covering key identifies
 /// the source index layout (and therefore the projected key component).
-pub(crate) fn coalesce_join_filters(program: &Program, facts: &mut Analysis) {
+pub(crate) fn coalesce_join_filters(physical: &crate::physical::Program, _program: &Program, facts: &mut Analysis) {
     if facts.join_filters.is_empty() {
         return;
     }
-    let layouts: BTreeMap<_, _> = program
-        .physical
+    let layouts: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()

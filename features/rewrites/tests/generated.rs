@@ -5,36 +5,35 @@ use cq_lang_physical::{self as physical, Choice, Operator};
 use cq_testkit::{Rows, harness, structures};
 use generated_support::{Inputs, Run, binary, fan, generic, oracle};
 
-fn captured(rewritten: bool) -> structures::Program {
+fn captured(rewritten: bool) -> (physical::Program, structures::Program) {
     let text = if rewritten {
         triangle! {
             r,s,t;
             plan = cq_planners::order(written, fine);
             physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
             print_input = structures;
-            print = cq_rewrite_test_driver::capture_structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     } else {
         triangle! {
             r,s,t;
             plan = cq_planners::order(written, fine);
             print_input = structures;
-            print = cq_rewrite_test_driver::capture_structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     };
-    syn::parse_str(text).unwrap()
+    cq_testkit::corpus::parse_structures_capture(text).unwrap()
 }
 
 #[test]
 fn generated_fine_triangle_and_fan_have_active_smallest_intersections() {
     let source = captured(false);
     let target = captured(true);
-    physical::contract::check(&source.physical).unwrap();
-    physical::contract::check(&target.physical).unwrap();
-    physical::check_rewrite(&source.physical, &target.physical).unwrap();
-    structures::contract::check(&target).unwrap();
-    let smallest: Vec<_> = target
-        .physical
+    physical::contract::check(&source.0).unwrap();
+    physical::contract::check(&target.0).unwrap();
+    physical::check_rewrite(&source.0, &target.0).unwrap();
+    structures::contract::check(&target.0, &target.1).unwrap();
+    let smallest: Vec<_> = target.0
         .program
         .definitions
         .windows(2)
@@ -48,7 +47,7 @@ fn generated_fine_triangle_and_fan_have_active_smallest_intersections() {
         1,
         "generated fine plan needs an active choice"
     );
-    let facts = physical::contract::check(&target.physical).unwrap();
+    let facts = physical::contract::check(&target.0).unwrap();
     for pair in smallest {
         assert!(physical::binary_intersection(&pair[0], &pair[1], &facts).is_some());
     }
@@ -107,23 +106,21 @@ macro_rules! three_way_query {
 
 #[test]
 fn step_order_and_occurrence_smallest_advice_reach_three_provider_execution() {
-    let source: structures::Program = syn::parse_str(three_way_query! {
+    let source = cq_testkit::corpus::parse_structures_capture(three_way_query! {
         seed,r,s,t;
         print_input = structures;
-        print = cq_rewrite_test_driver::capture_structures;
-    })
-    .unwrap();
-    let target: structures::Program = syn::parse_str(three_way_query! {
+        print = cq_rewrite_test_driver::capture_structures_stack;
+    }).unwrap();
+    let target = cq_testkit::corpus::parse_structures_capture(three_way_query! {
         seed,r,s,t;
         physical = [cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3))];
         print_input = structures;
-        print = cq_rewrite_test_driver::capture_structures;
-    })
-    .unwrap();
-    physical::check_rewrite(&source.physical, &target.physical).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
-    assert!(physical::candidate_prefixes(&source.physical, &facts.physical).is_empty());
-    let sites = physical::candidate_prefixes(&target.physical, &facts.physical);
+        print = cq_rewrite_test_driver::capture_structures_stack;
+    }).unwrap();
+    physical::check_rewrite(&source.0, &target.0).unwrap();
+    let facts = structures::contract::check(&target.0, &target.1).unwrap();
+    assert!(physical::candidate_prefixes(&source.0, &facts.physical).is_empty());
+    let sites = physical::candidate_prefixes(&target.0, &facts.physical);
     assert_eq!(sites.len(), 1);
     assert_eq!(sites[0].sides.len(), 3);
     let seed = [(1,)];
@@ -192,24 +189,24 @@ fn partial_target(inputs: &Inputs) -> Rows {
     .collect()
 }
 
-fn captured_partial(rewritten: bool) -> structures::Program {
+fn captured_partial(rewritten: bool) -> (physical::Program, structures::Program) {
     let text = if rewritten {
         partial_triangle! {
             inputs;
             plan = cq_planners::order(written, fine);
             physical = [cq_rewrites::canon_prefixes, cq_rewrites::smallest_intersections];
             print_input = structures;
-            print = cq_rewrite_test_driver::capture_structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     } else {
         partial_triangle! {
             inputs;
             plan = cq_planners::order(written, fine);
             print_input = structures;
-            print = cq_rewrite_test_driver::capture_structures;
+            print = cq_rewrite_test_driver::capture_structures_stack;
         }
     };
-    syn::parse_str(text).unwrap()
+    cq_testkit::corpus::parse_structures_capture(text).unwrap()
 }
 
 #[test]
@@ -226,12 +223,12 @@ fn generated_hoist_pins_opaque_rust_and_refines_written_execution() {
             .map(|(position, d)| (position, d.clone()))
             .collect::<Vec<_>>()
     };
-    let source_rust = rust(&source.physical);
+    let source_rust = rust(&source.0);
     assert_eq!(source_rust.len(), 3);
-    assert_eq!(source_rust, rust(&target.physical));
-    physical::check_rewrite(&source.physical, &target.physical).unwrap();
-    structures::contract::check(&target).unwrap();
-    assert_eq!(target.physical.program.definitions.iter().filter(|d| {
+    assert_eq!(source_rust, rust(&target.0));
+    physical::check_rewrite(&source.0, &target.0).unwrap();
+    structures::contract::check(&target.0, &target.1).unwrap();
+    assert_eq!(target.0.program.definitions.iter().filter(|d| {
         matches!(&d.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::Smallest(_))))
     }).count(), 1);
 

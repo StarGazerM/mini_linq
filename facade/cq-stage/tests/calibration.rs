@@ -10,7 +10,7 @@ fn node(name: &str, inputs: &[&str]) -> Node {
         inputs: inputs.iter().map(|s| (*s).into()).collect() }
 }
 fn stage(program: &str) -> Stage {
-    Stage { language: "test".into(), program: program.into() }
+    Stage { language: "test".into(), program: program.into(), bases: Vec::new() }
 }
 /// Calibrator-supplied graphs, keyed by recorded program.
 #[derive(Default)]
@@ -51,6 +51,40 @@ fn fusion_transfers_only_removed_dependency_cones() {
     assert!(trace.transitions(graphs.nodes()).unwrap().1[0].elided.is_empty());
     let encoded = trace.descriptor().unwrap();
     assert_eq!(Trace::parse_descriptor(&encoded).unwrap(), trace);
+}
+
+#[test]
+fn annotation_descriptor_preserves_bases_without_changing_selected_identity() {
+    let program = quote!(structures {});
+    let bases = vec!["physical {}".to_owned()];
+    let selected = Stage::of(&program);
+    let annotated = Stage::annotation(&program, bases);
+    assert!(selected.bases.is_empty());
+    assert_eq!(Snapshot::new(&selected, Vec::new()), Snapshot::new(&annotated, Vec::new()));
+    let mut graphs = Graphs::default();
+    let mut trace = trace(&mut graphs);
+    trace.advance(annotated.clone());
+    let seed = trace.seed.as_ref().unwrap();
+    let language = &annotated.language;
+    let printed = &annotated.program;
+    let expected = quote!(calibration_trace { 3; [#seed]; [(#language, #printed, ["physical {}"])] });
+    assert_eq!(trace.descriptor().unwrap(), expected.to_string());
+    assert_eq!(Trace::parse_descriptor(&expected.to_string()).unwrap(), trace);
+    trace.check_source(&annotated).unwrap();
+    let mut changed_base = annotated;
+    changed_base.bases = vec!["physical { changed }".into()];
+    assert!(trace.check_source(&changed_base).is_err());
+    trace.advance(changed_base.clone());
+    assert_eq!(trace.stages.len(), 2);
+    assert_eq!(trace.current(), Some(&changed_base));
+}
+
+#[test]
+fn annotation_descriptor_requires_version_three_and_explicit_bases() {
+    assert!(Trace::parse_descriptor("calibration_trace { 2; []; [] }").is_err());
+    assert!(syn::parse_str::<Stage>(r#"("test", "structures {}")"#).is_err());
+    let stage: Stage = syn::parse_str(r#"("test", "sequence {}", ["physical {}", "structures {}"])"#).unwrap();
+    assert_eq!(stage.bases, ["physical {}", "structures {}"]);
 }
 #[test]
 fn deleted_dead_work_is_explicit_not_fused_with_unrelated_nodes() {

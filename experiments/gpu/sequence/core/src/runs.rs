@@ -54,6 +54,7 @@ impl Codecs {
     }
 
     pub fn check(
+        physical: &cq_lang_structures::physical::Program,
         program: &Program,
         rows: &BTreeMap<String, cq_lang_structures::physical::Row>,
     ) -> syn::Result<Self> {
@@ -68,7 +69,7 @@ impl Codecs {
         // Closed answer binders are not row columns. Their declared answer
         // slots still supply the logical identity needed by carrier and codec
         // records; a type spelling must never substitute for that identity.
-        let physical = &program.physical.program;
+        let physical = &physical.program;
         let captures: std::collections::BTreeSet<_> = physical.captures.items.iter()
             .flat_map(cq_lang_structures::syntax::Capture::binding_types)
             .map(|(name, _)| symbol_name(&name))
@@ -112,10 +113,9 @@ pub(crate) fn scalar(ty: &Type) -> proc_macro2::TokenStream {
 
 // Formal rule GPU-Runs: declared radix relation handles bind full-key inputs; every
 // lookup uses a leading packed prefix and every physical run remains visible.
-pub fn bind(source: &Program) -> syn::Result<Program> {
-    let analysis = cq_lang_structures::contract::check(source)?;
-    let definitions = source
-        .physical
+pub fn bind(physical: &cq_lang_structures::physical::Program, source: &Program) -> syn::Result<Program> {
+    let analysis = cq_lang_structures::contract::check(physical, source)?;
+    let definitions = physical
         .program
         .definitions
         .iter()
@@ -193,7 +193,7 @@ pub fn bind(source: &Program) -> syn::Result<Program> {
         keyed.provider = provider.clone();
     }
     target.structures.declare(&[])?;
-    cq_lang_structures::contract::check(&target)?;
+    cq_lang_structures::contract::check(physical, &target)?;
     Ok(target)
 }
 

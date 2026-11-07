@@ -75,8 +75,8 @@ fn declared() -> proc_macro2::TokenStream {
     })
 }
 
-fn source() -> ir::Program {
-    cq_structure_selection::compile(&syn::parse_quote! { physical {
+fn source() -> (ir::physical::Program, ir::Program) {
+    let physical = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
         l = pipe rename L@0 {a -> x};
         r = let rename R@1 {a -> x,b -> y};
@@ -84,70 +84,70 @@ fn source() -> ir::Program {
         p = pipe probe first [x] s,r;
         out = let canon project p keep {x,y};
         return out as answer(x,y);
-    }})
-    .unwrap()
+    }};
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    (physical, structures)
 }
 
 #[test]
 fn explicit_support_composes_and_retyping_cannot_leave_stale_promises() {
-    let source = source();
-    let native = ir::contract::check(&source).unwrap();
+    let (physical, source) = source();
+    let native = ir::contract::check(&physical, &source).unwrap();
     assert!(native.provider_support("r", &["x".into()], None, ProviderCapability::Keys));
     assert!(!native.provider_support("r", &["x".into()], None, ProviderCapability::Retain));
     let declared = declared();
-    let custom = retype(
+    let custom = retype(&physical, 
         &source,
         quote!(#declared r => @custom_provider as ProviderAlias<_, _> supports [expand, keys]),
     )
     .unwrap();
-    let facts = ir::contract::check(&custom).unwrap();
+    let facts = ir::contract::check(&physical, &custom).unwrap();
     assert!(facts.provider_support("r", &["x".into()], None, ProviderCapability::Retain));
-    assert_eq!(custom.physical, source.physical);
-    let retained = retain_lookups(&custom, quote!()).unwrap();
-    let staged = expand_lookups(&custom, quote!(2)).unwrap();
-    let combined = expand_lookups(&retained, quote!(2)).unwrap();
-    let reordered = retain_lookups(&staged, quote!()).unwrap();
-    let combined_facts = ir::contract::check(&combined).unwrap();
-    let reordered_facts = ir::contract::check(&reordered).unwrap();
+    let retained = retain_lookups(&physical, &custom, quote!()).unwrap();
+    let staged = expand_lookups(&physical, &custom, quote!(2)).unwrap();
+    let combined = expand_lookups(&physical, &retained, quote!(2)).unwrap();
+    let reordered = retain_lookups(&physical, &staged, quote!()).unwrap();
+    let combined_facts = ir::contract::check(&physical, &combined).unwrap();
+    let reordered_facts = ir::contract::check(&physical, &reordered).unwrap();
     assert_eq!(combined_facts.shares, reordered_facts.shares);
     assert_eq!(combined_facts.witnesses, reordered_facts.witnesses);
     assert_eq!(combined_facts.expands, reordered_facts.expands);
     for plan in [&retained, &staged, &combined] {
-        assert!(retype(plan, quote!(r => @custom_provider as CustomProvider<_, _>)).is_err());
-        retype(
+        assert!(retype(&physical, plan, quote!(r => @custom_provider as CustomProvider<_, _>)).is_err());
+        retype(&physical, 
             plan,
             quote!(r => @custom_provider as CustomProvider<_, _> supports [expand, keys]),
         )
         .unwrap();
     }
-    let cleared = retype(
+    let cleared = retype(&physical, 
         &custom,
         quote!(r => @custom_provider as CustomProvider<_, _>),
     )
     .unwrap();
-    assert_eq!(retain_lookups(&cleared, quote!()).unwrap(), cleared);
-    assert_eq!(expand_lookups(&cleared, quote!(2)).unwrap(), cleared);
+    assert_eq!(retain_lookups(&physical, &cleared, quote!()).unwrap(), cleared);
+    assert_eq!(expand_lookups(&physical, &cleared, quote!(2)).unwrap(), cleared);
     assert!(cleared.structures.entries.iter().all(|entry| !matches!(
         &entry.structure, Structure::Built { keyed, .. } if keyed.supports.is_some()
     )));
     assert!(
-        retype(
+        retype(&physical, 
             &source,
             quote!(dedup => @btree_set as BTreeSet<_> supports [keys])
         )
         .is_err()
     );
-    let retained_only = retype(
+    let retained_only = retype(&physical, 
         &source,
         quote!(#declared r => @custom_provider as CustomProvider<_, _> supports [retain]),
     )
     .unwrap();
     assert_eq!(
-        expand_lookups(&retained_only, quote!(2)).unwrap(),
+        expand_lookups(&physical, &retained_only, quote!(2)).unwrap(),
         retained_only
     );
     assert!(
-        ir::contract::check(&retain_lookups(&retained_only, quote!()).unwrap())
+        ir::contract::check(&physical, &retain_lookups(&physical, &retained_only, quote!()).unwrap())
             .unwrap()
             .witnesses
             .contains_key("s")
@@ -156,12 +156,12 @@ fn explicit_support_composes_and_retyping_cannot_leave_stale_promises() {
 
 #[test]
 fn implementation_selection_replaces_support_for_its_actual_layout() {
-    let source = source();
+    let (physical, source) = source();
     for selected in [
-        sorted_runs(&source, quote!()).unwrap(),
-        cq_rewrite_passes::radix_runs(&source, quote!()).unwrap(),
+        sorted_runs(&physical, &source, quote!()).unwrap(),
+        cq_rewrite_passes::radix_runs(&physical, &source, quote!()).unwrap(),
     ] {
-        let facts = ir::contract::check(&selected).unwrap();
+        let facts = ir::contract::check(&physical, &selected).unwrap();
         for capability in [
             ProviderCapability::Retain,
             ProviderCapability::Expand,
@@ -169,71 +169,71 @@ fn implementation_selection_replaces_support_for_its_actual_layout() {
         ] {
             assert!(facts.provider_support("r", &["x".into()], None, capability));
         }
-        assert_eq!(selected.physical, source.physical);
     }
     // Rebuilding a hash layout replaces the old packet, even when its original
     // spelling still matches the selector's implementation catalog. Support
     // beyond the token's declaration is rejected (STR-Provider).
     assert!(
-        retype(
+        retype(&physical, 
             &source,
             quote!(r => @hash_index as ::cq_storage::HashIndex<'_, _, _> supports [expand, keys]),
         )
         .is_err()
     );
-    let declared = retype(
+    let declared = retype(&physical, 
         &source,
         quote!(r => @hash_index as ::cq_storage::HashIndex<'_, _, _> supports [keys]),
     )
     .unwrap();
-    let rebuilt = cq_rewrite_passes::sorted_indexes(&declared, quote!()).unwrap();
-    let facts = ir::contract::check(&rebuilt).unwrap();
+    let rebuilt = cq_rewrite_passes::sorted_indexes(&physical, &declared, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &rebuilt).unwrap();
     assert!(facts.provider_support("r", &["x".into()], None, ProviderCapability::Keys));
     assert!(!facts.provider_support("r", &["x".into()], None, ProviderCapability::Expand));
 }
 
 #[test]
 fn keys_advice_uses_declarations_instead_of_names() {
-    let source = source();
+    let (physical, source) = source();
     let declared = declared();
     for plan in [
         source.clone(),
-        sorted_runs(&source, quote!()).unwrap(),
-        retype(
+        sorted_runs(&physical, &source, quote!()).unwrap(),
+        retype(&physical, 
             &source,
             quote!(#declared r => @custom_provider as ProviderAlias<_, _> supports [keys]),
         )
         .unwrap(),
     ] {
-        let filtered = join_filter(&plan, quote!(l)).unwrap();
-        assert!(!ir::contract::check(&filtered).unwrap().join_filters["l"].is_empty());
+        let filtered = join_filter(&physical, &plan, quote!(l)).unwrap();
+        assert!(!ir::contract::check(&physical, &filtered).unwrap().join_filters["l"].is_empty());
         assert!(
-            retype(
+            retype(&physical, 
                 &filtered,
                 quote!(#declared r => @custom_provider as ProviderAlias<_, _>)
             )
             .is_err()
         );
     }
-    let undeclared = retype(
+    let undeclared = retype(&physical, 
         &source,
         quote!(#declared r => @custom_provider as ProviderAlias<_, _>),
     )
     .unwrap();
-    assert!(join_filter(&undeclared, quote!(l)).is_err());
+    assert!(join_filter(&physical, &undeclared, quote!(l)).is_err());
 }
 
 #[test]
 fn builtin_spelling_without_support_does_not_enable_advice() {
-    let sorted = sorted_runs(&source(), quote!()).unwrap();
-    let unrecorded = retype(
+    let (physical, source) = source();
+    let sorted = sorted_runs(&physical, &source, quote!()).unwrap();
+    let unrecorded = retype(&physical, 
         &sorted,
         quote!(r => @sorted_run as ::cq_storage::SortedRun<_, _>),
     )
     .unwrap();
-    assert_eq!(retain_lookups(&unrecorded, quote!()).unwrap(), unrecorded);
-    assert_eq!(expand_lookups(&unrecorded, quote!(2)).unwrap(), unrecorded);
-    assert!(join_filter(&unrecorded, quote!(l)).is_err());
+    assert_eq!(retain_lookups(&physical, &unrecorded, quote!()).unwrap(), unrecorded);
+    assert_eq!(expand_lookups(&physical, &unrecorded, quote!(2)).unwrap(), unrecorded);
+    assert!(join_filter(&physical, &unrecorded, quote!(l)).is_err());
 }
 
 macro_rules! query {

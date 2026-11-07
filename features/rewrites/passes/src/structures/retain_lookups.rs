@@ -8,16 +8,16 @@ use proc_macro2::TokenStream;
 /// key-preserving, nonintroducing relational steps; the language independently
 /// proves provider identity, key preservation and non-escape.
 /// Existing representation choices are preserved, including positions carriers.
-pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn retain_lookups(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
         return Err(syn::Error::new_spanned(
             arguments,
             "retain_lookups takes no arguments",
         ));
     }
-    let facts = ir::contract::check(source)?;
-    let definitions = &source.physical.program.definitions;
-    let candidates = ir::physical::candidate_prefixes(&source.physical, &facts.physical);
+    let facts = ir::contract::check(physical, source)?;
+    let definitions = &physical.program.definitions;
+    let candidates = ir::physical::candidate_prefixes(physical, &facts.physical);
     let mut target = source.clone();
     for (index, first) in definitions.iter().enumerate() {
         let Operator::Semi(_, read) = &first.operator else {
@@ -40,7 +40,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             let Operator::Probe(_, probe) = &force.operator else {
                 continue;
             };
-            if !preserving_bridge(source, &facts, &name, &probe.left, &keys) {
+            if !preserving_bridge(physical, &facts, &name, &probe.left, &keys) {
                 continue;
             }
             let candidate = candidates.iter().find(|candidate| {
@@ -116,7 +116,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             }
             // A failed candidate is ineligible, not a malformed input: the source
             // was checked above, and only this pair's two decisions were added.
-            if ir::contract::check(&target).is_ok() {
+            if ir::contract::check(physical, &target).is_ok() {
                 break;
             }
             target.structures.entries.truncate(original_len);
@@ -130,7 +130,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
             }
         }
     }
-    ir::check_rewrite(source, &target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
@@ -138,7 +138,7 @@ pub fn retain_lookups(source: &ir::Program, arguments: TokenStream) -> syn::Resu
 /// full-key membership probe can intervene without introducing a new binding.
 /// Opaque Rust, introducing joins and lost keys are not forwarding evidence.
 fn preserving_bridge(
-    source: &ir::Program,
+    physical: &ir::physical::Program,
     facts: &ir::Analysis,
     first: &str,
     input: &syn::Ident,
@@ -146,8 +146,7 @@ fn preserving_bridge(
 ) -> bool {
     let mut current = symbol_name(input);
     while current != first {
-        let Some(definition) = source
-            .physical
+        let Some(definition) = physical
             .program
             .definitions
             .iter()

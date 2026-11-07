@@ -125,7 +125,7 @@ pub fn lazy_anti(input: TokenStream) -> TokenStream {
 }
 #[proc_macro]
 pub fn ordered_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, _| {
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, _| {
         let mut target = source.clone();
         let provider = cq_lang_structures::provider::base::instance(
             "btree_map_grouped",
@@ -143,7 +143,7 @@ pub fn ordered_indexes(input: TokenStream) -> TokenStream {
             .declare(&[cq_lang_structures::provider::base::declaration(
                 "btree_map_grouped",
             )])?;
-        Ok((target.physical.clone(), target))
+        Ok((physical.clone(), target))
     })
     .into()
 }
@@ -184,7 +184,7 @@ pub fn expand_identity(input: TokenStream) -> TokenStream {
 }
 #[proc_macro]
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, _| {
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, _| {
         let mut target = source.clone();
         let declarations: cq_lang_structures::Providers = syn::parse_quote!(providers {
             sorted_index = SortedIndex<_, _> { reads [exact, membership], build typed };
@@ -197,7 +197,7 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
             }
         }
         target.structures.declare(&declarations.declarations)?;
-        Ok((target.physical.clone(), target))
+        Ok((physical.clone(), target))
     })
     .into()
 }

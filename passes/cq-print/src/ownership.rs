@@ -95,12 +95,12 @@ pub fn own_captures(expression: &mut Expr, owned: &[Ident], captures: &[(Ident, 
 /// its computed predecessors too, so rustc can infer their item types before
 /// checking a later callable's body. Type witnesses never evaluate a binding.
 pub(super) fn binding_captures(
-    module: &structures::Program,
+    physical: &physical::Program,
     analysis: &structures::Analysis,
     statements: &mut Vec<Stmt>,
     used: &mut std::collections::BTreeSet<String>,
 ) -> BTreeMap<String, (Ident, Vec<Ident>)> {
-    let definitions = &module.physical.program.definitions;
+    let definitions = &physical.program.definitions;
     let mut origins: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut required = std::collections::BTreeSet::new();
     for (index, definition) in definitions.iter().enumerate() {

@@ -7,11 +7,10 @@ use structures::syntax::algebra::Environment;
 
 /// Witness demand ends at its forcing probe; it never enters the logical heading.
 pub(super) fn carried_witnesses(
-    module: &structures::Program,
+    physical: &physical::Program,
     analysis: &structures::Analysis,
 ) -> BTreeMap<String, Vec<String>> {
-    let definitions: BTreeMap<_, _> = module
-        .physical
+    let definitions: BTreeMap<_, _> = physical
         .program
         .definitions
         .iter()
@@ -55,6 +54,7 @@ impl Context<'_> {
     /// row templates are emitted, so producer and consumer carriers agree.
     pub fn demand_columns(
         &mut self,
+        physical: &physical::Program,
         module: &structures::Program,
         result: &str,
         columns: &[String],
@@ -76,7 +76,7 @@ impl Context<'_> {
         used.get_mut(result)
             .expect("checked publication demand")
             .extend(columns.iter().cloned());
-        self.carried_columns = propagate_columns(module, self.analysis, used);
+        self.carried_columns = propagate_columns(physical, module, self.analysis, used);
         Ok(())
     }
 

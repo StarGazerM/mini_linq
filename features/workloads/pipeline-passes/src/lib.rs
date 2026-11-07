@@ -36,7 +36,7 @@ fn sorted(
 
 #[proc_macro]
 pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, arguments| {
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, arguments| {
         if !arguments.is_empty() {
             return Err(syn::Error::new_spanned(
                 arguments,
@@ -54,7 +54,7 @@ pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream
             }
         }
         target.structures.declare(&[sorted_index()])?;
-        Ok((target.physical.clone(), target))
+        Ok((physical.clone(), target))
     })
     .into()
 }

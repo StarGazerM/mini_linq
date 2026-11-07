@@ -119,9 +119,9 @@ pub fn retained_host_read<'a>(
     })
 }
 
-pub(crate) fn check(program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, Share>> {
-    let definitions = &program.physical.program.definitions;
-    let candidates = physical::candidate_prefixes(&program.physical, &facts.physical);
+pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<BTreeMap<String, Share>> {
+    let definitions = &physical.program.definitions;
+    let candidates = physical::candidate_prefixes(physical, &facts.physical);
     let mut result = BTreeMap::new();
     // ST-Share: Immutable payload lookups preserve their keys until the force.
     // A recorded Smallest probe can force any candidate's directory prefix.

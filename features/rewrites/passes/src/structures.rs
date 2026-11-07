@@ -11,9 +11,9 @@ pub use expand_lookups::expand_lookups;
 /// Record the existing full-key existential-storage certificate. The
 /// Structures checker proves that no reader observes a non-key payload and
 /// that the projected build satisfies the filtered-storage contract.
-pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn membership(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let name: Ident = syn::parse2(arguments)?;
-    ir::contract::check(source)?;
+    ir::contract::check(physical, source)?;
     let mut target = source.clone();
     let mut matched = 0;
     for entry in &mut target.structures.entries {
@@ -43,7 +43,7 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
             "membership advice requires one built provider",
         ));
     }
-    ir::check_rewrite(source, &target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
@@ -54,9 +54,9 @@ pub fn membership(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
 /// recorded (SEL-FilterPolicy). This is explicit positional-host advice,
 /// including when selection was not given positional hosts. The same
 /// Structures contract checks the result.
-pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn join_filter(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     let scan: Ident = syn::parse2(arguments)?;
-    let facts = ir::contract::check(source)?;
+    let facts = ir::contract::check(physical, source)?;
     // Analysis coalesces runtime filters; advice must inspect every recorded
     // proof witness to remain idempotent after that coalescing.
     let recorded: Vec<_> = source
@@ -68,13 +68,12 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
             _ => None,
         })
         .collect();
-    let candidates: Vec<_> = source
-        .physical
+    let candidates: Vec<_> = physical
         .program
         .definitions
         .iter()
         .flat_map(|d| {
-            ir::join_filter_candidates(source, &facts, &symbol_name(&d.name))
+            ir::join_filter_candidates(physical, source, &facts, &symbol_name(&d.name))
                 .into_iter()
                 .map(move |c| (&d.name, c))
         })
@@ -106,8 +105,7 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
                 .expect("checked lineage"),
         );
         let key = &facts.physical.rows[&candidate.build].bindings[&candidate.key];
-        let build = source
-            .physical
+        let build = physical
             .program
             .definitions
             .iter()
@@ -122,23 +120,23 @@ pub fn join_filter(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         });
     }
     target.structures.declare(&providers::declarations())?;
-    ir::record_join_filter_policies(&mut target)?;
-    ir::check_rewrite(source, &target)?;
+    ir::record_join_filter_policies(physical, &mut target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
 /// Formal rule EXT-SortedRuns:
 /// Retype one-level `hash_index` payload builds with one generic ordered key.
 /// Host fallbacks and smallest-intersection candidates retain their providers.
-pub fn sorted_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    select_runs(source, arguments, RunKind::Sorted)
+pub fn sorted_runs(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(physical, source, arguments, RunKind::Sorted)
 }
 
 /// Formal rule EXT-RadixRuns:
 /// Retype eligible singleton payload builds to RadixSpline runs.
 /// Rust checks OrderKey; this selects storage, not an ordered-input algorithm.
-pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    select_runs(source, arguments, RunKind::Radix)
+pub fn radix_runs(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+    select_runs(physical, source, arguments, RunKind::Radix)
 }
 
 /// Formal rule EXT-PackedCanon:
@@ -147,14 +145,14 @@ pub fn radix_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<i
 /// advice is the authored premise that every column of those results has an
 /// OrderKey; rustc checks it at the build. Other records and canonical
 /// references are unchanged.
-pub fn packed_canon(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn packed_canon(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
         return Err(syn::Error::new_spanned(
             arguments,
             "packed_canon takes no arguments",
         ));
     }
-    let analysis = ir::contract::check(source)?;
+    let analysis = ir::contract::check(physical, source)?;
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
         let Structure::Rows { provider, .. } = &mut entry.structure else {
@@ -170,7 +168,7 @@ pub fn packed_canon(source: &ir::Program, arguments: TokenStream) -> syn::Result
         }
     }
     target.structures.declare(&providers::declarations())?;
-    ir::check_rewrite(source, &target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
@@ -181,6 +179,7 @@ enum RunKind {
 }
 
 fn select_runs(
+    physical: &ir::physical::Program,
     source: &ir::Program,
     arguments: TokenStream,
     kind: RunKind,
@@ -192,8 +191,8 @@ fn select_runs(
         };
         return Err(syn::Error::new_spanned(arguments, message));
     }
-    let analysis = ir::contract::check(source)?;
-    let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let analysis = ir::contract::check(physical, source)?;
+    let candidates = ir::physical::candidate_prefixes(physical, &analysis.physical);
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
         let Structure::Built { keyed, .. } = &mut entry.structure else {
@@ -233,7 +232,7 @@ fn select_runs(
                 // The recorded `items` fact (SEL-ItemLayout) is the only
                 // source of the provider's declared layout argument.
                 keyed.provider = providers::declaration("radix_run").instance();
-                keyed.items = Some(if split_payload(source, &analysis, &name, &columns) {
+                keyed.items = Some(if split_payload(physical, source, &analysis, &name, &columns) {
                     syn::parse_quote!(items columns)
                 } else {
                     syn::parse_quote!(items rows)
@@ -253,7 +252,7 @@ fn select_runs(
         }
     }
     target.structures.declare(&providers::declarations())?;
-    ir::check_rewrite(source, &target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }
 
@@ -263,12 +262,13 @@ fn select_runs(
 /// keep contiguous rows; key, count and membership reads never touch items.
 /// Needs are the recorded carried columns (`ir::demand`), never Rust types.
 fn split_payload(
+    physical: &ir::physical::Program,
     source: &ir::Program,
     analysis: &ir::Analysis,
     name: &str,
     key: &[String],
 ) -> bool {
-    let carried = ir::demand::carried_columns(source, analysis);
+    let carried = ir::demand::carried_columns(physical, source, analysis);
     let stored: Vec<String> = match analysis.filtered.get(name) {
         Some(filtered) => filtered.payload.columns.iter().map(symbol_name).collect(),
         None => carried[name].clone(),
@@ -280,8 +280,7 @@ fn split_payload(
     if !(2..=12).contains(&payload.len()) {
         return false;
     }
-    source
-        .physical
+    physical
         .program
         .definitions
         .iter()
@@ -311,15 +310,15 @@ fn hashed_run() -> ir::Declaration {
 /// Record an exact hashed-bucket run (token `hashed_run`) for one-level
 /// composite scalar keys of token `hash_index`.
 /// Bucket collisions are resolved by comparing every recorded key column.
-pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
+pub fn hashed_runs(physical: &ir::physical::Program, source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
     if !arguments.is_empty() {
         return Err(syn::Error::new_spanned(
             arguments,
             "hashed_runs takes no arguments",
         ));
     }
-    let analysis = ir::contract::check(source)?;
-    let candidates = ir::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let analysis = ir::contract::check(physical, source)?;
+    let candidates = ir::physical::candidate_prefixes(physical, &analysis.physical);
     let mut target = source.clone();
     for entry in &mut target.structures.entries {
         let Structure::Built { keyed, .. } = &mut entry.structure else {
@@ -348,6 +347,6 @@ pub fn hashed_runs(source: &ir::Program, arguments: TokenStream) -> syn::Result<
         }
     }
     target.structures.declare(&[hashed_run()])?;
-    ir::check_rewrite(source, &target)?;
+    ir::check_rewrite(physical, source, physical, &target)?;
     Ok(target)
 }

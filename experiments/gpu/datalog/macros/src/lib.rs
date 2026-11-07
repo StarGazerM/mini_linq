@@ -34,9 +34,9 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
 pub fn bind_inputs(input: TokenStream) -> TokenStream {
     cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(
         input.into(),
-        |_physical: &cq_lang_structures::physical::Program, source: &cq_lang_structures::Program, args| {
-            let target = cq_gpu_datalog_core::bind_inputs(source, args)?;
-            Ok((target.physical.clone(), target))
+        |physical: &cq_lang_structures::physical::Program, source: &cq_lang_structures::Program, args| {
+            let target = cq_gpu_datalog_core::bind_inputs(physical, source, args)?;
+            Ok((physical.clone(), target))
         },
     )
     .into()

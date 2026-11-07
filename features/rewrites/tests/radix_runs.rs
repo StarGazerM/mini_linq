@@ -21,9 +21,9 @@ macro_rules! payload {
     };
 }
 
-fn assert_plan(captured: &str, retained: bool, staged: bool) -> ir::Program {
-    let program: ir::Program = syn::parse_str(captured).unwrap();
-    let facts = ir::contract::check(&program).unwrap();
+fn assert_plan(captured: &str, retained: bool, staged: bool) -> (ir::physical::Program, ir::Program) {
+    let (physical, program) = cq_testkit::corpus::parse_structures_capture(captured).unwrap();
+    let facts = ir::contract::check(&physical, &program).unwrap();
     assert_eq!(facts.built["r"].len(), 1);
     assert_eq!(
         facts.built["r"][0].1,
@@ -37,36 +37,36 @@ fn assert_plan(captured: &str, retained: bool, staged: bool) -> ir::Program {
     if retained {
         assert_eq!(facts.shares["s"].force, "p");
     }
-    program
+    (physical, program)
 }
 
 macro_rules! numeric_execution {
     ($name:ident, $ty:ty) => {
         #[test]
         fn $name() {
-            let baseline: ir::Program = syn::parse_str(payload!($ty, left, right, visits;
-                cq_rewrite_test_driver::capture_structures
+            let baseline = cq_testkit::corpus::parse_structures_capture(payload!($ty, left, right, visits;
+                cq_rewrite_test_driver::capture_structures_stack
             )).unwrap();
             for (captured, retained, staged) in [
                 (payload!($ty, left, right, visits;
-                    cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures
+                    cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures_stack
                 ), false, false),
                 (payload!($ty, left, right, visits;
                     cq_rewrites::radix_runs, cq_rewrites::retain_lookups,
-                    cq_rewrite_test_driver::capture_structures
+                    cq_rewrite_test_driver::capture_structures_stack
                 ), true, false),
                 (payload!($ty, left, right, visits;
-                    cq_rewrites::radix_runs, cq_rewrites::expand_lookups(32),
-                    cq_rewrite_test_driver::capture_structures
+                    cq_rewrites::radix_runs, cq_rewrites::expand_lookups(&physical, 32),
+                    cq_rewrite_test_driver::capture_structures_stack
                 ), false, true),
                 (payload!($ty, left, right, visits;
                     cq_rewrites::radix_runs, cq_rewrites::retain_lookups,
-                    cq_rewrites::expand_lookups(32), cq_rewrite_test_driver::capture_structures
+                    cq_rewrites::expand_lookups(&physical, 32), cq_rewrite_test_driver::capture_structures_stack
                 ), true, true),
             ] {
                 let rewritten = assert_plan(captured, retained, staged);
-                ir::check_rewrite(&baseline, &rewritten).unwrap();
-                assert_eq!(rewritten.physical, baseline.physical);
+                ir::check_rewrite(&baseline.0, &baseline.1, &rewritten.0, &rewritten.1).unwrap();
+                assert_eq!(rewritten.0, baseline.0);
             }
             for (left, right) in [
                 (vec![], vec![]),
@@ -155,10 +155,10 @@ macro_rules! owned_probe {
 #[test]
 fn owned_computed_wide_probes_execute_without_a_borrowed_codec() {
     let captured = owned_probe!(key, right;
-        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures
+        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures_stack
     );
-    let program: ir::Program = syn::parse_str(captured).unwrap();
-    let facts = ir::contract::check(&program).unwrap();
+    let (physical, program) = cq_testkit::corpus::parse_structures_capture(captured).unwrap();
+    let facts = ir::contract::check(&physical, &program).unwrap();
     assert_eq!(
         facts.built["r"][0].1,
         syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
@@ -193,12 +193,12 @@ macro_rules! named_query {
 #[test]
 fn named_pipeline_composes_and_executes() {
     let captured = named_query!(left, right;
-        structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups, cq_rewrites::expand_lookups(32)];
+        structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups, cq_rewrites::expand_lookups(&physical, 32)];
         print_input = structures;
-        print = cq_rewrite_test_driver::capture_structures;
+        print = cq_rewrite_test_driver::capture_structures_stack;
     );
-    let program: ir::Program = syn::parse_str(captured).unwrap();
-    let facts = ir::contract::check(&program).unwrap();
+    let (physical, program) = cq_testkit::corpus::parse_structures_capture(captured).unwrap();
+    let facts = ir::contract::check(&physical, &program).unwrap();
     assert!(facts.built.values().flatten().any(|(_, provider)| *provider
         == syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)));
     assert!(!facts.expands.is_empty());
@@ -217,7 +217,7 @@ fn named_pipeline_composes_and_executes() {
     );
 }
 
-fn single_key_source(ty: syn::Type, mode: proc_macro2::TokenStream) -> ir::Program {
+fn single_key_source(ty: syn::Type, mode: proc_macro2::TokenStream) -> (ir::physical::Program, ir::Program) {
     let physical = syn::parse2(quote! { physical {
         relation L(a:#ty); relation R(a:#ty,b:i64);
         l = pipe rename L@0 {a -> x};
@@ -226,7 +226,8 @@ fn single_key_source(ty: syn::Type, mode: proc_macro2::TokenStream) -> ir::Progr
         return p as answer(x,y);
     }})
     .unwrap();
-    cq_structure_selection::compile(&physical).unwrap()
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    (physical, structures)
 }
 
 #[test]
@@ -242,22 +243,21 @@ fn selection_is_checked_idempotent_and_preserves_defaults() {
         syn::parse_quote!(i128),
         syn::parse_quote!(usize),
     ] {
-        let source = single_key_source(ty, quote!(let));
-        let target = radix_runs(&source, quote!()).unwrap();
+        let (physical, source) = single_key_source(ty, quote!(let));
+        let target = radix_runs(&physical, &source, quote!()).unwrap();
         assert_eq!(
-            ir::contract::check(&source).unwrap().built["r"][0].1,
+            ir::contract::check(&physical, &source).unwrap().built["r"][0].1,
             syn::parse_quote!(@hash_index as ::cq_storage::HashIndex<'_, _, _>)
         );
         assert_eq!(
-            ir::contract::check(&target).unwrap().built["r"][0].1,
+            ir::contract::check(&physical, &target).unwrap().built["r"][0].1,
             syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
         );
-        assert_eq!(source.physical, target.physical);
-        assert_eq!(radix_runs(&target, quote!()).unwrap(), target);
+        assert_eq!(radix_runs(&physical, &target, quote!()).unwrap(), target);
         // Recorded singleton layout selects the provider; rustc, not this
         // rewrite, establishes OrderKey for concrete keys and aliases.
         assert_eq!(
-            cq_rewrite_passes::invoke_structures(
+            cq_rewrite_passes::invoke_structures(&physical, 
                 &source,
                 &syn::parse_quote!(cq_rewrites::radix_runs),
                 quote!(),
@@ -265,37 +265,37 @@ fn selection_is_checked_idempotent_and_preserves_defaults() {
             .unwrap(),
             target
         );
-        assert!(radix_runs(&source, quote!(12, 32)).is_err());
+        assert!(radix_runs(&physical, &source, quote!(12, 32)).is_err());
     }
-    let host = single_key_source(syn::parse_quote!(i64), quote!(pipe));
-    let facts = ir::contract::check(&host).unwrap();
+    let (physical, host) = single_key_source(syn::parse_quote!(i64), quote!(pipe));
+    let facts = ir::contract::check(&physical, &host).unwrap();
     assert!(!facts.fallbacks.is_empty());
-    assert_eq!(radix_runs(&host, quote!()).unwrap(), host);
+    assert_eq!(radix_runs(&physical, &host, quote!()).unwrap(), host);
 }
 
 #[test]
 fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
-    let composite = cq_structure_selection::compile(&syn::parse_quote! { physical {
+    let physical = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
         l = pipe rename L@0 {a -> x,b -> y};
         r = let rename R@1 {a -> x,b -> y,c -> z};
         p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
-    }})
-    .unwrap();
-    assert_eq!(radix_runs(&composite, quote!()).unwrap(), composite);
-    let membership = cq_structure_selection::compile(&syn::parse_quote! { physical {
+    }};
+    let composite = cq_structure_selection::compile(&physical).unwrap();
+    assert_eq!(radix_runs(&physical, &composite, quote!()).unwrap(), composite);
+    let physical = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64);
         l = pipe rename L@0 {a -> x};
         r = let rename R@1 {a -> x};
         p = let canon semi eager [x] l,r;
         return p as answer(x);
-    }})
-    .unwrap();
-    assert_eq!(radix_runs(&membership, quote!()).unwrap(), membership);
-    let membership = cq_rewrite_passes::membership(&membership, quote!(r)).unwrap();
-    assert_eq!(radix_runs(&membership, quote!()).unwrap(), membership);
-    let mut smallest = cq_structure_selection::compile(&syn::parse_quote! { physical {
+    }};
+    let membership = cq_structure_selection::compile(&physical).unwrap();
+    assert_eq!(radix_runs(&physical, &membership, quote!()).unwrap(), membership);
+    let membership = cq_rewrite_passes::membership(&physical, &membership, quote!(r)).unwrap();
+    assert_eq!(radix_runs(&physical, &membership, quote!()).unwrap(), membership);
+    let physical = syn::parse_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
         l = pipe rename L@0 {a -> a,b -> b};
         r = let rename R@1 {b -> b,c -> c};
@@ -303,8 +303,8 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
         candidate = pipe probe smallest [b] l,r;
         checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
-    }})
-    .unwrap();
+    }};
+    let mut smallest = cq_structure_selection::compile(&physical).unwrap();
     assert!(smallest.structures.entries.iter().any(|entry| matches!(
         &entry.structure, Structure::Built { keyed, .. } if keyed.levels.len() > 1
     )));
@@ -320,23 +320,23 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
         .structures
         .declare(&cq_lang_structures::provider::base::declarations())
         .unwrap();
-    ir::contract::check(&smallest).unwrap();
-    assert_eq!(radix_runs(&smallest, quote!()).unwrap(), smallest);
-    assert_eq!(retain_lookups(&smallest, quote!()).unwrap(), smallest);
-    assert_eq!(expand_lookups(&smallest, quote!(32)).unwrap(), smallest);
+    ir::contract::check(&physical, &smallest).unwrap();
+    assert_eq!(radix_runs(&physical, &smallest, quote!()).unwrap(), smallest);
+    assert_eq!(retain_lookups(&physical, &smallest, quote!()).unwrap(), smallest);
+    assert_eq!(expand_lookups(&physical, &smallest, quote!(32)).unwrap(), smallest);
 }
 
 #[test]
 fn radix_payload_remains_an_exact_join_filter_source() {
-    let source = single_key_source(syn::parse_quote!(i64), quote!(let));
-    let target = radix_runs(&source, quote!()).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
-    let candidates = ir::join_filter_candidates(&target, &facts, "p");
+    let (physical, source) = single_key_source(syn::parse_quote!(i64), quote!(let));
+    let target = radix_runs(&physical, &source, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
+    let candidates = ir::join_filter_candidates(&physical, &target, &facts, "p");
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].build, "r");
-    let filtered = cq_rewrite_passes::join_filter(&target, quote!(l)).unwrap();
+    let filtered = cq_rewrite_passes::join_filter(&physical, &target, quote!(l)).unwrap();
     assert_eq!(
-        ir::contract::check(&filtered).unwrap().join_filters["l"].len(),
+        ir::contract::check(&physical, &filtered).unwrap().join_filters["l"].len(),
         1
     );
 }
@@ -366,10 +366,10 @@ macro_rules! partial_reader {
 #[test]
 fn partial_payload_reader_selects_tuple_columns() {
     let captured = partial_reader!(left, right;
-        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures
+        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures_stack
     );
-    let program: ir::Program = syn::parse_str(captured).unwrap();
-    let facts = ir::contract::check(&program).unwrap();
+    let (physical, program) = cq_testkit::corpus::parse_structures_capture(captured).unwrap();
+    let facts = ir::contract::check(&physical, &program).unwrap();
     assert_eq!(
         facts.built["r"][0].1,
         syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::cq_storage::TupleColumns<_>>)
@@ -407,14 +407,14 @@ fn partial_payload_reader_selects_tuple_columns() {
     );
     // A column layout needs a split payload: recording it on a one-field
     // payload is rejected by the Structures checker.
-    let source = single_key_source(syn::parse_quote!(i64), quote!(let));
-    let mut target = radix_runs(&source, quote!()).unwrap();
+    let (physical, source) = single_key_source(syn::parse_quote!(i64), quote!(let));
+    let mut target = radix_runs(&physical, &source, quote!()).unwrap();
     for entry in &mut target.structures.entries {
         if let Structure::Built { keyed, .. } = &mut entry.structure {
             keyed.items = Some(syn::parse_quote!(items columns));
         }
     }
-    assert!(ir::contract::check(&target).is_err());
+    assert!(ir::contract::check(&physical, &target).is_err());
 }
 
 /// STR-ItemLayout: the recorded `items` fact is the only source of the
@@ -423,9 +423,9 @@ fn partial_payload_reader_selects_tuple_columns() {
 #[test]
 fn recorded_item_layout_alone_prints_the_layout_argument() {
     let captured = partial_reader!(left, right;
-        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures
+        cq_rewrites::radix_runs, cq_rewrite_test_driver::capture_structures_stack
     );
-    let program: ir::Program = syn::parse_str(captured).unwrap();
+    let (physical, program) = cq_testkit::corpus::parse_structures_capture(captured).unwrap();
     let run = |program: &ir::Program| {
         program
             .structures
@@ -458,7 +458,7 @@ fn recorded_item_layout_alone_prints_the_layout_argument() {
     flipped.items = Some(syn::parse_quote!(items rows));
     set(&mut rows, flipped);
     assert_eq!(
-        ir::contract::check(&rows).unwrap().built["r"][0].1,
+        ir::contract::check(&physical, &rows).unwrap().built["r"][0].1,
         syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
     );
     // A spelling stating the layout itself, or a missing fact, is rejected.
@@ -466,24 +466,24 @@ fn recorded_item_layout_alone_prints_the_layout_argument() {
     let mut authored = recorded.clone();
     authored.provider.ty = syn::parse_quote!(::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>);
     set(&mut spelled, authored);
-    assert!(ir::contract::check(&spelled).is_err());
+    assert!(ir::contract::check(&physical, &spelled).is_err());
     let mut missing = program.clone();
     let mut absent = recorded;
     absent.items = None;
     set(&mut missing, absent);
-    assert!(ir::contract::check(&missing).is_err());
+    assert!(ir::contract::check(&physical, &missing).is_err());
     // Retype advice states the layout with the replacement provider.
-    let retyped = cq_rewrite_passes::retype(
+    let retyped = cq_rewrite_passes::retype(&physical, 
         &program,
         quote!(r => @radix_run as ::cq_storage::RadixRun<_, _> supports [expand] items rows),
     )
     .unwrap();
     assert_eq!(
-        ir::contract::check(&retyped).unwrap().built["r"][0].1,
+        ir::contract::check(&physical, &retyped).unwrap().built["r"][0].1,
         syn::parse_quote!(@radix_run as ::cq_storage::RadixRun<_, _, ::std::vec::Vec<_>>)
     );
     assert!(
-        cq_rewrite_passes::retype(
+        cq_rewrite_passes::retype(&physical, 
             &program,
             quote!(r => @radix_run as ::cq_storage::RadixRun<_, _> supports [expand]),
         )

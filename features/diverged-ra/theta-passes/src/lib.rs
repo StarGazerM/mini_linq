@@ -64,7 +64,7 @@ pub fn select(input: TokenStream) -> TokenStream {
         |source, arguments| {
             no_arguments(arguments)?;
             let target = cq_structure_selection::compile(source)?;
-            Ok(cq_stage::Structures::new(target.physical.clone(), target))
+            Ok(cq_stage::Structures::new(source.clone(), target))
         },
     )
     .into()
@@ -153,7 +153,6 @@ mod tests {
         let target = pass.run(None).unwrap();
         cq_physical_lowering::check(&indexes(), &target).unwrap();
         let selected = cq_structure_selection::compile(&target).unwrap();
-        assert_eq!(selected.physical, target);
         cq_structure_selection::check(&target, &selected).unwrap();
         let sequence = cq_sequence_lowering::compile(&selected).unwrap();
         cq_sequence_lowering::check(&selected, &sequence).unwrap();

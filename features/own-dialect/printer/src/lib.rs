@@ -49,11 +49,11 @@ use structures::syntax::symbol_name;
 /// A terminal Structures → Rust pass with no arguments.
 #[proc_macro]
 pub fn push(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |_physical, source, arguments| {
+    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |physical, source, arguments| {
         if !arguments.is_empty() {
             return error(&arguments, "own_push::push accepts no arguments");
         }
-        compile_observed(source, None)
+        compile_observed(physical, source, None)
     })
     .into()
 }
@@ -85,9 +85,9 @@ impl syn::parse::Parse for Consumer {
 /// paths without a canon barrier invoke the callback as rows become available.
 #[proc_macro]
 pub fn push_into(input: TokenStream) -> TokenStream {
-    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |_physical, source, arguments| {
+    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |physical, source, arguments| {
         let consumer: Consumer = syn::parse2(arguments)?;
-        compile_observed(source, Some(&consumer.0))
+        compile_observed(physical, source, Some(&consumer.0))
     })
     .into()
 }
@@ -106,23 +106,23 @@ impl<'a> std::ops::Deref for Push<'a> {
     }
 }
 
-fn compile(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
-    compile_mode(module, consumer, false)
+fn compile(physical: &physical::Program, module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
+    compile_mode(physical, module, consumer, false)
 }
 
-fn compile_observed(module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
-    let plain = compile(module, consumer)?;
-    let calibrated = compile_mode(module, consumer, true)?;
+fn compile_observed(physical: &physical::Program, module: &structures::Program, consumer: Option<&syn::Expr>) -> syn::Result<syn::Expr> {
+    let plain = compile(physical, module, consumer)?;
+    let calibrated = compile_mode(physical, module, consumer, true)?;
     syn::parse2(quote!(::cq_storage::calibration_select! {
         plain { #plain }
         calibration { #calibrated }
     }))
 }
 
-fn compile_mode(module: &structures::Program, consumer: Option<&syn::Expr>, profile: bool) -> syn::Result<syn::Expr> {
-    let analysis = structures::contract::check(module)?;
+fn compile_mode(physical: &physical::Program, module: &structures::Program, consumer: Option<&syn::Expr>, profile: bool) -> syn::Result<syn::Expr> {
+    let analysis = structures::contract::check(physical, module)?;
     // Refuse unsupported written choices even in an otherwise unused result.
-    for definition in &module.physical.program.definitions {
+    for definition in &physical.program.definitions {
         match &definition.operator {
             Operator::Merge(..) => {
                 return error(&definition.name, "own_push: merge is unsupported");
@@ -174,14 +174,14 @@ fn compile_mode(module: &structures::Program, consumer: Option<&syn::Expr>, prof
         }
     };
     let context = if profile {
-        cq_physical_realization::sources_profile_with(module, &analysis, prepared)?
+        cq_physical_realization::sources_profile_with(physical, module, &analysis, prepared)?
     } else {
-        cq_physical_realization::sources_with(module, &analysis, prepared)?
+        cq_physical_realization::sources_with(physical, module, &analysis, prepared)?
     };
     let chunked = analysis
         .stages
         .keys()
-        .filter(|name| selection_chain(module, &analysis, name).is_some())
+        .filter(|name| selection_chain(physical, &analysis, name).is_some())
         .cloned()
         .collect();
     let mut push = Push {
@@ -197,14 +197,14 @@ fn compile_mode(module: &structures::Program, consumer: Option<&syn::Expr>, prof
             *id = format_ident!("__push_value_{}", column, span = Span::mixed_site());
         }
     }
-    let returned = &module.physical.program.returned;
+    let returned = &physical.program.returned;
     let name = symbol_name(returned);
     let out = temporary("out", &name);
     let head_rows = temporary("head_rows", &name);
     let canonical_head = analysis.head_dedup.get(&name);
     let body = push.head(
         &name,
-        &module.physical.program.head,
+        &physical.program.head,
         if canonical_head.is_some() {
             &head_rows
         } else {
@@ -218,7 +218,7 @@ fn compile_mode(module: &structures::Program, consumer: Option<&syn::Expr>, prof
         let rows = cq_physical_realization::RowEmitter::canon(
             &provider.ty,
             quote!(#head_rows),
-            module.physical.program.head.args.len(),
+            physical.program.head.args.len(),
         );
         if consumer.is_some() {
             quote!(for __push_answer in #rows { (#out)(__push_answer); })
@@ -261,14 +261,13 @@ fn temporary(role: &str, result: &str) -> syn::Ident {
 
 /// The supported stage is one uninterrupted selection spine over a host scan.
 fn selection_chain(
-    module: &structures::Program,
+    physical: &physical::Program,
     analysis: &structures::Analysis,
     result: &str,
 ) -> Option<()> {
     let mut current = result.to_owned();
     loop {
-        let definition = module
-            .physical
+        let definition = physical
             .program
             .definitions
             .iter()
@@ -829,13 +828,21 @@ impl Push<'_> {
 mod tests {
     use super::*;
 
+    fn parse_stack(tokens: Tokens) -> syn::Result<(physical::Program, structures::Program)> {
+        syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+            let physical = input.parse()?;
+            let structures = structures::Program::parse(input, &physical)?;
+            Ok((physical, structures))
+        }, tokens)
+    }
+
     #[test]
     fn certificates_distinguish_local_checks_from_discharged_facts() {
         for (fact, certified) in [
             (quote!(host_set R;), true),
             (quote!(host_set R discharged;), false),
         ] {
-            let module = syn::parse2(quote! {
+            let (physical, module) = parse_stack(quote! {
                 physical {
                     relation R(a:i32); #fact
                     r = pipe rename R@0 {a -> a};
@@ -844,7 +851,7 @@ mod tests {
                 structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
             })
             .unwrap();
-            let printed = compile(&module, None)
+            let printed = compile(&physical, &module, None)
                 .unwrap()
                 .to_token_stream()
                 .to_string();
@@ -861,7 +868,7 @@ mod tests {
         ] {
             let projection = project.then(|| quote!(p = pipe project r keep {a};));
             let returned = if project { quote!(p) } else { quote!(r) };
-            let module = syn::parse2(quote! {
+            let (physical, module) = parse_stack(quote! {
                 physical {
                     relation R(a:i32,b:i32);
                     consumer canonical;
@@ -874,7 +881,7 @@ mod tests {
             .unwrap();
             let callback = syn::parse_quote!(consume);
             for consumer in [None, Some(&callback)] {
-                let printed = compile(&module, consumer)
+                let printed = compile(&physical, &module, consumer)
                     .unwrap()
                     .to_token_stream()
                     .to_string();
@@ -887,7 +894,7 @@ mod tests {
 
     #[test]
     fn calibrated_push_keeps_loops_and_registers_real_operator_counters() {
-        let module = syn::parse2(quote! {
+        let (physical, module) = parse_stack(quote! {
             physical {
                 relation R(a:i32);
                 consumer canonical;
@@ -901,8 +908,8 @@ mod tests {
             }
         }).unwrap();
         let consumer = syn::parse_quote!(consume);
-        let plain = compile(&module, Some(&consumer)).unwrap().to_token_stream().to_string();
-        let observed = compile_mode(&module, Some(&consumer), true).unwrap().to_token_stream().to_string();
+        let plain = compile(&physical, &module, Some(&consumer)).unwrap().to_token_stream().to_string();
+        let observed = compile_mode(&physical, &module, Some(&consumer), true).unwrap().to_token_stream().to_string();
         assert!(!plain.contains("OperatorProgram"));
         assert!(observed.contains("OperatorProgram :: new"));
         assert!(observed.contains(". push ("));

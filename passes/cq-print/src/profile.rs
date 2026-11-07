@@ -9,7 +9,7 @@ pub struct Profile {
     time_aliases: Vec<(usize, usize)>,
 }
 impl Context<'_> {
-    pub fn enable_profile(&mut self, module: &structures::Program) {
+    pub fn enable_profile(&mut self, physical: &physical::Program, module: &structures::Program) {
         fn names(tokens: TokenStream, out: &mut std::collections::BTreeSet<String>) {
             for token in tokens {
                 match token {
@@ -23,6 +23,7 @@ impl Context<'_> {
         }
         let mut used = std::collections::BTreeSet::new();
         names(module.to_token_stream(), &mut used);
+        names(physical.to_token_stream(), &mut used);
         let mut suffix = 0usize;
         while used.contains(&format!("__cq_profile_{suffix}")) {
             suffix += 1;

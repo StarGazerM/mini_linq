@@ -3,7 +3,7 @@ use proc_macro::TokenStream;
 pub fn accept_sort(input: TokenStream) -> TokenStream {
     cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, arguments| {
         if arguments.to_string() != "a + (b * c)" { return Err(syn::Error::new_spanned(arguments, "opaque arguments changed")); }
-        let analysis = cq_lang_structures::contract::check(&source)?;
+        let analysis = cq_lang_structures::contract::check(physical, source)?;
         for canonical in analysis.canonical.values() {
             let cq_lang_structures::CanonSource::Rows(provider) = canonical else {
                 panic!("expected a sort-backed canonical rows index");

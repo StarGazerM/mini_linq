@@ -1,6 +1,8 @@
 use cq_lang_structures::{self as ir, Structure};
 use cq_rewrite_passes::{retain_lookups, sorted_runs};
 use quote::{ToTokens, quote};
+use syn::parse::Parser;
+use cq_testkit::corpus::parse_structures_capture;
 
 fn custom_payload() -> ir::Declaration {
     syn::parse_quote!(
@@ -10,8 +12,8 @@ fn custom_payload() -> ir::Declaration {
     )
 }
 
-fn triangle_source() -> ir::Program {
-    syn::parse_quote! { physical {
+fn triangle_source() -> (ir::physical::Program, ir::Program) {
+    parse_structures_capture(&quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
         l = pipe rename L@0 {a -> a,b -> b};
         r = let rename R@1 {b -> b,c -> c};
@@ -30,14 +32,14 @@ fn triangle_source() -> ir::Program {
         r rows = @vec as ::std::vec::Vec<_>;
         s rows = @vec as ::std::vec::Vec<_>;
         checked rows = @sort as ::cq_storage::dedup::Sort; checked canon = rows;
-    } }
+    } }.to_string()).unwrap()
 }
 
 #[test]
 fn triangle_records_both_prefix_witnesses_at_first_probe() {
-    let source = triangle_source();
-    let target = retain_lookups(&source, quote!()).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    let (physical, source) = triangle_source();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert_eq!(facts.witnesses.len(), 2);
     assert_eq!(facts.shares.len(), 2);
     for (first, build, key) in [("pre_r", "r", "b"), ("pre_s", "s", "a")] {
@@ -47,26 +49,24 @@ fn triangle_records_both_prefix_witnesses_at_first_probe() {
         assert_eq!(share.force, "candidate");
         assert!(facts.witnesses.contains_key(first));
     }
-    assert_eq!(source.physical, target.physical);
-    assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
+    assert_eq!(retain_lookups(&physical, &target, quote!()).unwrap(), target);
     assert_eq!(
-        syn::parse2::<ir::Program>(target.to_token_stream()).unwrap(),
+        (|input: syn::parse::ParseStream<'_>| ir::Program::parse(input, &physical)).parse2(target.to_token_stream()).unwrap(),
         target
     );
 }
 
 #[test]
 fn candidate_retention_uses_directory_support_not_complete_payload_support() {
-    let mut source = triangle_source();
+    let (physical, mut source) = triangle_source();
     source.structures.entries.push(syn::parse_quote!(
         r = @custom_payload as CustomPayload [b];
     ));
     source.structures.declare(&[custom_payload()]).unwrap();
-    let target = retain_lookups(&source, quote!()).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert!(facts.witnesses.contains_key("pre_r"));
     assert_eq!(facts.shares["pre_r"].force, "candidate");
-    assert_eq!(source.physical, target.physical);
 
     source.structures.entries[0] = syn::parse_quote!(
         r = @custom_directory as CustomDirectory [b][c];
@@ -74,16 +74,15 @@ fn candidate_retention_uses_directory_support_not_complete_payload_support() {
     *source.structures.entries.last_mut().unwrap() = syn::parse_quote!(
         r = @custom_payload as CustomPayload [b] supports [expand];
     );
-    let target = retain_lookups(&source, quote!()).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert!(!facts.witnesses.contains_key("pre_r"));
     assert!(facts.witnesses.contains_key("pre_s"));
-    assert_eq!(source.physical, target.physical);
 }
 
 #[test]
 fn declared_host_lookup_retains_exact_snapshot_ranges() {
-    let mut source: ir::Program = syn::parse_quote! { physical {
+    let (physical, mut source) = parse_structures_capture(&quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
         l = pipe rename L@0 {a -> x};
         r = pipe rename R@1 {a -> x,b -> y};
@@ -96,13 +95,12 @@ fn declared_host_lookup_retains_exact_snapshot_ranges() {
         r host result(s) = @snapshot as Snapshot<0> [x] supports [retain];
         r host result(p) = @snapshot as Snapshot<0> [x] supports [retain];
         p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows;
-    } };
-    let target = retain_lookups(&source, quote!()).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    } }.to_string()).unwrap();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert_eq!(facts.shares["s"].force, "p");
     assert!(facts.witnesses.contains_key("s"));
-    assert_eq!(target.physical, source.physical);
-    assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
+    assert_eq!(retain_lookups(&physical, &target, quote!()).unwrap(), target);
     let mut changed_provider = source.clone();
     changed_provider.structures.entries[3] = syn::parse_quote! {
         r host result(p) = @other_snapshot as Snapshot<0> [x] supports [retain];
@@ -118,17 +116,18 @@ fn declared_host_lookup_retains_exact_snapshot_ranges() {
     // One host/key has one fallback snapshot, even when two provider tokens
     // spell the same Rust type. This violates the input contract before a
     // retention decision can be made.
-    assert!(ir::contract::check(&changed_provider).is_err());
-    assert!(retain_lookups(&changed_provider, quote!()).is_err());
+    assert!(ir::contract::check(&physical, &changed_provider).is_err());
+    assert!(retain_lookups(&physical, &changed_provider, quote!()).is_err());
     source.structures.entries[3] = syn::parse_quote! {
         r host result(p) = @snapshot as Snapshot<1> [x] supports [retain];
     };
-    assert!(retain_lookups(&source, quote!()).is_err());
+    assert!(retain_lookups(&physical, &source, quote!()).is_err());
 }
 
 #[test]
 fn triangle_prefix_shares_reject_wrong_build_key_and_force() {
-    let target = retain_lookups(&triangle_source(), quote!()).unwrap();
+    let (physical, source) = triangle_source();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
     for replacement in [
         syn::parse_quote!(pre_s share = lookup r [a] first pre_s force candidate;),
         syn::parse_quote!(pre_s share = lookup s [c] first pre_s force candidate;),
@@ -144,48 +143,48 @@ fn triangle_prefix_shares_reject_wrong_build_key_and_force() {
             })
             .unwrap();
         *slot = replacement;
-        assert!(ir::contract::check(&bad).is_err());
+        assert!(ir::contract::check(&physical, &bad).is_err());
     }
 }
 
 #[test]
 fn triangle_prefix_witnesses_do_not_infer_key_types() {
-    let expected = retain_lookups(&triangle_source(), quote!()).unwrap();
-    let expected_facts = ir::contract::check(&expected).unwrap();
+    let (physical, source) = triangle_source();
+    let expected = retain_lookups(&physical, &source, quote!()).unwrap();
+    let expected_facts = ir::contract::check(&physical, &expected).unwrap();
     let key_types: [syn::Type; 3] = [
         syn::parse_quote!(bool),
         syn::parse_quote!(KeyAlias),
         syn::parse_quote!(keys::UserKey),
     ];
     for ty in key_types {
-        let mut source = triangle_source();
-        for declaration in &mut source.physical.program.declarations {
+        let (mut physical, source) = triangle_source();
+        for declaration in &mut physical.program.declarations {
             for column in &mut declaration.columns {
                 column.ty = ty.clone();
             }
         }
         // Key capabilities are Rust obligations, not inferred from type spelling.
-        let target = retain_lookups(&source, quote!()).unwrap();
-        let facts = ir::contract::check(&target).unwrap();
+        let target = retain_lookups(&physical, &source, quote!()).unwrap();
+        let facts = ir::contract::check(&physical, &target).unwrap();
         assert_eq!(facts.shares, expected_facts.shares);
         assert_eq!(facts.witnesses, expected_facts.witnesses);
-        assert_eq!(target.physical, source.physical);
     }
 }
 
 #[test]
 fn triangle_prefix_witnesses_do_not_escape() {
-    let mut escaping = triangle_source();
-    escaping.physical.program.definitions[4].canon = Some(Default::default());
-    escaping.physical.program.definitions[4].mode = syn::parse_quote!(let);
+    let (mut physical, mut escaping) = triangle_source();
+    physical.program.definitions[4].canon = Some(Default::default());
+    physical.program.definitions[4].mode = syn::parse_quote!(let);
     escaping.structures.entries.extend([
         syn::parse_quote!(pre_s rows = @sort as ::cq_storage::dedup::Sort;),
         syn::parse_quote!(pre_s canon = rows;),
     ]);
-    assert_eq!(retain_lookups(&escaping, quote!()).unwrap(), escaping);
+    assert_eq!(retain_lookups(&physical, &escaping, quote!()).unwrap(), escaping);
 }
 
-fn hashed_source() -> ir::Program {
+fn hashed_source() -> (ir::physical::Program, ir::Program) {
     let physical = syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
         l = pipe rename L@0 {a -> x};
@@ -197,20 +196,23 @@ fn hashed_source() -> ir::Program {
         out = let canon project p keep {x,y};
         return out as answer(x,y);
     }};
-    cq_structure_selection::compile(&physical).unwrap()
+    let source = cq_structure_selection::compile(&physical).unwrap();
+    (physical, source)
 }
 
-fn source() -> ir::Program {
-    sorted_runs(&hashed_source(), quote!()).unwrap()
+fn source() -> (ir::physical::Program, ir::Program) {
+    let (physical, source) = hashed_source();
+    let source = sorted_runs(&physical, &source, quote!()).unwrap();
+    (physical, source)
 }
 
 #[test]
 fn records_one_checked_cursor_and_roundtrips_idempotently() {
-    let source = source();
-    assert!(ir::contract::check(&source).unwrap().shares.is_empty());
-    let target = retain_lookups(&source, quote!()).unwrap();
-    ir::check_rewrite(&source, &target).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    let (physical, source) = source();
+    assert!(ir::contract::check(&physical, &source).unwrap().shares.is_empty());
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert_eq!(facts.shares.len(), 1);
     assert_eq!(facts.shares["s"].build, "r");
     assert_eq!(facts.shares["s"].keys, ["x"]);
@@ -218,50 +220,49 @@ fn records_one_checked_cursor_and_roundtrips_idempotently() {
     assert_eq!(facts.shares["s"].force, "p");
     assert_eq!(facts.witnesses.len(), 1);
     assert!(facts.witnesses.contains_key("s"));
-    assert_eq!(source.physical, target.physical);
-    assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
+    assert_eq!(retain_lookups(&physical, &target, quote!()).unwrap(), target);
     assert_eq!(
-        syn::parse2::<ir::Program>(target.to_token_stream()).unwrap(),
+        (|input: syn::parse::ParseStream<'_>| ir::Program::parse(input, &physical)).parse2(target.to_token_stream()).unwrap(),
         target
     );
-    assert!(retain_lookups(&source, quote!(unexpected)).is_err());
+    assert!(retain_lookups(&physical, &source, quote!(unexpected)).is_err());
 }
 
 #[test]
 fn preserves_positions_and_completes_an_existing_share() {
-    let mut source = source();
+    let (physical, mut source) = source();
     source.structures.entries.push(syn::parse_quote! {
         s repr = positions {L lineage {x -> a}} owned [];
     });
     source.structures.entries.push(syn::parse_quote! {
         s share = lookup r [x] first s force p;
     });
-    let old_repr = ir::contract::check(&source).unwrap().repr["s"].clone();
-    let target = retain_lookups(&source, quote!()).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    let old_repr = ir::contract::check(&physical, &source).unwrap().repr["s"].clone();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert_eq!(facts.repr["s"], old_repr);
     assert_eq!(facts.shares.len(), 1);
     assert_eq!(facts.witnesses.len(), 1);
-    ir::check_rewrite(&source, &target).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
 }
 
 #[test]
 fn a_custom_provider_with_declared_support_is_eligible() {
-    let mut source = source();
+    let (physical, mut source) = source();
     for entry in &mut source.structures.entries {
         if let Structure::Built { keyed, .. } = &mut entry.structure {
             keyed.provider = custom_payload().instance();
         }
     }
     source.structures.declare(&[custom_payload()]).unwrap();
-    let target = retain_lookups(&source, quote!()).unwrap();
-    assert_eq!(ir::contract::check(&target).unwrap().witnesses.len(), 1);
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    assert_eq!(ir::contract::check(&physical, &target).unwrap().witnesses.len(), 1);
 }
 
 #[test]
 fn hash_index_does_not_claim_a_copy_cursor() {
-    let source = hashed_source();
-    assert_eq!(retain_lookups(&source, quote!()).unwrap(), source);
+    let (physical, source) = hashed_source();
+    assert_eq!(retain_lookups(&physical, &source, quote!()).unwrap(), source);
 }
 
 #[test]
@@ -278,21 +279,20 @@ fn a_probe_before_the_semi_does_not_share() {
         return out as answer(x);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
-    let source = sorted_runs(&source, quote!()).unwrap();
-    let built = &ir::contract::check(&source).unwrap().built["r"][0].1;
+    let source = sorted_runs(&physical, &source, quote!()).unwrap();
+    let built = &ir::contract::check(&physical, &source).unwrap().built["r"][0].1;
     assert_eq!(built.token, "sorted_run");
     assert_eq!(
         built.ty,
         syn::parse_quote!(::cq_storage::SortedRun<_, _, ::cq_storage::I64Codec>)
     );
-    assert_eq!(retain_lookups(&source, quote!()).unwrap(), source);
+    assert_eq!(retain_lookups(&physical, &source, quote!()).unwrap(), source);
 }
 
 #[test]
 fn retained_rows_and_canon_are_not_witness_escape_paths() {
-    let mut retained = source();
-    retained
-        .physical
+    let (mut physical, mut retained) = source();
+    physical
         .program
         .definitions
         .iter_mut()
@@ -306,12 +306,11 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
         .structures
         .declare(&cq_lang_structures::provider::base::declarations())
         .unwrap();
-    ir::contract::check(&retained).unwrap();
-    assert_eq!(retain_lookups(&retained, quote!()).unwrap(), retained);
+    ir::contract::check(&physical, &retained).unwrap();
+    assert_eq!(retain_lookups(&physical, &retained, quote!()).unwrap(), retained);
 
-    let mut canonical = source();
-    let definition = canonical
-        .physical
+    let (mut physical, mut canonical) = source();
+    let definition = physical
         .program
         .definitions
         .iter_mut()
@@ -327,14 +326,14 @@ fn retained_rows_and_canon_are_not_witness_escape_paths() {
         .structures
         .declare(&cq_lang_structures::provider::base::declarations())
         .unwrap();
-    ir::contract::check(&canonical).unwrap();
-    assert_eq!(retain_lookups(&canonical, quote!()).unwrap(), canonical);
+    ir::contract::check(&physical, &canonical).unwrap();
+    assert_eq!(retain_lookups(&physical, &canonical, quote!()).unwrap(), canonical);
 }
 
 #[test]
 fn structural_check_rejects_tampered_share_and_witness() {
-    let source = source();
-    let target = retain_lookups(&source, quote!()).unwrap();
+    let (physical, source) = source();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
     let mut bad_share = target.clone();
     let entry = bad_share
         .structures
@@ -345,7 +344,7 @@ fn structural_check_rejects_tampered_share_and_witness() {
     *entry = syn::parse_quote! {
         s share = lookup r [x] first s force filtered;
     };
-    assert!(ir::check_rewrite(&source, &bad_share).is_err());
+    assert!(ir::check_rewrite(&physical, &source, &physical, &bad_share).is_err());
     let mut bad_witness = target;
     let entry = bad_witness
         .structures
@@ -356,28 +355,23 @@ fn structural_check_rejects_tampered_share_and_witness() {
     *entry = syn::parse_quote! {
         s repr = tuples witness {r [y] at s as _};
     };
-    assert!(ir::check_rewrite(&source, &bad_witness).is_err());
+    assert!(ir::check_rewrite(&physical, &source, &physical, &bad_witness).is_err());
 }
 
 #[test]
 fn composes_with_the_pinned_sorted_runs_fixture() {
-    let physical = include_str!("fixtures/representations.physical");
-    let source: ir::Program = syn::parse_str(&format!(
-        "{physical}\n{}",
-        include_str!("fixtures/representations.structures")
-    ))
-    .unwrap();
-    let expected: ir::Program = syn::parse_str(&format!(
-        "{physical}\n{}",
-        include_str!("fixtures/sorted_runs.structures")
-    ))
-    .unwrap();
-    let sorted = sorted_runs(&source, quote!()).unwrap();
+    let physical: ir::physical::Program =
+        syn::parse_str(include_str!("fixtures/representations.physical")).unwrap();
+    let source = (|input: syn::parse::ParseStream<'_>| ir::Program::parse(input, &physical))
+        .parse_str(include_str!("fixtures/representations.structures")).unwrap();
+    let expected = (|input: syn::parse::ParseStream<'_>| ir::Program::parse(input, &physical))
+        .parse_str(include_str!("fixtures/sorted_runs.structures")).unwrap();
+    let sorted = sorted_runs(&physical, &source, quote!()).unwrap();
     assert_eq!(sorted, expected);
-    let target = retain_lookups(&sorted, quote!()).unwrap();
+    let target = retain_lookups(&physical, &sorted, quote!()).unwrap();
     // This fixture's semi/probe pairs use distinct builds or key levels.
     assert_eq!(target, expected);
-    ir::check_rewrite(&source, &target).unwrap();
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
 }
 
 #[test]
@@ -386,7 +380,7 @@ fn public_rewrite_macro_records_the_cursor() {
         pipeline {
             ::cq_rewrites::sorted_runs,
             ::cq_rewrites::retain_lookups,
-            cq_rewrite_test_driver::capture_structures
+            cq_rewrite_test_driver::capture_structures_stack
         };
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
@@ -398,8 +392,8 @@ fn public_rewrite_macro_records_the_cursor() {
             return out as answer(x,y);
         }
     };
-    let target: ir::Program = syn::parse_str(captured).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    let (physical, target) = parse_structures_capture(captured).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert_eq!(facts.shares.len(), 1);
     assert_eq!(facts.witnesses.len(), 1);
 }
@@ -523,7 +517,7 @@ fn d19_le_runs_membership_bridge_preserves_the_complete_bag() {
     assert_eq!(actual.iter().filter(|row| **row == (1, 101, 9)).count(), 4);
 }
 
-fn membership_bridge_source() -> ir::Program {
+fn membership_bridge_source() -> (ir::physical::Program, ir::Program) {
     let physical = syn::parse_quote! { physical {
         relation L(a:i32,c:i32); relation R(a:i32,b:i32); relation M(c:i32);
         l = pipe rename L@0 {a -> x,c -> z};
@@ -537,32 +531,32 @@ fn membership_bridge_source() -> ir::Program {
         return out as answer(x,y);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
-    sorted_runs(&source, quote!()).unwrap()
+    let source = sorted_runs(&physical, &source, quote!()).unwrap();
+    (physical, source)
 }
 
 #[test]
 fn retains_same_lookup_across_membership_on_another_key() {
-    let source = membership_bridge_source();
-    let target = retain_lookups(&source, quote!()).unwrap();
-    let facts = ir::contract::check(&target).unwrap();
+    let (physical, source) = membership_bridge_source();
+    let target = retain_lookups(&physical, &source, quote!()).unwrap();
+    let facts = ir::contract::check(&physical, &target).unwrap();
     assert_eq!(facts.shares.len(), 1);
     assert_eq!(facts.shares["s"].build, "r");
     assert_eq!(facts.shares["s"].keys, ["x"]);
     assert_eq!(facts.shares["s"].force, "p");
     assert_eq!(facts.witnesses.len(), 1);
     assert_eq!(facts.witnesses["s"].first, "s");
-    assert_eq!(source.physical, target.physical);
-    ir::check_rewrite(&source, &target).unwrap();
-    assert_eq!(retain_lookups(&target, quote!()).unwrap(), target);
+    ir::check_rewrite(&physical, &source, &physical, &target).unwrap();
+    assert_eq!(retain_lookups(&physical, &target, quote!()).unwrap(), target);
     assert_eq!(
-        syn::parse2::<ir::Program>(target.to_token_stream()).unwrap(),
+        (|input: syn::parse::ParseStream<'_>| ir::Program::parse(input, &physical)).parse2(target.to_token_stream()).unwrap(),
         target
     );
 }
 
 #[test]
 fn authored_membership_bridge_preserves_positions_without_producer_replay() {
-    let mut authored = membership_bridge_source();
+    let (physical, mut authored) = membership_bridge_source();
     authored.structures.entries.extend([
         syn::parse_quote!(s share = lookup r [x] first s force p;),
         syn::parse_quote!(
@@ -570,11 +564,11 @@ fn authored_membership_bridge_preserves_positions_without_producer_replay() {
                 witness {r [x] at s as _};
         ),
     ]);
-    let facts = ir::contract::check(&authored).unwrap();
+    let facts = ir::contract::check(&physical, &authored).unwrap();
     assert_eq!(facts.shares["s"].force, "p");
     assert_eq!(facts.witnesses["s"].keys.columns[0], "x");
     assert!(matches!(facts.repr["s"], ir::Repr::Positions { .. }));
-    assert_eq!(retain_lookups(&authored, quote!()).unwrap(), authored);
+    assert_eq!(retain_lookups(&physical, &authored, quote!()).unwrap(), authored);
 }
 
 #[test]
@@ -609,24 +603,24 @@ fn membership_bridge_requires_the_original_native_snapshot_occurrence() {
         return out as answer(x,y);
     }};
     let source = native_demands(cq_structure_selection::compile(&physical).unwrap(), syn::parse_quote!(r));
-    let retained = retain_lookups(&source, quote!()).unwrap();
+    let retained = retain_lookups(&physical, &source, quote!()).unwrap();
     assert_eq!(
-        ir::contract::check(&retained).unwrap().shares["s"].build,
+        ir::contract::check(&physical, &retained).unwrap().shares["s"].build,
         "r"
     );
-    let mut physical = source.physical;
+    let mut physical = physical;
     physical.program.definitions.insert(
         3,
         syn::parse_quote!(other = pipe rename R@3 {a -> x,b -> y};),
     );
     physical.program.definitions[7] =
         syn::parse_quote!(p = pipe probe first [x] projected,other;);
-    rejects_bridge(native_demands(cq_structure_selection::compile(&physical).unwrap(), syn::parse_quote!(other)));
+    rejects_bridge(&physical, native_demands(cq_structure_selection::compile(&physical).unwrap(), syn::parse_quote!(other)));
 }
 
-fn rejects_bridge(source: ir::Program) {
-    ir::contract::check(&source).unwrap();
-    assert_eq!(retain_lookups(&source, quote!()).unwrap(), source);
+fn rejects_bridge(physical: &ir::physical::Program, source: ir::Program) {
+    ir::contract::check(&physical, &source).unwrap();
+    assert_eq!(retain_lookups(physical, &source, quote!()).unwrap(), source);
     // The independent contract must reject the same unsupported route even
     // when an authored decision bypasses the producer.
     let mut authored = source;
@@ -634,18 +628,18 @@ fn rejects_bridge(source: ir::Program) {
         syn::parse_quote!(s share = lookup r [x] first s force p;),
         syn::parse_quote!(s repr = tuples witness {r [x] at s as _};),
     ]);
-    assert!(ir::contract::check(&authored).is_err());
+    assert!(ir::contract::check(physical, &authored).is_err());
 }
 
 #[test]
 fn membership_bridge_cannot_drop_the_retained_key() {
-    let mut physical = membership_bridge_source().physical;
+    let mut physical = membership_bridge_source().0;
     physical.program.definitions[5] =
         syn::parse_quote!(projected = pipe project checked keep {z};);
     physical.program.definitions[6] =
         syn::parse_quote!(p = pipe probe first [] projected,r;);
     let source = cq_structure_selection::compile(&physical).unwrap();
-    rejects_bridge(sorted_runs(&source, quote!()).unwrap());
+    rejects_bridge(&physical, sorted_runs(&physical, &source, quote!()).unwrap());
 }
 
 #[test]
@@ -663,12 +657,12 @@ fn an_introducing_probe_is_not_a_bridge_even_if_its_payload_is_dropped() {
         return out as answer(x,y);
     }};
     let source = cq_structure_selection::compile(&physical).unwrap();
-    rejects_bridge(sorted_runs(&source, quote!()).unwrap());
+    rejects_bridge(&physical, sorted_runs(&physical, &source, quote!()).unwrap());
 }
 
 #[test]
 fn membership_bridge_does_not_change_the_lookup_provider() {
-    let mut physical = membership_bridge_source().physical;
+    let mut physical = membership_bridge_source().0;
     physical.program.definitions.insert(
         3,
         syn::parse_quote!(other = let rename R@3 {a -> x,b -> y};),
@@ -676,7 +670,7 @@ fn membership_bridge_does_not_change_the_lookup_provider() {
     physical.program.definitions[7] =
         syn::parse_quote!(p = pipe probe first [x] projected,other;);
     let source = cq_structure_selection::compile(&physical).unwrap();
-    rejects_bridge(sorted_runs(&source, quote!()).unwrap());
+    rejects_bridge(&physical, sorted_runs(&physical, &source, quote!()).unwrap());
 }
 
 #[test]
@@ -685,10 +679,10 @@ fn opaque_bindings_and_guards_are_not_retention_bridges() {
         syn::parse_quote!(projected = pipe bind checked with w:i32 = (*x);),
         syn::parse_quote!(projected = pipe guard checked if (*x >= 0);),
     ] {
-        let mut physical = membership_bridge_source().physical;
+        let mut physical = membership_bridge_source().0;
         physical.program.definitions[5] = bridge;
         let source = cq_structure_selection::compile(&physical).unwrap();
-        rejects_bridge(sorted_runs(&source, quote!()).unwrap());
+        rejects_bridge(&physical, sorted_runs(&physical, &source, quote!()).unwrap());
     }
 }
 
@@ -698,9 +692,9 @@ fn membership_bridge_cannot_publish_or_canonicalize_the_cursor() {
         syn::parse_quote!(checked = let probe first [z] s,m;),
         syn::parse_quote!(checked = let canon probe first [z] s,m;),
     ] {
-        let mut physical = membership_bridge_source().physical;
+        let mut physical = membership_bridge_source().0;
         physical.program.definitions[4] = retained;
         let source = cq_structure_selection::compile(&physical).unwrap();
-        rejects_bridge(sorted_runs(&source, quote!()).unwrap());
+        rejects_bridge(&physical, sorted_runs(&physical, &source, quote!()).unwrap());
     }
 }

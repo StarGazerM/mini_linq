@@ -1,8 +1,17 @@
+fn parse_fixture(tokens: proc_macro2::TokenStream) -> (cq_lang_structures::physical::Program, cq_lang_structures::Program) {
+    use syn::parse::Parser;
+    (|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let structures = cq_lang_structures::Program::parse(input, &physical)?;
+        Ok((physical, structures))
+    }).parse2(tokens).unwrap()
+}
+
 use cq_lang_structures as structures;
 use quote::{ToTokens, quote};
 
-fn chain() -> structures::Program {
-    syn::parse_quote! {
+fn chain() -> (cq_lang_structures::physical::Program, structures::Program) {
+    parse_fixture(quote! {
         physical {
             relation L(k:i32,v:i32);
             l = pipe rename L@0 {k -> k,v -> v};
@@ -15,30 +24,30 @@ fn chain() -> structures::Program {
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             c rows = @sort as ::cq_storage::dedup::Sort; c canon = rows;
         }
-    }
+    })
 }
 
 #[test]
 fn default_is_identity_and_named_selection_records_its_prefix() {
-    let source = chain();
-    assert_eq!(cq_represent::compile(&source).unwrap(), source);
-    let target = cq_represent::compile_with(&source, quote!(positions(p))).unwrap();
-    cq_represent::check(&source, &target).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    let (physical, source) = chain();
+    assert_eq!(cq_represent::compile(&physical, &source).unwrap(), source);
+    let target = cq_represent::compile_with(&physical, &source, quote!(positions(p))).unwrap();
+    cq_represent::check(&physical, &source, &target).unwrap();
+    let facts = structures::contract::check(&physical, &target).unwrap();
     assert_eq!(
         facts.repr.keys().cloned().collect::<Vec<_>>(),
         ["l", "p", "s"]
     );
     assert!(target.to_token_stream().to_string().contains("owned []"));
     assert_eq!(
-        cq_represent::compile_with(&source, quote!(positions)).unwrap(),
+        cq_represent::compile_with(&physical, &source, quote!(positions)).unwrap(),
         target
     );
 }
 
 #[test]
 fn joins_and_opaque_binds_end_the_positional_chain() {
-    let source: structures::Program = syn::parse_quote! {
+    let (physical, source) = parse_fixture(quote::quote! {
         physical {
             relation L(k:i32); relation R(k:i32,v:i32);
             l = pipe rename L@0 {k -> k};
@@ -54,29 +63,29 @@ fn joins_and_opaque_binds_end_the_positional_chain() {
             r = @user_index as UserIndex [k]; r rows = @vec as ::std::vec::Vec<_>;
             c rows = @sort as ::cq_storage::dedup::Sort; c canon = rows;
         }
-    };
-    let target = cq_represent::compile_with(&source, quote!(positions)).unwrap();
-    let facts = structures::contract::check(&target).unwrap();
+    });
+    let target = cq_represent::compile_with(&physical, &source, quote!(positions)).unwrap();
+    let facts = structures::contract::check(&physical, &target).unwrap();
     assert_eq!(facts.repr.keys().cloned().collect::<Vec<_>>(), ["l"]);
     for arguments in [
         quote!(positions(j)),
         quote!(positions(b)),
         quote!(positions(missing)),
     ] {
-        assert!(cq_represent::compile_with(&source, arguments).is_err());
+        assert!(cq_represent::compile_with(&physical, &source, arguments).is_err());
     }
 }
 
 #[test]
 fn checker_rejects_tampered_entries_and_unrelated_changes() {
-    let source = chain();
-    let mut target = cq_represent::compile_with(&source, quote!(positions)).unwrap();
+    let (physical, source) = chain();
+    let mut target = cq_represent::compile_with(&physical, &source, quote!(positions)).unwrap();
     target.structures.entries.last_mut().unwrap().structure = syn::parse_quote!(repr = tuples);
-    assert!(cq_represent::check(&source, &target).is_err());
-    let mut target = cq_represent::compile_with(&source, quote!(positions)).unwrap();
+    assert!(cq_represent::check(&physical, &source, &target).is_err());
+    let mut target = cq_represent::compile_with(&physical, &source, quote!(positions)).unwrap();
     target.structures.entries.remove(1);
-    assert!(cq_represent::check(&source, &target).is_err());
+    assert!(cq_represent::check(&physical, &source, &target).is_err());
     let mut target = source.clone();
     target.structures.entries[0] = syn::parse_quote!(l host scan = @other as Other [] ;);
-    assert!(cq_represent::check(&source, &target).is_err());
+    assert!(cq_represent::check(&physical, &source, &target).is_err());
 }

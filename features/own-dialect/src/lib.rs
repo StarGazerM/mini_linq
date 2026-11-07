@@ -13,10 +13,12 @@
 //! assert_eq!(answers.len(), 2);
 //! ```
 //!
-//! The printer receives a complete checked Structures program through
-//! `cq_stage::Structures::pass`, with a separate Physical reference. Continuations
-//! carry the realization envelope. It preserves the Physical graph and uses its recorded
-//! build, host read, retained row, canonical boundary and computed-head types.
+//! The printer receives checked Structures annotations through
+//! `cq_stage::Structures::pass`, with a separate Physical reference; Structures
+//! does not embed the Physical program. Compiler helpers take Physical first.
+//! Continuations carry both programs in the realization envelope. The printer
+//! preserves the Physical graph and uses the recorded build, host read, retained
+//! row, canonical boundary and computed-head types.
 //! Authored Structures can also start directly at
 //! `own_push::push! { pipeline {}; physical { ... } structures { providers { ... } ... } }`.
 //! The pass accepts no arguments and ends the queue.
