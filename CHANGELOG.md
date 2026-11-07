@@ -13,6 +13,13 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Calibration stage observation moved out of the IR crates (IR redesign M2d):
+  `cq_stage::Language` no longer has `calibration_snapshot`; the facade records
+  each checked stage as `calibration::Stage { language, program }` (Rust type
+  name and printed program, descriptor version 2) and the calibrator
+  (`cq_cost::calibration::lineage`) re-parses, checks and derives each stage's
+  dependency graph for `Trace::coverage`. No IR crate references calibration.
+
 - Explicit order advice now delegates dependency, subatom and phase legality to
   the VO and lookup/expand checkers instead of duplicating producer-side errors.
   Duplicate full occurrence selectors are rejected during resolution; partial

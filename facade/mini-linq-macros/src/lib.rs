@@ -217,11 +217,11 @@ pub fn plan(input: TokenStream) -> TokenStream {
         if !enabled {
             return cq_planning::compile_prefix(source, &args).map(|target| (target, None));
         }
-        use cq_stage::{Language, calibration::{Coverage, Seed}};
+        use cq_stage::calibration::{Coverage, Seed, Stage};
         let (target, valuation, origins) = cq_planning::compile_prefix_with_origins(source, &args)?;
         let seed = Seed {
-            valuation: valuation.calibration_snapshot().expect("VO adapter"),
-            lowering: target.calibration_snapshot().expect("RA adapter"),
+            valuation: Stage::of(&valuation),
+            lowering: Stage::of(&target),
             origins: origins.definitions.into_iter().map(|(node, origins)| Coverage {node, origins}).collect(),
             elided: origins.elided,
         };
@@ -788,8 +788,8 @@ mod tests {
         }
     }
     #[test]
-    fn actual_checked_boundaries_preserve_local_origins_and_executable_ir() {
-        use cq_stage::calibration::{Coverage, Seed, Trace};
+    fn facade_records_each_checked_stage_and_keeps_executable_ir() {
+        use cq_stage::calibration::{Coverage, Seed, Stage, Trace};
         let source = syn::parse_quote! {
             struct Q; relation R(x:i32,y:i32); relation S(y:i32);
             answer(x) :- R(x,y), where x >= 1, S(y), if accept(x);
@@ -801,28 +801,27 @@ mod tests {
         assert_eq!(ordinary, lowered);
         let mut trace = Trace::default();
         trace.initialize(Seed {
-            valuation: valuation.calibration_snapshot().unwrap(),
-            lowering: lowered.calibration_snapshot().unwrap(),
+            valuation: Stage::of(&valuation),
+            lowering: Stage::of(&lowered),
             origins: origins.definitions.into_iter().map(|(node, origins)|
                 Coverage {node, origins}).collect(),
             elided: origins.elided,
         }).unwrap();
-        let original_coverage = trace.coverage().unwrap();
+        trace.check_source(&Stage::of(&lowered)).unwrap();
         let indexed = cq_index_policy::compile(&lowered).unwrap();
-        trace.advance(indexed.calibration_snapshot().unwrap()).unwrap();
+        trace.advance(Stage::of(&indexed));
         let physical = cq_physical_lowering::compile(&indexed).unwrap();
-        let physical_snapshot = physical.calibration_snapshot().unwrap();
-        assert_eq!(trace.current().unwrap().nodes, physical_snapshot.nodes);
-        trace.advance(physical_snapshot).unwrap();
+        trace.advance(Stage::of(&physical));
         let structures = cq_structure_selection::compile(&physical).unwrap();
-        trace.advance(structures.calibration_snapshot().unwrap()).unwrap();
-        assert_eq!(trace.coverage().unwrap(), original_coverage);
-        assert_eq!(trace.current().unwrap().nodes.len(), physical.program.definitions.len());
+        trace.advance(Stage::of(&structures));
+        assert!(trace.check_source(&Stage::of(&physical)).is_err());
+        assert_eq!(trace.current(), Some(&Stage::of(&structures)));
         let encoded = trace.descriptor().unwrap();
         assert_eq!(Trace::parse_descriptor(&encoded).unwrap(), trace);
         let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-        trace.advance(sequence.calibration_snapshot().unwrap()).unwrap();
-        assert_eq!(trace.coverage().unwrap(), original_coverage);
+        trace.advance(Stage::of(&sequence));
+        assert_eq!(trace.stages, [Stage::of(&indexed), Stage::of(&physical),
+            Stage::of(&structures), Stage::of(&sequence)]);
         let analysis = cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
         let original = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
         let source_tokens = quote!(pipeline {}; #sequence);

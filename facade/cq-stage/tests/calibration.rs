@@ -1,4 +1,5 @@
-use cq_stage::calibration::{Coverage, Node, Seed, Snapshot, Trace, Transition};
+use std::collections::BTreeMap;
+use cq_stage::calibration::{Coverage, Node, Seed, Snapshot, Stage, Trace, Transition};
 use cq_stage::{Language, Pipeline};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -8,15 +9,29 @@ fn node(name: &str, inputs: &[&str]) -> Node {
     Node { name: name.into(), operator: format!("operator_{name}"),
         inputs: inputs.iter().map(|s| (*s).into()).collect() }
 }
-fn snapshot(language: &str, nodes: Vec<Node>) -> Snapshot {
-    Snapshot { language: language.into(), program: language.into(), nodes }
+fn stage(program: &str) -> Stage {
+    Stage { language: "test".into(), program: program.into() }
 }
-fn trace() -> Trace {
+/// Calibrator-supplied graphs, keyed by recorded program.
+#[derive(Default)]
+struct Graphs(BTreeMap<String, Vec<Node>>);
+impl Graphs {
+    fn record(&mut self, program: &str, nodes: Vec<Node>) -> Stage {
+        self.0.insert(program.into(), nodes);
+        stage(program)
+    }
+    fn nodes(&self) -> impl FnMut(&Stage) -> syn::Result<Vec<Node>> + '_ {
+        |stage| Ok(self.0[&stage.program].clone())
+    }
+}
+fn ra() -> Vec<Node> {
+    vec![node("a", &[]), node("b", &["a"]), node("unrelated", &[]), node("c", &["b"])]
+}
+fn trace(graphs: &mut Graphs) -> Trace {
     let mut trace = Trace::default();
     trace.initialize(Seed {
-        valuation: snapshot("vo", (0..4).map(|i| node(&i.to_string(), &[])).collect()),
-        lowering: snapshot("ra", vec![node("a", &[]), node("b", &["a"]),
-            node("unrelated", &[]), node("c", &["b"])]),
+        valuation: graphs.record("vo", (0..4).map(|i| node(&i.to_string(), &[])).collect()),
+        lowering: graphs.record("ra", ra()),
         origins: ["a", "b", "unrelated", "c"].into_iter().enumerate()
             .map(|(i, n)| Coverage {node:n.into(), origins:vec![i.to_string()]}).collect(),
         elided: Vec::new(),
@@ -25,71 +40,77 @@ fn trace() -> Trace {
 }
 #[test]
 fn fusion_transfers_only_removed_dependency_cones() {
-    let mut trace = trace();
-    trace.advance(snapshot("physical", vec![node("a", &[]),
-        node("unrelated", &[]), node("c", &["a"])])).unwrap();
-    let coverage = trace.coverage().unwrap();
+    let mut graphs = Graphs::default();
+    let mut trace = trace(&mut graphs);
+    trace.advance(graphs.record("physical", vec![node("a", &[]),
+        node("unrelated", &[]), node("c", &["a"])]));
+    let coverage = trace.coverage(graphs.nodes()).unwrap();
     assert_eq!(coverage[0].origins, ["0"]);
     assert_eq!(coverage[1].origins, ["2"]);
     assert_eq!(coverage[2].origins, ["1", "3"]);
-    assert!(trace.transitions[0].elided.is_empty());
+    assert!(trace.transitions(graphs.nodes()).unwrap().1[0].elided.is_empty());
     let encoded = trace.descriptor().unwrap();
     assert_eq!(Trace::parse_descriptor(&encoded).unwrap(), trace);
 }
 #[test]
 fn deleted_dead_work_is_explicit_not_fused_with_unrelated_nodes() {
-    let mut trace = trace();
-    trace.advance(snapshot("physical", vec![node("a", &[]), node("b", &["a"]),
-        node("c", &["b"])])).unwrap();
-    assert_eq!(trace.transitions[0].elided, ["unrelated"]);
-    assert!(trace.coverage().unwrap().iter().all(|c| !c.origins.contains(&"2".into())));
+    let mut graphs = Graphs::default();
+    let mut trace = trace(&mut graphs);
+    trace.advance(graphs.record("physical", vec![node("a", &[]), node("b", &["a"]),
+        node("c", &["b"])]));
+    assert_eq!(trace.transitions(graphs.nodes()).unwrap().1[0].elided, ["unrelated"]);
+    assert!(trace.coverage(graphs.nodes()).unwrap().iter().all(|c| !c.origins.contains(&"2".into())));
 }
 #[test]
 fn inserted_definition_anchors_to_its_actual_consumer() {
-    let mut trace = trace();
-    trace.advance(snapshot("physical", vec![node("a", &[]), node("b", &["a"]),
-        node("unrelated", &[]), node("inserted", &["b"]), node("c", &["inserted"])])).unwrap();
-    assert_eq!(trace.coverage().unwrap()[3].origins, ["3"]);
-    assert!(Transition::between(trace.current().unwrap(), snapshot("physical", vec![node("unanchored", &[])])).is_err());
+    let mut graphs = Graphs::default();
+    let mut trace = trace(&mut graphs);
+    trace.advance(graphs.record("physical", vec![node("a", &[]), node("b", &["a"]),
+        node("unrelated", &[]), node("inserted", &["b"]), node("c", &["inserted"])]));
+    assert_eq!(trace.coverage(graphs.nodes()).unwrap()[3].origins, ["3"]);
+    let current = trace.transitions(graphs.nodes()).unwrap().1.pop().unwrap().target;
+    let unanchored = Snapshot::new(&stage("unanchored"), vec![node("unanchored", &[])]);
+    assert!(Transition::between(&current, unanchored).is_err());
 }
 #[test]
 fn moved_operators_follow_payload_identity_not_reused_result_names() {
-    let mut trace = trace();
+    let mut graphs = Graphs::default();
+    let mut trace = trace(&mut graphs);
     let mut moved_b = node("b", &["a"]);
     moved_b.operator = "operator_c".into();
     let mut moved_c = node("c", &["b"]);
     moved_c.operator = "operator_b".into();
-    trace.advance(snapshot("physical", vec![node("a", &[]), moved_b,
-        node("unrelated", &[]), moved_c])).unwrap();
-    let coverage = trace.coverage().unwrap();
+    trace.advance(graphs.record("physical", vec![node("a", &[]), moved_b,
+        node("unrelated", &[]), moved_c]));
+    let coverage = trace.coverage(graphs.nodes()).unwrap();
     assert_eq!(coverage[1].origins, ["3"]);
     assert_eq!(coverage[3].origins, ["1"]);
     assert_eq!(coverage[2].origins, ["2"]);
 }
 #[test]
 fn complete_alpha_renaming_keeps_exact_origins() {
-    let mut trace = trace();
-    let renamed = trace.current().unwrap().nodes.iter().map(|node| Node {
+    let mut graphs = Graphs::default();
+    let mut trace = trace(&mut graphs);
+    let renamed = ra().iter().map(|node| Node {
         name: format!("new_{}", node.name),
         operator: node.operator.clone(),
         inputs: node.inputs.iter().map(|input| format!("new_{input}")).collect(),
     }).collect();
-    trace.advance(snapshot("physical", renamed)).unwrap();
-    assert!(trace.transitions[0].elided.is_empty());
-    for (index, coverage) in trace.coverage().unwrap().iter().enumerate() {
+    trace.advance(graphs.record("physical", renamed));
+    assert!(trace.transitions(graphs.nodes()).unwrap().1[0].elided.is_empty());
+    for (index, coverage) in trace.coverage(graphs.nodes()).unwrap().iter().enumerate() {
         assert_eq!(coverage.origins, [index.to_string()]);
         assert!(coverage.node.starts_with("new_"));
     }
 }
 #[test]
-fn forged_mapping_and_unknown_vo_origins_are_rejected() {
-    let mut trace = trace();
-    trace.advance(snapshot("physical", vec![node("a", &[]), node("unrelated", &[]), node("c", &["a"])])).unwrap();
-    trace.transitions[0].parents[2].origins.push("unrelated".into());
-    assert!(Trace::parse_descriptor(&trace.to_token_stream().to_string()).is_err());
-    let mut forged = self::trace();
+fn unknown_vo_origins_and_unseeded_stages_are_rejected() {
+    let mut graphs = Graphs::default();
+    let mut forged = trace(&mut graphs);
     forged.seed.as_mut().unwrap().origins[0].origins[0] = "99".into();
-    assert!(forged.check().is_err());
+    assert!(forged.coverage(graphs.nodes()).is_err());
+    let unseeded = Trace { seed: None, stages: vec![stage("physical")] };
+    assert!(Trace::parse_descriptor(&unseeded.to_token_stream().to_string()).is_err());
 }
 
 struct Payload(syn::LitInt);
@@ -102,16 +123,10 @@ impl ToTokens for Payload {
 impl Language for Payload {
     fn check(&self) -> syn::Result<()> { Ok(()) }
     fn check_rewrite(_: &Self, _: &Self) -> syn::Result<()> { Ok(()) }
-    fn calibration_snapshot(&self) -> Option<Snapshot> {
-        let mut snapshot = snapshot("physical", vec![node("a", &[]), node("b", &["a"]),
-            node("unrelated", &[]), node("c", &["b"])]);
-        snapshot.program = self.to_token_stream().to_string();
-        Some(snapshot)
-    }
 }
 fn terminal_trace() -> Trace {
-    let mut trace = trace();
-    trace.advance(Payload(syn::parse_quote!(1)).calibration_snapshot().unwrap()).unwrap();
+    let mut trace = trace(&mut Graphs::default());
+    trace.advance(Stage::of(&Payload(syn::parse_quote!(1))));
     trace
 }
 #[test]

@@ -1,9 +1,11 @@
 //! Optional checked continuation diagnostics. These records never select code.
 //!
-//! The versioned token descriptor implements `Parse`/`ToTokens`; consumers should
-//! use `Trace::parse_descriptor` and independently check the recorded language
-//! programs. Step identities are slash-separated VO step/branch/step paths;
-//! `$output` denotes lowering's return/unit work, not a fabricated VO index.
+//! The facade observes every checked stage and records only its language and
+//! printed program. The calibrator reads the versioned token descriptor with
+//! `Trace::parse_descriptor`, independently re-parses and checks each recorded
+//! program, and supplies its dependency graph to `Trace::coverage`. Step
+//! identities are slash-separated VO step/branch/step paths; `$output` denotes
+//! lowering's return/unit work, not a fabricated VO index.
 use std::collections::{BTreeMap, BTreeSet};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
@@ -12,6 +14,13 @@ use syn::{Token, bracketed, parenthesized};
 
 pub const OUTPUT: &str = "$output";
 
+/// A checked stage as observed by the facade: the Rust type of its language
+/// and its printed program.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stage {
+    pub language: String,
+    pub program: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
     pub name: String,
@@ -20,6 +29,7 @@ pub struct Node {
     pub operator: String,
     pub inputs: Vec<String>,
 }
+/// A recorded stage with the dependency graph derived by the calibrator.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub language: String,
@@ -34,8 +44,8 @@ pub struct Coverage {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Seed {
-    pub valuation: Snapshot,
-    pub lowering: Snapshot,
+    pub valuation: Stage,
+    pub lowering: Stage,
     /// VO steps explicitly erased by mechanical lowering (for example x = x).
     pub elided: Vec<String>,
     pub origins: Vec<Coverage>,
@@ -50,12 +60,24 @@ pub struct Transition {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Trace {
     pub seed: Option<Seed>,
-    pub transitions: Vec<Transition>,
+    /// Checked stages after the seed's lowering, in pipeline order.
+    pub stages: Vec<Stage>,
 }
 fn fail(message: &str) -> syn::Error {
     syn::Error::new(Span::call_site(), format!("ST-Calibration: {message}"))
 }
+impl Stage {
+    pub fn of<L: ToTokens>(program: &L) -> Self {
+        Self { language: std::any::type_name::<L>().into(), program: program.to_token_stream().to_string() }
+    }
+    pub fn is<L>(&self) -> bool {
+        self.language == std::any::type_name::<L>()
+    }
+}
 impl Snapshot {
+    pub fn new(stage: &Stage, nodes: Vec<Node>) -> Self {
+        Self { language: stage.language.clone(), program: stage.program.clone(), nodes }
+    }
     pub fn check(&self) -> syn::Result<()> {
         let mut seen = BTreeSet::new();
         for node in &self.nodes {
@@ -176,49 +198,45 @@ impl Trace {
     pub fn descriptor(&self) -> syn::Result<String> {
         self.check()?;
         if self.seed.is_none() { return Err(fail("terminal has no lowering origin producer")); }
-        if !self.current().is_some_and(|snapshot|
-            matches!(snapshot.language.as_str(), "physical" | "structures" | "sequence")) {
-            return Err(fail("terminal requires actual final Physical definitions"));
-        }
         Ok(self.to_token_stream().to_string())
     }
-    pub fn current(&self) -> Option<&Snapshot> {
-        self.transitions.last().map(|t| &t.target)
-            .or_else(|| self.seed.as_ref().map(|s| &s.lowering))
+    pub fn current(&self) -> Option<&Stage> {
+        self.stages.last().or_else(|| self.seed.as_ref().map(|s| &s.lowering))
     }
     pub fn initialize(&mut self, seed: Seed) -> syn::Result<()> {
         if self.seed.is_some() { return Err(fail("lowering origin already initialized")); }
         self.seed = Some(seed);
         self.check()
     }
-    pub fn check_source(&self, source: Option<&Snapshot>) -> syn::Result<()> {
+    pub fn check_source(&self, source: &Stage) -> syn::Result<()> {
         if let Some(current) = self.current() {
-            if source != Some(current) { return Err(fail("continuation does not match checked source")); }
+            if source != current { return Err(fail("continuation does not match checked source")); }
         }
         Ok(())
     }
-    pub fn advance(&mut self, target: Snapshot) -> syn::Result<()> {
-        if let Some(source) = self.current() {
-            if source != &target {
-                let transition = Transition::between(source, target)?;
-                self.transitions.push(transition);
-            }
+    pub fn advance(&mut self, target: Stage) {
+        if self.current().is_some_and(|source| *source != target) {
+            self.stages.push(target);
         }
-        Ok(())
     }
     pub fn check(&self) -> syn::Result<()> {
-        let Some(seed) = &self.seed else {
-            return if self.transitions.is_empty() { Ok(()) } else { Err(fail("unseeded transitions")) };
-        };
-        seed.valuation.check()?;
-        seed.lowering.check()?;
-        if seed.valuation.language != "vo" || seed.lowering.language != "ra" {
-            return Err(fail("origin seed must be actual VO to RA"));
-        }
-        let allowed: BTreeSet<_> = seed.valuation.nodes.iter().map(|n| n.name.as_str())
+        if self.seed.is_none() && !self.stages.is_empty() { return Err(fail("unseeded transitions")); }
+        Ok(())
+    }
+    /// Seed lowering snapshot and dependency-cone witnesses between consecutive
+    /// recorded stages, with graphs supplied by the calibrator.
+    pub fn transitions(&self, mut nodes: impl FnMut(&Stage) -> syn::Result<Vec<Node>>)
+        -> syn::Result<(Snapshot, Vec<Transition>)> {
+        self.check()?;
+        let seed = self.seed.as_ref().ok_or_else(|| fail("missing origin seed"))?;
+        let valuation = Snapshot::new(&seed.valuation, nodes(&seed.valuation)?);
+        let lowering = Snapshot::new(&seed.lowering, nodes(&seed.lowering)?);
+        valuation.check()?;
+        lowering.check()?;
+        let allowed: BTreeSet<_> = valuation.nodes.iter().map(|n| n.name.as_str())
             .chain(std::iter::once(OUTPUT)).collect();
-        if seed.origins.len() != seed.lowering.nodes.len() { return Err(fail("incomplete lowering origins")); }
-        for (node, coverage) in seed.lowering.nodes.iter().zip(&seed.origins) {
+        if seed.origins.len() != lowering.nodes.len() { return Err(fail("incomplete lowering origins")); }
+        for (node, coverage) in lowering.nodes.iter().zip(&seed.origins) {
             let unique: BTreeSet<_> = coverage.origins.iter().collect();
             if node.name != coverage.node || coverage.origins.is_empty()
                 || unique.len() != coverage.origins.len()
@@ -233,22 +251,20 @@ impl Trace {
             || allowed.iter().any(|name| *name != OUTPUT && !covered.contains(name) && !elided.contains(name)) {
             return Err(fail("incomplete or conflicting VO coverage"));
         }
-        let mut source = &seed.lowering;
-        for transition in &self.transitions {
-            if *transition != Transition::between(source, transition.target.clone())? {
-                return Err(fail("invalid dependency-cone witness"));
-            }
-            source = &transition.target;
+        let mut transitions: Vec<Transition> = Vec::new();
+        for stage in &self.stages {
+            let target = Snapshot::new(stage, nodes(stage)?);
+            let source = transitions.last().map_or(&lowering, |t| &t.target);
+            transitions.push(Transition::between(source, target)?);
         }
-        Ok(())
+        Ok((lowering, transitions))
     }
     /// Final local VO coverage, in actual final definition order. Consumers must
     /// union these sets for runtime row aliases before summing VO bounds.
-    pub fn coverage(&self) -> syn::Result<Vec<Coverage>> {
-        self.check()?;
-        let seed = self.seed.as_ref().ok_or_else(|| fail("missing origin seed"))?;
-        let mut coverage = seed.origins.clone();
-        for transition in &self.transitions {
+    pub fn coverage(&self, nodes: impl FnMut(&Stage) -> syn::Result<Vec<Node>>) -> syn::Result<Vec<Coverage>> {
+        let (_, transitions) = self.transitions(nodes)?;
+        let mut coverage = self.seed.as_ref().expect("checked seed").origins.clone();
+        for transition in &transitions {
             let previous: BTreeMap<_, _> = coverage.iter().map(|c| (c.node.as_str(), &c.origins)).collect();
             coverage = transition.parents.iter().map(|c| Coverage {
                 node: c.node.clone(), origins: c.origins.iter().flat_map(|p| previous[p.as_str()].iter().cloned())
@@ -268,36 +284,19 @@ fn list<T: Parse>(input: ParseStream<'_>) -> syn::Result<Vec<T>> {
     let body; bracketed!(body in input);
     Ok(body.parse_terminated(T::parse, Token![,])?.into_iter().collect())
 }
-impl Parse for Node {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let b; parenthesized!(b in input);
-        let name = text(&b)?; b.parse::<Token![,]>()?;
-        let operator = text(&b)?; b.parse::<Token![,]>()?;
-        let inputs = strings(&b)?;
-        if !b.is_empty() { return Err(b.error("unexpected node data")); }
-        Ok(Self { name, operator, inputs })
-    }
-}
-impl ToTokens for Node {
-    fn to_tokens(&self, out: &mut TokenStream) {
-        let Self {name, operator, inputs} = self;
-        out.extend(quote!((#name, #operator, [#(#inputs),*])));
-    }
-}
-impl Parse for Snapshot {
+impl Parse for Stage {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let b; parenthesized!(b in input);
         let language = text(&b)?; b.parse::<Token![,]>()?;
-        let program = text(&b)?; b.parse::<Token![,]>()?;
-        let nodes = list(&b)?;
-        if !b.is_empty() { return Err(b.error("unexpected snapshot data")); }
-        Ok(Self {language, program, nodes})
+        let program = text(&b)?;
+        if !b.is_empty() { return Err(b.error("unexpected stage data")); }
+        Ok(Self {language, program})
     }
 }
-impl ToTokens for Snapshot {
+impl ToTokens for Stage {
     fn to_tokens(&self, out: &mut TokenStream) {
-        let Self {language, program, nodes} = self;
-        out.extend(quote!((#language, #program, [#(#nodes),*])));
+        let Self {language, program} = self;
+        out.extend(quote!((#language, #program)));
     }
 }
 impl Parse for Coverage {
@@ -332,35 +331,19 @@ impl ToTokens for Seed {
         out.extend(quote!((#valuation, #lowering, [#(#origins),*], [#(#elided),*])));
     }
 }
-impl Parse for Transition {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let b; parenthesized!(b in input);
-        let target = b.parse()?; b.parse::<Token![,]>()?;
-        let parents = list(&b)?; b.parse::<Token![,]>()?;
-        let elided = strings(&b)?;
-        if !b.is_empty() { return Err(b.error("unexpected transition data")); }
-        Ok(Self {target, parents, elided})
-    }
-}
-impl ToTokens for Transition {
-    fn to_tokens(&self, out: &mut TokenStream) {
-        let Self {target, parents, elided} = self;
-        out.extend(quote!((#target, [#(#parents),*], [#(#elided),*])));
-    }
-}
 impl Parse for Trace {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         input.parse::<crate::kw::calibration_trace>()?;
         let b; syn::braced!(b in input);
         let version: syn::LitInt = b.parse()?;
-        if version.base10_parse::<u32>()? != 1 { return Err(b.error("unsupported calibration descriptor version")); }
+        if version.base10_parse::<u32>()? != 2 { return Err(b.error("unsupported calibration descriptor version")); }
         b.parse::<Token![;]>()?;
         let mut seeds: Vec<Seed> = list(&b)?;
         if seeds.len() > 1 { return Err(b.error("duplicate calibration seed")); }
         b.parse::<Token![;]>()?;
-        let transitions = list(&b)?;
+        let stages = list(&b)?;
         if !b.is_empty() { return Err(b.error("unexpected trace data")); }
-        let trace = Self { seed: seeds.pop(), transitions };
+        let trace = Self { seed: seeds.pop(), stages };
         trace.check()?;
         Ok(trace)
     }
@@ -368,7 +351,7 @@ impl Parse for Trace {
 impl ToTokens for Trace {
     fn to_tokens(&self, out: &mut TokenStream) {
         let seed = self.seed.iter();
-        let transitions = &self.transitions;
-        out.extend(quote!(calibration_trace { 1; [#(#seed),*]; [#(#transitions),*] }));
+        let stages = &self.stages;
+        out.extend(quote!(calibration_trace { 2; [#(#seed),*]; [#(#stages),*] }));
     }
 }

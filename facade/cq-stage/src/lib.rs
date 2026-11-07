@@ -112,11 +112,6 @@ pub trait Language: Parse + ToTokens {
     fn output_consumer(&self) -> Option<&OutputConsumer> {
         None
     }
-    /// Exact checked payload and named dependency graph, only requested when
-    /// calibration is enabled. This must not infer lineage from generated Rust.
-    fn calibration_snapshot(&self) -> Option<calibration::Snapshot> {
-        None
-    }
     fn terminal() -> bool {
         false
     }
@@ -606,7 +601,7 @@ fn run<In: Language, Out: Language>(
         }
         input.program.check()?;
         if let Some(trace) = &input.pipeline.calibration {
-            trace.check_source(input.program.calibration_snapshot().as_ref())?;
+            trace.check_source(&calibration::Stage::of(&input.program))?;
         }
         let consumer = if bind_consumer {
             input.pipeline.output_consumer.take()
@@ -641,12 +636,7 @@ fn run<In: Language, Out: Language>(
         correspondence(&input.program, &target)?;
         if let Some(trace) = &mut input.pipeline.calibration {
             if !Out::terminal() {
-                if let Some(snapshot) = target.calibration_snapshot() {
-                    trace.advance(snapshot)?;
-                } else if trace.seed.is_some() {
-                    return Err(syn::Error::new_spanned(&target,
-                        "ST-Calibration: language has no checked trace adapter"));
-                }
+                trace.advance(calibration::Stage::of(&target));
             }
         }
         let target_context = target.context();

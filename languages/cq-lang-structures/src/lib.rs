@@ -2006,13 +2006,6 @@ mod filtered;
 pub use filtered::{reconstructible_constants, required_columns, selection_constants};
 
 impl cq_stage::Language for Program {
-    fn calibration_snapshot(&self) -> Option<cq_stage::calibration::Snapshot> {
-        use quote::ToTokens;
-        let mut snapshot = cq_stage::Language::calibration_snapshot(&self.physical)?;
-        snapshot.language = "structures".into();
-        snapshot.program = self.to_token_stream().to_string();
-        Some(snapshot)
-    }
     fn output_consumer(&self) -> Option<&OutputConsumer> {
         self.consumer.as_ref()
     }

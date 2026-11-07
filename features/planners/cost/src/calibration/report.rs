@@ -1,5 +1,6 @@
 use super::*;
-use cq_stage::{Language, calibration::{Trace, Snapshot}};
+use cq_stage::calibration::Trace;
+use super::lineage::{checked, nodes};
 use cq_storage::counters::OperatorRecord;
 use crate::cost::{CandidateRecord, Decision};
 use crate::export::Origin;
@@ -156,32 +157,12 @@ struct CheckedTrace {
 }
 #[derive(Clone, Copy)]
 enum RawScope { Input(usize), Unit, Stream }
-fn snapshot<L: Language>(record: &Snapshot) -> Result<L> {
-    let value: L = syn::parse_str(&record.program)?;
-    value.check()?;
-    let generated = value.calibration_snapshot().ok_or_else(|| invalid("language has no calibration snapshot contract"))?;
-    // proc_macro's pretty display and proc_macro2's out-of-process display
-    // differ in whitespace. Compare parsed token streams, retaining literal
-    // contents and punctuation rather than stripping arbitrary source text.
-    let tokens = |text: &str| text.parse::<proc_macro2::TokenStream>()
-        .map(|tokens| tokens.to_string()).map_err(|error| invalid(error.to_string()));
-    require(generated.language == record.language
-        && tokens(&generated.program)? == tokens(&record.program)?
-        && generated.nodes.len() == record.nodes.len(),
-        format!("{} trace snapshot differs from its checked language payload", record.language))?;
-    for (generated, recorded) in generated.nodes.iter().zip(&record.nodes) {
-        require(generated.name == recorded.name && generated.inputs == recorded.inputs
-            && tokens(&generated.operator)? == tokens(&recorded.operator)?,
-            format!("{} trace node {} differs from its checked operator", record.language, recorded.name))?;
-    }
-    Ok(value)
-}
 fn checked_trace(text: &'static str, hole: &crate::export::Hole, context: &round::RoundContext,
     aliases: &[(&'static str, &'static str)]) -> Result<CheckedTrace> {
     let trace = Trace::parse_descriptor(text)?;
     let seed = trace.seed.as_ref().ok_or_else(|| invalid("physical trace lacks its VO producer"))?;
-    let mut valuation = snapshot::<cq_lang_vo::Program>(&seed.valuation)?;
-    let lower = snapshot::<cq_lang_ra::Program>(&seed.lowering)?;
+    let mut valuation = checked::<cq_lang_vo::Program>(&seed.valuation)?;
+    let lower = checked::<cq_lang_ra::Program>(&seed.lowering)?;
     let origins = cq_relational_lowering::Origins {
         definitions: seed.origins.iter().map(|c| (c.node.clone(), c.origins.clone())).collect(), elided: seed.elided.clone(),
     };
@@ -199,26 +180,21 @@ fn checked_trace(text: &'static str, hole: &crate::export::Hole, context: &round
     require(valuation == expected, "executed VO differs from the supplied checked variant")?;
     let mut physical = None;
     let mut structures = None;
-    for transition in &trace.transitions {
-        match transition.target.language.as_str() {
-            "ra" => { snapshot::<cq_lang_ra::Program>(&transition.target)?; }
-            "ix" => { snapshot::<cq_lang_ix::Program>(&transition.target)?; }
-            "physical" => physical = Some(snapshot::<cq_lang_physical::Program>(&transition.target)?),
-            "structures" => {
-                let checked = snapshot::<cq_lang_structures::Program>(&transition.target)?;
-                structures = Some(checked.structures.entries);
-                physical = Some(checked.physical);
-            }
-            "sequence" => {
-                let checked = snapshot::<cq_lang_sequence::Program>(&transition.target)?;
-                structures = Some(checked.structures.structures.entries);
-                physical = Some(checked.structures.physical);
-            }
-            _ => return Err(invalid("unsupported recorded calibration language")),
+    if let Some(stage) = trace.stages.last() {
+        if stage.is::<cq_lang_physical::Program>() {
+            physical = Some(checked::<cq_lang_physical::Program>(stage)?);
+        } else if stage.is::<cq_lang_structures::Program>() {
+            let checked = checked::<cq_lang_structures::Program>(stage)?;
+            structures = Some(checked.structures.entries);
+            physical = Some(checked.physical);
+        } else if stage.is::<cq_lang_sequence::Program>() {
+            let checked = checked::<cq_lang_sequence::Program>(stage)?;
+            structures = Some(checked.structures.structures.entries);
+            physical = Some(checked.structures.physical);
         }
     }
-    let physical = physical.ok_or_else(|| invalid("trace has no actual Physical program"))?;
-    let mut coverage = trace.coverage()?.into_iter().map(|c| (c.node, c.origins)).collect::<BTreeMap<_, _>>();
+    let physical = physical.ok_or_else(|| invalid("ST-Calibration: terminal requires actual final Physical definitions"))?;
+    let mut coverage = trace.coverage(nodes)?.into_iter().map(|c| (c.node, c.origins)).collect::<BTreeMap<_, _>>();
     let mut raw = BTreeMap::new();
     let mut kinds = BTreeMap::new();
     use cq_lang_physical::Operator as Op;

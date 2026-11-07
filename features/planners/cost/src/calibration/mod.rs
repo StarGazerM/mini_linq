@@ -13,6 +13,7 @@ use crate::export::{CheckedIr, PlannerInput, Target};
 use crate::cost::AdviceReport;
 
 mod capture;
+pub mod lineage;
 mod measured;
 mod report;
 mod report_bounds;

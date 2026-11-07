@@ -1818,50 +1818,6 @@ fn same_logical_operator(source: &Operator, target: &Operator) -> bool {
 }
 
 impl cq_stage::Language for Program {
-    fn calibration_snapshot(&self) -> Option<cq_stage::calibration::Snapshot> {
-        use quote::{ToTokens, quote};
-        use cq_stage::calibration::{Node, Snapshot};
-        Some(Snapshot {
-            language: "physical".into(),
-            program: self.to_token_stream().to_string(),
-            nodes: self.program.definitions.iter().map(|d| {
-                let slot = |index| Ident::new(&format!("__cq_operand_{index}"), proc_macro2::Span::call_site());
-                let left = slot(0);
-                let right = slot(1);
-                let logical = match &d.operator {
-                    Operator::Unit(u) => u.to_token_stream(),
-                    Operator::Rename(r) => r.to_token_stream(),
-                    Operator::Union(u) => {
-                        let mut u = u.logical();
-                        for (i, operand) in u.operands.iter_mut().enumerate() { *operand = slot(i); }
-                        if let Some(origin) = &mut u.origin {
-                            if let Some(over) = &mut origin.over { over.prefix = slot(0); }
-                            if let Some(domain) = &mut origin.domain { domain.input = slot(0); }
-                        }
-                        u.to_token_stream()
-                    }
-                    Operator::Anti(_, k) => {
-                        let columns = &k.columns;
-                        quote!(anti [#columns] #left, #right)
-                    }
-                    Operator::Probe(..) | Operator::Merge(..) => quote!(natural_join #left with #right),
-                    Operator::Semi(..) => quote!(semijoin #left with #right),
-                    Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) => {
-                        let mut s = s.clone(); s.input = left; s.to_token_stream()
-                    }
-                    Operator::Group(g) => { let mut g = g.clone(); g.input = left; g.to_token_stream() }
-                    Operator::Project(p) => { let mut p = p.clone(); p.input = left; p.to_token_stream() }
-                    Operator::Bind(b) => { let mut b = b.clone(); b.input = left; b.to_token_stream() }
-                    Operator::Guard(g) => { let mut g = g.clone(); g.input = left; g.to_token_stream() }
-                };
-                Node {
-                    name: symbol_name(&d.name),
-                    operator: logical.to_string(),
-                    inputs: d.operator.operands().into_iter().map(symbol_name).collect(),
-                }
-            }).collect(),
-        })
-    }
     fn context(&self) -> cq_stage::Context {
         cq_stage::Context {
             consumer_canonical: self.program.consumer_canonical.is_some(),

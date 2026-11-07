@@ -13,11 +13,11 @@ pub fn order(input: TokenStream) -> TokenStream {
         if !enabled {
             return cq_planners_plan::compile(source, planner).map(|target| (target, None));
         }
-        use cq_stage::{Language, calibration::{Coverage, Seed}};
+        use cq_stage::calibration::{Coverage, Seed, Stage};
         let (target, valuation, lowering, origins) = cq_planners_plan::compile_with_origins(source, planner)?;
         let seed = Seed {
-            valuation: valuation.calibration_snapshot().expect("VO adapter"),
-            lowering: lowering.calibration_snapshot().expect("RA adapter"),
+            valuation: Stage::of(&valuation),
+            lowering: Stage::of(&lowering),
             origins: origins.definitions.into_iter().map(|(node, origins)| Coverage {node, origins}).collect(),
             elided: origins.elided,
         };
