@@ -1,0 +1,23 @@
+// le_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5 and the
+// planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner le = Plan-Le: v = O_{Written,Coarse}; outer = written root (CK-Le auto); lookups R(b,_) at the first
+// point their bound key is available, in GYO ear order; expansions as late as column demand or scope exit
+// permits; then restrict, R_{None,Masks}.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// GYO ears (absorb order): c0, c1 (root c2).
+// No filters -> Masks empty.
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // outer
+    Edge @ 0 (a , b) ;
+    // lookup(c1): key b available
+    Edge @ 1 (b , _) ;
+    // expand(c1): c demanded by lookup(c2)/expand(c2)
+    Edge @ 1 (b , c) ;
+    // lookup(c2): key c available after expand(c1)
+    Edge @ 2 (_ , c) ;
+    // expand(c2): d demanded by head; scope exit
+    Edge @ 2 (d , c) ;
+}

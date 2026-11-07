@@ -1,0 +1,23 @@
+// retail_h11.query3.vo.expected: expected default-route VO of TPC-H kernel retail_h11 (query3_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: no evidence recorded
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation PartValue (part_key : i64 [0] , value : i64 [0]) ; relation TotalValue (value : i64 [0]) ; relation answer (part_key : i64 [0] , value : i64 [0]) ; answer (__cq_3_0 , __cq_3_1) : - PartValue (part_key , value) , TotalValue (total) , if i128 :: from (* value) * 10_000 > i128 :: from (* total) , let __cq_3_0 : i64 = * part_key , let __cq_3_1 : i64 = * value ;
+valuation {
+    // S-Connected: no connected ready atom (I3 vacuous); tie with ['@1'] broken by written position (I4 last)
+    PartValue @ 0 (part_key , value) ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let __cq_3_0 : i64 = * part_key ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let __cq_3_1 : i64 = * value ;
+    // S-Connected: no connected ready atom (I3 vacuous)
+    TotalValue @ 1 (total) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    if i128 :: from (* value) * 10_000 > i128 :: from (* total) ;
+}

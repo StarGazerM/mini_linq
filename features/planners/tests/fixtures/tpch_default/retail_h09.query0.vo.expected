@@ -1,0 +1,28 @@
+// retail_h09.query0.vo.expected: expected default-route VO of TPC-H kernel retail_h09 (query0_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: O-EvidenceLe premise fails: no count for ['GreenNames'] -> O_Prefix(Connected),Coarse
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation Lineitem (l_orderkey : i64 [0] , l_partkey : i64 [0] , l_suppkey : i64 [0]) ; relation PartSupp (ps_partkey : i64 [0] , ps_suppkey : i64 [0]) ; relation Part (p_partkey : i64 [0] , p_name : cq_load :: StringCode [1]) ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [2]) ; relation Orders (o_orderkey : i64 [0]) ; relation Nation (n_nationkey : i32 [2]) ; relation GreenNames (name : cq_load :: StringCode [1]) ; relation answer (order_key : i64 [0] , part_key : i64 [0] , supplier_key : i64 [0]) ; answer (order_key , part_key , supplier_key) : - Part (part_key , part_name) , GreenNames (part_name) , Lineitem (order_key , part_key , supplier_key) , PartSupp (part_key , supplier_key) , Orders (order_key) , Supplier (supplier_key , nation_key) , Nation (nation_key) ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Lineitem = 6001215 ; count PartSupp = 800000 ; key PartSupp [ps_partkey , ps_suppkey] ; count Part = 200000 ; key Part [p_partkey] ; count Supplier = 10000 ; key Supplier [s_suppkey] ; count Orders = 1500000 ; key Orders [o_orderkey] ; count Nation = 25 ; key Nation [n_nationkey] ; } {
+    // S-Connected: no connected ready atom (I3 vacuous); tie with ['@1', '@2', '@3', '@4', '@5', '@6'] broken by
+    // written position (I4 last)
+    Part @ 0 (part_key , part_name) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    GreenNames @ 1 (part_name) ;
+    // S-Connected: connected (shares ['part_key']); tie with ['@3'] broken by written position (I4 last)
+    Lineitem @ 2 (order_key , part_key , supplier_key) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    PartSupp @ 3 (part_key , supplier_key) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    Orders @ 4 (order_key) ;
+    // S-Connected: connected (shares ['supplier_key'])
+    Supplier @ 5 (supplier_key , nation_key) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    Nation @ 6 (nation_key) ;
+}

@@ -1,0 +1,28 @@
+// retail_h04.query0.vo.expected: expected default-route VO of TPC-H kernel retail_h04 (query0_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: O-EvidenceLe: w=Orders@0 (written root); Lineitem@3: count 6001215 >= 1500000, f_r=2
+// (relational predicate commit_date<receipt_date) >= f_w=1 (range), no third occurrence; functional: Orders
+// keyed by o_orderkey once order_key is bound -> F={Lineitem@3}; r=Lineitem@3. keyedReads: expand r, then the
+// only ready keyed occurrence Orders@0 (no other occurrence to look up). The keyed order differs from the
+// default (Orders first) -> t = orderAdvice(n, [Lineitem@3, Orders@0]).
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation Orders (o_orderkey : i64 [0] , o_orderdate : Date [1]) ; relation Lineitem (l_orderkey : i64 [0] , l_commitdate : Date [1] , l_receiptdate : Date [1]) ; answer (order_key) : - Orders (order_key , order_date) , where order_date >= (start) , where order_date < (end) , Lineitem (order_key , commit_date , receipt_date) , where commit_date < receipt_date ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Orders = 1500000 ; key Orders [o_orderkey] ; count Lineitem = 6001215 ; } {
+    // O-Restrict: c1 targets Orders@0 (H-Local, written predicate order)
+    restrict Orders @ 0 where order_date >= @ (start) ;
+    // O-Restrict: c2 targets Orders@0
+    restrict Orders @ 0 where order_date < @ (end) ;
+    // O-Restrict: c4 (relational predicate) targets Lineitem@3
+    restrict Lineitem @ 3 where commit_date < receipt_date ;
+    // O-EvidenceLe root r = Lineitem@3 (dominating functional root, argmax count); outer of R-Masks: Orders@0 is its
+    // child, root never a target -> no reduction
+    Lineitem @ 3 (order_key , commit_date , receipt_date) ;
+    // keyedReads: Orders@0 keyed by o_orderkey (key bound by r)
+    Orders @ 0 (order_key , order_date) ;
+}

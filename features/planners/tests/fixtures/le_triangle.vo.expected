@@ -1,0 +1,24 @@
+// le_triangle.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5 and
+// the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner le = Plan-Le: v = O_{Written,Coarse}; outer = written root (CK-Le auto); lookups R(b,_) at the first
+// point their bound key is available, in GYO ear order; expansions as late as column demand or scope exit
+// permits; then restrict, R_{None,Masks}.
+// c0=R(a,b), c1=S(b,c), c2=T(c,a)
+// Cyclic (G-Reject): no ears; RULE GAP: Plan-Le gives no lookup order for cyclic-core occurrences; written
+// position used (I4).
+// No filters -> Masks empty.
+struct Triangle ; relation R (first : i32 [0] , second : i32 [0]) ; relation S (first : i32 [0] , second : i32 [0]) ; relation T (first : i32 [0] , second : i32 [0]) ; answer (a , b , c) : - R (a , b) , S (b , c) , T (c , a) ;
+valuation {
+    // outer: written root, full read
+    R @ 0 (a , b) ;
+    // lookup(c1): key b available after outer
+    S @ 1 (b , _) ;
+    // lookup(c2): key a available after outer; after c1 by written position (gap above)
+    T @ 2 (_ , a) ;
+    // expand(c1): c is demanded (head) and by c2's full row
+    S @ 1 (b , c) ;
+    // expand(c2): full row, introduces nothing; I2 filter at first ready point (no crossing, no marker)
+    T @ 2 (c , a) ;
+}

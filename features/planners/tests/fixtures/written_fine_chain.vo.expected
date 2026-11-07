@@ -1,0 +1,18 @@
+// written_fine_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
+// I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner written,fine.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// In-place split (passes.tex:335-336) + O-Fine; same column-order gap as written_fine_triangle.
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // split of c0: a
+    Edge @ 0 (a , _) ;
+    // split of c0: b; full row
+    Edge @ 0 (a , b) ;
+    // c1: one new variable c
+    Edge @ 1 (b , c) ;
+    // c2: one new variable d
+    Edge @ 2 (d , c) ;
+}

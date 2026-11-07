@@ -1,0 +1,33 @@
+// retail_h10.query0.vo.expected: expected default-route VO of TPC-H kernel retail_h10 (query0_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: O-EvidenceLe: no dominating functional root (w=Orders@0; F=[]) ->
+// O_Prefix(Connected),Coarse
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation Customer (c_custkey : i64 [0] , c_name : StringCode [1] , c_acctbal : Decimal [2] , c_nationkey : i32 [3] , c_address : StringCode [1] , c_phone : StringCode [1] , c_comment : StringCode [1]) ; relation Orders (o_orderkey : i64 [0] , o_custkey : i64 [0] , o_orderdate : Date [4]) ; relation Lineitem (l_orderkey : i64 [0] , l_linenumber : i64 [0] , l_extendedprice : Decimal [2] , l_discount : Decimal [2] , l_returnflag : StringCode [1] in [0] (data . dictionaries . domain ("l_returnflag"))) ; relation Nation (n_nationkey : i32 [3] , n_name : StringCode [1]) ; relation answer (customer_key : i64 [0] , name : StringCode [1] , revenue : i64 [0] , account_balance : i64 [0] , nation : StringCode [1] , address : StringCode [1] , phone : StringCode [1] , comment : StringCode [1]) ; answer (customer_key , name , __cq_9_2 , balance_units , nation , address , phone , comment) : - Orders (order_key , customer_key , order_date) , where order_date >= (start) , where order_date < (end) , Lineitem (order_key , line_number , price , discount , returnflag) , where returnflag == (__cq_c_0) , Customer (customer_key , name , balance , nation_key , address , phone , comment) , Nation (nation_key , nation) , let revenue_units : i64 = price . scaled () * (100 - discount . scaled ()) , let balance_units : i64 = balance . scaled () group [address , balance , balance_units , comment , customer_key , discount , line_number , name , nation , nation_key , order_date , order_key , phone , price , returnflag , revenue_units] by [customer_key , name , balance_units , nation , address , phone , comment] { __cq_9_2 : i64 = sum (revenue_units) ; } capture { domain __cq_c_0 : StringCode in [0] (data . dictionaries . domain ("l_returnflag")) = exact ("R") ; } ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Customer = 150000 ; key Customer [c_custkey] ; count Orders = 1500000 ; key Orders [o_orderkey] ; count Lineitem = 6001215 ; key Lineitem [l_orderkey , l_linenumber] ; count Nation = 25 ; key Nation [n_nationkey] ; } {
+    // O-Restrict/H-Local: restriction of clause 1 on Orders@0 heads the scope (H-Local order)
+    restrict Orders @ 0 where order_date >= @ (start) ;
+    // O-Restrict/H-Local: restriction of clause 2 on Orders@0 heads the scope (H-Local order)
+    restrict Orders @ 0 where order_date < @ (end) ;
+    // O-Restrict/H-Local: restriction of clause 4 on Lineitem@3 heads the scope (H-Local order)
+    restrict Lineitem @ 3 where returnflag = @ (__cq_c_0) ;
+    // S-Connected: no connected ready atom (I3 vacuous); tie with ['@3', '@5', '@6'] broken by written position (I4
+    // last)
+    Orders @ 0 (order_key , customer_key , order_date) ;
+    // S-Connected: connected (shares ['order_key']); tie with ['@5'] broken by written position (I4 last)
+    Lineitem @ 3 (order_key , line_number , price , discount , returnflag) ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let revenue_units : i64 = price . scaled () * (100 - discount . scaled ()) ;
+    // S-Connected: connected (shares ['customer_key'])
+    Customer @ 5 (customer_key , name , balance , nation_key , address , phone , comment) ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let balance_units : i64 = balance . scaled () ;
+    // S-Connected: connected (shares ['nation_key'])
+    Nation @ 6 (nation_key , nation) ;
+}

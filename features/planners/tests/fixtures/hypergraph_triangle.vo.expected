@@ -1,0 +1,17 @@
+// hypergraph_triangle.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
+// I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner hypergraph = Plan-Graph: O_{Written,Coarse}; r = Tree if acyclic, else None.
+// c0=R(a,b), c1=S(b,c), c2=T(c,a)
+// GYO (G-Private/G-Absorb, least pair first): no private variable, no absorbable edge -> G-Reject, acyclic=false
+// -> r=None: no reductions.
+struct Triangle ; relation R (first : i32 [0] , second : i32 [0]) ; relation S (first : i32 [0] , second : i32 [0]) ; relation T (first : i32 [0] , second : i32 [0]) ; answer (a , b , c) : - R (a , b) , S (b , c) , T (c , a) ;
+valuation {
+    // S-Written 0
+    R @ 0 (a , b) ;
+    // S-Written 1
+    S @ 1 (b , c) ;
+    // S-Written 2 (filter, already earliest)
+    T @ 2 (c , a) ;
+}

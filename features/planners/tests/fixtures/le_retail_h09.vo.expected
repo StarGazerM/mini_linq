@@ -1,0 +1,52 @@
+// le_retail_h09.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5
+// and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner le = Plan-Le: v = O_{Written,Coarse}; outer = written root (CK-Le auto); lookups R(b,_) at the first
+// point their bound key is available, in GYO ear order; expansions as late as column demand or scope exit
+// permits; then restrict, R_{None,Masks}.
+// c0=Orders(order_key), c1=Lineitem(order_key,part_key,supplier_key), c2=PartSupp(part_key,supplier_key),
+// c3=Part(part_key,part_name), c4=if accept(part_name), c5=Supplier(supplier_key,nation_key),
+// c6=Nation(nation_key)
+// No relational predicate; the Rust guard never improves a rank (H-FilterRank) -> no restrictions, no Masks
+// reductions.
+// GYO (acyclic): absorbs 0->1, 1->2, 3->2, 2->5, 5->6; ear order of inner occurrences: 1, 3, 2, 5, then root 6.
+// Reading of "expand before first use" (RULE GAP: Plan-Le does not define first use of a column consumed only by
+// another inner occurrence): a column is used at the written-chain (v) position of the first later step whose
+// key/free variables need it; remaining expansions are emitted at scope exit in written order; the final I2
+// drainage then records `check after [...]` on an expansion that crosses introductions (passes.tex:1396-1399, VO
+// grammar paragraph).
+// Lookups are new partial reads R(b,_) placed at the first point their key is available (Plan-Le); they never
+// cross an introduction, so they carry no `check`/`after` marker.
+// RULE GAP (O-SeparatorCheck): the producer marks a stationary check that followed a drained check (`Nation @ 6
+// (nation_key) check`); no \Rule states this, and the VO grammar paragraph says drainage does not reclassify
+// stationary phases.
+struct H09 ; relation Lineitem (l_orderkey : i64 [0] , l_partkey : i64 [0] , l_suppkey : i64 [0]) ; relation PartSupp (ps_partkey : i64 [0] , ps_suppkey : i64 [0]) ; relation Part (p_partkey : i64 [0] , p_name : StringCode [1]) ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [2]) ; relation Orders (o_orderkey : i64 [0]) ; relation Nation (n_nationkey : i32 [2]) ; answer (order_key , part_key , supplier_key) : - Orders (order_key) , Lineitem (order_key , part_key , supplier_key) , PartSupp (part_key , supplier_key) , Part (part_key , part_name) , if accept (part_name) , Supplier (supplier_key , nation_key) , Nation (nation_key) ;
+valuation {
+    // outer: written root
+    Orders @ 0 (order_key) ;
+    // lookup(c1): key order_key
+    Lineitem @ 1 (order_key , _ , _) ;
+    // expand(c1): demanded by c2's written position (key part_key,supplier_key)
+    Lineitem @ 1 (order_key , part_key , supplier_key) ;
+    // lookup(c3): ear order 3 before 2
+    Part @ 3 (part_key , _) ;
+    // lookup(c2): whole key bound; ear order
+    PartSupp @ 2 (part_key , supplier_key) ;
+    // lookup(c5): ear order
+    Supplier @ 5 (supplier_key , _) ;
+    // expand(c2): never demanded -> scope exit (after expand(c3) and expand(c5)); I2 drainage moves it to its first
+    // ready point and records crossed introductions [3,5]
+    PartSupp @ 2 (part_key , supplier_key) check after [3 , 5] ;
+    // expand(c3): part_name demanded by guard c4
+    Part @ 3 (part_key , part_name) ;
+    // Rust guard at written-chain position (Plan-Le keeps the written Rust chain)
+    if accept (part_name) ;
+    // expand(c5): nation_key demanded at c6's written position
+    Supplier @ 5 (supplier_key , nation_key) ;
+    // lookup(c6): key nation_key
+    Nation @ 6 (nation_key) ;
+    // expand(c6): full row (CK-Le lookup<expand). DIFFERS: producer prints `check` (separator-following marker, rule
+    // gap above)
+    Nation @ 6 (nation_key) ;
+}

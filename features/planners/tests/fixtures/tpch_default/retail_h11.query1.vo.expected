@@ -1,0 +1,17 @@
+// retail_h11.query1.vo.expected: expected default-route VO of TPC-H kernel retail_h11 (query1_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: no evidence recorded
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct PerPart ; relation Stock (part_key : i64 [0] , supplier_key : i64 [0] , quantity : i64 [0] , cost_units : i64 [0]) ; relation answer (part_key : i64 [0] , value : i64 [0]) ; answer (part_key , __cq_2_1) : - Stock (part_key , supplier_key , quantity , cost_units) , let value : i64 = * quantity * * cost_units group [cost_units , part_key , quantity , supplier_key , value] by [part_key] { __cq_2_1 : i64 = sum (value) ; } ;
+valuation {
+    // S-Connected: no connected ready atom (I3 vacuous)
+    Stock @ 0 (part_key , supplier_key , quantity , cost_units) ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let value : i64 = * quantity * * cost_units ;
+}

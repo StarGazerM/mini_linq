@@ -1,0 +1,28 @@
+// elimination_fine_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
+// I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner elimination,fine: variable sequence = MCS order a,b,c,d.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// RULE GAP (elimination order): passes.tex:333-334 says only "reverse maximum-cardinality search on the primal
+// graph, with connected-ready variables or binders first"; the MCS start vertex and tie-break are unstated.
+// Derivation assumes MCS ties broken by first written occurrence of the variable; this is an assumption, not a
+// rule.
+// RULE GAP (O-Fine): "first eligible remaining variable" and "first holding atom" are not ordered by any rule.
+// Derivation reads the variable sequence as the heuristic order of first introduction and "first holding atom"
+// as the least holding atom under the planner rank at the current B; written position last (I4).
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // fineStep(a): only holder c0
+    Edge @ 0 (a , _) ;
+    // fineStep(b): c0 connected
+    Edge @ 0 (a , b) ;
+    // introduce(b): check of c1
+    Edge @ 1 (b , _) ;
+    // fineStep(c): c1 connected
+    Edge @ 1 (b , c) ;
+    // introduce(c): check of c2
+    Edge @ 2 (_ , c) ;
+    // fineStep(d): c2; full row
+    Edge @ 2 (d , c) ;
+}

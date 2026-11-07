@@ -1,0 +1,29 @@
+// hypergraph_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5
+// and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner hypergraph = Plan-Graph: O_{Written,Coarse}; acyclic -> R-Tree.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// GYO: (0,a) private, (2,d) private, absorb (0,1) pi(0)=1, (1,b) private, absorb (1,2) pi(1)=2, (2,c) private ->
+// G-Accept. H-JoinTree = [(0,1),(1,2)], root 2.
+// Y-Up/Y-Down with B=BFS(J)=[2,1,0]: up = [red(pi(b),b) | b in reverse([1,0])] = red(1,0), red(2,1); down =
+// [red(b,pi(b)) | b in [1,0]] = red(1,2), red(0,1).
+// R-Tree: insertAtReadyPrefix = before the first atom. Support columns per WF-VO-Reductions (shared classes
+// kept, others _).
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // Y-Up 1st: red(pi(0)=1, 0)
+    reduce Edge @ 1 with Edge @ 0 (_ , b) ;
+    // Y-Up 2nd: red(pi(1)=2, 1)
+    reduce Edge @ 2 with Edge @ 1 (_ , c) ;
+    // Y-Down 1st: red(1, pi(1)=2)
+    reduce Edge @ 1 with Edge @ 2 (_ , c) ;
+    // Y-Down 2nd: red(0, pi(0)=1)
+    reduce Edge @ 0 with Edge @ 1 (b , _) ;
+    // S-Written 0
+    Edge @ 0 (a , b) ;
+    // S-Written 1
+    Edge @ 1 (b , c) ;
+    // S-Written 2
+    Edge @ 2 (d , c) ;
+}

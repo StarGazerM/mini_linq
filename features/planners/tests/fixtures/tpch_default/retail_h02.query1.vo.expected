@@ -1,0 +1,48 @@
+// retail_h02.query1.vo.expected: expected default-route VO of TPC-H kernel retail_h02 (query1_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: O-EvidenceLe premise fails: no count for ['BrassTypes', 'MinimumCost'] ->
+// O_Prefix(Connected),Coarse
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation Part (p_partkey : i64 [0] , p_mfgr : StringCode [1] , p_size : i32 [2] , p_type : StringCode [1]) ; relation BrassTypes (name : StringCode [1]) ; relation Partsupp (ps_partkey : i64 [0] , ps_suppkey : i64 [0] , ps_supplycost : Decimal [3]) ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [2] , s_acctbal : Decimal [3] , s_name : StringCode [1] , s_address : StringCode [1] , s_phone : StringCode [1] , s_comment : StringCode [1]) ; relation Nation (n_nationkey : i32 [2] , n_regionkey : i32 [2] , n_name : StringCode [1]) ; relation Region (r_regionkey : i32 [2] , r_name : StringCode [1] in [0] (data . dictionaries . domain ("r_name"))) ; relation MinimumCost (part_key : i64 [0] , minimum_cost : Option < i64 > [4]) ; relation answer (balance : i64 [0] , supplier_name : StringCode [1] , nation_name : StringCode [1] , part_key : i64 [0] , manufacturer : StringCode [1] , address : StringCode [1] , phone : StringCode [1] , comment : StringCode [1]) ; answer (__cq_11_0 , supplier_name , nation_name , part_key , manufacturer , address , phone , comment) : - Part (part_key , manufacturer , size , kind) , where size == 15 , BrassTypes (kind) , Partsupp (part_key , supplier_key , cost) , MinimumCost (part_key , minimum_cost) , if * minimum_cost == Some (cost . scaled ()) , Supplier (supplier_key , nation_key , balance , supplier_name , address , phone , comment) , Nation (nation_key , region_key , nation_name) , Region (region_key , region_name) , where region_name == (__cq_c_0) , let balance_units : i64 = balance . scaled () , let __cq_11_0 : i64 = * balance_units capture { domain __cq_c_0 : StringCode in [0] (data . dictionaries . domain ("r_name")) = exact ("EUROPE") ; } ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Part = 200000 ; key Part [p_partkey] ; count Partsupp = 800000 ; key Partsupp [ps_partkey , ps_suppkey] ; count Supplier = 10000 ; key Supplier [s_suppkey] ; count Nation = 25 ; key Nation [n_nationkey] ; count Region = 5 ; key Region [r_regionkey] ; } {
+    // O-Restrict/H-Local: restriction of clause 1 on Part@0 heads the scope (H-Local order)
+    restrict Part @ 0 where size = 15 ;
+    // O-Restrict/H-Local: restriction of clause 9 on Region@8 heads the scope (H-Local order)
+    restrict Region @ 8 where region_name = @ (__cq_c_0) ;
+    // R-Masks: Region@8 is child of Nation@7 in H-SpanningCore tree (GYO join tree) rooted at outer Part@0; child
+    // subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Nation @ 7 with Region @ 8 (region_key , _) ;
+    // R-Masks: Nation@7 is child of Supplier@6 in H-SpanningCore tree (GYO join tree) rooted at outer Part@0; child
+    // subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Supplier @ 6 with Nation @ 7 (nation_key , _ , _) ;
+    // R-Masks: Supplier@6 is child of Partsupp@3 in H-SpanningCore tree (GYO join tree) rooted at outer Part@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Partsupp @ 3 with Supplier @ 6 (supplier_key , _ , _ , _ , _ , _ , _) ;
+    // S-Connected: no connected ready atom (I3 vacuous); tie with ['@2', '@3', '@4', '@6', '@7', '@8'] broken by
+    // written position (I4 last)
+    Part @ 0 (part_key , manufacturer , size , kind) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    BrassTypes @ 2 (kind) ;
+    // S-Connected: connected (shares ['part_key']); tie with ['@4'] broken by written position (I4 last)
+    Partsupp @ 3 (part_key , supplier_key , cost) ;
+    // S-Connected: connected (shares ['part_key']); tie with ['@6'] broken by written position (I4 last)
+    MinimumCost @ 4 (part_key , minimum_cost) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    if * minimum_cost == Some (cost . scaled ()) ;
+    // S-Connected: connected (shares ['supplier_key'])
+    Supplier @ 6 (supplier_key , nation_key , balance , supplier_name , address , phone , comment) ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let balance_units : i64 = balance . scaled () ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let __cq_11_0 : i64 = * balance_units ;
+    // S-Connected: connected (shares ['nation_key'])
+    Nation @ 7 (nation_key , region_key , nation_name) ;
+    // S-Connected: connected (shares ['region_key'])
+    Region @ 8 (region_key , region_name) ;
+}

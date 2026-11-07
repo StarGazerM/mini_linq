@@ -1,0 +1,16 @@
+// prefix_connected_coarse_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*,
+// passes.tex I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
+// with the tie-break used.
+// Planner prefix connected,coarse.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// S-Connected rank (a_i,1,[s_i=0],0,i).
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // B={}: tie on all components -> written position c0
+    Edge @ 0 (a , b) ;
+    // B={a,b}: c1 connected (b), c2 disconnected -> c1 (I3)
+    Edge @ 1 (b , c) ;
+    // c2 now connected via c; only clause left
+    Edge @ 2 (d , c) ;
+}

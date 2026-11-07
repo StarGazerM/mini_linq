@@ -1,0 +1,42 @@
+// retail_h21_positive.query0.vo.expected: expected default-route VO of TPC-H kernel retail_h21_positive
+// (query0_main), derived from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: O-EvidenceLe: no dominating functional root (w=Lineitem@0; F=[]) ->
+// O_Prefix(Connected),Coarse
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [1]) ; relation Lineitem (l_orderkey : i64 [0] , l_suppkey : i64 [0] , l_receiptdate : Date [2] , l_commitdate : Date [2]) ; relation Orders (o_orderkey : i64 [0] , o_orderstatus : cq_load :: StringCode [3] in [0] (dictionaries . domain ("o_orderstatus"))) ; relation Nation (n_nationkey : i32 [1] , n_name : cq_load :: StringCode [3] in [1] (dictionaries . domain ("n_name"))) ; relation answer (order_key : i64 [0] , waiting_supplier : i64 [0] , other_supplier : i64 [0]) ; answer (order_key , waiting_supplier , other_supplier) : - Lineitem (order_key , other_supplier , _other_receipt , _other_commit) , Lineitem (order_key , waiting_supplier , receipt_date , commit_date) , where receipt_date > commit_date , Supplier (waiting_supplier , nation_key) , Nation (nation_key , __cq_4_1) , where __cq_4_1 == (__cq_c_0) , Orders (order_key , __cq_5_1) , where __cq_5_1 == (__cq_c_1) , where waiting_supplier != other_supplier capture { domain __cq_c_0 : cq_load :: StringCode in [1] (dictionaries . domain ("n_name")) = exact ("SAUDI ARABIA") ; domain __cq_c_1 : cq_load :: StringCode in [0] (dictionaries . domain ("o_orderstatus")) = exact ("F") ; } ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Supplier = 10000 ; key Supplier [s_suppkey] ; count Lineitem = 6001215 ; count Orders = 1500000 ; key Orders [o_orderkey] ; count Nation = 25 ; key Nation [n_nationkey] ; } {
+    // O-Restrict/H-Local: restriction of clause 2 on Lineitem@1 heads the scope (H-Local order)
+    restrict Lineitem @ 1 where receipt_date > commit_date ;
+    // O-Restrict/H-Local: restriction of clause 5 on Nation@4 heads the scope (H-Local order)
+    restrict Nation @ 4 where __cq_4_1 = @ (__cq_c_0) ;
+    // O-Restrict/H-Local: restriction of clause 7 on Orders@6 heads the scope (H-Local order)
+    restrict Orders @ 6 where __cq_5_1 = @ (__cq_c_1) ;
+    // R-Masks: Nation@4 is child of Supplier@3 in H-SpanningCore tree (GYO join tree) rooted at outer Lineitem@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Supplier @ 3 with Nation @ 4 (nation_key , _) ;
+    // R-Masks: Supplier@3 is child of Lineitem@1 in H-SpanningCore tree (GYO join tree) rooted at outer Lineitem@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Lineitem @ 1 with Supplier @ 3 (waiting_supplier , _) ;
+    // R-Masks: Orders@6 is child of Lineitem@1 in H-SpanningCore tree (GYO join tree) rooted at outer Lineitem@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Lineitem @ 1 with Orders @ 6 (order_key , _) ;
+    // S-Connected: no connected ready atom (I3 vacuous); tie with ['@1', '@3', '@4', '@6'] broken by written
+    // position (I4 last)
+    Lineitem @ 0 (order_key , other_supplier , _other_receipt , _other_commit) ;
+    // S-Connected: connected (shares ['order_key']); tie with ['@6'] broken by written position (I4 last)
+    Lineitem @ 1 (order_key , waiting_supplier , receipt_date , commit_date) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    where waiting_supplier != other_supplier ;
+    // S-Connected: connected (shares ['waiting_supplier']); tie with ['@6'] broken by written position (I4 last)
+    Supplier @ 3 (waiting_supplier , nation_key) ;
+    // S-Connected: connected (shares ['nation_key']); tie with ['@6'] broken by written position (I4 last)
+    Nation @ 4 (nation_key , __cq_4_1) ;
+    // S-Connected: connected (shares ['order_key'])
+    Orders @ 6 (order_key , __cq_5_1) ;
+}
