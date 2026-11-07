@@ -1,10 +1,13 @@
 //! Device-resident FastLanes columns. The CPU loader uploads each raw column
 //! once; headers, unified transposition, delta and bit-packing run on the GPU.
+//! Alternatively the loader FOR-packs on the host into the same layout
+//! (`host_pack`) and uploads only packed words.
 //! Query-output encoding never reads metadata back. All allocations retain the
 //! rccl-memory pool and CUDA stream that own them.
 mod device;
 mod encoding;
 mod host;
+mod host_pack;
 mod kernels;
 mod memory;
 pub mod scan;
@@ -12,6 +15,7 @@ use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
+pub use host_pack::{check_packed_layout, pack_for};
 pub use memory::{Buffer, MemoryResource, Pool, PoolMemoryStats};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -123,11 +127,18 @@ fn count_pointer<T: DeviceCopy>(
 pub trait Lane: DeviceCopy + Copy + 'static {
     const ELEMENT: u32;
     fn widen(self) -> i64;
+    /// Exact i64 view of a lane slice; borrows when the lane already is i64.
+    fn widen_all(values: &[Self]) -> std::borrow::Cow<'_, [i64]> {
+        values.iter().map(|value| value.widen()).collect()
+    }
 }
 impl Lane for i64 {
     const ELEMENT: u32 = ELEMENT_I64;
     fn widen(self) -> i64 {
         self
+    }
+    fn widen_all(values: &[Self]) -> std::borrow::Cow<'_, [i64]> {
+        std::borrow::Cow::Borrowed(values)
     }
 }
 impl Lane for u32 {
@@ -141,6 +152,21 @@ impl Lane for i32 {
     fn widen(self) -> i64 {
         self as i64
     }
+}
+
+/// Resident representation of a loader-built base column. Device readers
+/// dispatch on each column's recorded codec, so every layout serves the same
+/// generated code; only bytes moved, encode work and resident size differ.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BaseLayout {
+    /// Raw lane upload, then device FOR headers and bit-packing.
+    For,
+    /// Raw lane upload, then device 64-bit headered transpose (no packing).
+    Plain64,
+    /// Native i64 upload: no headers, transposition or packing.
+    Native,
+    /// Host FOR packing into the device layout; only packed words cross.
+    HostFor,
 }
 
 /// Immutable encoded data plus per-vector codec facts. Bounds enclose logical
@@ -197,6 +223,71 @@ impl EncodedColumn {
             capacity: values.len(),
             count: std::ptr::null(),
             codec,
+            bounds,
+        })
+    }
+
+    /// Loader-only path: build a base column in the selected resident layout.
+    /// `For` is exactly [`Self::from_host`] with [`Codec::For`].
+    pub fn from_host_layout<L: Lane>(
+        pool: Arc<Pool>,
+        values: &[L],
+        layout: BaseLayout,
+    ) -> Result<Self> {
+        match layout {
+            BaseLayout::For => Self::from_host(pool, values, Codec::For),
+            BaseLayout::Plain64 => Self::from_host(pool, values, Codec::Plain),
+            BaseLayout::Native => Self::from_host_native(pool, &L::widen_all(values)),
+            BaseLayout::HostFor => Self::from_host_packed(pool, &L::widen_all(values)),
+        }
+    }
+
+    /// Loader-only path: upload native i64 values once, with no headers,
+    /// transposition or packing. Device readers take their native Plain branch.
+    pub fn from_host_native(pool: Arc<Pool>, values: &[i64]) -> Result<Self> {
+        Ok(Self {
+            headers: None,
+            data: ColumnData::Plain(Buffer::from_host(pool, values)?),
+            extent: None,
+            _count_owner: None,
+            capacity: values.len(),
+            count: std::ptr::null(),
+            codec: Codec::Plain,
+            bounds: Bounds::from_values(values),
+        })
+    }
+
+    /// Loader-only path: FOR-pack on the host into the device encoder's exact
+    /// layout ([`pack_for`]), then upload only headers and packed words.
+    pub fn from_host_packed(pool: Arc<Pool>, values: &[i64]) -> Result<Self> {
+        let (headers, payload) = pack_for(values);
+        Self::from_packed_parts(
+            pool,
+            values.len(),
+            &headers,
+            &payload,
+            Bounds::from_values(values),
+        )
+    }
+
+    /// Upload FOR headers and payload in the [`pack_for`] layout. The layout
+    /// is checked; `bounds` must enclose the logical values.
+    pub fn from_packed_parts(
+        pool: Arc<Pool>,
+        rows: usize,
+        headers: &[VectorHeader],
+        payload: &[u64],
+        bounds: Bounds,
+    ) -> Result<Self> {
+        check_packed_layout(rows, headers, payload.len())?;
+        Ok(Self {
+            headers: Some(Buffer::from_host(pool.clone(), headers)?),
+            data: ColumnData::Packed(Buffer::from_host(pool.clone(), payload)?),
+            extent: Some(Buffer::from_host(pool, &[payload.len() as u64])?),
+            _count_owner: None,
+            capacity: rows,
+            count: std::ptr::null(),
+            codec: Codec::For,
             bounds,
         })
     }

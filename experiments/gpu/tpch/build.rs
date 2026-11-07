@@ -1000,8 +1000,8 @@ fn compile_stage(
             quote!(catalog: gpu_compress::Catalog,),
             quote!(catalog,),
             quote! {
-                let source = gpu_compress::Source::load_manifest(&manifest.root)?;
-                let catalog = gpu_compress::Catalog::compress(&pool, &source, &gpu_compress_host::tpch::schema())?;
+                let source = crate::loader::load_source(&manifest.root)?;
+                let catalog = crate::loader::compress_catalog(&pool, &source, &gpu_compress_host::tpch::schema())?;
             },
         )
     } else {

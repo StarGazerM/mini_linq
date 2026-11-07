@@ -873,7 +873,7 @@ sweeps.
 | M3 | Merge two sorted runs (Datalog) | plain words vs decode-merge-re-encode | merge GB/s; per-round re-encode cost |
 | M4 | Transfer | plain vs compressed over PCIe + device decode | when compression pays for non-resident data |
 | M5 | Encoded execution | group/compare on dictionary codes vs `String` (CPU h01-like) | group-by throughput |
-| E1 | End-to-end | GPU TPC-H with plain columns vs current compressed default | whether today's GPU compression default pays (no prior controlled comparison exists) |
+| E1 | End-to-end | GPU TPC-H with plain columns vs current compressed default | whether today's GPU compression default pays (measured 2026-11-06, §12.5) |
 | E2 | End-to-end | per-phase profiles (CPU `perf`, GPU nsys/ncu) of h01/h06/h12/h14 | where time goes before optimizing storage |
 
 A codec/role rule enters the planner only with an M/E result that supports it
@@ -897,10 +897,10 @@ variants, 6,968 checks, no foreign tenants. CPU: 476 measurements.
 **What the evidence decides (supersedes §2's "codec by measured size"):**
 1. **The evidence-free policy default is plain** on every target. A non-plain
    choice needs a (target, role, access, parallelism) row above that supports
-   it. This is not yet the GPU catalog's implementation default:
-   `experiments/gpu/compress/src/lib.rs`, `Catalog::compress`, still selects
-   `Codec::For` for every column; the controlled end-to-end comparison E1
-   remains required.
+   it. For GPU TPC-H manifest-loader base columns, E1 (§12.5) is that row:
+   device FOR beats both plain layouts on resident query time, so FOR stays
+   the loader default. The `Catalog::compress` path (H05 `tpch_domains`) was
+   not part of E1 and remains unmeasured.
 2. **Index runs and merges stay plain** on CPU and GPU. This confirms §8
    without the directory confound in the Mac comparison.
 3. **CPU scan columns: byte-aligned truncation, not bit-packing.** Bit-
@@ -909,7 +909,8 @@ variants, 6,968 checks, no foreign tenants. CPU: 476 measurements.
    chosen jointly with Tasks placement.
 4. **GPU: compression is for transfer and capacity** (1.7–3.4× on PCIe).
    Resident scans gain 13–28% at SF10 scale and can lose on cache-resident
-   inputs.
+   inputs. End to end (E1, §12.5), plain base columns are 1.12–1.16× slower
+   than FOR over the 26-query suite; FOR is a resident win as well.
 5. **Encoded execution beats compression.** Grouping/comparing on dictionary
    codes is 12–16× on CPU. This is contract 7's `encoded` representation
    (`where`/group/join on codes), not a storage codec, and it is the largest
@@ -1231,6 +1232,78 @@ The initial implementation's 5.69x callback loss is retained in
 `results/p5-s1-scan.json`: hoisting predicate-variant dispatch out of the row
 loop fixes that realization; the final benchmark additionally prevents
 constant-folded bounds on the Vec side. No compiler default changes in S1.
+
+### 12.5 E1 and host-packed transfer (2026-11-06)
+
+Source: `experiments/storage-bench/results/gpu-base-codec-2026-11-06.json.gz`,
+driver `experiments/storage-bench/gpu_base_codec.py`, worktree branch
+`codex/compression` on `b7223ae9`. One `cq-gpu-tpch` binary (default advice,
+sha256 `ec7892dd…`) runs every variant through `--base-codec`; the generated
+`queries.rs` and `plans.json` are byte-identical to a pristine `b7223ae9`
+build, so plans, kernels and every checked fact are unchanged. Device readers
+dispatch on each column's recorded codec (`device.rs` `decode*`), so only the
+resident representation of manifest-loader base columns differs:
+
+| Variant | Base columns |
+|---|---|
+| `for` (current default) | raw i64 upload, device FOR headers and bit-packing |
+| `plain64` | raw i64 upload, device 64-bit headered transpose |
+| `native` | raw i64 upload kept native (null headers) |
+| `hostfor` | host `pack_for` (byte-identical to the device encoder, tested over widths 0–64), packed upload |
+| `hostfor-cached` | as `hostfor`, packed files persisted in tmpfs and read instead of raw columns |
+
+Protocol: RTX 6000 Ada, all 26 advised queries, SF1 and SF10, one warmup
+round plus 5 rotated rounds of fresh processes per variant; each process holds
+only the GPU lock; 60/60 processes validated (warmup and first measured sample
+full exact, later samples bench-check sampled), 0 major faults, no foreign GPU
+tenants. Ratios are geometric means over rounds of paired ratios to `for`
+with bootstrap 95% CIs (20,000 resamples); `suite` pairs the per-round
+geomean over queries. Load is untimed in query totals and reported separately
+(read + host pack + synchronous upload/device encode, summed over queries;
+every query reloads its columns).
+
+| Scale | Variant | Query total | Base load | Upload + encode | Process wall |
+|---|---|---|---|---|---|
+| SF1 | plain64 | 1.145 [1.135, 1.151] | 1.032 [0.939, 1.135] | 1.040 [1.027, 1.054] | 1.002 [0.972, 1.028] |
+| SF1 | native | 1.123 [1.099, 1.146] | 0.935 [0.867, 1.005] | 0.843 [0.805, 0.885] | 1.118 [1.028, 1.227] |
+| SF1 | hostfor | 1.004 [1.000, 1.009] | 1.037 [0.979, 1.098] | 0.122 [0.121, 0.122] | 1.018 [1.010, 1.027] |
+| SF1 | hostfor-cached | 0.996 [0.978, 1.008] | 0.096 [0.085, 0.105] | 0.110 [0.106, 0.113] | 0.862 [0.818, 0.889] |
+| SF10 | plain64 | 1.161 [1.148, 1.170] | 0.987 [0.917, 1.033] | 1.052 [0.978, 1.103] | 0.986 [0.902, 1.041] |
+| SF10 | native | 1.120 [1.112, 1.128] | 0.983 [0.934, 1.045] | 0.948 [0.907, 0.999] | 1.013 [0.951, 1.082] |
+| SF10 | hostfor | 1.000 [0.994, 1.004] | 1.006 [0.973, 1.030] | 0.102 [0.099, 0.105] | 1.010 [0.943, 1.064] |
+| SF10 | hostfor-cached | 1.007 [1.001, 1.011] | 0.067 [0.064, 0.069] | 0.114 [0.112, 0.117] | 0.523 [0.506, 0.539] |
+
+SF10 medians (sums over the 26 queries): `for` query totals 956.6 ms,
+resident base columns 9.27 GB vs 47.5 GB plain; load = read 41.0 s + upload
+and device encode 6.34 s. `hostfor`: read 40.6 s + host pack 7.01 s + upload
+0.67 s. `hostfor-cached`: read 2.02 s + upload 0.79 s; process wall 95.9 s →
+49.5 s.
+
+⇒ **E1 decided: FOR pays for resident GPU base columns.** Both plain layouts
+lose on the suite at both scales (h06 2.2×, h08 1.5×, h09 1.4× slower at SF10;
+no query is faster beyond noise except native h02 at SF10, 0.849). FOR stays
+the loader default; plain is not the GPU base-column default.
+
+⇒ **Packed upload cuts device load time ~9×, but host packing at load gives
+it back.** `hostfor` columns are the same bytes as `for` (query totals within
+1% on the suite; SF1 per-query outliers h09 1.26, h20 0.88 also appear in
+`hostfor-cached` and vanish at SF10 — an allocation-state effect of the
+device encoder's temporaries, [INFERENCE]). Per-process host packing
+(≈6.8 GB/s over all host threads) costs what the smaller upload saves.
+
+⇒ **Packed columns persisted once remove most of the cold path.** With
+`hostfor-cached`, base load falls to 0.067× and SF10 process wall to 0.52×.
+Confounds: cached files are read from tmpfs, raw columns from page-cached
+`/data/tpch-gpu` (0 major faults), and the raw path also widens stored
+i32/i64 into an i64 vector; the read saving is therefore not attributed to
+compression alone. The cache binds each file to its source column's path,
+length and mtime, rejects stale or malformed files before allocating their
+payload, and is opt-in (`--base-cache`); no default changes. Remaining:
+a read control (raw columns from tmpfs), the `Catalog::compress` (H05) path,
+and the RunPod replication. The measured binary predates the review fixes to
+the cache (identity captured before the raw read, bounded reads, per-call
+temporaries) and to the driver's validated/exact fields; none is on a timed
+path.
 
 ## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
 

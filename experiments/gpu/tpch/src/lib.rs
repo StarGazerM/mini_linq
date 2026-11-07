@@ -1,6 +1,7 @@
 #![recursion_limit = "1024"]
 
 pub mod benchmark;
+pub mod cache;
 pub mod loader;
 pub mod manifest;
 #[allow(warnings)]
@@ -34,6 +35,7 @@ pub fn run(
     authored: Option<&Path>,
     baseline: Option<&Path>,
 ) -> Result<bool> {
+    loader::check_options()?;
     let mut results = plans()?;
     if modes
         .iter()
@@ -90,9 +92,12 @@ pub fn run(
         if result["status"] == "accepted" {
             // A runtime failure is neither a planning rejection nor a passing
             // measurement. Preserve it, continue the inventory, then fail main.
+            loader::take_load_report();
             let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 execute_query(&query, &manifest, &mode, false)
             }));
+            // Zero columns: this query's inputs did not use the manifest loader.
+            result["base_columns"] = loader::take_load_report();
             let execution = match execution {
                 Ok(value) => value,
                 Err(payload) => {

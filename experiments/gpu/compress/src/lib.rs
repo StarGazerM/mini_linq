@@ -24,8 +24,8 @@
 //! DO NOT conflate scan codec selection with lookup/expand layout or infer either from type spelling.
 use gpu_compress_host::{Kind, Schema};
 use gpu_device_columns::{
-    Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn, OutputCount, Pool,
-    Table,
+    BaseLayout, Bounds, Buffer, Codec, ColumnView, DeviceColumns, Dictionary, EncodedColumn,
+    OutputCount, Pool, Table,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -244,6 +244,17 @@ pub struct Catalog {
 impl Catalog {
     /// Canonicalize complete schema projections, then FOR-pack and upload their columns.
     pub fn compress(pool: &Arc<Pool>, source: &Source, schema: &Schema) -> Result<Self> {
+        Self::compress_with(pool, source, schema, BaseLayout::For)
+    }
+
+    /// As [`Self::compress`], storing every column in `layout`; `For` is the
+    /// default device FOR path.
+    pub fn compress_with(
+        pool: &Arc<Pool>,
+        source: &Source,
+        schema: &Schema,
+        layout: BaseLayout,
+    ) -> Result<Self> {
         let mut domains = BTreeMap::new();
         for (name, members) in &schema.domains {
             let columns = members
@@ -289,13 +300,13 @@ impl Catalog {
                                 )
                                 .into());
                             }
-                            EncodedColumn::from_host(pool.clone(), &domain.ids(values), Codec::For)?
+                            EncodedColumn::from_host_layout(pool.clone(), &domain.ids(values), layout)?
                         }
                         Kind::I32 => {
                             let values = values
                                 .map(|v| Ok(i32::try_from(v)?))
                                 .collect::<Result<Vec<i32>>>()?;
-                            EncodedColumn::from_host(pool.clone(), &values, Codec::For)?
+                            EncodedColumn::from_host_layout(pool.clone(), &values, layout)?
                         }
                     };
                 stored.push(CompressedColumn {
