@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Fail when a branch adds grammar to an IR it does not own.
 
+Grammar is the data shape of a program: structs, fields, enums, variants,
+unions and type aliases. Functions, trait impls and parameter changes are
+API and are not compared (P7 restricts grammar, not API).
+
 A branch declares the IR crate(s) whose decision it changes (`--owner`).
 In every other `languages/cq-lang-*` crate it may delete or rename public
 items but not add them: an order-only change adds nothing below VO because
@@ -23,6 +27,8 @@ SNAPSHOTS = ROOT / "tools" / "public-api"
 IR_CRATES = ("cq-lang-cq", "cq-lang-vo", "cq-lang-ra", "cq-lang-ix",
              "cq-lang-physical", "cq-lang-structures", "cq-lang-sequence",
              "cq-syntax")
+GRAMMAR_KINDS = ('{"struct"', '{"struct_field"', '{"enum"', '{"variant"',
+                 '{"union"', '{"type_alias"')
 
 
 def lines_at(revision, crate):
@@ -54,8 +60,13 @@ def main():
     for crate in IR_CRATES:
         if crate in args.owner:
             continue
+        # Grammar = the data shape of a program: types, fields, variants. Functions,
+        # trait impls and parameters are API, not grammar (P7 restricts grammar).
+        grammar = lambda sig: sig.lstrip().startswith(GRAMMAR_KINDS)
         before = dict(line.split("\t", 1) for line in lines_at(base, crate) if "\t" in line)
         after = dict(line.split("\t", 1) for line in lines_at(None, crate) if "\t" in line)
+        before = {p: s for p, s in before.items() if grammar(s)}
+        after = {p: s for p, s in after.items() if grammar(s)}
         allowed = lambda path: any(a in path for a in args.allow)
         new = sorted(p for p in after.keys() - before.keys() if not allowed(p))
         # A signature that only lost tokens (a deleted field or variant) is a deletion.
