@@ -53,6 +53,12 @@ inspection, no avoidable allocation) and the census, and Main reads the
 expanded code of every changed target itself; (3) the gates above. A branch
 whose generated code changes in kind where its census predicted only a
 reorder is sent back, not merged with the change explained after the fact.
+Scope (P7, design-notes/ir-redesign.md): a branch declares the IR it owns
+and runs `python3 tools/check_ir_scope.py --owner <cq-lang-crate> [--allow
+<renamed path>]` after `check_public_api.py --update`; in every other IR
+crate it may delete or rename but not add or change grammar. An order-only
+change adds nothing below VO. Seam data a checker needs is a side table the
+lowering returns, never an IR field.
 After each merge batch Main runs the performance baseline: CPU TPC-H SF1
 default/par, CPU DOOP xalan mini/mini-par, and (GPU available) GPU TPC-H SF1
 advised and `doop-gpu` xalan, paired against the previous batch's main under
