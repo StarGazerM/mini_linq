@@ -45,18 +45,31 @@ use syn::Ident;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Steps(pub BTreeMap<String, Vec<usize>>);
 
-/// Check the VO contract, then lower it.
-pub fn compile(source: &valuation::Program) -> syn::Result<(ra::Program, Steps)> {
-    let analysis = valuation::contract::check(source)?;
-    Ok(lower(source, &analysis))
+/// Immutable VO input paired with analysis produced only by its checker.
+pub struct Checked<'a> {
+    source: &'a valuation::Program,
+    analysis: valuation::Analysis,
 }
 
-/// Lower a valuation plan with its WF-VO analysis into named RA and the seam
+impl<'a> Checked<'a> {
+    pub fn new(source: &'a valuation::Program) -> syn::Result<Self> {
+        Ok(Self { source, analysis: valuation::contract::check(source)? })
+    }
+}
+
+/// Check the VO contract, then lower it.
+pub fn compile(source: &valuation::Program) -> syn::Result<(ra::Program, Steps)> {
+    Ok(lower(&Checked::new(source)?))
+}
+
+/// Lower a checked valuation plan into named RA and the seam
 /// table. Recorded restrictions select their occurrence; every other
 /// predicate is a prefix step. A written reference is a VO without
 /// restrictions or reductions.
 /// Formal rule RL-Guard: Append an opaque guard to the prefix, seeding Unit if absent.
-pub fn lower(source: &valuation::Program, analysis: &valuation::Analysis) -> (ra::Program, Steps) {
+pub fn lower(checked: &Checked<'_>) -> (ra::Program, Steps) {
+    let source = checked.source;
+    let analysis = &checked.analysis;
     let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
         .iter()
         .any(|item| matches!(item, valuation::cq::BodyItem::Block(_)));

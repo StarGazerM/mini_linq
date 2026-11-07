@@ -35,16 +35,12 @@ to two inclusive comparisons and orients comparisons with the column on
 the left; it is undefined for any other constraint.
 $\operatorname{closed}(s)$ is the set of literal and parameter terms of $s$;
 $\operatorname{deps}(e,H)$ is the Rust free-variable dependency set in $H$.
-\[
- \mathsf{PPath}(p)\triangleq |p|>0\land |p|\bmod 2=1.
-\]
 \begin{mathpar}
 \Rule{PH-H-Definitions}{
  |\{R.name\mid R\in t.declarations\}|=|t.declarations|
  \quad\forall R\in t.declarations.\ |C(R)|>0\land|\operatorname{set}C(R)|=|C(R)|\\
  |N|=n\quad\forall i.\ \operatorname{operands}(d_i)\subseteq\{d_j.name\mid j<i\}\\
  \forall r=\operatorname{rename}(R)\in D.\ R\in t.declarations\land
- \mathsf{PPath}(r.path)\land
  |\operatorname{dom}M(r)|=|M(r)|=|\operatorname{ran}M(r)|\land
  |\operatorname{sources}K(r)|=|K(r)|\land
  \operatorname{dom}M(r)\mathbin{\dot\cup}\operatorname{sources}K(r)=\operatorname{set}C(R)\\
@@ -56,8 +52,7 @@ $\operatorname{deps}(e,H)$ is the Rust free-variable dependency set in $H$.
  \forall d\in D,\ e\in\operatorname{rustPayloads}(d).\ d.environment=\bot\Rightarrow U(e,L)\subseteq h(d.input)\\
  \forall d\in D.\ d.environment\ne\bot\Rightarrow
  (|\operatorname{set}d.environment.variables|=|d.environment.variables|
- \land\operatorname{set}d.environment.variables\subseteq h(d.input)
- \land(d.environment.path\ne\bot\Rightarrow\mathsf{PPath}(d.environment.path)))\\
+ \land\operatorname{set}d.environment.variables\subseteq h(d.input))\\
  o\in N\quad N=\operatorname{ancestors}(o)
  \quad\forall e\in t.head.args.\ U(e,L)\subseteq h(o)}
  {\mathsf{PHDefinitions}(t,A)}
@@ -84,8 +79,7 @@ $\operatorname{deps}(e,H)$ is the Rust free-variable dependency set in $H$.
  \forall a,b\in u.operands.\ h(a)=h(b)\land
  \forall c\in\operatorname{dom}T_a\cap\operatorname{dom}T_b.\ T_a(c)=T_b(c)\\
  \forall u\in D_{union}.\ u.origin\ne\bot\Rightarrow
- \bigl(\mathsf{PPath}(u.origin.occurrence)\land
- h(u.name)=\operatorname{set}(u.origin.free)\cup\operatorname{set}(u.origin.interface)
+ \bigl(h(u.name)=\operatorname{set}(u.origin.free)\cup\operatorname{set}(u.origin.interface)
  \cup\!\!\bigcup_{p\in\operatorname{prefixes}(u.origin)}h(p)
  \land(u.origin.interface=\varnothing\iff u.witness\ne\bot)\bigr)\\
  \forall u\in D_{union}.\ (u.origin=\bot\land u.witness\ne\bot)\Rightarrow h(u.name)=\varnothing\\

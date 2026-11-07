@@ -244,8 +244,8 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
 #[cfg(test)]
 mod tests;
 
-/// Preserve the recorded queue ordinals while running a per-hole Physical
-/// rewrite immediately before its original first post-lowering invocation.
+/// Resolve this invocation's selectors from carried planning tables, preserving
+/// queue ordinals without reconstructing CQ occurrences from Physical.
 #[proc_macro]
 pub fn smallest_before(input: TokenStream) -> TokenStream {
     use quote::quote;
@@ -269,12 +269,14 @@ pub fn smallest_before(input: TokenStream) -> TokenStream {
             proc_macro2::TokenStream::new()
         };
         let mut pipeline: cq_stage::Pipeline = input.parse()?;
+        let sites = cq_stage::planning::resolve_smallest(sites, pipeline.planning.as_ref())?;
         input.parse::<Token![;]>()?;
         let program: proc_macro2::TokenStream = input.parse()?;
         pipeline.passes.insert(0, next);
-        Ok(quote!(::cq_rewrites::smallest_intersections! {
-            arguments { #sites }; #context #pipeline; #program
-        }))
+        Ok(cq_stage::rewrite::<cq_lang_physical::Program>(
+            quote!(arguments { #sites }; #context #pipeline; #program),
+            cq_rewrite_passes::smallest_intersections,
+        ))
     };
     parser
         .parse2(input.into())

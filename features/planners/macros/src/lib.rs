@@ -8,19 +8,21 @@ use proc_macro::TokenStream;
 /// The selected order is elaborated into the emitted RA′ program.
 #[proc_macro]
 pub fn order(input: TokenStream) -> TokenStream {
-    cq_stage::pass_with_calibration::<cq::Program, ra::Program>(input.into(), |source, arguments, enabled| {
+    cq_stage::pass_with_calibration::<cq::Program, ra::Program>(input.into(), |source, arguments, enabled, planning| {
         let planner: Planner = syn::parse2(arguments)?;
+        use cq_stage::calibration::{Seed, Stage};
+        let (target, valuation, lowering, steps) = cq_planners_plan::compile_with_steps(source, planner)?;
+        let reads = cq_planning::first_reads(&valuation);
         if !enabled {
-            return cq_planners_plan::compile(source, planner).map(|target| (target, None));
+            *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
+            return Ok((target, None));
         }
-        use cq_stage::calibration::{Coverage, Seed, Stage};
-        let (target, valuation, lowering, origins) = cq_planners_plan::compile_with_origins(source, planner)?;
         let seed = Seed {
             valuation: Stage::of(&valuation),
             lowering: Stage::of(&lowering),
-            origins: origins.definitions.into_iter().map(|(node, origins)| Coverage {node, origins}).collect(),
-            elided: origins.elided,
+            steps: steps.0.clone(),
         };
+        *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
         Ok((target, Some(seed)))
     })
     .into()

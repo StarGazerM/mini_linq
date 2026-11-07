@@ -331,8 +331,8 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
 /// and LE the dead-expansion elimination of `cq-ra-rewrites`.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
     let valuation = compile_valuation(source, planner)?;
-    let target = cq_relational_lowering::compile(&valuation)?;
-    cq_relational_lowering::check(&valuation, &target)?;
+    let (target, steps) = cq_relational_lowering::compile(&valuation)?;
+    cq_relational_lowering::check(&valuation, &target, &steps)?;
     let target = match planner {
         Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&target)?,
         Planner::Le => cq_ra_rewrites::simplify_expansions(&target)?,
@@ -342,22 +342,22 @@ pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Progra
     Ok(target)
 }
 
-/// Preserve the actual selected VO and pre-rewrite lowering witness. The
-/// executable target is checked and simplified exactly as in [`compile`].
-pub fn compile_with_origins(
+/// Preserve the actual selected VO and pre-rewrite lowering step correspondence.
+/// The executable target is checked and simplified exactly as in [`compile`].
+pub fn compile_with_steps(
     source: &cq::Program,
     planner: Planner,
-) -> syn::Result<(ra::Program, vo::Program, ra::Program, cq_relational_lowering::Origins)> {
+) -> syn::Result<(ra::Program, vo::Program, ra::Program, cq_relational_lowering::Steps)> {
     let valuation = compile_valuation(source, planner)?;
-    let (lowered, origins) = cq_relational_lowering::compile_with_origins(&valuation)?;
-    cq_relational_lowering::check(&valuation, &lowered)?;
+    let (lowered, steps) = cq_relational_lowering::compile(&valuation)?;
+    cq_relational_lowering::check(&valuation, &lowered, &steps)?;
     let target = match planner {
         Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&lowered)?,
         Planner::Le => cq_ra_rewrites::simplify_expansions(&lowered)?,
         _ => lowered.clone(),
     };
     check(source, &target)?;
-    Ok((target, valuation, lowered, origins))
+    Ok((target, valuation, lowered, steps))
 }
 
 /// Independently check an authored valuation, including split and selected
@@ -544,7 +544,8 @@ mod prefix_tests {
             let options = syn::parse2::<PlanOptions>(tokens).unwrap();
             let valuation = prefix_valuation(&source, &options).unwrap();
             let target = compile_prefix(&source, &options).unwrap();
-            cq_relational_lowering::check(&valuation, &target).unwrap();
+            let (_, steps) = cq_relational_lowering::compile(&valuation).unwrap();
+            cq_relational_lowering::check(&valuation, &target, &steps).unwrap();
         }
         let invalid = syn::parse2(quote!(no_reduce, skip(R with S))).unwrap();
         assert!(compile_prefix(&source, &invalid).is_err());

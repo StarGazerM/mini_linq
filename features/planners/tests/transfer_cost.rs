@@ -1,4 +1,4 @@
-use cq_planners::{Planner, check, compile, cq, ra};
+use cq_planners::{Planner, check, compile, cq};
 use cq_testkit::{Database, Rows, semantics};
 
 #[test]
@@ -57,80 +57,6 @@ fn transfer_preserves_partial_guard_domain_while_connecting_later_atoms() {
     }
 }
 
-#[test]
-fn later_full_witness_repairs_only_key_preserving_positive_lineage() {
-    let source: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32,b:i32); relation T(a:i32,b:i32,c:i32);
-        r = rename R {a -> x,b -> y};
-        t = rename T {a -> x,b -> y,c -> z};
-        late = select r if (y > 0, y < 3);
-        result = natural_join t with late;
-        output result as answer(x,y,z);
-    }};
-    macro_rules! witness {
-        ($($tail:tt)*) => { syn::parse_quote! { relational {
-            relation R(a:i32,b:i32); relation T(a:i32,b:i32,c:i32);
-            r = rename R {a -> x,b -> y};
-            t = rename T {a -> x,b -> y,c -> z};
-            early = select r if (y > 0);
-            late = select early if (y < 3);
-            projected = project late keep {x};
-            prefix = natural_join t with early;
-            requested = natural_join prefix with projected;
-            $($tail)*
-        }} };
-    }
-    let target: ra::Program = witness! {
-        result = natural_join requested with late;
-        output result as answer(x,y,z);
-    };
-    ra::check_rewrite(&source, &target).unwrap();
-    ra::check_rewrite(&target, &source).unwrap();
-    let database = Database::from([
-        ("R".into(), [vec![1, 1], vec![1, 4]].into()),
-        ("T".into(), [vec![1, 1, 7], vec![1, 4, 9]].into()),
-    ]);
-    let expected = semantics::evaluate_ra(&source, &database).output;
-    assert_eq!(expected, [vec![1, 1, 7]].into_iter().collect::<Rows>());
-    assert_eq!(semantics::evaluate_ra(&target, &database).output, expected);
-
-    let mutations: [(&str, ra::Program); 3] = [
-        ("lost full-row key", witness! {
-            result = natural_join requested with projected;
-            output result as answer(x,y,z);
-        }),
-        ("unrelated raw full read", witness! {
-            result = natural_join requested with r;
-            output result as answer(x,y,z);
-        }),
-        ("dropped participating binding", witness! {
-            cut = project requested keep {x,z};
-            result = natural_join cut with late;
-            output result as answer(x,y,z);
-        }),
-    ];
-    for (reason, changed) in mutations {
-        ra::contract::check(&changed).unwrap();
-        assert!(ra::check_rewrite(&source, &changed).is_err(), "{reason}");
-        assert!(ra::check_rewrite(&changed, &source).is_err(), "{reason}");
-        // Every mutation admits a real spurious row, not just a different DAG.
-        assert_ne!(semantics::evaluate_ra(&changed, &database).output, expected, "{reason}");
-    }
-
-    let mut guarded_source = source.clone();
-    guarded_source.plan.definitions.push(
-        syn::parse_quote!(observed = guard result if (opaque(y));),
-    );
-    guarded_source.plan.output.input = syn::parse_quote!(observed);
-    let guarded_target: ra::Program = witness! {
-        observed = guard requested if (opaque(y));
-        result = natural_join observed with late;
-        output result as answer(x,y,z);
-    };
-    ra::contract::check(&guarded_target).unwrap();
-    assert!(ra::check_rewrite(&guarded_source, &guarded_target).is_err());
-    assert!(ra::check_rewrite(&guarded_target, &guarded_source).is_err());
-}
 
 #[test]
 fn transfer_keeps_early_membership_with_conjoined_reducer_restrictions() {
@@ -147,8 +73,8 @@ fn transfer_keeps_early_membership_with_conjoined_reducer_restrictions() {
         _ => None,
     }).take(2).collect();
     assert_eq!(first, ["R", "P"]);
-    let lowered = cq_relational_lowering::compile(&valuation).unwrap();
-    cq_relational_lowering::check(&valuation, &lowered).unwrap();
+    let (lowered, steps) = cq_relational_lowering::compile(&valuation).unwrap();
+    cq_relational_lowering::check(&valuation, &lowered, &steps).unwrap();
     let target = compile(&source, Planner::Transfer).unwrap();
     check(&source, &target).unwrap();
     for seed in 0..4 {

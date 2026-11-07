@@ -3,9 +3,11 @@
 //! The facade observes every checked stage and records only its language and
 //! printed program. The calibrator reads the versioned token descriptor with
 //! `Trace::parse_descriptor`, independently re-parses and checks each recorded
-//! program, and supplies its dependency graph to `Trace::coverage`. Step
-//! identities are slash-separated VO step/branch/step paths; `$output` denotes
-//! lowering's return/unit work, not a fabricated VO index.
+//! program, and supplies its dependency graph to `Trace::coverage`. Version 3
+//! stores the sparse lowering `Steps` correspondence, not a replay of all VO
+//! operations. Step identities are slash-separated VO step/branch/step paths;
+//! `$output` denotes unanchored lowering work, not a fabricated VO index.
+//! Inherited dependency coverage is diagnostic, not a stream-work certificate.
 use std::collections::{BTreeMap, BTreeSet};
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
@@ -36,7 +38,7 @@ pub struct Snapshot {
     pub program: String,
     pub nodes: Vec<Node>,
 }
-/// `origins` names VO steps in a Seed and preceding definitions in a Transition.
+/// `origins` names VO steps in coverage and preceding definitions in a Transition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Coverage {
     pub node: String,
@@ -46,9 +48,8 @@ pub struct Coverage {
 pub struct Seed {
     pub valuation: Stage,
     pub lowering: Stage,
-    /// VO steps explicitly erased by mechanical lowering (for example x = x).
-    pub elided: Vec<String>,
-    pub origins: Vec<Coverage>,
+    /// Sparse definition-name correspondence to VO step/branch/step positions.
+    pub steps: BTreeMap<String, Vec<usize>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transition {
@@ -235,21 +236,12 @@ impl Trace {
         lowering.check()?;
         let allowed: BTreeSet<_> = valuation.nodes.iter().map(|n| n.name.as_str())
             .chain(std::iter::once(OUTPUT)).collect();
-        if seed.origins.len() != lowering.nodes.len() { return Err(fail("incomplete lowering origins")); }
-        for (node, coverage) in lowering.nodes.iter().zip(&seed.origins) {
-            let unique: BTreeSet<_> = coverage.origins.iter().collect();
-            if node.name != coverage.node || coverage.origins.is_empty()
-                || unique.len() != coverage.origins.len()
-                || coverage.origins.iter().any(|o| !allowed.contains(o.as_str())) {
-                return Err(fail("invalid lowering origin"));
+        for (name, path) in &seed.steps {
+            let origin = path.iter().map(usize::to_string).collect::<Vec<_>>().join("/");
+            if path.is_empty() || path.len() % 2 == 0 || !allowed.contains(origin.as_str())
+                || !lowering.nodes.iter().any(|node| node.name == *name) {
+                return Err(fail("invalid lowering step correspondence"));
             }
-        }
-        let covered: BTreeSet<_> = seed.origins.iter().flat_map(|c| c.origins.iter().map(String::as_str)).collect();
-        let elided: BTreeSet<_> = seed.elided.iter().map(String::as_str).collect();
-        if elided.len() != seed.elided.len() || !elided.is_disjoint(&covered)
-            || elided.iter().any(|name| *name == OUTPUT || !allowed.contains(name))
-            || allowed.iter().any(|name| *name != OUTPUT && !covered.contains(name) && !elided.contains(name)) {
-            return Err(fail("incomplete or conflicting VO coverage"));
         }
         let mut transitions: Vec<Transition> = Vec::new();
         for stage in &self.stages {
@@ -259,11 +251,25 @@ impl Trace {
         }
         Ok((lowering, transitions))
     }
-    /// Final local VO coverage, in actual final definition order. Consumers must
-    /// union these sets for runtime row aliases before summing VO bounds.
+    /// Final dependency coverage, in actual final definition order. Sparse
+    /// step ancestry does not certify the work of unmapped stream operators.
     pub fn coverage(&self, nodes: impl FnMut(&Stage) -> syn::Result<Vec<Node>>) -> syn::Result<Vec<Coverage>> {
-        let (_, transitions) = self.transitions(nodes)?;
-        let mut coverage = self.seed.as_ref().expect("checked seed").origins.clone();
+        let (lowering, transitions) = self.transitions(nodes)?;
+        let seed = self.seed.as_ref().expect("checked seed");
+        let mut inherited: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut coverage = Vec::with_capacity(lowering.nodes.len());
+        for node in &lowering.nodes {
+            let origins = if let Some(path) = seed.steps.get(&node.name) {
+                vec![path.iter().map(usize::to_string).collect::<Vec<_>>().join("/")]
+            } else {
+                let mut origins: BTreeSet<_> = node.inputs.iter()
+                    .flat_map(|input| inherited[input].iter().cloned()).collect();
+                if origins.is_empty() { origins.insert(OUTPUT.into()); }
+                origins.into_iter().collect()
+            };
+            inherited.insert(node.name.clone(), origins.clone());
+            coverage.push(Coverage { node: node.name.clone(), origins });
+        }
         for transition in &transitions {
             let previous: BTreeMap<_, _> = coverage.iter().map(|c| (c.node.as_str(), &c.origins)).collect();
             coverage = transition.parents.iter().map(|c| Coverage {
@@ -319,16 +325,27 @@ impl Parse for Seed {
         let b; parenthesized!(b in input);
         let valuation = b.parse()?; b.parse::<Token![,]>()?;
         let lowering = b.parse()?; b.parse::<Token![,]>()?;
-        let origins = list(&b)?; b.parse::<Token![,]>()?;
-        let elided = strings(&b)?;
+        let entries; bracketed!(entries in b);
+        let mut steps = BTreeMap::new();
+        while !entries.is_empty() {
+            let entry; parenthesized!(entry in entries);
+            let name = text(&entry)?; entry.parse::<Token![,]>()?;
+            let position; bracketed!(position in entry);
+            let path = position.parse_terminated(syn::LitInt::parse, Token![,])?
+                .iter().map(syn::LitInt::base10_parse).collect::<syn::Result<Vec<usize>>>()?;
+            if !entry.is_empty() { return Err(entry.error("unexpected step correspondence data")); }
+            if steps.insert(name, path).is_some() { return Err(entries.error("duplicate lowering definition")); }
+            if !entries.is_empty() { entries.parse::<Token![,]>()?; }
+        }
         if !b.is_empty() { return Err(b.error("unexpected seed data")); }
-        Ok(Self { valuation, lowering, origins, elided })
+        Ok(Self { valuation, lowering, steps })
     }
 }
 impl ToTokens for Seed {
     fn to_tokens(&self, out: &mut TokenStream) {
-        let Self {valuation, lowering, origins, elided} = self;
-        out.extend(quote!((#valuation, #lowering, [#(#origins),*], [#(#elided),*])));
+        let Self {valuation, lowering, steps} = self;
+        let entries = steps.iter().map(|(name, path)| quote!((#name, [#(#path),*])));
+        out.extend(quote!((#valuation, #lowering, [#(#entries),*])));
     }
 }
 impl Parse for Trace {
@@ -336,7 +353,7 @@ impl Parse for Trace {
         input.parse::<crate::kw::calibration_trace>()?;
         let b; syn::braced!(b in input);
         let version: syn::LitInt = b.parse()?;
-        if version.base10_parse::<u32>()? != 2 { return Err(b.error("unsupported calibration descriptor version")); }
+        if version.base10_parse::<u32>()? != 3 { return Err(b.error("unsupported calibration descriptor version")); }
         b.parse::<Token![;]>()?;
         let mut seeds: Vec<Seed> = list(&b)?;
         if seeds.len() > 1 { return Err(b.error("duplicate calibration seed")); }
@@ -352,6 +369,6 @@ impl ToTokens for Trace {
     fn to_tokens(&self, out: &mut TokenStream) {
         let seed = self.seed.iter();
         let stages = &self.stages;
-        out.extend(quote!(calibration_trace { 2; [#(#seed),*]; [#(#stages),*] }));
+        out.extend(quote!(calibration_trace { 3; [#(#seed),*]; [#(#stages),*] }));
     }
 }

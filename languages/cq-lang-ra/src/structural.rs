@@ -922,9 +922,11 @@ impl Structure {
             .iter()
             .any(|&(earlier, later, projected)| {
                 let (a, b) = (intervals[earlier], intervals[later]);
-                !(a.0 <= b.0 && b.1 <= a.1 || projected && b.0 <= a.0 && a.1 <= b.1)
+                !(a.0 <= b.0 && b.1 <= a.1
+                    || projected && b.0 <= a.0 && a.1 <= b.1)
             })
     }
+
 
     /// Check the source structure's obligations against the target's.
     pub fn check(&self, target: &Self) -> Result<(), String> {

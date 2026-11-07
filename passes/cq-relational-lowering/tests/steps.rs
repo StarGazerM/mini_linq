@@ -24,9 +24,8 @@ fn renames_name_their_first_read_and_reductions_add_no_entry() {
         struct Q; relation R(x:i32); relation S(x:i32);
         answer(x) :- R(x), S(x);
     };
-    let ordering = &source.ordering;
     let source: vo::Program = syn::parse2(quote! {
-        #source valuation #ordering {
+        #source valuation {
             reduce R@0 with S@1(x); R@0(x); S@1(x);
         }
     })
@@ -76,4 +75,21 @@ fn forged_side_tables_are_rejected() {
     assert!(check(&source, &target, &table(&[("r0", &[0]), ("r1", &[0])])).is_err());
     // A non-rename result.
     assert!(check(&source, &target, &table(&[("r0", &[0]), ("r2", &[1])])).is_err());
+}
+
+#[test]
+fn total_lowering_requires_checked_valuation() {
+    let source = planned("struct Q; relation R(x:i32); answer(x) :- R(x);");
+    let checked = cq_relational_lowering::Checked::new(&source).unwrap();
+    assert_eq!(cq_relational_lowering::lower(&checked), compile(&source).unwrap());
+    let mut invalid = source.clone();
+    invalid.valuation.steps.clear();
+    assert!(cq_relational_lowering::Checked::new(&invalid).is_err());
+}
+
+#[test]
+fn repeated_head_variables_do_not_repeat_reference_projection_columns() {
+    let source = planned("struct Q; relation R(x:i32); answer(x,x) :- R(x);");
+    let (target, steps) = compile(&source).unwrap();
+    check(&source, &target, &steps).unwrap();
 }

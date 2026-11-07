@@ -688,7 +688,7 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
         let ix: cq_lang_ix::Program = syn::parse_quote! {
             relational {
                 #declaration
-                r = rename #host@0 {#column -> x};
+                r = rename #host {#column -> x};
                 b = bind r with y:i32 = (*x % 2);
                 p = project b keep {y};
                 output p as answer(y);

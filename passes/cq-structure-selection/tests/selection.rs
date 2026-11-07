@@ -1094,18 +1094,6 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         .entries
         .push(syn::parse_quote!(selected rows = @vec as ::std::vec::Vec<_>;));
     assert!(check(&source, &bad).is_err());
-    let mut changed_occurrence = target.clone();
-    let physical::Operator::Rename(rename) =
-        &mut changed_occurrence.physical.program.definitions[1].operator
-    else {
-        unreachable!()
-    };
-    rename.occurrence = syn::parse_quote!(2);
-    // The filtered layout still covers every read; correspondence must also
-    // preserve the identity of the source occurrence supplying those rows.
-    contract(&changed_occurrence).unwrap();
-    assert!(check(&source, &changed_occurrence).is_err());
-    assert!(structures::check_rewrite(&target, &changed_occurrence).is_err());
     let mut reordered = target.clone();
     reordered.physical.program.definitions.swap(0, 1);
     // Structures is representation-only, including definition order.

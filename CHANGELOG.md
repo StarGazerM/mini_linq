@@ -13,6 +13,14 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- RA and Physical erase occurrence paths (IR redesign M2b). Relational
+  lowering returns a `Steps` side table for the VO↔RA seam; its total entry
+  accepts a checker-created `Checked` input. Downstream identities use Physical
+  definition names. Planning transports its occurrence/read and `Steps` tables
+  beside the program; each Smallest invocation resolves only its own selectors.
+  No pass inspects the remaining queue. Calibration
+  descriptor version 3 records `Steps`, not replayed origins; stream-work facts
+  absent from that table remain explicit unknown bounds pending M6.
 - Calibration stage observation moved out of the IR crates (IR redesign M2d):
   `cq_stage::Language` no longer has `calibration_snapshot`; the facade records
   each checked stage as `calibration::Stage { language, program }` (Rust type

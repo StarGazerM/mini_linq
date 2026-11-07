@@ -648,8 +648,8 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
     let valuation = compile_valuation(&source, Planner::Le).unwrap();
     let target = compile(&source, Planner::Le).unwrap();
     check_valuation(&source, &valuation, Planner::Le).unwrap();
-    let elaborated = cq_relational_lowering::compile(&valuation).unwrap();
-    cq_relational_lowering::check(&valuation, &elaborated).unwrap();
+    let (elaborated, steps) = cq_relational_lowering::compile(&valuation).unwrap();
+    cq_relational_lowering::check(&valuation, &elaborated, &steps).unwrap();
     // LE may independently eliminate a recorded lookup. Its rewrite proof,
     // not the mechanical VO->RA transport obligation, certifies that removal.
     ra::check_rewrite(&elaborated, &target).unwrap();
@@ -959,7 +959,7 @@ fn checks_admit_free_relational_rankings() {
         #normal valuation { S@1(y,z); R@0(x,y); }
     })
     .unwrap();
-    let target = cq_relational_lowering::compile(&alternative).unwrap();
+    let (target, _) = cq_relational_lowering::compile(&alternative).unwrap();
     check(&simple, &target).unwrap();
     for planner in [
         Planner::PrefixConnectedCoarse,

@@ -472,6 +472,8 @@ dependencies = [
  "cq-lang-datalog-source",
  "cq-lang-datalog-storage",
  "cq-lang-datalog-strata",
+ "cq-lang-physical",
+ "cq-rewrite-passes",
  "cq-stage",
  "proc-macro2",
  "quote",
@@ -1060,6 +1062,7 @@ name = "cq-planners-macros"
 version = "0.1.0"
 dependencies = [
  "cq-planners-plan",
+ "cq-planning",
  "cq-stage",
  "syn 2.0.119",
 ]
@@ -1345,6 +1348,7 @@ dependencies = [
 name = "cq-stage"
 version = "0.1.0"
 dependencies = [
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

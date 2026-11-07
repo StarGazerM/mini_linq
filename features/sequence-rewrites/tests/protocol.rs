@@ -4,16 +4,18 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 macro_rules! capture {
-    (arguments {}; pipeline {}; realization {
+    (arguments {}; pipeline {} $(planning_tables { $($tables:tt)* })?; realization {
         physical { $($physical:tt)* }
         structures { $($structures:tt)* }
         sequence { $($sequence:tt)* }
     }) => { stringify!($($sequence)*) };
-    (pipeline {}; realization {
+    (pipeline {} $(planning_tables { $($tables:tt)* })?; realization {
         physical { $($physical:tt)* }
         structures { $($structures:tt)* }
         sequence { $($sequence:tt)* }
     }) => { stringify!($($sequence)*) };
+    (arguments {}; pipeline {} $(planning_tables { $($tables:tt)* })?; $($program:tt)*) => { stringify!($($program)*) };
+    (pipeline {} $(planning_tables { $($tables:tt)* })?; $($program:tt)*) => { stringify!($($program)*) };
 }
 
 macro_rules! apply_macro {

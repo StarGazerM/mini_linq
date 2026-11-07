@@ -163,11 +163,10 @@ fn checked_trace(text: &'static str, hole: &crate::export::Hole, context: &round
     let seed = trace.seed.as_ref().ok_or_else(|| invalid("physical trace lacks its VO producer"))?;
     let mut valuation = checked::<cq_lang_vo::Program>(&seed.valuation)?;
     let lower = checked::<cq_lang_ra::Program>(&seed.lowering)?;
-    let origins = cq_relational_lowering::Origins {
-        definitions: seed.origins.iter().map(|c| (c.node.clone(), c.origins.clone())).collect(), elided: seed.elided.clone(),
-    };
-    cq_relational_lowering::check_origins(&valuation, &lower, &origins)?;
+    let steps = cq_relational_lowering::Steps(seed.steps.clone());
+    cq_relational_lowering::check(&valuation, &lower, &steps)?;
     let mut expected: cq_lang_vo::Program = syn::parse_str(&hole.checked_vo)?;
+    let clauses = crate::cost::enumerate::recorded_clause_indices(hole, &expected)?;
     valuation.cq.declared_evidence = None;
     expected.cq.declared_evidence = None;
     let semantic_vo_hash = hash_bytes(expected.to_token_stream().to_string().as_bytes());
@@ -203,7 +202,18 @@ fn checked_trace(text: &'static str, hole: &crate::export::Hole, context: &round
             definition.operator.to_token_stream().to_string().split_whitespace().next().expect("operator keyword").to_uppercase());
         let unary = |name: &syn::Ident| raw.get(&cq_syntax::symbol_name(name)).copied().unwrap_or(RawScope::Stream);
         let scope = match &definition.operator {
-            Op::Rename(rename) if rename.occurrence.0.len() == 1 => RawScope::Input(rename.occurrence.clause()),
+            Op::Rename(_) => {
+                match steps.0.get(&cq_syntax::symbol_name(&definition.name)).map(Vec::as_slice) {
+                    Some([index]) => match &valuation.valuation.steps[*index] {
+                        cq_lang_vo::Step::Atom(atom, _) if atom.clause.0.len() == 1 =>
+                            RawScope::Input(atom.clause.clause()),
+                        cq_lang_vo::Step::Negation(_, _) =>
+                            clauses[*index].map(RawScope::Input).unwrap_or(RawScope::Stream),
+                        _ => RawScope::Stream,
+                    },
+                    _ => RawScope::Stream,
+                }
+            }
             Op::Unit(_) => RawScope::Unit,
             Op::Select(select) | Op::Point(_, select) | Op::Range(_, select) => unary(&select.input),
             Op::Bind(bind) if bind.for_token.is_none() => unary(&bind.input),
@@ -216,7 +226,13 @@ fn checked_trace(text: &'static str, hole: &crate::export::Hole, context: &round
         raw.insert(cq_syntax::symbol_name(&definition.name), scope);
     }
     require(raw.keys().eq(coverage.keys()), "trace coverage does not match actual Physical definitions")?;
-    let (repeated_inputs, unknown_evaluation) = evaluation_scopes(&physical, structures.as_deref(), &coverage, &mut raw);
+    let (repeated_inputs, mut unknown_evaluation) = evaluation_scopes(&physical, structures.as_deref(), &coverage, &mut raw);
+    for (name, scope) in &raw {
+        if matches!(scope, RawScope::Stream) && !steps.0.contains_key(name) {
+            unknown_evaluation.entry(name.clone()).or_insert_with(||
+                "M6: sparse lowering Steps does not certify this Physical definition's stream-work scope".into());
+        }
+    }
     // ANSWER is the existing counter for Physical's explicit return, not a
     // fabricated definition or a storage enumeration count.
     let answer = format!("{}.answer", physical.program.returned);

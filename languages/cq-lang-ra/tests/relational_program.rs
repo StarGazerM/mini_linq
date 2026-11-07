@@ -801,6 +801,49 @@ fn inverse_dead_expansion_restores_only_a_checked_primary_witness() {
 }
 
 #[test]
+fn inverse_dead_expansion_accepts_independent_names_but_preserves_keys_and_predicates() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        r = rename R {a -> x};
+        s = rename S {a -> x,b -> y};
+        t = rename T {b -> y};
+        filtered = select s if (y > 0);
+        support = semijoin filtered with t;
+        lookup = semijoin r with support;
+        expansion = natural_join lookup with support;
+        answer_rows = project expansion keep {x};
+        output answer_rows as answer(x);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32);
+        rows = rename R {a -> x};
+        candidates = rename S {a -> x,b -> y};
+        witnesses = rename T {b -> y};
+        positive = select candidates if (y > 0);
+        matched = semijoin positive with witnesses;
+        checked = semijoin rows with matched;
+        result = project checked keep {x};
+        output result as answer(x);
+    }};
+    ra::check_rewrite(&source, &target).unwrap();
+
+    let mut dropped_predicate = target.clone();
+    dropped_predicate.plan.definitions[3].operator =
+        syn::parse_quote!(project candidates keep {x,y});
+    ra::contract::check(&dropped_predicate).unwrap();
+    assert!(ra::check_rewrite(&source, &dropped_predicate).is_err());
+
+    let mut changed_key = target.clone();
+    changed_key.plan.definitions.insert(
+        5, syn::parse_quote!(keyless = project matched keep {y};),
+    );
+    changed_key.plan.definitions[6].operator =
+        syn::parse_quote!(semijoin rows with keyless);
+    ra::contract::check(&changed_key).unwrap();
+    assert!(ra::check_rewrite(&source, &changed_key).is_err());
+}
+
+#[test]
 fn final_equality_deduplicates_relational_constraints_across_total_rust() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};

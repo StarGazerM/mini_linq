@@ -81,7 +81,7 @@ fn conform(source: ir::Program, expected: &str, rewrite: Rewrite, case_name: &st
 }
 
 #[test]
-fn occurrence_smallest_projects_lookup_keys_and_preserves_full_expansions() {
+fn named_smallest_projects_lookup_keys_and_preserves_full_expansions() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32,x:i32);
         relation S(a:i32,x:i32,z:i32); relation T(a:i32,x:i32,w:i32);
@@ -97,13 +97,13 @@ fn occurrence_smallest_projects_lookup_keys_and_preserves_full_expansions() {
         return out as answer(a,x,z,w);
     });
     assert_eq!(smallest_intersections(&source, quote!()).unwrap(), source);
-    let target = smallest_intersections(&source, quote!(smallest(R @ 1, S @ 2, T @ 3))).unwrap();
+    let target = smallest_intersections(&source, quote!(smallest(r, s, t))).unwrap();
     ir::check_rewrite(&source, &target).unwrap();
     let facts = ir::contract::check(&target).unwrap();
     assert_eq!(ir::candidate_prefixes(&target, &facts)[0].sides.len(), 3);
     cq_structure_selection::compile(&target).unwrap();
     assert_eq!(
-        smallest_intersections(&target, quote!(smallest(R @ 1, S @ 2, T @ 3))).unwrap(),
+        smallest_intersections(&target, quote!(smallest(r, s, t))).unwrap(),
         target
     );
     for name in ["expand_s", "out"] {
@@ -265,7 +265,7 @@ fn smallest_output_is_pinned_for_adjacent_and_hoisted_corpus_pairs() {
 }
 
 #[test]
-fn smallest_three_way_occurrence_advice_is_exact_and_checked() {
+fn smallest_three_way_definition_advice_is_exact_and_checked() {
     let source: ir::Program = syn::parse_str(include_str!("fixtures/three_way.physical")).unwrap();
     let expected: ir::Program =
         syn::parse_str(include_str!("fixtures/three_way_smallest.physical")).unwrap();
@@ -273,8 +273,8 @@ fn smallest_three_way_occurrence_advice_is_exact_and_checked() {
         quote!(),
         quote!(all),
         quote!(candidate),
-        quote!(smallest(R @ 1, S @ 2, T @ 3)),
-        quote!(smallest(T @ 3, r#R @ 1, S @ 2)),
+        quote!(smallest(r, s, t)),
+        quote!(smallest(t, r#r, s)),
     ] {
         let target = smallest_intersections(&source, args.clone()).unwrap();
         assert_eq!(target, expected);
@@ -298,25 +298,25 @@ fn smallest_three_way_occurrence_advice_is_exact_and_checked() {
     let opaque: ir::Program =
         syn::parse_str(&include_str!("fixtures/three_way.physical").replace("i32", "OpaqueColumn"))
             .unwrap();
-    assert!(smallest_intersections(&opaque, quote!(smallest(R @ 1, S @ 2, T @ 3))).is_ok());
+    assert!(smallest_intersections(&opaque, quote!(smallest(r, s, t))).is_ok());
     assert!(!source.program.definitions.iter().any(|definition| matches!(
         &definition.operator, Operator::Probe(_, key) if matches!(key.choice, Some(Choice::Smallest(_)))
     )));
 }
 
 #[test]
-fn smallest_occurrence_advice_rejects_missing_ambiguous_and_inadmissible_sites() {
+fn smallest_definition_advice_rejects_missing_and_inadmissible_sites() {
     let source: ir::Program = syn::parse_str(include_str!("fixtures/three_way.physical")).unwrap();
     for args in [
         quote!(smallest()),
-        quote!(smallest(R @ 1)),
-        quote!(smallest(R @ 1, R @ 1)),
-        quote!(smallest(R @ 1, S @ 2)),
-        quote!(smallest(R @ 1, S @ 2, T @ 9)),
-        quote!(smallest(R @ 1, S @ 2, Missing @ 3)),
-        quote!(smallest(L @ 0, R @ 1, S @ 2, T @ 3)),
-        quote!(smallest(R @ 1, S @ 2, T @ 3), smallest(T @ 3, S @ 2, R @ 1)),
-        quote!(smallest(R @ 1, S @ 2, T @ 3), candidate),
+        quote!(smallest(r)),
+        quote!(smallest(r, r)),
+        quote!(smallest(r, s)),
+        quote!(smallest(r, s, t_missing)),
+        quote!(smallest(r, s, missing)),
+        quote!(smallest(l, r, s, t)),
+        quote!(smallest(r, s, t), smallest(t, s, r)),
+        quote!(smallest(r, s, t), candidate),
         quote!(smallest(R, S, T)),
     ] {
         assert!(smallest_intersections(&source, args).is_err());
@@ -326,10 +326,10 @@ fn smallest_occurrence_advice_rejects_missing_ambiguous_and_inadmissible_sites()
         // An intermediate materialization/canon ends the admissible chain.
         blocked.program.definitions[index].canon = Some(Default::default());
         blocked.program.definitions[index].mode = Mode::Let(Default::default());
-        assert!(smallest_intersections(&blocked, quote!(smallest(R @ 1, S @ 2, T @ 3))).is_err());
+        assert!(smallest_intersections(&blocked, quote!(smallest(r, s, t))).is_err());
     }
     let mut ambiguous = source.clone();
-    // Two independent sites reuse the same recorded occurrence provenance.
+    // Independent sites with equal relation contents retain distinct definition names.
     let mut other = source.clone();
     for definition in &mut other.program.definitions {
         definition.name = quote::format_ident!("{}_other", definition.name);
@@ -357,7 +357,7 @@ fn smallest_occurrence_advice_rejects_missing_ambiguous_and_inadmissible_sites()
     ambiguous.program.returned = syn::parse_quote!(both);
     ir::contract::check(&ambiguous).unwrap();
     assert!(
-        smallest_intersections(&ambiguous, quote!(smallest(R @ 1, S @ 2, T @ 3))).is_err()
+        smallest_intersections(&ambiguous, quote!(smallest(r, s, t))).is_ok()
     );
 }
 
@@ -481,7 +481,7 @@ fn smallest_visits_independent_pairs_hoisted_before_the_current_candidate() {
     assert_eq!(
         smallest_intersections(
             &source,
-            quote!(smallest(R @ 1, S @ 5), smallest(V @ 3, W @ 4))
+            quote!(smallest(r, s), smallest(v, w))
         )
         .unwrap(),
         target
@@ -493,7 +493,7 @@ fn smallest_visits_independent_pairs_hoisted_before_the_current_candidate() {
     assert!(named.program.definitions.iter().any(|d| d.name == "inner"
         && matches!(&d.operator, Operator::Probe(_, k) if matches!(k.choice, Some(Choice::First(_))))));
     assert_eq!(
-        smallest_intersections(&source, quote!(smallest(S @ 5, R @ 1))).unwrap(),
+        smallest_intersections(&source, quote!(smallest(s, r))).unwrap(),
         named
     );
 }
@@ -538,7 +538,7 @@ fn smallest_never_moves_interposed_rust_guards_or_bindings() {
         assert!(ir::binary_intersection(candidate, checked, &facts).is_some());
         assert_eq!(smallest_intersections(&source, quote!()).unwrap(), source);
         assert!(smallest_intersections(&source, quote!(candidate)).is_err());
-        assert!(smallest_intersections(&source, quote!(smallest(R @ 1, S @ 2))).is_err());
+        assert!(smallest_intersections(&source, quote!(smallest(r, s0))).is_err());
     }
 }
 

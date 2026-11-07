@@ -10,6 +10,25 @@ Checks are sufficient structural conditions under the
 premises of Section~\ref{sec:premises}: they reject some equal plans and decide
 no equivalence.
 
+\begin{mathpar}
+\Rule{Smallest-Resolve}
+ {a\text{ selects one positive CQ occurrence }i\quad
+  p=\mathit{Reads}(a)\quad
+  \{r\mid Steps(r)=p\land RA(r)\text{ is Rename}\}=\{r_i\}}
+ {\code{smallest}(\ldots,a,\ldots)\leadsto
+  \code{smallest}(\ldots,r_i,\ldots)}
+\end{mathpar}
+Planning produces $\mathit{Reads}$, the occurrence-to-first-VO-read table, and
+$Steps$ once from its actual compilation. The stage protocol carries both
+beside the program, not in any IR. Each Smallest invocation (including the
+Datalog wrapper) resolves only its own arguments when it executes. Planning
+does not inspect or rewrite any pending invocation. Missing or ambiguous table
+entries refuse the selector; downstream code never reconstructs CQ occurrences
+from relational definitions. Explicit paths alternate clause and branch
+indices; $\mathit{Reads}$ records the corresponding enclosing VO step and branch
+indices before the first local read. Unqualified aliases exist only for unique
+top-level positive occurrences, never for nested branch reads.
+
 \subsection{Normalization: CQ $\to$ CQ$_{\rm NF}$}
 For an atom at clause $i$, walk its arguments left to right against the declared
 types $\tau_j$. $B$ holds names bound by earlier clauses, $L$ names already seen in
@@ -629,6 +648,10 @@ survives every semijoin.\end{proof}
 the join, so meanings are equal; Rust steps are untouched.
 
 \subsection{Relational lowering: VO $\to$ RA prime}
+The total entry has type
+$\mathsf{CheckedVO}\to(\mathsf{RA},T)$, where the private carrier pairs an
+immutable VO borrow with the analysis returned by WF-VO. Only the checker
+constructs this carrier; a caller-supplied analysis is not evidence of WF-VO.
 State $(D,M,p,B)$: emitted definitions, latest result per clause, optional
 prefix, its heading. Relations are emitted lazily at first mention. Beside
 the RA, lowering returns the seam side table

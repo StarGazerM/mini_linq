@@ -71,8 +71,8 @@ impl Parse for Query {
         let ra: ra::Program = syn::parse2(quote! {
             relational {
                 #(#declarations)*
-                l = rename #lh@0 { #lm };
-                r = rename #rh@1 { #rm };
+                l = rename #lh { #lm };
+                r = rename #rh { #rm };
                 j = natural_join l with r;
                 s = guard j if (#condition);
                 p = project s keep { #(#kept),* };

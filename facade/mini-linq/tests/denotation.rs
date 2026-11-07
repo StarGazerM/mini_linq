@@ -36,8 +36,8 @@ fn every_planner_preserves_total_rust_and_relational_selection() {
                         let reduction = cq_reduce::Options { semijoins };
                         let vo = cq_reduce::compile(&ordered, &reduction).unwrap();
                         cq_reduce::check(&ordered, &vo, &reduction).unwrap();
-                        let ra = cq_relational_lowering::compile(&vo).unwrap();
-                        cq_relational_lowering::check(&vo, &ra).unwrap();
+                        let (ra, steps) = cq_relational_lowering::compile(&vo).unwrap();
+                        cq_relational_lowering::check(&vo, &ra, &steps).unwrap();
                         let ix = cq_index_policy::compile(&ra).unwrap();
                         cq_index_policy::check(&ra, &ix).unwrap();
                         let physical = cq_physical_lowering::compile(&ix).unwrap();

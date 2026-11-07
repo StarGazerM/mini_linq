@@ -218,12 +218,13 @@ impl Emitter {
     }
 
     pub(super) fn project(&mut self, input: usize, attributes: &[Ident]) -> usize {
+        let mut seen = HashSet::new();
         self.push(ra::Operator::Project(Box::new(ra::Project {
             project_token: Default::default(),
             input: Self::name(input),
             keep_token: Default::default(),
             attributes_brace: Default::default(),
-            attributes: attributes.iter().cloned().collect(),
+            attributes: attributes.iter().filter(|name| seen.insert(symbol_name(name))).cloned().collect(),
         })))
     }
 

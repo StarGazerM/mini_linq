@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use cq_stage::calibration::{Coverage, Node, Seed, Snapshot, Stage, Trace, Transition};
+use cq_stage::calibration::{Node, Seed, Snapshot, Stage, Trace, Transition};
 use cq_stage::{Language, Pipeline};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -32,9 +32,8 @@ fn trace(graphs: &mut Graphs) -> Trace {
     trace.initialize(Seed {
         valuation: graphs.record("vo", (0..4).map(|i| node(&i.to_string(), &[])).collect()),
         lowering: graphs.record("ra", ra()),
-        origins: ["a", "b", "unrelated", "c"].into_iter().enumerate()
-            .map(|(i, n)| Coverage {node:n.into(), origins:vec![i.to_string()]}).collect(),
-        elided: Vec::new(),
+        steps: ["a", "b", "unrelated", "c"].into_iter().enumerate()
+            .map(|(i, n)| (n.into(), vec![i])).collect(),
     }).unwrap();
     trace
 }
@@ -107,10 +106,22 @@ fn complete_alpha_renaming_keeps_exact_origins() {
 fn unknown_vo_origins_and_unseeded_stages_are_rejected() {
     let mut graphs = Graphs::default();
     let mut forged = trace(&mut graphs);
-    forged.seed.as_mut().unwrap().origins[0].origins[0] = "99".into();
+    forged.seed.as_mut().unwrap().steps.insert("a".into(), vec![99]);
     assert!(forged.coverage(graphs.nodes()).is_err());
     let unseeded = Trace { seed: None, stages: vec![stage("physical")] };
     assert!(Trace::parse_descriptor(&unseeded.to_token_stream().to_string()).is_err());
+}
+
+#[test]
+fn sparse_steps_follow_dependencies_without_inventing_vo_sites() {
+    let mut graphs = Graphs::default();
+    let mut trace = trace(&mut graphs);
+    let seed = trace.seed.as_mut().unwrap();
+    seed.steps.remove("b");
+    seed.steps.remove("c");
+    let coverage = trace.coverage(graphs.nodes()).unwrap();
+    assert_eq!(coverage[1].origins, ["0"]);
+    assert_eq!(coverage[3].origins, ["0"]);
 }
 
 struct Payload(syn::LitInt);

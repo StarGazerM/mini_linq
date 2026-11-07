@@ -29,8 +29,8 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
     let mut unbound = vo.clone();
     unbound.valuation.steps.swap(1, 2);
     assert!(cq_lang_vo::contract::check(&unbound).is_err());
-    let ra = cq_relational_lowering::compile(&vo).unwrap();
-    cq_relational_lowering::check(&vo, &ra).unwrap();
+    let (ra, steps) = cq_relational_lowering::compile(&vo).unwrap();
+    cq_relational_lowering::check(&vo, &ra, &steps).unwrap();
     let select = ra
         .plan
         .definitions
@@ -45,13 +45,13 @@ fn range_filters_cross_all_stages_and_new_obligations_reject_mutations() {
         panic!()
     };
     s.condition.constraints[1] = syn::parse_quote!(x <= @(upper));
-    assert!(cq_relational_lowering::check(&vo, &changed).is_err());
+    assert!(cq_relational_lowering::check(&vo, &changed, &steps).is_err());
     let mut lost = ra.clone();
     let ra::Operator::Select(s) = &mut lost.plan.definitions[select].operator else {
         panic!()
     };
     s.condition.constraints.pop();
-    assert!(cq_relational_lowering::check(&vo, &lost).is_err());
+    assert!(cq_relational_lowering::check(&vo, &lost, &steps).is_err());
     let ix = cq_index_policy::compile(&ra).unwrap();
     cq_index_policy::check(&ra, &ix).unwrap();
     assert_eq!(ix.indexes.len(), 1);
@@ -137,8 +137,8 @@ fn where_comparison_is_a_relational_select_with_a_host_bound() {
     assert!(matches!(source.query.body[2], cq::BodyItem::Constraint(_)));
     let normal = cq::normal::normalize(&source).unwrap();
     let vo = cq_order::compile(&normal, &Default::default()).unwrap();
-    let ra = cq_relational_lowering::compile(&vo).unwrap();
-    cq_relational_lowering::check(&vo, &ra).unwrap();
+    let (ra, steps) = cq_relational_lowering::compile(&vo).unwrap();
+    cq_relational_lowering::check(&vo, &ra, &steps).unwrap();
     assert!(
         ra.plan
             .definitions
@@ -203,8 +203,8 @@ fn rust_conjunction_stays_whole_and_moves_when_its_variables_are_bound() {
     };
     g.condition = syn::parse_quote!(g(*x) && f(*x));
     assert!(cq_order::check(&normal, &reversed, &options).is_err());
-    let ra = cq_relational_lowering::compile(&vo).unwrap();
-    cq_relational_lowering::check(&vo, &ra).unwrap();
+    let (ra, steps) = cq_relational_lowering::compile(&vo).unwrap();
+    cq_relational_lowering::check(&vo, &ra, &steps).unwrap();
     assert!(
         ra.plan
             .definitions
@@ -222,7 +222,7 @@ fn rust_conjunction_stays_whole_and_moves_when_its_variables_are_bound() {
         panic!()
     };
     g.condition = syn::parse_quote!(g(*x) && f(*x));
-    assert!(cq_relational_lowering::check(&vo, &changed).is_err());
+    assert!(cq_relational_lowering::check(&vo, &changed, &steps).is_err());
 }
 
 #[test]
@@ -250,9 +250,9 @@ fn rust_block_depends_on_free_variables_not_the_written_prefix() {
     let independent = moved.valuation.steps.remove(2);
     moved.valuation.steps.insert(0, independent);
     cq_lang_vo::contract::check(&moved).unwrap();
-    let with_prior_scan = cq_relational_lowering::compile(&moved).unwrap();
-    cq_relational_lowering::check(&moved, &with_prior_scan).unwrap();
-    let with_later_scan = cq_relational_lowering::compile(&original).unwrap();
+    let (with_prior_scan, steps) = cq_relational_lowering::compile(&moved).unwrap();
+    cq_relational_lowering::check(&moved, &with_prior_scan, &steps).unwrap();
+    let (with_later_scan, _) = cq_relational_lowering::compile(&original).unwrap();
     ra::check_rewrite(&with_later_scan, &with_prior_scan).unwrap();
     ra::check_rewrite(&with_prior_scan, &with_later_scan).unwrap();
 }
@@ -271,7 +271,7 @@ fn mixed_disjunction_and_negation_stay_wholly_opaque() {
         assert_eq!(source.query.body.len(), 3);
         assert!(matches!(source.query.body[2], cq::BodyItem::Filter(_)));
         let vo = cq_order::compile(&source, &Default::default()).unwrap();
-        let ra = cq_relational_lowering::compile(&vo).unwrap();
+        let (ra, _) = cq_relational_lowering::compile(&vo).unwrap();
         assert!(
             ra.plan
                 .definitions
@@ -301,8 +301,8 @@ fn a_constraint_on_a_let_result_can_cross_total_rust() {
         .unwrap();
         let nf = cq::normal::normalize(&source).unwrap();
         let vo = cq_order::compile(&nf, &Default::default()).unwrap();
-        let ra = cq_relational_lowering::compile(&vo).unwrap();
-        cq_relational_lowering::check(&vo, &ra).unwrap();
+        let (ra, steps) = cq_relational_lowering::compile(&vo).unwrap();
+        cq_relational_lowering::check(&vo, &ra, &steps).unwrap();
         let select = ra
             .plan
             .definitions
@@ -328,7 +328,7 @@ fn a_constraint_on_a_let_result_can_cross_total_rust() {
         bad.plan.definitions[select].operator = ra::Operator::Guard(g);
         bad.plan.definitions[guard].operator = ra::Operator::Select(s);
         ra::contract::check(&bad).unwrap();
-        cq_relational_lowering::check(&vo, &bad).unwrap();
+        cq_relational_lowering::check(&vo, &bad, &steps).unwrap();
     }
 }
 
@@ -346,8 +346,8 @@ fn shared_names_survive_order_reduce_and_elaborate_as_natural_join_columns() {
     };
     let reduced = cq_reduce::compile(&vo, &options).unwrap();
     cq_reduce::check(&vo, &reduced, &options).unwrap();
-    let ra = cq_relational_lowering::compile(&reduced).unwrap();
-    cq_relational_lowering::check(&reduced, &ra).unwrap();
+    let (ra, steps) = cq_relational_lowering::compile(&reduced).unwrap();
+    cq_relational_lowering::check(&reduced, &ra, &steps).unwrap();
     assert!(!ra.plan.definitions.iter().any(|d| {
         match &d.operator {
             ra::Operator::Select(s) => s
@@ -400,8 +400,8 @@ fn hypergraph_reduced_prefix_tuple_survives_elaboration_checks() {
             .iter()
             .any(|step| matches!(step, cq_lang_vo::Step::Reduce(..)))
     );
-    let target = cq_relational_lowering::compile(&reduced).unwrap();
-    cq_relational_lowering::check(&reduced, &target).unwrap();
+    let (target, steps) = cq_relational_lowering::compile(&reduced).unwrap();
+    cq_relational_lowering::check(&reduced, &target, &steps).unwrap();
     let indexed = cq_index_policy::compile(&target).unwrap();
     cq_index_policy::check(&target, &indexed).unwrap();
     let physical = cq_physical_lowering::compile(&indexed).unwrap();
@@ -421,7 +421,7 @@ fn reduced_plans_compute_the_authored_answers() {
             },
         };
         let reduced = cq_reduce::compile(&ordered, &options).unwrap();
-        let target = cq_relational_lowering::compile(&reduced).unwrap();
+        let (target, _) = cq_relational_lowering::compile(&reduced).unwrap();
         let database = case
             .inputs
             .iter()
@@ -502,7 +502,7 @@ fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
     let vo = cq_order::compile(&nf, &order).unwrap();
     let reduction = cq_reduce::Options::default();
     let reduced = cq_reduce::compile(&vo, &reduction).unwrap();
-    let ra = cq_relational_lowering::compile(&reduced).unwrap();
+    let (ra, steps) = cq_relational_lowering::compile(&reduced).unwrap();
     let ix = cq_index_policy::compile(&ra).unwrap();
     let physical = cq_physical_lowering::compile(&ix).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
@@ -533,7 +533,7 @@ fn declaration_layout_and_leaf_expressions_are_preserved_at_every_edge() {
         assert!(cq_reduce::check(&vo, &t, &reduction).is_err());
         let mut t = ra.clone();
         t.plan.declarations[0] = replacement.clone();
-        assert!(cq_relational_lowering::check(&reduced, &t).is_err());
+        assert!(cq_relational_lowering::check(&reduced, &t, &steps).is_err());
         let mut t = ix.clone();
         t.ra.plan.declarations[0] = replacement.clone();
         assert!(cq_index_policy::check(&ra, &t).is_err());
@@ -586,8 +586,8 @@ fn fine_tree_reduced_filtered_split_read_passes_its_own_elaboration_check() {
     };
     let reduced = cq_reduce::compile(&ordered, &options).unwrap();
     cq_reduce::check(&ordered, &reduced, &options).unwrap();
-    let target = cq_relational_lowering::compile(&reduced).unwrap();
-    cq_relational_lowering::check(&reduced, &target).unwrap();
+    let (target, steps) = cq_relational_lowering::compile(&reduced).unwrap();
+    cq_relational_lowering::check(&reduced, &target, &steps).unwrap();
 }
 
 #[test]
@@ -623,8 +623,8 @@ fn masks_reduces_only_by_supports_its_restrictions_filter() {
     assert_eq!(restricted, [1, 3].into());
     assert!(!supports.is_empty());
     assert!(supports.iter().all(|support| restricted.contains(support)));
-    let target = cq_relational_lowering::compile(&reduced).unwrap();
-    cq_relational_lowering::check(&reduced, &target).unwrap();
+    let (target, steps) = cq_relational_lowering::compile(&reduced).unwrap();
+    cq_relational_lowering::check(&reduced, &target, &steps).unwrap();
     // Ranks read the recorded restrictions: the written reference keeps the
     // predicate as a prefix step, so no support ranks as filtered.
     let written = cq_order::compile_written(&normal).unwrap();
@@ -671,8 +671,8 @@ fn restrictions_do_not_depend_on_the_predicate_written_position() {
                 .iter()
                 .any(|step| matches!(step, cq_lang_vo::Step::Constraint(..)))
         );
-        let target = cq_relational_lowering::compile(&ordered).unwrap();
-        cq_relational_lowering::check(&ordered, &target).unwrap();
+        let (target, steps) = cq_relational_lowering::compile(&ordered).unwrap();
+        cq_relational_lowering::check(&ordered, &target, &steps).unwrap();
     }
 }
 
@@ -709,8 +709,8 @@ fn a_hoisted_block_domain_is_read_only_after_vo_binds_its_free_columns() {
             _ => false,
         };
         assert!(!steps[..read].iter().any(reads_block), "{semijoins:?}");
-        let target = cq_relational_lowering::compile(&reduced).unwrap();
-        cq_relational_lowering::check(&reduced, &target).unwrap();
+        let (target, lowering_steps) = cq_relational_lowering::compile(&reduced).unwrap();
+        cq_relational_lowering::check(&reduced, &target, &lowering_steps).unwrap();
         for seed in 0..16 {
             let database = cq_testkit::databases::binary_database(&source, seed);
             assert_eq!(
@@ -757,7 +757,7 @@ fn a_nested_domain_block_in_an_unseeded_hoisted_arm_follows_its_generator() {
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let written = cq_order::compile_written(&normal).unwrap();
-    let reference = cq_relational_lowering::compile(&written).unwrap();
+    let (reference, _) = cq_relational_lowering::compile(&written).unwrap();
     for heuristic in [
         cq_order::Heuristic::Filtered,
         cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
@@ -773,10 +773,10 @@ fn a_nested_domain_block_in_an_unseeded_hoisted_arm_follows_its_generator() {
                 let options = cq_reduce::Options { semijoins };
                 let reduced = cq_reduce::compile(&ordered, &options).unwrap();
                 cq_reduce::check(&ordered, &reduced, &options).unwrap();
-                let target = cq_relational_lowering::compile(&reduced).unwrap_or_else(|error| {
+                let (target, steps) = cq_relational_lowering::compile(&reduced).unwrap_or_else(|error| {
                     panic!("{heuristic:?}/{split:?}/{semijoins:?}: {error}")
                 });
-                cq_relational_lowering::check(&reduced, &target).unwrap();
+                cq_relational_lowering::check(&reduced, &target, &steps).unwrap();
                 for seed in 0..16 {
                     let database = cq_testkit::databases::binary_database(&source, seed);
                     assert_eq!(
@@ -802,7 +802,7 @@ fn a_nested_domain_block_waits_for_both_unseeded_columns() {
     };
     let normal = cq::normal::normalize(&source).unwrap();
     let written = cq_order::compile_written(&normal).unwrap();
-    let reference = cq_relational_lowering::compile(&written).unwrap();
+    let (reference, _) = cq_relational_lowering::compile(&written).unwrap();
     for heuristic in [
         cq_order::Heuristic::Filtered,
         cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
@@ -818,10 +818,10 @@ fn a_nested_domain_block_waits_for_both_unseeded_columns() {
                 let options = cq_reduce::Options { semijoins };
                 let reduced = cq_reduce::compile(&ordered, &options).unwrap();
                 cq_reduce::check(&ordered, &reduced, &options).unwrap();
-                let target = cq_relational_lowering::compile(&reduced).unwrap_or_else(|error| {
+                let (target, steps) = cq_relational_lowering::compile(&reduced).unwrap_or_else(|error| {
                     panic!("{heuristic:?}/{split:?}/{semijoins:?}: {error}")
                 });
-                cq_relational_lowering::check(&reduced, &target).unwrap();
+                cq_relational_lowering::check(&reduced, &target, &steps).unwrap();
                 for seed in 0..16 {
                     let database = cq_testkit::databases::binary_database(&source, seed);
                     assert_eq!(
@@ -858,11 +858,11 @@ fn a_predicate_after_a_domain_needing_block_restricts_earlier_atoms() {
             })
             .collect();
         assert_eq!(restricted, [0, 3], "{choice}");
-        let target = cq_relational_lowering::compile(&planned).unwrap();
-        cq_relational_lowering::check(&planned, &target).unwrap();
+        let (target, steps) = cq_relational_lowering::compile(&planned).unwrap();
+        cq_relational_lowering::check(&planned, &target, &steps).unwrap();
         let normal = cq::normal::normalize(&source).unwrap();
         let written = cq_order::compile_written(&normal).unwrap();
-        let reference = cq_relational_lowering::compile(&written).unwrap();
+        let (reference, _) = cq_relational_lowering::compile(&written).unwrap();
         for seed in 0..32 {
             let database = cq_testkit::databases::binary_database(&source, seed);
             assert_eq!(
@@ -919,8 +919,8 @@ fn fine_tree_repeated_occurrences_pass_their_own_elaboration_check() {
         cq_order::check(&normal, &ordered, &order).unwrap();
         let reduced = cq_reduce::compile(&ordered, &options).unwrap();
         cq_reduce::check(&ordered, &reduced, &options).unwrap();
-        let target = cq_relational_lowering::compile(&reduced).unwrap();
-        cq_relational_lowering::check(&reduced, &target).unwrap_or_else(|error| {
+        let (target, steps) = cq_relational_lowering::compile(&reduced).unwrap();
+        cq_relational_lowering::check(&reduced, &target, &steps).unwrap_or_else(|error| {
             panic!(
                 "{error}\n{}\n{}",
                 quote::ToTokens::to_token_stream(&reduced),

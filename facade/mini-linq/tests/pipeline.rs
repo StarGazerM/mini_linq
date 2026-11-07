@@ -203,7 +203,7 @@ fn ordered_host_fallback_capabilities_are_rustc_obligations() {
 }
 
 macro_rules! capture_plan {
-    (pipeline {}; $($plan:tt)*) => {
+    (pipeline {} $(planning_tables { $($tables:tt)* })?; $($plan:tt)*) => {
         stringify!($($plan)*)
     };
 }
@@ -239,7 +239,7 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
         },
     )
     .unwrap();
-    let prior = cq_relational_lowering::compile(&ordered).unwrap();
+    let (prior, _) = cq_relational_lowering::compile(&ordered).unwrap();
     let reduced = cq_reduce::compile(
         &ordered,
         &cq_reduce::Options {
@@ -247,8 +247,8 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
         },
     )
     .unwrap();
-    let expected = cq_relational_lowering::compile(&reduced).unwrap();
-    cq_relational_lowering::check(&reduced, &expected).unwrap();
+    let (expected, steps) = cq_relational_lowering::compile(&reduced).unwrap();
+    cq_relational_lowering::check(&reduced, &expected, &steps).unwrap();
     let expected = cq_ra_rewrites::simplify_reductions(&expected).unwrap();
     let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
     let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
@@ -390,10 +390,10 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
             let reduced = cq_reduce::compile(&ordered, &options).unwrap();
             cq_reduce::check(&ordered, &reduced, &options).unwrap();
             assert!(has_reduction(&reduced.valuation.steps));
-            let expected = cq_relational_lowering::compile(&reduced).unwrap();
-            cq_relational_lowering::check(&reduced, &expected).unwrap();
+            let (expected, steps) = cq_relational_lowering::compile(&reduced).unwrap();
+            cq_relational_lowering::check(&reduced, &expected, &steps).unwrap();
             assert_eq!(default, expected);
-            assert_eq!(opted_out, cq_relational_lowering::compile(&ordered).unwrap());
+            assert_eq!(opted_out, cq_relational_lowering::compile(&ordered).unwrap().0);
             cq_lang_ra::check_rewrite(&opted_out, &default).unwrap();
         }};
     }

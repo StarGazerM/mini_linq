@@ -34,12 +34,7 @@ fn cases() -> Vec<(String, cq::Program)> {
 }
 
 fn check_equivalence(written: &cq_lang_ra::Program, target: &cq_lang_ra::Program) {
-    // Independently produced plans reuse local result names. Compare their
-    // semantic schedules, not same-definition rewrite metadata. The actual
-    // elaborated -> optimized transition below still checks every phase fact.
-    let written = cq_lang_ra::contract::Schedule::from_program(written).unwrap();
-    let target = cq_lang_ra::contract::Schedule::from_program(target).unwrap();
-    written.check(&target, &[]).unwrap();
+    cq_lang_ra::check_rewrite(written, target).unwrap();
 }
 
 fn check(name: &str, source: &cq::Program, bounded: bool) {
@@ -51,13 +46,13 @@ fn check(name: &str, source: &cq::Program, bounded: bool) {
     let vo = cq_planners_plan::compile_valuation(source, Planner::Hypergraph).unwrap();
     // Hypergraph now absorbs redundant reductions after elaboration. Check
     // elaboration against its own output, then validate the simplified target.
-    let elaborated = cq_relational_lowering::compile(&vo).unwrap();
+    let (elaborated, steps) = cq_relational_lowering::compile(&vo).unwrap();
     cq_lang_ra::check_rewrite(&elaborated, &target).unwrap();
     let elapsed = started.elapsed();
     let iterations = 100;
     let elaborate_started = Instant::now();
     for _ in 0..iterations {
-        cq_relational_lowering::check(&vo, &elaborated).unwrap();
+        cq_relational_lowering::check(&vo, &elaborated, &steps).unwrap();
     }
     let elaborate = elaborate_started.elapsed().as_secs_f64() / f64::from(iterations);
     let rewrite_started = Instant::now();

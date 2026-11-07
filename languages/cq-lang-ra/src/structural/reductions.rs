@@ -1,8 +1,10 @@
 //! Narrow RA-to-RA certificates for reduction absorption and dead expansion.
 //!
-//! The ordinary schedule contract preserves independent witness wiring. This
-//! additional proof checks actual named-definition substitutions instead of
-//! relaxing that contract or identifying witnesses by occurrence number.
+//! The ordinary schedule contract preserves independent witness wiring.
+//! Absorption and forward dead expansion prove named-definition substitutions.
+//! The inverse dead-expansion certificate also compares independently named
+//! programs, but only after source-side demand certifies each exposed support.
+//! None of these proofs merges independently projected witnesses.
 
 use super::{Atoms, Kind, Structure};
 use crate::{Operator, Program, symbol_name};
@@ -16,6 +18,69 @@ pub(super) fn check(
 ) -> bool {
     check_absorption(source, target, schedule)
         || check_dead_expansion(source, target, schedule, atoms)
+        || check_inverse_dead_expansion(schedule, target, atoms)
+}
+
+/// Compare independently named programs through the inverse of dead expansion.
+/// Every exposed support is first certified by the forward law's source-side
+/// demand check; the final structural comparison still preserves witness wiring.
+fn check_inverse_dead_expansion(
+    source: &Structure,
+    target: &Program,
+    atoms: &mut Atoms,
+) -> bool {
+    if source.nodes.iter().any(|node| {
+        !matches!(
+            node.kind,
+            Kind::Unit | Kind::Atom(_) | Kind::Project | Kind::Join(_) | Kind::Select
+        )
+    }) || target.plan.definitions.iter().any(|definition| {
+        !matches!(
+            definition.operator,
+            Operator::Unit(_)
+                | Operator::Rename(_)
+                | Operator::Project(_)
+                | Operator::NaturalJoin(_)
+                | Operator::Semijoin(_)
+                | Operator::Select(_)
+        )
+    }) {
+        return false;
+    }
+    let mut expanded = target.clone();
+    // Expose outer supports first, without merging independent witnesses.
+    for index in (0..expanded.plan.definitions.len()).rev() {
+        let Operator::Semijoin(join) = &expanded.plan.definitions[index].operator else {
+            continue;
+        };
+        let replacement = Operator::NaturalJoin(Box::new(crate::NaturalJoin {
+            natural_join_token: Default::default(),
+            left: join.left.clone(),
+            with_token: join.with_token,
+            right: join.right.clone(),
+        }));
+        let previous =
+            std::mem::replace(&mut expanded.plan.definitions[index].operator, replacement);
+        let Ok(schedule) = Structure::from_program(&expanded, atoms) else {
+            expanded.plan.definitions[index].operator = previous;
+            continue;
+        };
+        // Demand belongs to the expanded SOURCE of the forward identity:
+        // newly introduced downstream join keys must not become invisible.
+        let demand = source_demand(&expanded, &schedule);
+        let left = schedule.nodes[index].operands[0];
+        if demand[index]
+            .iter()
+            .any(|name| !schedule.nodes[left].heading.contains_key(name))
+        {
+            expanded.plan.definitions[index].operator = previous;
+            continue;
+        }
+        if source.check(&schedule).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 fn check_absorption(source: &Program, target: &Program, schedule: &Structure) -> bool {

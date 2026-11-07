@@ -11,7 +11,7 @@ fn both_printers_follow_whole_relation_access_for_empty_keys() {
                 physical {
                     relation L(a:i32); relation $right(b:i32);
                     l = pipe rename L {a -> a};
-                    r = $mode rename $right@1 {b -> b};
+                    r = $mode rename $right {b -> b};
                     out = let canon $operation $choice [] l,r;
                     return out as answer($($head),+);
                 }
