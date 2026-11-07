@@ -548,7 +548,7 @@ fn analyze_steps(
                 bound.extend(introduced.iter().cloned());
                 analysis.introduces.push(introduced);
             }
-            // Formal rule WF-VO-Subatoms: Validate source columns and bound-column retention, and require every atom's full row.
+            // Formal rule WF-VO-Subatoms: Validate source columns and bound-column retention; a partial subatom introduces at most one variable, and every atom completes its full row.
             Step::Atom(subatom, _) => {
                 let clause = subatom.clause();
                 order.atom = true;
@@ -610,6 +610,9 @@ fn analyze_steps(
                         }
                         Column::Dropped(_) => {}
                     }
+                }
+                if subatom.variables().count() < variables.len() && introduced.len() > 1 {
+                    return error(subatom, "a partial subatom introduces at most one variable");
                 }
                 seen_atoms.insert(clause);
                 if subatom.variables().count() == variables.len() {

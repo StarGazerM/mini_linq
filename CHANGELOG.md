@@ -13,6 +13,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Explicit order advice now delegates dependency, subatom and phase legality to
+  the VO and lookup/expand checkers instead of duplicating producer-side errors.
+  Duplicate full occurrence selectors are rejected during resolution; partial
+  reads followed by a full read remain legal. The VO subatom checker enforces
+  that a partial read introduces at most one variable.
+
 - Rule coverage gate (IR redesign M1): `doc/formal/check.py` classifies every
   function in `passes/*/src` and `languages/*/src` that constructs output IR or
   returns `Err` as a decision site and requires exactly one in-file

@@ -361,10 +361,74 @@ fn explicit_order_rejects_dependency_conflicts_instead_of_ignoring_advice() {
         relation S(a:i32);
         answer(x) :- R(x), let y:i32 = *x + 1, S(y);
     });
-    let error =
+    let mut invalid = cq_order::compile_explicit(
+        &source, &[syn::parse_quote!(R), syn::parse_quote!(S)],
+    ).unwrap();
+    let atom = invalid.valuation.steps.iter().position(
+        |step| matches!(step, valuation::Step::Atom(atom, _) if atom.relation == "S"),
+    ).unwrap();
+    let step = invalid.valuation.steps.remove(atom);
+    invalid.valuation.steps.insert(0, step);
+    let checker_error = valuation::contract::check(&invalid).unwrap_err();
+    let advice_error =
         cq_order::compile_explicit(&source, &[syn::parse_quote!(S), syn::parse_quote!(R)])
-            .unwrap_err().to_string();
-    assert!(error.contains("Q") && error.contains("dependencies"), "{error}");
+            .unwrap_err();
+    // The public API adds query context, but preserves the VO checker's diagnosis.
+    assert_eq!(advice_error.to_string(), format!("query `Q`: {checker_error}"));
+}
+
+#[test]
+fn duplicate_occurrences_are_rejected_before_scheduling() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32);
+        relation S(a:i32);
+        answer(x) :- R(x), let y:i32 = *x + 1, S(y);
+    });
+    let legal_prefix = cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(R), syn::parse_quote!(S), syn::parse_quote!(S@2(y))],
+    ).unwrap_err();
+    let illegal_prefix = cq_order::compile_explicit(
+        &source,
+        &[syn::parse_quote!(S), syn::parse_quote!(S@2), syn::parse_quote!(R)],
+    ).unwrap_err();
+    // Duplicate selector resolution takes precedence over the illegal schedule.
+    assert_eq!(legal_prefix.to_string(), illegal_prefix.to_string());
+}
+
+#[test]
+fn fine_advice_uses_the_vo_subatom_checker() {
+    let invalid: valuation::Program = syn::parse_quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32,z:i32,w:i32);
+        answer(x,y,z,w) :- Seed(x), R(x,y,z,w);
+        valuation { Seed@0(x); R@1(x,y,z,_); R@1(x,y,z,w); }
+    };
+    let checker_error = valuation::contract::check(&invalid).unwrap_err();
+    let advice_error = cq_order::compile_explicit(
+        &invalid.cq,
+        &[syn::parse_quote!(Seed), syn::parse_quote!(R@1(x,y,z)), syn::parse_quote!(R@1)],
+    ).unwrap_err();
+    assert_eq!(advice_error.to_string(), format!("query `Q`: {checker_error}"));
+}
+
+#[test]
+fn valid_advice_preserves_its_valuation() {
+    let mut expected: valuation::Program = syn::parse_quote! {
+        struct Q;
+        relation Seed(x:i32);
+        relation R(x:i32,y:i32);
+        answer(x,y) :- Seed(x), R(x,y);
+        valuation { Seed@0(x); R@1(x,_); R@1(x,y); }
+    };
+    expected.cq = cq::normal::normalize(&expected.cq).unwrap();
+    let actual = cq_order::compile_explicit(
+        &expected.cq,
+        &[syn::parse_quote!(Seed), syn::parse_quote!(R@1(x)), syn::parse_quote!(R@1)],
+    ).unwrap();
+    assert_eq!(actual, expected);
 }
 
 #[test]

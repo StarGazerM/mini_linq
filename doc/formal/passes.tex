@@ -251,11 +251,15 @@ without changing projected subatoms or introducing choices.
  {\mathsf{compileWritten}_{order}(s)=
  t[\forall b\text{ recursively}.\ b.placement:=\mathsf{correlated}]}
 
-\Rule{O-StepAdvice}{n=N(q)\quad t=\mathsf{authorSteps}(n,A)\quad
+\Rule{O-StepAdvice}{n=N(q)\quad
+ \forall c.\ |\{a\in A\mid \mathsf{resolve}(a)=c\land\mathsf{full}(a)\}|\le 1\\
+ t=\mathsf{authorSteps}(n,A)\quad
  \mathsf{erase}(t)=n\\
- \mathsf{WF}_{VO}(t)\quad
+ \mathsf{WF}_{VO}(t)\quad\mathsf{VOOrder}(t)\\
  (L\ne\varnothing\Rightarrow\mathsf{CK\text{-}Le}(n,t,L))}
  {\mathsf{orderAdvice}(q,A)=t}
+% Resolution checks the selector reference set; the output checkers, not
+% the planning walk, diagnose dependency, subatom, and occurrence-phase errors.
 
 \Rule{O-EvidenceLe}{n=N(q)\quad \mathcal{E}\text{ recorded counts and keys}\quad
  \forall i\in\mathsf{occ}(n).\ \mathsf{count}_{\mathcal{E}}(i)\text{ defined}\\

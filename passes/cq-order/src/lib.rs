@@ -942,6 +942,7 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
     let mut ordinary: Vec<_> = program.valuation.steps.into_iter().map(Some).collect();
     let mut pending = Vec::new();
     let mut named = BTreeSet::new();
+    let mut full_occurrences = BTreeSet::new();
     for selector in selectors {
         let clause = selector.resolve(source)?;
         named.insert(clause);
@@ -980,6 +981,17 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
                 })
                 .collect();
         }
+        let full = match &step {
+            valuation::Step::Atom(atom, _) => atom.variables().count() == atom.columns.len(),
+            valuation::Step::Block(_, _) => true,
+            _ => unreachable!("advice selects positive atoms or blocks"),
+        };
+        if full && !full_occurrences.insert(clause) {
+            return Err(syn::Error::new_spanned(
+                &selector.relation,
+                "occurrence named twice in order advice",
+            ));
+        }
         pending.push((clause, step, selector.columns.is_some()));
     }
     // Partial occurrences must be completed explicitly. Only entirely unnamed
@@ -998,7 +1010,6 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
     let mut steps = Vec::new();
     let mut lookups = BTreeSet::new();
     let mut fine = BTreeSet::new();
-    let mut completed = BTreeSet::new();
     let partial_advice = selectors.iter().any(|selector| selector.columns.is_some());
     for (clause, step, explicit_columns) in pending {
         let demand = partial_advice.then(|| match &step {
@@ -1015,20 +1026,6 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
             &mut steps,
             demand.as_ref(),
         );
-        let dependencies_ready = match &step {
-            valuation::Step::Atom(atom, _) => clauses[clause]
-                .requires
-                .iter()
-                .filter(|name| atom.variables().any(|(_, v)| symbol_name(v) == **name))
-                .all(|name| bound.contains(name)),
-            _ => ready(&clauses, &bound, clause),
-        };
-        if !dependencies_ready {
-            return Err(syn::Error::new_spanned(
-                &source.query,
-                "order advice conflicts with clause dependencies",
-            ));
-        }
         match &step {
             valuation::Step::Atom(atom, _) => {
                 let introduced: Vec<_> = atom
@@ -1036,36 +1033,15 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
                     .map(|(_, v)| symbol_name(v))
                     .filter(|name| !bound.contains(name))
                     .collect();
-                if completed.contains(&clause) {
-                    return Err(syn::Error::new_spanned(
-                        atom,
-                        "order advice places a lookup or another expansion after expansion",
-                    ));
-                }
                 let partial = atom.variables().count() < atom.columns.len();
                 if explicit_columns && partial && introduced.is_empty() && !fine.contains(&clause) {
                     lookups.insert(clause);
                 } else if explicit_columns && partial {
-                    if introduced.len() > 1 {
-                        return Err(syn::Error::new_spanned(
-                            atom,
-                            "fine order subatoms may introduce at most one new variable; lookup columns must already be bound",
-                        ));
-                    }
                     fine.insert(clause);
-                }
-                if !partial {
-                    completed.insert(clause);
                 }
                 bound.extend(introduced);
             }
             valuation::Step::Block(_, _) => {
-                if !completed.insert(clause) {
-                    return Err(syn::Error::new_spanned(
-                        &source.query,
-                        "duplicate block occurrence in order advice",
-                    ));
-                }
                 bound.extend(clauses[clause].provides.iter().cloned());
             }
             _ => unreachable!("advice selects positive atoms or blocks"),
@@ -1080,12 +1056,6 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
         &mut steps,
         None,
     );
-    if !waiting.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &source.query,
-            "order advice leaves clause dependencies unbound",
-        ));
-    }
     program.valuation.steps = steps;
     drain_ready_checks(&mut program)?;
     restrict::restrict(&mut program);
