@@ -2,6 +2,11 @@ use cq_lang_sequence::Program;
 use quote::quote;
 
 macro_rules! capture {
+    (pipeline {}; realization {
+        physical { $($physical:tt)* }
+        structures { $($structures:tt)* }
+        sequence { $($sequence:tt)* }
+    }) => { stringify!($($sequence)*) };
     (pipeline {}; $($program:tt)*) => { stringify!($($program)*) };
 }
 

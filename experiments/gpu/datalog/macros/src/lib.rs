@@ -32,8 +32,14 @@ pub fn print_rounds(input: TokenStream) -> TokenStream {
 
 #[proc_macro]
 pub fn bind_inputs(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_gpu_datalog_core::bind_inputs)
-        .into()
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(
+        input.into(),
+        |_physical: &cq_lang_structures::physical::Program, source: &cq_lang_structures::Program, args| {
+            let target = cq_gpu_datalog_core::bind_inputs(source, args)?;
+            Ok((target.physical.clone(), target))
+        },
+    )
+    .into()
 }
 
 #[proc_macro]

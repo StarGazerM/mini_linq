@@ -49,7 +49,7 @@ use structures::syntax::symbol_name;
 /// A terminal Structures → Rust pass with no arguments.
 #[proc_macro]
 pub fn push(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<structures::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |_physical, source, arguments| {
         if !arguments.is_empty() {
             return error(&arguments, "own_push::push accepts no arguments");
         }
@@ -85,7 +85,7 @@ impl syn::parse::Parse for Consumer {
 /// paths without a canon barrier invoke the callback as rows become available.
 #[proc_macro]
 pub fn push_into(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<structures::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Structures::<physical::Program, structures::Program>::pass::<syn::Expr>(input.into(), |_physical, source, arguments| {
         let consumer: Consumer = syn::parse2(arguments)?;
         compile_observed(source, Some(&consumer.0))
     })

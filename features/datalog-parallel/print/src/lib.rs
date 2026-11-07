@@ -983,26 +983,29 @@ mod tests {
                 let structures = cq_structure_selection::compile(&physical).unwrap();
                 assert_eq!(structures.context(), hole.facts);
                 let facts = &hole.facts;
-                let continuation = cq_stage::pass::<
-                    cq_lang_structures::Program,
-                    cq_lang_sequence::Program,
+                let continuation = cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<
+                    cq_stage::Sequence<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>,
+
                 >(
                     quote!(context { #facts }; pipeline { sequential, translate_pull }; #structures),
-                    |source, _| cq_sequence_lowering::compile(source),
+                    |_physical, source, _| {
+                        let target = cq_sequence_lowering::compile(source)?;
+                        Ok(cq_stage::Sequence::new(target.structures.physical.clone(), target.structures.clone(), target))
+                    },
                 );
                 let continuation: syn::Macro = syn::parse2(continuation).unwrap();
-                let graded = cq_stage::rewrite::<cq_lang_sequence::Program>(
+                let graded = cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(
                     continuation.tokens,
-                    |source, _| {
+                    |physical, structures, source, _| {
                         assert_eq!(source.context(), hole.facts);
                         cq_lang_sequence::check_grading(source, &machine)?;
-                        Ok(source.clone())
+                        Ok((physical.clone(), structures.clone(), source.clone()))
                     },
                 );
                 let graded: syn::Macro = syn::parse2(graded).unwrap();
-                let emitted = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
+                let emitted = cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(
                     graded.tokens,
-                    |source, _| {
+                    |_physical, _structures, source, _| {
                         assert_eq!(source.context(), hole.facts);
                         let analysis = cq_lang_sequence::check_grading(source, &machine)?;
                         let plain = cq_sequence_pull::translate(source, &analysis)?;
@@ -1017,9 +1020,9 @@ mod tests {
                 );
                 syn::parse2::<syn::Expr>(emitted).unwrap();
                 let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-                let rejected = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
+                let rejected = cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(
                     quote!(pipeline {}; #sequence),
-                    |_, _| panic!("discharged Sequence entered without its envelope"),
+                    |_, _, _, _| panic!("discharged Sequence entered without its envelope"),
                 );
                 assert!(rejected.to_string().contains("CTX-Entry"));
 

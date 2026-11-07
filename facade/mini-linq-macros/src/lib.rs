@@ -8,6 +8,30 @@ mod load;
 mod observation;
 mod workload;
 
+type Structures = cq_stage::Structures<cq_lang_physical::Program, cq_lang_structures::Program>;
+type Sequence = cq_stage::Sequence<
+    cq_lang_physical::Program,
+    cq_lang_structures::Program,
+    cq_lang_sequence::Program,
+>;
+
+fn structures_stack(target: cq_lang_structures::Program) -> Structures {
+    Structures::new(target.physical.clone(), target)
+}
+
+fn sequence_parts(target: cq_lang_sequence::Program) -> (
+    cq_lang_physical::Program,
+    cq_lang_structures::Program,
+    cq_lang_sequence::Program,
+) {
+    (target.structures.physical.clone(), target.structures.clone(), target)
+}
+
+fn sequence_stack(target: cq_lang_sequence::Program) -> Sequence {
+    let (physical, structures, sequence) = sequence_parts(target);
+    Sequence::new(physical, structures, sequence)
+}
+
 struct Source {
     config: cq_stage::Configuration,
     observation: Option<observation::Observation>,
@@ -259,10 +283,11 @@ pub fn lower(input: TokenStream) -> TokenStream {
 /// Lower/select context facts may be interleaved with positional arguments.
 #[proc_macro]
 pub fn select(input: TokenStream) -> TokenStream {
-    cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, cq_lang_structures::Program>(
+    cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, Structures>(
         input.into(),
         cq_structure_selection::context,
-        cq_structure_selection::compile_with_consumer,
+        |source, args, consumer| cq_structure_selection::compile_with_consumer(source, args, consumer)
+            .map(structures_stack),
     )
     .into()
 }
@@ -270,30 +295,35 @@ pub fn select(input: TokenStream) -> TokenStream {
 /// Structures → Structures representation decisions; `positions` opts in.
 #[proc_macro]
 pub fn represent(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_represent::compile_with)
-        .into()
+    Structures::rewrite(input.into(), |_physical, source, args| {
+        let target = cq_represent::compile_with(source, args)?;
+        Ok((target.physical.clone(), target))
+    }).into()
 }
 
 /// Structures → Structures total lookahead; `batch(N)` opts into scan staging.
 #[proc_macro]
 pub fn stage(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), cq_staging::compile_with).into()
+    Structures::rewrite(input.into(), |_physical, source, args| {
+        let target = cq_staging::compile_with(source, args)?;
+        Ok((target.physical.clone(), target))
+    }).into()
 }
 
 /// Structures → Sequence with checked default lowering.
 // Formal rule ST-Sequence: lower Structures, check host grading, then translate Sequence.
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
+    Structures::pass::<Sequence>(
         input.into(),
-        |source, args| {
+        |_physical, source, args| {
             let target = cq_sequence_lowering::compile(source)?;
             cq_sequence_lowering::check(source, &target)?;
             if args.is_empty() {
-                Ok(target)
+                Ok(sequence_stack(target))
             } else {
                 let evidence: cq_lang_sequence::Evidence = syn::parse2(args)?;
-                cq_sequence_plan::Advice::Evidence(evidence).apply(&target)
+                cq_sequence_plan::Advice::Evidence(evidence).apply(&target).map(sequence_stack)
             }
         },
     )
@@ -336,7 +366,7 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
         }
         input.parse::<cq_stage::Pipeline>()?;
         input.parse::<syn::Token![;]>()?;
-        input.parse::<cq_lang_sequence::Program>()?;
+        input.parse::<Sequence>()?;
         Ok(true)
     };
     parser.parse2(input.clone()).unwrap_or(false)
@@ -347,7 +377,7 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
 /// `preserve_order` requests the explicit authored policy; it is also the default.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+    Sequence::rewrite(input.into(), |_physical, _structures, source, args| {
         if !args.is_empty() {
             let option: syn::Ident = syn::parse2(args)?;
             if option != "preserve_order" {
@@ -356,7 +386,7 @@ pub fn plan_sequential(input: TokenStream) -> TokenStream {
         }
         let machine = cq_sequence_pull::machine();
         let catalog = cq_sequence_pull::catalog();
-        Ok(cq_sequence_plan::decompose(source, &machine, &catalog)?.program)
+        Ok(sequence_parts(cq_sequence_plan::decompose(source, &machine, &catalog)?.program))
     })
     .into()
 }
@@ -364,10 +394,10 @@ pub fn plan_sequential(input: TokenStream) -> TokenStream {
 /// Validate Sequence placement against the host-only machine without rewriting it.
 #[proc_macro]
 pub fn sequential(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+    Sequence::rewrite(input.into(), |_physical, _structures, source, args| {
         no_arguments(args)?;
         cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        Ok(source.clone())
+        Ok(sequence_parts(source.clone()))
     })
     .into()
 }
@@ -375,7 +405,7 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 /// Sequence → final Rust pull iterator, with optional runtime profile counters.
 #[proc_macro]
 pub fn translate_pull(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, args| {
+    Sequence::pass::<syn::Expr>(input.into(), |_physical, _structures, source, args| {
         no_arguments(args)?;
         let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
         let plain = cq_sequence_pull::translate(source, &analysis)?;
@@ -687,19 +717,21 @@ mod tests {
     fn select_packet_authorization_survives_structures_continuation() {
         let physical = physical(quote!());
         let output =
-            cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, cq_lang_structures::Program>(
+            cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, super::Structures>(
                 quote!(
                     arguments { consumer = canonical, positional(R), host_set R discharged };
                     pipeline { printer };
                     #physical
                 ),
                 cq_structure_selection::context,
-                cq_structure_selection::compile_with_consumer,
+                |source, args, consumer| cq_structure_selection::compile_with_consumer(source, args, consumer)
+                    .map(super::structures_stack),
             );
         let invocation: syn::Macro = syn::parse2(output).unwrap();
-        let output = cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(
+        let output = super::Structures::pass::<syn::Expr>(
             invocation.tokens,
-            |source, args| {
+            |physical, source, args| {
+                assert_eq!(physical, &source.physical);
                 assert!(args.is_empty());
                 let context = source.context();
                 assert!(context.consumer_canonical);
@@ -722,11 +754,12 @@ mod tests {
             "outer_fold"; head ["group", "x"]; value_reads ["group"];
         });
         let output = cq_stage::pass_with_output_consumer::<
-            cq_lang_physical::Program, cq_lang_structures::Program
+            cq_lang_physical::Program, super::Structures
         >(
             quote!(pipeline {} observe { inspect } #demand; #physical),
             cq_structure_selection::context,
-            cq_structure_selection::compile_with_consumer,
+            |source, args, consumer| cq_structure_selection::compile_with_consumer(source, args, consumer)
+                .map(super::structures_stack),
         );
         let invocation: syn::Macro = syn::parse2(output).unwrap();
         let selected: cq_lang_structures::Program = syn::parse2(invocation.tokens).unwrap();
@@ -749,11 +782,11 @@ mod tests {
         assert!(cq_lang_structures::check_rewrite(&selected, &forged).is_err());
         assert!(cq_lang_structures::check_retention_rewrite(&selected, &forged).is_err());
         let output = cq_stage::pass_with_output_consumer::<
-            cq_lang_physical::Program, cq_lang_structures::Program
+            cq_lang_physical::Program, super::Structures
         >(
             quote!(pipeline {} observe { inspect } #demand; #physical),
             cq_structure_selection::context,
-            |_, _, _| Ok(forged),
+            |_, _, _| Ok(super::structures_stack(forged)),
         );
         assert!(output.to_string().contains("ST-Consumer"));
     }
@@ -825,14 +858,14 @@ mod tests {
         let analysis = cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
         let original = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
         let source_tokens = quote!(pipeline {}; #sequence);
-        let trace_off = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
-            source_tokens, |source, _| cq_sequence_pull::translate(source, &analysis),
+        let trace_off = super::Sequence::pass::<syn::Expr>(
+            source_tokens, |_, _, source, _| cq_sequence_pull::translate(source, &analysis),
         );
         assert_eq!(trace_off.to_string(), original.to_token_stream().to_string());
         let descriptor = trace.descriptor().unwrap();
-        let trace_on = cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(
+        let trace_on = super::Sequence::pass::<syn::Expr>(
             quote!(pipeline {} #trace; #sequence),
-            |source, _| cq_sequence_pull::translate(source, &analysis),
+            |_, _, source, _| cq_sequence_pull::translate(source, &analysis),
         );
         assert_eq!(trace_on.to_string(), quote!(::cq_storage::calibration_select! {
             plain { #original }

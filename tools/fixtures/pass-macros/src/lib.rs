@@ -125,7 +125,7 @@ pub fn lazy_anti(input: TokenStream) -> TokenStream {
 }
 #[proc_macro]
 pub fn ordered_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, _| {
         let mut target = source.clone();
         let provider = cq_lang_structures::provider::base::instance(
             "btree_map_grouped",
@@ -143,7 +143,7 @@ pub fn ordered_indexes(input: TokenStream) -> TokenStream {
             .declare(&[cq_lang_structures::provider::base::declaration(
                 "btree_map_grouped",
             )])?;
-        Ok(target)
+        Ok((target.physical.clone(), target))
     })
     .into()
 }
@@ -184,7 +184,7 @@ pub fn expand_identity(input: TokenStream) -> TokenStream {
 }
 #[proc_macro]
 pub fn custom_indexes(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| {
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, _| {
         let mut target = source.clone();
         let declarations: cq_lang_structures::Providers = syn::parse_quote!(providers {
             sorted_index = SortedIndex<_, _> { reads [exact, membership], build typed };
@@ -197,14 +197,15 @@ pub fn custom_indexes(input: TokenStream) -> TokenStream {
             }
         }
         target.structures.declare(&declarations.declarations)?;
-        Ok(target)
+        Ok((target.physical.clone(), target))
     })
     .into()
 }
 #[proc_macro]
 pub fn identity_structures(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, _| Ok(source.clone()))
-        .into()
+    cq_stage::Structures::<physical::Program, cq_lang_structures::Program>::rewrite(
+        input.into(), |physical, source, _| Ok((physical.clone(), source.clone())),
+    ).into()
 }
 
 /// A real alternative policy: prefer reserve when no output protocol is authored.
@@ -245,7 +246,7 @@ impl cq_sequence_plan::Planner for ReservePlanner {
 /// Ordinary external checked pass, selected by the facade's named plan phase.
 #[proc_macro]
 pub fn plan_reserve(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, args| {
+    cq_stage::Sequence::<physical::Program, cq_lang_structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |_physical, _structures, source, args| {
         if args.to_string() != "expected" {
             return Err(syn::Error::new_spanned(
                 args,
@@ -273,7 +274,8 @@ pub fn plan_reserve(input: TokenStream) -> TokenStream {
             ));
         }
         cq_lang_sequence::check_grading(&planned.program, &machine)?;
-        Ok(planned.program)
+        let target = planned.program;
+        Ok((target.structures.physical.clone(), target.structures.clone(), target))
     })
     .into()
 }

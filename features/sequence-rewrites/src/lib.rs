@@ -55,9 +55,12 @@ macro_rules! sequence_rewrite {
         )]
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            cq_stage::rewrite::<cq_lang_sequence::Program>(
+            cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(
                 input.into(),
-                cq_sequence_plan::rewrites::$name,
+                |_physical, _structures, source, arguments| {
+                    let target = cq_sequence_plan::rewrites::$name(source, arguments)?;
+                    Ok((target.structures.physical.clone(), target.structures.clone(), target))
+                },
             )
             .into()
         }

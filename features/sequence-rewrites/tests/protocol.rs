@@ -4,8 +4,16 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 macro_rules! capture {
-    (arguments {}; pipeline {}; $($program:tt)*) => { stringify!($($program)*) };
-    (pipeline {}; $($program:tt)*) => { stringify!($($program)*) };
+    (arguments {}; pipeline {}; realization {
+        physical { $($physical:tt)* }
+        structures { $($structures:tt)* }
+        sequence { $($sequence:tt)* }
+    }) => { stringify!($($sequence)*) };
+    (pipeline {}; realization {
+        physical { $($physical:tt)* }
+        structures { $($structures:tt)* }
+        sequence { $($sequence:tt)* }
+    }) => { stringify!($($sequence)*) };
 }
 
 macro_rules! apply_macro {
@@ -115,11 +123,14 @@ fn rejected_advice_stops_each_macro_before_continuation() {
         (output, quote!(invalid)),
         (grade, quote!(custom, missing at host)),
     ] {
-        let result = cq_stage::rewrite::<Program>(
+        let result = cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(
             quote! {
                 arguments { #advice }; pipeline { forbidden_continuation }; #source
             },
-            pass,
+            |_physical, _structures, source, arguments| {
+                let target = pass(source, arguments)?;
+                Ok((target.structures.physical.clone(), target.structures.clone(), target))
+            },
         )
         .to_string();
         assert!(result.contains("compile_error"), "{result}");

@@ -28,6 +28,12 @@ pass paths, each with argument tokens read only by that pass.
  \mathsf{checkedRun}(\pi_b,s)=t}
  {\mathsf{observe}(b,r,c,s)\longrightarrow r!\{\mathsf{quote}(t)\}}
 
+\Rule{ST-Realization}{K=(p,s[,q])\quad
+ \mathsf{quote}(p)=\mathsf{quote}(\mathsf{embeddedPhysical}(s))\\
+ q\in K\Rightarrow\mathsf{quote}(s)=
+ \mathsf{quote}(\mathsf{embeddedStructures}(q))}
+ {\mathsf{admitStack}(K)}
+
 \Rule{DR-Explain}{b\le h\quad
  \mathsf{observe}(b,\code{core::stringify},\varnothing,s)=a_b}
  {\mathsf{explain}(s,\mathsf{through}=h)[b]=a_b}
@@ -39,6 +45,16 @@ pass. Failures emit one Rust expression block containing one
 and use the first diagnostic's span. The rejection does not invoke a printer
 or leak adjacent diagnostic macros into expression syntax. On success, rustc
 checks types, ownership and trait obligations of the generated code.
+From Physical onward a continuation carries the realization stack:
+$p$, $(p,s)$, or $(p,s,q)$. Each member is a separately printed program.
+ST-Realization checks the temporary embeddings against those separate members
+before a consumer runs and after a producer returns. Structures consumers take
+$(p,s,args)$; Sequence consumers take $(p,s,q,args)$. Rewrites return all stack
+members, including any legitimately changed upstream provider facts. Ordinary
+language contracts and rewrite correspondence remain unchanged. Authored
+embedding programs can initialize a stack at entry; subsequent continuations
+always print the separate stack. Observation and calibration describe the
+selected program, not its transport envelope, so their printed IR is unchanged.
 \begin{lstlisting}
 pipeline {
     surface = [Path(tokens), ...];

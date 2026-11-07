@@ -14,7 +14,8 @@
 //! ```
 //!
 //! The printer receives a complete checked Structures program through
-//! `cq_stage::pass`. It preserves the Physical graph and uses its recorded
+//! `cq_stage::Structures::pass`, with a separate Physical reference. Continuations
+//! carry the realization envelope. It preserves the Physical graph and uses its recorded
 //! build, host read, retained row, canonical boundary and computed-head types.
 //! Authored Structures can also start directly at
 //! `own_push::push! { pipeline {}; physical { ... } structures { providers { ... } ... } }`.

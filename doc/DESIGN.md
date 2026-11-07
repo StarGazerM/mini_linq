@@ -199,6 +199,20 @@ Only a terminal Rust printer can end the queue. Failures become
 `compile_error!`. Pass arguments record choices in target IR; subsequent passes
 receive complete programs.
 
+Physical continuations carry the Physical program. After selection they carry
+`realization { physical { ... } structures { ... } }`; after Sequence lowering
+they also carry `sequence { ... }`. Each member is independently printed.
+Use `cq_stage::Structures::<P, S>::rewrite` with a `(physical, structures, args)`
+closure returning `(P, S)`, or `cq_stage::Sequence::<P, S, Q>::rewrite` with a
+`(physical, structures, sequence, args)` closure returning `(P, S, Q)`.
+Their `pass::<Out>` methods give consumers the same separate arguments.
+Language-changing passes construct target carriers with `Structures::new` or
+`Sequence::new`. Flat CQ/VO/RA/IX/Physical and Datalog APIs are unchanged.
+During the embedding transition, ST-Realization rejects a separate program
+that differs from the next member's embedded program. Authored embedding IR
+can initialize the carrier at entry. Observers and calibration still receive
+the selected printed IR, never the transport envelope.
+
 The root Cargo workspace groups portable core, all feature consumers, formal
 examples and fixtures, and CPU benchmarks for shared compilation and lock
 resolution. Membership is not a dependency permission: core-to-feature edges

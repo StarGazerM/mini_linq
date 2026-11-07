@@ -36,7 +36,7 @@ fn sorted(
 
 #[proc_macro]
 pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |_physical, source, arguments| {
         if !arguments.is_empty() {
             return Err(syn::Error::new_spanned(
                 arguments,
@@ -54,7 +54,7 @@ pub fn sorted_payload(input: proc_macro::TokenStream) -> proc_macro::TokenStream
             }
         }
         target.structures.declare(&[sorted_index()])?;
-        Ok(target)
+        Ok((target.physical.clone(), target))
     })
     .into()
 }
@@ -130,7 +130,7 @@ pub fn conformance_targets(input: proc_macro::TokenStream) -> proc_macro::TokenS
 pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     use cq_sequence_conformance::{Target, translate_with_catalog};
     use quote::quote;
-    cq_stage::pass::<cq_lang_structures::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<syn::Expr>(input.into(), |_physical, source, arguments| {
         let loader: syn::Ident = syn::parse2(arguments)?;
         let sequence = cq_sequence_lowering::compile(source)?;
         cq_sequence_lowering::check(source, &sequence)?;

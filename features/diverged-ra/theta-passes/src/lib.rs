@@ -59,11 +59,12 @@ pub fn merge(input: TokenStream) -> TokenStream {
 /// Select concrete default representations from the written Physical program.
 #[proc_macro]
 pub fn select(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<physical::Program, cq_lang_structures::Program>(
+    cq_stage::pass::<physical::Program, cq_stage::Structures<cq_lang_structures::physical::Program, cq_lang_structures::Program>>(
         input.into(),
         |source, arguments| {
             no_arguments(arguments)?;
-            cq_structure_selection::compile(source)
+            let target = cq_structure_selection::compile(source)?;
+            Ok(cq_stage::Structures::new(target.physical.clone(), target))
         },
     )
     .into()
@@ -72,11 +73,12 @@ pub fn select(input: TokenStream) -> TokenStream {
 /// Lower the checked Structures program to Sequence.
 #[proc_macro]
 pub fn sequence(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, cq_lang_sequence::Program>(
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<cq_stage::Sequence<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>>(
         input.into(),
-        |source, arguments| {
+        |_physical, source, arguments| {
             no_arguments(arguments)?;
-            cq_sequence_lowering::compile(source)
+            let target = cq_sequence_lowering::compile(source)?;
+            Ok(cq_stage::Sequence::new(target.structures.physical.clone(), target.structures.clone(), target))
         },
     )
     .into()
@@ -85,10 +87,10 @@ pub fn sequence(input: TokenStream) -> TokenStream {
 /// Check host-only grading without changing authored Sequence decisions.
 #[proc_macro]
 pub fn sequential(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |physical, structures, source, arguments| {
         no_arguments(arguments)?;
         cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        Ok(source.clone())
+        Ok((physical.clone(), structures.clone(), source.clone()))
     })
     .into()
 }
@@ -96,7 +98,7 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 /// End the queue with a Rust pull expression.
 #[proc_macro]
 pub fn translate_pull(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |_physical, _structures, source, arguments| {
         no_arguments(arguments)?;
         let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
         cq_sequence_pull::translate(source, &analysis)

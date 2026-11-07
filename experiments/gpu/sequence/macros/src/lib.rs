@@ -1,6 +1,8 @@
 //! Named pipeline adapters for the checked GPU Sequence compiler.
 
 use proc_macro::TokenStream;
+use cq_lang_structures::{Program as Structures, physical::Program as Physical};
+use cq_lang_sequence::Program as Sequence;
 
 fn no_arguments(arguments: proc_macro2::TokenStream) -> syn::Result<()> {
     if arguments.is_empty() {
@@ -125,12 +127,12 @@ impl syn::parse::Parse for CodecDeclarations {
 /// Keep GPU scheduling in Sequence rather than inheriting CPU batch decisions.
 #[proc_macro]
 pub fn stage(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
+    cq_stage::Structures::<Physical, Structures>::rewrite(input.into(), |_physical: &Physical, source: &Structures, arguments| {
         no_arguments(arguments)?;
         let target = cq_gpu_sequence_core::bind_structures(source)?;
         let analysis = cq_lang_structures::contract::check(&target)?;
         cq_gpu_sequence_core::check_structures(&target, &analysis)?;
-        Ok(target)
+        Ok((target.physical.clone(), target))
     })
     .into()
 }
@@ -142,26 +144,26 @@ pub fn decompose(input: TokenStream) -> TokenStream {
 }
 
 fn expand_decompose(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input, |source, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::rewrite(input, |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
         let declarations = syn::parse2::<CodecDeclarations>(arguments)?;
         let mut catalog = cq_gpu_sequence_core::catalog();
         catalog.codecs.extend(declarations.0);
         let source = cq_gpu_sequence_core::runs::record_representation(source)?;
-        Ok(
+        let target =
             cq_sequence_plan::decompose(&source, &cq_gpu_sequence_core::machine(), &catalog)?
-                .program,
-        )
+                .program;
+        Ok((target.structures.physical.clone(), target.structures.clone(), target))
     })
 }
 
 /// Check the authored grades against the GPU machine without choosing grades.
 #[proc_macro]
 pub fn machine_grade(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_sequence::Program>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::rewrite(input.into(), |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
         no_arguments(arguments)?;
         let source = cq_gpu_sequence_core::runs::record_representation(source)?;
         cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
-        Ok(source)
+        Ok((source.structures.physical.clone(), source.structures.clone(), source))
     })
     .into()
 }
@@ -169,7 +171,7 @@ pub fn machine_grade(input: TokenStream) -> TokenStream {
 /// Translate a checked, explicitly graded Sequence program to CUDA.
 #[proc_macro]
 pub fn translate(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
         no_arguments(arguments)?;
         let source = cq_gpu_sequence_core::runs::record_representation(source)?;
         let analysis = cq_lang_sequence::check_grading(&source, &cq_gpu_sequence_core::machine())?;
@@ -184,7 +186,7 @@ pub fn translate(input: TokenStream) -> TokenStream {
 /// recorded output protocol still controls counting and capacity retries.
 #[proc_macro]
 pub fn translate_arena(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |_physical: &Physical, _structures: &Structures, source: &Sequence, arguments| {
         if arguments.is_empty() {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
@@ -202,9 +204,10 @@ pub fn translate_arena(input: TokenStream) -> TokenStream {
 /// Bind declared native run inputs before lowering Structures to Sequence.
 #[proc_macro]
 pub fn bind_runs(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
+    cq_stage::Structures::<Physical, Structures>::rewrite(input.into(), |_physical: &Physical, source: &Structures, arguments| {
         no_arguments(arguments)?;
-        cq_gpu_sequence_core::runs::bind(source)
+        let target = cq_gpu_sequence_core::runs::bind(source)?;
+        Ok((target.physical.clone(), target))
     })
     .into()
 }
@@ -217,11 +220,12 @@ pub fn bind_runs(input: TokenStream) -> TokenStream {
 /// the Physical tree required by an ordinary Structures rewrite.
 #[proc_macro]
 pub fn select_catalog(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_structures::Program, cq_lang_structures::Program>(
+    cq_stage::Structures::<Physical, Structures>::pass::<cq_stage::Structures<Physical, Structures>>(
         input.into(),
-        |source, arguments| {
+        |_physical: &Physical, source: &Structures, arguments| {
             no_arguments(arguments)?;
-            cq_sequence_plan::select_from_catalog(source, &cq_gpu_sequence_core::catalog())
+            let target = cq_sequence_plan::select_from_catalog(source, &cq_gpu_sequence_core::catalog())?;
+            Ok(cq_stage::Structures::new(target.physical.clone(), target))
         },
     )
     .into()

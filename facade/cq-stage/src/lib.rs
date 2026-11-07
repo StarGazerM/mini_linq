@@ -59,6 +59,14 @@
 //! standard representations fail contracts; rustc checks arbitrary user types
 //! against the generated Build, read and dedup obligations.
 //!
+//! [`Structures`] and [`Sequence`] carry the realization stack as separately
+//! printed programs. Their pass/rewrite closures receive Physical, Structures,
+//! and (where present) Sequence as separate typed arguments. Continuations use
+//! `realization { physical { ... } structures { ... } sequence { ... } }`,
+//! omitting Sequence before its lowering. The temporary IR embeddings must
+//! agree with the separate programs. Observers and calibration still identify
+//! only the selected IR, not this transport envelope.
+//!
 //! Restricted context facts enter only through [`pass_with_context`] (the
 //! lower/select adapters). Checked continuations carry a separate
 //! `context { consumer = canonical, host_set R discharged };` envelope after
@@ -66,8 +74,8 @@
 //! cannot add facts. Printing an IR does not print this envelope, so factful
 //! re-entry requires an explicit exact envelope from the enclosing compiler.
 //! Lower/select arguments introduce facts only into a fact-free source; matching
-//! arguments never replace an envelope. Fact-free expansions retain their
-//! original token protocol, and pass arguments remain opaque.
+//! arguments never replace an envelope. Fact-free expansions omit the context
+//! envelope, and pass arguments remain opaque.
 //!
 //! An `output_consumer { ... }` continuation requirement is separate from those
 //! facts. It records original output identities and the values read by an outer
@@ -76,6 +84,9 @@
 
 /// Optional diagnostic provenance carried outside every executable language.
 pub mod calibration;
+
+mod realization;
+pub use realization::{Sequence, Structures};
 
 use std::collections::BTreeSet;
 
@@ -104,6 +115,13 @@ mod kw {
 pub trait Language: Parse + ToTokens {
     fn check(&self) -> syn::Result<()>;
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()>;
+    /// Printed selected IR, without the realization transport envelope.
+    fn program_tokens(&self) -> TokenStream {
+        self.to_token_stream()
+    }
+    fn calibration_stage(&self) -> calibration::Stage {
+        calibration::Stage::of(self)
+    }
     /// Restricted facts recorded in this program, not ambient Rust assumptions.
     fn context(&self) -> Context {
         Context::default()
@@ -601,7 +619,7 @@ fn run<In: Language, Out: Language>(
         }
         input.program.check()?;
         if let Some(trace) = &input.pipeline.calibration {
-            trace.check_source(&calibration::Stage::of(&input.program))?;
+            trace.check_source(&input.program.calibration_stage())?;
         }
         let consumer = if bind_consumer {
             input.pipeline.output_consumer.take()
@@ -636,7 +654,7 @@ fn run<In: Language, Out: Language>(
         correspondence(&input.program, &target)?;
         if let Some(trace) = &mut input.pipeline.calibration {
             if !Out::terminal() {
-                trace.advance(calibration::Stage::of(&target));
+                trace.advance(target.calibration_stage());
             }
         }
         let target_context = target.context();
@@ -656,6 +674,7 @@ fn run<In: Language, Out: Language>(
         }
         if input.pipeline.passes.is_empty() {
             if let Some(receiver) = input.pipeline.observer {
+                let target = target.program_tokens();
                 Ok(quote!(#receiver! { #target }))
             } else if Out::terminal() {
                 if let Some(trace) = &input.pipeline.calibration {

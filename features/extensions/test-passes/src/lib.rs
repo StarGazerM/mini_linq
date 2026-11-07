@@ -7,7 +7,7 @@ use quote::quote;
 
 #[proc_macro]
 pub fn repeated(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |_physical, _structures, source, arguments| {
         let argument: syn::Ident = syn::parse2(arguments)?;
         if argument != "twice" {
             return Err(syn::Error::new_spanned(argument, "expected twice"));
@@ -24,7 +24,7 @@ pub fn repeated(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 #[proc_macro]
 pub fn canonical(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    cq_stage::pass::<cq_lang_sequence::Program, syn::Expr>(input.into(), |source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |_physical, _structures, source, arguments| {
         let argument: syn::Ident = syn::parse2(arguments)?;
         if argument != "once" {
             return Err(syn::Error::new_spanned(argument, "expected once"));

@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
 #[proc_macro]
 pub fn accept_sort(input: TokenStream) -> TokenStream {
-    cq_stage::rewrite::<cq_lang_structures::Program>(input.into(), |source, arguments| {
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::rewrite(input.into(), |physical, source, arguments| {
         if arguments.to_string() != "a + (b * c)" { return Err(syn::Error::new_spanned(arguments, "opaque arguments changed")); }
         let analysis = cq_lang_structures::contract::check(&source)?;
         for canonical in analysis.canonical.values() {
@@ -15,6 +15,6 @@ pub fn accept_sort(input: TokenStream) -> TokenStream {
             assert_eq!(provider.token, "sort");
             assert_eq!(&provider.ty, &syn::parse_quote!(::cq_storage::dedup::Sort));
         }
-        Ok(source.clone())
+        Ok((physical.clone(), source.clone()))
     }).into()
 }
