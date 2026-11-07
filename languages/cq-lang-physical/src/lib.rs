@@ -718,7 +718,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     analysis.scanned.insert(symbol_name(operand));
                 }
                 if let Some(origin) = &union.origin {
-                    origin.occurrence.check()?;
                     let mut expected: BTreeSet<_> = origin
                         .free
                         .iter()
@@ -760,7 +759,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
 
             Operator::Unit(_) => Row::default(),
             Operator::Rename(r) => {
-                r.occurrence.check()?;
                 let host = symbol_name(&r.relation);
                 let Some(declaration) = declarations.get(&host) else {
                     return error(r, format!("`{name}` renames undeclared relation `{host}`"));

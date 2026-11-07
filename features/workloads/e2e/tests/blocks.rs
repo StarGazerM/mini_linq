@@ -9,8 +9,8 @@ fn both_printers_build_independent_union_indices_directly() {
         pipeline {$($pass),+};
         physical {
             relation L(a:i32); relation A(a:i32,b:i32); relation B(a:i32,b:i32);
-            l = pipe rename L@0 {a -> x}; a = pipe rename A@1.0.0 {a -> x,b -> y}; b = pipe rename B@1.1.0 {a -> x,b -> y};
-            d = let canon union a,b block @1 free[x] interface[y];
+            l = pipe rename L {a -> x}; a = pipe rename A {a -> x,b -> y}; b = pipe rename B {a -> x,b -> y};
+            d = let canon union a,b block free[x] interface[y];
             j = pipe probe first [x] l,d; q = pipe project j keep {y}; out = let canon semi eager [y] q,d; return out as answer(y);
         }
     }.map(|(y,)|*y).collect::<std::collections::BTreeSet<_>>() }; }
@@ -33,8 +33,8 @@ fn both_printers_keep_curried_union_indices_and_a_recorded_scan() {
         pipeline {$($pass),+};
         physical {
             relation L(a:i32,b:i32); relation A(a:i32,b:i32,c:i32); relation B(a:i32,b:i32,c:i32);
-            l = pipe rename L@0 {a -> x,b -> y}; a = pipe rename A@1.0.0 {a -> x,b -> y,c -> z}; b = pipe rename B@1.1.0 {a -> x,b -> y,c -> z};
-            d = let canon union a,b block @1 free[x,y] interface[z];
+            l = pipe rename L {a -> x,b -> y}; a = pipe rename A {a -> x,b -> y,c -> z}; b = pipe rename B {a -> x,b -> y,c -> z};
+            d = let canon union a,b block free[x,y] interface[z];
             p = pipe project l keep {x}; checked = pipe semi eager [x] p,d;
             c = pipe probe first [x] checked,l; j = pipe probe first [x,y] c,d;
             aux = let project d keep {x,y}; out = let canon semi eager [x,y] j,aux;

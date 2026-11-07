@@ -85,12 +85,12 @@ fn occurrence_smallest_projects_lookup_keys_and_preserves_full_expansions() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32,x:i32);
         relation S(a:i32,x:i32,z:i32); relation T(a:i32,x:i32,w:i32);
-        l = pipe rename L@0 {a -> a};
-        r = pipe rename R@1 {a -> a,x -> x};
+        l = pipe rename L {a -> a};
+        r = pipe rename R {a -> a,x -> x};
         candidate = pipe probe first [a] l,r;
-        s = pipe rename S@2 {a -> a,x -> x,z -> z};
+        s = pipe rename S {a -> a,x -> x,z -> z};
         check_s = pipe semi eager [a,x] candidate,s;
-        t = pipe rename T@3 {a -> a,x -> x,w -> w};
+        t = pipe rename T {a -> a,x -> x,w -> w};
         check_t = pipe semi eager [a,x] check_s,t;
         expand_s = pipe probe first [a,x] check_t,s;
         out = let canon probe first [a,x] expand_s,t;
@@ -169,15 +169,15 @@ fn merge_output_is_pinned_and_named_selection_is_exact() {
 fn merge_preserves_retention_and_allows_same_key_stream_chains() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32); relation S(a:i32);
-        l = let rename L@0 {a -> x}; r = let rename R@1 {a -> x};
-        s = let rename S@2 {a -> x};
+        l = let rename L {a -> x}; r = let rename R {a -> x};
+        s = let rename S {a -> x};
         j = pipe probe first [x] l,r;
         k = let canon probe first [x] j,s; return k as answer(x);
     });
     let expected: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32); relation S(a:i32);
-        l = let rename L@0 {a -> x}; r = let rename R@1 {a -> x};
-        s = let rename S@2 {a -> x};
+        l = let rename L {a -> x}; r = let rename R {a -> x};
+        s = let rename S {a -> x};
         j = pipe merge [x] l,r;
         k = let canon merge [x] j,s; return k as answer(x);
     });
@@ -208,7 +208,7 @@ fn canon_output_is_pinned_and_existing_boundaries_are_preserved() {
 #[test]
 fn canon_avoids_projection_that_preserves_an_inferred_key() {
     let source: ir::Program = syn::parse_quote!(physical {
-        relation R(a:i32); r = let canon rename R@0 {a -> x};
+        relation R(a:i32); r = let canon rename R {a -> x};
         b = pipe bind r with y:i32 = (*x + 1);
         p = pipe project b keep {x}; return p as answer(x);
     });
@@ -221,7 +221,7 @@ fn canon_avoids_projection_that_preserves_an_inferred_key() {
 fn canon_records_the_choice_without_classifying_column_types() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:f64,c:i32);
-        r = pipe rename R@0 {a -> x,b -> y,c -> z};
+        r = pipe rename R {a -> x,b -> y,c -> z};
         p = pipe project r keep {x,y};
         q = let canon project p keep {x}; return q as answer(x);
     });
@@ -345,8 +345,8 @@ fn smallest_occurrence_advice_rejects_missing_ambiguous_and_inadmissible_sites()
     // A union keeps both independently named sites live.
     let union: ir::Program = syn::parse_quote!(physical {
         relation X(a:i32,v:i32);
-        result = pipe rename X@0 {a -> a,v -> v};
-        result_other = pipe rename X@1 {a -> a,v -> v};
+        result = pipe rename X {a -> a,v -> v};
+        result_other = pipe rename X {a -> a,v -> v};
         both = let canon union result,result_other;
         return both as answer(a,v);
     });
@@ -387,10 +387,10 @@ fn smallest_rejects_mutations_of_its_local_premises() {
 fn smallest_hoists_relational_dependency_chains_in_order() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l = pipe rename L@0 {a -> a,b -> b};
-        r = let rename R@1 {b -> b,c -> c};
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
         candidate = pipe probe first [b] l,r;
-        s0 = pipe rename S@2 {a -> a,c -> c};
+        s0 = pipe rename S {a -> a,c -> c};
         s1 = pipe point select s0 if (a = 1);
         s2 = pipe range select s1 if (c >= 0);
         s = let project s2 keep {a,c};
@@ -399,9 +399,9 @@ fn smallest_hoists_relational_dependency_chains_in_order() {
     });
     let expected: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l = pipe rename L@0 {a -> a,b -> b};
-        r = let rename R@1 {b -> b,c -> c};
-        s0 = pipe rename S@2 {a -> a,c -> c};
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
+        s0 = pipe rename S {a -> a,c -> c};
         s1 = pipe point select s0 if (a = 1);
         s2 = pipe range select s1 if (c >= 0);
         s = let project s2 keep {a,c};
@@ -447,13 +447,13 @@ fn smallest_visits_independent_pairs_hoisted_before_the_current_candidate() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
         relation U(d:i32,e:i32); relation V(e:i32,f:i32); relation W(d:i32,f:i32);
-        l = pipe rename L@0 {a -> a,b -> b}; r = pipe rename R@1 {b -> b,c -> c};
-        u = pipe rename U@2 {d -> d,e -> e}; v = pipe rename V@3 {e -> e,f -> f};
+        l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
+        u = pipe rename U {d -> d,e -> e}; v = pipe rename V {e -> e,f -> f};
         candidate = pipe probe first [b] l,r;
         inner = pipe probe first [e] u,v;
-        w = pipe rename W@4 {d -> d,f -> f};
+        w = pipe rename W {d -> d,f -> f};
         inner_checked = let probe first [d,f] inner,w;
-        s = pipe rename S@5 {a -> a,c -> c};
+        s = pipe rename S {a -> a,c -> c};
         checked = pipe probe first [a,c] candidate,s;
         out = let canon probe first [] checked,inner_checked;
         return out as answer(a,b,c,d,e,f);
@@ -461,12 +461,12 @@ fn smallest_visits_independent_pairs_hoisted_before_the_current_candidate() {
     let expected: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
         relation U(d:i32,e:i32); relation V(e:i32,f:i32); relation W(d:i32,f:i32);
-        l = pipe rename L@0 {a -> a,b -> b}; r = pipe rename R@1 {b -> b,c -> c};
-        u = pipe rename U@2 {d -> d,e -> e}; v = pipe rename V@3 {e -> e,f -> f};
-        w = pipe rename W@4 {d -> d,f -> f};
+        l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
+        u = pipe rename U {d -> d,e -> e}; v = pipe rename V {e -> e,f -> f};
+        w = pipe rename W {d -> d,f -> f};
         inner = pipe probe smallest [e] u,v;
         inner_checked = let probe first [d,f] inner,w;
-        s = pipe rename S@5 {a -> a,c -> c};
+        s = pipe rename S {a -> a,c -> c};
         candidate = pipe probe smallest [b] l,r;
         checked = pipe probe first [a,c] candidate,s;
         out = let canon probe first [] checked,inner_checked;
@@ -503,18 +503,18 @@ fn smallest_never_moves_interposed_rust_guards_or_bindings() {
     let sources: [ir::Program; 2] = [
         syn::parse_quote!(physical {
             relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-            l = pipe rename L@0 {a -> a,b -> b}; r = pipe rename R@1 {b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
             candidate = pipe probe first [b] l,r;
-            s0 = pipe rename S@2 {a -> a,c -> c};
+            s0 = pipe rename S {a -> a,c -> c};
             s = let guard s0 if (opaque(a,c));
             checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
         }),
         syn::parse_quote!(physical {
             relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-            l = pipe rename L@0 {a -> a,b -> b}; r = pipe rename R@1 {b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
             candidate = pipe probe first [b] l,r;
-            s0 = pipe rename S@2 {a -> a,c -> c};
+            s0 = pipe rename S {a -> a,c -> c};
             value = pipe bind s0 with unused:i32 = (partial(a));
             s = let project value keep {a,c};
             checked = let canon probe first [a,c] candidate,s;
@@ -546,10 +546,10 @@ fn smallest_never_moves_interposed_rust_guards_or_bindings() {
 fn smallest_does_not_bypass_a_candidate_consumer() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l = pipe rename L@0 {a -> a,b -> b}; r = pipe rename R@1 {b -> b,c -> c};
+        l = pipe rename L {a -> a,b -> b}; r = pipe rename R {b -> b,c -> c};
         candidate = pipe probe first [b] l,r;
         projected = pipe project candidate keep {a,b,c};
-        s = pipe rename S@2 {a -> a,c -> c};
+        s = pipe rename S {a -> a,c -> c};
         checked = let canon probe first [a,c] projected,s;
         return checked as answer(a,b,c);
     });
@@ -577,7 +577,7 @@ fn lazy_output_is_pinned_and_retained_membership_stays_eager() {
 fn lazy_shared_keys_change_atomically_and_payload_conflicts_are_rejected() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation R(a:i32); relation S(a:i32);
-        r = pipe rename R@0 {a -> x}; s = pipe rename S@1 {a -> x};
+        r = pipe rename R {a -> x}; s = pipe rename S {a -> x};
         a = pipe semi eager [x] r,s; b = let canon semi eager [x] a,s;
         return b as answer(x);
     });
@@ -599,7 +599,7 @@ fn lazy_shared_keys_change_atomically_and_payload_conflicts_are_rejected() {
 fn lazy_shared_keys_are_sets_even_when_written_in_different_orders() {
     let source: ir::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32); relation S(a:i32,b:i32);
-        r = pipe rename R@0 {a -> x,b -> y}; s = pipe rename S@1 {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y}; s = pipe rename S {a -> x,b -> y};
         a = pipe semi eager [x,y] r,s; b = let canon semi eager [y,x] a,s;
         return b as answer(x,y);
     });

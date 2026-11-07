@@ -105,7 +105,7 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                 pipeline { $($($passes),*)? };
                 physical {
                     relation L(a:i64) = ($left); relation R(b:i64) = ($right);
-                    l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x};
+                    l = pipe rename L {a -> x}; r = pipe rename R {b -> x};
                     s = let project r keep {x};
                     out = let canon $operator eager [x] l,s;
                     return out as answer(x);
@@ -185,7 +185,7 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
                 physical {
                     relation R(a:i64,b:i64) = ($source);
                     consumer canonical;
-                    r = pipe rename R@0 {a -> x,b -> y};
+                    r = pipe rename R {a -> x,b -> y};
                     first = $mode range select r if (x >= 1);
                     projected = pipe project first keep {x,y};
                     second = pipe range select projected if (y < 20);

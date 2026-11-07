@@ -204,8 +204,8 @@ mod tests {
         let structures = syn::parse_quote! {
             physical {
                 relation L(a:i32); relation R(a:i32,b:i32);
-                l = pipe rename L@0 {a -> a};
-                r = pipe rename R@1 {a -> a,b -> b};
+                l = pipe rename L {a -> a};
+                r = pipe rename R {a -> a,b -> b};
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
@@ -289,8 +289,8 @@ mod tests {
         let structures = syn::parse_quote! {
             physical {
                 relation L(a:i32); relation R(a:i32,b:i64);
-                l = pipe rename L@0 {a -> a};
-                r = pipe rename R@1 {a -> a,b -> b};
+                l = pipe rename L {a -> a};
+                r = pipe rename R {a -> a,b -> b};
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }
@@ -430,8 +430,8 @@ mod tests {
         let structures = syn::parse_quote! {
             physical {
                 relation L(a:i32 [0]); relation R(a:i32 [0],b:i32 [1]);
-                l = pipe rename L@0 {a -> a};
-                r = pipe rename R@1 {a -> a,b -> b};
+                l = pipe rename L {a -> a};
+                r = pipe rename R {a -> a,b -> b};
                 answer = let canon probe first [a] l,r;
                 return answer as answer(a,b);
             }

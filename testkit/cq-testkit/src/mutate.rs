@@ -717,7 +717,7 @@ mod tests {
         let program: physical::Program = parse_quote!(physical {
             relation R(x: Carrier);
             relation answer(y: ::std::primitive::i64);
-            r = pipe rename R@0 { x -> x };
+            r = pipe rename R { x -> x };
             b = pipe bind r with y: OtherCarrier = (x.to_owned());
             p = let canon project b keep { y };
             return p as answer(y);

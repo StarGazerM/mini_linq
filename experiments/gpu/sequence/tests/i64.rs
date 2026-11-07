@@ -6,9 +6,9 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
     let program: Program = syn::parse_quote! {
         physical {
             relation E(src:i64,dst:i64) = (edges);
-            l = pipe rename E@0 {src -> a,dst -> b};
-            r = let rename E@1 {src -> b,dst -> c};
-            s = let rename E@2 {src -> a,dst -> c};
+            l = pipe rename E {src -> a,dst -> b};
+            r = let rename E {src -> b,dst -> c};
+            s = let rename E {src -> a,dst -> c};
             candidate = pipe probe first [b] l,r;
             checked = let canon probe first [a,c] candidate,s;
             return checked as answer(a,b,c);
@@ -112,8 +112,8 @@ fn two_key_membership_preserves_full_width_last_key() -> cq_gpu_sequence_runtime
         physical {
             relation R(a:i64,c:i64) = (&edges);
             relation S(a:i64,c:i64) = (&stored);
-            l = pipe rename R@0 {a -> a,c -> c};
-            s = let rename S@0 {a -> a,c -> c};
+            l = pipe rename R {a -> a,c -> c};
+            s = let rename S {a -> a,c -> c};
             checked = let canon semi eager [a,c] l,s;
             return checked as answer(a,c);
         }

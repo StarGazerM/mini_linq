@@ -5,9 +5,9 @@ fn program() -> Program {
     syn::parse_quote! {
         physical {
             relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,c:i32);
-            r = pipe rename R@0 {a -> a};
-            s = let rename S@1 {a -> a,b -> b};
-            t = let rename T@2 {b -> b,c -> c};
+            r = pipe rename R {a -> a};
+            s = let rename S {a -> a,b -> b};
+            t = let rename T {b -> b,c -> c};
             joined = pipe probe first [a] r,s;
             last = pipe probe first [b] joined,t;
             answer = let canon project last keep {a,b,c};

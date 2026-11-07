@@ -146,8 +146,8 @@ fn ra_occurrence_constants_use_source_names_and_drop_literal_headings() {
     let program = syn::parse_quote! {
         relational {
             relation R(tag:i32,payload:i32,code:i32);
-            r = rename R@0 {payload -> tag} constants {tag = 5, code = -2};
-            witness = rename R@1 {} constants {tag = 5, payload = 1, code = -2};
+            r = rename R {payload -> tag} constants {tag = 5, code = -2};
+            witness = rename R {} constants {tag = 5, payload = 1, code = -2};
             result = natural_join r with witness;
             output result as answer(tag);
         }

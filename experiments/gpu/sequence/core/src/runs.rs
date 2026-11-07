@@ -308,7 +308,7 @@ mod tests {
         let program: cq_lang_sequence::Program = syn::parse_quote! {
             physical {
                 relation R(x:i64) = (&data.r);
-                r = pipe rename R@0 {x -> x};
+                r = pipe rename R {x -> x};
                 bound = pipe bind r with value:UserDefinedScalar = (convert(x));
                 result = let canon project bound keep {value};
                 return result as answer(value);
@@ -386,7 +386,7 @@ mod tests {
         let program: cq_lang_sequence::Program = syn::parse_quote! {
             physical {
                 relation R(a: Logical [5], b: Logical [6]) = (&data.r);
-                r = pipe rename R@0 {a -> x, b -> y};
+                r = pipe rename R {a -> x, b -> y};
                 result = let canon project r keep {x,y};
                 return result as answer(x,y);
             }
@@ -430,7 +430,7 @@ mod tests {
         let program: cq_lang_sequence::Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data.r);
-                r = pipe rename R@0 {a -> x,b -> y};
+                r = pipe rename R {a -> x,b -> y};
                 selected = pipe select r if (x > 1,y > 2);
                 result = let canon project selected keep {x,y};
                 return result as answer(x,y);
@@ -477,8 +477,8 @@ mod tests {
             physical {
                 relation R(x:i64) = (&data.r);
                 relation D(x:i64) = (&data.d);
-                d = pipe rename D@1 {x -> x};
-                r = let rename R@0 {x -> x};
+                d = pipe rename D {x -> x};
+                r = let rename R {x -> x};
                 joined = pipe probe first [x] d,r;
                 result = let canon project joined keep {x};
                 return result as answer(x);

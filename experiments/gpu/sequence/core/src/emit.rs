@@ -4214,8 +4214,8 @@ mod tests {
             physical {
                 relation Driver(b:i32) = (&data.driver);
                 relation R(a:i32,b:i32) = (&data.r);
-                d = pipe rename Driver@0 {b -> b};
-                r = let rename R@1 {a -> a,b -> b};
+                d = pipe rename Driver {b -> b};
+                r = let rename R {a -> a,b -> b};
                 joined = pipe probe first [b] d,r;
                 result = let canon project joined keep {a,b};
                 return result as answer(a,b);
@@ -4269,8 +4269,8 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data);
-                r = let rename R@0 {a -> a,b -> b};
-                driver = pipe rename R@1 {a -> a,b -> c};
+                r = let rename R {a -> a,b -> b};
+                driver = pipe rename R {a -> a,b -> c};
                 joined = let canon probe first [a] driver,r;
                 return joined as answer(a,b,c);
             }
@@ -4341,8 +4341,8 @@ mod tests {
         syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data);
-                r = let rename R@0 {a -> a,b -> b};
-                driver = pipe rename R@1 {a -> a,b -> c};
+                r = let rename R {a -> a,b -> b};
+                driver = pipe rename R {a -> a,b -> c};
                 joined = let canon probe first [a] driver,r;
                 return joined as answer(c,a,b);
             }
@@ -4531,7 +4531,7 @@ mod tests {
                 physical {
                     relation R(a:i32,b:i32) = (&data.r);
                     relation answer(#key0:i32,#key1:i32);
-                    r = pipe rename R@0 {a -> #key0,b -> #key1};
+                    r = pipe rename R {a -> #key0,b -> #key1};
                     filtered = pipe #predicate;
                     first = pipe bind filtered with out0:i32 = (*#key0);
                     second = pipe bind first with out1:i32 = (*#key1);
@@ -4847,7 +4847,7 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:u32) = (&data);
-                r = let canon rename R@0 {a -> a,b -> b};
+                r = let canon rename R {a -> a,b -> b};
                 return r as answer(b,a);
             }
             structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
@@ -5095,7 +5095,7 @@ mod tests {
             let program: Program = syn::parse2(quote! {
                 physical {
                     relation R(a:i64) = (&data);
-                    r = let canon rename R@0 {a -> a};
+                    r = let canon rename R {a -> a};
                     return r as answer(a);
                 }
                 structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
@@ -5156,8 +5156,8 @@ mod tests {
             physical {
                 relation Resident(a:i64) = (&data.resident);
                 relation Host(a:i64) = (&data.host);
-                resident = let rename Resident@0 {a -> a};
-                host_input = pipe rename Host@1 {a -> a};
+                resident = let rename Resident {a -> a};
+                host_input = pipe rename Host {a -> a};
                 host = let canon semi eager [a] host_input,resident;
                 return host as answer(a);
             }
@@ -5215,7 +5215,7 @@ mod tests {
             let program: Program = syn::parse2(quote! {
                 physical {
                     relation R(id:i64,key:i32,value:i64) = (&data.r);
-                    r = pipe rename R@0 {id -> id,key -> key,value -> value};
+                    r = pipe rename R {id -> id,key -> key,value -> value};
                     valuation = let canon project r keep {id,key,value};
                     grouped = pipe group valuation by [#keys] {
                         total:i64=sum(value); rows:usize=count();
@@ -5261,7 +5261,7 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(id:i64,key:i32,value:i64) = (&data.r);
-                r = pipe rename R@0 {id -> id,key -> key,value -> value};
+                r = pipe rename R {id -> id,key -> key,value -> value};
                 valuation = let canon project r keep {id,key,value};
                 grouped = pipe group valuation by [key] { total:i64=sum(value); rows:usize=count(); };
                 return grouped as answer(key,total,rows);
@@ -5313,7 +5313,7 @@ mod tests {
             let program: Program = syn::parse2(quote! {
                 physical {
                     relation R(id:i64,raw:i32) = (&data.r);
-                    r = pipe rename R@0 {id -> id,raw -> raw};
+                    r = pipe rename R {id -> id,raw -> raw};
                     bound = pipe bind r with value:i64 = (*raw as i64);
                     valuation = let canon project bound keep {id,value};
                     grouped = pipe group valuation by [] { total:i64=sum(value); rows:usize=count(); };
@@ -5474,8 +5474,8 @@ mod tests {
             physical {
                 relation R(a:i64) = (&data.r);
                 relation P(a:i64) = (&data.p);
-                r = pipe rename R@0 {a -> a};
-                p = let rename P@1 {a -> a};
+                r = pipe rename R {a -> a};
+                p = let rename P {a -> a};
                 present = let canon semi eager [a] r,p;
                 return present as answer(a);
             }
@@ -5536,7 +5536,7 @@ mod tests {
             let program: Program = syn::parse2(quote! {
                 physical {
                     relation R(a:i64) = (&data.r);
-                    r = pipe rename R@0 {a -> a};
+                    r = pipe rename R {a -> a};
                     filtered = let #canon select r if (a > 0);
                     guarded = let canon guard filtered if (a % 2 == 0);
                     return guarded as answer(a);
@@ -5593,7 +5593,7 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i64) = (&data.r);
-                r = let canon rename R@0 {a -> a};
+                r = let canon rename R {a -> a};
                 return r as answer(a);
             }
             structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
@@ -5658,7 +5658,7 @@ mod tests {
             let program: Program = syn::parse_quote! {
                 physical {
                     relation R(a:#ty) = (&data.r);
-                    r = let canon rename R@0 {a -> a};
+                    r = let canon rename R {a -> a};
                     return r as answer(a);
                 }
                 structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }

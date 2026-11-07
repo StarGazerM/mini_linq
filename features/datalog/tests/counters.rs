@@ -430,8 +430,8 @@ fn push_zero_key_reads_scan_host_and_retained_operands() {
                     physical {
                         relation L(x:i32) = (&left);
                         relation R(y:i32) = (&right);
-                        l = pipe rename L@0 {x -> x};
-                        r = $mode rename R@1 {y -> y};
+                        l = pipe rename L {x -> x};
+                        r = $mode rename R {y -> y};
                         nonempty = pipe semi eager [] l,r;
                         product = pipe probe first [] nonempty,r;
                         out = let canon project product keep {x,y};

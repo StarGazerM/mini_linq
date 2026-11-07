@@ -88,8 +88,8 @@ fn empty_positional_left_does_not_force_lazy_semi_rhs() {
         pipeline { $($first)::+, $($pass,)* };
         physical {
             relation L(a:i64) = (left); relation R(b:i64) = (right);
-            l = pipe rename L@0 {a -> x}; empty = pipe range select l if (x > 100);
-            r = pipe rename R@1 {b -> x};
+            l = pipe rename L {a -> x}; empty = pipe range select l if (x > 100);
+            r = pipe rename R {b -> x};
             s = pipe semi lazy [x] empty,r;
             out = let canon project s keep {x}; return out as answer(x);
         }
@@ -109,7 +109,7 @@ fn custom_aliases_and_bare_build_provider_keep_selected_source_contracts() {
         pipeline { $($pass,)* };
         physical {
             relation L(a:i64,b:i64) = (left); relation R(c:i64,d:i64) = (right);
-            l = pipe rename L@0 {a -> x,b -> y}; r = pipe rename R@1 {c -> x,d -> z};
+            l = pipe rename L {a -> x,b -> y}; r = pipe rename R {c -> x,d -> z};
             s = let point select r if (z = 1); t = let semi eager [x] l,s;
             u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
             out = let canon project j keep {x,y}; return out as answer(x,y);
@@ -155,9 +155,9 @@ fn a_computed_left_key_can_test_an_owned_set_without_becoming_a_selection() {
         pipeline { $($first)::+, $($pass,)* };
         physical {
             relation L(a:i64) = (left); relation R(b:i64,c:i64) = (right);
-            l = pipe rename L@0 {a -> a};
+            l = pipe rename L {a -> a};
             computed = pipe bind l with x:i64 = (*a + 1);
-            r = pipe rename R@1 {b -> x,c -> z};
+            r = pipe rename R {b -> x,c -> z};
             s = let point select r if (z = 1);
             t = let semi eager [x] computed,s;
             back = pipe semi eager [x] s,t;
@@ -205,9 +205,9 @@ macro_rules! positional_reduced {
             physical {
                 relation L(a:$ty, b:$ty) = ($left);
                 relation R(c:$ty, flag:$ty) = ($right);
-                l = pipe rename L@0 { a -> x, b -> y };
+                l = pipe rename L { a -> x, b -> y };
                 window = pipe range select l if (y >= 10, y < 40);
-                r = pipe rename R@1 { c -> x, flag -> f };
+                r = pipe rename R { c -> x, flag -> f };
                 selected = let point select r if (f = 1);
                 projected = pipe project window keep {x,y};
                 reduced = let semi eager [x] projected, selected;

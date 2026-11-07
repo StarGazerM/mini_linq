@@ -31,7 +31,7 @@ fn translates_grouped_canonical_publication() {
     let mut program: Program = syn::parse_quote! {
         physical {
             relation R(k:u32,id:u32,value:i64) = (data);
-            r = let canon rename R@0 {k -> k,id -> id,value -> value};
+            r = let canon rename R {k -> k,id -> id,value -> value};
             grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
             return grouped as answer(k,n,total,low,high);
         }
@@ -98,7 +98,7 @@ fn gpu_grouped_counts_sums_extrema_and_canonical_valuations() -> Result<()> {
         let result = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation R(k:u32,id:u32,value:i64) = (&data);
-                r = let canon rename R@0 {k -> k,id -> id,value -> value};
+                r = let canon rename R {k -> k,id -> id,value -> value};
                 grouped = let group r by [k] { n:usize=count(); total:i64=sum(value); low:Option<i64> = min(value); high:Option<i64> = max(value); };
                 return grouped as answer(k,n,total,low,high);
             }
@@ -149,7 +149,7 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
         let result = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation R(k:u32,id:u32,value:i64) = (&data);
-                r = pipe rename R@0 {k -> k,id -> id,value -> value};
+                r = pipe rename R {k -> k,id -> id,value -> value};
                 f = let canon select r if (value > 0);
                 grouped = let group f by [k] {
                     n:usize=count(); total:i64=sum(value);
@@ -202,7 +202,7 @@ fn whole_input_fold_combines_block_partials_including_empty_identity() -> Result
         let result = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation R(a:i64) = (&data);
-                r = let canon rename R@0 {a -> a};
+                r = let canon rename R {a -> a};
                 return r as answer(a);
             }
             structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }

@@ -8,8 +8,8 @@ fn source(indexes: proc_macro2::TokenStream) -> ix::Program {
     relation R(a:i32, b:i32);
             relation S(z:i32, b:i32, a:i32);
 
-                r = rename R@0 {a -> a, b -> b};
-                s = rename S@1 {z -> z, b -> b, a -> a};
+                r = rename R {a -> a, b -> b};
+                s = rename S {z -> z, b -> b, a -> a};
                 reduced = semijoin s with r;
                 joined = natural_join r with reduced;
                 again = semijoin joined with reduced;
@@ -80,8 +80,8 @@ fn cartesian_and_nonemptiness_joins_share_a_unit_tuple_index() {
     relation R(a:i32);
             relation S(b:i32);
 
-                r = rename R@0 {a -> a};
-                s = rename S@1 {b -> b};
+                r = rename R {a -> a};
+                s = rename S {b -> b};
                 reduced = semijoin r with s;
                 joined = natural_join reduced with s;
                 output joined as answer(a,b);
@@ -114,7 +114,7 @@ fn literal_selections_are_const_reads_and_column_equalities_are_not() {
     let source: ix::Program = syn::parse_quote! {
         relational {
             relation Customer(id: i32, segment: StringCode);
-            c = rename Customer@0 { id -> c, segment -> segment };
+            c = rename Customer { id -> c, segment -> segment };
             building = select c if (segment = "BUILDING");
             output building as answer(c, segment);
         }
@@ -137,7 +137,7 @@ fn literal_selections_are_const_reads_and_column_equalities_are_not() {
     let column_equality: ix::Program = syn::parse_quote! {
         relational {
             relation R(a: i32, b: i32);
-            r = rename R@0 { a -> x, b -> y };
+            r = rename R { a -> x, b -> y };
             equal = select r if (x = y);
             output equal as answer(x, y);
         }
@@ -151,7 +151,7 @@ fn const_supply_accepts_a_recorded_subset_of_point_columns() {
     let source: ix::Program = syn::parse_quote! {
         relational {
             relation R(a: i32, b: i32);
-            r = rename R@0 { a -> x, b -> y };
+            r = rename R { a -> x, b -> y };
             selected = select r if (x = 1, y = 2);
             output selected as answer(x, y);
         }
@@ -180,7 +180,7 @@ fn stream_and_const_supply_are_distinct_demand_identities() {
     let source: ix::Program = syn::parse_quote! {
         relational {
             relation R(a: i32); relation S(a: i32);
-            r = rename R@0 { a -> x }; s = rename S@1 { a -> x };
+            r = rename R { a -> x }; s = rename S { a -> x };
             constant = select r if (x = 5);
             joined = natural_join s with r;
             all = natural_join constant with joined;

@@ -2452,8 +2452,8 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64) = (&data);
-                r = let rename R@0 {a -> a,b -> b};
-                driver = pipe rename R@1 {a -> a,b -> c};
+                r = let rename R {a -> a,b -> b};
+                driver = pipe rename R {a -> a,b -> c};
                 joined = let canon probe first [a] driver,r;
                 return joined as answer(a,b,c);
             }
@@ -2572,8 +2572,8 @@ mod tests {
             physical {
                 relation R(a:u32) = (&data.r);
                 relation S(a:u32) = (&data.s);
-                r = pipe rename R@0 {a -> a};
-                s = pipe rename S@1 {a -> a};
+                r = pipe rename R {a -> a};
+                s = pipe rename S {a -> a};
                 answer = let canon union r,s;
                 return answer as answer(a);
             }
@@ -2634,8 +2634,8 @@ mod tests {
             physical {
                 relation Driver(a:i32, value:i32) = (&data.driver);
                 relation Provider(a:i32, payload:i32) = (&data.provider);
-                driver = pipe rename Driver@0 {a -> a, value -> value};
-                provider = #retained rename Provider@1 {a -> a, payload -> payload};
+                driver = pipe rename Driver {a -> a, value -> value};
+                provider = #retained rename Provider {a -> a, payload -> payload};
                 #selection
                 joined = pipe probe first [a] driver, #target;
                 result = let canon project joined keep {a, value, payload};

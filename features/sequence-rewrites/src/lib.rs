@@ -45,7 +45,7 @@ macro_rules! sequence_rewrite {
             "    pipeline { finish };\n",
             "    physical {\n",
             "        relation R(a:i32);\n",
-            "        r = let canon rename R@0 {a -> a};\n",
+            "        r = let canon rename R {a -> a};\n",
             "        return r as answer(a);\n",
             "    }\n",
             "    structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }\n",

@@ -7,8 +7,8 @@ use quote::quote;
 fn retains_host_without_changing_graph_or_keys() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
         p = let canon probe first [x] s,r;
         return p as answer(x,y);
@@ -33,8 +33,8 @@ fn retains_host_without_changing_graph_or_keys() {
 fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {b -> y};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {b -> y};
         joined = let canon probe first [] l,r;
         return joined as answer(x,y);
     }};
@@ -53,7 +53,7 @@ fn retains_an_empty_key_cartesian_provider_without_changing_the_join() {
 fn retains_nonintegral_hosts_but_skips_lazy_membership() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation L(a:Vec<i64>); relation R(a:Vec<i64>);
-        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
+        l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
         s = pipe semi eager [x] l,r; return s as answer(x);
     }};
     let mut expected = source.clone();
@@ -66,7 +66,7 @@ fn retains_nonintegral_hosts_but_skips_lazy_membership() {
 
     let lazy: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64);
-        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
+        l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
         s = pipe semi lazy [x] l,r; return s as answer(x);
     }};
     assert_eq!(build_host_reads(&lazy, TokenStream::new()).unwrap(), lazy);

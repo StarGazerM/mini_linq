@@ -13,8 +13,8 @@ macro_rules! execute {
             physical {
                 relation L(a:i64) = ($left);
                 relation R(a:i64,b:i64) = ($right);
-                l = pipe rename L@0 {a -> x};
-                r = let rename R@1 {a -> x,b -> y};
+                l = pipe rename L {a -> x};
+                r = let rename R {a -> x,b -> y};
                 s = pipe semi eager[x] l,r;
                 p = pipe probe first[x] s,r;
                 out = let canon project p keep {x,y};

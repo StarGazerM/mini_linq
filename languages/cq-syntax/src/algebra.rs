@@ -196,8 +196,6 @@ pub struct Union {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct BlockOrigin {
     pub block_token: kw::block,
-    pub at: Token![@],
-    pub occurrence: crate::Occurrence,
     pub free_token: kw::free,
     #[syn(bracketed)]
     pub free_bracket: token::Bracket,
@@ -289,7 +287,7 @@ pub struct AttributeRename {
 /// Filter literal source columns, drop them, and rename the remaining columns.
 ///
 /// ```text
-/// Rename ::= "rename" RelationName "@" Int "{"
+/// Rename ::= "rename" RelationName "{"
 ///              [AttributeRename ("," AttributeRename)* [","]]
 ///            "}" ["constants" "{" Equality ("," Equality)* [","] "}"]
 /// ```
@@ -297,8 +295,6 @@ pub struct AttributeRename {
 pub struct Rename {
     pub rename_token: kw::rename,
     pub relation: Ident,
-    pub at: Token![@],
-    pub occurrence: crate::Occurrence,
     #[syn(braced)]
     pub mapping_brace: token::Brace,
     #[syn(in = mapping_brace)]
@@ -701,20 +697,6 @@ pub struct Environment {
     #[syn(in = bracket)]
     #[parse(CommaList::parse_terminated)]
     pub variables: CommaList<Ident>,
-    /// Written clause path, including branch ancestry for block programs.
-    #[parse(parse_environment_path)]
-    #[to_tokens(|tokens: &mut proc_macro2::TokenStream, path: &Option<crate::Occurrence>| if let Some(path) = path { tokens.extend(quote::quote!(@ #path)); })]
-    pub path: Option<crate::Occurrence>,
-}
-fn parse_environment_path(
-    input: syn::parse::ParseStream<'_>,
-) -> syn::Result<Option<crate::Occurrence>> {
-    if input.peek(Token![@]) {
-        input.parse::<Token![@]>()?;
-        input.parse().map(Some)
-    } else {
-        Ok(None)
-    }
 }
 impl Environment {
     pub fn check(
@@ -722,9 +704,6 @@ impl Environment {
         heading: &std::collections::BTreeSet<String>,
         _expression: &syn::Expr,
     ) -> syn::Result<()> {
-        if let Some(path) = &self.path {
-            path.check()?;
-        }
         let names: std::collections::BTreeSet<_> =
             self.variables.iter().map(crate::symbol_name).collect();
         if names.len() != self.variables.len() || !names.is_subset(heading) {

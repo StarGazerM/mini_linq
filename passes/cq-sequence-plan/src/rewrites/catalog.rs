@@ -636,8 +636,8 @@ mod tests {
                 physical {
                     relation L(a:i32); relation R(a:i32,b:i32);
                     consumer canonical;
-                    l = pipe rename L@0 {a -> a};
-                    r = #mode rename R@1 {a -> a,b -> b};
+                    l = pipe rename L {a -> a};
+                    r = #mode rename R {a -> a,b -> b};
                     answer = pipe probe first [a] l,r;
                     return answer as answer(a,b);
                 }

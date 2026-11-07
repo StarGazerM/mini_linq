@@ -383,7 +383,7 @@ mod tests {
         let source: Program = syn::parse_quote! {
             physical {
                 relation R(a:i32, label:StringCode);
-                r = pipe rename R@0 { a -> a, label -> label };
+                r = pipe rename R { a -> a, label -> label };
                 selected = let guard r if (accept(label));
                 projected = let canon project selected keep {a};
                 return projected as answer(a);

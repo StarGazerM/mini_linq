@@ -60,8 +60,8 @@ macro_rules! query {
             pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
             physical {
                 relation L(a:i64) = ($left); relation R(a:i64,b:i64) = ($right) $($host)*;
-                l = pipe rename L@0 {a -> x};
-                r = pipe rename R@1 {a -> x,b -> y};
+                l = pipe rename L {a -> x};
+                r = pipe rename R {a -> x,b -> y};
                 s = pipe semi eager [x] l,r;
                 p = pipe probe first [x] s,r;
                 observed = pipe guard p if ({ $visits.borrow_mut().push((*x, *y)); true });

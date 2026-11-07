@@ -85,7 +85,7 @@ mod tests {
         syn::parse2(quote::quote! {
             physical {
                 relation R(id:i64,key:i32,value:i64) = (&data.r);
-                r = pipe rename R@0 {id -> id,key -> key,value -> value};
+                r = pipe rename R {id -> id,key -> key,value -> value};
                 valuation = let canon project r keep {id,key,value};
                 grouped = pipe group valuation by [#keys] {
                     total:i64=sum(value); rows:usize=count();

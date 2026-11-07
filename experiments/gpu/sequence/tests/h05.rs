@@ -417,10 +417,10 @@ fn semijoin_device_store_builds_provider_after_publication() {
             relation Region(region:u32) = (&data.region);
             relation Nation(nation:u32,region:u32) = (&data.nation);
             relation Customer(customer:u32,nation:u32) = (&data.customer);
-            r1 = let rename Region@0 {region -> region};
-            nation_base = pipe rename Nation@1 {nation -> nation,region -> region};
+            r1 = let rename Region {region -> region};
+            nation_base = pipe rename Nation {nation -> nation,region -> region};
             r2 = let semi eager [region] nation_base,r1;
-            customer = pipe rename Customer@2 {customer -> customer,nation -> nation};
+            customer = pipe rename Customer {customer -> customer,nation -> nation};
             answer = let canon semi eager [nation] customer,r2;
             return answer as answer(customer,nation);
         }

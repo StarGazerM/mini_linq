@@ -7,9 +7,9 @@ use quote::quote;
 fn program() -> ir::Program {
     let physical: ir::physical::Program = syn::parse_quote! { physical {
         relation A(z:u32); relation C(z:u32,a:u32); relation D(a:u32,z:u32,w:u32);
-        x = pipe rename A@0 {z -> z};
-        c = let rename C@1 {z -> z, a -> a};
-        d = let rename D@2 {a -> a, z -> z, w -> w};
+        x = pipe rename A {z -> z};
+        c = let rename C {z -> z, a -> a};
+        d = let rename D {a -> a, z -> z, w -> w};
         p = pipe probe first [z] x, c;
         s = pipe semi eager [a, z] p, c;
         q = let canon probe first [a, z] s, d;

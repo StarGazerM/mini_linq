@@ -4,76 +4,21 @@
 //! additional proof checks actual named-definition substitutions instead of
 //! relaxing that contract or identifying witnesses by occurrence number.
 
-use super::{Kind, Schedule};
+use super::{Atoms, Kind, Structure};
 use crate::{Operator, Program, symbol_name};
 use std::collections::{HashMap, HashSet};
 
-pub(super) fn check(source: &Program, target: &Program, schedule: &Schedule) -> bool {
-    check_absorption(source, target, schedule) || check_dead_expansion(source, target, schedule)
+pub(super) fn check(
+    source: &Program,
+    target: &Program,
+    schedule: &Structure,
+    atoms: &mut Atoms,
+) -> bool {
+    check_absorption(source, target, schedule)
+        || check_dead_expansion(source, target, schedule, atoms)
 }
 
-/// Supply an independently checked inverse of the dead-expansion law to the
-/// VO schedule checker. This uses only the supplied target, never elaboration
-/// or planner choices. Existential support equalities remain scoped until an
-/// actual natural-join witness has been proved equivalent to that target.
-pub(super) fn check_expanded(source: &Schedule, target: &Program) -> bool {
-    if source.nodes.iter().any(|node| {
-        !matches!(
-            node.kind,
-            Kind::Unit | Kind::Atom(_) | Kind::Project | Kind::Join(_) | Kind::Select
-        )
-    }) || target.plan.definitions.iter().any(|definition| {
-        matches!(
-            definition.operator,
-            Operator::Bind(_)
-                | Operator::Guard(_)
-                | Operator::Anti(_)
-                | Operator::Union(_)
-                | Operator::Group(_)
-        )
-    }) {
-        return false;
-    }
-    let mut expanded = target.clone();
-    // Start outside support subtrees: exposing an outer semijoin's hidden
-    // columns can restore primary access to the exact named support, without
-    // flattening independent witnesses into one occurrence-wide equality.
-    for index in (0..expanded.plan.definitions.len()).rev() {
-        let Operator::Semijoin(join) = &expanded.plan.definitions[index].operator else {
-            continue;
-        };
-        let replacement = Operator::NaturalJoin(Box::new(crate::NaturalJoin {
-            natural_join_token: Default::default(),
-            left: join.left.clone(),
-            with_token: join.with_token,
-            right: join.right.clone(),
-        }));
-        let previous =
-            std::mem::replace(&mut expanded.plan.definitions[index].operator, replacement);
-        let Ok(schedule) = Schedule::from_program(&expanded) else {
-            expanded.plan.definitions[index].operator = previous;
-            continue;
-        };
-        // The expanded program is the SOURCE of the forward set identity.
-        // This catches new implicit downstream keys that did not exist in the
-        // supplied target's headings, as well as selections and output.
-        let demand = source_demand(&expanded, &schedule);
-        let left = schedule.nodes[index].operands[0];
-        if demand[index]
-            .iter()
-            .any(|name| !schedule.nodes[left].heading.contains_key(name))
-        {
-            expanded.plan.definitions[index].operator = previous;
-            continue;
-        }
-        if super::compare(source, &schedule).is_ok() {
-            return true;
-        }
-    }
-    false
-}
-
-fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> bool {
+fn check_absorption(source: &Program, target: &Program, schedule: &Structure) -> bool {
     if source.plan.output != target.plan.output {
         return false;
     }
@@ -165,7 +110,12 @@ fn check_absorption(source: &Program, target: &Program, schedule: &Schedule) -> 
 
 /// This certificate does not relax the ordinary schedule contract. It replays
 /// only independently proved local set laws, then requires the exact target.
-fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule) -> bool {
+fn check_dead_expansion(
+    source: &Program,
+    target: &Program,
+    schedule: &Structure,
+    atoms: &mut Atoms,
+) -> bool {
     // Opaque execution and block/negative ancestry are outside these set laws.
     if source.plan.output.head != target.plan.output.head
         || source.plan.definitions.iter().any(|definition| {
@@ -274,7 +224,7 @@ fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule)
         };
         apply_rewrite(&mut current, index, rewrite);
         prune_unreachable(&mut current, &retained);
-        let Ok(next_schedule) = Schedule::from_program(&current) else {
+        let Ok(next_schedule) = Structure::from_program(&current, atoms) else {
             return false;
         };
         current_schedule = next_schedule;
@@ -285,7 +235,7 @@ fn check_dead_expansion(source: &Program, target: &Program, schedule: &Schedule)
 
 /// Demand is computed from the SOURCE, including keys of every later join.
 /// Target heading validity alone cannot detect an erased implicit equality.
-fn source_demand(source: &Program, schedule: &Schedule) -> Vec<HashSet<String>> {
+fn source_demand(source: &Program, schedule: &Structure) -> Vec<HashSet<String>> {
     let mut demand = vec![HashSet::new(); schedule.nodes.len()];
     if let Some(output) = schedule.output {
         demand[output].extend(schedule.nodes[output].heading.keys().cloned());
@@ -440,7 +390,7 @@ fn dependencies(node: &super::Node) -> impl Iterator<Item = usize> + '_ {
 }
 
 struct Proof<'a> {
-    schedule: &'a Schedule,
+    schedule: &'a Structure,
     negative: Vec<bool>,
     grouped: Vec<bool>,
     retained: Vec<bool>,

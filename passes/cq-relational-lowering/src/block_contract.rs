@@ -1,85 +1,23 @@
-//! State the fixed block equations as structural obligations. Each occurrence
-//! has its given positional path; there is no mapping search or compilation.
+//! State the fixed block equations as the structural reference. Each block
+//! arm is visited in place; there is no mapping search or compilation.
 //! Branches project to the common heading. Fallback negatives refer to the
 //! original branches, while positive reductions remain separate references.
 
-use cq_lang_ra::{self as ra, contract::Schedule};
+use super::structural::Emitter;
+use cq_lang_ra as ra;
 use cq_lang_vo::{self as vo, cq};
-use cq_syntax::{Occurrence, symbol_name};
+use cq_syntax::symbol_name;
 use std::collections::{BTreeMap, BTreeSet};
 use syn::Ident;
 use vo::syntax as cq_syntax;
 
-/// Formal rule CK-BlockPlacement: Every supplied VO block has RA provenance with exactly its recorded correlation alternative.
-pub(super) fn check_placement(steps: &[vo::Step], target: &ra::Program) -> syn::Result<()> {
-    for step in steps {
-        let vo::Step::Block(block, _) = step else {
-            continue;
-        };
-        let correlated = block.placement == vo::blocks::Placement::Correlated;
-        let origins = target.plan.definitions.iter().filter_map(|definition| {
-            let ra::Operator::Union(union) = &definition.operator else {
-                return None;
-            };
-            union
-                .origin
-                .as_ref()
-                .filter(|origin| origin.occurrence == block.source.clause)
-        });
-        let mut found = false;
-        for origin in origins {
-            found = true;
-            if origin.over.is_some() != correlated {
-                return Err(syn::Error::new_spanned(
-                    block,
-                    "RA block placement differs from the recorded VO placement",
-                ));
-            }
-        }
-        if !found {
-            return Err(syn::Error::new_spanned(
-                block,
-                "RA omits the recorded VO block",
-            ));
-        }
-        for branch in &block.branches {
-            check_placement(&branch.steps, target)?;
-        }
-    }
-    Ok(())
-}
-
-fn paths(
-    body: &cq_syntax::CommaList<cq::BodyItem>,
-    parent: Option<(&Occurrence, usize)>,
-    result: &mut Vec<Occurrence>,
-) {
-    for (c, item) in body.iter().enumerate() {
-        let path = parent.map_or_else(|| Occurrence::new(c), |(p, j)| p.child(j, c));
-        match item {
-            cq::BodyItem::Positive { .. } | cq::BodyItem::Negation(_) => result.push(path),
-            cq::BodyItem::Block(block) => {
-                result.push(path.clone());
-                for (j, b) in block.branches.iter().enumerate() {
-                    paths(&b.body, Some((&path, j)), result);
-                }
-            }
-            _ => (),
-        }
-    }
-}
-
-pub(super) fn check(source: &cq::Program, steps: &[vo::Step], target: &Schedule) -> Result<(), String> {
-    let mut schedule = Schedule::default();
-    let mut occurrences = Vec::new();
-    paths(&source.query.body, None, &mut occurrences);
-    schedule.occurrence_paths(occurrences);
+pub(super) fn reference(source: &cq::Program, steps: &[vo::Step]) -> ra::Program {
+    let mut schedule = Emitter::default();
     let mut obligation = Body {
         schedule: &mut schedule,
         source,
         body: &source.query.body,
         steps,
-        parent: None,
         context: BTreeSet::new(),
         heading: BTreeSet::new(),
         prefix: None,
@@ -89,33 +27,15 @@ pub(super) fn check(source: &cq::Program, steps: &[vo::Step], target: &Schedule)
         placed_rust: BTreeSet::new(),
     };
     obligation.visit();
-    let input = obligation
-        .prefix
-        .unwrap_or_else(|| obligation.schedule.unit());
-    let mut output = obligation.schedule.project(
-        input,
-        &source
-            .query
-            .valuation_variables()
-            .cloned()
-            .collect::<Vec<_>>(),
-    );
-    if let Some(group) = &source.query.group {
-        output = obligation.schedule.group(
-            output,
-            &group.operator(source.query.head.relation.clone()),
-        );
-    }
-    obligation.schedule.finish(output, &source.query.head);
-    schedule.check(target, &[])
+    let input = obligation.seed();
+    schedule.finish(source, input)
 }
 
 struct Body<'a, 's> {
-    schedule: &'s mut Schedule,
+    schedule: &'s mut Emitter,
     source: &'a cq::Program,
     body: &'a cq_syntax::CommaList<cq::BodyItem>,
     steps: &'a [vo::Step],
-    parent: Option<(Occurrence, usize)>,
     context: BTreeSet<String>,
     heading: BTreeSet<String>,
     prefix: Option<usize>,
@@ -125,11 +45,6 @@ struct Body<'a, 's> {
     placed_rust: BTreeSet<usize>,
 }
 impl Body<'_, '_> {
-    fn path(&self, clause: usize) -> Occurrence {
-        self.parent
-            .as_ref()
-            .map_or_else(|| Occurrence::new(clause), |(p, j)| p.child(*j, clause))
-    }
     fn seed(&mut self) -> usize {
         self.prefix.unwrap_or_else(|| {
             let unit = self.schedule.unit();
@@ -155,12 +70,7 @@ impl Body<'_, '_> {
                     .filter_map(|(c, a)| cq::rust::variable(a).map(|v| (c.name.clone(), v.clone())))
                     .collect::<Vec<_>>();
                 let constants = super::occurrence_constants(declaration, atom);
-                self.schedule.atom_path(
-                    &self.path(clause),
-                    &atom.relation,
-                    &mapping,
-                    constants.as_ref(),
-                )
+                self.schedule.atom(&atom.relation, &mapping, constants)
             }
             cq::BodyItem::Block(block) => {
                 let prefix = cq::blocks::bound_before(self.body, clause, &self.context);
@@ -191,7 +101,7 @@ impl Body<'_, '_> {
                 let mut originals = Vec::new();
                 let mut operands = Vec::new();
                 let columns = facts.free.values().cloned().collect::<Vec<_>>();
-                for (j, (branch, plan)) in block.branches.iter().zip(&planned.branches).enumerate()
+                for (branch, plan) in block.branches.iter().zip(&planned.branches)
                 {
                     let mut input = over.or(domain);
                     if correlated && block.kind == cq::blocks::Kind::Fallback {
@@ -203,13 +113,11 @@ impl Body<'_, '_> {
                             ));
                         }
                     }
-                    let child_path = self.path(clause);
                     let mut child = Body {
                         schedule: self.schedule,
                         source: self.source,
                         body: &branch.body,
                         steps: &plan.steps,
-                        parent: Some((child_path, j)),
                         context: if correlated {
                             prefix.clone()
                         } else {
@@ -249,13 +157,8 @@ impl Body<'_, '_> {
                     originals.push(original);
                     operands.push(positive);
                 }
-                let union = ra::Union {
-                    union_token: Default::default(),
-                    operands: Default::default(),
-                    origin: Some(ra::BlockOrigin {
+                let origin = ra::BlockOrigin {
                         block_token: Default::default(),
-                        at: Default::default(),
-                        occurrence: self.path(clause),
                         free_token: Default::default(),
                         free_bracket: Default::default(),
                         free: facts.free.values().cloned().collect(),
@@ -265,12 +168,11 @@ impl Body<'_, '_> {
                         fallback: (block.kind == cq::blocks::Kind::Fallback).then(Default::default),
                         over: None,
                         domain: None,
-                    }),
                 };
                 if correlated {
                     self.correlated.insert(clause);
                 }
-                self.schedule.union_frame(&operands, &union, over, domain)
+                self.schedule.union(&operands, origin, over, domain)
             }
             _ => unreachable!("VO relation occurrence"),
         };
@@ -326,7 +228,6 @@ impl Body<'_, '_> {
             .free_variables
             .dependencies(&scope);
         ra::Environment {
-            path: Some(self.path(clause)),
             scope_token: Default::default(),
             bracket: Default::default(),
             variables: names
@@ -354,7 +255,7 @@ impl Body<'_, '_> {
                     let input = self.seed();
                     self.prefix = Some(self.schedule.select(
                         input,
-                        &ra::Theta {
+                        ra::Theta {
                             equalities: std::iter::once(e.clone()).collect(),
                             constraints: Default::default(),
                         },
@@ -364,13 +265,13 @@ impl Body<'_, '_> {
                     let input = self.seed();
                     let mut theta = ra::Theta::default();
                     theta.push_constraint(c.clone());
-                    self.prefix = Some(self.schedule.select(input, &theta));
+                    self.prefix = Some(self.schedule.select(input, theta));
                 }
                 vo::Step::Restrict(r, _) => {
                     let occurrence = self.relation(r.clause());
                     let mut theta = ra::Theta::default();
                     theta.push_constraint(r.predicate.clone());
-                    let restricted = self.schedule.select(occurrence, &theta);
+                    let restricted = self.schedule.select(occurrence, theta);
                     self.relations.insert(r.clause(), restricted);
                 }
                 vo::Step::Negation(negation, _) => {
@@ -390,13 +291,11 @@ impl Body<'_, '_> {
                         .find(|d| symbol_name(&d.name) == symbol_name(&negation.atom.relation))
                         .expect("contracted negative input");
                     let bound = cq::blocks::bound_before(self.body, clause, &self.context);
-                    let path = self.path(clause);
                     let input = self.seed();
                     self.prefix = Some(super::negation::obligation(
                         self.schedule,
                         declaration,
                         negation,
-                        &path,
                         &bound,
                         input,
                     ));
@@ -405,19 +304,19 @@ impl Body<'_, '_> {
                 vo::Step::Guard(g, _) => {
                     let input = self.seed();
                     let environment = self.environment(Some(g), None, None);
-                    self.prefix = Some(self.schedule.guard_in(input, g, Some(&environment)));
+                    self.prefix = Some(self.schedule.guard(input, g, Some(environment)));
                 }
                 vo::Step::Let(b, _) => {
                     let input = self.seed();
                     let environment = self.environment(None, Some(b), None);
-                    self.prefix = Some(self.schedule.bind_in(input, b, Some(&environment)));
+                    self.prefix = Some(self.schedule.bind(input, b, Some(environment)));
                     self.heading
                         .extend(cq::rust::bindings(&b.pattern).iter().map(symbol_name));
                 }
                 vo::Step::For(b, _) => {
                     let input = self.seed();
                     let environment = self.environment(None, None, Some(b));
-                    self.prefix = Some(self.schedule.for_in(input, b, Some(&environment)));
+                    self.prefix = Some(self.schedule.for_bind(input, b, Some(environment)));
                     self.heading
                         .extend(cq::rust::bindings(&b.pattern).iter().map(symbol_name));
                 }
@@ -465,7 +364,7 @@ impl Body<'_, '_> {
                         let joined = self.schedule.join(left, right, false);
                         let selected = self.schedule.select(
                             joined,
-                            &ra::Theta {
+                            ra::Theta {
                                 equalities: equalities.into_iter().collect(),
                                 constraints: Default::default(),
                             },

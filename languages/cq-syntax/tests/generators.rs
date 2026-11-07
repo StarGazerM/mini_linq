@@ -25,9 +25,9 @@ fn only_fallback_construction_proves_union_disjointness() {
     // Literal values are never decoded: an origin-free union or a union block
     // is canonicalized whatever literals its arms select.
     assert!(disjoint_unions([(&union, None)]).is_empty());
-    let block: BlockOrigin = syn::parse_quote!(block @0 free [] interface [tag]);
+    let block: BlockOrigin = syn::parse_quote!(block free [] interface [tag]);
     assert!(disjoint_unions([(&union, Some(&block))]).is_empty());
-    let fallback: BlockOrigin = syn::parse_quote!(block @0 free [] interface [tag] fallback);
+    let fallback: BlockOrigin = syn::parse_quote!(block free [] interface [tag] fallback);
     assert!(disjoint_unions([(&union, Some(&fallback))]).contains("union"));
 }
 
@@ -35,9 +35,9 @@ fn only_fallback_construction_proves_union_disjointness() {
 fn occurrence_constants_round_trip_and_require_literal_values() {
     use cq_syntax::algebra::Rename;
     for text in [
-        "rename R@0 {a -> x} constants {b = 7, c = -2}",
-        "rename R@0 {} constants {a = true, b = \"fixed\"}",
-        "rename R@0 {a -> x}",
+        "rename R {a -> x} constants {b = 7, c = -2}",
+        "rename R {} constants {a = true, b = \"fixed\"}",
+        "rename R {a -> x}",
     ] {
         let rename: Rename = syn::parse_str(text).unwrap();
         if let Some(constants) = &rename.constants {
@@ -56,7 +56,7 @@ fn occurrence_constants_round_trip_and_require_literal_values() {
         let constants: cq_syntax::algebra::OccurrenceConstants = syn::parse_str(text).unwrap();
         assert!(constants.check().is_err());
     }
-    assert!(syn::parse_str::<Rename>("rename R@0 {} constants {a = f()}").is_err());
+    assert!(syn::parse_str::<Rename>("rename R {} constants {a = f()}").is_err());
 }
 
 #[test]

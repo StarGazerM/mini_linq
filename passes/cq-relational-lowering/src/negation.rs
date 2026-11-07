@@ -68,19 +68,18 @@ pub(super) fn layout(
 }
 
 pub(super) fn obligation(
-    schedule: &mut ra::contract::Schedule,
+    schedule: &mut super::structural::Emitter,
     declaration: &syntax::RelationDecl,
     negation: &cq::Negation,
-    path: &syntax::Occurrence,
     bound: &BTreeSet<String>,
     left: usize,
 ) -> usize {
     let layout = layout(declaration, negation, bound);
-    let mut right = schedule.atom_path(path, &negation.atom.relation, &layout.mapping, None);
+    let mut right = schedule.atom(&negation.atom.relation, &layout.mapping, None);
     let filtered =
         !layout.condition.equalities.is_empty() || !layout.condition.constraints.is_empty();
     if filtered {
-        right = schedule.select(right, &layout.condition);
+        right = schedule.select(right, layout.condition);
     }
     if layout.keys.len() != layout.mapping.len() && filtered {
         right = schedule.project(right, &layout.keys);

@@ -6,8 +6,8 @@ fn filtered_probe(condition: proc_macro2::TokenStream) -> Program {
         physical {
             relation Driver(a:i32, value:i32, bound:i32) = (&data.driver);
             relation Provider(a:i32, payload:i32) = (&data.provider);
-            driver = pipe rename Driver@0 {a -> a, value -> value, bound -> bound};
-            provider = let rename Provider@1 {a -> a, payload -> payload};
+            driver = pipe rename Driver {a -> a, value -> value, bound -> bound};
+            provider = let rename Provider {a -> a, payload -> payload};
             filtered = pipe select driver if (#condition);
             present = pipe semi eager [a] filtered, provider;
             projected = pipe project present keep {a, value};
@@ -142,8 +142,8 @@ fn negative_membership_inverts_the_provider_probe_without_expanding_witnesses() 
             physical {
                 relation Driver(a:i32, b:i32) = (&data.driver);
                 relation Provider(a:i32, b:i32) = (&data.provider);
-                driver = pipe rename Driver@0 {a -> a, b -> b};
-                provider = let rename Provider@1 {a -> a, b -> b};
+                driver = pipe rename Driver {a -> a, b -> b};
+                provider = let rename Provider {a -> a, b -> b};
                 present = pipe #operator eager [a, b] driver, provider;
                 result = let canon project present keep {a, b};
                 return result as answer(a, b);
@@ -190,8 +190,8 @@ fn planned_retained_provider_filter_evaluates_row_columns_before_build() {
         physical {
             relation Driver(a:i32) = (&data.driver);
             relation Provider(a:i32,value:i32,bound:i32) = (&data.provider);
-            driver = pipe rename Driver@0 {a -> a};
-            provider = pipe rename Provider@1 {a -> a,value -> value,bound -> bound};
+            driver = pipe rename Driver {a -> a};
+            provider = pipe rename Provider {a -> a,value -> value,bound -> bound};
             selected = let select provider if (value < bound);
             present = pipe semi eager [a] driver,selected;
             result = let canon project present keep {a};
@@ -233,8 +233,8 @@ fn segmented_binding(expression: proc_macro2::TokenStream) -> Program {
         physical {
             relation Driver(a:i32) = (&data.driver);
             relation Provider(a:i32, value:i32) = (&data.provider);
-            driver = pipe rename Driver@0 {a -> a};
-            provider = let rename Provider@1 {a -> a, value -> value};
+            driver = pipe rename Driver {a -> a};
+            provider = let rename Provider {a -> a, value -> value};
             joined = pipe probe first [a] driver, provider;
             computed = pipe bind joined with doubled:i32 = (#expression);
             result = let canon project computed keep {a, doubled};
@@ -330,8 +330,8 @@ fn row_regression_contradictory_provider_intervals_are_empty() -> cq_gpu_sequenc
             let output = cq_gpu_sequence_test_macros::sequence! {
                 physical {
                     relation R(x:i32) = (&data);
-                    driver = pipe rename R@0 {x -> x};
-                    provider = pipe rename R@1 {x -> x};
+                    driver = pipe rename R {x -> x};
+                    provider = pipe rename R {x -> x};
                     $($selection)*
                     present = pipe semi eager [x] driver,selected;
                     result = let canon project present keep {x};

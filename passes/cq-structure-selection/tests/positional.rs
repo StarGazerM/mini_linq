@@ -4,8 +4,8 @@ use quote::{ToTokens, quote};
 fn physical() -> physical::Program {
     syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {c -> x,d -> z};
         s = let point select r if (z = 1);
         t = let semi eager [x] l,s;
         u = pipe semi eager [x] s,t;
@@ -173,9 +173,9 @@ fn duplicate_and_missing_summaries_and_false_payload_indices_fail() {
 fn index_only_rhs_prunes_dependent_candidates_without_changing_the_old_representation() {
     let physical = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation H(c:i64); relation R(d:i64,e:i64);
-        l = pipe rename L@0 {a -> x,b -> y}; h = pipe rename H@1 {c -> x};
+        l = pipe rename L {a -> x,b -> y}; h = pipe rename H {c -> x};
         a = let semi eager [x] l,h;
-        r = pipe rename R@2 {d -> x,e -> z};
+        r = pipe rename R {d -> x,e -> z};
         t = let semi eager [x] r,a;
         out = let canon project t keep {x,z}; return out as answer(x,z);
     }};
@@ -189,12 +189,12 @@ fn index_only_rhs_prunes_dependent_candidates_without_changing_the_old_represent
 fn eager_semi_with_joined_support_admits_left_positional_keyset() {
     let source = syn::parse_quote! { physical {
         relation L(a:i64); relation R(b:i64); relation S(c:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {b -> x};
-        s = pipe rename S@2 {c -> x};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {b -> x};
+        s = pipe rename S {c -> x};
         support = let probe first [x] r,s;
         filtered = let semi eager [x] l,support;
-        outer = pipe rename L@3 {a -> x};
+        outer = pipe rename L {a -> x};
         out = let canon semi eager [x] outer,filtered;
         return out as answer(x);
     }};
@@ -220,7 +220,7 @@ fn eager_semi_with_joined_support_admits_left_positional_keyset() {
 fn join_filter_plan(branch: bool) -> ir::Program {
     let build = if branch {
         quote! {
-            h = pipe rename H@2 {e -> z,f -> w};
+            h = pipe rename H {e -> z,f -> w};
             b = let probe first [z] s,h;
         }
     } else {
@@ -228,8 +228,8 @@ fn join_filter_plan(branch: bool) -> ir::Program {
     };
     let source: physical::Program = syn::parse2(quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64); relation H(e:i64,f:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {c -> x,d -> z};
         s = pipe range select r if (z > 1);
         #build
         j = pipe probe first [x] l,b;
@@ -401,8 +401,8 @@ fn membership_provider_selection_is_type_blind_and_has_no_redundant_filter() {
     ] {
         let source: physical::Program = syn::parse2(quote! { physical {
             relation L(a:#key_type); relation R(a:#key_type,b:i64);
-            l = pipe rename L@0 {a -> x};
-            r = pipe rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = pipe rename R {a -> x,b -> y};
             selected = let range select r if (y > 1);
             joined = pipe probe first [x] l,selected;
             result = let canon project joined keep {x};
@@ -472,11 +472,11 @@ fn join_filters_cross_probes_only_on_scan_key_columns() {
     let plan = |key: proc_macro2::TokenStream| {
         let source: physical::Program = syn::parse2(quote! { physical {
             relation L(a:i64,b:i64); relation R(c:i64,d:i64); relation H(e:i64,f:i64);
-            l = pipe rename L@0 {a -> x,b -> y};
-            h = pipe rename H@2 {e -> y,f -> w};
+            l = pipe rename L {a -> x,b -> y};
+            h = pipe rename H {e -> y,f -> w};
             m = let range select h if (w > 1);
             p = pipe probe first [y] l,m;
-            r = pipe rename R@1 {c -> #key,d -> z};
+            r = pipe rename R {c -> #key,d -> z};
             s = pipe range select r if (z > 1);
             b = let project s keep {#key,z};
             j = pipe probe first [#key] p,b;
@@ -517,8 +517,8 @@ fn repeated_filter_plan(distinct_build: bool, distinct_layout: bool) -> ir::Prog
     let input = if distinct_build { quote!(p) } else { quote!(q) };
     let source: physical::Program = syn::parse2(quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {c -> x,d -> z};
         s = pipe range select r if (z > 1);
         b = let project s keep {x,z};
         #version
@@ -609,9 +609,9 @@ fn filter_build_versions_and_key_layouts_remain_distinct() {
 fn filters_do_not_share_across_occurrences_of_one_host() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        m = pipe rename L@2 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> z};
+        l = pipe rename L {a -> x,b -> y};
+        m = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {c -> x,d -> z};
         b = let range select r if (z > 1);
         p = pipe probe first [x] l,b;
         q = pipe probe first [x] m,b;
@@ -628,8 +628,8 @@ fn filters_do_not_share_across_occurrences_of_one_host() {
 fn filters_preserve_distinct_scalar_key_mappings_and_markers() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64,e:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> y,e -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {c -> x,d -> y,e -> z};
         b = let range select r if (y > 1);
         q = pipe semi eager [x,y] l,b;
         j = pipe probe first [x,y] q,b;
@@ -648,7 +648,7 @@ fn filters_preserve_distinct_scalar_key_mappings_and_markers() {
 fn block_source() -> physical::Program {
     syn::parse_quote! { physical {
         relation R(a: OpaqueAlias [17], b: OtherSpelling [17]);
-        r = pipe rename R@0 { a -> x, b -> y };
+        r = pipe rename R { a -> x, b -> y };
         p = pipe range select r if (x >= 3);
         g = pipe guard p if (opaque(y));
         v = pipe bind g with value: u64 = (compute(x));
@@ -710,7 +710,7 @@ fn blocks_keep_exact_disjunction_and_cross_column_predicates() {
     ] {
         let source: physical::Program = syn::parse2(quote! { physical {
             relation R(a: Alias [17], b: Alias [17]);
-            r = pipe rename R@0 { a -> x, b -> y };
+            r = pipe rename R { a -> x, b -> y };
             p = pipe select r if (#condition);
             return canon p as answer(x,y);
         }}).unwrap();
@@ -744,8 +744,8 @@ fn blocks_join_and_index_boundaries_reject_before_printing() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a: Alias [17], b: Alias [17]);
         relation S(c: Alias [17]);
-        r = pipe rename R@0 {a -> x, b -> y};
-        s = let rename S@1 {c -> x};
+        r = pipe rename R {a -> x, b -> y};
+        s = let rename S {c -> x};
         j = pipe probe first [x] r,s;
         return canon j as answer(x,y);
     }};
@@ -772,7 +772,7 @@ fn blocks_base_group_keys_and_aggregates_reject_before_printing() {
     ] {
         let source: physical::Program = syn::parse2(quote! { physical {
             relation R(a: Alias [17], b: Alias [17]);
-            r = pipe rename R@0 {a -> x, b -> y};
+            r = pipe rename R {a -> x, b -> y};
             valuations = let canon project r keep {x,y};
             grouped = pipe #group;
             return dedup grouped as #head;
@@ -786,7 +786,7 @@ fn blocks_base_group_keys_and_aggregates_reject_before_printing() {
 fn blocks_groups_accept_owned_computed_operands() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a: Alias [17], b: Alias [17]);
-        r = pipe rename R@0 {a -> x, b -> y};
+        r = pipe rename R {a -> x, b -> y};
         v = pipe bind r with value: u64 = (compute(x));
         valuations = let canon project v keep {x,y,value};
         grouped = pipe group valuations by [] { total: u64 = sum(value); };
@@ -802,7 +802,7 @@ fn blocks_groups_accept_owned_computed_operands() {
 fn blocks_restricted_source_literals_reject_before_printing() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a: Alias [17], b: Alias [17]);
-        r = let canon rename R@0 {a -> x} constants {b = 7};
+        r = let canon rename R {a -> x} constants {b = 7};
         return r as answer(x);
     }};
     cq_structure_selection::compile(&source).unwrap();
@@ -825,7 +825,7 @@ fn blocks_external_consumer_preserves_witness_values_and_owned_computations() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a: Alias [17], b: Alias [17]);
         capture { let group: u64 = 0; }
-        r = pipe rename R@0 {a -> x, b -> y};
+        r = pipe rename R {a -> x, b -> y};
         v = pipe bind r with value: u64 = (compute(y));
         out = let canon project v keep {x,y,value};
         return out as rows(group,x,y,value);

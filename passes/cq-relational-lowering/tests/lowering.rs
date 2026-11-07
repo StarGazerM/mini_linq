@@ -5,14 +5,30 @@ use cq_testkit::{corpus as scenarios, cq_semantics as cq_oracle, databases, sema
 use cq_lang_ra as ra;
 use cq_lang_vo as valuation;
 use cq_lang_vo::cq;
-use cq_relational_lowering::check;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
 fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
-    let target = cq_relational_lowering::compile(source)?;
-    check(source, &target)?;
+    let (target, steps) = cq_relational_lowering::compile(source)?;
+    cq_relational_lowering::check(source, &target, &steps)?;
     Ok(target)
+}
+
+/// The lowering alone; the seam table is dropped.
+fn lowered(source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
+    cq_relational_lowering::compile(source).map(|(target, _)| target)
+}
+
+/// The seam check with the side table of the supplied VO's own lowering.
+fn check(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let (_, steps) = cq_relational_lowering::compile(source)?;
+    cq_relational_lowering::check(source, target, &steps)
+}
+
+/// Structural refinement of a VO the target was not lowered from (CK-RLStructure only).
+fn refines(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let analysis = cq_lang_vo::contract::check(source)?;
+    cq_relational_lowering::check_reference(&source.cq, &source.valuation.steps, &analysis, target)
 }
 
 fn cq(tokens: TokenStream) -> cq::Program {
@@ -103,7 +119,7 @@ fn generated_results_do_not_shadow_declared_relations() {
     assert_plan(
         &target,
         quote! {
-            r3 = rename r0@0 { x -> x }; r4 = project r3 keep { x }; output r4 as r2(x);
+            r3 = rename r0 { x -> x }; r4 = project r3 keep { x }; output r4 as r2(x);
         },
     );
 }
@@ -114,8 +130,8 @@ fn coarse_plans_elaborate_relation_at_a_time() {
     assert_plan(
         &target,
         quote! {
-            r0 = rename L@0 { a -> a }; r1 = rename R@1 { a -> a, b -> b };
-            r2 = natural_join r0 with r1; r3 = rename S@2 { b -> b, c -> c };
+            r0 = rename L { a -> a }; r1 = rename R { a -> a, b -> b };
+            r2 = natural_join r0 with r1; r3 = rename S { b -> b, c -> c };
             r4 = natural_join r2 with r3; r5 = project r4 keep { a, c };
             output r5 as answer(a, c);
         },
@@ -330,10 +346,10 @@ fn reduced_prefix_guards_keep_independent_support_witnesses() {
     assert_plan(
         &target,
         quote! {
-            r0 = rename T@4 { x -> x, y -> y, z -> z };
-            r1 = rename Other@1 { y -> y };
+            r0 = rename T { x -> x, y -> y, z -> z };
+            r1 = rename Other { y -> y };
             r2 = semijoin r0 with r1;
-            r3 = rename R@0 { x -> x };
+            r3 = rename R { x -> x };
             r4 = semijoin r3 with r2;
             r5 = semijoin r2 with r4;
             r6 = semijoin r1 with r5;
@@ -366,7 +382,7 @@ fn seed_997_reductions_match_equality_classes_before_rust() {
         },
     );
     let target = compile(&reduced).unwrap();
-    let reference = cq_relational_lowering::compile(&written).unwrap();
+    let reference = lowered(&written).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     let first_rust = target
         .plan
@@ -428,7 +444,7 @@ fn reductions_match_every_protected_column_in_an_equality_class() {
     for form in equality_forms(&plan) {
         assert_eq!(compile(&form).unwrap(), target);
     }
-    let reference = cq_relational_lowering::compile(&coarse(&source)).unwrap();
+    let reference = lowered(&coarse(&source)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
 }
 
@@ -440,23 +456,23 @@ fn independent_relations_commute_across_rust() {
     });
     let target: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
-        r = rename R@0 {a -> x}; s = rename S@2 {b -> w};
+        r = rename R {a -> x}; s = rename S {b -> w};
         j = natural_join r with s; g = guard j if (10 / *x > 0);
         output g as answer(x,w);
     }};
-    check(&coarse(&source), &target).unwrap();
+    refines(&coarse(&source), &target).unwrap();
     let later_source = cq(quote! {
         struct Q; relation R(a: i32); relation S(b: i32);
         answer(x, w) :- R(x), S(w), if 10 / *x > 0;
     });
     let late: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
-        r = rename R@0 {a -> x}; g = guard r if (10 / *x > 0);
-        s = rename S@1 {b -> w}; j = natural_join g with s;
+        r = rename R {a -> x}; g = guard r if (10 / *x > 0);
+        s = rename S {b -> w}; j = natural_join g with s;
         output j as answer(x,w);
     }};
     ra::contract::check(&late).unwrap();
-    check(&coarse(&later_source), &late).unwrap();
+    refines(&coarse(&later_source), &late).unwrap();
 }
 
 #[test]
@@ -465,12 +481,12 @@ fn rust_reordering_is_accepted_but_payload_mutations_are_rejected() {
         struct Q; relation R(a:i32); answer(x,y) :- R(x), if { *x != 0 }, let y:i32 = 10 / *x;
     });
     let target: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R@0 {a -> x};
+        relation R(a:i32); r = rename R {a -> x};
         b = bind r with y:i32 = (10 / *x); g = guard b if ({ *x != 0 });
         output g as answer(x,y);
     }};
     ra::contract::check(&target).unwrap();
-    check(&coarse(&source), &target).unwrap();
+    refines(&coarse(&source), &target).unwrap();
     let mut changed = compile(&coarse(&source)).unwrap();
     let node = changed
         .plan
@@ -513,8 +529,8 @@ fn projection_cannot_discard_a_join_correlation() {
     });
     let broken: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-        r = rename R@0 {a -> x,b -> y}; p = project r keep {x};
-        s = rename S@1 {b -> y,c -> z}; j = natural_join p with s;
+        r = rename R {a -> x,b -> y}; p = project r keep {x};
+        s = rename S {b -> y,c -> z}; j = natural_join p with s;
         o = project j keep {x,z}; output o as answer(x,z);
     }};
     ra::contract::check(&broken).unwrap();
@@ -527,12 +543,12 @@ fn relational_equality_commutes_with_total_rust() {
         struct Q; relation R(a:i32); answer(x) :- R(x), where x == 1, if 10 / *x > 0;
     });
     let broken: ra::Program = syn::parse_quote! { relational {
-        relation R(a:i32); r = rename R@0 {a -> x};
+        relation R(a:i32); r = rename R {a -> x};
         g = guard r if (10 / *x > 0); s = select g if (x = 1);
         output s as answer(x);
     }};
     ra::contract::check(&broken).unwrap();
-    check(&coarse(&source), &broken).unwrap();
+    refines(&coarse(&source), &broken).unwrap();
 }
 
 #[test]
@@ -589,7 +605,7 @@ fn written_reference_filters_literal_columns_before_dependent_expressions() {
     });
     let normal = cq::normal::normalize(&surface).unwrap();
     let source = coarse(&normal);
-    let written = cq_relational_lowering::compile(&source).unwrap();
+    let written = lowered(&source).unwrap();
     check(&source, &written).unwrap();
     for target in [written, compile(&source).unwrap()] {
         let bind = target
@@ -619,11 +635,11 @@ fn correspondence_accepts_independent_relational_placement() {
     let written = coarse(&source);
     let hoisted = vo(&source, quote! { S@2(w); R@0(x); if 10 / *x > 1; });
     valuation::contract::check(&hoisted).unwrap();
-    let later = cq_relational_lowering::compile(&written).unwrap();
+    let later = lowered(&written).unwrap();
     // Total Rust has no written relational predecessor obligations.
     check(&written, &later).unwrap();
-    check(&hoisted, &later).unwrap();
-    check(&written, &compile(&hoisted).unwrap()).unwrap();
+    refines(&hoisted, &later).unwrap();
+    refines(&written, &compile(&hoisted).unwrap()).unwrap();
 }
 
 #[test]
@@ -646,12 +662,12 @@ fn leibniz_equality_class_can_use_either_generator_binding() {
     assert!(!explicit, "the shared join heading decides identity");
     let replacement: ra::Program = syn::parse_quote! { relational {
         relation R(key:Key, marker:i32); relation S(key:Key);
-        s = rename S@1 {key -> x}; r = rename R@0 {key -> x, marker -> z};
+        s = rename S {key -> x}; r = rename R {key -> x, marker -> z};
         j = natural_join s with r; b = bind j with y:bool = (x.flag);
         p = project b keep {y}; output p as answer(y);
     }};
     ra::contract::check(&replacement).unwrap();
-    check(&source, &replacement).unwrap();
+    refines(&source, &replacement).unwrap();
 }
 
 #[test]
@@ -662,12 +678,12 @@ fn projection_before_rust_can_discard_variables_outside_its_free_variables() {
     });
     let target: ra::Program = syn::parse_quote! { relational {
         relation R(key:Key, marker:i32);
-        r = rename R@0 {key -> x, marker -> z}; p = project r keep {x};
+        r = rename R {key -> x, marker -> z}; p = project r keep {x};
         b = bind p with y:bool = (x.flag); out = project b keep {y};
         output out as answer(y);
     }};
     ra::contract::check(&target).unwrap();
-    check(&coarse(&source), &target).unwrap();
+    refines(&coarse(&source), &target).unwrap();
 }
 
 #[test]
@@ -700,7 +716,7 @@ fn named_vo_reductions_cannot_be_erased_by_the_final_join() {
 }
 
 #[test]
-fn vo_clause_identity_is_checked_but_redundant_partial_columns_can_change() {
+fn redundant_partial_columns_can_change() {
     let source = cq(quote! {
         struct Q; relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
         answer(a,c) :- L(a), if opaque(a), R(a,b), S(b,c);
@@ -710,22 +726,6 @@ fn vo_clause_identity_is_checked_but_redundant_partial_columns_can_change() {
         quote! { R@2(a,_); L@0(a); if opaque(a); R@2(a,b); S@3(b,c); },
     );
     let target = compile(&valuation).unwrap();
-    for index in [0, 1] {
-        let mut changed = target.clone();
-        let rename = changed
-            .plan
-            .definitions
-            .iter_mut()
-            .filter_map(|d| match &mut d.operator {
-                ra::Operator::Rename(r) => Some(r),
-                _ => None,
-            })
-            .nth(index)
-            .unwrap();
-        rename.occurrence = syn::parse_quote!(50);
-        ra::contract::check(&changed).unwrap();
-        assert!(check(&valuation, &changed).is_err());
-    }
     let mut changed = target;
     let projection = changed
         .plan
@@ -991,7 +991,7 @@ fn generator_elaboration_round_trips_and_certifies_set_valued_binding() {
         answer(b) :- R(a), for b in 0..a, let c = b;
     }));
     let target = compile(&source).unwrap();
-    cq_relational_lowering::compile(&source).unwrap();
+    lowered(&source).unwrap();
     assert_eq!(
         syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
         target
@@ -1094,8 +1094,8 @@ fn negation_elaborates_direct_host_keys_without_redundant_projection() {
     assert_plan(
         &target,
         quote! {
-            r0 = rename R@0 { a -> x, b -> y };
-            r1 = rename K@1 { a -> x, b -> y };
+            r0 = rename R { a -> x, b -> y };
+            r1 = rename K { a -> x, b -> y };
             r2 = anti [x,y] r0, r1;
             r3 = project r2 keep { x,y };
             output r3 as answer(x,y);
@@ -1113,7 +1113,7 @@ fn negative_constants_repeats_and_wildcards_match_reference_semantics() {
         .unwrap();
         let written = coarse(&source);
         let target = compile(&written).unwrap();
-        let reference = cq_relational_lowering::compile(&written).unwrap();
+        let reference = lowered(&written).unwrap();
         let anti = target
             .plan
             .definitions
@@ -1190,7 +1190,7 @@ fn raw_negation_names_match_reference_semantics() {
                 .unwrap();
                 let target = compile(&written).unwrap();
                 let reference_vo = cq_order::compile_written(&normal).unwrap();
-                let reference = cq_relational_lowering::compile(&reference_vo).unwrap();
+                let reference = lowered(&reference_vo).unwrap();
                 check(&reference_vo, &reference).unwrap();
                 for seed in 0..32 {
                     let database = databases::binary_database(&source, seed);
@@ -1354,7 +1354,7 @@ fn native_anti_proof_allows_positive_join_and_total_rust_reordering() {
         },
     );
     let target = compile(&reordered).unwrap();
-    check(&written, &target).unwrap();
+    refines(&written, &target).unwrap();
     let mut delayed = target.clone();
     let guard_position = delayed
         .plan
@@ -1382,5 +1382,5 @@ fn native_anti_proof_allows_positive_join_and_total_rust_reordering() {
     delayed.plan.definitions[guard_position].operator =
         syn::parse_quote!(anti [#keys] #earlier, #right);
     ra::contract::check(&delayed).unwrap();
-    check(&written, &delayed).unwrap();
+    refines(&written, &delayed).unwrap();
 }

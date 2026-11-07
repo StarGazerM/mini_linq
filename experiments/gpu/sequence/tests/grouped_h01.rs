@@ -108,7 +108,7 @@ fn h01_gpu_matches_duckdb(scale: u32) -> Result<()> {
         let result = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation L(orderkey:u32,linenumber:u32,returnflag:u32,linestatus:u32,quantity:i64,price:i64,shipdate:i32)=(&data);
-                l=pipe rename L@0 {orderkey -> orderkey,linenumber -> linenumber,returnflag -> returnflag,linestatus -> linestatus,quantity -> quantity,price -> price,shipdate -> shipdate};
+                l=pipe rename L {orderkey -> orderkey,linenumber -> linenumber,returnflag -> returnflag,linestatus -> linestatus,quantity -> quantity,price -> price,shipdate -> shipdate};
                 filtered=let canon select l if (shipdate <= 10471);
                 grouped=let group filtered by [returnflag,linestatus] {sum_quantity:i64=sum(quantity);sum_price:i64=sum(price);count_order:usize=count();};
                 return grouped as answer(returnflag,linestatus,sum_quantity,sum_price,count_order);

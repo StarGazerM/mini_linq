@@ -25,7 +25,7 @@ fn recorded_for_order_survives_packed_flat_and_terminal_publications() -> Result
         let output = cq_gpu_sequence_test_macros::sequence! {
             physical {
                 relation R(a:i64,b:u32) = (&data);
-                r = let canon rename R@0 {a -> a,b -> b};
+                r = let canon rename R {a -> a,b -> b};
                 return r as answer(b,a);
             }
             structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }

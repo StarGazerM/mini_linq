@@ -21,16 +21,16 @@ pub fn program_with_capacity(capacity: usize) -> Program {
             relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&data.lineitem);
             relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&data.supplier);
 
-            region_base = pipe rename Region@0 {r_regionkey -> region,r_name -> region_name};
+            region_base = pipe rename Region {r_regionkey -> region,r_name -> region_name};
             region_selected = pipe select region_base if (region_name = 2);
             region_asia = let project region_selected keep {region};
-            nation_index = let rename Nation@1 {n_nationkey -> nation,n_regionkey -> region};
-            customer_index = let rename Customer@2 {c_custkey -> customer,c_nationkey -> nation};
-            orders_base = pipe rename Orders@3 {o_orderkey -> order,o_custkey -> customer,o_orderdate -> order_date};
+            nation_index = let rename Nation {n_nationkey -> nation,n_regionkey -> region};
+            customer_index = let rename Customer {c_custkey -> customer,c_nationkey -> nation};
+            orders_base = pipe rename Orders {o_orderkey -> order,o_custkey -> customer,o_orderdate -> order_date};
             orders_selected = pipe select orders_base if (order_date >= 8766,order_date < 9131);
             orders_index = let project orders_selected keep {order,customer};
-            lineitem_index = let rename Lineitem@4 {l_orderkey -> order,l_suppkey -> supplier};
-            supplier_index = let rename Supplier@5 {s_suppkey -> supplier,s_nationkey -> nation};
+            lineitem_index = let rename Lineitem {l_orderkey -> order,l_suppkey -> supplier};
+            supplier_index = let rename Supplier {s_suppkey -> supplier,s_nationkey -> nation};
 
             rn = pipe probe first [region] region_asia,nation_index;
             rnc = let probe first [nation] rn,customer_index;

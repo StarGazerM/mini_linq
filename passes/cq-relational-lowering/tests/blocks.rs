@@ -1,6 +1,23 @@
 use cq_lang_vo::cq;
-use cq_relational_lowering::{check, compile};
 use quote::ToTokens;
+
+/// The lowering alone; the seam table is dropped.
+fn compile(source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
+    cq_relational_lowering::compile(source).map(|(target, _)| target)
+}
+
+/// The seam check with the side table of the supplied VO's own lowering.
+fn check(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let (_, steps) = cq_relational_lowering::compile(source)?;
+    cq_relational_lowering::check(source, target, &steps)
+}
+
+/// Structural refinement of a VO the target was not lowered from (CK-RLStructure only).
+fn refines(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let analysis = cq_lang_vo::contract::check(source)?;
+    cq_relational_lowering::check_reference(&source.cq, &source.valuation.steps, &analysis, target)
+}
+
 
 fn plan(text: &str) -> (cq_lang_vo::Program, cq_lang_ra::Program) {
     let source: cq::Program = syn::parse_str(text).unwrap();
@@ -87,7 +104,7 @@ fn every_ordering_preserves_pure_and_rust_block_interfaces() {
                     .unwrap_or_else(|e| panic!("{options:?}: {e}"));
                 let ra = compile(&ordered).unwrap_or_else(|e| panic!("{options:?}: {e}"));
                 check(&ordered, &ra).unwrap_or_else(|e| panic!("supplied {options:?}: {e}"));
-                check(&written, &ra).unwrap_or_else(|e| panic!("written {options:?}: {e}"));
+                refines(&written, &ra).unwrap_or_else(|e| panic!("written {options:?}: {e}"));
             }
         }
     }
@@ -216,7 +233,7 @@ fn cq_rewrite_is_identity_but_vo_can_swap_independent_rust_with_a_rust_block() {
     cq_lang_vo::contract::check(&reordered).unwrap();
     let target = compile(&reordered).unwrap();
     check(&reordered, &target).unwrap();
-    check(&written, &target).unwrap();
+    refines(&written, &target).unwrap();
 }
 
 #[test]
@@ -388,7 +405,7 @@ fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
             );
         }
         let written = cq_order::compile_written(&vo.cq).unwrap();
-        let reference = cq_relational_lowering::compile(&written).unwrap();
+        let reference = compile(&written).unwrap();
         check(&written, &reference).unwrap();
         for seed in 0..8 {
             let database = cq_testkit::databases::binary_database(&vo.cq, seed);
@@ -453,7 +470,6 @@ fn branch_generators_capture_written_environment_and_keep_kind() {
         assert_eq!(generators.len(), 2);
         for (index, binding) in generators {
             let environment = binding.environment.as_ref().unwrap();
-            assert!(environment.path.is_some());
             assert_eq!(
                 environment
                     .variables
@@ -580,7 +596,7 @@ fn block_placement_round_trips_and_controls_both_elaboration_entry_points() {
         assert_eq!(*vo, reparsed);
         cq_lang_vo::contract::check(&reparsed).unwrap();
     }
-    let reference = cq_relational_lowering::compile(&written).unwrap();
+    let reference = compile(&written).unwrap();
     check(&written, &reference).unwrap();
     let correlated = compile(&written).unwrap();
     check(&written, &correlated).unwrap();

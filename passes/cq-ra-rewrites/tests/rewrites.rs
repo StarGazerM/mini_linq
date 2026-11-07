@@ -60,8 +60,8 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
     );
     let source: ra::Program = syn::parse_quote! { relational {
         relation l(k:i32); relation r(k:i32,v:i32);
-        r0 = rename r@1 {k -> k,v -> v};
-        r1 = rename l@0 {k -> k};
+        r0 = rename r {k -> k,v -> v};
+        r1 = rename l {k -> k};
         r2 = semijoin r0 with r1;
         r3 = semijoin r1 with r2;
         r4 = natural_join r3 with r2;
@@ -185,8 +185,8 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
 fn reduction_absorption_certificate_rejects_changed_support_predicates() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation l(k:i32); relation r(k:i32,v:i32);
-        r0 = rename r@1 {k -> k,v -> v};
-        r1 = rename l@0 {k -> k};
+        r0 = rename r {k -> k,v -> v};
+        r1 = rename l {k -> k};
         support = select r1 if (k > 0);
         r2 = semijoin r0 with support;
         r3 = semijoin support with r2;
@@ -209,9 +209,9 @@ fn reduction_absorption_retains_support_for_an_uncontained_consumer() {
     });
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(x:i32,y:i32); relation T(y:i32); relation U(x:i32);
-        r = rename R@0 {x -> x,y -> y};
-        t = rename T@1 {y -> y};
-        u = rename U@2 {x -> x};
+        r = rename R {x -> x,y -> y};
+        t = rename T {y -> y};
+        u = rename U {x -> x};
         reduced = semijoin r with t;
         result = natural_join u with reduced;
         output result as answer(x,y);
@@ -259,8 +259,8 @@ fn reduction_absorption_does_not_confuse_projected_aliases_with_full_key_support
         });
         let source: ra::Program = syn::parse_quote! { relational {
             relation R(x:i32,y:i32); relation T(x:i32,y:i32);
-            r = rename R@0 {x -> x,y -> y};
-            t = rename T@1 {x -> x,y -> y};
+            r = rename R {x -> x,y -> y};
+            t = rename T {x -> x,y -> y};
             reduced = semijoin r with t;
             projected = project t keep {x};
             alias = project projected keep {x};
@@ -286,9 +286,9 @@ fn reduction_absorption_does_not_confuse_projected_aliases_with_full_key_support
 fn two_sided_absorption_keeps_the_restriction_justifying_the_other_operand() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(x:i32); relation S(x:i32); relation T(x:i32);
-        r = rename R@0 {x -> x};
-        s = rename S@1 {x -> x};
-        t = rename T@2 {x -> x};
+        r = rename R {x -> x};
+        s = rename S {x -> x};
+        t = rename T {x -> x};
         left = semijoin r with s;
         right = semijoin t with left;
         result = natural_join left with right;
@@ -298,9 +298,9 @@ fn two_sided_absorption_keeps_the_restriction_justifying_the_other_operand() {
     ra::check_rewrite(&source, &target).unwrap();
     let invalid: ra::Program = syn::parse_quote! { relational {
         relation R(x:i32); relation S(x:i32); relation T(x:i32);
-        r = rename R@0 {x -> x};
-        s = rename S@1 {x -> x};
-        t = rename T@2 {x -> x};
+        r = rename R {x -> x};
+        s = rename S {x -> x};
+        t = rename T {x -> x};
         result = natural_join r with t;
         output result as answer(x);
     }};
@@ -323,9 +323,9 @@ fn dead_nation_expansion(region_consumer: TokenStream, tail: TokenStream) -> ra:
     syn::parse2(quote! { relational {
         relation Left(nation_key:i32); relation Nation(nation_key:i32,region_key:i32);
         relation Region(region_key:i32);
-        left = rename Left@0 {nation_key -> nation_key};
-        nation = rename Nation@1 {nation_key -> nation_key,region_key -> region_key};
-        region = rename Region@2 {region_key -> region_key};
+        left = rename Left {nation_key -> nation_key};
+        nation = rename Nation {nation_key -> nation_key,region_key -> region_key};
+        region = rename Region {region_key -> region_key};
         reduced_nation = semijoin nation with region;
         witnessed = semijoin left with reduced_nation;
         expanded = natural_join witnessed with reduced_nation;
@@ -453,9 +453,9 @@ fn dead_expansion_does_not_confuse_distinct_named_region_support() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation Left(nation_key:i32); relation Nation(nation_key:i32,region_key:i32);
         relation Region(region_key:i32);
-        left = rename Left@0 {nation_key -> nation_key};
-        nation = rename Nation@1 {nation_key -> nation_key,region_key -> region_key};
-        region = rename Region@2 {region_key -> region_key};
+        left = rename Left {nation_key -> nation_key};
+        nation = rename Nation {nation_key -> nation_key,region_key -> region_key};
+        region = rename Region {region_key -> region_key};
         restricted_region = select region if (region_key > 0);
         reduced_nation = semijoin nation with region;
         witnessed = semijoin left with reduced_nation;

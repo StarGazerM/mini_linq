@@ -838,7 +838,7 @@ mod tests {
             let module = syn::parse2(quote! {
                 physical {
                     relation R(a:i32); #fact
-                    r = pipe rename R@0 {a -> a};
+                    r = pipe rename R {a -> a};
                     return r as answer(a);
                 }
                 structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
@@ -865,7 +865,7 @@ mod tests {
                 physical {
                     relation R(a:i32,b:i32);
                     consumer canonical;
-                    r = pipe rename R@0 {a -> a,b -> b};
+                    r = pipe rename R {a -> a,b -> b};
                     #projection
                     return #returned as answer(#head);
                 }
@@ -891,7 +891,7 @@ mod tests {
             physical {
                 relation R(a:i32);
                 consumer canonical;
-                r = pipe rename R@0 {a -> a};
+                r = pipe rename R {a -> a};
                 p = pipe project r keep {a};
                 return p as answer(a);
             }

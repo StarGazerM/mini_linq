@@ -13,10 +13,10 @@ fn custom_payload() -> ir::Declaration {
 fn triangle_source() -> ir::Program {
     syn::parse_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l = pipe rename L@0 {a -> a,b -> b};
-        r = let rename R@1 {b -> b,c -> c};
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
         pre_r = pipe semi eager [b] l,r;
-        s = let rename S@2 {a -> a,c -> c};
+        s = let rename S {a -> a,c -> c};
         pre_s = pipe semi eager [a] pre_r,s;
         candidate = pipe probe smallest [b] pre_s,r;
         checked = let canon semi eager [a,c] candidate,s;
@@ -85,8 +85,8 @@ fn candidate_retention_uses_directory_support_not_complete_payload_support() {
 fn declared_host_lookup_retains_exact_snapshot_ranges() {
     let mut source: ir::Program = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
         p = let canon probe first [x] s,r;
         return p as answer(x,y);
@@ -171,8 +171,8 @@ fn triangle_prefix_witnesses_do_not_escape() {
 fn hashed_source() -> ir::Program {
     let physical = syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
         filtered = pipe select s if (x >= 0);
         projected = pipe project filtered keep {x};
@@ -251,8 +251,8 @@ fn hash_index_does_not_claim_a_copy_cursor() {
 fn a_probe_before_the_semi_does_not_share() {
     let physical = syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x,b -> y};
         p = pipe probe first [x] l,r;
         seen = pipe select p if (y >= 0);
         keys = pipe project seen keep {x};
@@ -373,8 +373,8 @@ fn public_rewrite_macro_records_the_cursor() {
         };
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x,b -> y};
             s = pipe semi eager [x] l,r;
             p = pipe probe first [x] s,r;
             out = let canon project p keep {x,y};
@@ -444,8 +444,8 @@ fn retained_cursor_executes_through_select_and_project() {
             };
             physical {
                 relation L(a:i32) = (left); relation R(a:i32,b:i32) = (right);
-                l = pipe rename L@0 {a -> x};
-                r = let rename R@1 {a -> x,b -> y};
+                l = pipe rename L {a -> x};
+                r = let rename R {a -> x,b -> y};
                 s = pipe semi eager [x] l,r;
                 filtered = pipe select s if (x >= 0);
                 projected = pipe project filtered keep {x};

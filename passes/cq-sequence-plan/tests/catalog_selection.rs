@@ -165,8 +165,8 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
     let source: structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             projected = pipe project j keep {a};
             answer = let canon semi eager [a] projected,r;
@@ -200,8 +200,8 @@ fn host_keyed_read() -> structures::Program {
     syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
@@ -278,8 +278,8 @@ fn unused_code_payload_is_projected_from_renamed_provider() {
         let mut physical: structures::physical::Program = syn::parse_quote! {
             physical {
                 relation L(a:i64); relation R(a:i64,unused:StringCode);
-                l = pipe rename L@0 {a -> a};
-                r = pipe rename R@1 {a -> a,unused -> unused};
+                l = pipe rename L {a -> a};
+                r = pipe rename R {a -> a,unused -> unused};
                 joined = pipe probe first [a] l,r;
                 answer = let canon project joined keep {a};
                 return answer as answer(a);
@@ -309,7 +309,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
         let mut source: structures::Program = syn::parse_quote! {
             physical {
                 relation R(a:i64,b:i64,c:i64);
-                r = pipe rename R@0 {a -> a,b -> b,c -> c};
+                r = pipe rename R {a -> a,b -> b,c -> c};
                 answer = let canon project r keep {a,b,c};
                 return answer as answer(a,b,c);
             }
@@ -323,7 +323,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
             source = syn::parse_quote! {
                 physical {
                     relation R(a:i64,b:i64);
-                    r = pipe rename R@0 {a -> a,b -> b};
+                    r = pipe rename R {a -> a,b -> b};
                     answer = let canon project r keep {a,b};
                     return answer as answer(a,b);
                 }

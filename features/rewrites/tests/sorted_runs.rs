@@ -74,8 +74,8 @@ fn one_run_answers_both_payload_and_membership_reads() {
         pipeline { cq_rewrites::sorted_runs, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(a:i32) = (left); relation R(a:i32,b:i32) = (right);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x,b -> y};
             s = pipe semi eager[x] l,r;
             p = pipe probe first[x] s,r;
             out = let canon project p keep {x,y};
@@ -96,7 +96,7 @@ fn closed_owned_probe_key_uses_exact_sorted_run() {
             relation R(a:i64,b:i64) = (&right);
             u = pipe unit;
             l = pipe bind u with x:i64 = (3i64);
-            r = let rename R@0 {a -> x,b -> y};
+            r = let rename R {a -> x,b -> y};
             p = let canon probe first[x] l,r;
             return dedup p as answer(*y);
         }

@@ -23,7 +23,7 @@ macro_rules! apply_macro {
             pipeline { capture };
             physical {
                 relation R(a:i32);
-                r = let canon rename R@0 {a -> a};
+                r = let canon rename R {a -> a};
                 return r as answer(a);
             }
             structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
@@ -41,7 +41,7 @@ fn source() -> Program {
     syn::parse2(quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
         structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
@@ -151,7 +151,7 @@ fn registered_macros_chain_and_forward_advice() {
         };
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
         structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }

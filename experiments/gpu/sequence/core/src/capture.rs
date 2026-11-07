@@ -1253,7 +1253,7 @@ mod tests {
         let program: cq_lang_sequence::Program = syn::parse_quote! {
             physical {
                 relation R(a:i32);
-                r = pipe rename R@0 {a -> a};
+                r = pipe rename R {a -> a};
                 result = let canon project r keep {a};
                 return result as answer(a);
             }

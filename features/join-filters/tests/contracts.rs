@@ -18,8 +18,8 @@ fn provider_alias() -> ir::Declaration {
 fn source() -> ir::Program {
     let p: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {c -> x,d -> z};
         s = pipe range select r if (z > 1);
         b = let project s keep {x,z};
         j = pipe probe first [x] l,b;
@@ -250,8 +250,8 @@ fn join_filter_requires_a_recorded_single_level_exact_layout() {
 fn advice_keeps_all_witnesses_and_is_idempotent_after_coalescing() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(c:i64,d:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {c -> x,d -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {c -> x,d -> z};
         s = pipe range select r if (z > 1);
         b = let project s keep {x,z};
         q = pipe semi eager [x] l,b;

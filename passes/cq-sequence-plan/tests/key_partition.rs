@@ -116,7 +116,7 @@ fn grouped(global: bool) -> Program {
     let mut program: Program = syn::parse_quote! {
         physical {
             relation Lineitem(orderkey:i64, linenumber:i32, returnflag:i32, linestatus:i32, quantity:i64, extendedprice:i64);
-            lineitem = let canon rename Lineitem@0 {
+            lineitem = let canon rename Lineitem {
                 orderkey -> orderkey, linenumber -> linenumber,
                 returnflag -> returnflag, linestatus -> linestatus,
                 quantity -> quantity, extendedprice -> extendedprice
@@ -372,7 +372,7 @@ fn canon_partition_and_machine_width_are_explicit() {
     let source: Program = syn::parse_quote! {
         physical {
             relation R(a:i32,b:i32);
-            r = let canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R {a -> a,b -> b};
             return r as answer(a,b);
         }
         structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -424,8 +424,8 @@ fn provider_program() -> Program {
     syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             joined = let canon probe first [a] l,r;
             return joined as answer(a,b);
         }
@@ -941,8 +941,8 @@ fn exact_membership_provider_supports_runtime_partition_choice() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
             j = let canon semi eager [a] l,r;
             return j as answer(a);
         }
@@ -1016,9 +1016,9 @@ fn smallest_candidate_directories_keep_their_native_two_level_providers() {
     let structures: cq_lang_sequence::structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = let rename R@1 {b -> b,c -> c};
-            s = let rename S@2 {a -> a,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            r = let rename R {b -> b,c -> c};
+            s = let rename S {a -> a,c -> c};
             candidate = pipe probe smallest [b] l,r;
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
@@ -1064,8 +1064,8 @@ fn filtered_provider_retains_valid_single_level_routing() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32,unused:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b,unused -> unused};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b,unused -> unused};
             joined = pipe probe first [a] l,r;
             answer = let canon project joined keep {a,b};
             return answer as answer(a,b);
@@ -1174,8 +1174,8 @@ fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             selected = let project r keep {a};
             joined = pipe probe first [a] l,r;
             final_rows = let canon semi eager [a] joined,selected;
@@ -1659,8 +1659,8 @@ fn adaptive_provider_publication_preserves_task_owned_pipe_execution() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
             selected = let select r if (b > a);
             joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
@@ -1757,8 +1757,8 @@ fn filtered_provider_uses_host_layout_bound_before_demanding_input_count() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
             selected = let select r if (b > a);
             joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
@@ -1812,8 +1812,8 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             joined = let probe first [a] l,r;
             final_rows = let canon probe first [a] l,joined;
             return final_rows as answer(a,b);
@@ -1957,16 +1957,16 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
         physical {
             relation P(a:i32); relation PS(a:i32,b:i32); relation S(b:i32,c:i32);
             relation N(c:i32,d:i32); relation L(o:i32,a:i32,b:i32,u:i32); relation O(o:i32,v:i32);
-            r0 = pipe rename P@0 {a -> a};
-            r1 = let rename PS@1 {a -> a,b -> b};
+            r0 = pipe rename P {a -> a};
+            r1 = let rename PS {a -> a,b -> b};
             r2 = pipe probe first [a] r0,r1;
-            r3 = let rename S@2 {b -> b,c -> c};
+            r3 = let rename S {b -> b,c -> c};
             r4 = pipe probe first [b] r2,r3;
-            r5 = let rename N@3 {c -> c,d -> d};
+            r5 = let rename N {c -> c,d -> d};
             r6 = pipe probe first [c] r4,r5;
-            r7 = let rename L@4 {o -> o,a -> a,b -> b,u -> u};
+            r7 = let rename L {o -> o,a -> a,b -> b,u -> u};
             r8 = pipe probe first [a,b] r6,r7;
-            r9 = let rename O@5 {o -> o,v -> v};
+            r9 = let rename O {o -> o,v -> v};
             r10 = pipe probe first [o] r8,r9;
             r11 = let canon project r10 keep {o,a,b};
             return r11 as answer(o,a,b);

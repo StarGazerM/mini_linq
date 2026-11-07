@@ -4,19 +4,19 @@
 \paragraph{Grammar.} A standalone named DAG; declarations and output are part of it.
 \begin{lstlisting}
 RA ::= relational { Decl* (r = Op;)* output r as Head; }
-Op ::= unit | rename R@path {source -> variable, ...} [constants {source = literal, ...}]
+Op ::= unit | rename R {source -> variable, ...} [constants {source = literal, ...}]
      | natural_join l with r | semijoin l with r
      | project r keep {columns} | select r if (Theta)
      | guard r if (Expr) [Environment]
      | bind r with [for] Pat [: Type] = (Expr) [Environment]
      | union r1, r2, ... [BlockOrigin] | anti [F] l, r
-Environment ::= scope[names] [@path]
-BlockOrigin ::= block @path free[F] interface[I]
+Environment ::= scope[names]
+BlockOrigin ::= block free[F] interface[I]
                 [fallback] [over prefix] [domain input]
 \end{lstlisting}
-Every \code{rename} carries the fixed source occurrence it realizes.
+A \code{rename} names a declared relation; its identity is its result name.
 Its mapping and literal bindings partition the declared columns. Writing
-$C$ for those bindings, the occurrence denotes
+$C$ for those bindings, the rename denotes
 $\delta_m(\pi_{\dom m}\sigma_C(R))$; the dropped columns are not interface columns
 and cannot prove disjointness of union arms.
 Mathematically,
@@ -76,8 +76,7 @@ opaque macro dependencies as in the shared Rust analyzer).
 $L$ is the set of all rename targets, bind names and aggregate names in $a$.
 For a guard or bind $b$, $E_b$ is its optional Environment and $e_b$ its
 expression. $\operatorname{scope}(b)$ is $H(b.input)$ without an Environment,
-and $\set(E_b.variables)$ otherwise. A path is admissible precisely when
-its sequence of nonnegative indices has positive odd length.
+and $\set(E_b.variables)$ otherwise.
 The optional-field notation $x=\bot$ means absent.
 \begin{mathpar}
 \Rule{RA-H-Declarations}{
@@ -95,21 +94,13 @@ The optional-field notation $x=\bot$ means absent.
  \operatorname{reach}(a.output.input)=\{r_i\mid1\leq i\leq n\}
  }{\mathsf{RADeclarations}(a,A)}
 
-\Rule{RA-H-Renames}{
- \forall i,\ o_i=\operatorname{rename}(R,p,m,C)
- \Rightarrow(|p|\in\{2k+1\mid k\in\mathbb N\})\\
- \forall i,j,\ (o_i=\operatorname{rename}(R,p,m,C)\land
- o_j=\operatorname{rename}(R',p',m',C')\land p=p')\Rightarrow i=j
- }{\mathsf{RARenames}(a,A)}
-
 \Rule{RA-H-Payloads}{
  \forall b\in\operatorname{guardBind}(a),\
  E_b=\bot\Rightarrow \operatorname{FV}(e_b)\cap L\subseteq H(b.input)\\
  \forall b\in\operatorname{guardBind}(a),\
  E_b\ne\bot\Rightarrow
  \bigl(|\set(E_b.variables)|=|E_b.variables|\ \land\
- \set(E_b.variables)\subseteq H(b.input)\ \land\
- (E_b.path\ne\bot\Rightarrow |E_b.path|\in\{2k+1\mid k\in\mathbb N\})\bigr)
+ \set(E_b.variables)\subseteq H(b.input)\bigr)
  }{\mathsf{RAPayloads}(a,A)}
 
 \Rule{RA-H-Unions}{
@@ -120,8 +111,7 @@ The optional-field notation $x=\bot$ means absent.
  (\dom A(s).logicalTypeIds\setminus A(s).C),\
  A(r).logicalTypeIds(x)=A(s).logicalTypeIds(x)\\
  \forall u\in\operatorname{unions}(a),\ u.origin\ne\bot\Rightarrow
- \bigl(|u.origin.path|\in\{2k+1\mid k\in\mathbb N\}\ \land\
- |F_u|=|u.origin.free|\ \land\ |I_u|=|u.origin.interface|\ \land\
+ \bigl(|F_u|=|u.origin.free|\ \land\ |I_u|=|u.origin.interface|\ \land\
  F_u\cap I_u=\emptyset\\
  {}\land (u.origin.domain\ne\bot\Rightarrow
  (u.origin.over=\bot\land H(u.origin.domain)=F_u))\\
@@ -147,7 +137,7 @@ The optional-field notation $x=\bot$ means absent.
  \Delta_0=\emptyset\quad
  \forall i\in\{1,\ldots,n\},\
  \Sigma\vdash(\Delta_{i-1},r_i=o_i)\Rightarrow\Delta_i\quad A=\Delta_n\\
- \mathsf{RADeclarations}(a,A)\quad\mathsf{RARenames}(a,A)\quad
+ \mathsf{RADeclarations}(a,A)\quad
  \mathsf{RAPayloads}(a,A)\quad\mathsf{RAUnions}(a,A)\quad
  \mathsf{RAOutput}(a,A)\quad\mathsf{RARust}(a,A)
  }{\mathsf{RAHeading}(a,A)}
@@ -162,7 +152,7 @@ schedule's recorded Rust arguments and input column identities; RA-H-Rust
 specifies their construction, not a second local rejection check.
 The output rule reflects the standalone checker: computations belong in final
 bind nodes, and output columns match the entire input heading after removing
-host captures. Explicit Environments validate their listed scope and path;
+host captures. Explicit Environments validate their listed scope;
 they do not add a free-variable subset test on the expression.
 Types are opaque host syntax; merging transports annotations and Rust
 establishes concrete type compatibility.
@@ -180,10 +170,12 @@ selection and semijoin sits, projections, and the block form (hoisted derived
 relation or correlated arms over a prefix).
 
 \paragraph{Rewrite check (\code{cq_lang_ra::check_rewrite}).} A structural contract
-over fixed occurrences, never an equivalence decision:
+over renames identified by relation, mapping and constants (with their
+ordinal among equal renames in definition order) and blocks identified by
+their signature, never an equivalence decision:
 (1)~both programs pass the contract; declarations, output heading and head are
 unchanged;
-(2)~the multiset of occurrences is equal and each keeps its column bindings;
+(2)~the multiset of renames is equal and each keeps its column bindings;
 (3)~relational constraints and projection correlations are equal after
 union-find closure of equalities, and every source semijoin reduction survives
 with its column matches;
@@ -198,5 +190,5 @@ certificate; changing only that tag is not a permitted rewrite.
 This support certificate can establish equality independently of intermediate
 evaluation domains. Pipeline refinements additionally preserve the recorded
 VO join and predicate placement decisions; semantic equivalence alone does
-not grant a later pass planning authority. No occurrence may be added or
+not grant a later pass planning authority. No rename may be added or
 removed (no query minimization).

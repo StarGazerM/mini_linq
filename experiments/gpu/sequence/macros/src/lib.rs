@@ -252,7 +252,7 @@ mod tests {
         let mut program: cq_lang_sequence::Program = syn::parse_quote! {
             physical {
                 relation R(k:u32) = (data);
-                r = let canon rename R@0 {k -> k};
+                r = let canon rename R {k -> k};
                 grouped = let group r by [k] { n:usize=count(); };
                 return grouped as answer(k,n);
             }

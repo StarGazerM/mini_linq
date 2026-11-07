@@ -349,7 +349,7 @@ mod tests {
             physical {
                 relation R(a:i32) = (&data);
                 relation answer(value:i32);
-                r = pipe rename R@0 {a -> a};
+                r = pipe rename R {a -> a};
                 bound = pipe bind r with b = (*a);
                 computed = let canon project bound keep {b};
                 return computed as answer(b);
@@ -418,7 +418,7 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i64) = (&data);
-                r = pipe rename R@0 {a -> a};
+                r = pipe rename R {a -> a};
                 result = let canon project r keep {a};
                 return result as answer(a);
             }

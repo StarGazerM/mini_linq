@@ -61,8 +61,8 @@ fn transfer_preserves_partial_guard_domain_while_connecting_later_atoms() {
 fn later_full_witness_repairs_only_key_preserving_positive_lineage() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); relation T(a:i32,b:i32,c:i32);
-        r = rename R@0 {a -> x,b -> y};
-        t = rename T@1 {a -> x,b -> y,c -> z};
+        r = rename R {a -> x,b -> y};
+        t = rename T {a -> x,b -> y,c -> z};
         late = select r if (y > 0, y < 3);
         result = natural_join t with late;
         output result as answer(x,y,z);
@@ -70,8 +70,8 @@ fn later_full_witness_repairs_only_key_preserving_positive_lineage() {
     macro_rules! witness {
         ($($tail:tt)*) => { syn::parse_quote! { relational {
             relation R(a:i32,b:i32); relation T(a:i32,b:i32,c:i32);
-            r = rename R@0 {a -> x,b -> y};
-            t = rename T@1 {a -> x,b -> y,c -> z};
+            r = rename R {a -> x,b -> y};
+            t = rename T {a -> x,b -> y,c -> z};
             early = select r if (y > 0);
             late = select early if (y < 3);
             projected = project late keep {x};

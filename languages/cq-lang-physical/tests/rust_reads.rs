@@ -12,7 +12,7 @@ fn rust_reads_distinguishes_columns_from_closed_captures_without_recognition() {
         let program: physical::Program = syn::parse_str(&format!(
             "physical {{
                 relation R(x: HostType);
-                r = pipe rename R@0 {{ x -> x }};
+                r = pipe rename R {{ x -> x }};
                 b = pipe bind r with y: Output = ({expression});
                 return canon b as answer(x, y);
             }}"
@@ -39,7 +39,7 @@ fn rust_reads_distinguishes_columns_from_closed_captures_without_recognition() {
 fn rust_reads_respects_the_recorded_lexical_environment() {
     let program: physical::Program = syn::parse_quote! { physical {
         relation R(x: HostType, z: HostType);
-        r = pipe rename R@0 { x -> x, z -> z };
+        r = pipe rename R { x -> x, z -> z };
         g = pipe guard r if (opaque!()) scope[x];
         return canon g as answer(x, z);
     }};

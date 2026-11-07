@@ -5,7 +5,7 @@ fn program() -> cq_lang_sequence::Program {
         physical {
             relation R(a:i32,b:i32);
             consumer canonical;
-            r = pipe rename R@0 {a -> a,b -> b};
+            r = pipe rename R {a -> a,b -> b};
             return r as answer(b,a);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }

@@ -2449,8 +2449,8 @@ mod tests {
             physical {
                 relation R(id:i64) = (&data.r);
                 relation H(value:Option<i64>) = (&data.h);
-                r = pipe rename R@0 {id -> id};
-                h = let rename H@1 {value -> value};
+                r = pipe rename R {id -> id};
+                h = let rename H {value -> value};
                 joined = pipe probe first [] r,h;
                 filtered = pipe guard joined if (value.is_some());
                 result = let canon project filtered keep {id};
@@ -2491,7 +2491,7 @@ mod tests {
         let program: Program = syn::parse_quote! {
             physical {
                 relation R(a:i32,b:i32) = (&data.r);
-                r = pipe rename R@0 {a -> a,b -> b};
+                r = pipe rename R {a -> a,b -> b};
                 selected = let canon point select r if (b = 7);
                 return selected as answer(a,b);
             }
@@ -2530,8 +2530,8 @@ mod tests {
             physical {
                 relation Driver(b:i32) = (&data.driver);
                 relation R(a:i32,b:i32) = (&data.r);
-                d = pipe rename Driver@0 {b -> b};
-                r = let rename R@1 {a -> a,b -> b};
+                d = pipe rename Driver {b -> b};
+                r = let rename R {a -> a,b -> b};
                 joined = pipe probe first [b] d,r;
                 result = let canon project joined keep {a,b};
                 return result as answer(a,b);
@@ -2713,7 +2713,7 @@ mod tests {
             physical {
                 relation R(a:i32,b:i32) = (&data.r);
                 relation answer(x:i32,y:i32);
-                r = pipe rename R@0 {a -> x,b -> y};
+                r = pipe rename R {a -> x,b -> y};
                 result = let canon project r keep {x,y};
                 return result as answer(x,y);
             }
@@ -2755,10 +2755,10 @@ mod tests {
                 relation Driver(available:i64,customer_key:i64,customer_nation:i64,
                     order_date:i64,order_key:i64,part_key:i64,supplier_key:i64,supplier_nation:i64) = (&data.driver);
                 relation Nation(supplier_nation:i64) = (&data.nation);
-                driver = pipe rename Driver@0 {available -> available,customer_key -> customer_key,
+                driver = pipe rename Driver {available -> available,customer_key -> customer_key,
                     customer_nation -> customer_nation,order_date -> order_date,order_key -> order_key,
                     part_key -> part_key,supplier_key -> supplier_key,supplier_nation -> supplier_nation};
-                nation = let rename Nation@1 {supplier_nation -> supplier_nation};
+                nation = let rename Nation {supplier_nation -> supplier_nation};
                 filtered = let select driver if (order_key > 0);
                 joined = pipe probe first [supplier_nation] filtered,nation;
                 result = let canon project joined keep {order_key,part_key,supplier_nation};

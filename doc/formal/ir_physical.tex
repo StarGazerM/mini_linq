@@ -7,7 +7,7 @@ Physical ::= physical { Decl* Fact* Def* return [canon] [dedup] r as Head; }
 Fact ::= host_set R [discharged];
        | consumer canonical;
 Def ::= r = (pipe | let | exists) [canon] Op;
-Op  ::= unit | rename R@path {..} [constants {source = literal, ...}]
+Op  ::= unit | rename R {..} [constants {source = literal, ...}]
       | select ... | point select ... | range select ...
       | bind ... | guard ... | project r keep {..} | merge [K] l, r
       | probe [first|smallest] [K] l, r
@@ -183,7 +183,7 @@ The final result retains its written mode and canonicalization.
  {p\ltimes_J R=p\ltimes_J R_J}
 \end{mathpar}
 The opt-in \code{smallest_intersections} rewrite records this choice without
-altering keys or Rust payloads. Explicit occurrence advice may additionally
+altering keys or Rust payloads. Explicit site advice may additionally
 retain the exact key projection of a membership provider with extra payload,
 by PH-KeyProjection. Later full reads still use the original provider.
 The correspondence checker permits only these private projections, used once
@@ -192,8 +192,12 @@ graph. Ordinary empty/\code{all}/result selections do not introduce key views.
 Independent interposed relational definitions may move before the entire chain in stable dependency order;
 Rust nodes and dependencies on intermediate results block this exposure.
 Empty/\code{all}/result-name advice retains its existing selection meaning.
-Occurrence advice \code{smallest(R@a,S@b,...)} names every provider of exactly
-one complete admissible site, through rename or unary relational provenance.
+Site advice \code{smallest(r_a,r_b,...)} names, by Physical definition name,
+the rename of every provider of exactly one complete admissible site, reached
+through unary relational provenance. Authored source advice
+\code{smallest(R@a,S@b,...)} is resolved at the planning front: occurrence
+$R@a$ to its first VO read step, then through the relational-lowering side
+table to the rename's result name, which Physical keeps as its definition name.
 Repeated, missing, partial, ambiguous or blocked sites are rejected, not widened.
 The public Physical contract and rewrite correspondence check the result.
 Selection uses only recorded columns and provenance, never Rust type inspection.

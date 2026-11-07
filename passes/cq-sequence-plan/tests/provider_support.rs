@@ -6,8 +6,8 @@ fn source(decision: &str) -> structures::Program {
     let mut program: structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x,b -> y};
             s = pipe semi eager [x] l,r;
             p = let canon probe first [x] s,r;
             return p as answer(x,y);

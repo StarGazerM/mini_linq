@@ -132,9 +132,9 @@ mod tests {
     fn complete_union_and_anti_program_keeps_nested_occurrences() {
         let source: Query = syn::parse_quote! {relational {
             relation R(a:i32); relation S(a:i32);
-            r = rename R@0.0.0 {a -> x}; s = rename S@0.1.0 {a -> x};
+            r = rename R {a -> x}; s = rename S {a -> x};
             a = anti [] s,r;
-            u = union r,a block @0 free[] interface[x] fallback;
+            u = union r,a block free[] interface[x] fallback;
             output u as answer(x);
         }};
         let target = source.indexes().unwrap();
@@ -156,8 +156,8 @@ mod tests {
             relational {
                 relation L(key: i32, value: i32);
                 relation R(key: i32, value: i32);
-                l = rename L@0 {key -> k, value -> x};
-                r = rename R@1 {key -> k, value -> y};
+                l = rename L {key -> k, value -> x};
+                r = rename R {key -> k, value -> y};
                 j = natural_join l with r;
                 s = guard j if (x < y);
                 p = project s keep {x, y};

@@ -6,8 +6,8 @@ fn projected_host_reader() -> Program {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a};
-            raw = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            raw = pipe rename R {a -> a,b -> b};
             r = let project raw keep {a};
             joined = pipe probe first [a] l,r;
             return joined as answer(a);
@@ -68,8 +68,8 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i32,b:i32); relation S(a:i32);
-            r = pipe rename R@0 {a -> a,b -> b};
-            s = let rename S@1 {a -> a};
+            r = pipe rename R {a -> a,b -> b};
+            s = let rename S {a -> a};
             selected = let semi eager [a] r,s;
             expanded = pipe probe first [a] s,selected;
             member = pipe probe first [a,b] expanded,r;
@@ -157,10 +157,10 @@ fn positional_selection_sharded_index_executes_exact_answers() {
         physical {
             relation Lineitem(order_key:i64,supplier_key:i64,ship_date:i32);
             relation Orders(order_key:i64,customer_key:i64);
-            lineitem = pipe rename Lineitem@0 {
+            lineitem = pipe rename Lineitem {
                 order_key -> order_key,supplier_key -> supplier_key,ship_date -> ship_date
             };
-            orders = pipe rename Orders@1 {
+            orders = pipe rename Orders {
                 order_key -> wanted_key,customer_key -> customer_key
             };
             selected = let range select lineitem if
@@ -180,10 +180,10 @@ fn kp_1_kp_2_key_partitioned_positional_selection() {
         physical {
             relation Lineitem(order_key:i64,supplier_key:i64,ship_date:i32);
             relation Orders(order_key:i64,customer_key:i64);
-            lineitem = pipe rename Lineitem@0 {
+            lineitem = pipe rename Lineitem {
                 order_key -> order_key,supplier_key -> supplier_key,ship_date -> ship_date
             };
-            orders = let rename Orders@1 {
+            orders = let rename Orders {
                 order_key -> order_key,customer_key -> customer_key
             };
             selected = let range select lineitem if
@@ -333,7 +333,7 @@ fn retained_positional_selection() -> Program {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i64,b:i64);
-            raw = pipe rename R@0 {a -> a,b -> b};
+            raw = pipe rename R {a -> a,b -> b};
             selected = let range select raw if (a >= 1);
             answer = let canon project selected keep {a,b};
             return answer as answer(a,b);

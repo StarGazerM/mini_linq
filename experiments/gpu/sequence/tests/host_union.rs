@@ -9,8 +9,8 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
             physical {
                 relation R(a:u32) = (&data.r);
                 relation S(a:u32) = (&data.s);
-                r = pipe rename R@0 {a -> a};
-                s = pipe rename S@1 {a -> a};
+                r = pipe rename R {a -> a};
+                s = pipe rename S {a -> a};
                 answer = let canon union r,s;
                 return answer as answer(a);
             }

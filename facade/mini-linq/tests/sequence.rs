@@ -92,11 +92,11 @@ fn retained_positional_range_keeps_its_host_source() {
         physical {
                     relation r0(c0:i32,c1:i32);
                     relation r1(c0:i32,c1:i32);
-                    r2 = pipe rename r0@0 {c0 -> v0,c1 -> v1};
+                    r2 = pipe rename r0 {c0 -> v0,c1 -> v1};
                     r3 = let range select r2 if (2 <= v1);
                     r4 = let canon project r3 keep {v0};
                     r5 = pipe probe first [v0] r4,r3;
-                    r6 = pipe rename r1@1 {c0 -> v2,c1 -> v3};
+                    r6 = pipe rename r1 {c0 -> v2,c1 -> v3};
                     r7 = let canon project r6 keep {v2};
                     r8 = pipe probe first [] r5,r7;
                     r9 = pipe probe first [v2] r8,r6;

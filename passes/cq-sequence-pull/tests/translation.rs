@@ -245,7 +245,7 @@ fn simple(body: TokenStream) -> Program {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
     };
@@ -262,7 +262,7 @@ fn simple(body: TokenStream) -> Program {
 fn sequence_owned_store_keeps_independent_row_accounting_live() {
     let physical = syn::parse_quote! { physical {
         relation R(a:i32);
-        r = pipe rename R@0 {a -> a};
+        r = pipe rename R {a -> a};
         combined = let canon union r,r;
         return combined as answer(a);
     }};
@@ -366,7 +366,7 @@ fn worker_choices_stream_flat_and_nested_alternatives() {
 fn runtime_choices_keep_recorded_selection_owners_alive() {
     let physical = syn::parse_quote! { physical {
         relation R(a:i64);
-        r = pipe rename R@0 {a -> a};
+        r = pipe rename R {a -> a};
         s = let range select r if (a > 1);
         out = let canon project s keep {a};
         return out as answer(a);
@@ -470,8 +470,8 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         }
@@ -534,8 +534,8 @@ fn whole_relation_access_preserves_host_and_retained_empty_key_reads() {
             let physical = syn::parse_str(&format!(
                 "physical {{
                     relation L(a:i32); relation R(b:i32);
-                    l = pipe rename L@0 {{a -> a}};
-                    r = {mode} rename R@1 {{b -> b}};
+                    l = pipe rename L {{a -> a}};
+                    r = {mode} rename R {{b -> b}};
                     out = let canon {operator} {choice} [] l,r;
                     return out as answer({head});
                 }}"
@@ -586,8 +586,8 @@ fn membership_and_payload_reads_share_the_same_provider() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             s = pipe semi eager [a] l,r;
             j = let canon probe first [a] s,r;
             return j as answer(a,b);
@@ -609,8 +609,8 @@ fn non_host_exists_is_stored_before_a_membership_read() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {b -> b};
             s = exists canon project r keep {};
             j = let canon probe first [] l,s;
             return j as answer(a);
@@ -674,7 +674,7 @@ fn canonical_consumer_receives_duplicate_witnesses_without_local_answer_sets() {
             physical {
                 relation R(a:i32);
                 consumer canonical;
-                r = pipe rename R@0 {a -> a};
+                r = pipe rename R {a -> a};
                 return r as answer(#head);
             }
         })
@@ -703,7 +703,7 @@ fn canonical_consumer_preserves_internal_canon() {
         physical {
             relation R(a:i32,b:i32);
             consumer canonical;
-            r = let canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R {a -> a,b -> b};
             p = pipe project r keep {a};
             return p as answer(a);
         }
@@ -732,7 +732,7 @@ fn ordered_canon_consumes_verified_source_without_hashing() {
     let structures: cq_lang_structures::Program = syn::parse_quote! {
         physical {
             relation R(a:i32,b:i32);
-            r = pipe canon rename R@0 {a -> x,b -> y};
+            r = pipe canon rename R {a -> x,b -> y};
             return r as answer(x,y);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }

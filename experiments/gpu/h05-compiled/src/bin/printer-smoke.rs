@@ -25,7 +25,7 @@ fn main() {
             };
             physical {
                 relation Input(value:i64) = (&resident);
-                scan = pipe rename Input@0 {value -> value};
+                scan = pipe rename Input {value -> value};
                 answer = let canon project scan keep {value};
                 return answer as answer(value);
             }

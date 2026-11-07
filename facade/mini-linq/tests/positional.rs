@@ -155,10 +155,10 @@ macro_rules! filtered_join {
                 relation L(a:i64,b:i64) = ($left);
                 relation R(c:i64,d:i64) = ($right);
                 relation H(e:i64,f:i64) = ([(2_i64,7_i64),(2,8),(4,9)]);
-                l = pipe rename L@0 {a -> x,b -> y};
+                l = pipe rename L {a -> x,b -> y};
                 projected = pipe project l keep {x,y};
                 window = pipe range select projected if (y >= 10);
-                r = pipe rename R@1 {c -> x,d -> z};
+                r = pipe rename R {c -> x,d -> z};
                 s = pipe range select r if (z > 1);
                 $($build)*
                 j = pipe probe first [x] window,b;
@@ -209,7 +209,7 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
     cq_storage::counters::reset();
     assert_eq!(
         filtered_join!(left,right,{
-            h = pipe rename H@2 {e -> z,f -> w};
+            h = pipe rename H {e -> z,f -> w};
             b = let probe first [z] s,h;
         }),
         expected

@@ -9,8 +9,8 @@ macro_rules! payload {
             pipeline { $($pipeline)* };
             physical {
                 relation L(a:$ty) = ($left); relation R(a:$ty,b:i64) = ($right);
-                l = pipe rename L@0 {a -> x};
-                r = let rename R@1 {a -> x,b -> y};
+                l = pipe rename L {a -> x};
+                r = let rename R {a -> x,b -> y};
                 s = pipe semi eager [x] l,r;
                 p = pipe probe first [x] s,r;
                 observed = pipe guard p if ({ $visits.borrow_mut().push((*x, *y)); true });
@@ -144,7 +144,7 @@ macro_rules! owned_probe {
                 relation R(a:u64,b:i64) = ($right);
                 u = pipe unit;
                 l = pipe bind u with x:u64 = ($key);
-                r = let rename R@0 {a -> x,b -> y};
+                r = let rename R {a -> x,b -> y};
                 p = let canon probe first [x] l,r;
                 return dedup p as answer(*y);
             }
@@ -220,8 +220,8 @@ fn named_pipeline_composes_and_executes() {
 fn single_key_source(ty: syn::Type, mode: proc_macro2::TokenStream) -> ir::Program {
     let physical = syn::parse2(quote! { physical {
         relation L(a:#ty); relation R(a:#ty,b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = #mode rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = #mode rename R {a -> x,b -> y};
         p = let canon probe first [x] l,r;
         return p as answer(x,y);
     }})
@@ -277,8 +277,8 @@ fn selection_is_checked_idempotent_and_preserves_defaults() {
 fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
     let composite = cq_structure_selection::compile(&syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = let rename R@1 {a -> x,b -> y,c -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = let rename R {a -> x,b -> y,c -> z};
         p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
     }})
@@ -286,8 +286,8 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
     assert_eq!(radix_runs(&composite, quote!()).unwrap(), composite);
     let membership = cq_structure_selection::compile(&syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x};
         p = let canon semi eager [x] l,r;
         return p as answer(x);
     }})
@@ -297,9 +297,9 @@ fn composite_membership_trie_and_smallest_providers_are_not_retyped() {
     assert_eq!(radix_runs(&membership, quote!()).unwrap(), membership);
     let mut smallest = cq_structure_selection::compile(&syn::parse_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l = pipe rename L@0 {a -> a,b -> b};
-        r = let rename R@1 {b -> b,c -> c};
-        s = let rename S@2 {a -> a,c -> c};
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
+        s = let rename S {a -> a,c -> c};
         candidate = pipe probe smallest [b] l,r;
         checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
@@ -347,8 +347,8 @@ macro_rules! partial_reader {
             pipeline { $($pipeline)* };
             physical {
                 relation L(a:i64) = ($left); relation R(a:i64,b:i64,c:i64) = ($right);
-                l = pipe rename L@0 {a -> x};
-                r = let rename R@1 {a -> x,b -> y,c -> z};
+                l = pipe rename L {a -> x};
+                r = let rename R {a -> x,b -> y,c -> z};
                 p = pipe probe first [x] l,r;
                 g = pipe guard p if (*y > 0);
                 k = pipe project g keep {x};

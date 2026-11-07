@@ -59,8 +59,8 @@ fn code_reader(retained: bool) -> structures::Program {
     let mut source: structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i32,label:StringCode); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a,label -> label};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a,label -> label};
+            r = pipe rename R {a -> a,b -> b};
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b,label);
         }
@@ -123,9 +123,9 @@ fn numeric_lookup_is_published_before_host_code_expansion() {
     let structures = syn::parse_quote! {
         physical {
             relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,label:StringCode);
-            r = pipe rename R@0 {a -> a};
-            s = let rename S@1 {a -> a,b -> b};
-            t = let rename T@2 {b -> b,label -> label};
+            r = pipe rename R {a -> a};
+            s = let rename S {a -> a,b -> b};
+            t = let rename T {b -> b,label -> label};
             numeric = pipe probe first [a] r,s;
             text = pipe probe first [b] numeric,t;
             selected = pipe select text if (label = "green");
@@ -174,19 +174,19 @@ fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
             relation PartSupp(part_key:i32,supplier_key:i32);
             relation Supplier(supplier_key:i32,nation_key:i32);
             relation Nation(nation_key:i32);
-            p = pipe rename Part@0 {part_key -> part_key,part_name -> part_name};
+            p = pipe rename Part {part_key -> part_key,part_name -> part_name};
             green = pipe guard p if (accept(part_name));
-            o = let rename Orders@2 {order_key -> order_key};
+            o = let rename Orders {order_key -> order_key};
             po = pipe probe first [] green,o;
-            l = let rename Lineitem@3 {
+            l = let rename Lineitem {
                 order_key -> order_key,part_key -> part_key,supplier_key -> supplier_key
             };
             pol = pipe probe first [order_key,part_key] po,l;
-            ps = let rename PartSupp@4 {part_key -> part_key,supplier_key -> supplier_key};
+            ps = let rename PartSupp {part_key -> part_key,supplier_key -> supplier_key};
             valid = pipe probe first [part_key,supplier_key] pol,ps;
-            s = let rename Supplier@5 {supplier_key -> supplier_key,nation_key -> nation_key};
+            s = let rename Supplier {supplier_key -> supplier_key,nation_key -> nation_key};
             supplied = pipe probe first [supplier_key] valid,s;
-            n = let rename Nation@6 {nation_key -> nation_key};
+            n = let rename Nation {nation_key -> nation_key};
             joined = pipe probe first [nation_key] supplied,n;
             answer = let canon project joined keep {order_key,part_key,supplier_key};
             return answer as answer(order_key,part_key,supplier_key);
@@ -212,21 +212,21 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_code_readers() {
             relation Orders(order_key:i32,customer_key:i32);
             relation Customer(customer_key:i32,customer_nation:i32);
             relation Nation(nation_key:i32,name:StringCode);
-            s = pipe rename Supplier@2 {
+            s = pipe rename Supplier {
                 supplier_key -> supplier_key,supplier_nation -> supplier_nation
             };
-            sn = pipe rename Nation@5 {nation_key -> supplier_nation,name -> supplier_name};
+            sn = pipe rename Nation {nation_key -> supplier_nation,name -> supplier_name};
             sf = let select sn if ((supplier_name = "FRANCE") or (supplier_name = "GERMANY"));
             ss = let semi eager [supplier_nation] s,sf;
-            c = pipe rename Customer@4 {
+            c = pipe rename Customer {
                 customer_key -> customer_key,customer_nation -> customer_nation
             };
-            cn = pipe rename Nation@6 {nation_key -> customer_nation,name -> customer_name};
+            cn = pipe rename Nation {nation_key -> customer_nation,name -> customer_name};
             cf = let select cn if ((customer_name = "GERMANY") or (customer_name = "FRANCE"));
             cs = let semi eager [customer_nation] c,cf;
-            o = pipe rename Orders@3 {order_key -> order_key,customer_key -> customer_key};
+            o = pipe rename Orders {order_key -> order_key,customer_key -> customer_key};
             os = let semi eager [customer_key] o,cs;
-            l = pipe rename Lineitem@0 {
+            l = pipe rename Lineitem {
                 order_key -> order_key,supplier_key -> supplier_key,ship_date -> ship_date
             };
             dated = pipe range select l if (ship_date between 1i32 and 20i32);
@@ -309,8 +309,8 @@ fn full_key_host_membership() -> structures::Program {
     syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32);
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = pipe rename R@1 {a -> a};
+            l = pipe rename L {a -> a,b -> b};
+            r = pipe rename R {a -> a};
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
@@ -431,8 +431,8 @@ fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
             relation L(a:i32,b:i32); relation R(a:i32);
             relation answer(c:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = pipe rename R@1 {a -> a};
+            l = pipe rename L {a -> a,b -> b};
+            r = pipe rename R {a -> a};
             kept = pipe anti eager [a] l,r;
             bound = pipe bind kept with c : i32 = (*b);
             projected = pipe project bound keep {c};

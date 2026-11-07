@@ -44,8 +44,8 @@ fn probe_shape_and_structural_checker_reject_mutations() {
     let source: cq_lang_structures::Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             out = let canon project j keep {b};
             return out as answer(b);
@@ -81,8 +81,8 @@ fn correspondence_accepts_authored_output_names_but_not_another_result() {
     let source: cq_lang_structures::Program = syn::parse_quote! {
         physical {
             relation R(a:i32); relation S(a:i32);
-            r = let canon rename R@0 {a -> a};
-            s = let canon rename S@1 {a -> a};
+            r = let canon rename R {a -> a};
+            s = let canon rename S {a -> a};
             u = let canon union r,s;
             return u as answer(a);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -111,7 +111,7 @@ fn output_name_is_fresh_and_return_canon_is_preserved() {
     let source: cq_lang_structures::Program = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            __sequence_output = pipe rename R@0 {a -> a};
+            __sequence_output = pipe rename R {a -> a};
             return canon __sequence_output as answer(a);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             __sequence_output host scan = @reader as Reader [];
@@ -131,8 +131,8 @@ fn merge_uses_lookup_with_both_ordered_provider_obligations() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon merge [a] l,r;
             return j as answer(a,b);
         }
@@ -156,7 +156,7 @@ fn groups_lower_to_segmented_folds_after_complete_valuation_canon() {
     let physical = syn::parse_quote! {
         physical {
             relation R(k:i32, witness:i32, value:i64, anonymous:i32);
-            raw = pipe rename R@0 {k -> k, witness -> witness, value -> value, anonymous -> anonymous};
+            raw = pipe rename R {k -> k, witness -> witness, value -> value, anonymous -> anonymous};
             valuations = let canon project raw keep {k, witness, value};
             grouped = pipe group valuations by [k] {
                 n: usize = count();
@@ -194,7 +194,7 @@ fn certified_valuation_set_needs_no_redundant_group_input_canon() {
         physical {
             relation R(k:i32, witness:i32);
             host_set R;
-            r = pipe rename R@0 {k -> k, witness -> witness};
+            r = pipe rename R {k -> k, witness -> witness};
             grouped = pipe group r by [k] { n: usize = count(); };
             return grouped as answer(k,n);
         }
@@ -216,9 +216,9 @@ fn projected_membership_probe_lowers_to_flat_compact_before_expansion() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,unused:i32); relation T(b:i32,c:i32);
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = let rename R@1 {a -> a,unused -> unused};
-            t = let rename T@2 {b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            r = let rename R {a -> a,unused -> unused};
+            t = let rename T {b -> b,c -> c};
             member = pipe probe first [a] l,r;
             expanded = pipe probe first [b] member,t;
             out = let canon project expanded keep {a,b,c};
@@ -258,9 +258,9 @@ fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
                 relation L(a:#key_type,b:i32,c:i32);
                 relation R(a:#key_type,b:i32);
                 relation T(c:i32,d:i32);
-                l = pipe rename L@0 {a -> a,b -> b,c -> c};
-                r = pipe rename R@1 {a -> a,b -> b};
-                t = let rename T@2 {c -> c,d -> d};
+                l = pipe rename L {a -> a,b -> b,c -> c};
+                r = pipe rename R {a -> a,b -> b};
+                t = let rename T {c -> c,d -> d};
                 member = pipe probe first [a,b] l,r;
                 expanded = pipe probe first [c] member,t;
                 out = let canon project expanded keep {a,b,c,d};
@@ -310,7 +310,7 @@ fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
 fn blocked_source() -> cq_lang_structures::Program {
     let physical = syn::parse_quote!(physical {
         relation R(a: i64 [1], b: i64 [1]);
-        r = pipe rename R@0 {a -> x, b -> y};
+        r = pipe rename R {a -> x, b -> y};
         p = pipe range select r if (x >= 3);
         q = pipe range select p if (y < 9);
         g = pipe guard q if (opaque(x));
