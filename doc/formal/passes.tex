@@ -263,6 +263,22 @@ the scope analysis does not number contributes nothing, so the rank is total.
  e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\cap E\}\cup\{|E|\})}
  {\mathsf{rank}_{Elimination}(i,B)=(a_i,1,[|O_i\cap B|=0],e_i,i)}
 
+\Rule{H-MCSTie}{W=\mathsf{firstOccurrences}([\bar X_i\concat
+ \mathsf{sort}_{lex}(\widehat X_i)]_{i\ {\rm written}})\quad
+ N_0=[]\\
+ x_k=\arg\min_{x\in W\setminus\set(N_k)}
+ (-|\mathsf{adj}(x)\cap\set(N_k)|,\operatorname{pos}_W(x))\quad
+ N_{k+1}=N_k\concat[x_k]}
+ {\mathsf{eliminationOrder}(q)=\mathsf{reverse}(N_{|W|})}
+
+\Rule{S-BlockOccurrence}{c_i\text{ a block}\quad\neg\mathsf{Rust}(c_i)}
+ {\mathsf{isOccurrence}(c_i)=\mathsf{true}\quad
+  \mathsf{rank}(i,B)=\mathsf{rank}_{\rm atom}(O_i,R_i,B)}
+
+\Rule{O-BlockColumns}{c\text{ a block with free names }F_c
+ \text{ and interface }I_c}
+ {\bar X_c=\mathsf{sort}_{lex}(F_c)\concat\mathsf{sort}_{lex}(I_c)}
+
 \Rule{O-Coarse}{\mathit{seq}\text{ chosen}}
  {\mathsf{coarse}(\mathit{seq})=[\mathsf{fullSubatom}(i)\text{ or the copied central/Rust step}\mid i\in\mathit{seq}]}
 
@@ -271,15 +287,43 @@ the scope analysis does not number contributes nothing, so the rank is total.
  {\mathsf{fineStep}(v,B)=G_0\concat a\concat G_1
    \concat[\mathsf{subatom}(j,B_1)]_{j\in J}}
 
+\Rule{O-FineHoldingOrder}{h=Prefix(r)\quad split=Fine\quad
+ \mathsf{rank}_r(i,P)=(a_i,b_i,c_i,d_i,i)\quad
+ \pi(a,b,c,d,i)=(b,c,d,i)}
+ {\sigma_{\rm hold}=\mathsf{schedule}_{C\text{-}Ready}
+   (q,\pi\circ\mathsf{rank}_r)\quad
+  \mathsf{sequence}_{h,Fine}(q)=\sigma_{\rm hold}}
+
+\Rule{O-FineVariables}{\sigma=\mathsf{sequence}_{h,Fine}(q)\quad
+ V_0=\begin{cases}
+ \mathsf{reverse}(\mathsf{eliminationOrder}(q))&h=Elimination\\
+ \mathsf{firstOccurrences}([\bar O_i]_{i\in\sigma})&\text{otherwise}
+ \end{cases}\\
+ A(x)=\mathsf{stableSort}_{\,\min\{\operatorname{pos}_\sigma(i)\mid x'\in O_i\}}
+       ([x'\in V_0\mid x'\sim x])}
+ {V=\mathsf{firstOccurrences}([A(x)]_{x\in V_0})}
+
+\Rule{O-FineChoice}{V\text{ from O-FineVariables}\quad
+ H_x=\{i\in\sigma\mid \mathsf{isOccurrence}(c_i),\
+       x\in O_i,\ R_i\subseteq P\}\\
+ E=\{x\in V_{\rm remaining}\mid x\in B\lor
+       (x\notin T\land H_x\ne\emptyset)\}\quad
+ c_x=[\exists i\in H_x.\ O_i\cap P\ne\emptyset]\\
+ x=\arg\min_{x\in E}([\,\neg c_x\,],\operatorname{pos}_V(x))\quad x\notin B}
+ {\mathsf{binder}(x)=\arg\min_{i\in H_x}
+   ([O_i\cap P=\emptyset],\operatorname{pos}_\sigma(i))}
+
+\Rule{O-WrittenFine}{i\in\sigma\quad\mathsf{isOccurrence}(c_i)\quad
+ [x_1,\ldots,x_l]=[x\in\bar O_i\mid x\notin B]\quad l>0}
+ {\mathsf{splitInPlace}(i,B)=
+   [\mathsf{subatom}(i,B\cup\{x_1,\ldots,x_j\})]_{j=1}^{l}}
+
 \Rule{O-EmptyCheck}{s_k=R@i(\bar\_)\quad
  \exists j>k.\ s_j=R@i(K)\land\mathsf{introduces}(s_j)\ne\emptyset}
  {\mathsf{omit}(s_k)}
 
 \Rule{VO-EmptyCheck}{s_k=R@i(\bar\_)}
  {\forall j>k.\ s_j=R@i(K)\Longrightarrow\mathsf{introduces}(s_j)=\emptyset}
-
-\Rule{VO-CheckPhase}{s_k=R@i(K)\ \code{check}}
- {K\subseteq P_k\quad\mathsf{candidateProvider}(s_k)=\mathsf{false}}
 
 \Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering, free heading }F,\ \text{arms }b_1,\ldots,b_m}
  {b.placement={\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\lor
@@ -313,6 +357,16 @@ the scope analysis does not number contributes nothing, so the rank is total.
  r=\arg\max_{r\in F}(\mathsf{count}_{\mathcal{E}}(r),-r)\\
  t=\mathsf{orderAdvice}(n,\mathsf{keyedReads}_{\mathcal{E}}(n,r))}
  {\mathsf{order}^{\mathcal{E}}(q)=t[\mathit{evidence}:=\mathcal{E}]}
+
+\Rule{O-EvidenceFallback}{d=O_{\chi}(n)\quad
+ F=\{r\mid\mathsf{functional}_{\mathcal E}(n,r)\land
+             \mathsf{dom}_{\mathcal E}(n,r)\}\\
+ (\mathsf{blocks}(n)\ne\emptyset)\lor(|\mathsf{occ}(n)|<2)\lor
+ (\exists i.\mathsf{count}_{\mathcal E}(i)=\bot)\lor(F=\emptyset)\lor
+ \left(F\ne\emptyset\land
+ r=\arg\max_{r\in F}(\mathsf{count}_{\mathcal E}(r),-r)\land
+ \mathsf{keyedReads}_{\mathcal E}(n,r)=\mathsf{fullReads}(d)\right)}
+ {\mathsf{order}^{\mathcal E}_{\chi}(n)=d[\mathit{evidence}:=\mathcal E]}
 
 \Rule{CK-EvidenceLe}{t.\mathit{evidence}=\mathcal{E}\quad \mathsf{WF}_{VO}(t)\quad
  F=\{r\mid \mathsf{functional}_{\mathcal{E}}(n,r)\wedge\mathsf{dom}_{\mathcal{E}}(n,r)\}\ne\varnothing\\
@@ -382,13 +436,28 @@ disconnected introduction. This declared I4 policy preserves legal
 introducing-binding boundaries and same-boundary filter order; it does not
 eagerly hoist an introducing let just because its inputs are ready.
 Auto is GreedyWidth; Elimination uses reverse maximum-cardinality search on the
-primal graph, with connected-ready variables or binders first.
-Written/Fine and WrittenConnected/Fine split each chosen atom in place,
-then drain ready checks. $\mathsf{flush}$ emits ready waiting
-steps (constraints first); a variable is eligible if no Rust step supplies it or
-it is bound; $\mathsf{introduce}$ emits a subatom of its first holding atom and
-then the others' checks. Every atom's full correlated row must eventually be
-checked. Literal-only occurrences have an empty variable heading and
+primal graph. H-MCSTie starts with no numbered vertex, so the first vertex
+and every score tie use the first written occurrence (column order, then
+lexical equality aliases at that occurrence). Fine reverses the elimination
+order back to MCS order, then groups aliases by earliest scheduled supplier
+(O-FineVariables).
+Written/Fine and WrittenConnected/Fine split each chosen atom in column order
+(O-WrittenFine), then drain ready checks. $\mathsf{flush}$ emits ready waiting
+steps (constraints and negations first). In O-FineChoice, $B$ is the visible
+bound set, $P$ the supplied set and $T$ the Rust-supplied names. Eligible
+variables with a connected ready holder precede the others; ties use $V$.
+For an already bound variable there is no binder. Otherwise the first
+connected ready holding atom in the fixed heuristic sequence binds it,
+or the first ready holder if none is connected. The other holding atoms
+are checked in that sequence, deferring unready reads.
+For Prefix/Fine, O-FineHoldingOrder constructs this auxiliary holding
+sequence without the whole-occurrence introduction component $a_i$.
+It is a tie-break for the split reads, not the executable coarse schedule:
+membership of each split read is derived at its own boundary. S-Connected
+and S-Greedy retain $a_i$ for coarse scheduling; Fine still drains ready
+nonintroducing reads under I2, preserving their holding-sequence ties.
+Every atom's full correlated row must eventually be checked.
+Literal-only occurrences have an empty variable heading and
 are placed as complete zero-column reads before the fine variable loop.
 The production facade uses Prefix(Connected)/Coarse: the written root, then
 at each step a ready atom sharing a bound name before a disconnected
@@ -440,8 +509,29 @@ every answer.
 \Rule{H-FilterRank}{P_i=\{P\mid i\in\mathsf{targets}(P)\}\ \text{(ordering) or }
  \{P\mid\mathsf{restrict}\ R@i\ \mathsf{where}\ P\in t\}\ \text{(reducers)}\quad
  L_i=\{0\mid O_i\text{ has a literal argument}\}}
- {f_i=\min(\{3\}\cup L_i\cup\{\mathsf{strength}(p)\mid p\in P_i\})}
+ {f_i=\min(\{3\}\cup L_i\cup\{\mathsf{strength}(p,w_p)\mid p\in P_i\})}
 \]
+\[
+\Rule{H-FilterStrength}{w\in\{\mathsf{written},\mathsf{derived}\}\quad
+ \mathsf{const}(t)\Longleftrightarrow
+ t\text{ is literal or CQ-Closed}}
+ {\mathsf{strength}(P,w)=
+ \begin{cases}
+ 0&w=\mathsf{written},\ P=(t=u),\
+       \mathsf{const}(t)\lor\mathsf{const}(u)\\
+ 1&w=\mathsf{written},\ P=(t\mathrel{op}u),\
+       op\in\{<,\le,>,\ge\},\
+       \mathsf{const}(t)\lor\mathsf{const}(u)\\
+ 1&w=\mathsf{written},\ P=(x\ \mathsf{between}\ l\ \mathsf{and}\ h),\
+       \mathsf{const}(l)\land\mathsf{const}(h)\\
+ 2&\text{otherwise}
+ \end{cases}}
+\]
+In particular, written disjunctions (including disjunctions of equalities),
+$\ne$, finite membership and all derived domains have strength $2$.
+Here $w_p$ records whether the predicate is written or is an implied domain;
+for a recorded restriction, equality with a written source predicate
+determines written provenance.
 \[
 \Rule{O-Restrict}{t=\mathsf{order}(s)\quad\forall P.\ \forall i\in\mathsf{targets}(P).\
  \mathsf{restrict}\ R_i@i\ \mathsf{where}\ P\text{ heads the scope}}
@@ -474,6 +564,13 @@ planners' transfer route) records restrictions this way; a rescheduling
 producer (LE, advised lookups) restricts its own schedule, so prefix
 predicates still constrain its choices. The written
 reference (\code{compile_written}) records none, but still obeys VO-Order.
+Within each source clause, H-Local lists the written predicate first, then
+its implied domains in the order below; each predicate's targets are in
+written occurrence order.
+\[
+\Rule{O-DomainOrder}{X=\{x\mid\text{E-Domain derives }D_x\ne C\}}
+ {\mathsf{impliedDomains}(C)=[D_x]_{x\in\mathsf{sort}_{lex}(X)}}
+\]
 In CK-OrderObligations, $\mathsf{scopes}(t)$ is the top-level step list and every
 block arm's step list, $\mathsf{clause}(\sigma_k)$ the NF clause of an atom or
 block step, $\mathsf{cols}(\sigma_k)$ its listed bound columns,
@@ -661,6 +758,20 @@ readiness). The outer exclusion includes a block used as the outer.
  \mathsf{ChildrenFirst}(t)\quad\mathsf{StrongestSiblings}(t)}
  {\mathsf{check}_{reduce}^{Masks}(s,t)\Downarrow\ok}
 \end{mathpar}
+\[
+\Rule{R-MasksOrder}{C\text{ the eligible atom-to-block cuts}\quad
+ \rho(c)=\min_{j\in\mathsf{subtree}(c)}
+       \min(f_j,\ 2\text{ if }j\text{ is a cut target, else }3)\\
+ L(c)=\mathsf{sort}_{(\rho(d),d)}(\mathsf{children}(c))\\
+ P(c)=\mathop{\concat}_{d\in L(c)}
+       \left(P(d)\concat[\mathsf{red}(c,d)\mid c\ne r,\rho(d)<3]\right)}
+ {\mathsf{maskSchedule}=
+  [\mathsf{red}(a,b)]_{(a,b)\in\mathsf{sort}_{(b,a)}(C)}
+  \concat[P(r)\text{ with nonatom targets and edges already in }C\text{ removed}]}
+\]
+R-MasksOrder fixes the producer's depth-first post-order, not an additional
+CK-Masks rejection: that checker still accepts independent subtree
+interleavings satisfying its partial-order premises.
 Correlated blocks denote a prefix-dependent computation, not an independently
 available reduction operand. R-Placement excludes their occurrences before
 incidence, GYO and tree analysis; their written binders still scope later
@@ -750,12 +861,22 @@ of $s$ that reads clause $i$ (an atom read, or the first block step of a block).
  \mathsf{conj}(P)\subseteq\textstyle\bigcup_{k\leq n}\mathsf{conj}(\theta_k)}
  {\mathsf{restrictionPlaced}(s,t,T,P)}
 
-\Rule{E-Domain}{C=\bigvee_i\bigwedge_j C_{ij}\quad
- D_{ix}=\{C_{ij}\mid C_{ij}\text{ restricts only }x\text{ against literals or CQ-Closed operands}\}\\
- \forall i.\ D_{ix}\ne\varnothing}
- {C\Longrightarrow D_x=\bigvee_i\bigwedge D_{ix}\quad
+\Rule{E-Domain}{C=\mathsf{Or}([\,[C_{ij}]_j\,]_i)\quad
+ D_{ix}=\{C_{ij}\mid \mathsf{atomic}(C_{ij}),\
+       \vars(C_{ij})=\{x\},\
+       \mathsf{otherOperands}(C_{ij})\subseteq
+          \mathsf{Literals}\cup\mathsf{CQClosed}\}\\
+ \forall i.\ D_{ix}\ne\varnothing\quad
+ D_x=\mathsf{Or}([\ D_{ix}\ ]_i)\ne C}
+ {C\Longrightarrow D_x\quad
   \text{record }D_x\text{ as O-Restrict restrictions; retain the exact }C}
 
+\end{mathpar}
+Here $\mathsf{atomic}$ means one comparison, \code{between}, or
+\code{in} conjunct with a variable operand. The outer \code{Or} and its
+branch conjunct lists are the written syntax, not a distributive-normal-form
+conversion: a nested \code{Or} conjunct contributes no atomic domain.
+\begin{mathpar}
 \Rule{CT-Constraint}{\vars(C)=\bar x\quad\mathsf{columns}(\bar x)=\bar t\\
  \mathsf{closure}(C)=\{C\}\cup\{D_x\mid\text{E-Domain derives }D_x\}}
  {\mathsf{facts}\longmapsto\mathsf{facts}\cup
@@ -1388,13 +1509,35 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
  {\mathsf{check}^{Transfer}(q,t)\Downarrow\ok}
 % CK-Transfer currently specifies producer replay, not independent checking.
 
-\Rule{Plan-Le}{n=N(q)\quad v=O_{Written,Coarse}(n)\\
- \text{for each inner occurrence }R\text{ in GYO ear order:}\\
+\Rule{Plan-Le}{n=N(q)\quad v=O^{unrestricted}_{Written,Coarse}(n)\\
+ \text{for each inner occurrence }R\text{ in O-LeEarOrder:}\\
  \mathsf{lookup}(R)=R(\bar b,\_)\ \text{at the first point its bound key }\bar b\text{ is available}\\
  \mathsf{expand}(R)=R(\bar b,\bar y)\ \text{before first use or scope exit,}\\
  \text{finishing ready connected expansions before any disconnected expansion}\\
  \mathsf{CK\text{-}Le}(n,\mathsf{le}(v),L)\quad w=R_{None,Masks}(\mathsf{restrict}(\mathsf{le}(v)))}
  {\code{cq_planners::order(le)}(q)=\mathsf{simplify}(E(w))}
+
+\Rule{O-LeEarOrder}{A\text{ the inner atom occurrences}\quad
+ G=[c\mid\mathsf{Absorb}(c,p)\in\mathsf{gyoSteps}(q),\ c\in A]}
+ {\mathsf{earOrder}=\mathsf{firstOccurrences}(G)\concat
+       \mathsf{sort}_{written}(A\setminus\set(G))}
+
+\Rule{O-LeDemand}{v=O^{unrestricted}_{Written,Coarse}(n)\quad
+ Y_i=\mathsf{intro}_v(i)\quad K_i=\vars(i)\cap B^v_i\\
+ D(s)=\begin{cases}
+ K_i&s\text{ reads inner atom }i\\
+ \vars(s)&s\text{ equality or constraint}\\
+ \mathsf{logicalVars}(s,B^v_s)&s\text{ negation}\\
+ \mathsf{freeVars}(s,B^v_s)&s\text{ Rust step}\\
+ F_s&s\text{ Rust-free block}\\
+ B^v_s&s\text{ Rust-containing block}
+ \end{cases}\\
+ A_D=[i\text{ unexpanded}\mid Y_i\cap D(s)\ne\emptyset]_{\rm written}}
+ {\mathsf{before}(s)=
+       [\mathsf{expand}(i)\text{ recursively demanding }K_i]_{i\in A_D}}
+
+\Rule{O-LeExit}{A'=\{i\text{ inner}\mid\neg\mathsf{expanded}(i)\}}
+ {\mathsf{finishScope}=[\mathsf{expand}(i)]_{i\in\mathsf{sort}_{written}(A')}}
 
 \Rule{CK-Le}{\mathsf{erase}(t)=n\quad
  \forall R\in L.\ (\mathsf{lookup}(R)<\mathsf{expand}(R)\ \text{exactly once each})
@@ -1412,18 +1555,18 @@ first read, which is expanded once, and WF-VO alone fixes which columns each
 expansion introduces; lookups still introduce nothing. A zero-column lookup
 of an occurrence later introducing columns is omitted (O-EmptyCheck); the
 expansion itself establishes nonemptiness. Other residual root checks are
-guards over Unit, never unit-projected enumerations. Final I2 drainage
-preserves a check moved across an introduction using the recorded \code{check}
-marker, including its original occurrence and key. Existing markers survive
-further drainage. Stationary Written/Fine reads and LE lookups are not globally
-reclassified: their previously admissible introducing/intersection choices
-remain available. RA and Physical transport the fact and independently check
-heading preservation; new adjacency cannot create a new provider phase.
-The relational correspondence proof may eliminate redundant checks or coalesce
-identical occurrence/key reads. Surviving demanded phases must retain their
-markers; moving a marker to another key is not elimination. Extra restrictive
-markers are lawful. A zero-heading projection of an occurrence is still a
-read, not proof that a root guard disappeared.
+guards over Unit, never unit-projected enumerations. Final I2 drainage moves
+ready nonintroducing steps without adding any role or history annotation.
+Membership is exactly $\mathsf{intro}(k)=\emptyset$; a stationary read
+following a moved read receives no special treatment. In particular there is
+no separator-following check rule. RA and Physical receive no VO check marker.
+O-LeDemand walks $v$ in schedule order before O-Restrict removes prefix
+predicates: even a predicate later restricted to its occurrence demands its
+columns here. Inner occurrences demand their incoming written-chain keys,
+so an inner consumer can trigger its owner's expansion. Expansion recursively
+demands its key, skips already expanded occurrences, and still obeys Plan-Le's
+connected-growth premise. O-LeExit invokes the same expansion operation in
+written order. A zero-heading projection of an occurrence remains a read.
 Demand-driven expansion obeys I3 even when an unrelated aggregate guard
 demands a disconnected occurrence first.
 

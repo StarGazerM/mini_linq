@@ -1,0 +1,21 @@
+// le_block.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5 and the
+// planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner le = Plan-Le: v = O_{Written,Coarse}; outer = written root (CK-Le auto); lookups R(b,_) at the first
+// point their bound key is available, in GYO ear order; expansions as late as column demand or scope exit
+// permits; then restrict, R_{None,Masks}.
+// c0=R(a,b), c1={ S(b,c), T(c,d), if keep!(d) } else { S(b,c), T(c,d), where d > 0 }
+// O-BlockPlacement: the block contains Rust (`if keep!(d)`) -> correlated; R-Placement excludes it from the
+// reducer graph -> no top-level Masks edges.
+// Each arm is its own scope (Plan-Le per scope): arm outer = first written atom S; T lookup on c then expansion
+// demanded by the guard / head interface.
+// Arm 1: O-Restrict `d > 0` targets T -> restriction at the arm head. Masks in the arm: T is a child of the arm
+// outer S (root never target) -> none.
+struct Blocks ; relation R (a : i32 [0] , b : i32 [0]) ; relation S (b : i32 [0] , c : i32 [0]) ; relation T (c : i32 [0] , d : i32 [0]) ; answer (a , c) : - R (a , b) , { S (b , c) , T (c , d) , if keep ! (d) } else { S (b , c) , T (c , d) , where d > 0 } ;
+valuation {
+    // outer: written root
+    R @ 0 (a , b) ;
+    // block at its written position (Plan-Le keeps the written outer chain); arm0: S outer, lookup T(c,_), expand T
+    // (d demanded by guard), guard; arm1: O-Restrict head, S outer, lookup T, expand T (scope exit)
+    block @ 1 (a , b , c , d) correlated { S @ 1.0 . 0 (b , c) ; T @ 1.0 . 1 (c , _) ; T @ 1.0 . 1 (c , d) ; if keep ! (d) ; } else { restrict T @ 1.1 . 1 where d > 0 ; S @ 1.1 . 0 (b , c) ; T @ 1.1 . 1 (c , _) ; T @ 1.1 . 1 (c , d) ; } ;
+}

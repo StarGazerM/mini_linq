@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h22.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation Customer (c_custkey : i64 , c_phone : StringCode) ; relation Orders (o_orderkey : i64 , o_custkey : i64) ; relation QualifyingPhones (phone : StringCode) ; relation answer (custkey : i64) ; answer (custkey) :- Customer (custkey , phone) , QualifyingPhones (phone) , ! Orders (_ , custkey) ;

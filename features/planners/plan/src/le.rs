@@ -38,17 +38,18 @@ impl Scope {
             if atom.lookup || (!atom.key.is_empty() && atom.key.is_disjoint(&self.bound)) {
                 continue;
             }
-            let mut partial = atom.full.clone();
-            partial.columns = partial
-                .columns
-                .iter()
-                .map(|column| match column {
+            let partial = vo::Subatom {
+                relation: atom.full.relation.clone(),
+                at: Default::default(),
+                clause: atom.full.clause.clone(),
+                paren: Default::default(),
+                columns: atom.full.columns.iter().map(|column| match column {
                     vo::Column::Variable(v) if self.bound.contains(&symbol_name(v)) => {
-                        column.clone()
+                        vo::Column::Variable(v.clone())
                     }
                     _ => vo::Column::Dropped(Default::default()),
-                })
-                .collect();
+                }).collect(),
+            };
             // An empty preliminary probe cannot constrain a later introduction:
             // that occurrence's expansion already establishes nonemptiness.
             if partial.variables().next().is_none() && !atom.provides.is_empty() {
@@ -141,10 +142,20 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                     continue;
                 }
                 let bound: BTreeSet<_> = analysis.bound_before[index].iter().cloned().collect();
+                let cq::BodyItem::Positive { atom: occurrence } = &body[atom.clause()] else {
+                    unreachable!("VO atom names a positive occurrence")
+                };
                 state.atoms.insert(
                     atom.clause(),
                     Atom {
-                        full: atom.clone(),
+                        full: vo::Subatom {
+                            relation: occurrence.relation.clone(),
+                            at: Default::default(),
+                            clause: atom.clause.clone(),
+                            paren: Default::default(),
+                            columns: occurrence.variables().cloned()
+                                .map(vo::Column::Variable).collect(),
+                        },
                         key: atom
                             .variables()
                             .map(|(_, v)| symbol_name(v))
@@ -157,6 +168,7 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
                 );
             }
         }
+        // Formal rule O-LeEarOrder: Visit GYO absorption children first, then remaining inner occurrences in written order.
         // GYO ears first, followed by the Masks tree's cyclic-core clauses.
         for step in &graph.gyo_steps {
             if let cq::hypergraph::GyoStep::Absorb { child, .. } = step {
@@ -176,6 +188,7 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
             }
         }
         let mut placed_rust = BTreeSet::new();
+        // Formal rule O-LeDemand: Walk the unrestricted written chain; expand written owners of demanded columns recursively before each step.
         for (index, step) in steps.iter().enumerate() {
             let mut step = step.clone();
             match &mut step {
@@ -246,6 +259,7 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
             state.steps.push(step);
             state.lookups();
         }
+        // Formal rule O-LeExit: Expand remaining occurrences in written order at scope exit.
         let remaining: Vec<_> = state.atoms.keys().copied().collect();
         for clause in remaining {
             state.expand(clause);

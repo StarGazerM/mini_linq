@@ -1,0 +1,19 @@
+// written_fine_triangle.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
+// I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner written,fine = O_{Written,Fine} (Plan-Generic).
+// c0=R(a,b), c1=S(b,c), c2=T(c,a)
+// "Written/Fine ... split each chosen atom in place, then drain ready checks" (passes.tex:335-336); O-Fine: at
+// most one new variable per subatom.
+// O-WrittenFine: in-place splits follow column order (a before b).
+struct Triangle ; relation R (first : i32 [0] , second : i32 [0]) ; relation S (first : i32 [0] , second : i32 [0]) ; relation T (first : i32 [0] , second : i32 [0]) ; answer (a , b , c) : - R (a , b) , S (b , c) , T (c , a) ;
+valuation {
+    // in-place split of c0, first new variable a (column order; gap noted)
+    R @ 0 (a , _) ;
+    // in-place split of c0, second new variable b; full row
+    R @ 0 (a , b) ;
+    // c1 has one new variable (c): single full subatom
+    S @ 1 (b , c) ;
+    // c2 introduces nothing: filter at its first ready point (I2)
+    T @ 2 (c , a) ;
+}

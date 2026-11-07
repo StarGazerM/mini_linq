@@ -1,0 +1,24 @@
+// prefix_greedy_fine_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*,
+// passes.tex I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner prefix greedy,fine.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// O-FineVariables: prioritize variables with a connected ready holder, then use
+// grouped heuristic variable order (forward MCS for Elimination). O-FineChoice:
+// choose a connected holder first, then its fixed heuristic sequence position.
+// Variable sequence: a, b, c, d.
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // fineStep(a): only holder c0
+    Edge @ 0 (a , _) ;
+    // fineStep(b): holder c0 (connected) before c1 (disconnected)
+    Edge @ 0 (a , b) ;
+    // introduce(b): check of other holder c1
+    Edge @ 1 (b , _) ;
+    // fineStep(c): c1 connected, c2 disconnected -> c1
+    Edge @ 1 (b , c) ;
+    // introduce(c): check of other holder c2
+    Edge @ 2 (_ , c) ;
+    // fineStep(d): only holder c2; full row
+    Edge @ 2 (d , c) ;
+}

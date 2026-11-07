@@ -1,0 +1,15 @@
+// transfer_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5
+// and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner transfer.
+// c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
+// f_i = 3 everywhere -> no Masks/F/B reductions.
+struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
+valuation {
+    // S-WrittenConnected: j = c0
+    Edge @ 0 (a , b) ;
+    // S-WrittenConnected: j = c1, connected via b
+    Edge @ 1 (b , c) ;
+    // S-WrittenConnected: j = c2, connected via c
+    Edge @ 2 (d , c) ;
+}

@@ -1,0 +1,17 @@
+// transfer_triangle.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
+// I1-I5 and the planner O-/S-/R- rules), independently of the producer.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
+// Planner transfer = Plan-Transfer: O_{WrittenConnected,Coarse}, R_{None,Masks}, forward F / backward B
+// transfers.
+// c0=R(a,b), c1=S(b,c), c2=T(c,a)
+// No relational filter or literal: every f_i = 3 (H-FilterRank) -> no filtered subtree -> R-Masks, F and B are
+// all empty.
+struct Triangle ; relation R (first : i32 [0] , second : i32 [0]) ; relation S (first : i32 [0] , second : i32 [0]) ; relation T (first : i32 [0] , second : i32 [0]) ; answer (a , b , c) : - R (a , b) , S (b , c) , T (c , a) ;
+valuation {
+    // S-WrittenConnected: j = argmin(a_i,i) = c0; no bound names so K empty
+    R @ 0 (a , b) ;
+    // S-WrittenConnected: j = c1 (written least), connected via b
+    S @ 1 (b , c) ;
+    // a_i = 0 filter (I2)
+    T @ 2 (c , a) ;
+}

@@ -1,0 +1,49 @@
+// retail_d85.query0.vo.expected: expected default-route VO of TPC-H kernel retail_d85 (query0_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: O-EvidenceLe: no dominating functional root (w=PartSupp@0; F=[]) ->
+// O_Prefix(Connected),Coarse
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself at their first ready boundary; membership follows from the bound prefix.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation Lineitem (l_orderkey : i64 [0] , l_partkey : i64 [0] , l_suppkey : i64 [0]) ; relation PartSupp (ps_partkey : i64 [0] , ps_suppkey : i64 [0] , ps_availqty : i64 [0]) ; relation Part (p_partkey : i64 [0]) ; relation Orders (o_orderkey : i64 [0] , o_custkey : i64 [0] , o_orderdate : Date [1]) ; relation Customer (c_custkey : i64 [0] , c_nationkey : i32 [2]) ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [2]) ; relation Nation (n_nationkey : i32 [2] , n_name : cq_load :: StringCode [3] in [0] (dictionaries . domain ("n_name"))) ; relation answer (order_key : i64 [0] , part_key : i64 [0] , supplier_nation : i32 [2]) ; answer (order_key , part_key , supplier_nation) : - PartSupp (part_key , supplier_key , available) , where available > 0 , Lineitem (order_key , part_key , supplier_key) , Orders (order_key , customer_key , order_date) , where order_date >= (start) , where order_date < (end) , Customer (customer_key , customer_nation) , Nation (customer_nation , __cq_7_1) , where __cq_7_1 == (__cq_c_0) , Part (part_key) , Supplier (supplier_key , supplier_nation) , Nation (supplier_nation , _supplier_name) capture { domain __cq_c_0 : cq_load :: StringCode in [0] (dictionaries . domain ("n_name")) = exact ("UNITED STATES") ; } ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Lineitem = 6001215 ; count PartSupp = 800000 ; key PartSupp [ps_partkey , ps_suppkey] ; count Part = 200000 ; key Part [p_partkey] ; count Orders = 1500000 ; key Orders [o_orderkey] ; count Customer = 150000 ; key Customer [c_custkey] ; count Supplier = 10000 ; key Supplier [s_suppkey] ; count Nation = 25 ; key Nation [n_nationkey] ; } {
+    // O-Restrict/H-Local: restriction of clause 1 on PartSupp@0 heads the scope (H-Local order)
+    restrict PartSupp @ 0 where available > 0 ;
+    // O-Restrict/H-Local: restriction of clause 4 on Orders@3 heads the scope (H-Local order)
+    restrict Orders @ 3 where order_date >= @ (start) ;
+    // O-Restrict/H-Local: restriction of clause 5 on Orders@3 heads the scope (H-Local order)
+    restrict Orders @ 3 where order_date < @ (end) ;
+    // O-Restrict/H-Local: restriction of clause 8 on Nation@7 heads the scope (H-Local order)
+    restrict Nation @ 7 where __cq_7_1 = @ (__cq_c_0) ;
+    // R-Masks: Nation@7 is child of Customer@6 in H-SpanningCore tree (GYO join tree) rooted at outer PartSupp@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Customer @ 6 with Nation @ 7 (customer_nation , _) ;
+    // R-Masks: Customer@6 is child of Orders@3 in H-SpanningCore tree (GYO join tree) rooted at outer PartSupp@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Orders @ 3 with Customer @ 6 (customer_key , _) ;
+    // R-Masks: Orders@3 is child of Lineitem@2 in H-SpanningCore tree (GYO join tree) rooted at outer PartSupp@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Lineitem @ 2 with Orders @ 3 (order_key , _ , _) ;
+    // S-Connected: no connected ready atom (I3 vacuous); tie with ['@2', '@3', '@6', '@7', '@9', '@10', '@11']
+    // broken by written position (I4 last)
+    PartSupp @ 0 (part_key , supplier_key , available) ;
+    // I2/a_i=0: ready filter, placed at first ready boundary
+    Part @ 9 (part_key) ;
+    // S-Connected: connected (shares ['part_key', 'supplier_key']); tie with ['@10'] broken by written position (I4
+    // last)
+    Lineitem @ 2 (order_key , part_key , supplier_key) ;
+    // S-Connected: connected (shares ['order_key']); tie with ['@10'] broken by written position (I4 last)
+    Orders @ 3 (order_key , customer_key , order_date) ;
+    // S-Connected: connected (shares ['customer_key']); tie with ['@10'] broken by written position (I4 last)
+    Customer @ 6 (customer_key , customer_nation) ;
+    // S-Connected: connected (shares ['customer_nation']); tie with ['@10'] broken by written position (I4 last)
+    Nation @ 7 (customer_nation , __cq_7_1) ;
+    // S-Connected: connected (shares ['supplier_key'])
+    Supplier @ 10 (supplier_key , supplier_nation) ;
+    // S-Connected: connected (shares ['supplier_nation'])
+    Nation @ 11 (supplier_nation , _supplier_name) ;
+}

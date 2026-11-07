@@ -91,6 +91,7 @@ struct Clause<'a> {
 }
 
 impl Clause<'_> {
+    /// Formal rule S-BlockOccurrence: A Rust-free block ranks as an occurrence, not as a nonatom.
     fn is_atom(&self) -> bool {
         self.atom.is_some() && !self.rust
     }
@@ -210,6 +211,7 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                 BodyItem::Positive { atom } => Some(atom.clone()),
                 BodyItem::Block(block) => {
                     let facts = block.analyze(&prefix);
+                    // Formal rule O-BlockColumns: List free columns lexically, followed by lexical interface columns.
                     Some(cq::Atom {
                         relation: syn::Ident::new("block", Span::call_site()),
                         paren_token: Default::default(),
@@ -267,7 +269,7 @@ fn placeable(clauses: &[Clause<'_>], seed: &BTreeSet<String>) -> bool {
     pending.is_empty()
 }
 
-/// Structural rank; the single final drainage producer records I2 moves.
+/// Structural rank for heuristics whose ready checks are drained afterwards.
 type Rank = (bool, bool, usize, usize);
 
 /// Choose introducing order by structural rank, then drain ready checks once.
@@ -276,10 +278,10 @@ type Rank = (bool, bool, usize, usize);
 /// CQ scoping (CQ-Where, CQ-Neg, IF-Environment, CQ-Bind, CQ-For) and
 /// O-BlockPlacement keep some pending clause ready at every step
 /// (design-notes/m2c-total-report.md, C1), so the ready loop places every clause.
-fn schedule(
+fn schedule<R: Ord>(
     clauses: &[Clause<'_>],
     seed: &BTreeSet<String>,
-    rank: impl Fn(usize, &BTreeSet<String>) -> Rank,
+    rank: impl Fn(usize, &BTreeSet<String>) -> R,
     connect_written: bool,
 ) -> Vec<usize> {
     let mut provided = seed.clone();
@@ -309,32 +311,33 @@ fn schedule(
     sequence
 }
 
-/// After I2 drainage, prioritize ready bindings, then connected atoms,
-/// then the narrowest heading, then the earliest clause.
+/// Prioritize ready nonintroducing clauses, then bindings, then connected
+/// atoms, then the narrowest heading and earliest clause.
 /// Connectivity counts only names actually shared after normalization: an
 /// unsolved (protected) equality class is not a join key the lowering can
 /// realize, so it does not make an occurrence look connected.
-/// Formal rule S-Connected: Drain ready nonintroducing clauses before any introduction, then rank atoms by shared names and clause index.
-/// Formal rule S-Greedy: After I2 drainage, GreedyWidth ranks connected atoms before union arity and written position.
+/// Formal rule S-Connected: Rank ready nonintroducing clauses first, then atoms by shared names and clause index.
+/// Formal rule S-Greedy: Rank ready nonintroducing clauses first, then connected atoms before union arity and written position.
 fn prefix_rank<'a>(
     clauses: &'a [Clause<'a>],
     ranking: Ranking,
-) -> impl Fn(usize, &BTreeSet<String>) -> Rank + 'a {
+) -> impl Fn(usize, &BTreeSet<String>) -> (bool, bool, bool, usize, usize) + 'a {
     move |clause, bound| {
         let facts = &clauses[clause];
+        let introduces = facts.provides.iter().any(|name| !bound.contains(name));
         if !facts.is_atom() {
             let priority = usize::from(!matches!(
                 facts.item,
                 BodyItem::Constraint(_) | BodyItem::Negation(_)
             ));
-            return (false, false, priority, clause);
+            return (introduces, false, false, priority, clause);
         }
         let shared = facts.provides.iter().filter(|name| bound.contains(*name)).count();
         let width = match ranking {
             Ranking::Connected => 0,
             Ranking::GreedyWidth => bound.len() + facts.provides.len() - shared,
         };
-        (true, shared == 0, width, clause)
+        (introduces, true, shared == 0, width, clause)
     }
 }
 
@@ -437,7 +440,6 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> valua
             clause: LitInt::new(&clause.to_string(), Span::call_site()).into(),
             paren: Default::default(),
             columns,
-            check: None,
         },
         Default::default(),
     )
@@ -557,6 +559,7 @@ impl Fine<'_> {
 /// eligible unbound variable has a ready holding atom by the filter itself
 /// (design-notes/m2c-total-report.md, C2 and C3).
 /// Formal rule O-Fine: Iterate variables with ready bindings and guards; introduce then check.
+/// Formal rule O-FineChoice: Prefer a connected ready holder then heuristic variable position; bind through a connected holder then fixed sequence position.
 fn fine(
     clauses: &[Clause<'_>],
     sequence: &[usize],
@@ -644,6 +647,7 @@ fn fine(
 }
 
 /// Split Written atoms in place; the assembled schedule subsequently drains checks.
+/// Formal rule O-WrittenFine: Split each chosen occurrence in retained source-column order.
 fn written_fine(
     clauses: &[Clause<'_>],
     sequence: &[usize],
@@ -797,25 +801,6 @@ fn drain_with(program: &mut valuation::Program, analysis: &valuation::Analysis) 
                     let facts = &analysis.order[order[next]];
                     !facts.preprocessing && facts.ready(&bound) && !facts.introduces(&bound)
                 }) {
-                    // Removing a separating check must not make the following
-                    // standalone check an alternate candidate provider.
-                    if next != position && next + 1 < steps.len()
-                        && analysis.introduces[order[next + 1]].is_empty()
-                    {
-                        if let valuation::Step::Atom(following, _) = &mut steps[next + 1] {
-                            following.check = Some(Default::default());
-                        }
-                    }
-                    // I2 moves an existing check, not its provider phase.
-                    // Newly adjacent introductions must not turn it into an
-                    // alternate supplier during Physical selection.
-                    if next != position || matches!(&steps[next],
-                        valuation::Step::Atom(atom, _) if atom.variables().next().is_none())
-                    {
-                        if let valuation::Step::Atom(atom, _) = &mut steps[next] {
-                            atom.check = Some(Default::default());
-                        }
-                    }
                     steps[position..=next].rotate_right(1);
                     order[position..=next].rotate_right(1);
                 }
@@ -1254,10 +1239,16 @@ fn compile_body(
             (sequence, variables)
         }
         Heuristic::Prefix(ranking) => {
+            let rank = prefix_rank(&clauses, ranking);
             let sequence = schedule(
                 &clauses,
                 seed,
-                prefix_rank(&clauses, ranking),
+                // Formal rule O-FineHoldingOrder: Fix Fine's auxiliary holding order without the whole-occurrence introduction component.
+                |clause, bound| {
+                    let (introduces, atom, disconnected, width, position) = rank(clause, bound);
+                    (options.split == Split::Coarse && introduces,
+                        atom, disconnected, width, position)
+                },
                 false,
             );
             let variables = binding_order(&clauses, &sequence);
@@ -1268,6 +1259,7 @@ fn compile_body(
     // Elimination removes leaves first. Enumerating in that direction joins
     // their independent projections before any connecting variable is bound.
     // Reverse it for Fine; Coarse retains the earliest-variable atom ranking.
+    // Formal rule O-FineVariables: Use heuristic first-introduction order (MCS for Elimination), grouping aliases by first scheduled supplier.
     if options.heuristic == Heuristic::Elimination && options.split == Split::Fine {
         variables.reverse();
     }

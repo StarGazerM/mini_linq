@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/tpch/tpch_q06.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Aggregate row hole: original rows CQ; these declarations have no leaf values to hoist.
+struct Query06 ; relation lineitem (orderkey : i64 [0] , linenumber : i64 [0] , quantity : Decimal [1] , price : Decimal [1] , discount : Decimal [1] , shipdate : Date [2]) ; rows (group , orderkey , linenumber , amount) :- lineitem (orderkey , linenumber , quantity , price , discount , shipdate) , where shipdate >= first && shipdate < after , where discount >= discount_low && discount <= discount_high , where quantity < quantity_limit , let group : i32 = 0 , let amount : i128 = i128 :: from (price . scaled ()) * i128 :: from (discount . scaled ()) ;

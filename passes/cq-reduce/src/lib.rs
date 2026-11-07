@@ -225,6 +225,7 @@ pub fn block_cuts(
 }
 
 /// The Masks schedule of one scope: block cuts, then outer-rooted mask edges.
+/// Formal rule R-MasksOrder: Emit cuts by support then target clause, followed by deduplicated depth-first post-order tree edges with siblings ranked by subtree strength then clause.
 fn mask_steps(
     body: &cq::CommaList<valuation::cq::BodyItem>,
     steps: &[Step],
@@ -664,7 +665,6 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> Subat
         clause: index(clause).into(),
         paren: Default::default(),
         columns,
-        check: None,
     }
 }
 

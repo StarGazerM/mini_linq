@@ -198,14 +198,16 @@ fn occurrence_reference_is_not_a_recorded_order_exemption() {
 }
 
 #[test]
-fn recorded_check_phase_cannot_become_an_introducer() {
+fn membership_is_derived_from_step_introductions() {
     let mut program: Program = syn::parse_quote! {
         struct Q; relation R(x:i32); relation S(x:i32);
         answer(x) :- R(x), S(x);
-        valuation { R@0(x); S@1(x) check; }
+        valuation { R@0(x); S@1(x); }
     };
-    contract::check(&program).unwrap();
+    assert!(contract::check(&program).unwrap().introduces[1].is_empty());
     assert_eq!(syn::parse2::<Program>(program.to_token_stream()).unwrap(), program);
     program.valuation.steps.swap(0, 1);
-    rejection(&program, "recorded check phase cannot introduce");
+    let facts = contract::check(&program).unwrap();
+    assert_eq!(facts.introduces[0], ["x"]);
+    assert!(facts.introduces[1].is_empty());
 }

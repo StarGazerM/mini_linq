@@ -281,6 +281,7 @@ pub fn order(
         }
         None => default,
     };
+    // Formal rule O-EvidenceFallback: Keep evidence on the default plan when keyed planning is unavailable or adds no change.
     program.valuation.evidence = Some(evidence.clone());
     program
 }

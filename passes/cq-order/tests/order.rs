@@ -20,6 +20,33 @@ fn normal(tokens: proc_macro2::TokenStream) -> cq::Program {
 }
 
 #[test]
+fn fine_membership_ties_keep_the_auxiliary_holding_order() {
+    let source = normal(quote! {
+        struct HoldingOrder;
+        relation L(a:i32,b:i32); relation R(b:i32,c:i32);
+        relation N(c:i32,d:i32); relation S(a:i32,c:i32);
+        answer(a,b,c,d) :- L(a,b), R(b,c), N(c,d), S(a,c);
+    });
+    let options = Options {
+        heuristic: Heuristic::Prefix(Ranking::Connected),
+        split: Split::Fine,
+    };
+    let target = cq_order::compile(&source, &options).unwrap();
+    let expected: valuation::Program = syn::parse_quote! {
+        #source
+        valuation {
+            L@0(a,_); S@3(a,_);
+            L@0(a,b); R@1(b,_);
+            R@1(b,c); N@2(c,_); S@3(a,c);
+            N@2(c,d);
+        }
+    };
+    valuation::contract::check(&expected).unwrap();
+    cq_order::check(&source, &expected, &options).unwrap();
+    assert_eq!(target, expected);
+}
+
+#[test]
 fn written_connected_preserves_legal_boundaries_and_repairs_only_invariants() {
     let cases = [
         (normal(quote! {
@@ -98,7 +125,7 @@ fn drainage_omits_only_empty_checks_discharged_by_the_same_introduction() {
     valuation::contract::check(&source).unwrap();
     assert_eq!(source.valuation.steps.len(), 2);
     assert!(matches!(&source.valuation.steps[0],
-        valuation::Step::Atom(atom, _) if atom.relation == "R" && atom.check.is_none()));
+        valuation::Step::Atom(atom, _) if atom.relation == "R"));
     for rows in [vec![], vec![vec![3]], vec![vec![3], vec![4], vec![5]]] {
         let database = std::collections::BTreeMap::from([
             ("R".into(), std::collections::BTreeSet::from([vec![1], vec![2]])),
@@ -108,9 +135,8 @@ fn drainage_omits_only_empty_checks_discharged_by_the_same_introduction() {
             cq_oracle::evaluate_cq(&source.cq, &database));
     }
     let mut redundant = source.clone();
-    redundant.valuation.steps.insert(0, syn::parse_quote!(S@1(_) check;));
-    assert!(valuation::contract::check(&redundant).unwrap_err().to_string()
-        .contains("redundant zero-column check"));
+    redundant.valuation.steps.insert(0, syn::parse_quote!(S@1(_);));
+    assert!(valuation::contract::check(&redundant).is_err());
 
     let mut residual: valuation::Program = syn::parse_quote! {
         struct Q; relation R(x:i32); relation S(x:i32);
@@ -120,11 +146,11 @@ fn drainage_omits_only_empty_checks_discharged_by_the_same_introduction() {
     cq_order::drain_ready_checks(&mut residual).unwrap();
     valuation::contract::check(&residual).unwrap();
     assert!(matches!(&residual.valuation.steps[0],
-        valuation::Step::Atom(atom, _) if atom.variables().next().is_none() && atom.check.is_some()));
+        valuation::Step::Atom(atom, _) if atom.variables().next().is_none()));
 }
 
 #[test]
-fn drainage_records_only_moved_checks_and_preserves_their_provider() {
+fn drainage_moves_membership_steps_without_changing_their_columns() {
     let mut source: valuation::Program = syn::parse_quote! {
         struct Q;
         relation L(a:i32,b:i32); relation R(b:i32,c:i32);
@@ -140,18 +166,10 @@ fn drainage_records_only_moved_checks_and_preserves_their_provider() {
     assert_eq!(check.clause, provider.clause);
     assert_eq!(check.relation, provider.relation);
     assert_eq!(check.columns, provider.columns);
-    assert!(check.check.is_some());
+    assert!(valuation::contract::check(&source).unwrap().introduces[2].is_empty());
     let drained = source.clone();
     cq_order::drain_ready_checks(&mut source).unwrap();
     assert_eq!(source, drained);
-
-    // An already-adjacent phase is not reclassified: its previously legal
-    // PH-Smallest alternatives remain available.
-    let valuation::Step::Atom(check, _) = &mut source.valuation.steps[2] else { panic!() };
-    check.check = None;
-    let stationary = source.clone();
-    cq_order::drain_ready_checks(&mut source).unwrap();
-    assert_eq!(source, stationary);
 }
 
 #[test]

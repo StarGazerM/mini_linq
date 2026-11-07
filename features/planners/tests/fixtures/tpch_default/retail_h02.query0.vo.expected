@@ -1,0 +1,33 @@
+// retail_h02.query0.vo.expected: expected default-route VO of TPC-H kernel retail_h02 (query0_main), derived
+// from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// Ordering decision: O-EvidenceLe: no dominating functional root (w=Partsupp@0; F=[]) ->
+// O_Prefix(Connected),Coarse
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself at their first ready boundary; membership follows from the bound prefix.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Minimum ; relation Partsupp (ps_partkey : i64 [0] , ps_suppkey : i64 [0] , ps_supplycost : Decimal [1]) ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [2] , s_acctbal : Decimal [1] , s_name : StringCode [3] , s_address : StringCode [3] , s_phone : StringCode [3] , s_comment : StringCode [3]) ; relation Nation (n_nationkey : i32 [2] , n_regionkey : i32 [2] , n_name : StringCode [3]) ; relation Region (r_regionkey : i32 [2] , r_name : StringCode [3] in [0] (data . dictionaries . domain ("r_name"))) ; relation answer (part_key : i64 [0] , minimum_cost : Option < i64 > [4]) ; answer (part_key , __cq_6_1) : - Partsupp (part_key , supplier_key , cost) , Supplier (supplier_key , nation_key , __cq_1_2 , __cq_1_3 , __cq_1_4 , __cq_1_5 , __cq_1_6) , Nation (nation_key , region_key , __cq_2_2) , Region (region_key , region_name) , where region_name == (__cq_c_0) , let cost_units : i64 = cost . scaled () group [cost , cost_units , nation_key , part_key , region_key , region_name , supplier_key] by [part_key] { __cq_6_1 : Option < i64 > = min (cost_units) ; } capture { domain __cq_c_0 : StringCode in [0] (data . dictionaries . domain ("r_name")) = exact ("EUROPE") ; } ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Partsupp = 800000 ; key Partsupp [ps_partkey , ps_suppkey] ; count Supplier = 10000 ; key Supplier [s_suppkey] ; count Nation = 25 ; key Nation [n_nationkey] ; count Region = 5 ; key Region [r_regionkey] ; } {
+    // O-Restrict/H-Local: restriction of clause 4 on Region@3 heads the scope (H-Local order)
+    restrict Region @ 3 where region_name = @ (__cq_c_0) ;
+    // R-Masks: Region@3 is child of Nation@2 in H-SpanningCore tree (GYO join tree) rooted at outer Partsupp@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Nation @ 2 with Region @ 3 (region_key , _) ;
+    // R-Masks: Nation@2 is child of Supplier@1 in H-SpanningCore tree (GYO join tree) rooted at outer Partsupp@0;
+    // child subtree carries a local filter (f<3, H-FilterRank); children first
+    reduce Supplier @ 1 with Nation @ 2 (nation_key , _ , _) ;
+    // S-Connected: no connected ready atom (I3 vacuous); tie with ['@1', '@2', '@3'] broken by written position (I4
+    // last)
+    Partsupp @ 0 (part_key , supplier_key , cost) ;
+    // rank (a,0,..): ready introducing nonatom precedes introducing atoms
+    let cost_units : i64 = cost . scaled () ;
+    // S-Connected: connected (shares ['supplier_key'])
+    Supplier @ 1 (supplier_key , nation_key , __cq_1_2 , __cq_1_3 , __cq_1_4 , __cq_1_5 , __cq_1_6) ;
+    // S-Connected: connected (shares ['nation_key'])
+    Nation @ 2 (nation_key , region_key , __cq_2_2) ;
+    // S-Connected: connected (shares ['region_key'])
+    Region @ 3 (region_key , region_name) ;
+}

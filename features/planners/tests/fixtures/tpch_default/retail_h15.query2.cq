@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h15.rs, query literal 2.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation Supplier (s_suppkey : i64 , s_name : StringCode , s_address : StringCode , s_phone : StringCode) ; relation Revenue (supplier_key : i64 , revenue : i64) ; relation Maximum (maximum : Option < i64 >) ; relation answer (supplier_key : i64 , name : StringCode , address : StringCode , phone : StringCode , revenue : i64) ; answer (supplier_key , name , address , phone , revenue) :- Revenue (supplier_key , revenue) , Supplier (supplier_key , name , address , phone) , Maximum (maximum) , if Some (* revenue) == * maximum ;

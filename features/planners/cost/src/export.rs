@@ -424,7 +424,6 @@ fn reference_steps(
                     relation: atom.relation.clone(), at: Default::default(),
                     clause: path, paren: Default::default(),
                     columns: atom.variables().cloned().map(vo::Column::Variable).collect(),
-                    check: None,
                 }, Default::default())
             }
             cq::BodyItem::Block(block) => {
@@ -444,7 +443,6 @@ fn reference_steps(
                         at: Default::default(), clause: path, paren: Default::default(),
                         columns: facts.free.values().chain(facts.interface.values())
                             .cloned().map(vo::Column::Variable).collect(),
-                        check: None,
                     },
                     placement: if facts.rust { vo::Placement::Correlated } else { vo::Placement::Hoisted },
                     kind: block.kind, branches,

@@ -8,7 +8,7 @@ Evidence ::= evidence from "provenance" { (count R = n; | key R [col, ...];)* }
 OrderingInputs ::= ordering(seed = Bool, delta = none | Index,
     driver = WrittenOrder | DeltaFirst, permutation = [Index, ...],
     shared_demand = none | [Relation(ColumnIndex, ...), ...])
-Step ::= R@path(x, _, ...) [check]; | !R(Arg, ...); | x = y; | where Constraint;
+Step ::= R@path(x, _, ...); | !R(Arg, ...); | x = y; | where Constraint;
        | if Expr; | let Pat [: Type] = Expr;
        | for Pat in Expr;
        | reduce R@path with S@path(...);
@@ -30,14 +30,13 @@ not a ranking or index-reuse claim. The executable VO contract independently
 checks I1--I3 (VO-Order, Section~\ref{sec:planning-order}) in every scope;
 Written and authored schedules are not exempt. CQ occurrence-coverage proof
 references used by correspondence checks are not executable VOs.
-The optional \code{check} suffix records a standalone membership phase: all
-its retained columns must already be supplied. I2 drainage
-records this role when a check crosses an introduction, preserving the fixed
-occurrence and columns. It does not reclassify stationary phases; previously
-legal candidate intersections remain eligible. This is a producer-owned
-role, not a printer or scheduler-replay inference.
-An empty projected read before a later introduction of the same occurrence
-is redundant and forbidden. The role is not transported to RA or Physical.
+A read at position $k$ is membership-only exactly when
+$\mathsf{intro}(k)=\emptyset$, where $\mathsf{intro}(k)$ is the set of
+retained variables not supplied before that step. Membership is a property of
+the recorded columns and prefix, not a suffix or a history of motion.
+Drainage neither annotates moved reads nor reclassifies a following stationary
+read. An empty projected read before a later introduction of the same
+occurrence is redundant and forbidden.
 
 \paragraph{Contract.}
 The six judgments below define $\mathsf{Schedule}$, scope by scope.

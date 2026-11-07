@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h04.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation Orders (o_orderkey : i64 , o_orderdate : Date) ; relation Lineitem (l_orderkey : i64 , l_commitdate : Date , l_receiptdate : Date) ; answer (order_key) :- Orders (order_key , order_date) , where order_date >= start && order_date < end , Lineitem (order_key , commit_date , receipt_date) , where commit_date < receipt_date ;

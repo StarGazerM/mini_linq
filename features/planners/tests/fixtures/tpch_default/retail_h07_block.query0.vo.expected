@@ -1,0 +1,37 @@
+// retail_h07_block.query0.vo.expected: expected default-route VO of TPC-H kernel retail_h07_block (query0_main),
+// derived from doc/formal independently of the producer.
+// Route: default (the par route records the identical VO). Plan-Prefix with the R-TpchEvidence options (SF1
+// counts, primary keys whose columns are all declared); r = Masks.
+// O-EvidenceFallback: a top-level block selects O_{Prefix(Connected),Coarse}, retaining evidence.
+// S-BlockOccurrence: a Rust-free block receives the atom/occurrence rank, not a nonatom rank.
+// Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
+// (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
+// by the scheduler itself at their first ready boundary; membership follows from the bound prefix.
+// Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
+// the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
+struct Query ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [1]) ; relation Lineitem (l_orderkey : i64 [0] , l_suppkey : i64 [0] , l_shipdate : Date [2]) ; relation Orders (o_orderkey : i64 [0] , o_custkey : i64 [0]) ; relation Customer (c_custkey : i64 [0] , c_nationkey : i32 [1]) ; relation Nation (n_nationkey : i32 [1] , n_name : cq_load :: StringCode [3] in [0] (dictionaries . domain ("n_name"))) ; relation answer (order_key : i64 [0] , supplier_nation : i32 [1] , customer_nation : i32 [1]) ; answer (order_key , supplier_nation , customer_nation) : - Lineitem (order_key , supplier_key , ship_date) , where ship_date in (start) ..= (end) , Supplier (supplier_key , supplier_nation) , Orders (order_key , customer_key) , Customer (customer_key , customer_nation) , { Nation (supplier_nation , __cq_0_1) , where __cq_0_1 == (__cq_c_0) , Nation (customer_nation , __cq_1_1) , where __cq_1_1 == (__cq_c_1) } | { Nation (supplier_nation , __cq_0_1_) , where __cq_0_1_ == (__cq_c_2) , Nation (customer_nation , __cq_1_1_) , where __cq_1_1_ == (__cq_c_3) } capture { domain __cq_c_0 : cq_load :: StringCode in [0] (dictionaries . domain ("n_name")) = exact ("FRANCE") ; domain __cq_c_1 : cq_load :: StringCode in [0] (dictionaries . domain ("n_name")) = exact ("GERMANY") ; domain __cq_c_2 : cq_load :: StringCode in [0] (dictionaries . domain ("n_name")) = exact ("GERMANY") ; domain __cq_c_3 : cq_load :: StringCode in [0] (dictionaries . domain ("n_name")) = exact ("FRANCE") ; } ;
+valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Supplier = 10000 ; key Supplier [s_suppkey] ; count Lineitem = 6001215 ; count Orders = 1500000 ; key Orders [o_orderkey] ; count Customer = 150000 ; key Customer [c_custkey] ; count Nation = 25 ; key Nation [n_nationkey] ; } {
+    // O-Restrict: `ship_date in start..=end` targets Lineitem@0
+    restrict Lineitem @ 0 where ship_date between @ (start) and @ (end) ;
+    // R-Masks cut C: Supplier@2 shares supplier_nation with the Rust-free finite block; cuts precede tree edges;
+    // R-MasksOrder: cuts ordered by (block support clause, target clause), before tree edges
+    reduce Supplier @ 2 with block @ 5 (_ , supplier_nation) ;
+    // R-Masks cut C: Customer@4 shares customer_nation with the block
+    reduce Customer @ 4 with block @ 5 (customer_nation , _) ;
+    // R-Masks tree edge: H-SpanningCore (cyclic: 0-2-5-4-3-0; spanning core earliest-first 0-2, 0-3, 2-5, 3-4)
+    // rooted at outer Lineitem@0; Customer@4 is a cut target -> filtered subtree -> red(3,4)
+    reduce Orders @ 3 with Customer @ 4 (customer_key , _) ;
+    // B={}: all occurrences tie -> written root (I4)
+    Lineitem @ 0 (order_key , supplier_key , ship_date) ;
+    // B={order_key,supplier_key,ship_date}: Supplier@2 and Orders@3 connected, tie -> written position
+    Supplier @ 2 (supplier_key , supplier_nation) ;
+    // Orders@3 and block@5 connected, tie -> written position
+    Orders @ 3 (order_key , customer_key) ;
+    // Customer@4 and block@5 connected, tie -> written position
+    Customer @ 4 (customer_key , customer_nation) ;
+    // block: O-BlockPlacement hoisted (Rust-free); now a filter (both interface columns bound, a_i=0). Arms:
+    // hoisted, not needsDomain -> P_0={} (WF-VO-Blocks); each arm: O-Restrict head (H-Local order),
+    // Prefix(Connected): both Nation reads disconnected, written order.
+    // O-BlockColumns: lexical free columns, followed by lexical interface columns.
+    block @ 5 (customer_nation , supplier_nation) hoisted { restrict Nation @ 5.0 . 0 where __cq_0_1 = @ (__cq_c_0) ; restrict Nation @ 5.0 . 2 where __cq_1_1 = @ (__cq_c_1) ; Nation @ 5.0 . 0 (supplier_nation , __cq_0_1) ; Nation @ 5.0 . 2 (customer_nation , __cq_1_1) ; } | { restrict Nation @ 5.1 . 0 where __cq_0_1_ = @ (__cq_c_2) ; restrict Nation @ 5.1 . 2 where __cq_1_1_ = @ (__cq_c_3) ; Nation @ 5.1 . 0 (supplier_nation , __cq_0_1_) ; Nation @ 5.1 . 2 (customer_nation , __cq_1_1_) ; } ;
+}
