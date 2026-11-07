@@ -84,17 +84,26 @@ fn check_entry(tokens: &proc_macro2::TokenStream) -> syn::Result<()> {
             "CTX-Entry: CQ entry does not accept a checked continuation envelope",
         ));
     }
-    // Structures and Sequence both begin with their complete Physical program.
-    // Do not parse normal CQ or opaque surface input as three other languages.
-    if name != "physical" {
+    // Authored stacks begin with Physical; checked carriers wrap it in realization.
+    // Do not parse normal CQ or opaque surface input as other languages.
+    if name != "physical" && name != "realization" {
         return Ok(());
     }
-    let recorded = |input: ParseStream<'_>| -> syn::Result<bool> {
-        let program: cq_lang_physical::Program = input.parse()?;
-        let _: proc_macro2::TokenStream = input.parse()?;
-        Ok(!program.context().is_empty())
+    let has_context = if name == "realization" {
+        syn::parse2::<Sequence>(tokens.clone())
+            .map(|stack| !stack.context().is_empty())
+            .or_else(|_| syn::parse2::<Structures>(tokens.clone())
+                .map(|stack| !stack.context().is_empty()))
+            .unwrap_or(false)
+    } else {
+        let recorded = |input: ParseStream<'_>| -> syn::Result<bool> {
+            let program: cq_lang_physical::Program = input.parse()?;
+            let _: proc_macro2::TokenStream = input.parse()?;
+            Ok(!program.context().is_empty())
+        };
+        recorded.parse2(tokens.clone()).unwrap_or(false)
     };
-    if recorded.parse2(tokens.clone()).unwrap_or(false) {
+    if has_context {
         Err(syn::Error::new_spanned(
             tokens,
             "CTX-Entry: recorded context facts require an explicit exact context envelope; CQ entry is not a checked continuation",
@@ -650,7 +659,8 @@ mod tests {
             rejects_printed_entry(&physical);
             let structures = cq_structure_selection::compile(&physical).unwrap();
             rejects_printed_entry(&super::Structures::new(physical.clone(), structures.clone()));
-            let sequence = cq_sequence_lowering::compile(&structures).unwrap();
+            let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+            let sequence = super::Sequence::new(physical.clone(), structures, program);
             assert_eq!(sequence.context(), physical.context());
             rejects_printed_entry(&sequence);
         }

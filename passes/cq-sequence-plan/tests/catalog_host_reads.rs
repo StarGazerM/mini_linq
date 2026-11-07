@@ -3,6 +3,8 @@ use cq_lang_sequence::{
 };
 use cq_sequence_plan::{Advice, decompose, select_from_catalog};
 use structures::Capability;
+#[macro_use]
+mod support;
 
 fn machine() -> Machine {
     fn node(name: &str, children: Vec<LevelNode>) -> LevelNode {
@@ -55,8 +57,8 @@ fn catalog() -> Catalog {
     catalog
 }
 
-fn code_reader(retained: bool) -> structures::Program {
-    let mut source: structures::Program = syn::parse_quote! {
+fn code_reader(retained: bool) -> (structures::physical::Program, structures::Program) {
+    let (mut physical, mut source) = structure_fixture! {
         physical {
             relation L(a:i32,label:StringCode); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a,label -> label};
@@ -71,7 +73,7 @@ fn code_reader(retained: bool) -> structures::Program {
         }
     };
     if retained {
-        source.physical.program.definitions[1].mode =
+        physical.program.definitions[1].mode =
             structures::physical::Mode::Let(Default::default());
         source.structures.entries[2] = syn::parse_quote!(r = @authored as Authored [a];);
         source
@@ -81,7 +83,7 @@ fn code_reader(retained: bool) -> structures::Program {
             )])
             .unwrap();
     }
-    source
+    (physical, source)
 }
 
 /// Row element types are not catalog facts: a code-carrying reader selects
@@ -89,9 +91,9 @@ fn code_reader(retained: bool) -> structures::Program {
 #[test]
 fn code_carrying_reader_selects_the_first_token_declaring_its_reads() {
     for retained in [false, true] {
-        let source = code_reader(retained);
-        let selected = select_from_catalog(&source.physical, &source, &catalog()).map(|(_, structures)| structures).unwrap();
-        let facts = structures::contract::check(&selected).unwrap();
+        let (physical, source) = code_reader(retained);
+        let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog()).unwrap();
+        let facts = structures::contract::check(&selected_physical, &selected).unwrap();
         assert_eq!(facts.layouts["r"], ["a", "b"]);
         assert_eq!(
             facts
@@ -99,28 +101,28 @@ fn code_carrying_reader_selects_the_first_token_declaring_its_reads() {
                 .map(|(provider, _)| provider),
             Some(&syn::parse_quote!(@range_provider as RangeProvider)),
         );
-        structures::physical::check_rewrite(&source.physical, &selected.physical).unwrap();
+        structures::physical::check_rewrite(&physical, &selected_physical).unwrap();
         let mut unavailable = catalog();
         unavailable
             .providers
             .retain(|entry| entry.provider.token == "sort");
-        assert!(select_from_catalog(&source.physical, &source, &unavailable).is_err());
+        assert!(select_from_catalog(&physical, &source, &unavailable).is_err());
     }
 }
 
-fn assert_replay(structures: &structures::Program, source: &Program, planned: &cq_sequence_plan::Planned) {
-    let mut replay = (structures.physical.clone(), structures.clone(), source.clone());
+fn assert_replay(physical: &structures::physical::Program, structures: &structures::Program, source: &Program, planned: &cq_sequence_plan::Planned) {
+    let mut replay = (physical.clone(), structures.clone(), source.clone());
     for advice in &planned.trace {
         replay = advice.apply(&replay.0, &replay.1, &replay.2).unwrap();
     }
     assert_eq!((&planned.physical, &planned.structures, &planned.program), (&replay.0, &replay.1, &replay.2));
-    check_rewrite(&structures.physical, structures, source, &planned.physical, &planned.structures, &planned.program).unwrap();
+    check_rewrite(physical, structures, source, &planned.physical, &planned.structures, &planned.program).unwrap();
     check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
 }
 
 #[test]
 fn numeric_lookup_is_published_before_host_code_expansion() {
-    let structures: structures::Program = syn::parse_quote! {
+    let (physical, structures) = structure_fixture! {
         physical {
             relation R(a:i32); relation S(a:i32,b:i32); relation T(b:i32,label:StringCode);
             r = pipe rename R@0 {a -> a};
@@ -138,8 +140,8 @@ fn numeric_lookup_is_published_before_host_code_expansion() {
             answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
         }
     };
-    let source = cq_sequence_lowering::compile(&structures.physical, &structures).unwrap();
-    let planned = decompose(&structures.physical, &structures, &source, &machine(), &catalog()).unwrap();
+    let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let planned = decompose(&physical, &structures, &source, &machine(), &catalog()).unwrap();
     assert!(
         planned
             .trace
@@ -155,12 +157,12 @@ fn numeric_lookup_is_published_before_host_code_expansion() {
     let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
     assert_eq!(facts.levels["numeric"], ["host"]);
     assert_eq!(
-        structures::contract::check(&planned.structures).unwrap()
+        structures::contract::check(&planned.physical, &planned.structures).unwrap()
             .built_on("s", &["a".into()])
             .map(|(provider, _)| provider),
         Some(&syn::parse_quote!(@range_provider as RangeProvider)),
     );
-    assert_replay(&structures, &source, &planned);
+    assert_replay(&physical, &structures, &source, &planned);
 }
 
 #[test]
@@ -192,14 +194,14 @@ fn automatic_h09_uses_catalog_read_levels_after_opaque_prefix() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let selected = select_from_catalog(&structures.physical, &structures, &catalog()).map(|(_, structures)| structures).unwrap();
-    let mut source = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
+    let (selected_physical, selected) = select_from_catalog(&physical, &structures, &catalog()).unwrap();
+    let mut source = cq_sequence_lowering::compile(&selected_physical, &selected).unwrap();
     source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/catalog_host_reads.rs fixture") {
         count Part = 20; count Orders = 150; count Lineitem = 600;
         count PartSupp = 80; count Supplier = 10; count Nation = 2;
     });
-    let planned = decompose(&selected.physical, &selected, &source, &machine(), &catalog()).unwrap();
-    assert_replay(&selected, &source, &planned);
+    let planned = decompose(&selected_physical, &selected, &source, &machine(), &catalog()).unwrap();
+    assert_replay(&selected_physical, &selected, &source, &planned);
 }
 
 #[test]
@@ -243,21 +245,21 @@ fn automatic_h07_keeps_numeric_forwards_legal_before_code_readers() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let selected = select_from_catalog(&structures.physical, &structures, &catalog()).map(|(_, structures)| structures).unwrap();
-    let mut source = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
+    let (selected_physical, selected) = select_from_catalog(&physical, &structures, &catalog()).unwrap();
+    let mut source = cq_sequence_lowering::compile(&selected_physical, &selected).unwrap();
     source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/catalog_host_reads.rs fixture") {
         count Supplier = 10; count Lineitem = 600; count Orders = 150;
         count Customer = 15; count Nation = 2;
     });
-    let planned = decompose(&selected.physical, &selected, &source, &machine(), &catalog()).unwrap();
-    assert_eq!(planned.physical, selected.physical);
-    assert_replay(&selected, &source, &planned);
+    let planned = decompose(&selected_physical, &selected, &source, &machine(), &catalog()).unwrap();
+    assert_eq!(planned.physical, selected_physical);
+    assert_replay(&selected_physical, &selected, &source, &planned);
 }
 
 #[test]
 fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
-    let source = code_reader(false);
-    let mut selected = select_from_catalog(&source.physical, &source, &catalog()).map(|(_, structures)| structures).unwrap();
+    let (physical, source) = code_reader(false);
+    let (selected_physical, mut selected) = select_from_catalog(&physical, &source, &catalog()).unwrap();
     for entry in &mut selected.structures.entries {
         if entry.name == "answer"
             && let structures::Structure::Rows { provider, .. } = &mut entry.structure
@@ -272,10 +274,10 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
         )])
         .unwrap();
     // The ordinary Structures-only contract remains exact.
-    assert!(structures::check_rewrite(&source, &selected).is_err());
-    structures::check_retention_rewrite(&source, &selected).unwrap();
-    let sequence = cq_sequence_lowering::compile(&source.physical, &source).unwrap();
-    check_rewrite(&source.physical, &source, &sequence, &selected.physical, &selected, &sequence).unwrap();
+    assert!(structures::check_rewrite(&physical, &source, &selected_physical, &selected).is_err());
+    structures::check_retention_rewrite(&physical, &source, &selected_physical, &selected).unwrap();
+    let sequence = cq_sequence_lowering::compile(&physical, &source).unwrap();
+    check_rewrite(&physical, &source, &sequence, &selected_physical, &selected, &sequence).unwrap();
 
     let mut changed_reader = selected.clone();
     if let structures::Structure::Host { keyed, .. } =
@@ -289,18 +291,18 @@ fn catalog_retention_and_canon_selection_cross_the_sequence_boundary() {
             different_reader = DifferentReader { reads [exact, range, membership], build inferred };
         )])
         .unwrap();
-    assert!(structures::check_retention_rewrite(&source, &changed_reader).is_err());
-    let mut changed_order = selected.clone();
-    changed_order.physical.program.definitions.swap(0, 1);
-    assert!(structures::check_retention_rewrite(&source, &changed_order).is_err());
-    let mut changed_mode = selected;
-    changed_mode.physical.program.definitions[2].mode =
+    assert!(structures::check_retention_rewrite(&physical, &source, &selected_physical, &changed_reader).is_err());
+    let mut changed_order = selected_physical.clone();
+    changed_order.program.definitions.swap(0, 1);
+    assert!(structures::check_retention_rewrite(&physical, &source, &changed_order, &selected).is_err());
+    let mut changed_mode = selected_physical;
+    changed_mode.program.definitions[2].mode =
         structures::physical::Mode::Pipe(Default::default());
-    assert!(structures::check_retention_rewrite(&source, &changed_mode).is_err());
+    assert!(structures::check_retention_rewrite(&physical, &source, &changed_mode, &selected).is_err());
 }
 
-fn full_key_host_membership() -> structures::Program {
-    syn::parse_quote! {
+fn full_key_host_membership() -> (structures::physical::Program, structures::Program) {
+    structure_fixture! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32);
             l = pipe rename L@0 {a -> a,b -> b};
@@ -332,14 +334,14 @@ fn membership_catalog(declaration: structures::Declaration) -> Catalog {
 
 #[test]
 fn catalog_preserves_admitted_raw_host_membership_without_enumeration() {
-    let source = full_key_host_membership();
+    let (physical, source) = full_key_host_membership();
     let available = membership_catalog(syn::parse_quote!(
         host_membership = HostMembership { reads [membership], build inferred };
     ));
-    let selected = select_from_catalog(&source.physical, &source, &available).map(|(_, structures)| structures).unwrap();
-    assert_eq!(selected, source);
-    let lowered = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
-    cq_sequence_lowering::check(&selected.physical, &selected, &lowered).unwrap();
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &available).unwrap();
+    assert_eq!((&selected_physical, &selected), (&physical, &source));
+    let lowered = cq_sequence_lowering::compile(&selected_physical, &selected).unwrap();
+    cq_sequence_lowering::check(&selected_physical, &selected, &lowered).unwrap();
     assert_eq!(
         lowered.sequence.definitions[2].term,
         syn::parse_quote!(canon compact answer lookup r [a] l)
@@ -348,12 +350,12 @@ fn catalog_preserves_admitted_raw_host_membership_without_enumeration() {
 
 #[test]
 fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
-    let source = full_key_host_membership();
+    let (physical, source) = full_key_host_membership();
     let available = membership_catalog(syn::parse_quote!(
         membership_index = MembershipIndex { reads [membership], build inferred };
     ));
-    let selected = select_from_catalog(&source.physical, &source, &available).map(|(_, structures)| structures).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &available).unwrap();
+    let facts = structures::contract::check(&selected_physical, &selected).unwrap();
     assert!(facts.membership.contains(&("r".into(), vec!["a".into()])));
     assert_eq!(
         facts
@@ -366,17 +368,17 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
             && matches!(&entry.structure, structures::Structure::Built { keyed, .. }
                 if keyed.membership.is_some() && keyed.filtered.is_none())
     }));
-    structures::check_retention_rewrite(&source, &selected).unwrap();
-    let before = cq_sequence_lowering::compile(&source.physical, &source).unwrap();
-    let after = cq_sequence_lowering::compile(&selected.physical, &selected).unwrap();
-    cq_sequence_lowering::check(&selected.physical, &selected, &after).unwrap();
-    check_rewrite(&source.physical, &source, &before, &selected.physical, &selected, &after).unwrap();
+    structures::check_retention_rewrite(&physical, &source, &selected_physical, &selected).unwrap();
+    let before = cq_sequence_lowering::compile(&physical, &source).unwrap();
+    let after = cq_sequence_lowering::compile(&selected_physical, &selected).unwrap();
+    cq_sequence_lowering::check(&selected_physical, &selected, &after).unwrap();
+    check_rewrite(&physical, &source, &before, &selected_physical, &selected, &after).unwrap();
     assert_eq!(
         before.sequence.definitions[2].term,
         after.sequence.definitions[2].term
     );
     assert_eq!(
-        cq_lang_sequence::contract::check(&selected.physical, &selected, &after)
+        cq_lang_sequence::contract::check(&selected_physical, &selected, &after)
             .unwrap()
             .capabilities[&("r".into(), vec!["a".into()])],
         Capability::Membership
@@ -389,13 +391,13 @@ fn catalog_retention_preserves_raw_membership_certificate_and_compact() {
         .find(|declaration| declaration.token == "membership_index")
         .unwrap();
     index.facts.reads = vec![Capability::Exact, Capability::Range];
-    assert!(select_from_catalog(&source.physical, &source, &unavailable).is_err());
+    assert!(select_from_catalog(&physical, &source, &unavailable).is_err());
 }
 
 #[test]
 fn admitted_storage_type_does_not_move_unretained_host_membership_to_workers() {
-    let structures = full_key_host_membership();
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let (physical, structures) = full_key_host_membership();
+    let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     let mut available = membership_catalog(syn::parse_quote!(
         host_membership = HostMembership { reads [membership], build inferred };
     ));
@@ -404,15 +406,15 @@ fn admitted_storage_type_does_not_move_unretained_host_membership_to_workers() {
         vec!["host".into(), "device".into()],
         vec!["host".into(), "device".into(), "block".into()],
     ];
-    let planned = decompose(&source, &machine(), &available).unwrap();
-    let facts = check_grading(&planned.program, &machine()).unwrap();
+    let planned = decompose(&physical, &structures, &source, &machine(), &available).unwrap();
+    let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
     assert_eq!(facts.levels["answer"], ["host"]);
-    assert!(facts.structures.host_read("r"));
-    check_rewrite(&source, &planned.program).unwrap();
+    assert!(structures::contract::check(&planned.physical, &planned.structures).unwrap().host_read("r"));
+    check_rewrite(&physical, &structures, &source, &planned.physical, &planned.structures, &planned.program).unwrap();
 
     let authored =
-        cq_sequence_plan::rewrites::grade(&source, quote::quote!(gpu, answer at device)).unwrap();
-    assert!(decompose(&authored, &machine(), &available).is_err());
+        cq_sequence_plan::rewrites::grade(&physical, &structures, &source, quote::quote!(gpu, answer at device)).unwrap();
+    assert!(decompose(&physical, &structures, &authored, &machine(), &available).is_err());
 }
 
 // PL-Resident: placement predicts a read level with the catalog's own
@@ -420,7 +422,7 @@ fn admitted_storage_type_does_not_move_unretained_host_membership_to_workers() {
 // host Rust is read below host and published, not left at an unadmitted host.
 #[test]
 fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
-    let structures: structures::Program = syn::parse_quote! {
+    let (physical, structures) = structure_fixture! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32);
             relation answer(c:i32);
@@ -437,7 +439,7 @@ fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
             r host result(kept) = @native as Native [a];
         }
     };
-    let source = cq_sequence_lowering::compile(&structures).unwrap();
+    let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     // PL-Catalog: the program declares the token exactly as the target does.
     let resident = |reads: proc_macro2::TokenStream| {
         let declaration: structures::Declaration =
@@ -453,15 +455,15 @@ fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
                 vec!["host".into(), "device".into(), "block".into()],
             ],
         );
-        let mut source = source.clone();
-        source.structures.structures.providers.declarations = vec![declaration];
-        (source, available)
+        let mut structures = structures.clone();
+        structures.structures.providers.declarations = vec![declaration];
+        (structures, available)
     };
-    let (source, available) = resident(quote::quote!(exact, range, membership, resident));
-    let facts = cq_lang_sequence::contract::check(&source).unwrap();
-    assert!(facts.structures.host_read("r"));
-    let planned = decompose(&source, &machine(), &available).unwrap();
-    let facts = check_grading(&planned.program, &machine()).unwrap();
+    let (resident_structures, available) = resident(quote::quote!(exact, range, membership, resident));
+    cq_lang_sequence::contract::check(&physical, &resident_structures, &source).unwrap();
+    assert!(structures::contract::check(&physical, &resident_structures).unwrap().host_read("r"));
+    let planned = decompose(&physical, &resident_structures, &source, &machine(), &available).unwrap();
+    let facts = check_grading(&planned.physical, &planned.structures, &planned.program, &machine()).unwrap();
     let reader = facts
         .provider_reads
         .iter()
@@ -474,8 +476,8 @@ fn resident_host_membership_before_opaque_host_rust_is_read_below_host() {
         facts.levels
     );
     assert_eq!(facts.levels["bound"], ["host"]);
-    check_rewrite(&source, &planned.program).unwrap();
+    check_rewrite(&physical, &resident_structures, &source, &planned.physical, &planned.structures, &planned.program).unwrap();
     // Without the explicit resident token the same handle is not admitted below host.
-    let (source, native) = resident(quote::quote!(exact, range, membership));
-    assert!(decompose(&source, &machine(), &native).is_err());
+    let (native_structures, native) = resident(quote::quote!(exact, range, membership));
+    assert!(decompose(&physical, &native_structures, &source, &machine(), &native).is_err());
 }

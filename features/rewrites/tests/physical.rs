@@ -269,7 +269,7 @@ fn merge_preserves_retention_and_allows_same_key_stream_chains() {
     assert_eq!(merge_joins(&source, quote!(j)).unwrap(), only_j);
     assert!(merge_joins(&source, quote!(k)).is_err());
     let selected = cq_structure_selection::compile(&expected).unwrap();
-    cq_testkit::structures::contract::check(&selected).unwrap();
+    cq_testkit::structures::contract::check(&expected, &selected).unwrap();
 }
 
 #[test]
@@ -374,7 +374,7 @@ fn smallest_three_way_occurrence_advice_is_exact_and_checked() {
             ]
         );
         let selected = cq_structure_selection::compile(&target).unwrap();
-        cq_testkit::structures::contract::check(&selected).unwrap();
+        cq_testkit::structures::contract::check(&target, &selected).unwrap();
     }
     // The rewrite neither infers nor alters Rust representations.
     let opaque: ir::Program =
@@ -462,7 +462,7 @@ fn smallest_rejects_mutations_of_its_local_premises() {
         assert!(ir::check_rewrite(&source, &invalid).is_err());
     }
     let structures = cq_structure_selection::compile(&target).unwrap();
-    cq_testkit::structures::contract::check(&structures).unwrap();
+    cq_testkit::structures::contract::check(&target, &structures).unwrap();
 }
 
 #[test]

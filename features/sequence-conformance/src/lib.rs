@@ -81,7 +81,7 @@ pub fn translate_with_catalog(
             format!("{target:?} translation failed: {error}"),
         )
     })?;
-    let structures_analysis = cq_lang_sequence::structures::contract::check(&structures)?;
+    let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures)?;
     Ok((expression, output_is_canonical(&physical, &structures_analysis, &graded, &analysis)))
 }
 

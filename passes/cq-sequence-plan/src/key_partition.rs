@@ -87,7 +87,7 @@ pub(crate) fn choices(
     facts: &Analysis,
     policies: &[KeyPartitionPolicy],
 ) -> syn::Result<Vec<Vec<KeyPartitionPolicy>>> {
-    let structures_analysis = structures::contract::check(structures)?;
+    let structures_analysis = structures::contract::check(physical, structures)?;
     let names: Vec<_> = program
         .sequence
         .definitions
@@ -165,7 +165,7 @@ pub(crate) fn apply(
     };
     // Decomposition may require range cursors even when construction needed
     // only exact lookup. Provider routing must inspect the completed schedule.
-    let structures_analysis = structures::contract::check(&planned.structures)?;
+    let structures_analysis = structures::contract::check(&planned.physical, &planned.structures)?;
     let facts = if providers {
         std::rc::Rc::new(checker.check_grading(&planned.physical, &planned.structures, &planned.program, machine)?)
     } else {

@@ -51,7 +51,7 @@ fn read(program: &mut Program) -> &mut sequence::stats::Guard {
 }
 
 fn reject(program: &Program) {
-    structures::contract::check(&program.structures).unwrap();
+    structures::contract::check(&program.physical, &program.structures).unwrap();
     assert!(common::check(program).is_err());
 }
 

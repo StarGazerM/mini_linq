@@ -48,11 +48,11 @@ fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
     cq_physical_lowering::check(&ix, &physical).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
     cq_structure_selection::check(&physical, &structures).unwrap();
-    let sequence = cq_sequence_lowering::compile(&structures.physical, &structures).unwrap();
-    cq_sequence_lowering::check(&structures.physical, &structures, &sequence).unwrap();
+    let sequence = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    cq_sequence_lowering::check(&physical, &structures, &sequence).unwrap();
     let machine = cq_sequence_pull::machine();
-    let analysis = cq_lang_sequence::check_grading(&structures.physical, &structures, &sequence, &machine).unwrap();
-    let expression = cq_sequence_pull::translate(&structures.physical, &structures, &sequence, &analysis).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&physical, &structures, &sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&physical, &structures, &sequence, &analysis).unwrap();
     quote!((#expression).into_iter())
 }
 

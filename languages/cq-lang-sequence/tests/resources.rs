@@ -91,8 +91,13 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
         } graded target { result at engine; }
     };
     let analysis = common::check_grading(&program, &machine()).unwrap();
-    let carried =
-        cq_lang_structures::demand::carried_columns(&program.structures, &cq_lang_structures::contract::check(&program.structures).unwrap());
+    let structures =
+        cq_lang_structures::contract::check(&program.physical, &program.structures).unwrap();
+    let carried = cq_lang_structures::demand::carried_columns(
+        &program.physical,
+        &program.structures,
+        &structures,
+    );
     assert_eq!(carried["l"], ["a", "x"]);
     assert_eq!(carried["r"], ["a", "b"]);
     assert_eq!(carried["j"], ["b", "x"]);

@@ -293,9 +293,9 @@ fn anti_membership_checks_all_blocked_runs_without_multiplying_rows() -> Result 
         bag(result.buffer(), result.len(), result.packing())?,
         expected
     );
-    let native = fixtures::fixture("native_anti");
+    let fixtures::StructuresStack { physical, structures: native } = fixtures::fixture("native_anti");
     assert!(
-        cq_lang_structures::contract::check(&native)?
+        cq_lang_structures::contract::check(&physical, &native)?
             .built
             .is_empty()
     );
@@ -385,35 +385,35 @@ mod fixtures;
 
 #[test]
 fn run_binding_accepts_a_source_present_nonleading_lookup_key() {
-    let mut source = fixtures::fixture("nonlinear");
+    let fixtures::StructuresStack { mut physical, structures: mut source } = fixtures::fixture("nonlinear");
     // Keep the lawful lookup [y], but store the full rows physically as (z,y).
-    let columns = &mut source.physical.program.declarations[1].columns;
+    let columns = &mut physical.program.declarations[1].columns;
     *columns = std::mem::take(columns).into_iter().rev().collect();
     source
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    cq_gpu_sequence_core::runs::bind(&source.physical, &source).unwrap();
+    cq_gpu_sequence_core::runs::bind(&physical, &source).unwrap();
 }
 
 #[test]
 fn run_binding_rejects_an_index_without_the_join_prefix() {
-    let mut source = fixtures::fixture("linear");
+    let fixtures::StructuresStack { physical, structures: mut source } = fixtures::fixture("linear");
     source.structures.entries[2] =
         syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [z][y];);
     source.structures.declare(&cq_gpu_sequence::providers::declarations()).unwrap();
-    assert!(cq_gpu_sequence_core::runs::bind(&source.physical, &source).is_err());
+    assert!(cq_gpu_sequence_core::runs::bind(&physical, &source).is_err());
 }
 
 #[test]
 fn run_binding_rejects_lookup_key_outside_recorded_layout() {
-    let mut source = fixtures::fixture("linear");
+    let fixtures::StructuresStack { physical, structures: mut source } = fixtures::fixture("linear");
     source.structures.entries[2] = syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [missing][z];);
     source
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    assert!(cq_gpu_sequence_core::runs::bind(&source.physical, &source).is_err());
+    assert!(cq_gpu_sequence_core::runs::bind(&physical, &source).is_err());
 }
 
 #[test]
@@ -444,14 +444,14 @@ fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
 
 #[test]
 fn native_host_lookup_accepts_a_leading_full_key_column() {
-    let mut source = fixtures::fixture("native_linear");
+    let fixtures::StructuresStack { physical, structures: mut source } = fixtures::fixture("native_linear");
     source.structures.entries[1] = syn::parse_quote!(e host scan = @radix_relation input { keys 2; columns [[0] i32 => i32, [1] u32 => u32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,u32),(),u64,u64,()> [];);
     source.structures.entries[2] = syn::parse_quote!(e host result(joined) = @radix_relation input { keys 2; columns [[0] i32 => i32, [1] u32 => u32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,u32),(),u64,u64,()> [y];);
     source
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    let physical = &source.physical;
+    let physical = &physical;
     let bound = cq_gpu_sequence_core::runs::bind(physical, &source).unwrap();
     let sequence = cq_sequence_lowering::compile(physical, &bound).unwrap();
     let machine = cq_gpu_sequence::machine();

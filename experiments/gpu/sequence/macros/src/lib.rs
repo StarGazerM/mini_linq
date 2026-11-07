@@ -293,7 +293,7 @@ mod tests {
                 source at host; feed at device.block; valuations at host; result at host;
             }
         };
-        structures = cq_gpu_sequence_core::bind_structures(&structures).unwrap();
+        structures = cq_gpu_sequence_core::bind_structures(&physical, &structures).unwrap();
         program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
         let machine = cq_gpu_sequence_core::machine();
         cq_lang_sequence::check_grading(&physical, &structures, &program, &machine).unwrap();

@@ -470,6 +470,7 @@ dependencies = [
  "cq-sequence-plan",
  "cq-sequence-pull",
  "cq-structure-selection",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]

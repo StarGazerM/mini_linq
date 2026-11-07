@@ -39,7 +39,7 @@ fn checked_in(
     source: &Program,
     mut target: Program,
 ) -> syn::Result<Program> {
-    cq_lang_sequence::blocks::record_routing(structures, &mut target)?;
+    cq_lang_sequence::blocks::record_routing(physical, structures, &mut target)?;
     checker.check_rewrite_in(physical, structures, source, physical, structures, &target)?;
     Ok(target)
 }

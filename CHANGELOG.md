@@ -20,6 +20,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   bases. Flat stages have no bases. Version 2 descriptors are no longer accepted.
   Structures no longer embeds Physical: its parser receives Physical explicitly,
   its printer emits only annotations, and readers/checkers take separate programs.
+  Sequence likewise no longer embeds Structures; lowering, planning, grading,
+  and realization receive separate Physical/Structures/Sequence programs.
+  Provider-changing rewrites return all changed layers. CQ entry validation
+  also checks restricted Physical facts inside realization carriers.
 - Calibration stage observation moved out of the IR crates (IR redesign M2d):
   `cq_stage::Language` no longer has `calibration_snapshot`; the facade records
   each checked stage as `calibration::Stage { language, program }` (Rust type

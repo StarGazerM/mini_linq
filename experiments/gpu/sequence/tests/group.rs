@@ -59,7 +59,7 @@ fn translates_grouped_canonical_publication() {
     let expression = cq_gpu_sequence::translate(&physical, &structures, &program, &analysis).unwrap();
     let code = expression.to_token_stream().to_string();
     let segmented: syn::Type = syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup);
-    let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+    let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
     assert_eq!(structure_analysis.groups["grouped"].ty, segmented);
     assert_eq!(fold_providers(&expression), vec![Some(segmented)], "{code}");
     assert!(code.contains("build_set"));

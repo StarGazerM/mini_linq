@@ -23,7 +23,7 @@ pub(crate) fn boundaries(
     facts: &cq_lang_sequence::Analysis,
     catalog: &cq_lang_sequence::Catalog,
 ) -> syn::Result<Vec<Advice>> {
-    let structures_analysis = structures::contract::check(structures)?;
+    let structures_analysis = structures::contract::check(physical, structures)?;
     let Some(child) = machine.root.children.first() else {
         return Ok(Vec::new());
     };
@@ -208,7 +208,7 @@ pub(crate) fn advise(
     source: &Program,
     catalog: &cq_lang_sequence::Catalog,
 ) -> syn::Result<Vec<Advice>> {
-    let structures_analysis = structures::contract::check(structures)?;
+    let structures_analysis = structures::contract::check(physical, structures)?;
     let host = vec![machine.root.name.clone()];
     let publication = if parallel {
         machine

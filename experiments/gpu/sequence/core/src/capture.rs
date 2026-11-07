@@ -1273,7 +1273,7 @@ mod tests {
                 output count;
             }
         };
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
         assert!(check(&records, &definitions, &structure_analysis, &analysis, &codecs).is_ok());
         for change_identity in [true, false] {

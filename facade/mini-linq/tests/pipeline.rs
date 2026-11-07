@@ -204,6 +204,13 @@ fn ordered_host_fallback_capabilities_are_rustc_obligations() {
 }
 
 macro_rules! capture_plan {
+    (pipeline {}; realization {
+        physical { $($physical:tt)* }
+        structures { $($structures:tt)* }
+        sequence { $($sequence:tt)* }
+    }) => {
+        stringify!($($physical)* $($structures)* $($sequence)*)
+    };
     (pipeline {}; $($plan:tt)*) => {
         stringify!($($plan)*)
     };

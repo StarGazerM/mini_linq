@@ -63,7 +63,7 @@ pub(crate) fn carriers(
     structure_analysis: &cq_lang_structures::Analysis,
 ) -> syn::Result<BTreeMap<String, syn::Type>> {
     let codecs =
-        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
+        crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
     let mut carriers = BTreeMap::new();
     let logicals = logical_types(physical);
     for row in structure_analysis.physical.rows.values() {
@@ -93,7 +93,7 @@ fn check_carriers(
     records: &Bindings,
 ) -> syn::Result<()> {
     let codecs =
-        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
+        crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
     let mut typed: BTreeMap<&String, Vec<&syn::Type>> = BTreeMap::new();
     let logicals = logical_types(physical);
     for row in structure_analysis.physical.rows.values() {
@@ -382,7 +382,7 @@ mod tests {
             graded gpu { input at host; values at host; output_rows at host.device; }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert!(matches!(
             structure_analysis.physical.rows["computed"].types["b"],
@@ -440,7 +440,7 @@ mod tests {
             graded gpu { input at host; output_rows at host.device; }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let records = &analysis.gpu_bindings;
         assert_eq!(

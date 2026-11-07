@@ -872,7 +872,7 @@ fn compact_publication_program(union: bool) -> Program {
 }
 
 fn publication_bounds(program: &Program, analysis: &mut Analysis) {
-    let structures = structures::contract::check(&program.structures).unwrap();
+    let structures = structures::contract::check(&program.physical, &program.structures).unwrap();
     for column in structures.physical.headings.values().flatten() {
         analysis
             .gpu_bindings
@@ -899,7 +899,7 @@ fn gpu_flat_publications_record_each_heading_without_shared_padding() {
     let p = compact_publication_program(false);
     let mut analysis = common::check_grading(&p, &sequential()).unwrap();
     publication_bounds(&p, &mut analysis);
-    let mut records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis).unwrap();
+    let mut records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis).unwrap();
     for (name, columns) in [
         ("left", vec!["a", "parent"]),
         ("right", vec!["a", "b"]),
@@ -909,7 +909,7 @@ fn gpu_flat_publications_record_each_heading_without_shared_padding() {
         assert_eq!(rows.columns, columns);
         assert_eq!(rows.width, columns.len());
     }
-    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &records).unwrap();
+    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &records).unwrap();
     // Physical order belongs to the supplied record: checking does not replay
     // the selector's sorted order.
     let gpu::publication::PublicationStorage::FlatRows(rows) =
@@ -918,7 +918,7 @@ fn gpu_flat_publications_record_each_heading_without_shared_padding() {
         unreachable!()
     };
     rows.columns.reverse();
-    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &records).unwrap();
+    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &records).unwrap();
 }
 
 #[test]
@@ -926,7 +926,7 @@ fn gpu_flat_publications_reject_missing_duplicate_unrelated_fields_and_stride() 
     let p = compact_publication_program(false);
     let mut analysis = common::check_grading(&p, &sequential()).unwrap();
     publication_bounds(&p, &mut analysis);
-    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis).unwrap();
+    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis).unwrap();
     for (columns, width) in [
         (vec!["a"], 1),
         (vec!["a", "a", "parent"], 3),
@@ -944,7 +944,7 @@ fn gpu_flat_publications_reject_missing_duplicate_unrelated_fields_and_stride() 
                 columns: columns.into_iter().map(str::to_owned).collect(),
                 width,
             });
-        let error = gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &mutant)
+        let error = gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &mutant)
             .unwrap_err()
             .to_string();
         assert!(error.contains("GPU-PublicationStorage:"), "{error}");
@@ -956,12 +956,12 @@ fn gpu_host_union_staging_has_its_own_checked_compact_heading() {
     let p = compact_publication_program(true);
     let mut analysis = common::check_grading(&p, &sequential()).unwrap();
     publication_bounds(&p, &mut analysis);
-    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis).unwrap();
+    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis).unwrap();
     let staging = records["merged"].union_staging.as_ref().unwrap();
     assert_eq!(staging.columns, ["a", "b", "parent"]);
     assert_eq!(staging.width, 3);
     assert_eq!(staging, publication_rows(&records["merged"]));
-    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &records).unwrap();
+    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &records).unwrap();
     for (columns, width) in [
         (vec!["a", "b"], 2),
         (vec!["a", "b", "parent", "parent"], 4),
@@ -974,7 +974,7 @@ fn gpu_host_union_staging_has_its_own_checked_compact_heading() {
                 columns: columns.into_iter().map(str::to_owned).collect(),
                 width,
             });
-        assert!(gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &mutant).is_err());
+        assert!(gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &mutant).is_err());
     }
 }
 
@@ -994,7 +994,7 @@ fn gpu_deferred_publication_keeps_parent_fields_but_not_provider_payload() {
         .find(|dispatch| dispatch.inner_stores.iter().any(|store| store == "joined"))
         .unwrap();
     joined.gpu = launch.dispatches[0].gpu.clone();
-    let provider = structures::contract::check(&p.structures).unwrap().built["r"][0].1.clone();
+    let provider = structures::contract::check(&p.physical, &p.structures).unwrap().built["r"][0].1.clone();
     analysis.gpu_bindings.providers.insert(
         "r".into(),
         vec![gpu::bindings::ProviderLayout {
@@ -1008,11 +1008,11 @@ fn gpu_deferred_publication_keeps_parent_fields_but_not_provider_payload() {
             radix: None,
         }],
     );
-    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis).unwrap();
+    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis).unwrap();
     let rows = publication_rows(&records["joined"]);
     assert_eq!(rows.columns, ["a", "parent"]);
     assert_eq!(rows.width, 2);
-    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &records).unwrap();
+    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &records).unwrap();
     for columns in [vec!["a"], vec!["a", "b", "parent"]] {
         let mut mutant = records.clone();
         mutant.get_mut("joined").unwrap().storage =
@@ -1020,7 +1020,7 @@ fn gpu_deferred_publication_keeps_parent_fields_but_not_provider_payload() {
                 width: columns.len(),
                 columns: columns.into_iter().map(str::to_owned).collect(),
             });
-        assert!(gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &mutant).is_err());
+        assert!(gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &mutant).is_err());
     }
 }
 
@@ -1034,14 +1034,14 @@ fn gpu_grouped_publications_store_only_the_group_result_fields() {
         },
     );
     let analysis = common::check_grading(&p, &sequential()).unwrap();
-    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis).unwrap();
+    let records = gpu::publication::derive(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis).unwrap();
     assert_eq!(publication_rows(&records["input"]).columns, ["k", "value", "witness"]);
     assert_eq!(
         publication_rows(&records["out"]).columns,
         ["high", "k", "low", "n", "total"]
     );
     assert_eq!(publication_rows(&records["out"]).width, 5);
-    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.structures).unwrap(), &analysis, &records).unwrap();
+    gpu::publication::check(&p.physical, &p.program, &structures::contract::check(&p.physical, &p.structures).unwrap(), &analysis, &records).unwrap();
 }
 
 #[test]
@@ -1521,7 +1521,7 @@ fn tiled_host_sources_cannot_discard_native_scan_records() {
             sequence { #body }
         })
         .unwrap();
-        structures::contract::check(&p.structures).unwrap();
+        structures::contract::check(&p.physical, &p.structures).unwrap();
         if tiled {
             assert!(common::check(&p).is_err());
         } else {
@@ -2178,7 +2178,7 @@ fn empty_key_membership_reads_the_whole_relation_without_an_index_obligation() {
         .unwrap();
         let analysis = common::check(&program).unwrap();
         assert_eq!(
-            structures::contract::check(&program.structures).unwrap().read_accesses["r"][&Vec::<String>::new()],
+            structures::contract::check(&program.physical, &program.structures).unwrap().read_accesses["r"][&Vec::<String>::new()],
             cq_lang_structures::ReadAccess::Whole
         );
         assert!(!analysis.obligations.iter().any(|obligation| matches!(

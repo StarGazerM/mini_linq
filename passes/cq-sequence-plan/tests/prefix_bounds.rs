@@ -49,12 +49,12 @@ fn prefix_bound_checker_accepts_weaker_records_and_rejects_missing_premises() {
     assert_eq!(analysis.prefix_bounds["joined"].rows, Some(100));
     let mut alternative = analysis.prefix_bounds.clone();
     alternative.get_mut("joined").unwrap().rows = Some(101);
-    bounds::check(&physical, &structures, &source, &alternative).unwrap();
+    bounds::check(&physical, &source, &alternative).unwrap();
     alternative.get_mut("joined").unwrap().rows = Some(99);
-    assert!(bounds::check(&physical, &structures, &source, &alternative).is_err());
+    assert!(bounds::check(&physical, &source, &alternative).is_err());
     let mut unsupported = analysis.prefix_bounds.clone();
     unsupported.get_mut("r").unwrap().keys.clear();
-    assert!(bounds::check(&physical, &structures, &source, &unsupported).is_err());
+    assert!(bounds::check(&physical, &source, &unsupported).is_err());
 }
 
 #[test]

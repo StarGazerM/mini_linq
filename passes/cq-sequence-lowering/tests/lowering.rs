@@ -2,13 +2,26 @@ use cq_lang_sequence::structures::Capability;
 use cq_lang_sequence::{LevelNode, Machine, OutputProtocol, Program, Term};
 use cq_sequence_lowering::{check, compile};
 
-fn accept(source: &cq_lang_structures::Program) -> Program {
-    let target = compile(&source.physical, source).unwrap();
+struct Stack {
+    physical: cq_lang_structures::physical::Program,
+    structures: cq_lang_structures::Program,
+}
+
+impl syn::parse::Parse for Stack {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = cq_lang_structures::Program::parse(input, &physical)?;
+        Ok(Self { physical, structures })
+    }
+}
+
+fn accept(physical: &cq_lang_structures::physical::Program, source: &cq_lang_structures::Program) -> Program {
+    let target = compile(physical, source).unwrap();
     assert!(target.graded.is_none());
     assert_eq!(target.sequence.output, Some(OutputProtocol::Count));
-    cq_lang_sequence::contract::check(&source.physical, source, &target).unwrap();
+    cq_lang_sequence::contract::check(physical, source, &target).unwrap();
     cq_lang_sequence::check_grading(
-        &source.physical,
+        physical,
         source,
         &target,
         &Machine {
@@ -30,20 +43,21 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
         },
     )
     .unwrap();
-    check(&source.physical, source, &target).unwrap();
+    check(physical, source, &target).unwrap();
     target
 }
 
 #[test]
 fn every_authored_structures_scenario() {
     for scenario in cq_testkit::SCENARIOS {
-        accept(&scenario.parse_structures().unwrap());
+        let physical = scenario.parse_physical().unwrap();
+        accept(&physical, &scenario.parse_structures(&physical).unwrap());
     }
 }
 
 #[test]
 fn probe_shape_and_structural_checker_reject_mutations() {
-    let source: cq_lang_structures::Program = syn::parse_quote! {
+    let Stack { physical, structures: source }: Stack = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
@@ -56,10 +70,10 @@ fn probe_shape_and_structural_checker_reject_mutations() {
             r = @provider as Provider [a]; out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
     };
-    let target = accept(&source);
+    let target = accept(&physical, &source);
     let expected: Term = syn::parse_quote!(flatten lookup r [a] l);
     assert_eq!(target.sequence.definitions[2].term, expected);
-    let analysis = cq_lang_sequence::contract::check(&source.physical, &source, &target).unwrap();
+    let analysis = cq_lang_sequence::contract::check(&physical, &source, &target).unwrap();
     assert_eq!(
         analysis.capabilities[&("r".into(), vec!["a".into()])],
         Capability::Exact
@@ -69,18 +83,18 @@ fn probe_shape_and_structural_checker_reject_mutations() {
         panic!()
     };
     changed.sequence.definitions[2].term = *inner;
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target.clone();
     changed.sequence.output = Some(OutputProtocol::Reserve);
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target;
     changed.sequence.definitions.swap(0, 1);
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
 }
 
 #[test]
 fn correspondence_accepts_authored_output_names_but_not_another_result() {
-    let source: cq_lang_structures::Program = syn::parse_quote! {
+    let Stack { physical, structures: source }: Stack = syn::parse_quote! {
         physical {
             relation R(a:i32); relation S(a:i32);
             r = let canon rename R@0 {a -> a};
@@ -101,15 +115,15 @@ fn correspondence_accepts_authored_output_names_but_not_another_result() {
             output count;
         }
     };
-    check(&source.physical, &source, &target).unwrap();
+    check(&physical, &source, &target).unwrap();
     let mut wrong = target;
     wrong.sequence.definitions.last_mut().unwrap().term = syn::parse_quote!(store s);
-    assert!(check(&source.physical, &source, &wrong).is_err());
+    assert!(check(&physical, &source, &wrong).is_err());
 }
 
 #[test]
 fn output_name_is_fresh_and_return_canon_is_preserved() {
-    let source: cq_lang_structures::Program = syn::parse_quote! {
+    let Stack { physical, structures: source }: Stack = syn::parse_quote! {
         physical {
             relation R(a:i32);
             __sequence_output = pipe rename R@0 {a -> a};
@@ -119,7 +133,7 @@ fn output_name_is_fresh_and_return_canon_is_preserved() {
             __sequence_output head = @sort as ::cq_storage::dedup::Sort;
         }
     };
-    let target = accept(&source);
+    let target = accept(&physical, &source);
     let last = target.sequence.definitions.last().unwrap();
     assert_eq!(last.name, "__sequence_output_");
     assert!(
@@ -139,7 +153,7 @@ fn merge_uses_lookup_with_both_ordered_provider_obligations() {
         }
     };
     let source = cq_structure_selection::compile(&physical).unwrap();
-    let target = accept(&source);
+    let target = accept(&physical, &source);
     assert!(matches!(&target.sequence.definitions[2].term,
         Term::Canon(inner) if matches!(inner.as_ref(), Term::Flatten(_))));
     let analysis = cq_lang_sequence::contract::check(&physical, &source, &target).unwrap();
@@ -169,7 +183,7 @@ fn groups_lower_to_segmented_folds_after_complete_valuation_canon() {
         }
     };
     let source = cq_structure_selection::compile(&physical).unwrap();
-    let target = accept(&source);
+    let target = accept(&physical, &source);
     assert_eq!(
         target.sequence.definitions[1].term,
         syn::parse_quote!(canon map valuations raw)
@@ -201,7 +215,7 @@ fn certified_valuation_set_needs_no_redundant_group_input_canon() {
         }
     };
     let source = cq_structure_selection::compile(&physical).unwrap();
-    let target = accept(&source);
+    let target = accept(&physical, &source);
     assert_eq!(
         target.sequence.definitions[0].term,
         syn::parse_quote!(rows r)
@@ -227,9 +241,9 @@ fn projected_membership_probe_lowers_to_flat_compact_before_expansion() {
         }
     };
     let structures = cq_structure_selection::compile(&physical).unwrap();
-    let target = accept(&structures);
+    let target = accept(&physical, &structures);
     let facts = cq_lang_sequence::contract::check(&physical, &structures, &target).unwrap();
-    let structures_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+    let structures_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
     assert!(
         structures_analysis
             .membership
@@ -269,9 +283,9 @@ fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
             }
         };
         let structures = cq_structure_selection::compile(&physical).unwrap();
-        let target = accept(&structures);
+        let target = accept(&physical, &structures);
         let facts = cq_lang_sequence::contract::check(&physical, &structures, &target).unwrap();
-        let structures_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structures_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let key = ("r".into(), vec!["a".into(), "b".into()]);
         assert!(structures_analysis.membership.contains(&key));
         assert_eq!(facts.capabilities[&key], Capability::Membership);
@@ -304,12 +318,12 @@ fn raw_full_key_host_membership_lowers_to_compact_without_type_inspection() {
                 keyed.membership = None;
             }
         }
-        cq_lang_structures::contract::check(&uncertified).unwrap();
+        cq_lang_structures::contract::check(&physical, &uncertified).unwrap();
         assert!(cq_lang_sequence::contract::check(&physical, &uncertified, &target).is_err());
     }
 }
 
-fn blocked_source() -> cq_lang_structures::Program {
+fn blocked_source() -> (cq_lang_structures::physical::Program, cq_lang_structures::Program) {
     let physical = syn::parse_quote!(physical {
         relation R(a: i64 [1], b: i64 [1]);
         r = pipe rename R@0 {a -> x, b -> y};
@@ -326,8 +340,8 @@ fn blocked_source() -> cq_lang_structures::Program {
 
 #[test]
 fn blocked_execution_roundtrips_and_accepts_lawful_shorter_runs() {
-    let source = blocked_source();
-    let target = accept(&source);
+    let (physical, source) = blocked_source();
+    let target = accept(&physical, &source);
     assert_eq!(target.representation.blocks.runs["r"], ["p", "q"]);
     assert_eq!(target.representation.blocks.runs["t"], ["t"]);
     let printed = syn::parse_quote!(#target);
@@ -336,34 +350,34 @@ fn blocked_execution_roundtrips_and_accepts_lawful_shorter_runs() {
     separate.representation.blocks.runs.remove("r");
     separate.representation.blocks.runs.insert("p".into(), vec!["p".into()]);
     separate.representation.blocks.runs.insert("q".into(), vec!["q".into()]);
-    check(&source.physical, &source, &separate).unwrap();
+    check(&physical, &source, &separate).unwrap();
     let mut alternative = source;
     for predicate in alternative.encoded.blocks.predicates.values_mut() {
         predicate.test = cq_lang_structures::blocks::Test::DecodeCodes;
         predicate.prune = cq_lang_structures::blocks::Prune::None;
         predicate.strategy = cq_lang_structures::blocks::Strategy::Formula;
     }
-    accept(&alternative);
+    accept(&physical, &alternative);
 }
 
 #[test]
 fn blocked_execution_rejects_forged_phases_scratch_and_opaque_crossing() {
-    let source = blocked_source();
-    let target = accept(&source);
+    let (physical, source) = blocked_source();
+    let target = accept(&physical, &source);
     let mut changed = target.clone();
     changed.representation.blocks.predicates.get_mut("p").unwrap().swap(0,1);
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target.clone();
     changed.representation.blocks.scans.get_mut("r").unwrap().scratch_rows = 2048;
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target.clone();
     changed.representation.blocks.runs.get_mut("r").unwrap().push("t".into());
     changed.representation.blocks.runs.remove("t");
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target.clone();
     changed.representation.blocks.runs.get_mut("r").unwrap().pop();
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target;
     changed.representation.blocks.reads.remove("g");
-    assert!(check(&source.physical, &source, &changed).is_err());
+    assert!(check(&physical, &source, &changed).is_err());
 }

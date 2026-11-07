@@ -61,8 +61,12 @@ fn planned_a_retains_its_real_authored_traversal_choices() {
 
 /// The preserved step-R order: one ASIA region row fans out through Nation,
 /// Customer, Orders and Lineitem, then checks Supplier membership.
-fn step_r() -> cq_lang_sequence::structures::Program {
-    syn::parse_quote! {
+fn step_r() -> (cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program) {
+    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let structures = cq_lang_sequence::structures::Program::parse(input, &physical)?;
+        Ok((physical, structures))
+    }, quote::quote! {
         physical {
             relation Region(r_regionkey:u32,r_name:i32) = (&data.region);
             relation Nation(n_nationkey:u32,n_regionkey:u32) = (&data.nation);
@@ -107,14 +111,13 @@ fn step_r() -> cq_lang_sequence::structures::Program {
             lineitem = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [order];
             supplier = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [supplier][nation];
         }
-    }
+    }).unwrap()
 }
 
 #[test]
 fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
     let machine = cq_gpu_sequence::machine();
-    let structures = step_r();
-    let physical = structures.physical.clone();
+    let (physical, structures) = step_r();
     let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source).unwrap();
     let evidence: cq_sequence_plan::Advice = syn::parse_quote!(evidence from authored("experiments/gpu/sequence/tests/planner.rs fixture") {
@@ -160,8 +163,7 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
     let forged: cq_sequence_plan::Advice = syn::parse_quote!(retain(rnc, 1, 256, 65536));
     assert!(forged.apply(&physical, &structures, &source).is_err());
     // Without evidence the order keeps its single small root.
-    let structures = step_r();
-    let physical = structures.physical.clone();
+    let (physical, structures) = step_r();
     let plain = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     let plain = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &plain).unwrap();
     let unadvised =

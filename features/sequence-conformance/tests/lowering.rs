@@ -2,13 +2,13 @@ use cq_lang_sequence::{LevelNode, Machine, OutputProtocol, Program};
 use cq_planners_plan::Planner;
 use cq_sequence_lowering::{check, compile};
 
-fn accept(source: &cq_lang_structures::Program) -> Program {
-    let target = compile(&source.physical, source).unwrap();
+fn accept(physical: &cq_lang_structures::physical::Program, source: &cq_lang_structures::Program) -> Program {
+    let target = compile(physical, source).unwrap();
     assert!(target.graded.is_none());
     assert_eq!(target.sequence.output, Some(OutputProtocol::Count));
-    cq_lang_sequence::contract::check(&source.physical, source, &target).unwrap();
+    cq_lang_sequence::contract::check(physical, source, &target).unwrap();
     cq_lang_sequence::check_grading(
-        &source.physical,
+        physical,
         source,
         &target,
         &Machine {
@@ -30,7 +30,7 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
         },
     )
     .unwrap();
-    check(&source.physical, source, &target).unwrap();
+    check(physical, source, &target).unwrap();
     target
 }
 
@@ -40,10 +40,11 @@ fn lower_cq(source: &cq_testkit::cq::Program, label: &str) {
             let ra = cq_planners_plan::compile(source, planner)?;
             let ix = cq_index_policy::compile(&ra)?;
             let physical = cq_physical_lowering::compile(&ix)?;
-            cq_structure_selection::compile(&physical)
+            let structures = cq_structure_selection::compile(&physical)?;
+            Ok((physical, structures))
         })()
         .unwrap_or_else(|error| panic!("{label} {planner:?}: {error}"));
-        accept(&result);
+        accept(&result.0, &result.1);
     }
 }
 
@@ -110,7 +111,7 @@ fn rewritten_claw_preserves_ordered_stream_providers() {
                         unsupported.is_empty(),
                         "{pipeline:?}: accepted unsupported candidate facts {unsupported:?}"
                     );
-                    let selected = cq_lang_structures::contract::check(&structures).unwrap();
+                    let selected = cq_lang_structures::contract::check(&physical, &structures).unwrap();
                     for candidate in &candidates {
                         for (side, prefix) in &candidate.sides {
                             assert!(

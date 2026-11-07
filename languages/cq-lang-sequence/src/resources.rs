@@ -138,7 +138,7 @@ pub(crate) fn dispatch_shape(
             .map(|definition| (symbol_name(&definition.name), definition))
             .collect(),
         publications,
-        carried: carried_columns(structures, structure_analysis)
+        carried: carried_columns(physical, structures, structure_analysis)
             .into_iter()
             .map(|(name, columns)| (name, columns.into_iter().collect()))
             .collect(),

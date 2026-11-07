@@ -21,7 +21,7 @@ fn group_survives_ix_erasure_and_canonicalizes_all_input_valuations() {
     let indexed = cq_index_policy::compile(&source.ra).unwrap();
     assert_eq!(indexed, source);
     let structures = cq_structure_selection::compile(&target).unwrap();
-    let selected = cq_lang_structures::contract::check(&structures).unwrap();
+    let selected = cq_lang_structures::contract::check(&target, &structures).unwrap();
     assert_eq!(selected.unique["grouped"], ["k"]);
     assert_eq!(selected.unique["valuations"], ["id", "k", "v"]);
     assert!(target.program.definitions[1].canon.is_some());

@@ -352,7 +352,7 @@ impl<'a> Facts<'a> {
             .map(|d| (symbol_name(&d.name), &d.term))
             .collect();
         let codecs =
-            crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
+            crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
         let carriers = &analysis.gpu_bindings.carriers;
         let mut resident = BTreeSet::new();
         let mut runs = BTreeSet::new();
@@ -2499,7 +2499,7 @@ mod tests {
     #[test]
     fn publication_step_is_the_only_provider_owner() {
         let (Stack { physical, structures, program }, analysis) = republished();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert_eq!(realization.rejection, None);
         assert!(realization.steps.iter().any(|(publication, step)| {
@@ -2542,7 +2542,7 @@ mod tests {
     #[test]
     fn a_reader_before_the_publication_keeps_the_source_owner() {
         let (Stack { physical, structures, program }, analysis) = republished_after(true);
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert_eq!(realization.rejection, None);
         assert!(matches!(
@@ -2682,7 +2682,7 @@ mod tests {
     /// which accepts the unmutated record.
     fn rejects(fixture: (Stack, Analysis), mutations: &[&dyn Fn(&mut Realization)]) {
         let (Stack { physical, structures, program }, analysis) = fixture;
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert_eq!(realization.rejection, None);
         check(&physical, &structures, &program, &structure_analysis, &analysis, &realization).unwrap();
@@ -2747,7 +2747,7 @@ mod tests {
     #[test]
     fn checker_rejects_union_consumers_with_incompatible_flat_slots() {
         let (Stack { physical, structures, program }, analysis) = union();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         for missing in [false, true] {
             let mut changed = analysis.clone();

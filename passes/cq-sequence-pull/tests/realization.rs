@@ -9,16 +9,29 @@ fn text(tokens: impl ToTokens) -> String {
     tokens.to_token_stream().to_string()
 }
 
-fn sequence_rows(module: &structures::Program) -> syn::Result<syn::Expr> {
-    let program = cq_sequence_lowering::compile(&module.physical, module)?;
-    let analysis = cq_lang_sequence::check_grading(&module.physical, module, &program, &cq_sequence_pull::machine())?;
-    let expression = cq_sequence_pull::translate(&module.physical, module, &program, &analysis)?;
+struct Stack {
+    physical: structures::physical::Program,
+    structures: structures::Program,
+}
+
+impl syn::parse::Parse for Stack {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = structures::Program::parse(input, &physical)?;
+        Ok(Self { physical, structures })
+    }
+}
+
+fn sequence_rows(physical: &structures::physical::Program, module: &structures::Program) -> syn::Result<syn::Expr> {
+    let program = cq_sequence_lowering::compile(physical, module)?;
+    let analysis = cq_lang_sequence::check_grading(physical, module, &program, &cq_sequence_pull::machine())?;
+    let expression = cq_sequence_pull::translate(physical, module, &program, &analysis)?;
     Ok(syn::parse_quote!((#expression).into_iter()))
 }
 
-fn program(module: &structures::Program) -> String {
+fn program(module: &Stack) -> String {
     let complete = cq_structure_selection::compile(&module.physical).unwrap();
-    let expr = sequence_rows(&complete).unwrap();
+    let expr = sequence_rows(&module.physical, &complete).unwrap();
     text(expr)
 }
 
@@ -61,7 +74,7 @@ fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() 
         rows_r = build r provider #token layout #(#layout)* columns [] domains [] stat #statistic;
     );
     selected.structures.publications.0.push(publication.clone());
-    structures::stats::record_constructions(&mut selected).unwrap();
+    structures::stats::record_constructions(&physical, &mut selected).unwrap();
     let mut program = cq_sequence_lowering::compile(&physical, &selected).unwrap();
     let reference = publication.reference();
     let guard: Guard = syn::parse_quote!(stat r (#reference) < 10);
@@ -142,7 +155,7 @@ fn selected_construction_publishes_real_rows_and_group_maxima() {
             return j as answer(a,b);
         });
         let selected = cq_structure_selection::compile(&physical).unwrap();
-        let mut selected = cq_structure_selection::retype(&selected, quote!(
+        let mut selected = cq_structure_selection::retype(&physical, &selected, quote!(
             r => @sorted_run as ::cq_storage::SortedRun<_, _> supports [keys]
         )).unwrap();
         let declaration = selected.structures.providers.declarations.iter()
@@ -159,7 +172,7 @@ fn selected_construction_publishes_real_rows_and_group_maxima() {
                 #projection stat #statistic;
         );
         selected.structures.publications.0.push(publication.clone());
-        structures::stats::record_constructions(&mut selected).unwrap();
+        structures::stats::record_constructions(&physical, &mut selected).unwrap();
         let mut program = cq_sequence_lowering::compile(&physical, &selected).unwrap();
         let reference = publication.reference();
         let guard: Guard = syn::parse_quote!(stat r (#reference) < 3);
@@ -215,7 +228,7 @@ fn ordered_merge_uses_selected_fallback_and_rejects_authored_native() {
         }
     };
     let mut selected = cq_structure_selection::compile(&physical).unwrap();
-    let analysis = structures::contract::check(&selected).unwrap();
+    let analysis = structures::contract::check(&physical, &selected).unwrap();
     for result in ["l", "r"] {
         let key = (
             result.into(),
@@ -225,7 +238,7 @@ fn ordered_merge_uses_selected_fallback_and_rejects_authored_native() {
         assert!(analysis.fallbacks.contains_key(&key));
         assert!(!analysis.natives.contains_key(&key));
     }
-    sequence_rows(&selected).unwrap();
+    sequence_rows(&physical, &selected).unwrap();
     let mut replaced = 0;
     for entry in &mut selected.structures.entries {
         if matches!(&entry.structure,
@@ -239,8 +252,8 @@ fn ordered_merge_uses_selected_fallback_and_rejects_authored_native() {
     }
     assert_eq!(replaced, 2);
     selected.structures.declare(&[]).unwrap();
-    structures::contract::check(&selected).unwrap();
-    assert!(sequence_rows(&selected).is_err());
+    structures::contract::check(&physical, &selected).unwrap();
+    assert!(sequence_rows(&physical, &selected).is_err());
 }
 
 #[test]
@@ -253,7 +266,7 @@ fn zero_heading_exists_can_be_scanned_and_probed_against_itself() {
         return out as answer();
     });
     let selected = cq_structure_selection::compile(&physical).unwrap();
-    let expression = sequence_rows(&selected).unwrap();
+    let expression = sequence_rows(&physical, &selected).unwrap();
     let source = quote!(
         fn main() {
             for (rows, expected) in [
@@ -344,10 +357,10 @@ fn attached_sidecar_and_index_survive_the_selected_lazy_choice_arm() {
     selected.structures.entries.push(syn::parse_quote!(
         l join_filter = #provider build b [x] covering j marker ::cq_load::ColumnAt<0> policy always;
     ));
-    structures::record_join_filter_policies(&mut selected).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    structures::record_join_filter_policies(&physical, &mut selected).unwrap();
+    let facts = structures::contract::check(&physical, &selected).unwrap();
     assert!(facts.join_filters["l"][0].policy.abandon().is_none());
-    let mut context = cq_print::Context::new(&selected, &facts);
+    let mut context = cq_print::Context::new(&physical, &selected, &facts);
     context.register("b");
     context.begin_deferred_bindings();
     let mut arms = Vec::new();
@@ -533,7 +546,7 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
             }
             let analysis =
                 cq_lang_sequence::check_grading(&physical, &structures, &program, &cq_sequence_pull::machine()).unwrap();
-            let structures_analysis = structures::contract::check(&structures).unwrap();
+            let structures_analysis = structures::contract::check(&physical, &structures).unwrap();
             assert!(
                 structures_analysis
                     .membership
@@ -633,8 +646,8 @@ fn recorded_hash_types_print_verbatim_including_explicit_standard_hashers() {
                 };
                 respell(provider, ty);
             }
-            structures::check_rewrite(&selected, &recorded).unwrap();
-            let printed = text(sequence_rows(&recorded).unwrap());
+            structures::check_rewrite(&source, &selected, &source, &recorded).unwrap();
+            let printed = text(sequence_rows(&source, &recorded).unwrap());
             if text(&recorded.structures).contains(&text(ty)) {
                 assert!(printed.contains(&text(ty)), "{}: {printed}", case.name);
             }
@@ -757,7 +770,7 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
         let mut reversed = target.clone();
         reversed.structures.entries.reverse();
         for target in [target, reversed] {
-            let expression = sequence_rows(&target).unwrap();
+            let expression = sequence_rows(&physical, &target).unwrap();
             let emitted = text(&expression);
             assert!(
                 emitted.contains("__cq_choose_a"),
@@ -851,7 +864,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                 .unwrap();
                 let mut target = cq_structure_selection::compile(&source).unwrap();
                 assert!(
-                    structures::contract::check(&target)
+                    structures::contract::check(&source, &target)
                         .unwrap()
                         .filtered
                         .contains_key("f")
@@ -875,7 +888,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                         )])
                         .unwrap();
                 }
-                let expression = sequence_rows(&target).unwrap();
+                let expression = sequence_rows(&source, &target).unwrap();
                 assert!(!text(&expression).contains("__cq_f_rows"));
                 checks.push(quote!({
                     let L: &[(i32,)] = &[(1,), (1,), (2,), (9,)];
@@ -913,7 +926,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
             source
         };
         let target = cq_structure_selection::compile(&source).unwrap();
-        let expression = sequence_rows(&target).unwrap();
+        let expression = sequence_rows(&source, &target).unwrap();
         let input = if key == "a" {
             quote!(let L: &[(i32,)] = &[(7,), (8,)];)
         } else {
@@ -932,7 +945,7 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
         f = let point select r if (tag = 0u32);
         j = let canon probe first [k] l,f; return j as answer(k,tag);
     });
-    let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+    let expression = sequence_rows(&source, &cq_structure_selection::compile(&source).unwrap()).unwrap();
     checks.push(quote!({
         let L: &[(i32,)] = &[(1,), (2,)];
         let R = vec![(0_u32,1), (1_u32,2)];
@@ -957,10 +970,10 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         }})
         .unwrap();
         let selected = cq_structure_selection::compile(&source).unwrap();
-        let facts = structures::contract::check(&selected).unwrap();
+        let facts = structures::contract::check(&source, &selected).unwrap();
         assert!(!facts.retained.contains_key("r"));
         assert!(!facts.filtered.contains_key("r"));
-        let expression = sequence_rows(&selected).unwrap();
+        let expression = sequence_rows(&source, &selected).unwrap();
         checks.push(quote!({
             let L: &[(i32,)] = &[(1,), (2,), (3,)];
             let R: &[(i32,i32)] = &[(-7,1),(-7,1),(7,2),(-7,3)];
@@ -969,7 +982,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
             assert_eq!(actual, [1,3].into_iter().collect());
         }));
     }
-    let authored: structures::Program = syn::parse_quote! { physical {
+    let authored: Stack = syn::parse_quote! { physical {
         relation L(a:i32); relation R(tag:i32,a:i32,b:i32,unused:i32);
         l = pipe rename L@0 {a -> x};
         r = let rename R@1 {a -> x,b -> y,unused -> z} constants {tag = -7};
@@ -982,7 +995,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
         j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
     }};
-    let expression = sequence_rows(&authored).unwrap();
+    let expression = sequence_rows(&authored.physical, &authored.structures).unwrap();
     checks.push(quote!({
         let L: &[(i32,)] = &[(1,), (2,), (3,)];
         let R: &[(i32,i32,i32,i32)] =
@@ -1001,11 +1014,11 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         return j as answer(x,y);
     }};
     let selected = cq_structure_selection::compile(&source).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
+    let facts = structures::contract::check(&source, &selected).unwrap();
     assert_eq!(facts.built["r"].len(), 2);
     assert!(facts.retained.contains_key("r"));
     assert!(!facts.filtered.contains_key("r"));
-    let expression = sequence_rows(&selected).unwrap();
+    let expression = sequence_rows(&source, &selected).unwrap();
     checks.push(quote!({
         let L: &[(i32,)] = &[(1,),(2,),(3,)];
         let R: &[(i32,i32,i32)] = &[(-7,1,10),(7,2,20),(-7,3,30)];
@@ -1021,12 +1034,12 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
     }};
     let selected = cq_structure_selection::compile(&source).unwrap();
     assert!(
-        structures::contract::check(&selected)
+        structures::contract::check(&source, &selected)
             .unwrap()
             .retained
             .contains_key("r")
     );
-    let expression = sequence_rows(&selected).unwrap();
+    let expression = sequence_rows(&source, &selected).unwrap();
     checks.push(quote!({
         let R = vec![
             (1_u32,1,true),
@@ -1043,7 +1056,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         r = exists canon rename R@0 {} constants {a = 7};
         return r as answer();
     }};
-    let expression = sequence_rows(&cq_structure_selection::compile(&source).unwrap()).unwrap();
+    let expression = sequence_rows(&source, &cq_structure_selection::compile(&source).unwrap()).unwrap();
     checks.push(quote!({
         for (R, expected) in [
             (&[(7,), (7,), (8,)][..], vec![()]),
@@ -1063,16 +1076,16 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
 fn complete_scenarios_compile_and_execute_against_authored_answers() {
     let mut checks = Vec::new();
     for case in scenarios::SCENARIOS {
-        let source = case.parse_structures().unwrap();
-        let expression = sequence_rows(&source).unwrap();
+        let physical = case.parse_physical().unwrap();
+        let source = case.parse_structures(&physical).unwrap();
+        let expression = sequence_rows(&physical, &source).unwrap();
         let data_name = if case.name == "fine_triangle" {
             "triangle"
         } else {
             case.name.trim_end_matches("_reduced")
         };
         let data = cases::CASES.iter().find(|c| c.name == data_name).unwrap();
-        let bindings: Vec<_> = source
-            .physical
+        let bindings: Vec<_> = physical
             .inputs()
             .map(|d| {
                 let name = &d.name;
@@ -1082,7 +1095,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
                 quote!(let #name: &[(#(#types,)*)] = &[#(#tuples),*];)
             })
             .collect();
-        let variables: Vec<_> = (0..source.physical.program.head.args.len())
+        let variables: Vec<_> = (0..physical.program.head.args.len())
             .map(|i| quote::format_ident!("v{i}"))
             .collect();
         let copied = variables.iter().map(|v| quote!(*#v));
@@ -1108,13 +1121,13 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     runtime.run(&source.to_string());
     // Selection records ordered fallbacks even when the host declares an
     // ordered read: Sequence's keyed printer consumes the recorded fallback.
-    let unordered: structures::Program = syn::parse_quote!(physical {
+    let unordered: Stack = syn::parse_quote!(physical {
         relation L(a:i32) host [a] reads [ordered]; relation R(a:i32) host [a] reads [ordered];
         l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a};
         j = let canon merge[a] l,r; return j as answer(a);
     } structures { providers {  }});
     let complete = cq_structure_selection::compile(&unordered.physical).unwrap();
-    let expression = sequence_rows(&complete).unwrap();
+    let expression = sequence_rows(&unordered.physical, &complete).unwrap();
     let fallback = quote! {
         #[allow(non_snake_case)] fn main() {
             let L: &[(i32,)] = &[(2,), (1,), (1,)];
@@ -1130,7 +1143,7 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
 
 #[test]
 fn point_prints_build_free_dispatch_and_canonical_lets_use_sort() {
-    let p: structures::Program = syn::parse_quote!(physical {
+    let p: Stack = syn::parse_quote!(physical {
         relation R(a:i32,b:i32) host [a] reads [exact]; r = pipe rename R@0 {a -> x,b -> y};
         w = let canon point select r if (x = 2);
         p = pipe project w keep {x,y}; return p as answer(y,x);
@@ -1153,12 +1166,12 @@ fn adapter_carriers_drop_columns_after_their_last_reader() {
         return p as answer(b);
     });
     let module = cq_structure_selection::compile(&physical).unwrap();
-    let analysis = structures::contract::check(&module).unwrap();
-    let context = cq_print::Context::new(&module, &analysis);
+    let analysis = structures::contract::check(&physical, &module).unwrap();
+    let context = cq_print::Context::new(&physical, &module, &analysis);
     assert_eq!(context.carried("r"), ["a", "b"]);
     assert_eq!(context.carried("s"), ["b"]);
     assert_eq!(context.carried("p"), ["b"]);
-    let printed = text(sequence_rows(&module).unwrap());
+    let printed = text(sequence_rows(&physical, &module).unwrap());
     assert!(printed.contains("(a , b , _ ,)"), "{printed}");
     assert!(printed.contains("& (a , _ ,)"), "{printed}");
     assert!(!printed.contains("dead"), "{printed}");
@@ -1170,7 +1183,7 @@ fn host_certificates_only_emit_for_locally_checked_facts() {
         (quote!(host_set R;), true),
         (quote!(host_set R discharged;), false),
     ] {
-        let module: structures::Program = syn::parse2(quote! {
+        let module: Stack = syn::parse2(quote! {
             physical {
                 relation R(a:i32); #fact
                 r = pipe rename R@0 {a -> a};
@@ -1193,7 +1206,7 @@ fn canonical_consumer_omits_local_answer_state_for_every_head_shape() {
     ] {
         let projection = project.then(|| quote!(p = pipe project r keep {a};));
         let returned = if project { quote!(p) } else { quote!(r) };
-        let module: structures::Program = syn::parse2(quote! {
+        let module: Stack = syn::parse2(quote! {
             physical {
                 relation R(a:i32,b:i32);
                 consumer canonical;
@@ -1235,8 +1248,8 @@ fn grouped_folds_share_full_named_valuations_and_empty_identities() {
         return grouped as answer(n,total,low,high);
     }})
     .unwrap();
-    let keyed = sequence_rows(&cq_structure_selection::compile(&keyed).unwrap()).unwrap();
-    let global = sequence_rows(&cq_structure_selection::compile(&global).unwrap()).unwrap();
+    let keyed = sequence_rows(&keyed, &cq_structure_selection::compile(&keyed).unwrap()).unwrap();
+    let global = sequence_rows(&global, &cq_structure_selection::compile(&global).unwrap()).unwrap();
     let source = quote! {
         fn main() {
             let populated: &[(i32,i32,i64,i32)] = &[
@@ -1326,10 +1339,10 @@ fn blocked_predicates_execute_exact_formulas_and_own_only_demanded_fields() {
                 out = pipe project q keep {x,y};
                 return canon out as answer(x,y);
             })).unwrap();
-            let selected = cq_structure_selection::compile_with(&physical, quote!(
+            let (physical, selected) = cq_structure_selection::compile_with(&physical, quote!(
                 blocks(R { block_rows 1024; summary none; columns [a: #family u64, b: #family u64, unused: plain u64]; })
             )).unwrap();
-            let expression = sequence_rows(&selected).unwrap();
+            let expression = sequence_rows(&physical, &selected).unwrap();
             let storage = if family.to_string() == "plain" { quote!(Plain) } else { quote!(Bytes) };
             checks.push(quote! {
                 {
@@ -1357,15 +1370,15 @@ fn blocked_predicates_execute_exact_formulas_and_own_only_demanded_fields() {
         out = pipe project v keep {value};
         return canon out as answer(value);
     });
-    let selected = cq_structure_selection::compile_with(&physical, quote!(
+    let (physical, selected) = cq_structure_selection::compile_with(&physical, quote!(
         blocks(R { block_rows 1024; summary minmax; columns [a: bytes u64,b: bytes u64,unused: plain u64]; })
     )).unwrap();
-    let complete = sequence_rows(&selected).unwrap();
+    let complete = sequence_rows(&physical, &selected).unwrap();
     // Exercise the checked streaming prefix before its mandatory canonical
     // answer consumer, rather than weakening the complete query's semantics.
     let sequence = cq_sequence_lowering::compile(&physical, &selected).unwrap();
-    let facts = structures::contract::check(&selected).unwrap();
-    let mut context = cq_print::Context::new(&selected, &facts);
+    let facts = structures::contract::check(&physical, &selected).unwrap();
+    let mut context = cq_print::Context::new(&physical, &selected, &facts);
     context.blocked_runs = sequence.representation.blocks.runs.clone();
     for name in ["r", "p", "q", "g", "v"] { context.register(name); }
     let mut emitter = cq_physical_realization::RowEmitter::new(context);
@@ -1446,10 +1459,10 @@ fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
             head: ["group", "witness", "amount"].map(String::from).into(),
             value_reads: ["group", "amount"].map(String::from).into(),
         };
-        let selected = cq_structure_selection::compile_with_consumer(&physical, quote!(
+        let (physical, selected) = cq_structure_selection::compile_with_consumer(&physical, quote!(
             blocks(R { block_rows 1024; summary none; columns [key: #family u64, price: #family u64]; })
         ), Some(&demand)).unwrap();
-        let expression = sequence_rows(&selected).unwrap();
+        let expression = sequence_rows(&physical, &selected).unwrap();
         let reads = &selected.encoded.blocks.reads;
         assert!(reads.values().all(|read| read.purpose != structures::encoded::ReadPurpose::FinalHostAnswer));
         assert!(reads.values().any(|read| read.purpose == structures::encoded::ReadPurpose::OpaqueRustRead));

@@ -8,7 +8,7 @@ pub(crate) fn check(
     analysis: &Analysis,
     catalog: &Catalog,
 ) -> syn::Result<()> {
-    let structures_analysis = structures::contract::check(structures)?;
+    let structures_analysis = structures::contract::check(physical, structures)?;
     // Formal rule PL-Catalog: a program declaration of a token the target
     // declares is that declaration; the catalog is keyed by token id.
     for declaration in &structures_analysis.providers.declarations {

@@ -2206,9 +2206,9 @@ fn translate_observed(
             "GPU Sequence translation requires checked gpu grading",
         ));
     }
-    let structure_analysis = &cq_lang_structures::contract::check(structures)?;
+    let structure_analysis = &cq_lang_structures::contract::check(physical, structures)?;
     // The target-owned Structures stage and terminal enforce the same boundary.
-    crate::check_structures(structures, structure_analysis)?;
+    crate::check_structures(physical, structures, structure_analysis)?;
     cq_lang_sequence::gpu::publication::check(physical, program, structure_analysis, analysis, &analysis.gpu_publications)?;
     cq_lang_sequence::gpu::check(program, analysis)?;
     if arena.is_none() && program.sequence.output == Some(OutputProtocol::ReservePrevious) {
@@ -2238,7 +2238,7 @@ fn translate_observed(
     }
     let rows = Rows::new(physical, structures, program, structure_analysis, analysis)?;
     let codecs =
-        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
+        crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
     let mut compiler = Compiler {
         physical,
         structures,
@@ -4303,7 +4303,7 @@ mod tests {
             }
             graded gpu { index at host; input at host; output_rows at device; }
         };
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let compiler = Compiler {
             physical: &physical,
@@ -4384,7 +4384,7 @@ mod tests {
     #[test]
     fn program_launch_preparation_is_recorded_checked_and_printed() {
         let Stack { physical, structures, program } = arena_program(false);
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_bindings.realization.launches, [Launch::ProgramOccupancy]);
         let arena: syn::Expr = syn::parse_quote!(arena);
@@ -4419,7 +4419,7 @@ mod tests {
     fn arena_encoding_is_recorded_for_raw_terminals_only() {
         use cq_lang_sequence::gpu::publication::{self, ArenaColumn, ArenaRows};
         let Stack { physical, structures, program } = arena_program(false);
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let records = &analysis.gpu_publications;
         let arena = records["output_rows"].arena.clone().unwrap();
@@ -4602,7 +4602,7 @@ mod tests {
 
     fn abi_rows() -> Rows {
         let Stack { physical, structures, program } = arena_program(false);
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap()
     }
@@ -4892,7 +4892,7 @@ mod tests {
             }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let records = &analysis.gpu_publications;
         let radix_set: syn::Type = syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>);
@@ -5135,7 +5135,7 @@ mod tests {
             })
             .unwrap();
             let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-            let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+            let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
             let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             let codec = analysis.gpu_publications["result"].storage.codec().unwrap();
             assert_eq!(
@@ -5271,7 +5271,7 @@ mod tests {
                 }
             })
             .unwrap();
-            let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+            let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
             let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             let expression = translate(&physical, &structures, &program, &analysis).unwrap();
             let generated = expression.to_token_stream().to_string();
@@ -5407,7 +5407,7 @@ mod tests {
     #[test]
     fn host_guard_lengths_use_the_uploaded_publication_count() {
         let Stack { physical, structures, program } = uploaded_host_program(false);
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let mut compiler = Compiler {
             physical: &physical,
@@ -5532,7 +5532,7 @@ mod tests {
             }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let adapters = &analysis.gpu_bindings.host_materializations;
         assert_eq!(
@@ -5701,7 +5701,7 @@ mod tests {
                 sequence { input = store canon rows r; }
                 graded gpu { input at host; }
             };
-            let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+            let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
             let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             let compiler = Compiler {
                 physical: &physical,

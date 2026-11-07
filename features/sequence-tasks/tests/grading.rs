@@ -213,7 +213,7 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
         })
         .unwrap();
         let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
-        let structures_facts = structures::contract::check(&program.structures).unwrap();
+        let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
         assert!(
             structures_facts
                 .head_dedup
@@ -2034,7 +2034,7 @@ fn late_covering_program(input: proc_macro2::TokenStream) -> Fixture {
             return out as answer(x,y,z);
         }
     };
-    let structures =
+    let (physical, structures) =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(L, R))).unwrap();
     let source: Fixture = syn::parse2(quote::quote! {
         #physical
@@ -2092,9 +2092,9 @@ fn retained_scans_never_use_join_filters_before_the_covering_build() {
     for input in [quote::quote!(rows l), quote::quote!(map l rows l)] {
         let program = late_covering_program(input);
         let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
-        let structures_facts = structures::contract::check(&program.structures).unwrap();
+        let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
         assert!(!structures_facts.join_filters["l"].is_empty());
-        let context = cq_print::Context::new(&program.structures, &structures_facts);
+        let context = cq_print::Context::new(&program.physical, &program.structures, &structures_facts);
         let filters = structures_facts
             .join_filters
             .iter()
@@ -2150,7 +2150,7 @@ fn covering_filters_leave_provider_capabilities_to_the_rust_boundary() {
             let mut declared = vec![opaque.clone()];
             declared.extend(declarations());
             candidate.structures.structures.declare(&declared).unwrap();
-            cq_lang_sequence::structures::record_join_filter_policies(&mut candidate.structures).unwrap();
+            cq_lang_sequence::structures::record_join_filter_policies(&candidate.physical, &mut candidate.structures).unwrap();
             // Structure checks validate the covering relation, key and declared
             // support, not the opaque provider spelling. Construction-attached
             // sidecar and lookup obligations are Rust's; no scalar ABI is guessed.
@@ -2214,7 +2214,7 @@ fn constant_key_provider_program() -> Fixture {
 fn planner_does_not_route_on_constant_bound_provider_keys() {
     let source = constant_key_provider_program();
     cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
-    let structures_facts = structures::contract::check(&source.structures).unwrap();
+    let structures_facts = structures::contract::check(&source.physical, &source.structures).unwrap();
     assert!(
         structures_facts.filtered["r"]
             .constants
@@ -2373,7 +2373,7 @@ fn flattened_key_covers_restore_positional_reads() {
             return out as answer(a);
         }
     };
-    let structures =
+    let (physical, structures) =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(R))).unwrap();
     let program: Fixture = syn::parse_quote! {
         #physical
@@ -2387,7 +2387,7 @@ fn flattened_key_covers_restore_positional_reads() {
         graded tasks { input at host; parts at pool; joined at host; result at host; }
     };
     let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
-    let structures_facts = structures::contract::check(&program.structures).unwrap();
+    let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
     assert!(structures_facts.reads.contains_key("selected"));
     let mut expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     struct Reads(usize);
@@ -2435,7 +2435,7 @@ fn filtered_host_tiles_apply_predicates_without_collecting_the_host() {
         graded tasks { b at host; parts at pool; joined at host; result at host; }
     });
     let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
-    let structures_facts = structures::contract::check(&program.structures).unwrap();
+    let structures_facts = structures::contract::check(&program.physical, &program.structures).unwrap();
     assert!(!structures_facts.join_filters["l"].is_empty());
     let expression = translate(&program.physical, &program.structures, &program.program, &facts).unwrap();
     let rendered = expression.to_token_stream().to_string();
@@ -2553,7 +2553,7 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
     let catalog = cq_sequence_tasks::catalog();
     let source = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
     cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
-    let structures_facts = structures::contract::check(&source.structures).unwrap();
+    let structures_facts = structures::contract::check(&source.physical, &source.structures).unwrap();
     assert!(
         structures_facts.physical.fused["answer"]
             .members
@@ -2671,7 +2671,7 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
         out = let canon project v keep {x,value};
         return out as answer(x,value);
     });
-    let structures = cq_structure_selection::compile_with(&physical, quote::quote!(
+    let (physical, structures) = cq_structure_selection::compile_with(&physical, quote::quote!(
         blocks(R { block_rows 1024; summary minmax; columns [a:bytes u64,b:plain u64]; })
     )).unwrap();
     let lowered = cq_sequence_lowering::compile(&physical, &structures).unwrap();
@@ -2711,7 +2711,7 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
         term: syn::parse_quote!(store rows r),
     });
     routed.program.graded.as_mut().unwrap().grades.insert(0, syn::parse_quote!(source at host;));
-    cq_lang_sequence::blocks::record_routing(&routed.structures, &mut routed.program).unwrap();
+    cq_lang_sequence::blocks::record_routing(&routed.physical, &routed.structures, &mut routed.program).unwrap();
     let routed_facts = check_grading(&routed.physical, &routed.structures, &routed.program, &machine()).unwrap();
     let routed_expression = translate(&routed.physical, &routed.structures, &routed.program, &routed_facts).unwrap();
     let printed = routed.to_token_stream();

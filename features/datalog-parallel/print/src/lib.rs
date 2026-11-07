@@ -981,13 +981,14 @@ mod tests {
                         .all(|definition| definition.canon.is_none())
                 );
                 let structures = cq_structure_selection::compile(&physical).unwrap();
-                assert_eq!(structures.context(), hole.facts);
+                let stack = cq_stage::Structures::new(physical.clone(), structures.clone());
+                assert_eq!(stack.context(), hole.facts);
                 let facts = &hole.facts;
                 let continuation = cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<
                     cq_stage::Sequence<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>,
 
                 >(
-                    quote!(context { #facts }; pipeline { sequential, translate_pull }; #structures),
+                    quote!(context { #facts }; pipeline { sequential, translate_pull }; #stack),
                     |physical, source, _| {
                         let target = cq_sequence_lowering::compile(physical, source)?;
                         Ok(cq_stage::Sequence::new(physical.clone(), source.clone(), target))

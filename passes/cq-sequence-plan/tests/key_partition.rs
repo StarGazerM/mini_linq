@@ -1998,7 +1998,7 @@ fn prefix_bounds_keep_the_empty_global_group_identity() {
         let mut forged = facts.prefix_bounds.clone();
         forged.get_mut("totals").unwrap().rows = Some(0);
         assert_eq!(
-            cq_lang_sequence::bounds::check(&physical, &structures, &source, &forged).is_err(),
+            cq_lang_sequence::bounds::check(&physical, &source, &forged).is_err(),
             global
         );
     }

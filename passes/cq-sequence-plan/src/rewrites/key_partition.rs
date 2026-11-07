@@ -438,7 +438,7 @@ pub fn key_partition_in(
     advice: &KeyPartition,
 ) -> syn::Result<(physical::Program, structures::Program, Program)> {
     let analysis = checker.check_shared(physical, structures, source)?;
-    let structures_analysis = structures::contract::check(structures)?;
+    let structures_analysis = structures::contract::check(physical, structures)?;
     let index = super::definition(source, &advice.name)?;
     if advice.parts == 0 {
         return Err(syn::Error::new_spanned(
@@ -807,6 +807,7 @@ pub fn key_partition_in(
             let routed = cq_lang_sequence::structures::provider::base::declaration("sharded")
                 .compose(keyed.provider.clone())?;
             target_structures = cq_structure_selection::retype(
+                physical,
                 &target_structures,
                 quote!(entry(#entry_index) => #routed #supports),
             )?;
@@ -833,7 +834,7 @@ pub fn key_partition_in(
             },
         },
     );
-    cq_lang_sequence::blocks::record_routing(&target_structures, &mut target)?;
+    cq_lang_sequence::blocks::record_routing(physical, &target_structures, &mut target)?;
     checker.check_rewrite_in(physical, structures, source, physical, &target_structures, &target)?;
     Ok((physical.clone(), target_structures, target))
 }

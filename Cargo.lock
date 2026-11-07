@@ -808,6 +808,7 @@ dependencies = [
  "cq-testkit",
  "mini-linq",
  "own-push",
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
@@ -1336,6 +1337,7 @@ dependencies = [
  "cq-stage",
  "cq-storage",
  "mini-linq",
+ "proc-macro2",
  "quote",
  "rayon",
  "syn 2.0.119",

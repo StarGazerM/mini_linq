@@ -134,7 +134,7 @@ impl Checker {
                     .push((index, symbol_name(&keyed.left)));
             }
         }
-        let analysis = cq_lang_structures::contract::check(program)?;
+        let analysis = cq_lang_structures::contract::check(physical, program)?;
         let queries = self.support.queries(physical, &analysis.physical);
         // BE-Code obligations name a column's codec: the one its logical type's
         // input columns declare; differing declarations leave it ambiguous.
@@ -454,7 +454,7 @@ fn analyze_in(
     }
     publication::derive(&prefix.physical_program, &prefix.analysis, program, &mut checker.analysis, &publication_facts)?;
     checker.analysis.task_execution = crate::task_execution::analyze(&prefix.physical_program, &prefix.analysis, program, &checker.analysis);
-    crate::blocks::check_task_covers(&prefix.program, program, &prefix.analysis, &checker.analysis)?;
+    crate::blocks::check_task_covers(&prefix.physical_program, &prefix.program, program, &prefix.analysis, &checker.analysis)?;
     program.evidence.check(&prefix.physical_program, &prefix.analysis, &checker.analysis)?;
     Ok(context.remember(CheckedProof {
         prefix: prefix.clone(),
@@ -1787,7 +1787,7 @@ fn check_rewrite_in(source_physical: &physical::Program, source_structures: &cq_
     // Catalog selection may retain host renames and replace their keyed
     // fallbacks, while preserving opaque syntax and the original scans.
     let storage_retyped = !unchanged
-        && cq_lang_structures::check_retention_rewrite(source_structures, target_structures)
+        && cq_lang_structures::check_retention_rewrite(source_physical, source_structures, target_physical, target_structures)
             .is_ok();
     // Formal rule BE-PhysicalPreserved: Only checked catalog retention may change the prefix.
     if !unchanged && !storage_retyped {

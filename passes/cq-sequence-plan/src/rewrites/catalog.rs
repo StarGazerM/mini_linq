@@ -169,6 +169,8 @@ fn required_support(
 /// Unlike `plan`, this operation explicitly replaces recorded providers.
 /// The explicit Physical base drives read obligations; the returned pair includes
 /// any Physical retention rewrite together with its selected Structures layer.
+/// Callers must pass both returned bases to subsequent checking and Sequence
+/// lowering; retention can change Physical even when selecting only providers.
 /// Formal rule PL-Select: Stable-partition catalog order by recorded token, then select its first eligible entry.
 pub fn select_from_catalog(
     physical: &structures::physical::Program,
@@ -201,9 +203,7 @@ fn select(
     admitted: Option<&std::collections::BTreeSet<String>>,
 ) -> syn::Result<(structures::physical::Program, structures::Program)> {
     let mut target = source.clone();
-    target.physical = physical.clone();
-    let source = &target.clone();
-    let analysis = structures::contract::check(source)?;
+    let analysis = structures::contract::check(physical, source)?;
     let candidates = structures::physical::candidate_prefixes(physical, &analysis.physical);
     for (index, entry) in source.structures.entries.iter().enumerate() {
         let name = symbol_name(&entry.name);
@@ -418,6 +418,7 @@ fn select(
             continue;
         }
         match cq_structure_selection::retype(
+            physical,
             &target,
             retype_advice(catalog, index, entry.name.span(), &provider, supports),
         ) {
@@ -431,9 +432,9 @@ fn select(
             }
         }
     }
-    let (physical, target) = retain_host_indexes(&target.physical, &target, catalog, admitted)?;
-    structures::check_retention_rewrite(source, &target)?;
-    Ok((physical, target))
+    let (target_physical, target) = retain_host_indexes(physical, &target, catalog, admitted)?;
+    structures::check_retention_rewrite(physical, source, &target_physical, &target)?;
+    Ok((target_physical, target))
 }
 
 fn retain_host_indexes(
@@ -475,7 +476,7 @@ fn retain_host_index(
     catalog: &Catalog,
     selected: Option<&str>,
 ) -> syn::Result<(structures::physical::Program, structures::Program)> {
-    let analysis = structures::contract::check(source)?;
+    let analysis = structures::contract::check(physical, source)?;
     let needed = structures::required_columns(physical, &analysis.physical);
     let mut target = source.clone();
     let mut target_physical = physical.clone();
@@ -622,8 +623,7 @@ fn retain_host_index(
             || !matches!(&entry.structure, Structure::Host { reader, .. } if !matches!(reader, structures::ReaderRef::Scan))
     });
     target.structures.declare(&catalog.declarations)?;
-    target.physical = target_physical.clone();
-    structures::contract::check(&target)?;
+    structures::contract::check(&target_physical, &target)?;
     Ok((target_physical, target))
 }
 

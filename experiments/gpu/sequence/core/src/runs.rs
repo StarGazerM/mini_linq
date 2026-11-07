@@ -204,7 +204,7 @@ pub fn record_representation(
     structures: &cq_lang_structures::Program,
     source: &cq_lang_sequence::Program,
 ) -> syn::Result<cq_lang_sequence::Program> {
-    let analysis = cq_lang_structures::contract::check(structures)?;
+    let analysis = cq_lang_structures::contract::check(physical, structures)?;
     let mut hosts = BTreeMap::new();
     for entry in &structures.structures.entries {
         let Structure::Host {
@@ -286,7 +286,7 @@ pub fn record_representation(
             }
         }
     }
-    let codecs = Codecs::check(structures, &analysis.physical.rows)?;
+    let codecs = Codecs::check(physical, structures, &analysis.physical.rows)?;
     for row in analysis.physical.rows.values() {
         for column in row.types.keys() {
             if codecs
@@ -330,15 +330,16 @@ mod tests {
         let recorded = record_representation(&physical, &structures, &program).unwrap();
         assert!(recorded.representation.identity.contains("value"));
         let facts = cq_lang_sequence::contract::check(&physical, &structures, &recorded).unwrap();
+        let physical_facts = cq_lang_structures::physical::contract::check(&physical).unwrap();
         let mut operator = physical.program.definitions[1]
             .operator
             .clone();
-        assert!(!facts.rust_requires_host(&operator));
+        assert!(!facts.rust_requires_host(&physical_facts, &operator));
         let cq_lang_structures::physical::Operator::Bind(bind) = &mut operator else {
             unreachable!()
         };
         bind.annotation = None;
-        assert!(facts.rust_requires_host(&operator));
+        assert!(facts.rust_requires_host(&physical_facts, &operator));
     }
 
     #[test]
@@ -414,7 +415,7 @@ mod tests {
         let recorded = record_representation(&physical, &structures, &program).unwrap();
         assert!(recorded.representation.encoded.contains("x"));
         assert!(recorded.representation.encoded.contains("y"));
-        let analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let codecs = Codecs::check(&physical, &structures, &analysis.physical.rows).unwrap();
         assert_eq!(codecs.column("x"), Some(&syn::parse_quote!(First)));
         assert_eq!(codecs.column("y"), Some(&syn::parse_quote!(Second)));
@@ -476,7 +477,11 @@ mod tests {
 
     #[test]
     fn native_binding_reads_declared_abi_and_copies_the_input_instance() {
-        let source: Program = syn::parse_quote! {
+        let (physical, source) = syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+            let physical = input.parse()?;
+            let structures = Program::parse(input, &physical)?;
+            Ok((physical, structures))
+        }, quote! {
             physical {
                 relation R(x:i64) = (&data.r);
                 relation D(x:i64) = (&data.d);
@@ -501,8 +506,8 @@ mod tests {
                 result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
                 result canon = rows;
             }
-        };
-        let target = bind(&source.physical, &source).unwrap();
+        }).unwrap();
+        let target = bind(&physical, &source).unwrap();
         let Structure::Host { keyed: host, .. } = &source.structures.entries[0].structure else {
             unreachable!()
         };
@@ -521,7 +526,7 @@ mod tests {
             } else {
                 keyed.provider.input.as_mut().unwrap().key_count = 0;
             }
-            assert!(cq_lang_structures::contract::check(&stale).is_err());
+            assert!(cq_lang_structures::contract::check(&physical, &stale).is_err());
         }
     }
 }

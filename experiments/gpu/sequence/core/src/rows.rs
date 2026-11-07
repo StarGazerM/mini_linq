@@ -412,7 +412,7 @@ impl Rows {
             })
             .collect::<syn::Result<Vec<_>>>()?;
         let codecs =
-            crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
+            crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
         let realization = &analysis.gpu_bindings.realization;
         if let Some(rejection) = &realization.rejection {
             return Err(error(rejection));
@@ -1835,7 +1835,7 @@ fn host_rows(
     }
     let host_structures = crate::bindings::host_structures(structures, &analysis.gpu_bindings)
         .expect("checked host materialization adapters");
-    let host_analysis = cq_lang_structures::contract::check(&host_structures)
+    let host_analysis = cq_lang_structures::contract::check(physical, &host_structures)
         .expect("checked host Structures contract");
     let inputs = physical
         .inputs()
@@ -1846,11 +1846,11 @@ fn host_rows(
         })
         .collect();
     let mut context =
-        cq_print::Context::with_bound_captures(&host_structures, &host_analysis, &inputs);
+        cq_print::Context::with_bound_captures(physical, &host_structures, &host_analysis, &inputs);
     // This host/device boundary publishes its complete checked layout, even
     // when the final answer projects columns away. Seed that demand before
     // RowEmitter prunes carriers through the producer's probes and guards.
-    context.demand_columns(&host_structures, name, &structure_analysis.layouts[name])?;
+    context.demand_columns(physical, &host_structures, name, &structure_analysis.layouts[name])?;
     // Formal rule GPU-Transfer: resident inputs read by host Rust download
     // the recorded complete rows through their recorded download adapter.
     for transfer in &evaluation.transfers {
@@ -1938,7 +1938,7 @@ fn host_rows(
     let context = emitter.context();
     let pattern = context.pattern(name);
     let codecs =
-        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
+        crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
     let values: Vec<_> = structure_analysis.layouts[name]
         .iter()
         .map(|column| {
@@ -2486,7 +2486,7 @@ mod tests {
             }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let rows = Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert!(!analysis.gpu_bindings.realization.sources.contains_key("h"));
@@ -2516,7 +2516,7 @@ mod tests {
             graded gpu { input at host; result at host.device; }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let rows = Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert!(rows.run_sources.contains_key("r"));
@@ -2560,7 +2560,7 @@ mod tests {
             graded gpu { input at host; index at host; result_rows at host.device; }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let rows = Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         let provider = &rows.providers["r"];
@@ -2742,7 +2742,7 @@ mod tests {
                 result_rows at host.device;
             }
         };
-        assert!(crate::runs::Codecs::check(&structures, &BTreeMap::new()).is_err());
+        assert!(crate::runs::Codecs::check(&physical, &structures, &BTreeMap::new()).is_err());
         assert!(cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).is_err());
     }
 
@@ -2801,7 +2801,7 @@ mod tests {
                 output_rows at host.device;
             }
         };
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         let definitions = physical
             .program

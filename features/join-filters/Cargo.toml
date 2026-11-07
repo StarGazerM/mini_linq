@@ -20,4 +20,5 @@ cq-structure-selection = { version = "0.1.0", path = "../../passes/cq-structure-
 cq-lang-structures = { version = "0.1.0", path = "../../languages/cq-lang-structures" }
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 quote = "1"
+proc-macro2 = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }

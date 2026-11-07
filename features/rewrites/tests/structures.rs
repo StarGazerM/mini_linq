@@ -387,7 +387,7 @@ fn every_selector_has_a_pinned_ir_and_independent_mutation_checks() {
         let checked = PassCase {
             source: source(),
             expected_next: Some(fixture(expected)),
-            compile: Box::new(|p| Ok((p.0.clone(), retype(&p.0, &p.1, arguments.clone())?))),
+            compile: Box::new(|p: &Fixture| -> syn::Result<Fixture> { Ok((p.0.clone(), retype(&p.0, &p.1, arguments.clone())?)) }),
             check: Box::new(|source, target| ir::check_rewrite(&source.0, &source.1, &target.0, &target.1)),
             mutations: vec![Box::new(missing_storage), Box::new(changed_physical)],
             answers: None,
@@ -408,7 +408,7 @@ fn sorted_runs_preserves_the_observation_contract_and_records_only_eligible_type
     let checked = PassCase {
         source: source(),
         expected_next: Some(fixture(include_str!("fixtures/sorted_runs.structures"))),
-        compile: Box::new(|p| Ok((p.0.clone(), cq_rewrite_passes::sorted_runs(&p.0, &p.1, quote!())?))),
+        compile: Box::new(|p: &Fixture| -> syn::Result<Fixture> { Ok((p.0.clone(), cq_rewrite_passes::sorted_runs(&p.0, &p.1, quote!())?)) }),
         check: Box::new(|source, target| ir::check_rewrite(&source.0, &source.1, &target.0, &target.1)),
         mutations: vec![Box::new(missing_storage), Box::new(changed_physical)],
         answers: None,

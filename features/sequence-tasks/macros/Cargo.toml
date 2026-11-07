@@ -20,5 +20,6 @@ cq-sequence-pull.workspace = true
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-sequence-rewrites = { path = "../../sequence-rewrites" }
 quote.workspace = true
+proc-macro2.workspace = true
 cq-storage = { path = "../../../runtime/cq-storage" }
 rayon = "1"

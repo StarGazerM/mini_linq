@@ -236,9 +236,9 @@ pub fn check(physical: &structures::physical::Program, structures: &structures::
 
 /// A task partitions the borrowed source itself. Its contiguous row ranges
 /// are disjoint, aligned, and clipped only at the source's live final extent.
-pub fn check_task_covers(structures: &structures::Program, program: &Program, structure_analysis: &structures::Analysis, analysis: &crate::Analysis) -> syn::Result<()> {
+pub fn check_task_covers(physical: &structures::physical::Program, structures: &structures::Program, program: &Program, structure_analysis: &structures::Analysis, analysis: &crate::Analysis) -> syn::Result<()> {
     if program.representation.blocks.is_empty() { return Ok(()); }
-    check_routing(structures, program, structure_analysis)?;
+    check_routing(physical, structures, program, structure_analysis)?;
     let terms = analysis.task_execution.terms(program);
     fn unstored_source(term: &Term, program: &Program) -> bool {
         match term {
@@ -312,10 +312,10 @@ fn routing_sites(program: &Program) -> Vec<(String, Vec<String>)> {
 /// Producer-side refinement after a Sequence rewrite introduces or moves a
 /// routing constructor. Existing source/predicate/materialization facts remain
 /// unchanged; the independent checker below never calls this producer.
-pub fn record_routing(structures: &structures::Program, program: &mut Program) -> syn::Result<()> {
+pub fn record_routing(physical: &structures::physical::Program, structures: &structures::Program, program: &mut Program) -> syn::Result<()> {
     if program.representation.blocks.scans.is_empty() { return Ok(()); }
-    let facts = structures::contract::check(structures)?;
-    let origins = structures::representation_bases(structures, &facts);
+    let facts = structures::contract::check(physical, structures)?;
+    let origins = structures::representation_bases(physical, structures, &facts);
     let mut routing = BTreeMap::<String, BTreeMap<String, structures::encoded::RepresentationId>>::new();
     for (result, keys) in routing_sites(program) {
         for column in keys {
@@ -332,8 +332,8 @@ pub fn record_routing(structures: &structures::Program, program: &mut Program) -
     Ok(())
 }
 
-fn check_routing(structures: &structures::Program, program: &Program, facts: &structures::Analysis) -> syn::Result<()> {
-    let origins = structures::representation_bases(structures, facts);
+fn check_routing(physical: &structures::physical::Program, structures: &structures::Program, program: &Program, facts: &structures::Analysis) -> syn::Result<()> {
+    let origins = structures::representation_bases(physical, structures, facts);
     let encoded = &structures.encoded;
     let mut used = BTreeSet::new();
     let invalid = || syn::Error::new_spanned(program, "BE-Blocks: routing key lacks its exact retained ordinal representation");

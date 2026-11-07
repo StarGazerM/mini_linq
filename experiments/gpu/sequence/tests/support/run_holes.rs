@@ -1,9 +1,22 @@
 //! Authored Structures only: all Sequence schedules come from the planner.
-pub fn fixture(name: &str) -> cq_lang_structures::Program {
+pub struct StructuresStack {
+    pub physical: cq_lang_structures::physical::Program,
+    pub structures: cq_lang_structures::Program,
+}
+
+impl syn::parse::Parse for StructuresStack {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let physical = input.parse()?;
+        let structures = cq_lang_structures::Program::parse(input, &physical)?;
+        Ok(Self { physical, structures })
+    }
+}
+
+pub fn fixture(name: &str) -> StructuresStack {
     match name {
         "native_local_word" => {
             let mut program = fixture("native_linear");
-            for entry in &mut program.structures.entries {
+            for entry in &mut program.structures.structures.entries {
                 let provider = entry.structure.provider_mut().expect("native fixture provider");
                 let types = provider.input.as_ref().expect("native fixture schema")
                     .columns.iter().map(|column| &column.storage);

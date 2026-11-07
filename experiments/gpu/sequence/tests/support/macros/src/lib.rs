@@ -123,10 +123,10 @@ fn arena_hole(
     name: &syn::Ident,
     output: cq_lang_sequence::OutputProtocol,
 ) -> syn::Result<syn::Expr> {
-    let mut structures = run_holes::fixture(&name.to_string());
-    let normalized = cq_gpu_sequence_core::constants::compile(&structures.physical)?;
-    if normalized != structures.physical {
-        let before = cq_lang_structures::physical::contract::check(&structures.physical)?;
+    let run_holes::StructuresStack { mut physical, mut structures } = run_holes::fixture(&name.to_string());
+    let normalized = cq_gpu_sequence_core::constants::compile(&physical)?;
+    if normalized != physical {
+        let before = cq_lang_structures::physical::contract::check(&physical)?;
         let inputs: std::collections::BTreeMap<_, _> = structures
             .structures
             .entries
@@ -144,7 +144,7 @@ fn arena_hole(
             })
             .collect();
         structures = cq_structure_selection::compile(&normalized)?;
-        let after = cq_lang_structures::contract::check(&structures)?;
+        let after = cq_lang_structures::contract::check(&normalized, &structures)?;
         for entry in &mut structures.structures.entries {
             if let cq_lang_structures::Structure::Host { reader, keyed, .. } = &mut entry.structure
             {
@@ -160,8 +160,8 @@ fn arena_hole(
         structures
             .structures
             .declare(&cq_gpu_sequence_core::providers::declarations())?;
+        physical = normalized;
     }
-    let physical = structures.physical.clone();
     let structures = cq_gpu_sequence_core::runs::bind(&physical, &structures)?;
     let source = cq_sequence_lowering::compile(&physical, &structures)?;
     let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source)?;

@@ -320,7 +320,7 @@ pub(crate) fn check_grading_in(
         );
     }
     analysis.task_execution = crate::task_execution::analyze(physical, structure_analysis, program, &analysis);
-    crate::blocks::check_task_covers(structures, program, structure_analysis, &analysis)?;
+    crate::blocks::check_task_covers(physical, structures, program, structure_analysis, &analysis)?;
     Ok(analysis)
 }
 

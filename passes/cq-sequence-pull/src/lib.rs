@@ -117,7 +117,6 @@ pub struct Emitter<'a> {
     pub structures_analysis: &'a cq_lang_structures::Analysis,
     physical: &'a cq_lang_structures::physical::Program,
     structures: &'a cq_lang_structures::Program,
-    program: &'a Program,
     adapters: RowEmitter<'a>,
     values: BTreeMap<String, Value>,
     target_published: std::collections::BTreeSet<String>,
@@ -138,10 +137,10 @@ impl<'a> Emitter<'a> {
         structures_analysis: &'a cq_lang_structures::Analysis,
         analysis: &'a Analysis,
     ) -> Self {
-        let mut context = Context::new(structures, structures_analysis);
+        let mut context = Context::new(physical, structures, structures_analysis);
         context.blocked_runs = program.representation.blocks.runs.clone();
         context.blocked_routing = program.representation.blocks.routing.clone();
-        context.certify_host_sets(structures);
+        context.certify_host_sets(physical);
         let mut partial_groups = BTreeMap::new();
         for definition in &program.sequence.definitions {
             let mut nodes = Vec::new();
@@ -156,7 +155,6 @@ impl<'a> Emitter<'a> {
             physical,
             structures,
             structures_analysis,
-            program,
             adapters: RowEmitter::new(context),
             values: BTreeMap::new(),
             target_published: std::collections::BTreeSet::new(),
@@ -1536,13 +1534,13 @@ fn translate_with_profile(
         hook(node, emitter, child.as_ref(), &mut value, owner, tiles)?;
         Ok(value)
     }
-    let structures_analysis = cq_lang_structures::contract::check(structures)?;
+    let structures_analysis = cq_lang_structures::contract::check(physical, structures)?;
     let mut emitter = Emitter::new(physical, structures, program, &structures_analysis, analysis);
     emitter.adapters.set_canon_target(canon_target);
     emitter.pull = pull;
     emitter.workers = workers;
     if profile {
-        emitter.context_mut().enable_profile(structures);
+        emitter.context_mut().enable_profile(physical, structures);
     }
     let mut output = None;
     // Recorded fused arms are emitted inside their prefix row's scope, not

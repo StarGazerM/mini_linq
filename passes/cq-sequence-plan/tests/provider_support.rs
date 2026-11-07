@@ -1,9 +1,11 @@
 use cq_lang_sequence::{Catalog, structures};
 use structures::{ProviderCapability as Support, Structure};
+#[macro_use]
+mod support;
 
-fn source(decision: &str) -> structures::Program {
+fn source(decision: &str) -> (structures::physical::Program, structures::Program) {
     let decision: proc_macro2::TokenStream = decision.parse().unwrap();
-    let mut program: structures::Program = syn::parse_quote! {
+    let (physical, mut program) = structure_fixture! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
             l = pipe rename L@0 {a -> x};
@@ -22,7 +24,7 @@ fn source(decision: &str) -> structures::Program {
         }
     };
     program.structures.declare(&[]).unwrap();
-    program
+    (physical, program)
 }
 fn catalog(supports: Vec<Support>) -> Catalog {
     let supports = supports.iter().map(|support| match support {
@@ -69,43 +71,43 @@ fn catalog_retyping_preserves_live_support_obligations() {
             Support::Keys,
         ),
     ] {
-        let source = source(decision);
-        structures::contract::check(&source).unwrap();
-        let selected =
-            cq_sequence_plan::select_from_catalog(&source.physical, &source, &catalog(vec![capability])).map(|(_, structures)| structures).unwrap();
+        let (physical, source) = source(decision);
+        structures::contract::check(&physical, &source).unwrap();
+        let (selected_physical, selected) =
+            cq_sequence_plan::select_from_catalog(&physical, &source, &catalog(vec![capability])).unwrap();
         assert_eq!(
             selected_provider(&selected),
             &syn::parse_quote!(@selected_alias as SelectedAlias)
         );
-        assert_eq!(selected.physical, source.physical);
-        let facts = structures::contract::check(&selected).unwrap();
+        assert_eq!(selected_physical, physical);
+        let facts = structures::contract::check(&selected_physical, &selected).unwrap();
         assert!(facts.provider_support("r", &["x".into()], None, capability));
-        assert!(cq_sequence_plan::select_from_catalog(&source.physical, &source, &catalog(Vec::new())).is_err());
+        assert!(cq_sequence_plan::select_from_catalog(&physical, &source, &catalog(Vec::new())).is_err());
     }
 }
 
 #[test]
 fn expansion_support_implies_retention_but_not_the_reverse() {
-    let retained = source(
+    let (retained_physical, retained) = source(
         "s share = lookup r [x] first s force p; s repr = tuples witness { r [x] at s as _ };",
     );
-    cq_sequence_plan::select_from_catalog(&retained.physical, &retained, &catalog(vec![Support::Expand])).map(|(_, structures)| structures).unwrap();
-    let expanded = source("p stage = batch 4 expand;");
+    cq_sequence_plan::select_from_catalog(&retained_physical, &retained, &catalog(vec![Support::Expand])).unwrap();
+    let (expanded_physical, expanded) = source("p stage = batch 4 expand;");
     assert!(
-        cq_sequence_plan::select_from_catalog(&expanded.physical, &expanded, &catalog(vec![Support::Retain])).is_err()
+        cq_sequence_plan::select_from_catalog(&expanded_physical, &expanded, &catalog(vec![Support::Retain])).is_err()
     );
 }
 
 #[test]
 fn unused_promises_are_replaced_instead_of_leaking_to_new_provider() {
-    let source = source("");
-    let (_, selected) =
-        cq_sequence_plan::select_from_catalog(&source.physical, &source, &catalog(Vec::new())).unwrap();
+    let (physical, source) = source("");
+    let (selected_physical, selected) =
+        cq_sequence_plan::select_from_catalog(&physical, &source, &catalog(Vec::new())).unwrap();
     assert_eq!(
         selected_provider(&selected),
         &syn::parse_quote!(@read_only as ReadOnly)
     );
-    let facts = structures::contract::check(&selected).unwrap();
+    let facts = structures::contract::check(&selected_physical, &selected).unwrap();
     for capability in [Support::Retain, Support::Expand, Support::Keys] {
         assert!(!facts.provider_support("r", &["x".into()], None, capability));
     }
@@ -115,5 +117,5 @@ fn unused_promises_are_replaced_instead_of_leaking_to_new_provider() {
         .structures
         .entries
         .push(syn::parse_quote!(p stage = batch 4 expand;));
-    assert!(structures::contract::check(&invalid).is_err());
+    assert!(structures::contract::check(&selected_physical, &invalid).is_err());
 }

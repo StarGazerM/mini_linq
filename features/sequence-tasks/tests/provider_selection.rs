@@ -111,7 +111,7 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
             return answer as answer(a,b);
         }
     };
-    let structures =
+    let (physical, structures) =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(R, S))).unwrap();
     let source = Fixture {
         program: cq_sequence_lowering::compile(&physical, &structures).unwrap(),
@@ -123,7 +123,7 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
         ..source
     };
     cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
-    let before = structures::contract::check(&source.structures).unwrap();
+    let before = structures::contract::check(&source.physical, &source.structures).unwrap();
     assert!(before.reads.contains_key("selected"));
     assert!(
         before
@@ -133,7 +133,7 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
     let catalog = cq_sequence_tasks::catalog();
     let target = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
     cq_lang_sequence::contract::check(&target.physical, &target.structures, &target.program).unwrap();
-    let facts = structures::contract::check(&target.structures).unwrap();
+    let facts = structures::contract::check(&target.physical, &target.structures).unwrap();
     assert!(facts.host_read("r"));
     assert!(facts.reads.contains_key("selected"));
     cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
@@ -238,7 +238,7 @@ fn kp_1_kp_2_key_partitioned_positional_selection() {
 }
 
 fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Program) {
-    let structures = cq_structure_selection::compile_with(
+    let (physical, structures) = cq_structure_selection::compile_with(
         &physical,
         quote::quote!(positional(Lineitem, Orders)),
     )
@@ -270,7 +270,7 @@ fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Pr
             *provider = sharded_index.instance();
         }
     }
-    let error = cq_lang_sequence::structures::contract::check(&invalid).unwrap_err();
+    let error = cq_lang_sequence::structures::contract::check(&physical, &invalid).unwrap_err();
     assert!(error.to_string().contains("STR-Positions"), "{error}");
     let source = Fixture {
         program: cq_sequence_lowering::compile(&physical, &structures).unwrap(),
@@ -381,14 +381,14 @@ fn retained_positional_selection() -> Fixture {
             return answer as answer(a,b);
         }
     };
-    let structures =
+    let (physical, structures) =
         cq_structure_selection::compile_with(&physical, quote::quote!(positional(R))).unwrap();
     let source = Fixture {
         program: cq_sequence_lowering::compile(&physical, &structures).unwrap(),
         physical, structures,
     };
     cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
-    let facts = structures::contract::check(&source.structures).unwrap();
+    let facts = structures::contract::check(&source.physical, &source.structures).unwrap();
     assert!(facts.selections.contains_key("selected"));
     source
 }
@@ -397,12 +397,12 @@ fn retained_positional_selection() -> Fixture {
 fn positional_selection_keeps_its_recorded_constructor_through_tasks_catalog() {
     let source = retained_positional_selection();
     cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
-    let before = structures::contract::check(&source.structures).unwrap();
+    let before = structures::contract::check(&source.physical, &source.structures).unwrap();
     let recorded = &before.selections["selected"].provider;
     let catalog = cq_sequence_tasks::catalog();
     let target = cq_sequence_tasks::select_providers(&source.physical, &source.structures, &source.program, &catalog).map(Fixture::from).unwrap();
     cq_lang_sequence::contract::check(&target.physical, &target.structures, &target.program).unwrap();
-    let facts = structures::contract::check(&target.structures).unwrap();
+    let facts = structures::contract::check(&target.physical, &target.structures).unwrap();
     assert_eq!(&facts.selections["selected"].provider, recorded);
     cq_lang_sequence::check_rewrite(&source.physical, &source.structures, &source.program, &target.physical, &target.structures, &target.program).unwrap();
     let planned =
@@ -443,7 +443,7 @@ fn positional_selection_keeps_its_recorded_constructor_through_tasks_catalog() {
 fn membership_catalog_entry_cannot_replace_a_positional_constructor() {
     let source = retained_positional_selection();
     cq_lang_sequence::contract::check(&source.physical, &source.structures, &source.program).unwrap();
-    let facts = structures::contract::check(&source.structures).unwrap();
+    let facts = structures::contract::check(&source.physical, &source.structures).unwrap();
     let recorded = &facts.selections["selected"].provider;
     let mut catalog = cq_sequence_tasks::catalog();
     catalog.providers.retain(|entry| !entry.covers(recorded));

@@ -55,7 +55,7 @@ impl Cost {
         machine: &Machine,
         analysis: &Analysis,
     ) -> syn::Result<Self> {
-        let structures_analysis = structures::contract::check(structures)?;
+        let structures_analysis = structures::contract::check(physical, structures)?;
         let mut evaluator = Evaluator {
             physical,
             structures_analysis: &structures_analysis,

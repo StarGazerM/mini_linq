@@ -44,7 +44,7 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
         .unwrap();
         let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
         let analysis = check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine()).unwrap();
-        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         assert_eq!(analysis.dispatches.len(), 2);
         use cq_lang_sequence::gpu::publication::{self, PublicationStorage};
         for name in ["left", "right"] {

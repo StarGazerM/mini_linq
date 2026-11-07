@@ -56,12 +56,12 @@ macro_rules! numeric_execution {
                     cq_rewrite_test_driver::capture_structures_stack
                 ), true, false),
                 (payload!($ty, left, right, visits;
-                    cq_rewrites::radix_runs, cq_rewrites::expand_lookups(&physical, 32),
+                    cq_rewrites::radix_runs, cq_rewrites::expand_lookups(32),
                     cq_rewrite_test_driver::capture_structures_stack
                 ), false, true),
                 (payload!($ty, left, right, visits;
                     cq_rewrites::radix_runs, cq_rewrites::retain_lookups,
-                    cq_rewrites::expand_lookups(&physical, 32), cq_rewrite_test_driver::capture_structures_stack
+                    cq_rewrites::expand_lookups(32), cq_rewrite_test_driver::capture_structures_stack
                 ), true, true),
             ] {
                 let rewritten = assert_plan(captured, retained, staged);
@@ -193,7 +193,7 @@ macro_rules! named_query {
 #[test]
 fn named_pipeline_composes_and_executes() {
     let captured = named_query!(left, right;
-        structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups, cq_rewrites::expand_lookups(&physical, 32)];
+        structures = [cq_rewrites::radix_runs, cq_rewrites::retain_lookups, cq_rewrites::expand_lookups(32)];
         print_input = structures;
         print = cq_rewrite_test_driver::capture_structures_stack;
     );

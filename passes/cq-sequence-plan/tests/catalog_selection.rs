@@ -1,9 +1,18 @@
 use cq_lang_sequence::{Catalog, structures};
 use cq_sequence_plan::select_from_catalog;
 use structures::{Capability, Declaration, Provider, Structure};
+#[macro_use]
+mod support;
 
-fn h05() -> structures::Program {
-    syn::parse_str(include_str!("fixtures/h05.structures")).unwrap()
+fn h05() -> (structures::physical::Program, structures::Program) {
+    syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream<'_>| {
+            let physical = input.parse()?;
+            let structures = structures::Program::parse(input, &physical)?;
+            Ok((physical, structures))
+        },
+        include_str!("fixtures/h05.structures"),
+    ).unwrap()
 }
 
 // Target tokens are data, not a dependency on a GPU implementation. These are
@@ -51,13 +60,13 @@ fn provider(structure: &Structure) -> Option<&Provider> {
 
 #[test]
 fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
-    let authored = h05();
-    let defaults = cq_structure_selection::compile(&authored.physical).unwrap();
+    let (physical, authored) = h05();
+    let defaults = cq_structure_selection::compile(&physical).unwrap();
     // No type-width guessing: the full-row set token accepts the recorded
     // packed row codec regardless of its eventual lane count.
-    let selected = select_from_catalog(&defaults.physical, &defaults, &gpu_catalog()).map(|(_, structures)| structures).unwrap();
-    structures::check_rewrite(&defaults, &selected).unwrap();
-    assert_eq!(selected.physical, defaults.physical);
+    let (selected_physical, selected) = select_from_catalog(&physical, &defaults, &gpu_catalog()).unwrap();
+    structures::check_rewrite(&physical, &defaults, &selected_physical, &selected).unwrap();
+    assert_eq!(selected_physical, physical);
     let mut count = 0;
     for (before, after) in defaults
         .structures
@@ -92,7 +101,8 @@ fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
 
 #[test]
 fn selection_is_deterministic_and_uses_first_satisfying_token() {
-    let source = cq_structure_selection::compile(&h05().physical).unwrap();
+    let (physical, _) = h05();
+    let source = cq_structure_selection::compile(&physical).unwrap();
     let mut catalog = gpu_catalog();
     insert(
         &mut catalog,
@@ -108,9 +118,9 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
     let later: Declaration =
         syn::parse_quote!(later = Later { reads [exact, range, membership], build inferred };);
     insert(&mut catalog, 4, later);
-    let selected = select_from_catalog(&source.physical, &source, &catalog).map(|(_, structures)| structures).unwrap();
-    assert_eq!(selected, select_from_catalog(&source.physical, &source, &catalog).unwrap().1);
-    assert_eq!(selected, select_from_catalog(&selected.physical, &selected, &catalog).unwrap().1);
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+    assert_eq!((selected_physical.clone(), selected.clone()), select_from_catalog(&physical, &source, &catalog).unwrap());
+    assert_eq!((selected_physical.clone(), selected.clone()), select_from_catalog(&selected_physical, &selected, &catalog).unwrap());
     let supplier = selected
         .structures
         .entries
@@ -139,13 +149,14 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
 
 #[test]
 fn unavailable_read_or_canonicalization_cannot_be_selected() {
-    let source = cq_structure_selection::compile(&h05().physical).unwrap();
+    let (physical, _) = h05();
+    let source = cq_structure_selection::compile(&physical).unwrap();
     let mut missing_read = gpu_catalog();
     declaration(&mut missing_read, "range_provider")
         .facts
         .reads
         .clear();
-    assert!(select_from_catalog(&source.physical, &source, &missing_read).is_err());
+    assert!(select_from_catalog(&physical, &source, &missing_read).is_err());
     let mut missing_canon = gpu_catalog();
     let catalog = gpu_catalog();
     for entry in &mut missing_canon.providers {
@@ -157,12 +168,12 @@ fn unavailable_read_or_canonicalization_cannot_be_selected() {
             entry.levels.clear();
         }
     }
-    assert!(select_from_catalog(&source.physical, &source, &missing_canon).is_err());
+    assert!(select_from_catalog(&physical, &source, &missing_canon).is_err());
 }
 
 #[test]
 fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
-    let source: structures::Program = syn::parse_quote! {
+    let (physical, source) = structure_fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             l = pipe rename L@0 {a -> a};
@@ -188,16 +199,16 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
         2,
         syn::parse_quote!(membership = Membership { reads [membership], build inferred };),
     );
-    assert!(select_from_catalog(&source.physical, &source, &catalog).is_err());
+    assert!(select_from_catalog(&physical, &source, &catalog).is_err());
     declaration(&mut catalog, "range_provider")
         .facts
         .reads
         .push(Capability::Membership);
-    select_from_catalog(&source.physical, &source, &catalog).map(|(_, structures)| structures).unwrap();
+    select_from_catalog(&physical, &source, &catalog).unwrap();
 }
 
-fn host_keyed_read() -> structures::Program {
-    syn::parse_quote! {
+fn host_keyed_read() -> (structures::physical::Program, structures::Program) {
+    structure_fixture! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
             l = pipe rename L@0 {a -> a};
@@ -217,18 +228,18 @@ fn host_keyed_read() -> structures::Program {
 
 #[test]
 fn integral_host_fallback_is_retained_with_a_catalog_range_index() {
-    let source = host_keyed_read();
-    let selected = select_from_catalog(&source.physical, &source, &gpu_catalog()).map(|(_, structures)| structures).unwrap();
-    structures::physical::check_rewrite(&source.physical, &selected.physical).unwrap();
+    let (physical, source) = host_keyed_read();
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &gpu_catalog()).unwrap();
+    structures::physical::check_rewrite(&physical, &selected_physical).unwrap();
     assert_eq!(
         selected,
-        select_from_catalog(&source.physical, &source, &gpu_catalog()).unwrap().1
+        select_from_catalog(&physical, &source, &gpu_catalog()).unwrap().1
     );
     assert_eq!(
         selected,
-        select_from_catalog(&selected.physical, &selected, &gpu_catalog()).unwrap().1
+        select_from_catalog(&selected_physical, &selected, &gpu_catalog()).unwrap().1
     );
-    let analysis = structures::contract::check(&selected).unwrap();
+    let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
     assert_eq!(
         analysis
             .built_on("r", &["a".into()])
@@ -251,8 +262,8 @@ fn unsupported_host_range_read_rejects_instead_of_skipping_the_obligation() {
     let mut catalog = gpu_catalog();
     declaration(&mut catalog, "range_provider").facts.reads =
         vec![Capability::Exact, Capability::Membership];
-    let source = host_keyed_read();
-    assert!(select_from_catalog(&source.physical, &source, &catalog).is_err());
+    let (physical, source) = host_keyed_read();
+    assert!(select_from_catalog(&physical, &source, &catalog).is_err());
 }
 
 #[test]
@@ -263,9 +274,9 @@ fn host_range_index_selection_does_not_pick_an_exact_only_token() {
         0,
         syn::parse_quote!(exact_only = ExactOnly { reads [exact], build inferred };),
     );
-    let source = host_keyed_read();
-    let (_, selected) = select_from_catalog(&source.physical, &source, &catalog).unwrap();
-    let analysis = structures::contract::check(&selected).unwrap();
+    let (physical, source) = host_keyed_read();
+    let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+    let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
     assert_eq!(
         analysis
             .built_on("r", &["a".into()])
@@ -293,8 +304,8 @@ fn unused_code_payload_is_projected_from_renamed_provider() {
         }
         let source = cq_structure_selection::compile(&physical).unwrap();
         let catalog = gpu_catalog();
-        let selected = select_from_catalog(&source.physical, &source, &catalog).map(|(_, structures)| structures).unwrap();
-        let analysis = structures::contract::check(&selected).unwrap();
+        let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+        let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
         assert_eq!(analysis.layouts["r"], ["a"]);
         assert_eq!(
             analysis
@@ -308,7 +319,7 @@ fn unused_code_payload_is_projected_from_renamed_provider() {
 #[test]
 fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
     for (third, expected) in [(false, "radix_set"), (true, "radix_set")] {
-        let mut source: structures::Program = syn::parse_quote! {
+        let (mut physical, mut source) = structure_fixture! {
             physical {
                 relation R(a:i64,b:i64,c:i64);
                 r = pipe rename R@0 {a -> a,b -> b,c -> c};
@@ -322,7 +333,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
             }
         };
         if !third {
-            source = syn::parse_quote! {
+            (physical, source) = structure_fixture! {
                 physical {
                     relation R(a:i64,b:i64);
                     r = pipe rename R@0 {a -> a,b -> b};
@@ -336,9 +347,9 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                 }
             };
         }
-        let selected = select_from_catalog(&source.physical, &source, &gpu_catalog()).map(|(_, structures)| structures).unwrap();
-        structures::check_rewrite(&source, &selected).unwrap();
-        let analysis = structures::contract::check(&selected).unwrap();
+        let (selected_physical, selected) = select_from_catalog(&physical, &source, &gpu_catalog()).unwrap();
+        structures::check_rewrite(&physical, &source, &selected_physical, &selected).unwrap();
+        let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
         assert_eq!(
             analysis.canonical["answer"].rows_provider().unwrap().token,
             expected
@@ -346,7 +357,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
         if third {
             let mut catalog = gpu_catalog();
             catalog.providers.pop();
-            assert!(select_from_catalog(&source.physical, &source, &catalog).is_err());
+            assert!(select_from_catalog(&physical, &source, &catalog).is_err());
         }
     }
 }

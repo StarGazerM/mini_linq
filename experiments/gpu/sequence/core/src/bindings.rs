@@ -273,7 +273,7 @@ pub(crate) fn select(
                 .unwrap_or_else(|| dispatch.outer_store.clone())
         })
         .collect();
-    let context = cq_print::Context::new(structures, structure_analysis);
+    let context = cq_print::Context::new(physical, structures, structure_analysis);
     result.carriers = crate::domains::carriers(physical, structures, structure_analysis)?;
     for (name, layouts) in &structure_analysis.built {
         let mut recorded = Vec::new();
@@ -520,7 +520,7 @@ pub(crate) fn check(
 ) -> syn::Result<()> {
     let catalog = crate::catalog();
     crate::domains::check(physical, structures, structure_analysis, records)?;
-    let context = cq_print::Context::new(structures, structure_analysis);
+    let context = cq_print::Context::new(physical, structures, structure_analysis);
     let mut input_hosts = BTreeSet::new();
     for entry in &structures.structures.entries {
         let Structure::Host { reader: ReaderRef::Scan, keyed, .. } = &entry.structure else { continue };
@@ -834,8 +834,8 @@ pub(crate) fn check(
         return Err(error("GPU-HostMaterialization: adapter names no device collection"));
     }
     let host = host_structures(structures, records)?;
-    cq_lang_structures::check_rewrite(structures, &host)?;
-    cq_lang_structures::contract::check(&host)?;
+    cq_lang_structures::check_rewrite(physical, structures, physical, &host)?;
+    cq_lang_structures::contract::check(physical, &host)?;
     Ok(())
 }
 

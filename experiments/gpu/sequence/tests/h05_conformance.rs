@@ -2,6 +2,7 @@
 //! Both execute on identical encoded rows from /data/tpch-gpu/sf1. The CPU
 //! reference uses default structures and lowering, not the GPU Sequence terms.
 #![recursion_limit = "1024"]
+include!("support/stack.rs");
 
 use cq_gpu_runtime::{DeviceColumns, Pool};
 use cq_testkit::conformance::assert_answers_equal;

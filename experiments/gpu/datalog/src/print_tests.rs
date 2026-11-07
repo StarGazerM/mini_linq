@@ -445,7 +445,11 @@ fn rejects_unrecorded_batch_arena_arguments() {
 
 #[test]
 fn device_bindings_preserve_scan_and_keyed_readers() {
-    let source = syn::parse_quote! {
+    let (physical, source) = syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+        let physical = input.parse()?;
+        let structures = cq_lang_structures::Program::parse(input, &physical)?;
+        Ok((physical, structures))
+    }, quote! {
         physical {
             relation Delta(x:i32,y:i32) = (&delta);
             relation Edge(y:i32,z:i32) = (&edge);
@@ -461,7 +465,7 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             e host scan = @host_scan as ::core::iter::Map<_,_> [];
             e host result(joined) = @hash_index as ::cq_storage::HashIndex<'_,_,_> [y];
         }
-    };
+    }).unwrap();
     let declaration = cq_gpu_sequence_core::providers::declaration("radix_relation");
     assert_eq!(
         declaration.facts.abi,
@@ -470,6 +474,7 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
     let scalar = syn::parse_quote!(i32);
     let word = storage::word_type([&scalar, &scalar]).unwrap();
     let target = crate::bind_inputs(
+        &physical,
         &source,
         quote! {
             providers { #declaration }
@@ -502,8 +507,8 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             keyed.provider.ty = syn::parse_quote!(OpaqueLayoutAlias);
         }
     }
-    cq_lang_structures::contract::check(&opaque).unwrap();
-    cq_gpu_sequence_core::runs::bind(&opaque).unwrap();
+    cq_lang_structures::contract::check(&physical, &opaque).unwrap();
+    cq_gpu_sequence_core::runs::bind(&physical, &opaque).unwrap();
 }
 
 #[test]
