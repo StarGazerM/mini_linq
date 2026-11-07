@@ -19,16 +19,12 @@ fn structures_stack((physical, structures): (cq_lang_physical::Program, cq_lang_
     Structures::new(physical, structures)
 }
 
-fn sequence_parts(target: cq_lang_sequence::Program) -> (
+
+fn sequence_stack((physical, structures, sequence): (
     cq_lang_physical::Program,
     cq_lang_structures::Program,
     cq_lang_sequence::Program,
-) {
-    (target.structures.physical.clone(), target.structures.clone(), target)
-}
-
-fn sequence_stack(target: cq_lang_sequence::Program) -> Sequence {
-    let (physical, structures, sequence) = sequence_parts(target);
+)) -> Sequence {
     Sequence::new(physical, structures, sequence)
 }
 
@@ -114,7 +110,7 @@ fn expand_compile(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::T
     if let Some(observation) = source.observation {
         return observation.expand(source.config, source.tokens);
     }
-    if syn::parse2::<cq_lang_sequence::Program>(source.tokens.clone()).is_ok() {
+    if syn::parse2::<Sequence>(source.tokens.clone()).is_ok() {
         return sequence_pipeline(source.config)?.start(source.tokens);
     }
     source.config.resolve(defaults())?.start(source.tokens)
@@ -316,14 +312,14 @@ pub fn stage(input: TokenStream) -> TokenStream {
 pub fn sequence(input: TokenStream) -> TokenStream {
     Structures::pass::<Sequence>(
         input.into(),
-        |_physical, source, args| {
-            let target = cq_sequence_lowering::compile(source)?;
-            cq_sequence_lowering::check(source, &target)?;
+        |physical, source, args| {
+            let target = cq_sequence_lowering::compile(physical, source)?;
+            cq_sequence_lowering::check(physical, source, &target)?;
             if args.is_empty() {
-                Ok(sequence_stack(target))
+                Ok(Sequence::new(physical.clone(), source.clone(), target))
             } else {
                 let evidence: cq_lang_sequence::Evidence = syn::parse2(args)?;
-                cq_sequence_plan::Advice::Evidence(evidence).apply(&target).map(sequence_stack)
+                cq_sequence_plan::Advice::Evidence(evidence).apply(physical, source, &target).map(sequence_stack)
             }
         },
     )
@@ -377,7 +373,7 @@ fn sequence_plan_source(input: &proc_macro2::TokenStream) -> bool {
 /// `preserve_order` requests the explicit authored policy; it is also the default.
 #[proc_macro]
 pub fn plan_sequential(input: TokenStream) -> TokenStream {
-    Sequence::rewrite(input.into(), |_physical, _structures, source, args| {
+    Sequence::rewrite(input.into(), |physical, structures, source, args| {
         if !args.is_empty() {
             let option: syn::Ident = syn::parse2(args)?;
             if option != "preserve_order" {
@@ -386,7 +382,8 @@ pub fn plan_sequential(input: TokenStream) -> TokenStream {
         }
         let machine = cq_sequence_pull::machine();
         let catalog = cq_sequence_pull::catalog();
-        Ok(sequence_parts(cq_sequence_plan::decompose(source, &machine, &catalog)?.program))
+        let planned = cq_sequence_plan::decompose(physical, structures, source, &machine, &catalog)?;
+        Ok((planned.physical, planned.structures, planned.program))
     })
     .into()
 }
@@ -394,10 +391,10 @@ pub fn plan_sequential(input: TokenStream) -> TokenStream {
 /// Validate Sequence placement against the host-only machine without rewriting it.
 #[proc_macro]
 pub fn sequential(input: TokenStream) -> TokenStream {
-    Sequence::rewrite(input.into(), |_physical, _structures, source, args| {
+    Sequence::rewrite(input.into(), |physical, structures, source, args| {
         no_arguments(args)?;
-        cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        Ok(sequence_parts(source.clone()))
+        cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
+        Ok((physical.clone(), structures.clone(), source.clone()))
     })
     .into()
 }
@@ -405,11 +402,11 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 /// Sequence → final Rust pull iterator, with optional runtime profile counters.
 #[proc_macro]
 pub fn translate_pull(input: TokenStream) -> TokenStream {
-    Sequence::pass::<syn::Expr>(input.into(), |_physical, _structures, source, args| {
+    Sequence::pass::<syn::Expr>(input.into(), |physical, structures, source, args| {
         no_arguments(args)?;
-        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        let plain = cq_sequence_pull::translate(source, &analysis)?;
-        let profile = cq_sequence_pull::translate_profile(source, &analysis)?;
+        let analysis = cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
+        let plain = cq_sequence_pull::translate(physical, structures, source, &analysis)?;
+        let profile = cq_sequence_pull::translate_profile(physical, structures, source, &analysis)?;
         Ok(syn::parse_quote!(::cq_storage::profile_select! {
             plain { (#plain).into_iter() }
             counters { (#profile).into_iter() }
@@ -804,11 +801,11 @@ mod tests {
         });
         let ordinary = cq_structure_selection::compile(&physical).unwrap();
         let render = |program: &cq_lang_structures::Program| {
-            let sequence = cq_sequence_lowering::compile(program).unwrap();
+            let sequence = cq_sequence_lowering::compile(&physical, program).unwrap();
             let analysis =
-                cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
-            let plain = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
-            let profile = cq_sequence_pull::translate_profile(&sequence, &analysis).unwrap();
+                cq_lang_sequence::check_grading(&physical, program, &sequence, &cq_sequence_pull::machine()).unwrap();
+            let plain = cq_sequence_pull::translate(&physical, program, &sequence, &analysis).unwrap();
+            let profile = cq_sequence_pull::translate_profile(&physical, program, &sequence, &analysis).unwrap();
             (quote!(#plain).to_string(), quote!(#profile).to_string())
         };
         let expected = render(&ordinary);
@@ -850,26 +847,32 @@ mod tests {
         let physical = cq_physical_lowering::compile(&indexed).unwrap();
         trace.advance(Stage::of(&physical));
         let structures = cq_structure_selection::compile(&physical).unwrap();
-        trace.advance(Stage::of(&structures));
+        let structures_stage = Stage::annotation(
+            &structures, vec![physical.to_token_stream().to_string()],
+        );
+        trace.advance(structures_stage.clone());
         assert!(trace.check_source(&Stage::of(&physical)).is_err());
-        assert_eq!(trace.current(), Some(&Stage::of(&structures)));
+        assert_eq!(trace.current(), Some(&structures_stage));
         let encoded = trace.descriptor().unwrap();
         assert_eq!(Trace::parse_descriptor(&encoded).unwrap(), trace);
-        let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-        trace.advance(Stage::of(&sequence));
+        let sequence = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+        let sequence_stage = Stage::annotation(&sequence, vec![
+            physical.to_token_stream().to_string(), structures.to_token_stream().to_string(),
+        ]);
+        trace.advance(sequence_stage.clone());
         assert_eq!(trace.stages, [Stage::of(&indexed), Stage::of(&physical),
-            Stage::of(&structures), Stage::of(&sequence)]);
-        let analysis = cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
-        let original = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
-        let source_tokens = quote!(pipeline {}; #sequence);
+            structures_stage, sequence_stage]);
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &sequence, &cq_sequence_pull::machine()).unwrap();
+        let original = cq_sequence_pull::translate(&physical, &structures, &sequence, &analysis).unwrap();
+        let source_tokens = quote!(pipeline {}; #physical #structures #sequence);
         let trace_off = super::Sequence::pass::<syn::Expr>(
-            source_tokens, |_, _, source, _| cq_sequence_pull::translate(source, &analysis),
+            source_tokens, |physical, structures, source, _| cq_sequence_pull::translate(physical, structures, source, &analysis),
         );
         assert_eq!(trace_off.to_string(), original.to_token_stream().to_string());
         let descriptor = trace.descriptor().unwrap();
         let trace_on = super::Sequence::pass::<syn::Expr>(
-            quote!(pipeline {} #trace; #sequence),
-            |_, _, source, _| cq_sequence_pull::translate(source, &analysis),
+            quote!(pipeline {} #trace; #physical #structures #sequence),
+            |physical, structures, source, _| cq_sequence_pull::translate(physical, structures, source, &analysis),
         );
         assert_eq!(trace_on.to_string(), quote!(::cq_storage::calibration_select! {
             plain { #original }

@@ -366,17 +366,29 @@ mod tests {
             }
         }
         for report in artifacts {
+            let mut physical: cq_lang_sequence::structures::physical::Program =
+                syn::parse_str(report["physical_input"].as_str().unwrap())?;
+            let mut structures = syn::parse::Parser::parse_str(
+                |input: syn::parse::ParseStream<'_>| cq_lang_sequence::structures::Program::parse(input, &physical),
+                report["structures_input"].as_str().unwrap(),
+            )?;
             let mut current: cq_lang_sequence::Program =
                 syn::parse_str(report["sequence_input"].as_str().unwrap())?;
             for invocation in report["pipeline"]["sequence"].as_array().unwrap() {
                 let advice: cq_sequence_plan::Advice =
                     syn::parse_str(invocation.as_str().unwrap())?;
-                current = advice.apply(&current)?;
+                (physical, structures, current) = advice.apply(&physical, &structures, &current)?;
             }
+            let expected_physical: cq_lang_sequence::structures::physical::Program =
+                syn::parse_str(report["physical_planned"].as_str().unwrap())?;
+            let expected_structures = syn::parse::Parser::parse_str(
+                |input: syn::parse::ParseStream<'_>| cq_lang_sequence::structures::Program::parse(input, &expected_physical),
+                report["structures_planned"].as_str().unwrap(),
+            )?;
             let expected: cq_lang_sequence::Program =
                 syn::parse_str(report["sequence_planned"].as_str().unwrap())?;
             assert_eq!(
-                current, expected,
+                (physical, structures, current), (expected_physical, expected_structures, expected),
                 "{} SF{} {}",
                 report["query"], report["sf"], report["mode"]
             );

@@ -393,7 +393,7 @@ fn run_binding_accepts_a_source_present_nonleading_lookup_key() {
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    cq_gpu_sequence_core::runs::bind(&source).unwrap();
+    cq_gpu_sequence_core::runs::bind(&source.physical, &source).unwrap();
 }
 
 #[test]
@@ -402,7 +402,7 @@ fn run_binding_rejects_an_index_without_the_join_prefix() {
     source.structures.entries[2] =
         syn::parse_quote!(e = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [z][y];);
     source.structures.declare(&cq_gpu_sequence::providers::declarations()).unwrap();
-    assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
+    assert!(cq_gpu_sequence_core::runs::bind(&source.physical, &source).is_err());
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn run_binding_rejects_lookup_key_outside_recorded_layout() {
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    assert!(cq_gpu_sequence_core::runs::bind(&source).is_err());
+    assert!(cq_gpu_sequence_core::runs::bind(&source.physical, &source).is_err());
 }
 
 #[test]
@@ -451,14 +451,17 @@ fn native_host_lookup_accepts_a_leading_full_key_column() {
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    let bound = cq_gpu_sequence_core::runs::bind(&source).unwrap();
-    let sequence = cq_sequence_lowering::compile(&bound).unwrap();
+    let physical = &source.physical;
+    let bound = cq_gpu_sequence_core::runs::bind(physical, &source).unwrap();
+    let sequence = cq_sequence_lowering::compile(physical, &bound).unwrap();
     let machine = cq_gpu_sequence::machine();
-    let sequence = cq_gpu_sequence_core::runs::record_representation(&sequence).unwrap();
+    let sequence = cq_gpu_sequence_core::runs::record_representation(physical, &bound, &sequence).unwrap();
     let planned =
-        cq_sequence_plan::decompose(&sequence, &machine, &cq_gpu_sequence::catalog()).unwrap();
-    let analysis = cq_lang_sequence::check_grading(&planned.program, &machine).unwrap();
+        cq_sequence_plan::decompose(physical, &bound, &sequence, &machine, &cq_gpu_sequence::catalog()).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine).unwrap();
     cq_gpu_sequence_core::translate_arena(
+        &planned.physical,
+        &planned.structures,
         &planned.program,
         &analysis,
         &syn::parse_quote!(&mut arena),

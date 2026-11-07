@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_lang_sequence::structures::physical::Operator;
+use cq_lang_sequence::structures::{self, physical::{self, Operator}};
 use cq_lang_sequence::{Definition, Guard, Len, Machine, Program, Term};
 use cq_syntax::symbol_name;
 use syn::Ident;
@@ -16,13 +16,16 @@ use syn::Ident;
 use crate::Advice;
 
 pub(crate) fn boundaries(
+    physical: &physical::Program,
+    structures: &structures::Program,
     program: &Program,
     machine: &Machine,
     facts: &cq_lang_sequence::Analysis,
     catalog: &cq_lang_sequence::Catalog,
-) -> Vec<Advice> {
+) -> syn::Result<Vec<Advice>> {
+    let structures_analysis = structures::contract::check(structures)?;
     let Some(child) = machine.root.children.first() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let host = vec![machine.root.name.clone()];
     let mut producer_level = vec![machine.root.name.clone(), child.name.clone()];
@@ -35,7 +38,7 @@ pub(crate) fn boundaries(
         .enumerate()
         .map(|(i, definition)| (symbol_name(&definition.name), i))
         .collect();
-    let host_operations = host_operations(program, facts);
+    let host_operations = host_operations(physical, &structures_analysis, facts);
     let mut host_feeds = BTreeSet::new();
     for definition in definitions {
         let mut refs = Vec::new();
@@ -74,7 +77,7 @@ pub(crate) fn boundaries(
         // device representation; machines whose child level runs host Rust
         // need none (BE-RustRepresentation).
         if !child.host_rust
-            && !facts.structures.layouts.get(result).is_some_and(|columns| {
+            && !structures_analysis.layouts.get(result).is_some_and(|columns| {
                 columns.iter().all(|column| {
                     facts.representation.identity.contains(column)
                         || facts.representation.encoded.contains(column)
@@ -83,19 +86,15 @@ pub(crate) fn boundaries(
         {
             continue;
         }
-        let physical = program
-            .structures
-            .physical
+        let physical_result = physical
             .program
             .definitions
             .iter()
             .find(|physical| symbol_name(&physical.name) == *result)
             .expect("checked result");
-        if !facts.structures.filtered.contains_key(result)
-            && !physical.operator.operands().iter().any(|input| {
-                program
-                    .structures
-                    .physical
+        if !structures_analysis.filtered.contains_key(result)
+            && !physical_result.operator.operands().iter().any(|input| {
+                physical
                     .program
                     .definitions
                     .iter()
@@ -107,7 +106,7 @@ pub(crate) fn boundaries(
             continue;
         }
         if !host_feeds.contains(&symbol_name(&definition.name))
-            || !reads_at(&definition.term, Some(result), facts, catalog, &host, &host)
+            || !reads_at(&definition.term, Some(result), &structures_analysis, facts, catalog, &host, &host)
         {
             continue;
         }
@@ -196,17 +195,20 @@ pub(crate) fn boundaries(
             });
         }
     }
-    advice
+    Ok(advice)
 }
 
 pub(crate) fn advise(
+    physical: &physical::Program,
+    structures: &structures::Program,
     program: &Program,
     machine: &Machine,
     parallel: bool,
     facts: &cq_lang_sequence::Analysis,
     source: &Program,
     catalog: &cq_lang_sequence::Catalog,
-) -> Vec<Advice> {
+) -> syn::Result<Vec<Advice>> {
+    let structures_analysis = structures::contract::check(structures)?;
     let host = vec![machine.root.name.clone()];
     let publication = if parallel {
         machine
@@ -268,11 +270,9 @@ pub(crate) fn advise(
     let opaque = if producer_model.host_rust {
         BTreeSet::new()
     } else {
-        host_operations(program, facts)
+        host_operations(physical, &structures_analysis, facts)
     };
-    let row_predicates: BTreeSet<_> = program
-        .structures
-        .physical
+    let row_predicates: BTreeSet<_> = physical
         .program
         .definitions
         .iter()
@@ -287,9 +287,9 @@ pub(crate) fn advise(
     let mut advice = Vec::new();
     for (i, d) in definitions.iter().enumerate() {
         let result = facts.results.get(&symbol_name(&d.name)).map(String::as_str);
-        let host_reads = reads_at(&d.term, result, facts, catalog, &host, &host);
-        let descendant_reads = reads_at(&d.term, result, facts, catalog, &producer, &publication)
-            || reads_at(&d.term, result, facts, catalog, &publication, &publication);
+        let host_reads = reads_at(&d.term, result, &structures_analysis, facts, catalog, &host, &host);
+        let descendant_reads = reads_at(&d.term, result, &structures_analysis, facts, catalog, &producer, &publication)
+            || reads_at(&d.term, result, &structures_analysis, facts, catalog, &publication, &publication);
         // BE-Length permits a growing publication at host, not at a separated
         // level. In particular, equal-support choice arms may have different
         // lengths; do not invent a capacity to make their split dispatch fit.
@@ -327,10 +327,11 @@ pub(crate) fn advise(
                 let definition = &definitions[source];
                 let result = facts.results.get(&symbol_name(name)).map(String::as_str);
                 if !requires_host(&definition.term, &opaque)
-                    && !reads_at(&definition.term, result, facts, catalog, &host, &host)
+                    && !reads_at(&definition.term, result, &structures_analysis, facts, catalog, &host, &host)
                     && (reads_at(
                         &definition.term,
                         result,
+                        &structures_analysis,
                         facts,
                         catalog,
                         &producer,
@@ -338,6 +339,7 @@ pub(crate) fn advise(
                     ) || reads_at(
                         &definition.term,
                         result,
+                        &structures_analysis,
                         facts,
                         catalog,
                         &publication,
@@ -361,7 +363,7 @@ pub(crate) fn advise(
                     || facts
                         .results
                         .get(&symbol_name(&d.name))
-                        .is_some_and(|result| rebuilds_native_provider(program, facts, result))
+                        .is_some_and(|result| rebuilds_native_provider(physical, structures, &structures_analysis, result))
                     || has_row_work(
                         &d.term,
                         definitions,
@@ -386,7 +388,7 @@ pub(crate) fn advise(
                     } else {
                         level
                     };
-                    reads_at(&d.term, result, facts, catalog, read_level, level)
+                    reads_at(&d.term, result, &structures_analysis, facts, catalog, read_level, level)
                 });
             // Keep an impossible candidate visible to the catalog checker.
             levels[i] = Some(match selected {
@@ -499,7 +501,7 @@ pub(crate) fn advise(
             });
         }
     }
-    advice
+    Ok(advice)
 }
 
 fn has_row_work(
@@ -549,18 +551,17 @@ fn has_row_work(
 // retain their host boundary instead of materializing an identity row stream.
 // Both choices use declared ABI facts, never Rust spelling or catalog levels.
 fn rebuilds_native_provider(
-    program: &Program,
-    facts: &cq_lang_sequence::Analysis,
+    physical: &physical::Program,
+    structures: &structures::Program,
+    structures_analysis: &structures::Analysis,
     result: &str,
 ) -> bool {
-    let Some(builds) = facts.structures.built.get(result) else {
+    let Some(builds) = structures_analysis.built.get(result) else {
         return false;
     };
     let mut source = result.to_owned();
     loop {
-        let Some(definition) = program
-            .structures
-            .physical
+        let Some(definition) = physical
             .program
             .definitions
             .iter()
@@ -571,21 +572,20 @@ fn rebuilds_native_provider(
         match &definition.operator {
             Operator::Rename(rename) => {
                 let host = symbol_name(&rename.relation);
-                return program.structures.structures.entries.iter().any(|entry| {
+                return structures.structures.entries.iter().any(|entry| {
                     let cq_lang_sequence::structures::Structure::Host { reader, keyed, .. } =
                         &entry.structure
                     else {
                         return false;
                     };
                     matches!(reader, cq_lang_sequence::structures::ReaderRef::Scan)
-                        && facts
-                            .structures
+                        && structures_analysis
                             .physical
                             .hosts
                             .get(&symbol_name(&entry.name))
                             == Some(&host)
                         && matches!(
-                            facts.structures.facts(&keyed.provider).abi,
+                            structures_analysis.facts(&keyed.provider).abi,
                             Some(
                                 cq_lang_sequence::structures::provider::NativeAbi::Range
                                     | cq_lang_sequence::structures::provider::NativeAbi::Radix
@@ -635,6 +635,7 @@ fn requires_host(term: &Term, opaque: &BTreeSet<String>) -> bool {
 fn reads_at(
     term: &Term,
     result: Option<&str>,
+    structures_analysis: &structures::Analysis,
     facts: &cq_lang_sequence::Analysis,
     catalog: &cq_lang_sequence::Catalog,
     level: &[Ident],
@@ -665,6 +666,7 @@ fn reads_at(
                 };
                 *name != provider
                     || crate::catalog::provider_admitted(
+                        structures_analysis,
                         facts,
                         catalog,
                         &provider,
@@ -673,7 +675,7 @@ fn reads_at(
                         level.len() > 1,
                         |registered| registered.iter().any(|registered| at(registered, level)),
                     )
-            }) && reads_at(inner, result, facts, catalog, level, canon_level)
+            }) && reads_at(inner, result, structures_analysis, facts, catalog, level, canon_level)
         }
         Term::Canon(inner) => {
             facts.obligations.iter().all(|obligation| {
@@ -694,7 +696,7 @@ fn reads_at(
                         answer_index.as_ref(),
                         |registered| registered.iter().any(|level| at(level, canon_level)),
                     )
-            }) && reads_at(inner, result, facts, catalog, level, canon_level)
+            }) && reads_at(inner, result, structures_analysis, facts, catalog, level, canon_level)
         }
         Term::Map(_, inner)
         | Term::Compact(_, inner)
@@ -703,13 +705,13 @@ fn reads_at(
         | Term::Group(_, inner)
         | Term::Store { inner, .. }
         | Term::PartitionK { inner, .. }
-        | Term::Tile { inner, .. } => reads_at(inner, result, facts, catalog, level, canon_level),
+        | Term::Tile { inner, .. } => reads_at(inner, result, structures_analysis, facts, catalog, level, canon_level),
         Term::Union(arms) => arms
             .iter()
-            .all(|term| reads_at(term, result, facts, catalog, level, canon_level)),
+            .all(|term| reads_at(term, result, structures_analysis, facts, catalog, level, canon_level)),
         Term::Choose(arms) => arms
             .iter()
-            .all(|(_, term)| reads_at(term, result, facts, catalog, level, canon_level)),
+            .all(|(_, term)| reads_at(term, result, structures_analysis, facts, catalog, level, canon_level)),
         Term::Ref(_) | Term::Rows(_) => true,
     }
 }
@@ -857,14 +859,16 @@ fn row_predicate(operator: &Operator) -> bool {
     }
 }
 
-fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTreeSet<String> {
-    program
-        .structures
-        .physical
+fn host_operations(
+    physical: &physical::Program,
+    structures_analysis: &structures::Analysis,
+    facts: &cq_lang_sequence::Analysis,
+) -> BTreeSet<String> {
+    physical
         .program
         .definitions
         .iter()
-        .filter(|definition| facts.rust_requires_host(&definition.operator))
+        .filter(|definition| facts.rust_requires_host(&structures_analysis.physical, &definition.operator))
         .map(|definition| symbol_name(&definition.name))
         .collect()
 }
@@ -872,6 +876,8 @@ fn host_operations(program: &Program, facts: &cq_lang_sequence::Analysis) -> BTr
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../tests/support/mod.rs");
+    use cq_lang_sequence::structures::{Program as Structures, physical::Program as Physical};
     use cq_lang_sequence::structures::Providers;
     use cq_lang_sequence::{Catalog, LevelNode};
 
@@ -898,8 +904,8 @@ mod tests {
         }
     }
 
-    fn membership() -> Program {
-        let structures = syn::parse_quote! {
+    fn membership() -> (Physical, Structures, Program) {
+        let (physical, structures) = structure_fixture! {
             physical {
                 relation L(a:i32); relation R(a:i32,s:StringCode);
                 l = pipe rename L@0 {a -> a};
@@ -912,7 +918,8 @@ mod tests {
                 r = @index as Index [a]; answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
             }
         };
-        cq_sequence_lowering::compile(&structures).unwrap()
+        let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+        (physical, structures, program)
     }
 
     fn catalog(levels: Vec<Vec<String>>) -> Catalog {
@@ -937,8 +944,8 @@ mod tests {
     fn filtered_codes(
         ty: proc_macro2::TokenStream,
         condition: proc_macro2::TokenStream,
-    ) -> Program {
-        syn::parse_quote! {
+    ) -> (Physical, Structures, Program) {
+        fixture! {
             physical {
                 relation R(a:i32,s:#ty);
                 r = pipe rename R@0 {a -> a,s -> s};
@@ -964,7 +971,7 @@ mod tests {
             (quote::quote!(*a == threshold()), false),
             (quote::quote!(opaque(a)), false),
         ] {
-            let source: Program = syn::parse_quote! {
+            let (physical, structures, source) = fixture! {
                 physical {
                     relation R(a:i32);
                     r = pipe rename R@0 {a -> a};
@@ -982,16 +989,17 @@ mod tests {
                 }
                 representation { identity [a]; }
             };
-            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
             assert_eq!(
-                host_operations(&source, &facts).contains("selected"),
+                host_operations(&physical, &structures_analysis, &facts).contains("selected"),
                 host_only
             );
             let mut encoded = source.clone();
             encoded.representation.identity.clear();
             encoded.representation.encoded.insert("a".into());
-            let encoded_facts = cq_lang_sequence::contract::check(&encoded).unwrap();
-            assert!(host_operations(&encoded, &encoded_facts).contains("selected"));
+            let encoded_facts = cq_lang_sequence::contract::check(&physical, &structures, &encoded).unwrap();
+            assert!(host_operations(&physical, &structures_analysis, &encoded_facts).contains("selected"));
         }
     }
 
@@ -1001,17 +1009,18 @@ mod tests {
             quote::quote!((s = 1i32) or (s = 2i32)),
             quote::quote!(s in {1i32, 2i32}),
         ] {
-            let source = filtered_codes(quote::quote!(i32), condition);
-            let facts = cq_lang_sequence::contract::check(&source).unwrap();
-            assert!(!host_operations(&source, &facts).contains("selected"));
-            let advice = advise(
+            let (physical, structures, source) = filtered_codes(quote::quote!(i32), condition);
+            let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
+            assert!(!host_operations(&physical, &structures_analysis, &facts).contains("selected"));
+            let advice = advise(&physical, &structures, 
                 &source,
                 &machine(),
                 true,
                 &facts,
                 &source,
                 &catalog(Vec::new()),
-            );
+            ).unwrap();
             assert!(advice.iter().any(|advice| matches!(advice,
                 Advice::Grade { name, level, .. }
                     if name == "selected" && level.iter().map(symbol_name).collect::<Vec<_>>()
@@ -1025,17 +1034,18 @@ mod tests {
             quote::quote!((s = "green") or (s = "blue")),
             quote::quote!(s in {"green", "blue"}),
         ] {
-            let source = filtered_codes(quote::quote!(String), condition);
-            let facts = cq_lang_sequence::contract::check(&source).unwrap();
-            assert!(!host_operations(&source, &facts).contains("selected"));
-            let advice = advise(
+            let (physical, structures, source) = filtered_codes(quote::quote!(String), condition);
+            let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
+            assert!(!host_operations(&physical, &structures_analysis, &facts).contains("selected"));
+            let advice = advise(&physical, &structures, 
                 &source,
                 &machine(),
                 true,
                 &facts,
                 &source,
                 &catalog(Vec::new()),
-            );
+            ).unwrap();
             assert!(advice.iter().any(|advice| matches!(advice,
                 Advice::Grade { name, level, .. }
                     if name == "selected" && level.iter().map(symbol_name).collect::<Vec<_>>()
@@ -1051,21 +1061,22 @@ mod tests {
             quote::quote!(s != 1i32),
             quote::quote!(s != @(constants.c_object_array), s != @(constants.c_string_array)),
         ] {
-            let source = filtered_codes(quote::quote!(i32), condition);
-            let source = Advice::Store(syn::parse_quote!(selected))
-                .apply(&source)
+            let (physical, structures, source) = filtered_codes(quote::quote!(i32), condition);
+            let (physical, structures, source) = Advice::Store(syn::parse_quote!(selected))
+                .apply(&physical, &structures, &source)
                 .unwrap();
-            let facts = cq_lang_sequence::contract::check(&source).unwrap();
-            let selected = &source.structures.physical.program.definitions[1].operator;
+            let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
+            let selected = &physical.program.definitions[1].operator;
             assert!(row_predicate(selected));
-            let advice = advise(
+            let advice = advise(&physical, &structures, 
                 &source,
                 &machine(),
                 true,
                 &facts,
                 &source,
                 &catalog(Vec::new()),
-            );
+            ).unwrap();
             assert!(advice.iter().any(|advice| matches!(advice,
                 Advice::Grade { name, level, .. }
                     if name == "selected" && level.iter().map(symbol_name).collect::<Vec<_>>()
@@ -1075,23 +1086,24 @@ mod tests {
 
     #[test]
     fn membership_placement_does_not_infer_host_from_right_payload_type() {
-        let source = membership();
-        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        let (physical, structures, source) = membership();
+        let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
         let target = machine();
         let available = catalog(vec![
             vec!["host".into(), "device".into()],
             vec!["host".into(), "device".into(), "block".into()],
         ]);
-        assert!(!host_operations(&source, &facts).contains("answer"));
+        assert!(!host_operations(&physical, &structures_analysis, &facts).contains("answer"));
         // A structural rename does not evaluate Rust on its payload. Neither
         // the payload's spelling nor its absence from the key requires host Rust.
-        assert!(!host_operations(&source, &facts).contains("r"));
+        assert!(!host_operations(&physical, &structures_analysis, &facts).contains("r"));
         assert!(
-            !boundaries(&source, &target, &facts, &available)
+            !boundaries(&physical, &structures, &source, &target, &facts, &available).unwrap()
                 .iter()
                 .any(|advice| matches!(advice, Advice::Publish { name, .. } if name == "answer"))
         );
-        let advice = advise(&source, &target, true, &facts, &source, &available);
+        let advice = advise(&physical, &structures, &source, &target, true, &facts, &source, &available).unwrap();
         // STR-RowsByValue: the single-reader canon `answer` is not stored, so
         // like a canon pipe it executes at the provider's deepest level and
         // its output store is published at device.
@@ -1107,16 +1119,17 @@ mod tests {
 
     #[test]
     fn host_only_provider_reads_keep_integer_membership_at_host() {
-        let source = membership();
-        let facts = cq_lang_sequence::contract::check(&source).unwrap();
-        let advice = advise(
+        let (physical, structures, source) = membership();
+        let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
+        let advice = advise(&physical, &structures, 
             &source,
             &machine(),
             true,
             &facts,
             &source,
             &catalog(vec![vec!["host".into()]]),
-        );
+        ).unwrap();
         assert!(advice.iter().any(|advice| matches!(advice,
             Advice::Grade { name, level, .. }
                 if name == "answer" && level.iter().map(symbol_name).collect::<Vec<_>>()
@@ -1125,14 +1138,16 @@ mod tests {
 
     #[test]
     fn unsupported_authored_provider_read_grade_is_not_replaced() {
+        let (physical, structures, source) = membership();
         let source =
-            crate::rewrites::grade(&membership(), quote::quote!(gpu, answer at host)).unwrap();
-        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            crate::rewrites::grade(&physical, &structures, &source, quote::quote!(gpu, answer at host)).unwrap();
+        let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
         let available = catalog(vec![
             vec!["host".into(), "device".into()],
             vec!["host".into(), "device".into(), "block".into()],
         ]);
-        let advice = advise(&source, &machine(), true, &facts, &source, &available);
+        let advice = advise(&physical, &structures, &source, &machine(), true, &facts, &source, &available).unwrap();
         assert!(
             !advice
                 .iter()
@@ -1147,6 +1162,7 @@ mod tests {
                 .unwrap()
                 .term,
             Some("answer"),
+            &structures_analysis,
             &facts,
             &available,
             &[syn::parse_quote!(host)],
@@ -1158,8 +1174,8 @@ mod tests {
         abi: proc_macro2::TokenStream,
         ty: proc_macro2::TokenStream,
         input: proc_macro2::TokenStream,
-    ) -> Program {
-        let mut source: Program = syn::parse_quote! {
+    ) -> (Physical, Structures, Program) {
+        let (physical, mut structures, source) = fixture! {
             physical {
                 relation R(a:i32); relation L(a:i32);
                 consumer canonical;
@@ -1176,8 +1192,8 @@ mod tests {
                 result = store answer;
             }
         };
-        source.structures.structures.declare(&[]).unwrap();
-        source
+        structures.structures.declare(&[]).unwrap();
+        (physical, structures, source)
     }
 
     // GPU-NativeAbi: nativeness of the scanned host provider is its token's
@@ -1235,20 +1251,21 @@ mod tests {
                 false,
             ),
         ] {
-            let source = native_program(abi.clone(), ty, input);
-            let facts = cq_lang_sequence::contract::check(&source).unwrap();
+            let (physical, structures, source) = native_program(abi.clone(), ty, input);
+            let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
             let mut available = catalog(descendant.clone());
             available.register(
                 syn::parse_quote!(native = Native { reads [exact, range, membership], build inferred #abi };),
                 native_levels,
             );
-            assert_eq!(rebuilds_native_provider(&source, &facts, "r"), rebuilds);
+            assert_eq!(rebuilds_native_provider(&physical, &structures, &structures_analysis, "r"), rebuilds);
             assert!(
-                crate::catalog::check(&source, &facts, &available)
+                crate::catalog::check(&physical, &structures, &source, &facts, &available)
                     .err()
                     .is_none_or(|error| !error.to_string().contains("PL-Catalog"))
             );
-            let advice = advise(&source, &machine(), true, &facts, &source, &available);
+            let advice = advise(&physical, &structures, &source, &machine(), true, &facts, &source, &available).unwrap();
             let expected = if rebuilds {
                 vec!["host", "device"]
             } else {
@@ -1264,19 +1281,20 @@ mod tests {
     // change placement; the record must equal the catalog declaration.
     #[test]
     fn native_abi_omitted_from_a_catalog_token_is_rejected() {
-        let source = native_program(
+        let (physical, structures, source) = native_program(
             quote::quote!(),
             quote::quote!(@index as Index),
             quote::quote!(),
         );
-        let facts = cq_lang_sequence::contract::check(&source).unwrap();
+        let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
+            let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
         let levels = vec![vec!["host".into(), "device".into()]];
         let mut available = catalog(levels.clone());
         available.register(
             syn::parse_quote!(native = Native { reads [exact, range, membership], build inferred, abi range };),
             levels,
         );
-        let error = crate::catalog::check(&source, &facts, &available).unwrap_err();
+        let error = crate::catalog::check(&physical, &structures, &source, &facts, &available).unwrap_err();
         assert!(error.to_string().contains("PL-Catalog"), "{error}");
     }
 }

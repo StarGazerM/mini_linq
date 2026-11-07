@@ -55,7 +55,7 @@ fn retype_advice(
 /// Only live decisions constrain replacement. Unused support may change with
 /// the selected implementation; a retained witness or filter may not go stale.
 fn required_support(
-    source: &structures::Program,
+    physical: &structures::physical::Program,
     analysis: &structures::Analysis,
     name: &str,
     keyed: &structures::Keyed,
@@ -89,7 +89,7 @@ fn required_support(
                 .candidate_on(name, prefix, column)
                 .is_some_and(|provider| *provider == keyed.provider)
     };
-    let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
+    let candidates = structures::physical::candidate_prefixes(physical, &analysis.physical);
     let mut required = Vec::new();
     if analysis.witnesses.keys().any(|first| {
         let share = &analysis.shares[first];
@@ -110,7 +110,7 @@ fn required_support(
     }) {
         required.push(Retain);
     }
-    for definition in &source.physical.program.definitions {
+    for definition in &physical.program.definitions {
         if !analysis.expands.contains(&symbol_name(&definition.name)) {
             continue;
         }
@@ -140,8 +140,7 @@ fn required_support(
         if symbol_name(&filter.build) != name {
             return false;
         }
-        source
-            .physical
+        physical
             .program
             .definitions
             .iter()
@@ -168,12 +167,15 @@ fn required_support(
 /// Host scan adapters are preserved. Unsupported keyed host reads are retained
 /// through `build_host_reads`; built indexes preserve their membership certificates.
 /// Unlike `plan`, this operation explicitly replaces recorded providers.
+/// The explicit Physical base drives read obligations; the returned pair includes
+/// any Physical retention rewrite together with its selected Structures layer.
 /// Formal rule PL-Select: Stable-partition catalog order by recorded token, then select its first eligible entry.
 pub fn select_from_catalog(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     catalog: &Catalog,
-) -> syn::Result<structures::Program> {
-    select(source, catalog, None)
+) -> syn::Result<(structures::physical::Program, structures::Program)> {
+    select(physical, source, catalog, None)
 }
 
 /// Select providers while retaining admitted native results when a checked
@@ -184,21 +186,25 @@ pub fn select_from_catalog(
 /// Keyed host adapters are retained even when their storage type is already
 /// admitted: a lazy host fallback is not the published storage value itself.
 pub fn select_from_catalog_preserving(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     catalog: &Catalog,
     admitted: &std::collections::BTreeSet<String>,
-) -> syn::Result<structures::Program> {
-    select(source, catalog, Some(admitted))
+) -> syn::Result<(structures::physical::Program, structures::Program)> {
+    select(physical, source, catalog, Some(admitted))
 }
 
 fn select(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     catalog: &Catalog,
     admitted: Option<&std::collections::BTreeSet<String>>,
-) -> syn::Result<structures::Program> {
-    let analysis = structures::contract::check(source)?;
-    let candidates = structures::physical::candidate_prefixes(&source.physical, &analysis.physical);
+) -> syn::Result<(structures::physical::Program, structures::Program)> {
     let mut target = source.clone();
+    target.physical = physical.clone();
+    let source = &target.clone();
+    let analysis = structures::contract::check(source)?;
+    let candidates = structures::physical::candidate_prefixes(physical, &analysis.physical);
     for (index, entry) in source.structures.entries.iter().enumerate() {
         let name = symbol_name(&entry.name);
         let mut required = Vec::new();
@@ -229,8 +235,7 @@ fn select(
                         continue;
                     }
                     // A separate positional key set discharges membership reads.
-                    let operator = source
-                        .physical
+                    let operator = physical
                         .program
                         .definitions
                         .iter()
@@ -329,7 +334,7 @@ fn select(
         };
         let support_required = match &entry.structure {
             Structure::Built { keyed, .. } => {
-                required_support(source, &analysis, &name, keyed, false)
+                required_support(physical, &analysis, &name, keyed, false)
             }
             _ => Vec::new(),
         };
@@ -426,20 +431,22 @@ fn select(
             }
         }
     }
-    let target = retain_host_indexes(&target, catalog, admitted)?;
+    let (physical, target) = retain_host_indexes(&target.physical, &target, catalog, admitted)?;
     structures::check_retention_rewrite(source, &target)?;
-    Ok(target)
+    Ok((physical, target))
 }
 
 fn retain_host_indexes(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     catalog: &Catalog,
     admitted: Option<&std::collections::BTreeSet<String>>,
-) -> syn::Result<structures::Program> {
+) -> syn::Result<(structures::physical::Program, structures::Program)> {
     if admitted.is_none() {
-        return retain_host_index(source, catalog, None);
+        return retain_host_index(physical, source, catalog, None);
     }
     let mut target = source.clone();
+    let mut physical = physical.clone();
     let names: std::collections::BTreeSet<_> = source
         .structures
         .entries
@@ -450,23 +457,28 @@ fn retain_host_indexes(
         .map(|entry| symbol_name(&entry.name))
         .collect();
     for name in names {
-        match retain_host_index(&target, catalog, Some(&name)) {
-            Ok(selected) => target = selected,
+        match retain_host_index(&physical, &target, catalog, Some(&name)) {
+            Ok((selected_physical, selected)) => {
+                physical = selected_physical;
+                target = selected;
+            }
             Err(_) if admitted.is_some_and(|names| names.contains(&name)) => {}
             Err(error) => return Err(error),
         }
     }
-    Ok(target)
+    Ok((physical, target))
 }
 
 fn retain_host_index(
+    physical: &structures::physical::Program,
     source: &structures::Program,
     catalog: &Catalog,
     selected: Option<&str>,
-) -> syn::Result<structures::Program> {
+) -> syn::Result<(structures::physical::Program, structures::Program)> {
     let analysis = structures::contract::check(source)?;
-    let needed = structures::required_columns(&source.physical, &analysis.physical);
+    let needed = structures::required_columns(physical, &analysis.physical);
     let mut target = source.clone();
+    let mut target_physical = physical.clone();
     let mut retained = std::collections::BTreeSet::new();
     let mut indexes = std::collections::BTreeSet::new();
     for entry in &source.structures.entries {
@@ -489,8 +501,7 @@ fn retain_host_index(
                     Some(read) == reader_name.as_ref()
                         && *columns == keys
                         && (*supply == structures::physical::syntax::SupplyKind::Stream
-                            || source
-                                .physical
+                            || physical
                                 .program
                                 .definitions
                                 .iter()
@@ -503,7 +514,7 @@ fn retain_host_index(
                                 }))
                 })
             });
-        let support_required = required_support(source, &analysis, &name, keyed, true);
+        let support_required = required_support(physical, &analysis, &name, keyed, true);
         if !stream || analysis.built_on(&name, &keys).is_some() {
             continue;
         }
@@ -513,8 +524,7 @@ fn retain_host_index(
             if *columns != keys {
                 continue;
             }
-            let capability = match source
-                .physical
+            let capability = match physical
                 .program
                 .definitions
                 .iter()
@@ -536,14 +546,14 @@ fn retain_host_index(
                 required.push(Capability::Exact);
             }
         }
-        let projected = (source.physical.program.definitions.iter().any(|definition|
+        let projected = (physical.program.definitions.iter().any(|definition|
             symbol_name(&definition.name) == name
                 && matches!(&definition.operator, Operator::Rename(rename) if rename.constants.is_none()))
             && !analysis.physical.scanned.contains(&name)
             && needed[&name].len() < analysis.layouts[&name].len()
             && analysis.physical.keyed_reads[&name].iter().all(|(reader, columns, supply)| {
                 *columns == keys && matches!(supply, structures::physical::syntax::SupplyKind::Stream | structures::physical::syntax::SupplyKind::Const)
-                    && source.physical.program.definitions.iter().any(|definition| {
+                    && physical.program.definitions.iter().any(|definition| {
                         symbol_name(&definition.name) == *reader
                             && matches!(&definition.operator, Operator::Semi(..) | Operator::Anti(..))
                                 || symbol_name(&definition.name) == *reader
@@ -573,8 +583,8 @@ fn retain_host_index(
         ))?;
         let build = &entry.name;
         if retained.insert(name.clone()) {
-            target.physical =
-                cq_structure_selection::build_host_reads(&target.physical, quote!(#build))
+            target_physical =
+                cq_structure_selection::build_host_reads(&target_physical, quote!(#build))
                     .map_err(|error| {
                         syn::Error::new(error.span(), format!("PL-Select: {error}"))
                     })?;
@@ -612,13 +622,15 @@ fn retain_host_index(
             || !matches!(&entry.structure, Structure::Host { reader, .. } if !matches!(reader, structures::ReaderRef::Scan))
     });
     target.structures.declare(&catalog.declarations)?;
+    target.physical = target_physical.clone();
     structures::contract::check(&target)?;
-    Ok(target)
+    Ok((target_physical, target))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../../tests/support/mod.rs");
 
     #[test]
     fn catalog_patterns_preserve_concrete_native_built_and_host_providers() {
@@ -632,7 +644,7 @@ mod tests {
                 quote!(r = @native as Native<(i32,), (i32,)> [a];),
             ),
         ] {
-            let source: structures::Program = syn::parse_quote! {
+            let (physical, source) = structure_fixture! {
                 physical {
                     relation L(a:i32); relation R(a:i32,b:i32);
                     consumer canonical;
@@ -655,8 +667,9 @@ mod tests {
             for declaration in declared.declarations {
                 catalog.register(declaration, vec![vec!["host".into(), "device".into()]]);
             }
-            let selected = select_from_catalog(&source, &catalog).unwrap();
-            structures::check_rewrite(&source, &selected).unwrap();
+            let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+            structures::check_rewrite(&physical, &source, &selected_physical, &selected).unwrap();
+            assert_eq!(selected_physical, physical);
             assert_eq!(selected, source);
         }
     }

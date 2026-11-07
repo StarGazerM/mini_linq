@@ -3,20 +3,21 @@
 #[path = "h05_program.rs"]
 mod reference;
 
-use cq_lang_sequence::{OutputProtocol, Program, Term};
+use cq_lang_sequence::{OutputProtocol, Term};
+use crate::Stack;
 
-pub fn r() -> Program {
+pub fn r() -> Stack {
     let mut program = reference::program();
-    let Term::Store { capacity, .. } = &mut program.sequence.definitions.last_mut().unwrap().term
+    let Term::Store { capacity, .. } = &mut program.program.sequence.definitions.last_mut().unwrap().term
     else {
         unreachable!("the authored reference publishes a store")
     };
     *capacity = None;
-    program.sequence.output = Some(OutputProtocol::Count);
+    program.program.sequence.output = Some(OutputProtocol::Count);
     program
 }
 
-pub fn b() -> Program {
+pub fn b() -> Stack {
     syn::parse_quote! {
         physical {
             relation Region(r_regionkey:u32,r_name:i32) = (&data.region);
@@ -88,9 +89,9 @@ pub fn b() -> Program {
     }
 }
 
-pub fn a() -> Program {
+pub fn a() -> Stack {
     let mut program = b();
-    let physical = &mut program.structures.physical.program.definitions;
+    let physical = &mut program.physical.program.definitions;
     physical.retain(|definition| {
         !["asia", "co", "col", "matched", "answer"].contains(&definition.name.to_string().as_str())
     });
@@ -117,7 +118,7 @@ pub fn a() -> Program {
         .structures
         .declare(&cq_gpu_sequence::providers::declarations())
         .unwrap();
-    program.sequence = syn::parse_quote! {
+    program.program.sequence = syn::parse_quote! {
         sequence {
             R1 = store map r1 compact region_selected rows region_base;
             N = store rows nation_base;

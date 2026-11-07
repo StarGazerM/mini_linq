@@ -72,7 +72,7 @@ fn catalog_retyping_preserves_live_support_obligations() {
         let source = source(decision);
         structures::contract::check(&source).unwrap();
         let selected =
-            cq_sequence_plan::select_from_catalog(&source, &catalog(vec![capability])).unwrap();
+            cq_sequence_plan::select_from_catalog(&source.physical, &source, &catalog(vec![capability])).map(|(_, structures)| structures).unwrap();
         assert_eq!(
             selected_provider(&selected),
             &syn::parse_quote!(@selected_alias as SelectedAlias)
@@ -80,7 +80,7 @@ fn catalog_retyping_preserves_live_support_obligations() {
         assert_eq!(selected.physical, source.physical);
         let facts = structures::contract::check(&selected).unwrap();
         assert!(facts.provider_support("r", &["x".into()], None, capability));
-        assert!(cq_sequence_plan::select_from_catalog(&source, &catalog(Vec::new())).is_err());
+        assert!(cq_sequence_plan::select_from_catalog(&source.physical, &source, &catalog(Vec::new())).is_err());
     }
 }
 
@@ -89,17 +89,18 @@ fn expansion_support_implies_retention_but_not_the_reverse() {
     let retained = source(
         "s share = lookup r [x] first s force p; s repr = tuples witness { r [x] at s as _ };",
     );
-    cq_sequence_plan::select_from_catalog(&retained, &catalog(vec![Support::Expand])).unwrap();
+    cq_sequence_plan::select_from_catalog(&retained.physical, &retained, &catalog(vec![Support::Expand])).map(|(_, structures)| structures).unwrap();
     let expanded = source("p stage = batch 4 expand;");
     assert!(
-        cq_sequence_plan::select_from_catalog(&expanded, &catalog(vec![Support::Retain])).is_err()
+        cq_sequence_plan::select_from_catalog(&expanded.physical, &expanded, &catalog(vec![Support::Retain])).is_err()
     );
 }
 
 #[test]
 fn unused_promises_are_replaced_instead_of_leaking_to_new_provider() {
-    let selected =
-        cq_sequence_plan::select_from_catalog(&source(""), &catalog(Vec::new())).unwrap();
+    let source = source("");
+    let (_, selected) =
+        cq_sequence_plan::select_from_catalog(&source.physical, &source, &catalog(Vec::new())).unwrap();
     assert_eq!(
         selected_provider(&selected),
         &syn::parse_quote!(@read_only as ReadOnly)

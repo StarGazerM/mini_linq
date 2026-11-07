@@ -45,7 +45,8 @@ struct Chain {
 }
 
 struct Builder<'a> {
-    program: &'a Program,
+    physical_program: &'a cq_lang_structures::physical::Program,
+    structure_analysis: &'a cq_lang_structures::Analysis,
     analysis: &'a Analysis,
     definitions: BTreeMap<String, &'a Term>,
     physical: BTreeMap<String, &'a Definition>,
@@ -76,6 +77,9 @@ fn publication<'a>(
 /// refinements; without deferred-range publication, a range expands in place.
 /// Grading checks the target layout of these demands against level capacity.
 pub(crate) fn dispatch_shape(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     program: &Program,
     analysis: &Analysis,
     dispatch: &Dispatch,
@@ -125,19 +129,16 @@ pub(crate) fn dispatch_shape(
             .cloned(),
     );
     let builder = Builder {
-        program,
+        physical_program: physical,
+        structure_analysis,
         analysis,
         definitions,
-        physical: program
-            .structures
-            .physical
-            .program
-            .definitions
+        physical: physical.program.definitions
             .iter()
             .map(|definition| (symbol_name(&definition.name), definition))
             .collect(),
         publications,
-        carried: carried_columns(&program.structures, &analysis.structures)
+        carried: carried_columns(structures, structure_analysis)
             .into_iter()
             .map(|(name, columns)| (name, columns.into_iter().collect()))
             .collect(),
@@ -206,29 +207,23 @@ pub(crate) fn dispatch_shape(
         )
     });
     let outputs = if final_output {
-        let returned = symbol_name(&program.structures.physical.program.returned);
-        program
-            .structures
-            .physical
-            .program
-            .head
+        let returned = symbol_name(&physical.program.returned);
+        physical.program.head
             .args
             .iter()
             .flat_map(|expression| {
-                rust_columns(expression, &analysis.structures.layouts[&returned], None)
+                rust_columns(expression, &structure_analysis.layouts[&returned], None)
             })
             .collect()
     } else if canonical && builder.output_fold(inner) {
         // A scalar publication reuses the single declared output attribute;
         // capture arguments are host values, not published attributes.
-        let physical = &program.structures.physical.program;
-        physical
-            .head
+        physical.program.head
             .args
             .iter()
             .find(|argument| {
                 !rust::variable(argument)
-                    .is_some_and(|v| physical.captures.contains(&symbol_name(v)))
+                    .is_some_and(|v| physical.program.captures.contains(&symbol_name(v)))
             })
             .and_then(rust::variable)
             .map(symbol_name)
@@ -238,8 +233,7 @@ pub(crate) fn dispatch_shape(
         chains
             .iter()
             .flat_map(|chain| {
-                analysis
-                    .structures
+                structure_analysis
                     .physical
                     .headings
                     .get(&chain.result)
@@ -435,8 +429,8 @@ impl<'p> Builder<'p> {
             if !membership {
                 chain.result = self.lookup_result(&provider, &keys, &chain.result)?;
                 for candidate in cq_lang_structures::physical::candidate_prefixes(
-                    &self.program.structures.physical,
-                    &self.analysis.structures.physical,
+                    self.physical_program,
+                    &self.structure_analysis.physical,
                 ) {
                     if symbol_name(candidate.reader) == chain.result {
                         carried.extend(candidate.sides.into_iter().flat_map(|(_, prefix)| prefix));
@@ -454,11 +448,7 @@ impl<'p> Builder<'p> {
     }
 
     fn lookup_result(&self, provider: &str, keys: &Columns, input: &str) -> syn::Result<String> {
-        self.program
-            .structures
-            .physical
-            .program
-            .definitions
+        self.physical_program.program.definitions
             .iter()
             .find_map(|definition| match &definition.operator {
                 Operator::Probe(_, keyed) | Operator::Merge(_, keyed)
@@ -532,7 +522,7 @@ impl<'p> Builder<'p> {
     }
 
     fn payload(&self, provider: &str, keys: &Columns) -> syn::Result<Columns> {
-        let structures = &self.analysis.structures;
+        let structures = self.structure_analysis;
         let result = self
             .analysis
             .results
@@ -605,7 +595,7 @@ impl<'p> Builder<'p> {
                 _ => Columns::new(),
             };
             uses.extend(
-                operator_columns(&definition.operator, self.analysis)
+                operator_columns(&definition.operator, self.structure_analysis)
                     .into_iter()
                     .filter(|column| !bound.contains(column) && !defines.contains(column)),
             );
@@ -644,8 +634,7 @@ impl<'p> Builder<'p> {
     fn column(&self, name: &str) -> syn::Result<ResourceColumn> {
         let mut types = Vec::new();
         for ty in self
-            .analysis
-            .structures
+            .structure_analysis
             .physical
             .rows
             .values()
@@ -798,8 +787,8 @@ fn fold_columns(monoid: &Monoid) -> Columns {
     }
 }
 
-fn operator_columns(operator: &Operator, analysis: &Analysis) -> Columns {
-    let layouts = &analysis.structures.layouts;
+fn operator_columns(operator: &Operator, structure_analysis: &cq_lang_structures::Analysis) -> Columns {
+    let layouts = &structure_analysis.layouts;
     match operator {
         Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
             select.condition.columns()

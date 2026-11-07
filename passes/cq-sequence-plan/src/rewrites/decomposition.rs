@@ -6,77 +6,61 @@ use crate::rewrites::{Tile, checked_in, definition};
 /// Partition a producer chain at its input storage boundary. The paired
 /// flatten keeps its row shape unchanged, including across named pipe terms.
 /// An existing tile is authored advice and is not replaced.
-pub fn partition(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    partition_in(&mut Default::default(), source, arguments)
-}
+pub fn partition(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { partition_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn partition_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let Tile { name, n, items } = syn::parse2(arguments)?;
-    let index = definition(source, &name)?;
-    checker.check_shared(source)?;
-    positive(&name, n, items)?;
-    let Some((index, depth)) = boundary(
-        source,
-        index,
-        0,
-        &source.sequence.definitions[index].term,
-        true,
-    )?
-    else {
-        return Ok(source.clone());
-    };
-    let mut target = source.clone();
-    let mut term = &mut target.sequence.definitions[index].term;
-    for _ in 0..depth {
-        term = child_mut(term).expect("the located boundary has a unary path");
-    }
-    let inner = std::mem::replace(term, Term::Union(Vec::new()));
-    *term = Term::Flatten(Box::new(Term::Tile {
-        n,
-        items,
-        inner: Box::new(inner),
-    }));
-    checked_in(checker, source, target)
+pub fn partition_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let Tile { name, n, items } = syn::parse2(arguments)?;
+let index = definition(source, &name)?;
+checker.check_shared(physical, structures, source)?;
+positive(&name, n, items)?;
+let Some((index, depth)) = boundary(
+    source,
+    index,
+    0,
+    &source.sequence.definitions[index].term,
+    true,
+)?
+else {
+    return Ok(source.clone());
+};
+let mut target = source.clone();
+let mut term = &mut target.sequence.definitions[index].term;
+for _ in 0..depth {
+    term = child_mut(term).expect("the located boundary has a unary path");
 }
+let inner = std::mem::replace(term, Term::Union(Vec::new()));
+*term = Term::Flatten(Box::new(Term::Tile {
+    n,
+    items,
+    inner: Box::new(inner),
+}));
+checked_in(checker, physical, structures, source, target) }
 
 /// Materialize and partition a named flatten level, preserving its row shape.
 /// This records the offsets boundary explicitly rather than hiding it in the
 /// target emitter. Existing stores and tiles are never overwritten.
-pub fn segment(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    segment_in(&mut Default::default(), source, arguments)
-}
+pub fn segment(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { segment_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn segment_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let Tile { name, n, items } = syn::parse2(arguments)?;
-    let index = definition(source, &name)?;
-    positive(&name, n, items)?;
-    if !matches!(source.sequence.definitions[index].term, Term::Flatten(_)) {
-        return Err(syn::Error::new_spanned(
-            name,
-            "segment requires a named flatten level",
-        ));
-    }
-    let mut target = source.clone();
-    let term = &mut target.sequence.definitions[index].term;
-    let inner = std::mem::replace(term, Term::Union(Vec::new()));
-    *term = Term::Flatten(Box::new(Term::Tile {
-        n,
-        items,
-        inner: Box::new(Term::Store {
-            capacity: None,
-            inner: Box::new(inner),
-        }),
-    }));
-    checked_in(checker, source, target)
+pub fn segment_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let Tile { name, n, items } = syn::parse2(arguments)?;
+let index = definition(source, &name)?;
+positive(&name, n, items)?;
+if !matches!(source.sequence.definitions[index].term, Term::Flatten(_)) {
+    return Err(syn::Error::new_spanned(
+        name,
+        "segment requires a named flatten level",
+    ));
 }
+let mut target = source.clone();
+let term = &mut target.sequence.definitions[index].term;
+let inner = std::mem::replace(term, Term::Union(Vec::new()));
+*term = Term::Flatten(Box::new(Term::Tile {
+    n,
+    items,
+    inner: Box::new(Term::Store {
+        capacity: None,
+        inner: Box::new(inner),
+    }),
+}));
+checked_in(checker, physical, structures, source, target) }
 
 fn positive(name: &syn::Ident, n: usize, items: Option<usize>) -> syn::Result<()> {
     if n == 0 || items == Some(0) {

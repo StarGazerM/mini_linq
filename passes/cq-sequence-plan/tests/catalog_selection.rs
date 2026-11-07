@@ -55,7 +55,7 @@ fn gpu_catalog_selects_h05_authored_provider_types_from_defaults() {
     let defaults = cq_structure_selection::compile(&authored.physical).unwrap();
     // No type-width guessing: the full-row set token accepts the recorded
     // packed row codec regardless of its eventual lane count.
-    let selected = select_from_catalog(&defaults, &gpu_catalog()).unwrap();
+    let selected = select_from_catalog(&defaults.physical, &defaults, &gpu_catalog()).map(|(_, structures)| structures).unwrap();
     structures::check_rewrite(&defaults, &selected).unwrap();
     assert_eq!(selected.physical, defaults.physical);
     let mut count = 0;
@@ -108,9 +108,9 @@ fn selection_is_deterministic_and_uses_first_satisfying_token() {
     let later: Declaration =
         syn::parse_quote!(later = Later { reads [exact, range, membership], build inferred };);
     insert(&mut catalog, 4, later);
-    let selected = select_from_catalog(&source, &catalog).unwrap();
-    assert_eq!(selected, select_from_catalog(&source, &catalog).unwrap());
-    assert_eq!(selected, select_from_catalog(&selected, &catalog).unwrap());
+    let selected = select_from_catalog(&source.physical, &source, &catalog).map(|(_, structures)| structures).unwrap();
+    assert_eq!(selected, select_from_catalog(&source.physical, &source, &catalog).unwrap().1);
+    assert_eq!(selected, select_from_catalog(&selected.physical, &selected, &catalog).unwrap().1);
     let supplier = selected
         .structures
         .entries
@@ -145,7 +145,7 @@ fn unavailable_read_or_canonicalization_cannot_be_selected() {
         .facts
         .reads
         .clear();
-    assert!(select_from_catalog(&source, &missing_read).is_err());
+    assert!(select_from_catalog(&source.physical, &source, &missing_read).is_err());
     let mut missing_canon = gpu_catalog();
     let catalog = gpu_catalog();
     for entry in &mut missing_canon.providers {
@@ -157,7 +157,7 @@ fn unavailable_read_or_canonicalization_cannot_be_selected() {
             entry.levels.clear();
         }
     }
-    assert!(select_from_catalog(&source, &missing_canon).is_err());
+    assert!(select_from_catalog(&source.physical, &source, &missing_canon).is_err());
 }
 
 #[test]
@@ -188,12 +188,12 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
         2,
         syn::parse_quote!(membership = Membership { reads [membership], build inferred };),
     );
-    assert!(select_from_catalog(&source, &catalog).is_err());
+    assert!(select_from_catalog(&source.physical, &source, &catalog).is_err());
     declaration(&mut catalog, "range_provider")
         .facts
         .reads
         .push(Capability::Membership);
-    select_from_catalog(&source, &catalog).unwrap();
+    select_from_catalog(&source.physical, &source, &catalog).map(|(_, structures)| structures).unwrap();
 }
 
 fn host_keyed_read() -> structures::Program {
@@ -218,15 +218,15 @@ fn host_keyed_read() -> structures::Program {
 #[test]
 fn integral_host_fallback_is_retained_with_a_catalog_range_index() {
     let source = host_keyed_read();
-    let selected = select_from_catalog(&source, &gpu_catalog()).unwrap();
+    let selected = select_from_catalog(&source.physical, &source, &gpu_catalog()).map(|(_, structures)| structures).unwrap();
     structures::physical::check_rewrite(&source.physical, &selected.physical).unwrap();
     assert_eq!(
         selected,
-        select_from_catalog(&source, &gpu_catalog()).unwrap()
+        select_from_catalog(&source.physical, &source, &gpu_catalog()).unwrap().1
     );
     assert_eq!(
         selected,
-        select_from_catalog(&selected, &gpu_catalog()).unwrap()
+        select_from_catalog(&selected.physical, &selected, &gpu_catalog()).unwrap().1
     );
     let analysis = structures::contract::check(&selected).unwrap();
     assert_eq!(
@@ -251,7 +251,8 @@ fn unsupported_host_range_read_rejects_instead_of_skipping_the_obligation() {
     let mut catalog = gpu_catalog();
     declaration(&mut catalog, "range_provider").facts.reads =
         vec![Capability::Exact, Capability::Membership];
-    assert!(select_from_catalog(&host_keyed_read(), &catalog).is_err());
+    let source = host_keyed_read();
+    assert!(select_from_catalog(&source.physical, &source, &catalog).is_err());
 }
 
 #[test]
@@ -262,7 +263,8 @@ fn host_range_index_selection_does_not_pick_an_exact_only_token() {
         0,
         syn::parse_quote!(exact_only = ExactOnly { reads [exact], build inferred };),
     );
-    let selected = select_from_catalog(&host_keyed_read(), &catalog).unwrap();
+    let source = host_keyed_read();
+    let (_, selected) = select_from_catalog(&source.physical, &source, &catalog).unwrap();
     let analysis = structures::contract::check(&selected).unwrap();
     assert_eq!(
         analysis
@@ -291,7 +293,7 @@ fn unused_code_payload_is_projected_from_renamed_provider() {
         }
         let source = cq_structure_selection::compile(&physical).unwrap();
         let catalog = gpu_catalog();
-        let selected = select_from_catalog(&source, &catalog).unwrap();
+        let selected = select_from_catalog(&source.physical, &source, &catalog).map(|(_, structures)| structures).unwrap();
         let analysis = structures::contract::check(&selected).unwrap();
         assert_eq!(analysis.layouts["r"], ["a"]);
         assert_eq!(
@@ -334,7 +336,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                 }
             };
         }
-        let selected = select_from_catalog(&source, &gpu_catalog()).unwrap();
+        let selected = select_from_catalog(&source.physical, &source, &gpu_catalog()).map(|(_, structures)| structures).unwrap();
         structures::check_rewrite(&source, &selected).unwrap();
         let analysis = structures::contract::check(&selected).unwrap();
         assert_eq!(
@@ -344,7 +346,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
         if third {
             let mut catalog = gpu_catalog();
             catalog.providers.pop();
-            assert!(select_from_catalog(&source, &catalog).is_err());
+            assert!(select_from_catalog(&source.physical, &source, &catalog).is_err());
         }
     }
 }

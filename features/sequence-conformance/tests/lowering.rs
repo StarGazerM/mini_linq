@@ -3,11 +3,13 @@ use cq_planners_plan::Planner;
 use cq_sequence_lowering::{check, compile};
 
 fn accept(source: &cq_lang_structures::Program) -> Program {
-    let target = compile(source).unwrap();
+    let target = compile(&source.physical, source).unwrap();
     assert!(target.graded.is_none());
     assert_eq!(target.sequence.output, Some(OutputProtocol::Count));
-    cq_lang_sequence::contract::check(&target).unwrap();
+    cq_lang_sequence::contract::check(&source.physical, source, &target).unwrap();
     cq_lang_sequence::check_grading(
+        &source.physical,
+        source,
         &target,
         &Machine {
             gpu: None,
@@ -28,7 +30,7 @@ fn accept(source: &cq_lang_structures::Program) -> Program {
         },
     )
     .unwrap();
-    check(source, &target).unwrap();
+    check(&source.physical, source, &target).unwrap();
     target
 }
 
@@ -142,7 +144,7 @@ fn rewritten_claw_preserves_ordered_stream_providers() {
                     continue;
                 }
             };
-            compile(&structures).unwrap_or_else(|error| {
+            compile(&physical, &structures).unwrap_or_else(|error| {
                 panic!("{pipeline:?}: {error}\n{}", structures.to_token_stream())
             });
         }

@@ -1,5 +1,7 @@
+mod common;
+use common::Stack as Program;
 use cq_lang_sequence::{
-    Analysis, DispatchShape, LevelNode, Machine, Program, ResourceAllocation, check_grading,
+    Analysis, DispatchShape, LevelNode, Machine, ResourceAllocation,
 };
 use quote::quote;
 
@@ -88,9 +90,9 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
             result = store map projected compact selected flatten lookup r [a] rows l;
         } graded target { result at engine; }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let carried =
-        cq_lang_structures::demand::carried_columns(&program.structures, &analysis.structures);
+        cq_lang_structures::demand::carried_columns(&program.structures, &cq_lang_structures::contract::check(&program.structures).unwrap());
     assert_eq!(carried["l"], ["a", "x"]);
     assert_eq!(carried["r"], ["a", "b"]);
     assert_eq!(carried["j"], ["b", "x"]);
@@ -119,7 +121,7 @@ fn every_choice_arm_contributes_in_order() {
         },
         quote!(result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let shape = shape(&analysis, "result");
     assert_eq!(shape.chains.len(), 2);
     for chain in &shape.chains {
@@ -136,7 +138,7 @@ fn fold_scope_precedes_its_input_payload_and_uses_only_the_sum_column() {
         },
         quote!(result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let chain = &shape(&analysis, "result").chains[0];
     assert_eq!(chain.len(), 2);
     assert_eq!(chain[0], ResourceAllocation::Fold);
@@ -151,7 +153,7 @@ fn a_fold_inside_a_child_tile_follows_the_parent_payload() {
         },
         quote!(result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let chain = &shape(&analysis, "result").chains[0];
     assert_eq!(chain.len(), 2);
     assert!(parents(&chain[0]).is_empty());
@@ -168,7 +170,7 @@ fn ordinary_range_publications_allocate_payload_but_published_reads_do_not() {
         },
         quote!(view at engine.team; first at engine; result at engine;),
     );
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     // This machine has no deferred-range execution refinement. Its terminal
     // lookup therefore expands rows; only the later read of the completed
     // publication avoids allocating the lookup's payload scratch again.
@@ -198,7 +200,7 @@ fn membership_reads_do_not_allocate_payload_scratch() {
             } graded target { result at engine; }
         })
         .unwrap();
-        let analysis = check_grading(&program, &machine()).unwrap();
+        let analysis = common::check_grading(&program, &machine()).unwrap();
         let shape = shape(&analysis, "result");
         assert_eq!(shape.tile, Some(8));
         assert_eq!(shape.items, 1);
@@ -229,7 +231,7 @@ fn later_lookup_keys_are_live_across_an_earlier_payload() {
             result = store map projected flatten lookup s [x] flatten lookup r [a] rows l;
         } graded target { result at engine; }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let chain = &shape(&analysis, "result").chains[0];
     assert_eq!(chain.len(), 2);
     assert_eq!(parents(&chain[0]), ["x"]);
@@ -259,7 +261,7 @@ fn union_retains_every_arm_without_reusing_allocations() {
             ];
         } graded target { result at engine; }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     let shape = shape(&analysis, "result");
     assert_eq!(shape.chains.len(), 2);
     for chain in &shape.chains {
@@ -294,7 +296,7 @@ fn a_host_consumer_requires_expanded_rows_instead_of_virtual_ranges() {
             result at host;
         }
     };
-    let analysis = check_grading(&program, &machine()).unwrap();
+    let analysis = common::check_grading(&program, &machine()).unwrap();
     assert!(
         !analysis
             .dispatches

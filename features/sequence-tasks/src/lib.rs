@@ -2,8 +2,8 @@
 //!
 //! Generated expressions require `rayon`, `cq-storage` and this crate (its
 //! [`combine`] runtime) in the consumer. The
-//! caller supplies facts checked against [`machine`]; translation never repeats
-//! analysis. Host and task-local constructors reuse the sequential interpreter,
+//! caller supplies Sequence facts checked against [`machine`]; translation never
+//! repeats Sequence analysis. Host and task-local constructors reuse the sequential interpreter,
 //! with whole-stream and answer-head canonicalization explicitly targeting
 //! parallel sort and adjacent unique.
 //! Shared indexed dispatch keeps Rayon plumbing out of generated pipelines.
@@ -199,13 +199,16 @@ pub fn catalog() -> cq_lang_sequence::Catalog {
 /// Select native shareable representations through checked Structures rewrites.
 /// Host fallbacks must be retained and published before shared readers capture
 /// them, even when their underlying storage type already supports task reads.
+/// Returns the complete updated `(Physical, Structures, Sequence)` stack so that
+/// retention and provider changes remain paired with the rewritten schedule.
 pub fn select_providers(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     source: &Program,
     catalog: &cq_lang_sequence::Catalog,
-) -> syn::Result<Program> {
-    let analysis = cq_lang_sequence::contract::check(source)?;
-    let mut admitted: std::collections::BTreeSet<_> = source
-        .structures
+) -> syn::Result<(cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, Program)> {
+    let analysis = cq_lang_sequence::contract::check(physical, structures, source)?;
+    let mut admitted: std::collections::BTreeSet<_> = structures
         .structures
         .entries
         .iter()
@@ -238,18 +241,17 @@ pub fn select_providers(
         .providers
         .retain(|entry| entry.levels.iter().any(|level| level.len() > 1));
     let mut target = source.clone();
-    target.structures = cq_sequence_plan::rewrites::select_from_catalog_preserving(
-        &source.structures,
+    let (target_physical, target_structures) = cq_sequence_plan::rewrites::select_from_catalog_preserving(
+        physical,
+        structures,
         &native,
         &admitted,
     )?;
-    for (old, retained) in source
-        .structures
-        .physical
+    for (old, retained) in physical
         .program
         .definitions
         .iter()
-        .zip(&target.structures.physical.program.definitions)
+        .zip(&target_physical.program.definitions)
     {
         if old.mode == retained.mode {
             continue;
@@ -288,8 +290,8 @@ pub fn select_providers(
             }
         }
     }
-    cq_lang_sequence::check_rewrite(source, &target)?;
-    Ok(target)
+    cq_lang_sequence::check_rewrite(physical, structures, source, &target_physical, &target_structures, &target)?;
+    Ok((target_physical, target_structures, target))
 }
 
 // DESIGN translator-tasks
@@ -300,33 +302,49 @@ pub fn select_providers(
 /// Translate checked partitions into joined, owned output.
 // Formal rule T-Tasks: shared indexed task dispatch publishes ordered task-local
 // buffers before monoidal reductions and whole-stream sort canonicalization.
-pub fn translate(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
-    translate_with(program, analysis, Config::default())
+pub fn translate(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<syn::Expr> {
+    translate_with(physical, structures, program, analysis, Config::default())
 }
 
 /// Instrument the same checked Tasks interpretation, including worker work.
-pub fn translate_profile(program: &Program, analysis: &Analysis) -> syn::Result<syn::Expr> {
-    translate_profile_with(program, analysis, Config::default())
+pub fn translate_profile(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+) -> syn::Result<syn::Expr> {
+    translate_profile_with(physical, structures, program, analysis, Config::default())
 }
 
 /// Profile a target with explicit scheduling parameters.
 pub fn translate_profile_with(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     program: &Program,
     analysis: &Analysis,
     config: Config,
 ) -> syn::Result<syn::Expr> {
-    translate_mode(program, analysis, config, true)
+    translate_mode(physical, structures, program, analysis, config, true)
 }
 
 pub fn translate_with(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     program: &Program,
     analysis: &Analysis,
     config: Config,
 ) -> syn::Result<syn::Expr> {
-    translate_mode(program, analysis, config, false)
+    translate_mode(physical, structures, program, analysis, config, false)
 }
 
 fn translate_mode(
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     program: &Program,
     analysis: &Analysis,
     config: Config,
@@ -363,6 +381,8 @@ fn translate_mode(
         cq_sequence_pull::translate_with
     };
     let mut expression = translate(
+        physical,
+        structures,
         program,
         analysis,
         syn::parse_quote!(__cq_task_workers),
@@ -571,7 +591,7 @@ fn translate_mode(
                             .last()
                             .is_some_and(|definition| std::ptr::eq(&definition.term, term))
                         && let Some(result) = &output.result
-                        && !analysis.structures.head_dedup.contains_key(result)
+                        && !emitter.structures_analysis.head_dedup.contains_key(result)
                     {
                         local = emitter.own_task_answer(result, local);
                     }

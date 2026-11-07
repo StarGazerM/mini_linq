@@ -44,11 +44,11 @@ fn every_planner_preserves_total_rust_and_relational_selection() {
                         cq_physical_lowering::check(&ix, &physical).unwrap();
                         let structures = cq_structure_selection::compile(&physical).unwrap();
                         cq_structure_selection::check(&physical, &structures).unwrap();
-                        let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-                        cq_sequence_lowering::check(&structures, &sequence).unwrap();
+                        let sequence = cq_sequence_lowering::compile(&structures.physical, &structures).unwrap();
+                        cq_sequence_lowering::check(&structures.physical, &structures, &sequence).unwrap();
                         let analysis =
-                            cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
-                        let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+                            cq_lang_sequence::check_grading(&structures.physical, &structures, &sequence, &machine).unwrap();
+                        let expression = cq_sequence_pull::translate(&structures.physical, &structures, &sequence, &analysis).unwrap();
                         tests.push(quote!({ #bindings let rows: Vec<_> = (#expression).into_iter().collect(); assert!(rows.is_empty()); }));
                     }
                 }
@@ -77,10 +77,10 @@ fn every_planner_preserves_total_rust_and_relational_selection() {
             .iter()
             .any(|entry| entry.name == "b")
     );
-    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-    cq_sequence_lowering::check(&structures, &sequence).unwrap();
-    let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
-    let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+    let sequence = cq_sequence_lowering::compile(&structures.physical, &structures).unwrap();
+    cq_sequence_lowering::check(&structures.physical, &structures, &sequence).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&structures.physical, &structures, &sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&structures.physical, &structures, &sequence, &analysis).unwrap();
     tests.push(quote!({
         let R: &[(i32,)] = &[(0,)]; let S: &[(i32,)] = &[]; let T: &[(i32,)] = &[(1,)];
         let rows: Vec<_> = (#expression).into_iter().collect(); assert!(rows.is_empty());

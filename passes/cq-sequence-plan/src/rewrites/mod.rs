@@ -34,11 +34,13 @@ mod kw {
 
 fn checked_in(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     source: &Program,
     mut target: Program,
 ) -> syn::Result<Program> {
-    cq_lang_sequence::blocks::record_routing(&mut target)?;
-    checker.check_rewrite_in(source, &target)?;
+    cq_lang_sequence::blocks::record_routing(structures, &mut target)?;
+    checker.check_rewrite_in(physical, structures, source, physical, structures, &target)?;
     Ok(target)
 }
 
@@ -55,101 +57,77 @@ fn definition(program: &Program, name: &Ident) -> syn::Result<usize> {
 /// The construction-based rewrite checker validates the storage boundary;
 /// target-specific placement remains the caller's separate grading obligation.
 // Materialization preserves the producer's support (EXT-SeqStore).
-pub fn store(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    store_in(&mut Default::default(), source, arguments)
-}
+pub fn store(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { store_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn store_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let name: Ident = syn::parse2(arguments)?;
-    let index = definition(source, &name)?;
-    let mut target = source.clone();
-    let term = &mut target.sequence.definitions[index].term;
-    if !matches!(term, Term::Store { .. }) {
-        *term = Term::Store {
-            capacity: None,
-            inner: Box::new(term.clone()),
-        };
-    }
-    checked_in(checker, source, target)
+pub fn store_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let name: Ident = syn::parse2(arguments)?;
+let index = definition(source, &name)?;
+let mut target = source.clone();
+let term = &mut target.sequence.definitions[index].term;
+if !matches!(term, Term::Store { .. }) {
+    *term = Term::Store {
+        capacity: None,
+        inner: Box::new(term.clone()),
+    };
 }
+checked_in(checker, physical, structures, source, target) }
 
 /// Materialize selected flatten definitions. Empty advice or `all` selects all
 /// flatten definitions; named selections must all exist and be flatten terms.
 // Formal rule EXT-SeqStore: Materialize flatten levels or factor named publication producers with unchanged support.
-pub fn store_level(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    store_level_in(&mut Default::default(), source, arguments)
-}
+pub fn store_level(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { store_level_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn store_level_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let selection = Results::parse(arguments)?;
-    let mut target = source.clone();
-    let mut matched = BTreeSet::new();
-    for definition in &mut target.sequence.definitions {
-        if selection.includes(&definition.name) && matches!(definition.term, Term::Flatten(_)) {
-            definition.term = Term::Store {
-                capacity: None,
-                inner: Box::new(definition.term.clone()),
-            };
-            matched.insert(symbol_name(&definition.name));
-        }
+pub fn store_level_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let selection = Results::parse(arguments)?;
+let mut target = source.clone();
+let mut matched = BTreeSet::new();
+for definition in &mut target.sequence.definitions {
+    if selection.includes(&definition.name) && matches!(definition.term, Term::Flatten(_)) {
+        definition.term = Term::Store {
+            capacity: None,
+            inner: Box::new(definition.term.clone()),
+        };
+        matched.insert(symbol_name(&definition.name));
     }
-    selection.require_matches(&matched)?;
-    checked_in(checker, source, target)
 }
+selection.require_matches(&matched)?;
+checked_in(checker, physical, structures, source, target) }
 
 /// Name a store's producer so its execution grade can differ from publication.
 /// Factoring a definition and inserting a store preserve support (EXT-SeqStore).
-pub fn publish(source: &Program, name: &Ident, producer: &Ident) -> syn::Result<Program> {
-    publish_in(&mut Default::default(), source, name, producer)
-}
+pub fn publish(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, name: &Ident, producer: &Ident) -> syn::Result<Program> { publish_in(&mut Default::default(), physical, structures, source, name, producer) }
 
-pub fn publish_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    name: &Ident,
-    producer: &Ident,
-) -> syn::Result<Program> {
-    let index = definition(source, name)?;
-    if source
-        .sequence
-        .definitions
-        .iter()
-        .any(|definition| definition.name == *producer)
-    {
-        return Err(syn::Error::new_spanned(
-            producer,
-            "publication producer name already exists",
-        ));
-    }
-    let mut target = source.clone();
-    let term = &mut target.sequence.definitions[index].term;
-    let inner = match term {
-        Term::Store { inner, .. } => std::mem::replace(inner.as_mut(), Term::Ref(producer.clone())),
-        _ => std::mem::replace(
-            term,
-            Term::Store {
-                capacity: None,
-                inner: Box::new(Term::Ref(producer.clone())),
-            },
-        ),
-    };
-    target.sequence.definitions.insert(
-        index,
-        cq_lang_sequence::Definition {
-            name: producer.clone(),
-            term: inner,
-        },
-    );
-    checked_in(checker, source, target)
+pub fn publish_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, name: &Ident,
+producer: &Ident,) -> syn::Result<Program> { let index = definition(source, name)?;
+if source
+    .sequence
+    .definitions
+    .iter()
+    .any(|definition| definition.name == *producer)
+{
+    return Err(syn::Error::new_spanned(
+        producer,
+        "publication producer name already exists",
+    ));
 }
+let mut target = source.clone();
+let term = &mut target.sequence.definitions[index].term;
+let inner = match term {
+    Term::Store { inner, .. } => std::mem::replace(inner.as_mut(), Term::Ref(producer.clone())),
+    _ => std::mem::replace(
+        term,
+        Term::Store {
+            capacity: None,
+            inner: Box::new(Term::Ref(producer.clone())),
+        },
+    ),
+};
+target.sequence.definitions.insert(
+    index,
+    cq_lang_sequence::Definition {
+        name: producer.clone(),
+        term: inner,
+    },
+);
+checked_in(checker, physical, structures, source, target) }
 
 struct Tile {
     name: Ident,
@@ -176,37 +154,29 @@ impl Parse for Tile {
 /// Wrap `d` in a positive contiguous tile: `d, n` or `d, n, items m`.
 /// Unknown-length stores require a capacity before they can be tiled.
 // Formal rule EXT-SeqTile: Positive contiguous tiles preserve the covered support.
-pub fn tile(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    tile_in(&mut Default::default(), source, arguments)
-}
+pub fn tile(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { tile_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn tile_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let Tile { name, n, items } = syn::parse2(arguments)?;
-    let index = definition(source, &name)?;
-    let mut target = source.clone();
-    let analysis = checker.check_shared(source)?;
-    if matches!(
-        source.sequence.definitions[index].term,
-        Term::Store { capacity: None, .. }
-    ) && matches!(analysis.lengths[&symbol_name(&name)], Len::Unknown(None))
-    {
-        return Err(syn::Error::new_spanned(
-            name,
-            "BE-Length: tiling an unknown-length store requires capacity",
-        ));
-    }
-    let term = &mut target.sequence.definitions[index].term;
-    *term = Term::Tile {
-        n,
-        items,
-        inner: Box::new(term.clone()),
-    };
-    checked_in(checker, source, target)
+pub fn tile_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let Tile { name, n, items } = syn::parse2(arguments)?;
+let index = definition(source, &name)?;
+let mut target = source.clone();
+let analysis = checker.check_shared(physical, structures, source)?;
+if matches!(
+    source.sequence.definitions[index].term,
+    Term::Store { capacity: None, .. }
+) && matches!(analysis.lengths[&symbol_name(&name)], Len::Unknown(None))
+{
+    return Err(syn::Error::new_spanned(
+        name,
+        "BE-Length: tiling an unknown-length store requires capacity",
+    ));
 }
+let term = &mut target.sequence.definitions[index].term;
+*term = Term::Tile {
+    n,
+    items,
+    inner: Box::new(term.clone()),
+};
+checked_in(checker, physical, structures, source, target) }
 
 struct Choose {
     name: Ident,
@@ -241,69 +211,45 @@ impl Parse for Choose {
 /// Replace `d` by a length- or worker-guarded choice with an `else` fallback.
 /// The two earlier definitions must denote the same Structures result, not just its heading.
 // Formal rule EXT-SeqChoose: Exhaustive scheduling guards select equal-support constructions.
-pub fn choose(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    choose_in(&mut Default::default(), source, arguments)
-}
+pub fn choose(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { choose_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn choose_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let Choose {
-        name,
-        guard,
-        yes,
-        no,
-    } = syn::parse2(arguments)?;
-    let index = definition(source, &name)?;
-    let mut target = source.clone();
-    target.sequence.definitions[index].term =
-        Term::Choose(vec![(guard, Term::Ref(yes)), (Guard::Else, Term::Ref(no))]);
-    checked_in(checker, source, target)
-}
+pub fn choose_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let Choose {
+    name,
+    guard,
+    yes,
+    no,
+} = syn::parse2(arguments)?;
+let index = definition(source, &name)?;
+let mut target = source.clone();
+target.sequence.definitions[index].term =
+    Term::Choose(vec![(guard, Term::Ref(yes)), (Guard::Else, Term::Ref(no))]);
+checked_in(checker, physical, structures, source, target) }
 
 /// Set `count`, `reserve`, `reserve_previous` or `bounded` on the final store.
 /// Bounded output requires the store's declared capacity; this pass never
 /// invents one. `reserve_previous` requires an arena terminal and uses the last
 /// validated count only as a capacity hint, with checked overflow replay.
 /// Formal rule EXT-SeqOutput: Count, reserve, reserve_previous and bounded change storage interpretation, not support; bounded requires capacity.
-pub fn output(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    output_in(&mut Default::default(), source, arguments)
-}
+pub fn output(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { output_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn output_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let protocol: OutputProtocol = syn::parse2(arguments)?;
-    let mut target = source.clone();
-    target.sequence.output = Some(protocol);
-    checked_in(checker, source, target)
-}
+pub fn output_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let protocol: OutputProtocol = syn::parse2(arguments)?;
+let mut target = source.clone();
+target.sequence.output = Some(protocol);
+checked_in(checker, physical, structures, source, target) }
 
 /// Record the root partition policy: `roots(spread)` sizes every fold-free
 /// dispatch's root tiles at launch from the resident block count, never above
 /// the declared tile. Rows, their order within a part and support are unchanged.
 /// Formal rule EXT-SeqRoots: Root partition policy changes only how roots are tiled across blocks, not the construction or its support.
-pub fn roots(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    roots_in(&mut Default::default(), source, arguments)
-}
+pub fn roots(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { roots_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn roots_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let policy: Ident = syn::parse2(arguments)?;
-    if policy != "spread" {
-        return Err(syn::Error::new_spanned(policy, "expected roots(spread)"));
-    }
-    let mut target = source.clone();
-    target.sequence.roots = cq_lang_sequence::Roots::Spread;
-    checked_in(checker, source, target)
+pub fn roots_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let policy: Ident = syn::parse2(arguments)?;
+if policy != "spread" {
+    return Err(syn::Error::new_spanned(policy, "expected roots(spread)"));
 }
+let mut target = source.clone();
+target.sequence.roots = cq_lang_sequence::Roots::Spread;
+checked_in(checker, physical, structures, source, target) }
 
 struct Grades {
     machine: Ident,
@@ -337,26 +283,20 @@ impl Parse for Grades {
 /// preserved. Paths and machine capabilities are checked only by the facade's
 /// grade phase; unknown definitions, duplicate advice and machine changes fail.
 // Formal rule EXT-SeqGrade: Record machine placements without changing the Sequence construction.
-pub fn grade(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
-    grade_in(&mut Default::default(), source, arguments)
-}
+pub fn grade(physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream) -> syn::Result<Program> { grade_in(&mut Default::default(), physical, structures, source, arguments) }
 
-pub fn grade_in(
-    checker: &mut cq_lang_sequence::contract::Checker,
-    source: &Program,
-    arguments: TokenStream,
-) -> syn::Result<Program> {
-    let Grades { machine, grades } = syn::parse2(arguments)?;
-    let mut target = source.clone();
-    grade_definitions_in(checker, &mut target, &machine, &grades)?;
-    Ok(target)
-}
+pub fn grade_in(checker: &mut cq_lang_sequence::contract::Checker, physical: &cq_lang_sequence::structures::physical::Program, structures: &cq_lang_sequence::structures::Program, source: &Program, arguments: TokenStream,) -> syn::Result<Program> { let Grades { machine, grades } = syn::parse2(arguments)?;
+let mut target = source.clone();
+grade_definitions_in(checker, physical, structures, &mut target, &machine, &grades)?;
+Ok(target) }
 
 /// Apply typed grade advice without copying unchanged syntax or rendering tokens.
 /// Only the nonsemantic grading field is borrowed mutably after its complete
 /// structural proof succeeds; machine grading remains a separate obligation.
 pub fn grade_definitions_in(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     source: &mut Program,
     machine: &Ident,
     grades: &[Grade],
@@ -372,7 +312,7 @@ pub fn grade_definitions_in(
             "cannot extend a different graded machine",
         ));
     }
-    checker.check_shared(source)?;
+    checker.check_shared(physical, structures, source)?;
     let graded = source.graded.get_or_insert_with(|| Graded {
         machine: machine.clone(),
         grades: Vec::new(),

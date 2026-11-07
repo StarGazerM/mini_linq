@@ -24,7 +24,7 @@ pub struct Bound {
 }
 
 /// Formal rule BE-PrefixBound: Record counts and keys through Unit, Rename, filters, scalar Bind, Project, Group, Semi/Anti and keyed Probe/Merge; generators and Union have no bound.
-pub(crate) fn record(program: &Program) -> BTreeMap<String, Bound> {
+pub(crate) fn record(physical: &crate::structures::physical::Program, program: &Program) -> BTreeMap<String, Bound> {
     let mut bounds: BTreeMap<String, Bound> = BTreeMap::new();
     let get = |bounds: &BTreeMap<String, Bound>, name: &syn::Ident| {
         bounds.get(&symbol_name(name)).cloned().unwrap_or_default()
@@ -32,7 +32,7 @@ pub(crate) fn record(program: &Program) -> BTreeMap<String, Bound> {
     let covers = |bound: &Bound, columns: &BTreeSet<String>| {
         bound.keys.iter().any(|key| key.is_subset(columns))
     };
-    for definition in &program.structures.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let bound = match &definition.operator {
             Operator::Unit(_) => Bound {
                 rows: Some(1),
@@ -110,14 +110,14 @@ pub(crate) fn record(program: &Program) -> BTreeMap<String, Bound> {
 /// Check BE-PrefixBound locally against evidence and preceding recorded facts.
 /// A record may omit keys or weaken an upper bound. At a keyed join either
 /// justified side is legal; this does not replay `record`'s preferred side.
-pub fn check(program: &Program, bounds: &BTreeMap<String, Bound>) -> syn::Result<()> {
+pub fn check(physical: &crate::structures::physical::Program, program: &Program, bounds: &BTreeMap<String, Bound>) -> syn::Result<()> {
     fn weakens(recorded: &Bound, premise: &Bound) -> bool {
         recorded
             .rows
             .is_none_or(|rows| premise.rows.is_some_and(|limit| limit <= rows))
             && recorded.keys.iter().all(|key| premise.keys.contains(key))
     }
-    let definitions = &program.structures.physical.program.definitions;
+    let definitions = &physical.program.definitions;
     if bounds.len() != definitions.len() {
         return Err(syn::Error::new_spanned(
             program,

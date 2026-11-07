@@ -184,13 +184,13 @@ fn checked_trace(text: &'static str, hole: &crate::export::Hole, context: &round
         if stage.is::<cq_lang_physical::Program>() {
             physical = Some(checked::<cq_lang_physical::Program>(stage)?);
         } else if stage.is::<cq_lang_structures::Program>() {
-            let checked = checked::<cq_lang_structures::Program>(stage)?;
-            structures = Some(checked.structures.entries);
+            let checked = lineage::checked_structures(stage)?;
+            structures = Some(checked.structures.structures.entries);
             physical = Some(checked.physical);
         } else if stage.is::<cq_lang_sequence::Program>() {
-            let checked = checked::<cq_lang_sequence::Program>(stage)?;
+            let checked = lineage::checked_sequence(stage)?;
             structures = Some(checked.structures.structures.entries);
-            physical = Some(checked.structures.physical);
+            physical = Some(checked.physical);
         }
     }
     let physical = physical.ok_or_else(|| invalid("ST-Calibration: terminal requires actual final Physical definitions"))?;

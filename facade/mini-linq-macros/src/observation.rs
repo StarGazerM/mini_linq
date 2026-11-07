@@ -41,7 +41,7 @@ impl Observation {
         config: Configuration,
         tokens: TokenStream,
     ) -> syn::Result<TokenStream> {
-        if let Ok(sequence) = syn::parse2::<cq_lang_sequence::Program>(tokens.clone()) {
+        if let Ok(sequence) = syn::parse2::<super::Sequence>(tokens.clone()) {
             let mut pipeline = super::sequence_pipeline(config)?;
             let cutoff = match self.boundary {
                 Boundary::Sequence => {
@@ -60,7 +60,7 @@ impl Observation {
             };
             pipeline.passes.truncate(cutoff);
             pipeline.observer = Some(self.receiver);
-            return pipeline.start(tokens);
+            return pipeline.start(if cutoff == 0 { sequence.program_tokens() } else { tokens });
         }
         if self.boundary == Boundary::Vo && config.plan.is_some() {
             return Err(syn::Error::new_spanned(

@@ -551,16 +551,21 @@ pub fn filtered_leaf(
 }
 
 pub fn apply_sequence(
+    physical: &cq_lang_physical::Program,
+    structures: &cq_lang_structures::Program,
     source: &cq_lang_sequence::Program,
     invocations: &[String],
 ) -> syn::Result<cq_sequence_plan::Planned> {
     let mut planned = cq_sequence_plan::Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: source.clone(),
         trace: Vec::new(),
     };
     for invocation in invocations {
         let step: cq_sequence_plan::Advice = syn::parse_str(invocation)?;
-        planned.program = step.apply(&planned.program)?;
+        (planned.physical, planned.structures, planned.program) =
+            step.apply(&planned.physical, &planned.structures, &planned.program)?;
         planned.trace.push(step);
     }
     Ok(planned)
@@ -659,16 +664,22 @@ pub fn hand_membership(
 /// Share only legal placement/catalog discovery with decomposition. The root,
 /// expansion boundaries, tile/items and output protocol are authored here.
 pub fn hand_schedule(
+    physical: &cq_lang_physical::Program,
+    structures: &cq_lang_structures::Program,
     source: &cq_lang_sequence::Program,
     recipe: &Schedule,
 ) -> syn::Result<cq_sequence_plan::Planned> {
     use cq_sequence_plan::Advice;
     let suggested = cq_sequence_plan::decompose(
+        physical,
+        structures,
         source,
         &cq_gpu_sequence::machine(),
         &cq_gpu_sequence::catalog(),
     )?;
     let mut planned = cq_sequence_plan::Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: source.clone(),
         trace: Vec::new(),
     };
@@ -679,7 +690,8 @@ pub fn hand_schedule(
         ) {
             continue;
         }
-        planned.program = step.apply(&planned.program)?;
+        (planned.physical, planned.structures, planned.program) =
+            step.apply(&planned.physical, &planned.structures, &planned.program)?;
         planned.trace.push(step);
     }
     let output = planned
@@ -697,9 +709,7 @@ pub fn hand_schedule(
     }];
     // Partition every independent device-side numeric filter. Tiling only join
     // expansion leaves a 6M/60M-row publication as a scalar producer.
-    for definition in source
-        .structures
-        .physical
+    for definition in physical
         .program
         .definitions
         .iter()
@@ -730,15 +740,13 @@ pub fn hand_schedule(
         // The host filtered-range builder accepts one half-open column only.
         // Publish numeric filtered leaves on device instead: shipdate+quantity
         // and availability are checked map predicates, not host index bounds.
-        for definition in &source.structures.physical.program.definitions {
+        for definition in &physical.program.definitions {
             if matches!(definition.mode, cq_lang_physical::Mode::Let(_))
                 && matches!(definition.operator, cq_lang_physical::Operator::Range(..))
             {
                 let name = &definition.name;
                 let mut input = definition.operator.input().unwrap();
-                while let Some(parent) = source
-                    .structures
-                    .physical
+                while let Some(parent) = physical
                     .program
                     .definitions
                     .iter()
@@ -781,11 +789,11 @@ pub fn hand_schedule(
             }
         }
     }
-    for definition in &source.structures.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let cq_lang_physical::Operator::Probe(_, key) = &definition.operator else {
             continue;
         };
-        if !relation_of(&source.structures.physical, &key.right)
+        if !relation_of(physical, &key.right)
             .is_some_and(|relation| recipe.expansions.iter().any(|name| relation == name))
         {
             continue;
@@ -809,7 +817,8 @@ pub fn hand_schedule(
     }
     schedule.push(Advice::Output(cq_lang_sequence::OutputProtocol::Count));
     for step in schedule {
-        planned.program = step.apply(&planned.program)?;
+        (planned.physical, planned.structures, planned.program) =
+            step.apply(&planned.physical, &planned.structures, &planned.program)?;
         planned.trace.push(step);
     }
     Ok(planned)

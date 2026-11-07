@@ -1,5 +1,5 @@
 //! Typed realization-stack transport, separate from the printed IR grammar.
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::braced;
@@ -17,6 +17,9 @@ mod kw {
 ///
 /// `Base` borrows the upper program, or a tuple of upper-program references.
 /// No upper program is cloned or embedded by this contract.
+/// Authored streams parse upper programs first, then pass their references here.
+/// `check` validates the actual seam; `check_rewrite` receives both source and
+/// target bases so it can check the rewrite without an embedded upper program.
 pub trait Annotation<Base>: ToTokens {
     fn parse(input: ParseStream<'_>, base: Base) -> syn::Result<Self>
     where
@@ -34,6 +37,7 @@ pub trait Annotation<Base>: ToTokens {
 }
 
 /// Physical and its Structures annotation, printed independently in continuations.
+/// Authored entry consumes Physical followed by the Structures annotation.
 pub struct Structures<P, S> {
     pub physical: P,
     pub structures: S,
@@ -128,6 +132,8 @@ impl<P: Language, S: for<'a> Annotation<&'a P>> Language for Structures<P, S> {
 }
 
 /// Physical, Structures and the Sequence schedule, all separate programs.
+/// Authored entry consumes Physical, Structures against Physical, and Sequence
+/// against both preceding programs, in that order.
 pub struct Sequence<P, S, Q> {
     pub physical: P,
     pub structures: S,
@@ -140,7 +146,12 @@ impl<P, S, Q> Sequence<P, S, Q> {
     }
 }
 
-impl<P: Language, S: Language, Q: Language> Sequence<P, S, Q> {
+impl<P, S, Q> Sequence<P, S, Q>
+where
+    P: Language,
+    S: for<'a> Annotation<&'a P>,
+    Q: for<'a> Annotation<(&'a P, &'a S)>,
+{
     pub fn pass<Out: Language>(
         input: TokenStream,
         f: impl FnOnce(&P, &S, &Q, TokenStream) -> syn::Result<Out>,
@@ -162,12 +173,18 @@ impl<P: Language, S: Language, Q: Language> Sequence<P, S, Q> {
     }
 }
 
-impl<P: Parse, S: Parse, Q: Parse> Parse for Sequence<P, S, Q> {
+impl<P, S, Q> Parse for Sequence<P, S, Q>
+where
+    P: Parse,
+    S: for<'a> Annotation<&'a P>,
+    Q: for<'a> Annotation<(&'a P, &'a S)>,
+{
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         if !input.peek(kw::realization) {
-            let physical = input.fork().parse()?;
-            let structures = input.fork().parse()?;
-            return Ok(Self::new(physical, structures, input.parse()?));
+            let physical = input.parse()?;
+            let structures = S::parse(input, &physical)?;
+            let sequence = Q::parse(input, (&physical, &structures))?;
+            return Ok(Self::new(physical, structures, sequence));
         }
         input.parse::<kw::realization>()?;
         let body;
@@ -175,9 +192,19 @@ impl<P: Parse, S: Parse, Q: Parse> Parse for Sequence<P, S, Q> {
         body.parse::<kw::physical>()?;
         let physical = program(&body)?;
         body.parse::<kw::structures>()?;
-        let structures = program(&body)?;
+        let annotations;
+        braced!(annotations in body);
+        let structures = S::parse(&annotations, &physical)?;
+        if !annotations.is_empty() {
+            return Err(annotations.error("unexpected tokens after Structures annotation"));
+        }
         body.parse::<kw::sequence>()?;
-        let sequence = program(&body)?;
+        let annotations;
+        braced!(annotations in body);
+        let sequence = Q::parse(&annotations, (&physical, &structures))?;
+        if !annotations.is_empty() {
+            return Err(annotations.error("unexpected tokens after Sequence annotation"));
+        }
         if !body.is_empty() {
             return Err(body.error("expected a Physical + Structures + Sequence realization stack"));
         }
@@ -194,20 +221,36 @@ impl<P: ToTokens, S: ToTokens, Q: ToTokens> ToTokens for Sequence<P, S, Q> {
     }
 }
 
-impl<P: Language, S: Language, Q: Language> Language for Sequence<P, S, Q> {
+impl<P, S, Q> Language for Sequence<P, S, Q>
+where
+    P: Language,
+    S: for<'a> Annotation<&'a P>,
+    Q: for<'a> Annotation<(&'a P, &'a S)>,
+{
     fn check(&self) -> syn::Result<()> {
-        check_embedding(&self.physical, &self.structures)?;
-        check_embedding(&self.structures, &self.sequence)?;
-        self.sequence.check()
+        self.physical.check()?;
+        self.structures.check(&self.physical)?;
+        self.sequence.check((&self.physical, &self.structures))
     }
     fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        Q::check_rewrite(&source.sequence, &target.sequence)
+        Q::check_rewrite(
+            (&source.physical, &source.structures),
+            &source.sequence,
+            (&target.physical, &target.structures),
+            &target.sequence,
+        )
     }
-    fn context(&self) -> Context { self.sequence.context() }
+    fn context(&self) -> Context { self.physical.context() }
     fn output_consumer(&self) -> Option<&OutputConsumer> { self.sequence.output_consumer() }
     fn program_tokens(&self) -> TokenStream { self.sequence.to_token_stream() }
     fn calibration_stage(&self) -> crate::calibration::Stage {
-        crate::calibration::Stage::of(&self.sequence)
+        crate::calibration::Stage::annotation(
+            &self.sequence,
+            vec![
+                self.physical.to_token_stream().to_string(),
+                self.structures.to_token_stream().to_string(),
+            ],
+        )
     }
 }
 
@@ -221,40 +264,3 @@ fn program<L: Parse>(input: ParseStream<'_>) -> syn::Result<L> {
     Ok(program)
 }
 
-// Sequence's temporary prefix bridge is removed by the Sequence de-embedding.
-// Comparing token trees ignores spans, not syntax.
-fn check_embedding(upper: &impl ToTokens, lower: &impl ToTokens) -> syn::Result<()> {
-    let mut lower_tokens = lower.to_token_stream().into_iter();
-    if upper.to_token_stream().into_iter().all(|upper| {
-        lower_tokens.next().is_some_and(|lower| same_token(upper, lower))
-    }) {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(lower,
-            "ST-Realization: separate program disagrees with the embedded program"))
-    }
-}
-
-fn same_token(left: TokenTree, right: TokenTree) -> bool {
-    match (left, right) {
-        (TokenTree::Group(left), TokenTree::Group(right)) => {
-            if left.delimiter() != right.delimiter() { return false; }
-            let mut left = left.stream().into_iter();
-            let mut right = right.stream().into_iter();
-            loop {
-                match (left.next(), right.next()) {
-                    (None, None) => return true,
-                    (Some(left), Some(right)) => {
-                        if !same_token(left, right) { return false; }
-                    }
-                    _ => return false,
-                }
-            }
-        }
-        (TokenTree::Ident(left), TokenTree::Ident(right)) => left == right,
-        (TokenTree::Punct(left), TokenTree::Punct(right)) =>
-            left.as_char() == right.as_char() && left.spacing() == right.spacing(),
-        (TokenTree::Literal(left), TokenTree::Literal(right)) => left.to_string() == right.to_string(),
-        _ => false,
-    }
-}

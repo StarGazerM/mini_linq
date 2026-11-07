@@ -130,19 +130,17 @@ pub fn conformance_targets(input: proc_macro::TokenStream) -> proc_macro::TokenS
 pub fn sequence_targets(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     use cq_sequence_conformance::{Target, translate_with_catalog};
     use quote::quote;
-    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<syn::Expr>(input.into(), |_physical, source, arguments| {
+    cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<syn::Expr>(input.into(), |physical, source, arguments| {
         let loader: syn::Ident = syn::parse2(arguments)?;
-        let sequence = cq_sequence_lowering::compile(source)?;
-        cq_sequence_lowering::check(source, &sequence)?;
+        let sequence = cq_sequence_lowering::compile(physical, source)?;
+        cq_sequence_lowering::check(physical, source, &sequence)?;
         // This provider belongs to the workload, not to either target crate.
         // SortedIndex uses Rc-backed buckets and is a host-only provider.
         let mut catalog = cq_lang_sequence::Catalog::default();
         catalog.register(sorted_index(), vec![vec!["host".into()]]);
-        let (sequential, _) = translate_with_catalog(&sequence, Target::Sequential, &catalog)?;
-        let (tasks, canonical) = translate_with_catalog(&sequence, Target::Tasks, &catalog)?;
-        let bindings: Vec<_> = sequence
-            .structures
-            .physical
+        let (sequential, _) = translate_with_catalog(physical, source, &sequence, Target::Sequential, &catalog)?;
+        let (tasks, canonical) = translate_with_catalog(physical, source, &sequence, Target::Tasks, &catalog)?;
+        let bindings: Vec<_> = physical
             .inputs()
             .map(|input| {
                 let ident = &input.name;

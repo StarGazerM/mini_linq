@@ -1,11 +1,12 @@
-use cq_lang_sequence::{Program, check_grading};
+use cq_lang_sequence::check_grading;
+include!("support/stack.rs");
 use quote::quote;
 
 #[test]
 fn host_union_concatenates_published_dispatches_before_optional_canon() {
     for canonical in [false, true] {
         let canon = canonical.then(|| quote!(canon));
-        let program: Program = syn::parse2(quote! {
+        let Stack { physical, structures, program } = syn::parse2(quote! {
             physical {
                 relation R(a:u32) = (&data.r);
                 relation S(a:u32) = (&data.s);
@@ -41,8 +42,9 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
             }
         })
         .unwrap();
-        let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
-        let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
+        let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
+        let analysis = check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine()).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
         assert_eq!(analysis.dispatches.len(), 2);
         use cq_lang_sequence::gpu::publication::{self, PublicationStorage};
         for name in ["left", "right"] {
@@ -56,7 +58,7 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
         assert!(matches!(record.storage, PublicationStorage::PackedKeys(_)));
         assert_eq!(record.storage.canonical_provider().is_some(), canonical);
         assert_eq!(record.union_staging.as_ref().unwrap().columns, ["a"]);
-        publication::check(&program, &analysis, &analysis.gpu_publications).unwrap();
+        publication::check(&physical, &program, &structure_analysis, &analysis, &analysis.gpu_publications).unwrap();
         let mut missing_staging = analysis.clone();
         missing_staging
             .gpu_publications
@@ -65,14 +67,16 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
             .union_staging = None;
         assert!(
             publication::check(
+                &physical,
                 &program,
+                &structure_analysis,
                 &missing_staging,
                 &missing_staging.gpu_publications
             )
             .is_err()
         );
-        assert!(cq_gpu_sequence::translate(&program, &missing_staging).is_err());
-        let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+        assert!(cq_gpu_sequence::translate(&physical, &structures, &program, &missing_staging).is_err());
+        let expression = cq_gpu_sequence::translate(&physical, &structures, &program, &analysis).unwrap();
         struct PublicationCalls(Vec<&'static str>);
         impl<'a> syn::visit::Visit<'a> for PublicationCalls {
             fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
@@ -104,8 +108,8 @@ fn host_union_concatenates_published_dispatches_before_optional_canon() {
                 unreachable!()
             };
             packed.granularity = publication::Granularity::Rows;
-            assert!(publication::check(&program, &dropped, &dropped.gpu_publications).is_err());
-            assert!(cq_gpu_sequence::translate(&program, &dropped).is_err());
+            assert!(publication::check(&physical, &program, &structure_analysis, &dropped, &dropped.gpu_publications).is_err());
+            assert!(cq_gpu_sequence::translate(&physical, &structures, &program, &dropped).is_err());
         }
     }
 }

@@ -1,6 +1,7 @@
 use cq_gpu_runtime::{Codec, DeviceColumns, Dictionary, Pool};
 use cq_gpu_sequence_runtime::Result;
-use cq_lang_sequence::{Program, check_grading};
+use cq_lang_sequence::check_grading;
+include!("support/stack.rs");
 use quote::ToTokens;
 
 /// Accumulator providers of every emitted `fold` call.
@@ -28,7 +29,7 @@ fn fold_providers(generated: &syn::Expr) -> Vec<Option<syn::Type>> {
 
 #[test]
 fn translates_grouped_canonical_publication() {
-    let mut program: Program = syn::parse_quote! {
+    let Stack { physical, structures, program } = syn::parse_quote! {
         physical {
             relation R(k:u32,id:u32,value:i64) = (data);
             r = let canon rename R@0 {k -> k,id -> id,value -> value};
@@ -52,28 +53,26 @@ fn translates_grouped_canonical_publication() {
         graded gpu {source at host; feed at device.block; valuations at host; result at host;}
     };
     // Authored Sequence skips the `stage` pass: bind target Structures explicitly.
-    program.structures = cq_gpu_sequence::bind_structures(&program.structures).unwrap();
-    let program = cq_gpu_sequence_core::runs::record_representation(&program).unwrap();
-    let analysis = check_grading(&program, &cq_gpu_sequence::machine()).unwrap();
-    let expression = cq_gpu_sequence::translate(&program, &analysis).unwrap();
+    let structures = cq_gpu_sequence::bind_structures(&physical, &structures).unwrap();
+    let program = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &program).unwrap();
+    let analysis = check_grading(&physical, &structures, &program, &cq_gpu_sequence::machine()).unwrap();
+    let expression = cq_gpu_sequence::translate(&physical, &structures, &program, &analysis).unwrap();
     let code = expression.to_token_stream().to_string();
     let segmented: syn::Type = syn::parse_quote!(::cq_gpu_sequence_runtime::group::SegmentedGroup);
-    assert_eq!(analysis.structures.groups["grouped"].ty, segmented);
+    let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+    assert_eq!(structure_analysis.groups["grouped"].ty, segmented);
     assert_eq!(fold_providers(&expression), vec![Some(segmented)], "{code}");
     assert!(code.contains("build_set"));
     assert!(code.contains("valid [3usize]"));
 
     // A group answer needs a distinct empty publication protocol. Reject that
     // unsupported combination in the target checker, before any printer runs.
-    let mut gated = program.clone();
-    gated
-        .structures
-        .physical
-        .program
+    let mut gated = physical.clone();
+    gated.program
         .captures
         .items
         .push(syn::parse_quote!(if (limit != 3)));
-    let error = check_grading(&gated, &cq_gpu_sequence::machine()).unwrap_err();
+    let error = check_grading(&gated, &structures, &program, &cq_gpu_sequence::machine()).unwrap_err();
     assert!(
         error
             .to_string()

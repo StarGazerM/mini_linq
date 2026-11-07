@@ -7,6 +7,8 @@ use crate::{Advice, Planned};
 /// Existing tiles are authored scheduling choices, including their item counts.
 pub(crate) fn advise(
     checker: &mut cq_lang_sequence::contract::Checker,
+    physical: &cq_lang_sequence::structures::physical::Program,
+    structures: &cq_lang_sequence::structures::Program,
     program: &Program,
     machine: &Machine,
     width: Option<usize>,
@@ -14,6 +16,8 @@ pub(crate) fn advise(
     segmented: bool,
 ) -> syn::Result<Planned> {
     let mut planned = Planned {
+        physical: physical.clone(),
+        structures: structures.clone(),
         program: program.clone(),
         trace: Vec::new(),
     };

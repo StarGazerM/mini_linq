@@ -23,7 +23,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{Ident, LitInt, LitStr, Token, braced, bracketed, parenthesized};
 
-use crate::{Analysis, Program};
+use crate::Analysis;
 
 pub(crate) mod kw {
     syn::custom_keyword!(evidence);
@@ -206,7 +206,7 @@ impl Evidence {
 
     /// Check grammar invariants and references, never the truth of a fact.
     // Formal rule WF-SequenceEvidence: Require structured nonempty provenance and valid references; VO planning advice never supplies a trusted semantic key premise.
-    pub(crate) fn check(&self, program: &Program, analysis: &Analysis) -> syn::Result<()> {
+    pub(crate) fn check(&self, physical: &crate::structures::physical::Program, structure_analysis: &crate::structures::Analysis, analysis: &Analysis) -> syn::Result<()> {
         for fact in &self.facts {
             fact.source().check()?;
             if matches!(
@@ -230,12 +230,12 @@ impl Evidence {
                 | EvidenceFact::Bounds { subject, .. }
                 | EvidenceFact::Sorted { subject, .. } => subject,
             };
-            check_subject(program, analysis, subject)?;
+            check_subject(physical, structure_analysis, analysis, subject)?;
             match fact {
                 EvidenceFact::PlanningKey { columns, .. }
                 | EvidenceFact::TrustedKey { columns, .. }
                 | EvidenceFact::Sorted { columns, .. } => {
-                    check_columns(program, analysis, subject, columns)?;
+                    check_columns(physical, structure_analysis, analysis, subject, columns)?;
                 }
                 EvidenceFact::ForeignKey {
                     columns,
@@ -249,12 +249,12 @@ impl Evidence {
                             "evidence: foreign key column arities differ",
                         ));
                     }
-                    check_subject(program, analysis, referenced)?;
-                    check_columns(program, analysis, subject, columns)?;
-                    check_columns(program, analysis, referenced, referenced_columns)?;
+                    check_subject(physical, structure_analysis, analysis, referenced)?;
+                    check_columns(physical, structure_analysis, analysis, subject, columns)?;
+                    check_columns(physical, structure_analysis, analysis, referenced, referenced_columns)?;
                 }
                 EvidenceFact::Bounds { column, .. } => {
-                    check_columns(program, analysis, subject, std::slice::from_ref(column))?;
+                    check_columns(physical, structure_analysis, analysis, subject, std::slice::from_ref(column))?;
                 }
                 EvidenceFact::Selectivity { ratio, .. } if ratio.denominator == 0 => {
                     return Err(syn::Error::new_spanned(
@@ -269,15 +269,11 @@ impl Evidence {
     }
 }
 
-fn check_subject(program: &Program, analysis: &Analysis, subject: &Ident) -> syn::Result<()> {
+fn check_subject(physical: &crate::structures::physical::Program, structure_analysis: &crate::structures::Analysis, analysis: &Analysis, subject: &Ident) -> syn::Result<()> {
     let name = symbol_name(subject);
     if analysis.lengths.contains_key(&name)
-        || analysis.structures.physical.headings.contains_key(&name)
-        || program
-            .structures
-            .physical
-            .program
-            .declarations
+        || structure_analysis.physical.headings.contains_key(&name)
+        || physical.program.declarations
             .iter()
             .any(|relation| symbol_name(&relation.name) == name)
     {
@@ -291,7 +287,8 @@ fn check_subject(program: &Program, analysis: &Analysis, subject: &Ident) -> syn
 }
 
 fn check_columns(
-    program: &Program,
+    physical: &crate::structures::physical::Program,
+    structure_analysis: &crate::structures::Analysis,
     analysis: &Analysis,
     subject: &Ident,
     columns: &[Ident],
@@ -317,14 +314,10 @@ fn check_columns(
         let present =
             if analysis.lengths.contains_key(&name) && !analysis.results.contains_key(&name) {
                 false
-            } else if let Some(heading) = analysis.structures.physical.headings.get(result) {
+            } else if let Some(heading) = structure_analysis.physical.headings.get(result) {
                 heading.contains(&column_name)
             } else {
-                program
-                    .structures
-                    .physical
-                    .program
-                    .declarations
+                physical.program.declarations
                     .iter()
                     .find(|relation| symbol_name(&relation.name) == result)
                     .is_some_and(|relation| {

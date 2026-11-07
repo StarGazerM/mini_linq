@@ -75,10 +75,10 @@ pub fn select(input: TokenStream) -> TokenStream {
 pub fn sequence(input: TokenStream) -> TokenStream {
     cq_stage::Structures::<cq_lang_structures::physical::Program, cq_lang_structures::Program>::pass::<cq_stage::Sequence<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>>(
         input.into(),
-        |_physical, source, arguments| {
+        |physical, source, arguments| {
             no_arguments(arguments)?;
-            let target = cq_sequence_lowering::compile(source)?;
-            Ok(cq_stage::Sequence::new(target.structures.physical.clone(), target.structures.clone(), target))
+            let target = cq_sequence_lowering::compile(physical, source)?;
+            Ok(cq_stage::Sequence::new(physical.clone(), source.clone(), target))
         },
     )
     .into()
@@ -89,7 +89,7 @@ pub fn sequence(input: TokenStream) -> TokenStream {
 pub fn sequential(input: TokenStream) -> TokenStream {
     cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |physical, structures, source, arguments| {
         no_arguments(arguments)?;
-        cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
+        cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
         Ok((physical.clone(), structures.clone(), source.clone()))
     })
     .into()
@@ -98,10 +98,10 @@ pub fn sequential(input: TokenStream) -> TokenStream {
 /// End the queue with a Rust pull expression.
 #[proc_macro]
 pub fn translate_pull(input: TokenStream) -> TokenStream {
-    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |_physical, _structures, source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |physical, structures, source, arguments| {
         no_arguments(arguments)?;
-        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_pull::machine())?;
-        cq_sequence_pull::translate(source, &analysis)
+        let analysis = cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_pull::machine())?;
+        cq_sequence_pull::translate(physical, structures, source, &analysis)
     })
     .into()
 }
@@ -154,11 +154,11 @@ mod tests {
         cq_physical_lowering::check(&indexes(), &target).unwrap();
         let selected = cq_structure_selection::compile(&target).unwrap();
         cq_structure_selection::check(&target, &selected).unwrap();
-        let sequence = cq_sequence_lowering::compile(&selected).unwrap();
-        cq_sequence_lowering::check(&selected, &sequence).unwrap();
+        let sequence = cq_sequence_lowering::compile(&target, &selected).unwrap();
+        cq_sequence_lowering::check(&target, &selected, &sequence).unwrap();
         let analysis =
-            cq_lang_sequence::check_grading(&sequence, &cq_sequence_pull::machine()).unwrap();
-        cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+            cq_lang_sequence::check_grading(&target, &selected, &sequence, &cq_sequence_pull::machine()).unwrap();
+        cq_sequence_pull::translate(&target, &selected, &sequence, &analysis).unwrap();
     }
 
     #[test]

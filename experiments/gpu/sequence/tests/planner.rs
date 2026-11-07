@@ -5,16 +5,17 @@
 #[path = "support/h05_plans.rs"]
 mod h05_plans;
 
-use cq_lang_sequence::{Program, check_grading, check_rewrite};
+use cq_lang_sequence::{check_grading, check_rewrite};
+include!("support/stack.rs");
 
-fn planned(authored: &Program) -> Program {
+fn planned(authored: &Stack) -> Stack {
     let machine = cq_gpu_sequence::machine();
-    let source = cq_sequence_lowering::compile(&authored.structures).unwrap();
-    let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
+    let source = cq_sequence_lowering::compile(&authored.physical, &authored.structures).unwrap();
+    let source = cq_gpu_sequence_core::runs::record_representation(&authored.physical, &authored.structures, &source).unwrap();
     let result =
-        cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+        cq_sequence_plan::decompose(&authored.physical, &authored.structures, &source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let repeated =
-        cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+        cq_sequence_plan::decompose(&authored.physical, &authored.structures, &source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     assert_eq!(
         result, repeated,
         "PL-Det: repeated planning must be identical"
@@ -22,22 +23,22 @@ fn planned(authored: &Program) -> Program {
     let replayed = result
         .trace
         .iter()
-        .fold(source.clone(), |previous, advice| {
-            let next = advice.apply(&previous).unwrap();
-            check_rewrite(&previous, &next).unwrap();
+        .fold((authored.physical.clone(), authored.structures.clone(), source.clone()), |previous, advice| {
+            let next = advice.apply(&previous.0, &previous.1, &previous.2).unwrap();
+            check_rewrite(&previous.0, &previous.1, &previous.2, &next.0, &next.1, &next.2).unwrap();
             next
         });
     assert_eq!(
-        replayed, result.program,
+        replayed, (result.physical.clone(), result.structures.clone(), result.program.clone()),
         "PL-Closure: replay must reproduce every generated decision"
     );
     assert_eq!(
-        result.program.structures, authored.structures,
+        result.structures, authored.structures,
         "decomposition must preserve the authored traversal and provider choices"
     );
-    let analysis = check_grading(&result.program, &machine).unwrap();
-    cq_gpu_sequence::translate(&result.program, &analysis).unwrap();
-    result.program
+    let analysis = check_grading(&result.physical, &result.structures, &result.program, &machine).unwrap();
+    cq_gpu_sequence::translate(&result.physical, &result.structures, &result.program, &analysis).unwrap();
+    Stack { physical: result.physical, structures: result.structures, program: result.program }
 }
 
 #[test]
@@ -112,8 +113,10 @@ fn step_r() -> cq_lang_sequence::structures::Program {
 #[test]
 fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
     let machine = cq_gpu_sequence::machine();
-    let source = cq_sequence_lowering::compile(&step_r()).unwrap();
-    let source = cq_gpu_sequence_core::runs::record_representation(&source).unwrap();
+    let structures = step_r();
+    let physical = structures.physical.clone();
+    let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source).unwrap();
     let evidence: cq_sequence_plan::Advice = syn::parse_quote!(evidence from authored("experiments/gpu/sequence/tests/planner.rs fixture") {
         count Region = 5; trusted_key Region [r_regionkey];
         count Nation = 25; trusted_key Nation [n_nationkey];
@@ -122,18 +125,18 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
         count Lineitem = 6001215;
         count Supplier = 10000; trusted_key Supplier [s_suppkey];
     });
-    let source = evidence.apply(&source).unwrap();
+    let (physical, structures, source) = evidence.apply(&physical, &structures, &source).unwrap();
     let result =
-        cq_sequence_plan::decompose(&source, &machine, &cq_gpu_sequence::catalog()).unwrap();
+        cq_sequence_plan::decompose(&physical, &structures, &source, &machine, &cq_gpu_sequence::catalog()).unwrap();
     let replayed = result
         .trace
         .iter()
-        .fold(source.clone(), |previous, advice| {
-            let next = advice.apply(&previous).unwrap();
-            check_rewrite(&previous, &next).unwrap();
+        .fold((physical.clone(), structures.clone(), source.clone()), |previous, advice| {
+            let next = advice.apply(&previous.0, &previous.1, &previous.2).unwrap();
+            check_rewrite(&previous.0, &previous.1, &previous.2, &next.0, &next.1, &next.2).unwrap();
             next
         });
-    assert_eq!(replayed, result.program, "PL-Closure");
+    assert_eq!(replayed, (result.physical.clone(), result.structures.clone(), result.program.clone()), "PL-Closure");
     let trace: Vec<String> = result
         .trace
         .iter()
@@ -151,16 +154,18 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
             "segment (rncol , 1024 , items 4)",
         ]
     );
-    let analysis = check_grading(&result.program, &machine).unwrap();
-    cq_gpu_sequence::translate(&result.program, &analysis).unwrap();
+    let analysis = check_grading(&result.physical, &result.structures, &result.program, &machine).unwrap();
+    cq_gpu_sequence::translate(&result.physical, &result.structures, &result.program, &analysis).unwrap();
     // A recorded bound that the evidence does not establish is rejected.
     let forged: cq_sequence_plan::Advice = syn::parse_quote!(retain(rnc, 1, 256, 65536));
-    assert!(forged.apply(&source).is_err());
+    assert!(forged.apply(&physical, &structures, &source).is_err());
     // Without evidence the order keeps its single small root.
-    let plain = cq_sequence_lowering::compile(&step_r()).unwrap();
-    let plain = cq_gpu_sequence_core::runs::record_representation(&plain).unwrap();
+    let structures = step_r();
+    let physical = structures.physical.clone();
+    let plain = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let plain = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &plain).unwrap();
     let unadvised =
-        cq_sequence_plan::decompose(&plain, &machine, &cq_gpu_sequence::catalog()).unwrap();
+        cq_sequence_plan::decompose(&physical, &structures, &plain, &machine, &cq_gpu_sequence::catalog()).unwrap();
     assert!(
         !unadvised
             .trace
@@ -169,13 +174,13 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
     );
 }
 
-fn assert_cost_acceptance(name: &str, authored: Program) {
+fn assert_cost_acceptance(name: &str, mut authored: Stack) {
     let machine = cq_gpu_sequence::machine();
-    let authored = cq_gpu_sequence_core::runs::record_representation(&authored).unwrap();
-    check_grading(&authored, &machine).unwrap();
+    authored.program = cq_gpu_sequence_core::runs::record_representation(&authored.physical, &authored.structures, &authored.program).unwrap();
+    check_grading(&authored.physical, &authored.structures, &authored.program, &machine).unwrap();
     let generated = planned(&authored);
-    let authored_cost = cq_sequence_plan::cost(&authored, &machine).unwrap();
-    let planned_cost = cq_sequence_plan::cost(&generated, &machine).unwrap();
+    let authored_cost = cq_sequence_plan::cost(&authored.physical, &authored.structures, &authored.program, &machine).unwrap();
+    let planned_cost = cq_sequence_plan::cost(&generated.physical, &generated.structures, &generated.program, &machine).unwrap();
     eprintln!("H05 {name}: authored={authored_cost}; planned={planned_cost}");
     eprintln!(
         "H05 {name}: planned/authored ordering={:?}",

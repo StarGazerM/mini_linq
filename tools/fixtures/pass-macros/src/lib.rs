@@ -215,13 +215,15 @@ struct ReservePlanner;
 impl cq_sequence_plan::Planner for ReservePlanner {
     fn plan(
         &self,
+        physical: &physical::Program,
+        structures: &cq_lang_structures::Program,
         source: &cq_lang_sequence::Program,
         machine: &cq_lang_sequence::Machine,
         catalog: &cq_lang_sequence::Catalog,
         evidence: &cq_lang_sequence::Evidence,
     ) -> syn::Result<cq_sequence_plan::Planned> {
         let evidence_advice = cq_sequence_plan::Advice::Evidence(evidence.clone());
-        let recorded = evidence_advice.apply(source)?;
+        let recorded = evidence_advice.apply(physical, structures, source)?;
         let output_advice =
             source
                 .sequence
@@ -231,10 +233,10 @@ impl cq_sequence_plan::Planner for ReservePlanner {
                     cq_lang_sequence::OutputProtocol::Reserve,
                 ));
         let advised = match &output_advice {
-            Some(advice) => advice.apply(&recorded)?,
+            Some(advice) => advice.apply(&recorded.0, &recorded.1, &recorded.2)?,
             None => recorded,
         };
-        let mut planned = cq_sequence_plan::decompose(&advised, machine, catalog)?;
+        let mut planned = cq_sequence_plan::decompose(&advised.0, &advised.1, &advised.2, machine, catalog)?;
         if let Some(advice) = output_advice {
             planned.trace.insert(0, advice);
         }
@@ -246,7 +248,7 @@ impl cq_sequence_plan::Planner for ReservePlanner {
 /// Ordinary external checked pass, selected by the facade's named plan phase.
 #[proc_macro]
 pub fn plan_reserve(input: TokenStream) -> TokenStream {
-    cq_stage::Sequence::<physical::Program, cq_lang_structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |_physical, _structures, source, args| {
+    cq_stage::Sequence::<physical::Program, cq_lang_structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |physical, structures, source, args| {
         if args.to_string() != "expected" {
             return Err(syn::Error::new_spanned(
                 args,
@@ -256,26 +258,27 @@ pub fn plan_reserve(input: TokenStream) -> TokenStream {
         let machine = cq_sequence_pull::machine();
         let planned = cq_sequence_plan::Planner::plan(
             &ReservePlanner,
+            physical,
+            structures,
             source,
             &machine,
             &cq_sequence_pull::catalog(),
             &source.evidence,
         )?;
-        let mut replayed = source.clone();
+        let mut replayed = (physical.clone(), structures.clone(), source.clone());
         for advice in &planned.trace {
-            let next = advice.apply(&replayed)?;
-            cq_lang_sequence::check_rewrite(&replayed, &next)?;
+            let next = advice.apply(&replayed.0, &replayed.1, &replayed.2)?;
+            cq_lang_sequence::check_rewrite(&replayed.0, &replayed.1, &replayed.2, &next.0, &next.1, &next.2)?;
             replayed = next;
         }
-        if replayed != planned.program {
+        if (&replayed.0, &replayed.1, &replayed.2) != (&planned.physical, &planned.structures, &planned.program) {
             return Err(syn::Error::new_spanned(
                 source,
                 "planner trace did not replay",
             ));
         }
-        cq_lang_sequence::check_grading(&planned.program, &machine)?;
-        let target = planned.program;
-        Ok((target.structures.physical.clone(), target.structures.clone(), target))
+        cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
+        Ok((planned.physical, planned.structures, planned.program))
     })
     .into()
 }

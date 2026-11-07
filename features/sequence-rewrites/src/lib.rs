@@ -28,13 +28,20 @@
 //! and BE-Abort checks and overflow replay must succeed before publication.
 //!
 //! The macro protocol is `arguments { advice }; pipeline { next, ... };` followed
-//! by a complete Sequence program. Core dependencies are public packaged APIs;
+//! by the explicit Physical, Structures, and Sequence stack. Core dependencies are public packaged APIs;
 //! this package does not depend on storage, target translations or test hooks.
 #![forbid(unsafe_code)]
 
 use proc_macro::TokenStream;
 
 macro_rules! sequence_rewrite {
+    (@apply key_partition, $physical:expr, $structures:expr, $source:expr, $arguments:expr) => {
+        cq_sequence_plan::rewrites::key_partition($physical, $structures, $source, $arguments)
+    };
+    (@apply $name:ident, $physical:expr, $structures:expr, $source:expr, $arguments:expr) => {{
+        let target = cq_sequence_plan::rewrites::$name($physical, $structures, $source, $arguments)?;
+        Ok(($physical.clone(), $structures.clone(), target))
+    }};
     ($name:ident, $($invalid:tt)*) => {
         #[doc = concat!(
             "Checked `", stringify!($name), "` rewrite. Invalid advice is rejected:\n",
@@ -57,9 +64,8 @@ macro_rules! sequence_rewrite {
         pub fn $name(input: TokenStream) -> TokenStream {
             cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(
                 input.into(),
-                |_physical, _structures, source, arguments| {
-                    let target = cq_sequence_plan::rewrites::$name(source, arguments)?;
-                    Ok((target.structures.physical.clone(), target.structures.clone(), target))
+                |physical, structures, source, arguments| {
+                    sequence_rewrite!(@apply $name, physical, structures, source, arguments)
                 },
             )
             .into()

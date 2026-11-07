@@ -141,10 +141,11 @@ realization follows that recorded decision without inferring retention.
 
 ## Checks and evidence
 
-A language contract checks one program and returns facts its consumers use.
-A pass's independent `check(source, target)` checks both contracts and its
-erasure, refinement, demand, or representation obligations without rerunning
-`compile`. Free admissible choices remain free. A printer has no independent
+A language contract checks a program against any separately supplied base
+programs and returns facts its consumers use. A pass's independent
+`check(source, target)` checks both contracts and its erasure, refinement,
+demand, or representation obligations without rerunning `compile`.
+Free admissible choices remain free. A printer has no independent
 Rust semantic checker: rustc trait checks, expansion fixtures, and executed
 oracle agreement supply distinct evidence.
 
@@ -191,10 +192,14 @@ arguments packet is omitted when empty. An authored IR can start directly at
 a compatible macro with an explicit queue.
 
 Use `cq_stage::pass::<In, Out>` for a language-changing pass and
-`cq_stage::rewrite::<L>` for a same-language rewrite. Languages implement
-`Parse`, `ToTokens`, and `cq_stage::Language`. The protocol checks source and
-target contracts and queue shape; a changing pass supplies its own independent
-correspondence check. `rewrite` also invokes `Language::check_rewrite`.
+`cq_stage::rewrite::<L>` for a same-language rewrite. Flat languages implement
+`Parse`, `ToTokens`, and `cq_stage::Language`; annotation layers implement
+`cq_stage::Annotation<Base>` and `ToTokens`. Structures uses `Base = &P`;
+Sequence uses `Base = (&P, &S)`. Their carriers implement `Language`.
+The protocol checks source and target contracts and queue shape; a changing
+pass supplies its own independent correspondence check. `rewrite` also invokes
+`Language::check_rewrite`, which passes both base stacks to an annotation's
+rewrite checker.
 Only a terminal Rust printer can end the queue. Failures become
 `compile_error!`. Pass arguments record choices in target IR; subsequent passes
 receive complete programs.
@@ -208,10 +213,18 @@ closure returning `(P, S)`, or `cq_stage::Sequence::<P, S, Q>::rewrite` with a
 Their `pass::<Out>` methods give consumers the same separate arguments.
 Language-changing passes construct target carriers with `Structures::new` or
 `Sequence::new`. Flat CQ/VO/RA/IX/Physical and Datalog APIs are unchanged.
-During the embedding transition, ST-Realization rejects a separate program
-that differs from the next member's embedded program. Authored embedding IR
-can initialize the carrier at entry. Observers and calibration still receive
-the selected printed IR, never the transport envelope.
+ST-Realization checks each annotation's references and obligations against the
+actual separate base programs, not token-prefix equality. Authored entry parses
+Physical first, then Structures against Physical, then (when present) Sequence
+against Physical and Structures. Neither annotation embeds its base programs.
+Checked continuations use the realization envelope above.
+
+Observers receive only the selected printed IR, never the transport envelope.
+A calibration `Stage` likewise retains the selected layer's language and printed
+program as its identity, with separately printed `bases`: none for flat layers,
+`[P]` for Structures, and `[P, S]` for Sequence. The calibrator reparses the bases
+and annotation and checks their actual seam before deriving lineage. Calibration
+descriptors preserve those bases; they are not part of the selected IR grammar.
 
 The root Cargo workspace groups portable core, all feature consumers, formal
 examples and fixtures, and CPU benchmarks for shared compilation and lock

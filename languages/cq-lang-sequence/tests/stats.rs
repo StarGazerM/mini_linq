@@ -1,4 +1,6 @@
-use cq_lang_sequence::{self as sequence, Guard, Program, Term, structures};
+mod common;
+use common::Stack as Program;
+use cq_lang_sequence::{self as sequence, Guard, Term, structures};
 use quote::ToTokens;
 
 fn program() -> Program {
@@ -50,13 +52,13 @@ fn read(program: &mut Program) -> &mut sequence::stats::Guard {
 
 fn reject(program: &Program) {
     structures::contract::check(&program.structures).unwrap();
-    assert!(sequence::contract::check(program).is_err());
+    assert!(common::check(program).is_err());
 }
 
 #[test]
 fn typed_statistic_guard_and_program_roundtrip() {
     let mut program = program();
-    sequence::contract::check(&program).unwrap();
+    common::check(&program).unwrap();
     assert_eq!(
         syn::parse2::<Program>(program.to_token_stream()).unwrap(),
         program
@@ -68,7 +70,7 @@ fn typed_statistic_guard_and_program_roundtrip() {
             sequence::stats::Comparison::Ge,
         ] {
             read(&mut program).comparison = comparison;
-            sequence::contract::check(&program).unwrap();
+            common::check(&program).unwrap();
             let guard = read(&mut program).clone();
             assert_eq!(
                 syn::parse2::<sequence::stats::Guard>(guard.to_token_stream()).unwrap(),
@@ -131,7 +133,7 @@ fn statistic_missing_value_cannot_fall_through_to_another_guard() {
             panic!()
         };
         arms.insert(1, (intervening, arms[0].1.clone()));
-        let error = sequence::contract::check(&changed).unwrap_err().to_string();
+        let error = common::check(&changed).unwrap_err().to_string();
         assert!(error.contains("BE-StatsRead"), "{error}");
     }
     let mut changed = program();
@@ -153,7 +155,7 @@ fn estimates_select_checked_shapes_but_are_not_length_or_capacity_operands() {
         .statistic
         .precision = structures::stats::Precision::Estimate;
     read(&mut program).reference.precision = structures::stats::Precision::Estimate;
-    sequence::contract::check(&program).unwrap();
+    common::check(&program).unwrap();
     assert!(syn::parse_str::<sequence::Len>("stat ready (rows_r)").is_err());
     assert!(syn::parse_str::<Term>("store capacity stat ready (rows_r) rows r").is_err());
 }
@@ -180,8 +182,8 @@ fn host_statistic_read_cannot_enter_nonuniform_device_scope() {
         root: node("host", vec![node("device", vec![])]),
     };
     program.graded = Some(syn::parse_quote!(graded target { ready at host; answer at host; }));
-    sequence::check_grading(&program, &machine).unwrap();
+    common::check_grading(&program, &machine).unwrap();
     program.graded = Some(syn::parse_quote!(graded target { ready at host; answer at device; }));
-    sequence::contract::check(&program).unwrap();
-    assert!(sequence::check_grading(&program, &machine).is_err());
+    common::check(&program).unwrap();
+    assert!(common::check_grading(&program, &machine).is_err());
 }

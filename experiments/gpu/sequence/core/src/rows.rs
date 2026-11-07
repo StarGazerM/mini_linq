@@ -376,9 +376,14 @@ impl Rows {
             .collect()
     }
 
-    pub fn new(program: &Program, analysis: &Analysis) -> syn::Result<Self> {
-        let physical = &program.structures.physical;
-        crate::bindings::check(program, analysis, &analysis.gpu_bindings)?;
+    pub fn new(
+        physical: &cq_lang_structures::physical::Program,
+        structures: &cq_lang_structures::Program,
+        program: &Program,
+        structure_analysis: &cq_lang_structures::Analysis,
+        analysis: &Analysis,
+    ) -> syn::Result<Self> {
+        crate::bindings::check(physical, structures, program, structure_analysis, analysis, &analysis.gpu_bindings)?;
         let provider_layouts = analysis.gpu_bindings.providers.clone();
         let definitions: BTreeMap<_, _> = physical
             .program
@@ -386,8 +391,7 @@ impl Rows {
             .iter()
             .map(|d| (symbol_name(&d.name), d.clone()))
             .collect();
-        let names: BTreeSet<_> = analysis
-            .structures
+        let names: BTreeSet<_> = structure_analysis
             .physical
             .headings
             .values()
@@ -408,15 +412,15 @@ impl Rows {
             })
             .collect::<syn::Result<Vec<_>>>()?;
         let codecs =
-            crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
+            crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
         let realization = &analysis.gpu_bindings.realization;
         if let Some(rejection) = &realization.rejection {
             return Err(error(rejection));
         }
-        crate::realize::check(program, analysis, realization)?;
+        crate::realize::check(physical, structures, program, structure_analysis, analysis, realization)?;
         let expressions = realization.captures.device.clone();
         let capture_uses = realization.captures.uses.clone();
-        let mut physical_rows = analysis.structures.physical.rows.clone();
+        let mut physical_rows = structure_analysis.physical.rows.clone();
         for row in physical_rows.values_mut() {
             for (column, ty) in &mut row.types {
                 if codecs
@@ -483,9 +487,8 @@ impl Rows {
             let name = symbol_name(&input.name);
             let mut run_binding = None;
             let mut resident = false;
-            for entry in &program.structures.structures.entries {
-                if analysis
-                    .structures
+            for entry in &structures.structures.entries {
+                if structure_analysis
                     .physical
                     .hosts
                     .get(&symbol_name(&entry.name))
@@ -498,13 +501,13 @@ impl Rows {
                     if !matches!(reader, cq_lang_structures::ReaderRef::Scan) {
                         continue;
                     }
-                    if analysis.structures.facts(&keyed.provider).abi
+                    if structure_analysis.facts(&keyed.provider).abi
                         == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
                     {
                         run_binding = Some(analysis.gpu_bindings.relation_inputs.get(&name)
                             .ok_or_else(|| error("GPU-RadixRelation: missing recorded input read"))?);
                         resident = true;
-                    } else if analysis.structures.facts(&keyed.provider).abi
+                    } else if structure_analysis.facts(&keyed.provider).abi
                         == Some(cq_lang_structures::provider::NativeAbi::Columns)
                     {
                         resident = true;
@@ -583,7 +586,7 @@ impl Rows {
                 __cq_statuses.push(#id.storage().metadata.clone());
                 let #length = #id.checked_len()?;
             });
-            let layout = &analysis.structures.host_layouts[&name];
+            let layout = &structure_analysis.host_layouts[&name];
             let mut fields = BTreeMap::new();
             for (index, column) in layout.iter().enumerate() {
                 let param = format_ident!("__cq_sequence_column_{}_{}", name, index);
@@ -688,15 +691,13 @@ impl Rows {
             let definition = &definitions[name];
             let needs_host = realization.phase == Phase::Build;
             if let SourceOrigin::Uploaded { evaluation } = &realization.origin {
-                let layout = &analysis.structures.layouts[name];
+                let layout = &structure_analysis.layouts[name];
                 let adapter = analysis
                     .gpu_bindings
                     .uploads
                     .get(name)
                     .ok_or_else(|| error("GPU-Upload: missing source upload adapter"))?;
-                let rows = host_rows(
-                    program,
-                    analysis,
+                let rows = host_rows(physical, structures, program, structure_analysis, analysis,
                     name,
                     &definitions,
                     evaluation,
@@ -739,7 +740,7 @@ impl Rows {
                 let (view, _types, _key_count) = run_hosts
                     .get(&origin_host)
                     .ok_or_else(|| error("GPU-RadixRelation: run source names a nonrun input"))?;
-                let layout = &analysis.structures.host_layouts[&origin_host];
+                let layout = &structure_analysis.host_layouts[&origin_host];
                 let payload = layout
                     .iter()
                     .map(|source| {
@@ -768,8 +769,7 @@ impl Rows {
                     },
                 );
                 for provider_name in native {
-                    if analysis
-                        .structures
+                    if structure_analysis
                         .built
                         .get(name)
                         .is_some_and(|layouts| layouts.len() != 1)
@@ -856,7 +856,7 @@ impl Rows {
                 quote!(None)
             };
             if let SourceAccess::Provider { .. } = &realization.access {
-                if analysis.structures.built[name].len() != 1 {
+                if structure_analysis.built[name].len() != 1 {
                     return Err(syn::Error::new_spanned(
                         definition,
                         "T-Gpu: source has multiple recorded provider layouts; name each provider store separately",
@@ -1162,8 +1162,7 @@ impl Rows {
         let rust_reads = definitions
             .iter()
             .filter_map(|(name, definition)| {
-                analysis
-                    .structures
+                structure_analysis
                     .physical
                     .rust_reads(&definition.operator)
                     .map(|reads| (name.clone(), reads))
@@ -1218,21 +1217,22 @@ impl Rows {
     /// Bindings are decoded complete publications, never re-evaluated producers.
     pub fn publish_host(
         &mut self,
+        physical: &cq_lang_structures::physical::Program,
+        structures: &cq_lang_structures::Program,
         program: &Program,
+        structure_analysis: &cq_lang_structures::Analysis,
         analysis: &Analysis,
         name: &str,
         evaluation: &HostEvaluation,
         bindings: &BTreeMap<String, Ident>,
     ) -> syn::Result<TokenStream> {
-        let layout = &analysis.structures.layouts[name];
+        let layout = &structure_analysis.layouts[name];
         let adapter = analysis
             .gpu_bindings
             .uploads
             .get(name)
             .ok_or_else(|| error("GPU-Upload: missing publication upload adapter"))?;
-        let rows = host_rows(
-            program,
-            analysis,
+        let rows = host_rows(physical, structures, program, structure_analysis, analysis,
             name,
             &self.definitions,
             evaluation,
@@ -1406,6 +1406,7 @@ impl Rows {
     /// or copying it before the ordinary radix/lower-bound range build.
     pub fn publish_provider(
         &mut self,
+        structure_analysis: &cq_lang_structures::Analysis,
         analysis: &Analysis,
         result: &str,
         publication: &str,
@@ -1417,7 +1418,7 @@ impl Rows {
             return Ok(TokenStream::new());
         };
         let layouts =
-            analysis.structures.built.get(result).ok_or_else(|| {
+            structure_analysis.built.get(result).ok_or_else(|| {
                 error("GPU-Realization: provider publication lacks built layouts")
             })?;
         let rows = format_ident!("__cq_store_rows_{index}");
@@ -1734,7 +1735,11 @@ impl Rows {
 /// Sources admitted by a dispatch, a native provider, a whole-relation
 /// lookup, or a recorded scalar host publication. Arbitrary host-only Rust
 /// rows do not acquire a device ABI.
-pub(crate) fn device_source_results(program: &Program, analysis: &Analysis) -> BTreeSet<String> {
+pub(crate) fn device_source_results(
+    program: &Program,
+    structure_analysis: &cq_lang_structures::Analysis,
+    analysis: &Analysis,
+) -> BTreeSet<String> {
     let mut sources: BTreeSet<_> = analysis
         .dispatches
         .iter()
@@ -1749,15 +1754,14 @@ pub(crate) fn device_source_results(program: &Program, analysis: &Analysis) -> B
             .filter_map(|(name, keys)| keys.is_empty().then_some(name)),
     );
     sources.extend(
-        analysis
-            .structures
+        structure_analysis
             .built
             .iter()
             .filter_map(|(name, layouts)| {
                 layouts
                     .iter()
                     .any(|(_, provider)| {
-                        analysis.structures.facts(provider).abi
+                        structure_analysis.facts(provider).abi
                             == Some(cq_lang_structures::provider::NativeAbi::Range)
                     })
                     .then(|| name.clone())
@@ -1770,7 +1774,7 @@ pub(crate) fn device_source_results(program: &Program, analysis: &Analysis) -> B
             .get(store)?
             .last()
             .is_some_and(|level| level == "host");
-        let represented = analysis.structures.layouts[result].iter().all(|column| {
+        let represented = structure_analysis.layouts[result].iter().all(|column| {
             analysis.representation.identity.contains(column)
                 || analysis.representation.encoded.contains(column)
         });
@@ -1796,7 +1800,10 @@ fn analysis_reads<'a>(
 /// Realize a host subgraph with the shared Rust row printer before uploading a
 /// device-representable boundary. String guards execute before any upload.
 fn host_rows(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
     program: &Program,
+    structure_analysis: &cq_lang_structures::Analysis,
     analysis: &Analysis,
     name: &str,
     definitions: &BTreeMap<String, Definition>,
@@ -1806,13 +1813,12 @@ fn host_rows(
 ) -> syn::Result<TokenStream> {
     let dependencies = host_dependencies_from(name, definitions, bindings);
     let mut run_host_types = BTreeMap::new();
-    for entry in &program.structures.structures.entries {
+    for entry in &structures.structures.entries {
         if let cq_lang_structures::Structure::Host { keyed, .. } = &entry.structure
-            && analysis.structures.facts(&keyed.provider).abi
+            && structure_analysis.facts(&keyed.provider).abi
                 == Some(cq_lang_structures::provider::NativeAbi::RadixRelation)
             && let Some(input) = &keyed.provider.input
-            && let Some(host) = analysis
-                .structures
+            && let Some(host) = structure_analysis
                 .physical
                 .hosts
                 .get(&symbol_name(&entry.name))
@@ -1827,12 +1833,11 @@ fn host_rows(
             );
         }
     }
-    let host_structures = crate::bindings::host_structures(program, &analysis.gpu_bindings)
+    let host_structures = crate::bindings::host_structures(structures, &analysis.gpu_bindings)
         .expect("checked host materialization adapters");
     let host_analysis = cq_lang_structures::contract::check(&host_structures)
         .expect("checked host Structures contract");
-    let inputs = host_structures
-        .physical
+    let inputs = physical
         .inputs()
         .map(|input| {
             let name = symbol_name(&input.name);
@@ -1845,7 +1850,7 @@ fn host_rows(
     // This host/device boundary publishes its complete checked layout, even
     // when the final answer projects columns away. Seed that demand before
     // RowEmitter prunes carriers through the producer's probes and guards.
-    context.demand_columns(&host_structures, name, &analysis.structures.layouts[name])?;
+    context.demand_columns(&host_structures, name, &structure_analysis.layouts[name])?;
     // Formal rule GPU-Transfer: resident inputs read by host Rust download
     // the recorded complete rows through their recorded download adapter.
     for transfer in &evaluation.transfers {
@@ -1870,7 +1875,7 @@ fn host_rows(
     }
     let mut emitter = cq_physical_realization::RowEmitter::new(context);
     let mut output = None;
-    for definition in &host_structures.physical.program.definitions {
+    for definition in &physical.program.definitions {
         let result = symbol_name(&definition.name);
         if !dependencies.contains(&result) {
             continue;
@@ -1933,12 +1938,12 @@ fn host_rows(
     let context = emitter.context();
     let pattern = context.pattern(name);
     let codecs =
-        crate::runs::Codecs::check(&program.structures, &analysis.structures.physical.rows)?;
-    let values: Vec<_> = analysis.structures.layouts[name]
+        crate::runs::Codecs::check(structures, &structure_analysis.physical.rows)?;
+    let values: Vec<_> = structure_analysis.layouts[name]
         .iter()
         .map(|column| {
             let value = context.key_field(name, column, true);
-            let ty = &analysis.structures.physical.rows[name].types[column];
+            let ty = &structure_analysis.physical.rows[name].types[column];
             let value = match codecs.column(column) {
                 Some(codec) => {
                     quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::code(&(#value)))
@@ -2344,6 +2349,7 @@ pub(crate) fn device_lookup_demands(
 
 #[cfg(test)]
 mod tests {
+    include!("../../tests/support/stack.rs");
     use super::*;
 
     #[test]
@@ -2445,7 +2451,7 @@ mod tests {
 
     #[test]
     fn host_store_without_device_consumers_does_not_upload_nullable_values() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(id:i64) = (&data.r);
                 relation H(value:Option<i64>) = (&data.h);
@@ -2479,16 +2485,17 @@ mod tests {
                 result_rows at host.device;
             }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let rows = Rows::new(&program, &analysis).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let rows = Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert!(!analysis.gpu_bindings.realization.sources.contains_key("h"));
         assert!(!rows.build.to_string().contains("__cq_sequence_uploaded_h"));
     }
 
     #[test]
     fn nonleading_selection_fallback_does_not_construct_a_lookup_provider() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i32,b:i32) = (&data.r);
                 r = pipe rename R@0 {a -> a,b -> b};
@@ -2508,9 +2515,10 @@ mod tests {
             }
             graded gpu { input at host; result at host.device; }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let rows = Rows::new(&program, &analysis).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let rows = Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         assert!(rows.run_sources.contains_key("r"));
         assert!(!rows.run_providers.contains("r"));
         assert!(rows.provider_name("r", &["b".into()]).is_err());
@@ -2526,7 +2534,7 @@ mod tests {
 
     #[test]
     fn built_native_provider_realizes_nonleading_keys_without_changing_scan_order() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation Driver(b:i32) = (&data.driver);
                 relation R(a:i32,b:i32) = (&data.r);
@@ -2551,9 +2559,10 @@ mod tests {
             }
             graded gpu { input at host; index at host; result_rows at host.device; }
         };
-        let program = crate::runs::record_representation(&program).unwrap();
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let rows = Rows::new(&program, &analysis).unwrap();
+        let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let rows = Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
         let provider = &rows.providers["r"];
         assert_eq!(provider.keys, ["b"]);
         assert_eq!(provider.payload, ["b", "a"]);
@@ -2566,21 +2575,21 @@ mod tests {
         assert_eq!(recorded.radix.key_types, vec![syn::parse_quote!(i32), syn::parse_quote!(i32)]);
         let mut stale = analysis.gpu_bindings.clone();
         stale.native.get_mut("r").unwrap().radix.fields.swap(0, 1);
-        assert!(crate::bindings::check(&program, &analysis, &stale).is_err());
+        assert!(crate::bindings::check(&physical, &structures, &program, &structure_analysis, &analysis, &stale).is_err());
         let mut missing = analysis.gpu_bindings.clone();
         missing.native.remove("r");
-        assert!(crate::bindings::check(&program, &analysis, &missing).is_err());
+        assert!(crate::bindings::check(&physical, &structures, &program, &structure_analysis, &analysis, &missing).is_err());
         let mut wrong_offset = analysis.gpu_bindings.clone();
         wrong_offset.relation_inputs.values_mut().next().unwrap().offset = syn::parse_quote!(u32);
-        assert!(crate::bindings::check(&program, &analysis, &wrong_offset).is_err());
+        assert!(crate::bindings::check(&physical, &structures, &program, &structure_analysis, &analysis, &wrong_offset).is_err());
         let mut wrong_capture = analysis.gpu_bindings.clone();
         wrong_capture.relation_inputs.values_mut().next().unwrap().word_capture =
             cq_lang_sequence::gpu::bindings::RadixWordCapture::InputView { host: "absent".into() };
-        assert!(crate::bindings::check(&program, &analysis, &wrong_capture).is_err());
+        assert!(crate::bindings::check(&physical, &structures, &program, &structure_analysis, &analysis, &wrong_capture).is_err());
         let mut wrong_permutation_capture = analysis.gpu_bindings.clone();
         wrong_permutation_capture.native.get_mut("r").unwrap().radix.word_capture =
             cq_lang_sequence::gpu::bindings::RadixWordCapture::InputView { host: "absent".into() };
-        assert!(crate::bindings::check(&program, &analysis, &wrong_permutation_capture).is_err());
+        assert!(crate::bindings::check(&physical, &structures, &program, &structure_analysis, &analysis, &wrong_permutation_capture).is_err());
         struct Permutations(Vec<Vec<usize>>, Vec<syn::Expr>);
         impl VisitMut for Permutations {
             fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
@@ -2622,8 +2631,8 @@ mod tests {
         let full_bits: syn::Expr = syn::parse_quote!(<u128 as ::gpu_datalog_runtime::Word>::BITS);
         full_width.gpu_bindings.native.get_mut("r").unwrap()
             .materialization.as_mut().unwrap().active_bits = full_bits.clone();
-        crate::bindings::check(&program, &full_width, &full_width.gpu_bindings).unwrap();
-        let full_rows = Rows::new(&program, &full_width).unwrap();
+        crate::bindings::check(&physical, &structures, &program, &structure_analysis, &full_width, &full_width.gpu_bindings).unwrap();
+        let full_rows = Rows::new(&physical, &structures, &program, &structure_analysis, &full_width).unwrap();
         let build = &full_rows.build;
         let mut block: syn::Block = syn::parse2(quote!({ #build })).unwrap();
         let mut printed_full = Permutations(Vec::new(), Vec::new());
@@ -2633,7 +2642,7 @@ mod tests {
         let mut narrow = analysis.clone();
         narrow.gpu_bindings.native.get_mut("r").unwrap()
             .materialization.as_mut().unwrap().active_bits = syn::parse_quote!(32u32);
-        assert!(Rows::new(&program, &narrow).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &narrow).is_err());
         let mut invalid = analysis.clone();
         invalid
             .gpu_bindings
@@ -2644,14 +2653,14 @@ mod tests {
             .as_mut()
             .unwrap()
             .permutation = vec![0, 0];
-        assert!(Rows::new(&program, &invalid).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &invalid).is_err());
         let mut missing = analysis.clone();
         missing.gpu_bindings.native.remove("r");
-        assert!(Rows::new(&program, &missing).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &missing).is_err());
         let mut wrong_provider = analysis.clone();
         wrong_provider.gpu_bindings.providers.get_mut("r").unwrap()[0].provider =
             crate::providers::declaration("range_provider").instance();
-        assert!(Rows::new(&program, &wrong_provider).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &wrong_provider).is_err());
         let mut wrong_materialization = analysis.clone();
         wrong_materialization
             .gpu_bindings
@@ -2662,7 +2671,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .provider = crate::providers::declaration("radix_relation").instance();
-        assert!(Rows::new(&program, &wrong_materialization).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &wrong_materialization).is_err());
         let mut wide_permutation = analysis.clone();
         wide_permutation
             .gpu_bindings
@@ -2673,18 +2682,18 @@ mod tests {
             .as_mut()
             .unwrap()
             .permutation_threads = 512;
-        assert!(Rows::new(&program, &wide_permutation).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &wide_permutation).is_err());
         let mut missing_download = analysis.clone();
         missing_download.gpu_bindings.downloads.clear();
-        assert!(Rows::new(&program, &missing_download).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &missing_download).is_err());
         let mut missing_host_adapter = analysis.clone();
         assert!(!missing_host_adapter.gpu_bindings.host_materializations.is_empty());
         missing_host_adapter.gpu_bindings.host_materializations.clear();
-        assert!(Rows::new(&program, &missing_host_adapter).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &missing_host_adapter).is_err());
         let mut device_host_adapter = analysis.clone();
         *device_host_adapter.gpu_bindings.host_materializations.values_mut().next().unwrap() =
             crate::providers::declaration("range_provider").instance();
-        assert!(Rows::new(&program, &device_host_adapter).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &device_host_adapter).is_err());
         let mut incomplete_payload = analysis.clone();
         incomplete_payload
             .gpu_bindings
@@ -2693,10 +2702,10 @@ mod tests {
             .unwrap()[0]
             .payload
             .pop();
-        assert!(Rows::new(&program, &incomplete_payload).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &incomplete_payload).is_err());
         let mut missing_upload = analysis.clone();
         missing_upload.gpu_bindings.uploads.clear();
-        assert!(Rows::new(&program, &missing_upload).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &missing_upload).is_err());
         let mut wrong_bounds = analysis.clone();
         wrong_bounds.gpu_bindings.bounds.insert(
             "a".into(),
@@ -2704,12 +2713,12 @@ mod tests {
                 ty: syn::parse_quote!(u8),
             },
         );
-        assert!(Rows::new(&program, &wrong_bounds).is_err());
+        assert!(Rows::new(&physical, &structures, &program, &structure_analysis, &wrong_bounds).is_err());
     }
 
     #[test]
     fn binding_rejects_same_spelling_with_conflicting_codec_ids() {
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation R(a:i32,b:i32) = (&data.r);
                 relation answer(x:i32,y:i32);
@@ -2733,8 +2742,8 @@ mod tests {
                 result_rows at host.device;
             }
         };
-        assert!(crate::runs::Codecs::check(&program.structures, &BTreeMap::new()).is_err());
-        assert!(cq_lang_sequence::check_grading(&program, &crate::machine()).is_err());
+        assert!(crate::runs::Codecs::check(&structures, &BTreeMap::new()).is_err());
+        assert!(cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).is_err());
     }
 
     #[test]
@@ -2750,7 +2759,7 @@ mod tests {
     fn downloaded_probe_carriers_preserve_the_host_publication_demand() {
         // D72 shape: eight columns cross a device publication, a host probe
         // publishes all eight, but the final answer keeps only three.
-        let program: Program = syn::parse_quote! {
+        let Stack { physical, structures, program } = syn::parse_quote! {
             physical {
                 relation Driver(available:i64,customer_key:i64,customer_nation:i64,
                     order_date:i64,order_key:i64,part_key:i64,supplier_key:i64,supplier_nation:i64) = (&data.driver);
@@ -2792,10 +2801,9 @@ mod tests {
                 output_rows at host.device;
             }
         };
-        let analysis = cq_lang_sequence::check_grading(&program, &crate::machine()).unwrap();
-        let definitions = program
-            .structures
-            .physical
+        let structure_analysis = cq_lang_structures::contract::check(&structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let definitions = physical
             .program
             .definitions
             .iter()
@@ -2808,7 +2816,10 @@ mod tests {
             transfers: Vec::new(),
         };
         let publication = host_rows(
+            &physical,
+            &structures,
             &program,
+            &structure_analysis,
             &analysis,
             "joined",
             &definitions,
@@ -2839,7 +2850,10 @@ mod tests {
         // A narrower boundary must select the carried slots from the same
         // stored layout, not hand an eight-field tuple to a three-field probe.
         let projected = host_rows(
+            &physical,
+            &structures,
             &program,
+            &structure_analysis,
             &analysis,
             "result",
             &definitions,
@@ -2854,7 +2868,10 @@ mod tests {
         assert!(projected.contains(&projected_download), "{projected}");
 
         let columns = host_rows(
+            &physical,
+            &structures,
             &program,
+            &structure_analysis,
             &analysis,
             "result",
             &definitions,

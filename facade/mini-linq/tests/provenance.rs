@@ -48,11 +48,11 @@ fn realize(ra: &cq_lang_ra::Program, decisions: &str) -> TokenStream {
     cq_physical_lowering::check(&ix, &physical).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();
     cq_structure_selection::check(&physical, &structures).unwrap();
-    let sequence = cq_sequence_lowering::compile(&structures).unwrap();
-    cq_sequence_lowering::check(&structures, &sequence).unwrap();
+    let sequence = cq_sequence_lowering::compile(&structures.physical, &structures).unwrap();
+    cq_sequence_lowering::check(&structures.physical, &structures, &sequence).unwrap();
     let machine = cq_sequence_pull::machine();
-    let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
-    let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&structures.physical, &structures, &sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&structures.physical, &structures, &sequence, &analysis).unwrap();
     quote!((#expression).into_iter())
 }
 
@@ -481,11 +481,11 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
         &selected_physical, &selected, &selected_physical, &custom,
     ).unwrap();
     cq_structure_selection::check(&selected_physical, &custom).unwrap();
-    let sequence = cq_sequence_lowering::compile(&custom).unwrap();
-    cq_sequence_lowering::check(&custom, &sequence).unwrap();
+    let sequence = cq_sequence_lowering::compile(&selected_physical, &custom).unwrap();
+    cq_sequence_lowering::check(&selected_physical, &custom, &sequence).unwrap();
     let machine = cq_sequence_pull::machine();
-    let analysis = cq_lang_sequence::check_grading(&sequence, &machine).unwrap();
-    let expression = cq_sequence_pull::translate(&sequence, &analysis).unwrap();
+    let analysis = cq_lang_sequence::check_grading(&selected_physical, &custom, &sequence, &machine).unwrap();
+    let expression = cq_sequence_pull::translate(&selected_physical, &custom, &sequence, &analysis).unwrap();
     let emitted = quote!(#expression).to_string();
     assert!(!emitted.contains("BuildWithSidecar"));
     assert!(emitted.contains("Keys :: distinct_keys"));

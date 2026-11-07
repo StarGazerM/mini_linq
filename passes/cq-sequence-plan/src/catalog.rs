@@ -1,10 +1,17 @@
-use cq_lang_sequence::structures::{CanonSource, Capability, Provider};
+use cq_lang_sequence::structures::{self, physical, CanonSource, Capability, Provider};
 use cq_lang_sequence::{Analysis, Catalog, Obligation, Program};
 
-pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -> syn::Result<()> {
+pub(crate) fn check(
+    physical: &physical::Program,
+    structures: &structures::Program,
+    _program: &Program,
+    analysis: &Analysis,
+    catalog: &Catalog,
+) -> syn::Result<()> {
+    let structures_analysis = structures::contract::check(structures)?;
     // Formal rule PL-Catalog: a program declaration of a token the target
     // declares is that declaration; the catalog is keyed by token id.
-    for declaration in &analysis.structures.providers.declarations {
+    for declaration in &structures_analysis.providers.declarations {
         if catalog
             .declaration(&declaration.token)
             .is_some_and(|declared| declared != declaration)
@@ -20,7 +27,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
     }
     // Positional selection is a constructor contract, not a Membership read
     // obligation. Recheck its recorded token even when planning skips PL-Select.
-    for selection in analysis.structures.selections.values() {
+    for selection in structures_analysis.selections.values() {
         if !catalog.providers.iter().any(|entry| {
             entry.covers(&selection.provider) && !entry.levels.is_empty()
         }) {
@@ -37,7 +44,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 capability,
                 instance,
                 ..
-            } => provider_available(analysis, catalog, provider, capability, instance),
+            } => provider_available(&structures_analysis, analysis, catalog, provider, capability, instance),
             // The canon boundary is admitted at its recorded graded level only.
             Obligation::Canon {
                 canonical,
@@ -70,7 +77,7 @@ pub(crate) fn check(program: &Program, analysis: &Analysis, catalog: &Catalog) -
                 String::new()
             };
             return Err(syn::Error::new(
-                program.structures.physical.program.returned.span(),
+                physical.program.returned.span(),
                 format!("P-Decompose: unmet catalog obligation {obligation:?}; reads [{reads}]"),
             ));
         }
@@ -132,6 +139,7 @@ pub(crate) fn codec_available(
 
 /// Check the complete target promise, including scheduled read levels.
 pub(crate) fn provider_available(
+    structures_analysis: &structures::Analysis,
     analysis: &Analysis,
     catalog: &Catalog,
     provider: &str,
@@ -140,6 +148,7 @@ pub(crate) fn provider_available(
 ) -> bool {
     let levels = provider_levels(analysis, provider);
     provider_admitted(
+        structures_analysis,
         analysis,
         catalog,
         provider,
@@ -156,7 +165,8 @@ pub(crate) fn provider_available(
 /// the read levels. The catalog entry of the recorded instance's tokens
 /// supplies the levels; its declared facts the capabilities.
 pub(crate) fn provider_admitted(
-    analysis: &Analysis,
+    structures_analysis: &structures::Analysis,
+    _analysis: &Analysis,
     catalog: &Catalog,
     provider: &str,
     capability: &Capability,
@@ -166,7 +176,7 @@ pub(crate) fn provider_admitted(
 ) -> bool {
     // Formal rule PL-Resident: Only an explicit resident token admits an
     // unretained host handle below host; all read/level facts still apply.
-    let needs_resident = analysis.structures.host_read(provider) && below_host;
+    let needs_resident = structures_analysis.host_read(provider) && below_host;
     catalog.providers.iter().any(|entry| {
         entry.covers(instance)
             && catalog.facts(&entry.provider).is_some_and(|facts| {
@@ -197,11 +207,13 @@ fn provider_levels(analysis: &Analysis, provider: &str) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../tests/support/mod.rs");
+    use cq_lang_sequence::structures::{Program as Structures, physical::Program as Physical};
     use cq_lang_sequence::structures::Declaration;
 
     #[test]
     fn resident_host_reads_require_explicit_complete_catalog_facts() {
-        let structures = syn::parse_quote! {
+        let (physical, structures) = structure_fixture! {
             physical {
                 relation L(a:i32); relation R(a:i32,b:i32);
                 l = pipe rename L@0 {a -> a};
@@ -217,8 +229,9 @@ mod tests {
                 answer canon = rows;
             }
         };
-        let program = cq_sequence_lowering::compile(&structures).unwrap();
-        let mut analysis = cq_lang_sequence::contract::check(&program).unwrap();
+        let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+        let mut analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
+        let structures_analysis = cq_lang_sequence::structures::contract::check(&physical, &structures).unwrap();
         let level = vec!["host".into(), "device".into(), "block".into()];
         for (reader, providers) in &analysis.provider_reads {
             if providers.contains("r") {
@@ -232,7 +245,7 @@ mod tests {
         let mut catalog = Catalog::default();
         catalog.register(declaration, vec![level]);
         for capability in [Capability::Exact, Capability::Range, Capability::Membership] {
-            assert!(!provider_available(
+            assert!(!provider_available(&structures_analysis,
                 &analysis,
                 &catalog,
                 "r",
@@ -245,7 +258,7 @@ mod tests {
             .reads
             .push(Capability::Resident);
         for capability in [Capability::Exact, Capability::Range, Capability::Membership] {
-            assert!(provider_available(
+            assert!(provider_available(&structures_analysis,
                 &analysis,
                 &catalog,
                 "r",
@@ -258,8 +271,8 @@ mod tests {
             .facts
             .reads
             .retain(|c| *c != Capability::Membership);
-        assert!(!provider_available(
-            &analysis,
+        assert!(!provider_available(&structures_analysis,
+                &analysis,
             &missing,
             "r",
             &Capability::Membership,
@@ -267,15 +280,15 @@ mod tests {
         ));
         let mut wrong_level = catalog.clone();
         wrong_level.providers[0].levels = vec![vec!["host".into()]];
-        assert!(!provider_available(
-            &analysis,
+        assert!(!provider_available(&structures_analysis,
+                &analysis,
             &wrong_level,
             "r",
             &Capability::Range,
             &instance
         ));
-        assert!(!provider_available(
-            &analysis,
+        assert!(!provider_available(&structures_analysis,
+                &analysis,
             &catalog,
             "r",
             &Capability::Range,
@@ -285,8 +298,8 @@ mod tests {
 
     /// `L` declares `codec Codec` for its i32 column; `b` is an i64 column
     /// without a declared codec.
-    fn encoded() -> Program {
-        let structures = syn::parse_quote! {
+    fn encoded() -> (Physical, Structures, Program) {
+        let (physical, structures) = structure_fixture! {
             physical {
                 relation L(a:i32); relation R(a:i32,b:i64);
                 l = pipe rename L@0 {a -> a};
@@ -302,7 +315,8 @@ mod tests {
                 answer canon = rows;
             }
         };
-        cq_sequence_lowering::compile(&structures).unwrap()
+        let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+        (physical, structures, program)
     }
 
     fn at(level: &[&str]) -> impl Fn(&[Vec<String>]) -> bool {
@@ -312,7 +326,8 @@ mod tests {
 
     #[test]
     fn codec_obligations_record_the_declared_codec_and_admit_only_its_token() {
-        let mut analysis = cq_lang_sequence::contract::check(&encoded()).unwrap();
+        let (physical, structures, program) = encoded();
+        let mut analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
         let declared = cq_lang_sequence::structures::CodecId(0);
         let codecs: Vec<_> = analysis
             .obligations
@@ -376,8 +391,9 @@ mod tests {
 
     #[test]
     fn codec_admission_rejects_a_mutated_id_without_inspecting_its_spelling() {
+        let (physical, structures, program) = encoded();
         use cq_lang_sequence::structures::CodecId;
-        let analysis = cq_lang_sequence::contract::check(&encoded()).unwrap();
+        let analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
         let mut catalog = Catalog {
             codecs: vec![cq_lang_sequence::CodecToken {
                 codec_id: Some(CodecId(0)),
@@ -403,16 +419,16 @@ mod tests {
 
     #[test]
     fn same_spelling_with_distinct_declared_ids_is_a_conflicting_encoding() {
-        let mut program = encoded();
-        program.structures.structures.entries[1]
+        let (physical, mut structures, program) = encoded();
+        structures.structures.entries[1]
             .structure
             .provider_mut()
             .unwrap()
             .input = Some(syn::parse_quote!(input {
             keys 0; columns [[0] i32 => Code codec [0] Codec, [1] i64 => i64]
         }));
-        assert!(cq_lang_sequence::contract::check(&program).is_ok());
-        let input = program.structures.structures.entries[1]
+        assert!(cq_lang_sequence::contract::check(&physical, &structures, &program).is_ok());
+        let input = structures.structures.entries[1]
             .structure
             .provider_mut()
             .unwrap()
@@ -422,12 +438,12 @@ mod tests {
         // The same spelling under an explicitly different declaration is not
         // the same encoding of the shared logical i32 column.
         input.columns[0].codec_id = Some(cq_lang_sequence::structures::CodecId(1));
-        assert!(cq_lang_sequence::contract::check(&program).is_err());
+        assert!(cq_lang_sequence::contract::check(&physical, &structures, &program).is_err());
     }
 
     #[test]
     fn equal_logical_spellings_with_distinct_ids_select_distinct_codecs() {
-        let structures = syn::parse_quote! {
+        let (physical, structures) = structure_fixture! {
             physical {
                 relation L(a:i32 [0]); relation R(a:i32 [0],b:i32 [1]);
                 l = pipe rename L@0 {a -> a};
@@ -446,8 +462,8 @@ mod tests {
                 answer canon = rows;
             }
         };
-        let program = cq_sequence_lowering::compile(&structures).unwrap();
-        let analysis = cq_lang_sequence::contract::check(&program).unwrap();
+        let program = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+        let analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
         for (column, id) in [("a", 0), ("b", 1)] {
             assert!(analysis.obligations.iter().any(|obligation| matches!(
                 obligation,
@@ -459,38 +475,34 @@ mod tests {
 
     #[test]
     fn codec_declarations_require_recorded_ids_after_parsing() {
-        let mut program = encoded();
-        let input = program
-            .structures
-            .structures
+        let (physical, mut structures, program) = encoded();
+        let input = structures.structures
             .entries
             .iter_mut()
             .find_map(|entry| entry.structure.provider_mut()?.input.as_mut())
             .unwrap();
         input.columns[0].codec_id = None;
-        assert!(cq_lang_sequence::contract::check(&program).is_err());
+        assert!(cq_lang_sequence::contract::check(&physical, &structures, &program).is_err());
     }
 
     #[test]
     fn logical_type_identity_mutations_are_rejected() {
         for logical_type_id in [None, Some(cq_lang_sequence::structures::LogicalTypeId(99))] {
-            let mut program = encoded();
-            let input = program
-                .structures
-                .structures
+            let (physical, mut structures, program) = encoded();
+            let input = structures.structures
                 .entries
                 .iter_mut()
                 .find_map(|entry| entry.structure.provider_mut()?.input.as_mut())
                 .unwrap();
             input.columns[0].logical_type_id = logical_type_id;
-            assert!(cq_lang_sequence::contract::check(&program).is_err());
+            assert!(cq_lang_sequence::contract::check(&physical, &structures, &program).is_err());
         }
     }
 
     #[test]
     fn canon_admission_reads_the_recorded_token_and_graded_level() {
-        let program = encoded();
-        let mut analysis = cq_lang_sequence::contract::check(&program).unwrap();
+        let (physical, mut structures, program) = encoded();
+        let mut analysis = cq_lang_sequence::contract::check(&physical, &structures, &program).unwrap();
         let sort: Declaration = syn::parse_quote!(
             sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
         );
@@ -531,14 +543,14 @@ mod tests {
                 ..
             }
         )));
-        assert!(check(&program, &analysis, &catalog).is_err());
+        assert!(check(&physical, &structures, &program, &analysis, &catalog).is_err());
         let mut record = |recorded: &[&str]| {
             for obligation in &mut analysis.obligations {
                 if let Obligation::Canon { level, .. } = obligation {
                     *level = Some(recorded.iter().map(|name| (*name).to_owned()).collect());
                 }
             }
-            check(&program, &analysis, &catalog)
+            check(&physical, &structures, &program, &analysis, &catalog)
         };
         record(&["host"]).unwrap();
         assert!(record(&["host", "device"]).is_err());

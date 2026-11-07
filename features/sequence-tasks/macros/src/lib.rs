@@ -54,22 +54,23 @@ impl syn::parse::Parse for PlanningOptions {
 /// `key_partition(name, select true|false)` forces or forbids routing.
 #[proc_macro]
 pub fn plan(input: TokenStream) -> TokenStream {
-    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |_physical, _structures, source, arguments| {
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |physical, structures, source, arguments| {
         let options: PlanningOptions = syn::parse2(arguments)?;
         let machine = cq_sequence_tasks::machine_with(cq_sequence_tasks::Config {
             key_partition_threshold: options.threshold,
             ..Default::default()
         });
         let catalog = cq_sequence_tasks::catalog();
-        let source = cq_sequence_tasks::select_providers(source, &catalog)?;
+        let (physical, structures, source) = cq_sequence_tasks::select_providers(physical, structures, source, &catalog)?;
         let target = cq_sequence_plan::decompose_with_key_partitions(
+            &physical,
+            &structures,
             &source,
             &machine,
             &catalog,
             &options.policies,
-        )?
-        .program;
-        Ok((target.structures.physical.clone(), target.structures.clone(), target))
+        )?;
+        Ok((target.physical, target.structures, target.program))
     })
     .into()
 }
@@ -78,7 +79,7 @@ pub fn plan(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn tasks(input: TokenStream) -> TokenStream {
     cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::rewrite(input.into(), |physical, structures, source, _| {
-        cq_lang_sequence::check_grading(source, &cq_sequence_tasks::machine())?;
+        cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_tasks::machine())?;
         Ok((physical.clone(), structures.clone(), source.clone()))
     })
     .into()
@@ -87,10 +88,10 @@ pub fn tasks(input: TokenStream) -> TokenStream {
 /// Return joined owned answers, selecting the runtime's plain/profile build.
 #[proc_macro]
 pub fn translate_tasks(input: TokenStream) -> TokenStream {
-    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |_physical, _structures, source, _| {
-        let analysis = cq_lang_sequence::check_grading(source, &cq_sequence_tasks::machine())?;
-        let plain = cq_sequence_tasks::translate(source, &analysis)?;
-        let profile = cq_sequence_tasks::translate_profile(source, &analysis)?;
+    cq_stage::Sequence::<cq_lang_sequence::structures::physical::Program, cq_lang_sequence::structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(input.into(), |physical, structures, source, _| {
+        let analysis = cq_lang_sequence::check_grading(physical, structures, source, &cq_sequence_tasks::machine())?;
+        let plain = cq_sequence_tasks::translate(physical, structures, source, &analysis)?;
+        let profile = cq_sequence_tasks::translate_profile(physical, structures, source, &analysis)?;
         Ok(syn::parse_quote!(::cq_storage::profile_select! {
             plain { (#plain).into_iter() }
             counters { (#profile).into_iter() }
