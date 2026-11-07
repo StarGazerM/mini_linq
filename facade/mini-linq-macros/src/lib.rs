@@ -658,7 +658,7 @@ mod tests {
         syn::parse2(quote!(physical {
             relation R(a: i32);
             #facts
-            r = pipe rename R@0 { a -> x };
+            r = pipe rename R { a -> x };
             return r as answer(x);
         }))
         .unwrap()
@@ -783,7 +783,7 @@ mod tests {
         let physical: cq_lang_physical::Program = syn::parse_quote!(physical {
             relation R(a: i32);
             capture { let group: i32 = 0; }
-            r = pipe rename R@0 { a -> x };
+            r = pipe rename R { a -> x };
             return canon r as answer(group, x);
         });
         let demand: cq_stage::OutputConsumer = syn::parse_quote!(output_consumer {
@@ -831,7 +831,7 @@ mod tests {
     fn ordinary_row_host_rust_is_unchanged_by_consumer_demand() {
         let physical = syn::parse_quote!(physical {
             relation R(a: i32);
-            r = let canon rename R@0 { a -> x };
+            r = let canon rename R { a -> x };
             return r as answer(x);
         });
         let ordinary = cq_structure_selection::compile(&physical).unwrap();
