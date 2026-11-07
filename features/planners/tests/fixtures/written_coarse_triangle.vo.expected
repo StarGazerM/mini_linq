@@ -1,7 +1,6 @@
 // written_coarse_triangle.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*,
 // passes.tex I1-I5 and the planner O-/S-/R- rules), independently of the producer.
-// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
-// with the tie-break used.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
 // Planner written,coarse = O_{Written,Coarse} (lib.rs facade table; Plan-Graph uses the same order).
 // c0=R(a,b), c1=S(b,c), c2=T(c,a)
 // S-Written: sequence = drain_I2([0,1,2]); O-Coarse: one full subatom per atom. No predicates, no reductions.
@@ -12,6 +11,6 @@ valuation {
     // S-Written position 1; introduces c
     S @ 1 (b , c) ;
     // S-Written position 2; filter (a,c bound); ready only after c, so already at its earliest point (I2 satisfied,
-    // no drainage, no check marker)
+    // no drainage)
     T @ 2 (c , a) ;
 }

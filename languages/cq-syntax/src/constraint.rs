@@ -605,7 +605,7 @@ impl ToTokens for Constraint {
 }
 
 impl Constraint {
-    /// Formal rule E-Domain: Project every disjunct's query-constant restrictions onto a common variable, retaining the exact predicate.
+    /// Formal rule E-Domain: Project only atomic comparison, between or in conjuncts against query constants onto a common variable; retain the exact predicate.
     pub fn implied_domains(&self) -> Vec<Self> {
         let Self::Or(branches) = self else {
             return Vec::new();
@@ -614,6 +614,7 @@ impl Constraint {
         for c in branches.iter().flatten() {
             names.extend(c.variables().map(symbol_name));
         }
+        // Formal rule O-DomainOrder: Emit nonidentical implied domains in lexical variable-name order.
         names
             .into_iter()
             .filter_map(|name| {

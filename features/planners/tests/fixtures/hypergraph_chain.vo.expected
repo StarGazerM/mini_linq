@@ -1,7 +1,6 @@
 // hypergraph_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5
 // and the planner O-/S-/R- rules), independently of the producer.
-// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
-// with the tie-break used.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
 // Planner hypergraph = Plan-Graph: O_{Written,Coarse}; acyclic -> R-Tree.
 // c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
 // GYO: (0,a) private, (2,d) private, absorb (0,1) pi(0)=1, (1,b) private, absorb (1,2) pi(1)=2, (2,c) private ->

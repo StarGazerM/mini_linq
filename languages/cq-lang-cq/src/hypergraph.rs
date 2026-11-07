@@ -174,6 +174,7 @@ pub fn filter_ranks<'a>(
         })
         .collect();
     for (target, predicate, written) in restrictions {
+        // Formal rule H-FilterStrength: Written constant equality ranks zero, ordered bounds one, and all other written or derived predicates two.
         let rank = match predicate {
             _ if !written => 2,
             Constraint::Compare {
@@ -429,6 +430,7 @@ impl Analysis {
     }
 
     /// Maximum-cardinality search; fills `elimination_order`.
+    /// Formal rule H-MCSTie: Maximize numbered primal neighbours; start and break ties by first written variable occurrence, then reverse the numbering.
     fn eliminate(&mut self) {
         let mut numbered: Vec<String> = Vec::new();
         let mut unnumbered: Vec<&String> = self.variables.iter().collect();

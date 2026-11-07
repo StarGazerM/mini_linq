@@ -6,7 +6,7 @@
 // O_Prefix(Connected),Coarse
 // Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
 // (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
-// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// by the scheduler itself at their first ready boundary; membership follows from the bound prefix.
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Supplier (s_suppkey : i64 [0] , s_name : StringCode [1] , s_address : StringCode [1] , s_phone : StringCode [1]) ; relation Revenue (supplier_key : i64 [0] , revenue : i64 [0]) ; relation Maximum (maximum : Option < i64 > [2]) ; relation answer (supplier_key : i64 [0] , name : StringCode [1] , address : StringCode [1] , phone : StringCode [1] , revenue : i64 [0]) ; answer (supplier_key , name , address , phone , revenue) : - Revenue (supplier_key , revenue) , Supplier (supplier_key , name , address , phone) , Maximum (maximum) , if Some (* revenue) == * maximum ;

@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h12.rs, query literal 4.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct WithoutHigh ; relation Totals (shipmode : StringCode , total : i64) ; relation HighCounts (shipmode : StringCode , high : i64) ; relation answer (shipmode : StringCode , high_line_count : i64 , low_line_count : i64) ; answer (shipmode , 0 , total) :- Totals (shipmode , total) , ! HighCounts (shipmode , _) ;

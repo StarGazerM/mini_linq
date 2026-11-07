@@ -5,7 +5,7 @@
 // Ordering decision: no evidence recorded
 // Prefix(Connected)/Coarse rank (passes.tex:197-199, 214-215, 326-327): atoms (a_i,1,[s_i=0],0,i), constraints
 // (a_i,0,0,0,i), other nonatoms (a_i,0,0,1,i); a_i=[O_i not subset of B] first, so ready filters (I2) are placed
-// by the scheduler itself and nothing is drained: no `check`/`after` markers.
+// by the scheduler itself at their first ready boundary; membership follows from the bound prefix.
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query06 ; relation lineitem (orderkey : i64 [0] , linenumber : i64 [0] , quantity : Decimal [1] , price : Decimal [1] , discount : Decimal [1] , shipdate : Date [2]) ; rows (group , orderkey , linenumber , amount) : - lineitem (orderkey , linenumber , quantity , price , discount , shipdate) , where shipdate >= (first) , where shipdate < (after) , where discount in (discount_low) ..= (discount_high) , where quantity < (quantity_limit) , let amount : i128 = i128 :: from (price . scaled ()) * i128 :: from (discount . scaled ()) capture { let group : i32 = 0 ; } ;

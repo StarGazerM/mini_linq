@@ -1,7 +1,6 @@
 // le_block.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex I1-I5 and the
 // planner O-/S-/R- rules), independently of the producer.
-// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
-// with the tie-break used.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
 // Planner le = Plan-Le: v = O_{Written,Coarse}; outer = written root (CK-Le auto); lookups R(b,_) at the first
 // point their bound key is available, in GYO ear order; expansions as late as column demand or scope exit
 // permits; then restrict, R_{None,Masks}.

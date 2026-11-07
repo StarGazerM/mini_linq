@@ -485,7 +485,7 @@ fn every_scenario_through_every_planner() {
 }
 
 #[test]
-fn authored_vo_and_ra_fixtures_remain_valid_for_each_planner() {
+fn authored_ra_fixtures_remain_valid_for_each_planner() {
     for (fixture, scenario_name) in [
         ("triangle", "triangle"),
         ("chain", "oriented_chain"),
@@ -500,17 +500,13 @@ fn authored_vo_and_ra_fixtures_remain_valid_for_each_planner() {
         for planner in Planner::ALL {
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
             let stem = format!("{}_{fixture}", planner.name());
-            let expected_vo = std::fs::read_to_string(root.join(format!("{stem}.vo"))).unwrap();
             let expected_ra = std::fs::read_to_string(root.join(format!("{stem}.ra"))).unwrap();
-            let valuation: vo::Program = syn::parse_str(&expected_vo).unwrap();
             let algebra: ra::Program = syn::parse_str(&expected_ra).unwrap();
-            check_valuation(&source, &valuation, planner).unwrap();
             check(&source, &algebra).unwrap();
             for seed in 0..4 {
-                let database = databases::binary_database(&valuation.cq, seed);
-                let expected = cq_semantics::evaluate_cq(&valuation.cq, &database);
-                assert_eq!(valuation_semantics::evaluate(&valuation, &database), expected,
-                    "{stem}: valuation/database {seed}");
+                let normal = cq::normal::normalize(&source).unwrap();
+                let database = databases::binary_database(&normal, seed);
+                let expected = cq_semantics::evaluate_cq(&normal, &database);
                 assert_eq!(semantics::evaluate_ra(&algebra, &database).output, expected,
                     "{stem}: algebra/database {seed}");
             }
@@ -527,12 +523,10 @@ fn le_omits_redundant_zero_checks_in_the_census_schedules() {
         ("ya_disconnected_reduced", vec!["R @ 0 (x) ;", "S @ 1 (y , z) ;"]),
         ("barbell", vec![
             "R @ 0 (x , y) ;", "S @ 1 (y , _) ;", "T @ 2 (x , _) ;",
-            "Bridge @ 3 (x , _) ;", "S @ 1 (y , z) ;", "T @ 2 (x , z) check ;",
+            "Bridge @ 3 (x , _) ;", "S @ 1 (y , z) ;", "T @ 2 (x , z) ;",
             "Bridge @ 3 (x , u) ;", "U @ 4 (u , _) ;", "W @ 6 (u , _) ;",
             "U @ 4 (u , v) ;", "V @ 5 (v , _) ;", "V @ 5 (v , w) ;",
-            // Removing the delayed T check exposes W to V's introduction;
-            // W keeps the standalone phase it had behind that separator.
-            "W @ 6 (u , w) check ;",
+            "W @ 6 (u , w) ;",
         ]),
     ] {
         let source = SCENARIOS.iter().find(|scenario| scenario.name == name)
@@ -555,7 +549,6 @@ fn le_omits_redundant_zero_checks_in_the_census_schedules() {
             }).unwrap();
             probe.columns = probe.columns.iter()
                 .map(|_| vo::Column::Dropped(Default::default())).collect();
-            probe.check = Some(Default::default());
             let before = redundant.valuation.steps.iter()
                 .position(|step| matches!(step, vo::Step::Atom(..))).unwrap();
             redundant.valuation.steps.insert(before, vo::Step::Atom(probe, Default::default()));
@@ -582,7 +575,7 @@ fn le_root_guard_does_not_replace_the_written_outer_stream() {
     let valuation = compile_valuation(&source, Planner::Le).unwrap();
     check_valuation(&source, &valuation, Planner::Le).unwrap();
     assert!(matches!(&valuation.valuation.steps[0], vo::Step::Atom(atom, _)
-        if atom.relation == "Gate" && atom.variables().next().is_none() && atom.check.is_some()));
+        if atom.relation == "Gate" && atom.variables().next().is_none()));
     let facts = vo::contract::check(&valuation).unwrap();
     let introducers: Vec<_> = valuation.valuation.steps.iter().zip(&facts.introduces)
         .filter_map(|(step, introduced)| match step {
@@ -604,27 +597,18 @@ fn le_root_guard_does_not_replace_the_written_outer_stream() {
 }
 
 #[test]
-fn le_retail_and_block_schedule_fixtures() {
+fn le_retail_and_block_algebra_fixtures() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     for fixture in ["retail_h05", "retail_h09", "retail_d72_inner", "block"] {
         let stem = format!("le_{fixture}");
         let source =
             syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.cq"))).unwrap())
                 .unwrap();
-        let valuation = compile_valuation(&source, Planner::Le).unwrap();
         let algebra = compile(&source, Planner::Le).unwrap();
-        let mut expected_valuation: vo::Program =
-            syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.vo"))).unwrap())
-                .unwrap();
-        // Authored fixtures may omit declaration-local identities. Compare the
-        // recorded plans after the same source normalization, not token spelling.
-        expected_valuation.cq = cq::normal::normalize(&expected_valuation.cq).unwrap();
         let expected_algebra: ra::Program =
             syn::parse_str(&std::fs::read_to_string(root.join(format!("{stem}.ra"))).unwrap())
                 .unwrap();
-        assert_eq!(valuation, expected_valuation, "{stem}");
         assert_eq!(algebra, expected_algebra, "{stem}");
-        check_valuation(&source, &valuation, Planner::Le).unwrap();
         check(&source, &algebra).unwrap();
     }
 }

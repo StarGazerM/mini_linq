@@ -1,7 +1,6 @@
 // written_coarse_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
 // I1-I5 and the planner O-/S-/R- rules), independently of the producer.
-// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
-// with the tie-break used.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
 // Planner written,coarse.
 // c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
 // S-Written + O-Coarse.

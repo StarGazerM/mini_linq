@@ -1,12 +1,11 @@
 // prefix_greedy_fine_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*,
 // passes.tex I1-I5 and the planner O-/S-/R- rules), independently of the producer.
-// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
-// with the tie-break used.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
 // Planner prefix greedy,fine.
 // c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
-// RULE GAP (O-Fine): "first eligible remaining variable" and "first holding atom" are not ordered by any rule.
-// Derivation reads the variable sequence as the heuristic order of first introduction and "first holding atom"
-// as the least holding atom under the planner rank at the current B; written position last (I4).
+// O-FineVariables: prioritize variables with a connected ready holder, then use
+// grouped heuristic variable order (forward MCS for Elimination). O-FineChoice:
+// choose a connected holder first, then its fixed heuristic sequence position.
 // Variable sequence: a, b, c, d.
 struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
 valuation {

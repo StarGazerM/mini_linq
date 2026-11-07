@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h01.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation Lineitem (l_orderkey : i64 , l_linenumber : i64 , l_returnflag : StringCode , l_linestatus : StringCode , l_quantity : Decimal , l_extendedprice : Decimal , l_shipdate : Date) ; relation answer (returnflag : StringCode , linestatus : StringCode , sum_quantity : i64 , sum_price : i64 , count_order : usize) ; answer (returnflag , linestatus , sum (quantity_units) , sum (price_units) , count ()) :- Lineitem (order_key , line_number , returnflag , linestatus , quantity , price , shipdate) , where shipdate <= cutoff , let quantity_units : i64 = quantity . scaled () , let price_units : i64 = price . scaled () ;

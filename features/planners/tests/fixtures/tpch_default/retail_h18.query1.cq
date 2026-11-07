@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h18.rs, query literal 1.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation Quantity (order_key : i64 , sum_quantity : i64) ; relation Orders (o_orderkey : i64 , o_custkey : i64 , o_orderdate : Date , o_totalprice : Decimal) ; relation Customer (c_custkey : i64 , c_name : StringCode) ; relation answer (customer_name : StringCode , customer_key : i64 , order_key : i64 , order_date : Date , total_price : i64 , sum_quantity : i64) ; answer (customer_name , customer_key , order_key , order_date , price_units , sum_quantity) :- Quantity (order_key , sum_quantity) , where sum_quantity > 30000 , Orders (order_key , customer_key , order_date , total_price) , Customer (customer_key , customer_name) , let price_units : i64 = total_price . scaled () ;

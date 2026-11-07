@@ -1,7 +1,6 @@
 // hypergraph_triangle.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
 // I1-I5 and the planner O-/S-/R- rules), independently of the producer.
-// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
-// with the tie-break used.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
 // Planner hypergraph = Plan-Graph: O_{Written,Coarse}; r = Tree if acyclic, else None.
 // c0=R(a,b), c1=S(b,c), c2=T(c,a)
 // GYO (G-Private/G-Absorb, least pair first): no private variable, no absorbable edge -> G-Reject, acyclic=false

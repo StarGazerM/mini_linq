@@ -48,7 +48,6 @@ pub mod kw {
     syn::custom_keyword!(valuation);
     syn::custom_keyword!(with);
     syn::custom_keyword!(block);
-    syn::custom_keyword!(check);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -174,8 +173,6 @@ pub struct Subatom {
     #[syn(in = paren)]
     #[parse(CommaList::parse_terminated)]
     pub columns: CommaList<Column>,
-    /// A standalone membership phase, never an alternate introducing provider.
-    pub check: Option<kw::check>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -559,13 +556,6 @@ fn analyze_steps(
                     return error(subatom, "atom occurrence escaped its source branch path");
                 }
                 let variables = columns(subatom)?;
-                // Formal rule VO-CheckPhase: a standalone check consumes
-                // supplied columns, never an alternate introducing phase.
-                if subatom.check.is_some()
-                    && subatom.variables().any(|(_, v)| !provided.contains(&symbol_name(v)))
-                {
-                    return error(subatom, "a recorded check phase cannot introduce columns");
-                }
                 let mut introduced = Vec::new();
                 for (position, column) in subatom.columns.iter().enumerate() {
                     let expected = &variables[position];

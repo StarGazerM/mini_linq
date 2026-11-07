@@ -1,0 +1,4 @@
+// Source: features/workloads/src/queries/retail/tpch/retail_h06.rs, query literal 0.
+// Default/par route: authored stage advice omitted; evidence is recorded in the expected VO.
+// Original pre-normalization CQ captured from the kernel query (not the expected VO).
+struct Query ; relation Lineitem (l_orderkey : i64 , l_linenumber : i64 , l_extendedprice : Decimal , l_discount : Decimal , l_quantity : Decimal , l_shipdate : Date) ; relation answer (revenue : i64) ; answer (sum (revenue_units)) :- Lineitem (order_key , line_number , price , discount , quantity , shipdate) , where shipdate >= start && shipdate < end , if discount . scaled () >= 5 && discount . scaled () <= 7 , if quantity . scaled () < 2400 , let revenue_units : i64 = price . scaled () * discount . scaled () ;

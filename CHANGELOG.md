@@ -13,6 +13,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- VO membership is derived from empty step introductions, not a `check`
+  suffix (M2f). Connected ranking includes introduction priority; LE builds
+  reads from occurrences without inherited phase metadata. Formal tie-breaks
+  document producer choices and E-Domain is atomic-conjunct-only (the two Q19
+  expected plans now omit the disjunctive container domain). The expected-VO
+  harness checks all 69 rule-derived plans against their fixture routes.
 - RA and Physical erase occurrence paths (IR redesign M2b). Relational
   lowering returns a `Steps` side table for the VO↔RA seam; its total entry
   accepts a checker-created `Checked` input. Downstream identities use Physical

@@ -1,16 +1,13 @@
 // elimination_fine_chain.vo.expected: expected VO derived by hand from doc/formal (ir_vo.tex WF-VO-*, passes.tex
 // I1-I5 and the planner O-/S-/R- rules), independently of the producer.
-// Every step is preceded by the rule that fixes its position; RULE GAP marks a position the rules leave open,
-// with the tie-break used.
+// Every step is preceded by its ordering rule; deterministic tie-breaks are stated below.
 // Planner elimination,fine: variable sequence = MCS order a,b,c,d.
 // c0=Edge(a,b), c1=Edge(b,c), c2=Edge(d,c)
-// RULE GAP (elimination order): passes.tex:333-334 says only "reverse maximum-cardinality search on the primal
-// graph, with connected-ready variables or binders first"; the MCS start vertex and tie-break are unstated.
-// Derivation assumes MCS ties broken by first written occurrence of the variable; this is an assumption, not a
-// rule.
-// RULE GAP (O-Fine): "first eligible remaining variable" and "first holding atom" are not ordered by any rule.
-// Derivation reads the variable sequence as the heuristic order of first introduction and "first holding atom"
-// as the least holding atom under the planner rank at the current B; written position last (I4).
+// H-MCSTie: maximum-cardinality search starts and breaks ties by first written
+// variable occurrence. Coarse reverses MCS; Fine uses the forward MCS sequence.
+// O-FineVariables: prioritize variables with a connected ready holder, then use
+// grouped heuristic variable order (forward MCS for Elimination). O-FineChoice:
+// choose a connected holder first, then its fixed heuristic sequence position.
 struct OrientedChain ; relation Edge (src : i32 [0] , dst : i32 [0]) ; answer (a , d) : - Edge (a , b) , Edge (b , c) , Edge (d , c) ;
 valuation {
     // fineStep(a): only holder c0
