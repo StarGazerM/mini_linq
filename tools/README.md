@@ -59,6 +59,13 @@ and runs `python3 tools/check_ir_scope.py --owner <cq-lang-crate> [--allow
 crate it may delete or rename but not add or change grammar. An order-only
 change adds nothing below VO. Seam data a checker needs is a side table the
 lowering returns, never an IR field.
+Per-step gate for a single-IR change (owner declared, scope check zero):
+the owner crate's tests with expected-output fixtures (input program ->
+expected printed program, and the checker), the IR-level census (re-lower
+every recorded plan and compare printed plans against the base; no
+codegen), and `check_ir_scope.py`. Nothing else: a later layer cannot have
+changed. Expanded gate, root/package suites, compile-tpch and the GPU gate
+run once per merge batch, by Main.
 After each merge batch Main runs the performance baseline: CPU TPC-H SF1
 default/par, CPU DOOP xalan mini/mini-par, and (GPU available) GPU TPC-H SF1
 advised and `doop-gpu` xalan, paired against the previous batch's main under
