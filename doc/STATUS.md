@@ -8,7 +8,7 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
-**Per-batch CPU baseline (2026-11-06, `b23e6bb2` vs `96f32991`):**
+**Per-batch CPU/GPU baseline (2026-11-06, `b23e6bb2` vs `96f32991`):**
 [report](../experiments/gpu/compare/baseline-2026-11-06.md),
 [raw results](../experiments/gpu/compare/baseline-2026-11-06.results.json).
 Five interleaved pairs, all 29 TPC-H SF1 kernels: default geomean
@@ -19,7 +19,15 @@ sampled-later; DOOP validation runs after collection, with no resident checker
 during timing. The report records expanded plan movements, same-source linker
 layout controls, per-command Gate times, and a native checker full-witness
 memory defect exposed by field_flow's 103.7 million output rows.
-**GPU pending:** a foreign tenant holds the GPU; no new GPU result is claimed.
+**GPU completed:** 26 advised SF1 queries and both xalan GPU workloads, five
+interleaved pairs plus five CPU-exclusive confirmation pairs. Confirmed TPC-H
+geomean **1.004 [1.002, 1.008]**; H07 **1.102 [1.093, 1.108]** and
+D72-inner **1.045 [1.039, 1.049]** are slower. Both DOOP fixpoint CIs include one.
+All validation passes (26-output full tuples; field_flow 43-output full-first,
+sampled-later). Main `525673c5` GPU batch gate **PASS**, **1066.22 s**:
+H05 SF10 **8.375264 ms ≤ 10.35 ms**, Cassandra **26/26** complete output sets.
+Evidence: `/data/mini_linq-wt/gpu-batch-1106/target/gpu-batch-1106/gpu-gate.log`
+and `target/gpu-gate-h05-sf10.json` in that worktree.
 
 **Historical paired measurement (2026-11-02/03, `44bf82bc` vs `c1b75718`;
 [summary](../experiments/gpu/compare/bench-2026-11-02.md), raw samples in
@@ -82,11 +90,12 @@ The DOOP pod also lacks both the live SRD toolchain and the prepared corpus for
   are classified, with H15 default/par byte-identical.
   CPU xalan passes 26-relation full-tuple checks. Final GPU workspace/all-target
   compilation passes, including doop-gpu and the legal H07 advice mirror.
-  GPU runtime acceptance is pending: H01 SF10 exhausted VRAM while an unrelated
-  vLLM process held 44,980 MiB; the remaining GPU suite and Cassandra must run
-  with the GPU available before merge. No tests were disabled.
+  GPU runtime acceptance subsequently passed on main `525673c5` (2026-11-06):
+  all GPU crate suites, separate radix-counters suite, H05 SF10 ceiling, both
+  DOOP builds and Cassandra 26/26 complete tuple sets; see dated baseline above.
   Evidence: `/data/design-notes/planner-step1-census.md` and the worktree's
-  `target/planner-step1-gates.json`. No performance comparison is claimed.
+  `target/planner-step1-gates.json`. The subsequent paired GPU comparison is
+  recorded in the dated baseline above, not in that historical census.
   Datalog seed/delta, driver and permutation are recorded facts; optional
   stratum demand is a no-op. Main explicitly retained Incremental-prefix
   Storage and delta permutation in this step; single CQ order ownership and
