@@ -687,7 +687,8 @@ fn assemble(source: &cq::Program, options: &Options) -> syn::Result<valuation::P
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
             evidence: None,
-            ordering: source.ordering.clone(),
+            // Ordering inputs are plan options, recorded by the composition (Plan-Prefix).
+            ordering: None,
             brace: Default::default(),
             steps,
         },

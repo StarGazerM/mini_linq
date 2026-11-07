@@ -319,7 +319,7 @@ pub fn analyze(
     let mut known = BTreeSet::new();
     for hole in &input.holes {
         if let Some(ordering) = &hole.ordering_ir {
-            let facts: cq_lang_cq::ordering::OrderingFacts = syn::parse_str(ordering)?;
+            let facts: cq_lang_vo::ordering::OrderingFacts = syn::parse_str(ordering)?;
             for demand in facts.shared_demand.into_iter().flatten() {
                 let mut key = demand.columns;
                 key.sort_unstable();

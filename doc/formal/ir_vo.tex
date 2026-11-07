@@ -21,7 +21,9 @@ Number all NF body clauses $0,\ldots,m-1$; a path \code{R@c.j.k} names the fixed
 occurrence of clause $c$, extended by branch/clause pairs per nesting level.
 A subatom lists the occurrence's currently bound columns and \code{_} elsewhere.
 Equalities and constraints use internal relational syntax: \code{where} prefixes the existing \code{=}, \code{between}, \code{in \{...\}}, \code{and}/\code{or} forms; raw \code{x = y;} remains an identity step.
-Optional ordering inputs are carried unchanged from CQ and printed as recorded.
+Optional ordering inputs are planner inputs: the \code{ordering(...)} plan
+option (Plan-Prefix) is recorded here unchanged and printed as recorded; CQ has
+no ordering syntax. VO-OrderingInputs checks the record on its own.
 Delta and permutation use original Datalog body identities, not positions
 renumbered by CQ normalization. Shared demand is checked input only in step 1,
 not a ranking or index-reuse claim. The executable VO contract independently
@@ -224,8 +226,15 @@ Every step extends $P$ by its provided columns.
  \text{keys nonempty, distinct, of declared columns}}
  {\mathsf{Evidence}(t.cq,\mathcal{E})\Downarrow\ok}
 
+\Rule{VO-OrderingInputs}{o=t.ordering\quad n=|o.permutation|\quad
+ o.permutation:\{0,\ldots,n-1\}\to\{0,\ldots,n-1\}\text{ bijective}\\
+ o.seed\Longleftrightarrow o.delta=\mathsf{none}\quad
+ o.delta=d\Longrightarrow d<n}
+ {\mathsf{OrderingInputs}(t)\Downarrow\ok}
+
 \Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\\
- t.evidence\ne\epsilon\Rightarrow\mathsf{Evidence}(t.cq,t.evidence)\Downarrow\ok}
+ t.evidence\ne\epsilon\Rightarrow\mathsf{Evidence}(t.cq,t.evidence)\Downarrow\ok\\
+ t.ordering\ne\epsilon\Rightarrow\mathsf{OrderingInputs}(t)\Downarrow\ok}
  {\mathsf{WF}_{VO}(t)\Downarrow A}
 \end{mathpar}
 

@@ -45,7 +45,7 @@ struct Arguments {
     timing: Ident,
     lower: Option<usize>,
     plan: Option<usize>,
-    shared_demand: Option<Vec<Vec<round::cq::ordering::SharedDemand>>>,
+    shared_demand: Option<Vec<Vec<round::SharedDemand>>>,
 }
 impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
@@ -367,7 +367,7 @@ fn construct(
     timing: Ident,
     lower: Option<usize>,
     plan: Option<usize>,
-    shared_demand: Option<Vec<Vec<round::cq::ordering::SharedDemand>>>,
+    shared_demand: Option<Vec<Vec<round::SharedDemand>>>,
 ) -> syn::Result<Program> {
     let analysis = storage::contract::check(source)?;
     ensure(
@@ -718,15 +718,8 @@ fn construct(
                 }),
             )?;
             let hole = holes.len();
-            let ordering = round::cq::ordering::OrderingFacts {
-                delta: variant.delta,
-                seed: variant.delta.is_none(),
-                driver: source.incremental.driver,
-                permutation: variant.order.clone(),
-                shared_demand: shared_demand.as_ref().map(|demands| demands[stratum_index].clone()),
-            };
             holes.push(syn::parse2(
-                quote!(struct #name; #ordering #(#declarations)* #scan_declaration #output #query),
+                quote!(struct #name; #(#declarations)* #scan_declaration #output #query),
             )?);
             planning.push(Some(Planning {
                 order: variant
@@ -753,6 +746,10 @@ fn construct(
                 } else {
                     None
                 },
+                delta: variant.delta,
+                driver: source.incremental.driver,
+                permutation: variant.order.clone(),
+                shared_demand: shared_demand.as_ref().map(|demands| demands[stratum_index].clone()),
             }));
             context.relations[head].admit.push(hole);
             let rule = RuleHole {

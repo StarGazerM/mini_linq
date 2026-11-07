@@ -8,6 +8,21 @@ use cq_lang_datalog_storage::{self as storage, Program};
 
 use quote::{ToTokens, quote};
 
+/// Planning arguments other than the serialized `ordering(...)` inputs.
+fn without_ordering(arguments: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let mut items = vec![Vec::new()];
+    for token in arguments {
+        match &token {
+            proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ',' => items.push(Vec::new()),
+            _ => items.last_mut().unwrap().push(token),
+        }
+    }
+    let kept = items.into_iter().filter(|item| {
+        !matches!(item.first(), Some(proc_macro2::TokenTree::Ident(name)) if name == "ordering")
+    }).map(|item| item.into_iter().collect::<proc_macro2::TokenStream>());
+    quote!(#(#kept),*)
+}
+
 fn authored() -> Program {
     schedule(&syn::parse_quote! {
         struct Closure;
@@ -109,8 +124,6 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     // The scan declares none.
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
-        ordering(seed = false, delta = 0, driver = WrittenOrder,
-            permutation = [0, 1, 2], shared_demand = none)
         relation #lookup(x:i32,y:i32) = (&#lookup_host)
             host [x] reads [exact, membership, candidates];
         relation #keys(x:i32) = (#keys) host [x] borrowed reads [membership];
@@ -628,8 +641,6 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
     let declarations = &hole.declarations;
     let expected: cq_lang_cq::Program = syn::parse2(quote! {
         struct #name;
-        ordering(seed = false, delta = 4, driver = WrittenOrder,
-            permutation = [0, 1, 2, 3, 4], shared_demand = none)
         #(#declarations)*
         #name(*heap,*to) :- #assign_scan(to,from),
             where to != 0, if 10 / *to > 0,
@@ -690,27 +701,26 @@ fn positive_constant_probes_preserve_repeats_wildcards_and_later_delta() {
     let stratum = &target.context.strata[0];
     assert!(stratum.seeds[0].scan.is_none());
     assert!(stratum.steps[0].scan.is_none());
-    for (index, ordering, body) in [
+    for (index, (delta, permutation), body) in [
         (
             stratum.seeds[0].hole,
-            quote!(ordering(seed = true, delta = none, driver = WrittenOrder,
-                permutation = [0, 1], shared_demand = none)),
+            (None, vec![0, 1]),
             quote!(#first(7,x,x), #second(x,(1 + 2),_)),
         ),
         (
             stratum.steps[0].hole,
-            quote!(ordering(seed = false, delta = 2, driver = WrittenOrder,
-                permutation = [0, 1, 2, 3], shared_demand = none)),
+            (Some(2), vec![0, 1, 2, 3]),
             quote!(#third(7,y,_), where y != 0, #delta(x), #fourth(x,x,7)),
         ),
     ] {
+        let planning = target.holes[index].planning.as_ref().unwrap();
+        assert_eq!((planning.delta, &planning.permutation), (delta, &permutation));
         let hole = &target.holes[index].cq;
         let name = &hole.name;
         let declarations = &hole.declarations;
         let head = &hole.query.head;
         let expected: cq_lang_cq::Program = syn::parse2(quote! {
             struct #name;
-            #ordering
             #(#declarations)*
             #head :- #body;
         })
@@ -761,16 +771,15 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
         .zip(expected_bodies)
         .zip(expected_occurrences)
     {
-        let delta = syn::Index::from(delta);
-        let permutation = (0..clauses).map(syn::Index::from);
+        let planning = target.holes[step.hole].planning.as_ref().unwrap();
+        assert_eq!(planning.delta, Some(delta));
+        assert_eq!(planning.permutation, (0..clauses).collect::<Vec<_>>());
         let hole = &target.holes[step.hole].cq;
         let name = &hole.name;
         let declarations = &hole.declarations;
         let head = &hole.query.head;
         let expected: cq_lang_cq::Program = syn::parse2(quote! {
             struct #name;
-            ordering(seed = false, delta = #delta, driver = WrittenOrder,
-                permutation = [#(#permutation),*], shared_demand = none)
             #(#declarations)*
             #head :- #body;
         })
@@ -1089,7 +1098,7 @@ fn authored_variant_orders_become_explicit_plan_advice_on_their_holes() {
         let hole = &fork.holes[rule.hole];
         let pipeline = hole.invocation_pipeline().unwrap();
         let plan = &pipeline.passes[hole.plan.unwrap()];
-        plan.arguments.to_string().replace(' ', "")
+        without_ordering(plan.arguments.clone()).to_string().replace(' ', "")
     };
     // The hole body already follows the authored order (Super is the scan),
     // so the advice names the hole's inputs by normalized clause position.
@@ -1178,8 +1187,9 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
     let restored: Fork = syn::parse2(fork.to_token_stream()).unwrap();
     assert_eq!(restored, fork);
     for hole in fork.holes.iter().filter(|hole| {
-        !hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
+        !without_ordering(hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
             .arguments
+            .clone())
             .is_empty()
     }) {
         use syn::parse::{Parse, Parser};
@@ -1192,9 +1202,9 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
             syn::parenthesized!(entries in input);
             entries.parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])
         };
-        let args = hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
+        let args = without_ordering(hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()]
             .arguments
-            .clone();
+            .clone());
         let selectors = parser.parse2(args).unwrap().into_iter().collect::<Vec<_>>();
         let normal = cq_lang_datalog_round::cq::normal::normalize(&hole.cq).unwrap();
         // compile_explicit runs WF-VO and the selected CK-Le phases.
@@ -1272,6 +1282,15 @@ fn smallest_rule_sites_preserve_recorded_pipeline_ordinals() {
     assert!(cq_datalog_incremental::check(&strata, &invalid).is_err());
 }
 
+/// The hole's planning invocation receives the recorded ordering inputs as
+/// `PlanOptions` and the checked VO records them unchanged.
+fn planned(hole: &cq_lang_datalog_round::Hole) -> cq_lang_vo::Program {
+    let pipeline = hole.invocation_pipeline().unwrap();
+    let options: cq_planning::PlanOptions =
+        syn::parse2(pipeline.passes[hole.plan.unwrap()].arguments.clone()).unwrap();
+    cq_planning::prefix_valuation(&hole.cq, &options).unwrap()
+}
+
 #[test]
 fn upstream_ordering_facts_survive_both_driver_policies_and_cq_planning() {
     use cq_datalog_incremental::DriverPolicy;
@@ -1284,10 +1303,6 @@ fn upstream_ordering_facts_survive_both_driver_policies_and_cq_planning() {
         R(*x,*z) :- R(x,y), R(y,z);
     };
     let strata = cq_datalog_stratify::compile(&source).unwrap();
-    let options = cq_order::Options {
-        heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
-        split: cq_order::Split::Coarse,
-    };
     for driver in [DriverPolicy::WrittenOrder, DriverPolicy::DeltaFirst] {
         let incremental = cq_datalog_incremental::compile_with_driver(&strata, driver).unwrap();
         assert_eq!(incremental.driver, driver);
@@ -1300,28 +1315,34 @@ fn upstream_ordering_facts_survive_both_driver_policies_and_cq_planning() {
         );
         let storage = schedule(&incremental).unwrap();
         let fork = compile(&storage).unwrap();
+        let parsed: Fork = syn::parse2(fork.to_token_stream()).unwrap();
+        assert_eq!(parsed, fork);
         for stratum in &fork.context.strata {
             for rule in stratum.seeds.iter().chain(&stratum.steps) {
                 let variant = &incremental.variants[rule.variant];
-                let cq = &fork.holes[rule.hole].cq;
-                let facts = cq.ordering.as_ref().unwrap();
+                let hole = &fork.holes[rule.hole];
+                let facts = hole.planning.as_ref().unwrap();
                 assert_eq!(facts.delta, variant.delta);
-                assert_eq!(facts.seed, variant.delta.is_none());
                 assert_eq!(facts.driver, driver);
                 assert_eq!(facts.permutation, variant.order);
                 assert_eq!(facts.shared_demand, None);
-                let normal = cq_lang_cq::normal::normalize(cq).unwrap();
-                let vo = cq_order::compile(&normal, &options).unwrap();
-                assert_eq!(vo.valuation.ordering.as_ref(), Some(facts));
-                let mut fact_free = normal.clone();
-                fact_free.ordering = None;
-                let plain = cq_order::compile(&fact_free, &options).unwrap();
+                let seed = variant.delta.is_none();
+                let delta = variant.delta.map_or_else(|| quote!(none), |delta| {
+                    let delta = syn::Index::from(delta);
+                    quote!(#delta)
+                });
+                let permutation = variant.order.iter().copied().map(syn::Index::from);
+                let expected = syn::parse2(quote!(ordering(seed = #seed, delta = #delta,
+                    driver = #driver, permutation = [#(#permutation),*], shared_demand = none)))
+                    .unwrap();
+                let vo = planned(hole);
+                assert_eq!(vo.valuation.ordering, Some(expected));
+                let plain = cq_planning::prefix_valuation(&hole.cq, &Default::default()).unwrap();
                 assert_eq!(plain.valuation.steps, vo.valuation.steps);
-                let changes: &[fn(&mut cq_lang_cq::ordering::OrderingFacts)] = &[
-                    |f: &mut cq_lang_cq::ordering::OrderingFacts| f.seed = !f.seed,
-                    |f: &mut cq_lang_cq::ordering::OrderingFacts| f.delta = Some(99),
-                    |f: &mut cq_lang_cq::ordering::OrderingFacts| f.permutation.clear(),
-                    |f: &mut cq_lang_cq::ordering::OrderingFacts| {
+                let changes: &[fn(&mut cq_lang_datalog_round::Planning)] = &[
+                    |f| f.delta = Some(99),
+                    |f| f.permutation.clear(),
+                    |f| {
                         f.driver = if f.driver == DriverPolicy::WrittenOrder {
                             DriverPolicy::DeltaFirst
                         } else {
@@ -1331,7 +1352,7 @@ fn upstream_ordering_facts_survive_both_driver_policies_and_cq_planning() {
                 ];
                 for change in changes {
                     let mut changed = fork.clone();
-                    change(changed.holes[rule.hole].cq.ordering.as_mut().unwrap());
+                    change(changed.holes[rule.hole].planning.as_mut().unwrap());
                     assert!(check(&storage, &changed).is_err());
                 }
             }
@@ -1354,16 +1375,13 @@ fn optional_stratum_shared_demand_is_checked_and_recorded_without_ranking() {
     assert_eq!(parsed, supplied);
     check(&storage, &parsed).unwrap();
     for (before, after) in baseline.holes.iter().zip(&supplied.holes) {
-        if let Some(facts) = &after.cq.ordering {
+        assert_eq!(before.cq, after.cq);
+        if let Some(facts) = &after.planning {
             assert_eq!(facts.shared_demand.as_ref().unwrap().len(), 1);
-            let options = cq_order::Options {
-                heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
-                split: cq_order::Split::Coarse,
-            };
-            let before = cq_order::compile(&cq_lang_cq::normal::normalize(&before.cq).unwrap(), &options).unwrap();
-            let after = cq_order::compile(&cq_lang_cq::normal::normalize(&after.cq).unwrap(), &options).unwrap();
+            let (before, after) = (planned(before), planned(after));
             assert_eq!(before.valuation.steps, after.valuation.steps);
-            assert_eq!(after.valuation.ordering.as_ref(), Some(facts));
+            let recorded = after.valuation.ordering.as_ref().unwrap();
+            assert_eq!(recorded.shared_demand.as_ref().unwrap().len(), 1);
         } else {
             assert_eq!(before, after);
         }
@@ -1409,7 +1427,7 @@ fn heapalloc_disconnected_authored_order_is_rejected_at_cq_boundary() {
     ).unwrap();
     let fork = compile(&schedule(&incremental).unwrap()).unwrap();
     let hole = &fork.holes[fork.context.strata[0].seeds[0].hole];
-    let arguments = hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()].arguments.clone();
+    let arguments = without_ordering(hole.invocation_pipeline().unwrap().passes[hole.plan.unwrap()].arguments.clone());
     let selectors = (|input: syn::parse::ParseStream<'_>| {
         let order: syn::Ident = input.parse()?;
         assert_eq!(order, "order");

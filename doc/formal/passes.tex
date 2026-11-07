@@ -1326,9 +1326,12 @@ and $S$ checked redundant-support absorption, Plan-Prefix is the reusable
 \code{cq_planning::compile_prefix} core composition, re-exported by
 \code{mini_linq::planning} and \code{cq_planners_plan}, not a macro-local policy.
 Its \code{PlanOptions} parser is shared by macro and programmatic callers:
-\code{order(...)} and \code{no_reduce} occur at most once, reduction and skip
+\code{order(...)}, \code{ordering(...)} and \code{no_reduce} occur at most once, reduction and skip
 packets may repeat, and a trailing options comma is rejected. The checked
 \code{prefix_valuation} API exposes $w$ before elaboration.
+\code{ordering(...)} carries upstream ordering inputs (Datalog seed/delta
+identity, driver, permutation, shared demand); the composition records them
+unchanged as $v_0.ordering$ (VO-OrderingInputs) and no ordering choice reads them.
 Qualified \code{PlanOptions} selectors name clauses of the authored input $q$.
 Normalization preserves top-level atom/block order, so its inserted bindings
 and restrictions induce a positional map $\rho$ from those source clauses
@@ -1340,7 +1343,7 @@ passing them to the normal-IR ordering API; unqualified selectors are unchanged.
  v_0={\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
  \mathsf{order}^{p.evidence}(n)\ \text{checked by CK-EvidenceLe}&p.evidence\text{ present}\\
  O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}}\\
- v=\mathsf{known}(p.known)(v_0)\quad
+ v=\mathsf{known}(p.known)(v_0[ordering:=p.ordering])\quad
  r=\text{None if }p.no\_reduce,\text{ otherwise Masks}\\
  w=\mathsf{advise}(R_{None,r}(v),p)\quad \mathsf{known}(p.known)\text{ re-checked on }w\quad a=E(w)}
  {\code{compile_prefix}(q,p)=\code{mini_linq::passes::plan}(q,args)=a}

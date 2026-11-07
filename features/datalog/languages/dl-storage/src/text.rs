@@ -119,7 +119,8 @@ syntax_text!(
     cq_lang_structures::provider::InputSchema,
     cq_stage::Pipeline,
     cq_stage::Context,
-    crate::incremental::Program
+    crate::incremental::Program,
+    crate::incremental::DriverPolicy
 );
 
 #[macro_export]

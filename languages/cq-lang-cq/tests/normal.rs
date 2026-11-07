@@ -550,28 +550,15 @@ fn literals_preserve_argument_positions_and_do_not_bind_head_or_block_names() {
 }
 
 #[test]
-fn upstream_ordering_facts_roundtrip_and_survive_normalization() {
-    let source = cq(quote! {
+fn cq_has_no_ordering_inputs() {
+    // Ordering inputs are planner options recorded by VO, not CQ grammar.
+    assert!(syn::parse2::<cq::Program>(quote! {
         struct Q;
         ordering(seed = false, delta = 1, driver = DeltaFirst,
             permutation = [1, 0], shared_demand = [R(0)])
         relation R(a:i32,b:i32);
         relation answer(a:i32);
         answer(*x) :- R(x,y), R(y,x);
-    });
-    let normal = cq::normal::normalize(&source).unwrap();
-    assert_eq!(normal.ordering, source.ordering);
-    let parsed: cq::Program = syn::parse2(quote!(#normal)).unwrap();
-    assert_eq!(parsed, normal);
-    for permutation in [vec![0, 0], vec![0, 2]] {
-        let mut invalid = source.clone();
-        invalid.ordering.as_mut().unwrap().permutation = permutation;
-        assert!(cq::contract::check(&invalid).is_err());
-    }
-    let mut invalid = source.clone();
-    invalid.ordering.as_mut().unwrap().seed = true;
-    assert!(cq::contract::check(&invalid).is_err());
-    let mut invalid = source;
-    invalid.ordering.as_mut().unwrap().delta = Some(2);
-    assert!(cq::contract::check(&invalid).is_err());
+    })
+    .is_err());
 }

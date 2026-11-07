@@ -9,22 +9,23 @@ impl Hole {
         let Some(planning) = &self.planning else {
             return Ok(pipeline);
         };
-        if !planning.authored && planning.known.is_none() {
+        let advised = planning.authored || planning.known.is_some();
+        let Some(plan) = self.plan else {
+            ensure(!advised, self, "planning facts require a planning invocation")?;
+            // Without a recorded owner the ordering inputs reach no planner.
             return Ok(pipeline);
-        }
-        let plan = self.plan.ok_or_else(|| {
-            syn::Error::new_spanned(self, "planning facts require a planning invocation")
-        })?;
-        let pass = pipeline
+        };
+        let raw = &pipeline
             .passes
-            .get_mut(plan)
-            .ok_or_else(|| syn::Error::new_spanned(self, "missing planning invocation"))?;
+            .get(plan)
+            .ok_or_else(|| syn::Error::new_spanned(self, "missing planning invocation"))?
+            .arguments;
         ensure(
-            pass.arguments.is_empty(),
+            !advised || raw.is_empty(),
             self,
             "recorded planning facts conflict with raw planning arguments",
         )?;
-        let mut arguments = TokenStream::new();
+        let mut arguments = raw.clone();
         if planning.authored {
             let normal = cq::normal::normalize(&self.cq)?;
             let atoms: Vec<_> = normal
@@ -113,7 +114,33 @@ impl Hole {
             }
             arguments.extend(quote!(known(#name @ #clause at #level)));
         }
+        if !arguments.is_empty() {
+            arguments.extend(quote!(,));
+        }
+        arguments.extend(planning.ordering_option());
         pipeline.passes[plan].arguments = arguments;
         Ok(pipeline)
+    }
+}
+
+impl Planning {
+    /// Formal rule DL-OrderingInputs: serialize the recorded ordering inputs unchanged as the planning invocation's `ordering(...)` option.
+    fn ordering_option(&self) -> TokenStream {
+        let seed = self.delta.is_none();
+        let delta = self.delta.map_or_else(
+            || quote!(none),
+            |delta| {
+                let delta = syn::Index::from(delta);
+                quote!(#delta)
+            },
+        );
+        let driver = self.driver;
+        let permutation = self.permutation.iter().copied().map(syn::Index::from);
+        let shared_demand = self
+            .shared_demand
+            .as_ref()
+            .map_or_else(|| quote!(none), |demands| quote!([#(#demands),*]));
+        quote!(ordering(seed = #seed, delta = #delta, driver = #driver,
+            permutation = [#(#permutation),*], shared_demand = #shared_demand))
     }
 }

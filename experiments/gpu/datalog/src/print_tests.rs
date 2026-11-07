@@ -75,14 +75,11 @@ fn device_round_preserves_delta_driver_and_source_permutation_facts() {
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             let variant = &round.storage.incremental.variants[rule.variant];
             let hole = &round.holes[rule.hole];
-            let facts = hole.cq.ordering.as_ref().unwrap();
+            let facts = hole.planning.as_ref().unwrap();
             assert_eq!(facts.driver, round.storage.incremental.driver);
             assert_eq!(facts.delta, variant.delta);
-            assert_eq!(facts.seed, variant.delta.is_none());
             assert_eq!(facts.permutation, variant.order);
             assert_eq!(facts.shared_demand, None);
-            let normal = cq_lang_datalog_round::cq::normal::normalize(&hole.cq).unwrap();
-            assert_eq!(normal.ordering.as_ref(), Some(facts));
         }
     }
     let parsed: cq_lang_datalog_round::Program = syn::parse2(round.to_token_stream()).unwrap();

@@ -133,7 +133,7 @@ fn recorded_ordering_inputs_round_trip_and_are_preserved() {
             let facts = quote!(ordering(seed = #seed, delta = #delta, driver = #driver,
                 permutation = [1, 0], shared_demand = #demand));
             let mut program: Program = syn::parse2(quote! {
-                struct Q; #facts
+                struct Q;
                 relation R(x:i32); relation S(x:i32);
                 answer(x) :- R(x), S(x);
                 valuation #facts { R@0(x); S@1(x); }
@@ -142,9 +142,32 @@ fn recorded_ordering_inputs_round_trip_and_are_preserved() {
             assert_eq!(syn::parse2::<Program>(program.to_token_stream()).unwrap(), program);
             let source = program.clone();
             program.valuation.ordering = None;
-            assert!(contract::check(&program).is_err());
+            contract::check(&program).unwrap();
             assert!(cq_lang_vo::check_rewrite(&source, &program).is_err());
         }
+    }
+}
+
+#[test]
+fn ordering_inputs_reject_non_bijections_and_seed_delta_disagreement() {
+    let program: Program = syn::parse_quote! {
+        struct Q;
+        relation R(x:i32); relation S(x:i32);
+        answer(x) :- R(x), S(x);
+        valuation ordering(seed = false, delta = 1, driver = DeltaFirst,
+            permutation = [1, 0], shared_demand = none) { R@0(x); S@1(x); }
+    };
+    contract::check(&program).unwrap();
+    let changes: [fn(&mut cq_lang_vo::ordering::OrderingFacts); 4] = [
+        |facts| facts.permutation = vec![0, 0],
+        |facts| facts.permutation = vec![0, 2],
+        |facts| facts.seed = true,
+        |facts| facts.delta = Some(2),
+    ];
+    for change in changes {
+        let mut invalid = program.clone();
+        change(invalid.valuation.ordering.as_mut().unwrap());
+        rejection(&invalid, "VO-OrderingInputs");
     }
 }
 

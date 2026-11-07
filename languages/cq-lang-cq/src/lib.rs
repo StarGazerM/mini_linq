@@ -24,7 +24,6 @@ mod domain;
 pub mod group;
 pub mod hypergraph;
 pub mod normal;
-pub mod ordering;
 pub use blocks::{Block, Branch};
 mod sugar;
 pub use cq_syntax::Constraint;
@@ -41,7 +40,7 @@ pub use cq_syntax::{CommaList, kw, symbol_name};
 ///
 /// ```text
 /// Program ::= RustVisibility? "struct" Ident ";"
-///             OrderingFacts? DeclaredEvidence?
+///             DeclaredEvidence?
 ///             RelationDecl*
 ///             Query
 /// ```
@@ -51,7 +50,6 @@ pub struct Program {
     pub struct_token: Token![struct],
     pub name: Ident,
     pub declaration_semi: Token![;],
-    pub ordering: Option<ordering::OrderingFacts>,
     /// Dataset facts are recorded separately from legacy evidence-driven planning.
     pub declared_evidence: Option<cq_syntax::declared_evidence::DeclaredEvidence>,
     #[to_tokens(|tokens, declarations| quote::TokenStreamExt::append_all(tokens, declarations))]
@@ -109,7 +107,6 @@ impl Program {
             struct_token: input.parse()?,
             name: input.parse()?,
             declaration_semi: input.parse()?,
-            ordering: ordering::parse_optional(input)?,
             declared_evidence: cq_syntax::declared_evidence::parse_optional(input)?,
             declarations: parse_declarations(input)?,
             query: input.parse()?,
@@ -454,9 +451,6 @@ pub mod contract {
 
 /// Formal rule WF-CQ: Check CQ declarations, written scope, output arity and symbolic type availability.
 fn check_program(program: &Program) -> syn::Result<()> {
-    if let Some(ordering) = &program.ordering {
-        ordering.check()?;
-    }
     if let Some(evidence) = &program.declared_evidence {
         evidence.check(&program.declarations)?;
     }

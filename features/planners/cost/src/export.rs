@@ -480,7 +480,7 @@ fn hole(id: usize, source: &cq::Program, plan: &vo::Program, origin: Origin) -> 
     Ok(Hole {
         id, origin, source_cq: text(source), normalized_cq: text(&plan.cq),
         vo_hash: sha256(&checked_vo), checked_vo, captures_ir: text(&plan.cq.query.captures),
-        ordering_ir: plan.cq.ordering.as_ref().map(text), evidence: evidence(plan.cq.declared_evidence.as_ref())?,
+        ordering_ir: plan.valuation.ordering.as_ref().map(text), evidence: evidence(plan.cq.declared_evidence.as_ref())?,
         candidate: scope(&plan.cq.query.body, &plan.valuation.steps, &analysis)?, occurrences,
         candidate_reference: scope(&plan.cq.query.body, &reference, &reference_analysis)?,
     })

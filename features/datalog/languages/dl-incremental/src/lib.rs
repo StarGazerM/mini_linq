@@ -8,7 +8,6 @@
 //! order before comparison. Opaque total Rust imposes no written-order chain.
 use cq_datalog_support::{Fresh, ensure};
 pub use cq_lang_datalog_strata as strata;
-pub use cq_lang_cq::ordering::DriverPolicy;
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
@@ -19,6 +18,32 @@ use syn::{
     Ident, Token,
     parse::{Parse, ParseStream},
 };
+
+/// Which occurrence a delta variant reads first; recorded upstream input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DriverPolicy {
+    #[default]
+    WrittenOrder,
+    DeltaFirst,
+}
+impl Parse for DriverPolicy {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let name: Ident = input.parse()?;
+        match name.to_string().as_str() {
+            "WrittenOrder" => Ok(Self::WrittenOrder),
+            "DeltaFirst" => Ok(Self::DeltaFirst),
+            _ => Err(syn::Error::new_spanned(name, "expected WrittenOrder or DeltaFirst")),
+        }
+    }
+}
+impl ToTokens for DriverPolicy {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Self::WrittenOrder => quote!(WrittenOrder),
+            Self::DeltaFirst => quote!(DeltaFirst),
+        });
+    }
+}
 pub mod kw {
     syn::custom_keyword!(incremental);
     syn::custom_keyword!(scheme);

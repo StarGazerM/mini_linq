@@ -581,18 +581,17 @@ pub(crate) fn check_storage_with_analysis(
                     source,
                     "fork admission placement disagrees with its advice or recorded fan-out",
                 )?;
-                let ordering = hole.ordering.as_ref().ok_or_else(|| {
-                    syn::Error::new_spanned(hole, "rule hole must record upstream ordering facts")
+                let planning = target.holes[rule.hole].planning.as_ref().ok_or_else(|| {
+                    syn::Error::new_spanned(hole, "rule hole must record planning facts")
                 })?;
                 ensure(
-                    ordering.delta == variant.delta
-                        && ordering.seed == variant.delta.is_none()
-                        && ordering.driver == source.incremental.driver
-                        && ordering.permutation == variant.order,
+                    planning.delta == variant.delta
+                        && planning.driver == source.incremental.driver
+                        && planning.permutation == variant.order,
                     hole,
                     "ordering facts must preserve Incremental delta, driver and permutation",
                 )?;
-                if let Some(demands) = &ordering.shared_demand {
+                if let Some(demands) = &planning.shared_demand {
                     for demand in demands {
                         ensure(
                             context.layouts.iter().any(|layout| {
@@ -604,9 +603,6 @@ pub(crate) fn check_storage_with_analysis(
                         )?;
                     }
                 }
-                let planning = target.holes[rule.hole].planning.as_ref().ok_or_else(|| {
-                    syn::Error::new_spanned(hole, "rule hole must record planning facts")
-                })?;
                 let order: Vec<_> = variant
                     .query
                     .body
@@ -671,7 +667,7 @@ pub(crate) fn check_storage_with_analysis(
                 let declared_evidence =
                     crate::evidence::for_hole(source, context, rule.hole, &expected_declarations)?;
                 let expected: CqProgram =
-                    syn::parse2(quote!(struct #name; #ordering #declared_evidence #(#expected_declarations)* #query))?;
+                    syn::parse2(quote!(struct #name; #declared_evidence #(#expected_declarations)* #query))?;
                 ensure(
                     hole == &expected,
                     source,

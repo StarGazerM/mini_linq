@@ -993,8 +993,10 @@ orders resolve to the existing permutation form. Step orders retain original
 source occurrences and optional columns separately from that permutation.
 The mark is denoted advice, not a validity premise: DL-OccurrenceOrder still
 checks permutation, dependencies and exact erasure. Fork records each rule
-hole's positive-occurrence order, authored flag, steps, smallest sites and
-optional known level as \code{Planning}. CK-DL-Fork checks these against the
+hole's positive-occurrence order, authored flag, steps, smallest sites,
+optional known level and ordering inputs (delta occurrence, driver, complete
+permutation, optional stratum shared demand) as \code{Planning}; the hole's CQ
+program carries none of them. CK-DL-Fork checks these against the
 Incremental variant. A numeric \code{Planning.known} must equal explicit
 \code{Known::At} advice; automatic admission records \code{None}, not a numeric
 pin. Round rewrites keep the fact fixed.
@@ -1013,10 +1015,23 @@ Unauthored variants leave the hole's CQ planner free to choose its own order.
   (\mathrm{authored}(v)\lor h.\mathrm{planning.known}\ne\varnothing)
     \Rightarrow \mathrm{args}(h.Q_p)=\varnothing}
  {\mathrm{invoke}(h).Q_p.\mathrm{args}=
-   \mathrm{serialize}(\rho_v,h.\mathrm{planning})}
+   \mathrm{args}(h.Q_p);\ \mathrm{serialize}(\rho_v,h.\mathrm{planning});\
+   \mathrm{ordering}(h.\mathrm{planning})}
+
+\Rule{DL-OrderingInputs}
+ {P=h.\mathrm{planning}\quad n=|P.\mathrm{permutation}|\quad
+  P.\mathrm{delta}=d\Rightarrow d<n}
+ {\mathrm{ordering}(P)=\code{ordering}(\mathrm{seed}=(P.\mathrm{delta}=\mathsf{none}),\
+   \mathrm{delta}=P.\mathrm{delta},\ \mathrm{driver}=P.\mathrm{driver},\
+   \mathrm{permutation}=P.\mathrm{permutation},\
+   \mathrm{shared\_demand}=P.\mathrm{shared\_demand})}
 \end{mathpar}
 Unauthored order arguments remain unchanged unless a recorded known level
-owns the invocation. No pass path or relative queue-position heuristic identifies
+owns the invocation; the recorded ordering inputs are appended to every owned
+planning invocation as its \code{PlanOptions} \code{ordering(...)} option
+(Plan-Prefix), which VO records unchanged (VO-OrderingInputs) and no ordering
+choice reads. A hole without a recorded planning owner hands them to no planner.
+No pass path or relative queue-position heuristic identifies
 the owner. The smallest wrapper is likewise serialized from the recorded sites
 without changing invocation ordinals.
 

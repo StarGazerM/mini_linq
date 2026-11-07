@@ -1,4 +1,5 @@
-//! Recorded upstream ordering inputs. These facts do not rank candidates in step 1.
+//! Recorded upstream ordering inputs: planner options (`PlanOptions` `ordering(...)`)
+//! recorded unchanged in VO. CQ has no ordering syntax; these facts rank nothing.
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{Ident, Token, parse::{Parse, ParseStream}};
@@ -83,21 +84,21 @@ pub fn parse_optional(input: ParseStream<'_>) -> syn::Result<Option<OrderingFact
 }
 
 impl OrderingFacts {
-    /// Validate upstream identities without deriving any scheduling decision.
+    /// Formal rule VO-OrderingInputs: The permutation is a bijection on its positions, seed iff no delta, and a delta indexes the permutation.
     pub fn check(&self) -> syn::Result<()> {
         let mut seen = vec![false; self.permutation.len()];
         for &position in &self.permutation {
             let Some(slot) = seen.get_mut(position) else {
-                return Err(syn::Error::new_spanned(self, "ordering permutation is not a bijection"));
+                return Err(syn::Error::new_spanned(self, "VO-OrderingInputs: permutation is not a bijection"));
             };
             if std::mem::replace(slot, true) {
-                return Err(syn::Error::new_spanned(self, "ordering permutation is not a bijection"));
+                return Err(syn::Error::new_spanned(self, "VO-OrderingInputs: permutation is not a bijection"));
             }
         }
         if self.seed != self.delta.is_none()
             || self.delta.is_some_and(|delta| delta >= self.permutation.len())
         {
-            return Err(syn::Error::new_spanned(self, "ordering seed and delta facts disagree"));
+            return Err(syn::Error::new_spanned(self, "VO-OrderingInputs: seed and delta facts disagree"));
         }
         Ok(())
     }

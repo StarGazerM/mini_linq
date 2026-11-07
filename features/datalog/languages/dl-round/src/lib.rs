@@ -310,6 +310,47 @@ pub struct Planning {
     pub smallest: Vec<Vec<usize>>,
     /// Explicit `Known::At` level pin only; automatic admission follows CQ readiness.
     pub known: Option<usize>,
+    /// Ordering inputs handed to the hole's planning invocation as `ordering(...)`
+    /// (DL-PlanningOwner): Incremental delta occurrence (none for a seed), driver,
+    /// complete source-body permutation and optional stratum index demand.
+    pub delta: Option<usize>,
+    pub driver: incremental::DriverPolicy,
+    pub permutation: Vec<usize>,
+    pub shared_demand: Option<Vec<SharedDemand>>,
+}
+/// A per-stratum index demand `Relation(column, ...)`, recorded only; it ranks nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedDemand {
+    pub relation: Ident,
+    pub columns: Vec<usize>,
+}
+impl syn::parse::Parse for SharedDemand {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let relation = input.parse()?;
+        let columns;
+        syn::parenthesized!(columns in input);
+        let columns = columns
+            .parse_terminated(<syn::LitInt as syn::parse::Parse>::parse, syn::Token![,])?
+            .iter()
+            .map(syn::LitInt::base10_parse)
+            .collect::<syn::Result<_>>()?;
+        Ok(Self { relation, columns })
+    }
+}
+impl ToTokens for SharedDemand {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let relation = &self.relation;
+        let columns = self.columns.iter().copied().map(syn::Index::from);
+        tokens.extend(quote!(#relation(#(#columns),*)));
+    }
+}
+impl Text for SharedDemand {
+    fn parse_text(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        input.parse()
+    }
+    fn text(&self) -> TokenStream {
+        self.to_token_stream()
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanningStep {
@@ -629,7 +670,7 @@ record!(Hole {
     binding: Option<usize>,
     answer: Vec<AnswerColumn>
 });
-record!(Planning { order: Vec<usize>, authored: bool, steps: Vec<PlanningStep>, smallest: Vec<Vec<usize>>, known: Option<usize> });
+record!(Planning { order: Vec<usize>, authored: bool, steps: Vec<PlanningStep>, smallest: Vec<Vec<usize>>, known: Option<usize>, delta: Option<usize>, driver: incremental::DriverPolicy, permutation: Vec<usize>, shared_demand: Option<Vec<SharedDemand>> });
 record!(PlanningStep { occurrence: usize, columns: Option<Vec<Ident>> });
 record!(Execution {
     hole: usize,

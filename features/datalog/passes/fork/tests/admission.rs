@@ -74,13 +74,18 @@ fn default_admission_follows_the_recorded_fanout() {
     assert_eq!(rule(&target, "Pair").known, Admission::Admit);
     for rule in rules(&target) {
         assert_eq!(rule.fanout, [Fanout::Multiply, Fanout::Multiply]);
+        // Only the recorded ordering inputs reach the planning invocation.
         let arguments = target.holes[rule.hole]
             .invocation_pipeline()
             .unwrap()
             .passes[0]
             .arguments
-            .to_string();
-        assert!(arguments.is_empty(), "{arguments}");
+            .clone();
+        let options: cq_planning::PlanOptions = syn::parse2(arguments.clone()).unwrap();
+        assert!(
+            options.ordering.is_some() && options.order.is_none() && options.known.is_empty(),
+            "{arguments}"
+        );
         assert_eq!(
             target.holes[rule.hole].planning.as_ref().unwrap().known,
             None
@@ -490,8 +495,8 @@ fn known_advice_pins_admission_and_transports_the_level() {
                 .arguments
                 .to_string();
             let known = quote!(known(#name @ #clause at 2)).to_string();
-            assert!(arguments.ends_with(&known), "{arguments}");
-            assert_eq!(arguments.contains("order"), order, "{arguments}");
+            assert!(arguments.contains(&known), "{arguments}");
+            assert_eq!(arguments.contains("order ("), order, "{arguments}");
         }
     }
     // Level 1 precedes Pair's last head binding.

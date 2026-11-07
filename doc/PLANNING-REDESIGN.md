@@ -51,8 +51,9 @@ the dated acceptance below records exact gates and matched paired measurements.
    seed/recursive variants, delta identity and admission. In step 1 it retains
    `delta_first_order` and its recorded occurrence permutation; Storage still
    selects layouts from that Incremental prefix. CPU `WrittenOrder` and GPU
-   `DeltaFirst` remain distinct structural inputs. These facts accompany CQ
-   planning rather than being inferred by a printer; I2 drains fully-bound
+   `DeltaFirst` remain distinct structural inputs. These facts reach the CQ
+   planner as `PlanOptions` `ordering(...)` inputs (not CQ grammar) and VO
+   records them, rather than being inferred by a printer; I2 drains fully-bound
    checks without changing the introducing-atom order. Optional stratum shared
    demand is a recorded no-op in this step. Step 1b, after its own census,
    removes the permutation planner and makes Storage follow recorded VOs.

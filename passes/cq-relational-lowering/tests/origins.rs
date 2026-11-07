@@ -61,9 +61,8 @@ fn reused_reduction_prefix_records_atom_even_without_a_new_definition() {
         struct Q; relation R(x:i32); relation S(x:i32);
         answer(x) :- R(x), S(x);
     };
-    let ordering = &source.ordering;
     let source: vo::Program = syn::parse2(quote! {
-        #source valuation #ordering {
+        #source valuation {
             reduce R@0 with S@1(x); R@0(x); S@1(x);
         }
     }).unwrap();

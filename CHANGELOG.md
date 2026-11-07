@@ -19,6 +19,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   name and printed program, descriptor version 2) and the calibrator
   (`cq_cost::calibration::lineage`) re-parses, checks and derives each stage's
   dependency graph for `Trace::coverage`. No IR crate references calibration.
+- Ordering inputs leave the CQ grammar (IR redesign M2e). `cq_lang_cq::ordering`
+  and `Program.ordering` are deleted; the `ordering(seed, delta, driver,
+  permutation, shared_demand)` record is VO's own (`cq_lang_vo::ordering`,
+  checked by VO-OrderingInputs) and reaches the planner as the `PlanOptions`
+  `ordering(...)` option, which Plan-Prefix records unchanged in VO. Datalog
+  Fork records the inputs in Round `Planning`, and `invocation_pipeline`
+  serializes them into the owned planning invocation (DL-OrderingInputs).
+  `DriverPolicy` is defined by DL-Incremental. Printed VO loses only the
+  embedded CQ header's `ordering(...)` line.
 
 - Explicit order advice now delegates dependency, subatom and phase legality to
   the VO and lookup/expand checkers instead of duplicating producer-side errors.

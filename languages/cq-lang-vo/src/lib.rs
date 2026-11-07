@@ -40,10 +40,7 @@ pub use evidence::Evidence;
 pub mod restrict;
 pub use restrict::Restrict;
 pub mod order;
-/// Recorded ordering inputs shared with CQ; printing never reconstructs them.
-pub mod ordering {
-    pub use cq_lang_cq::ordering::*;
-}
+pub mod ordering;
 
 pub mod kw {
     syn::custom_keyword!(reduce);
@@ -249,8 +246,8 @@ fn error<T>(
 }
 
 fn analyze(program: &Program) -> syn::Result<Analysis> {
-    if program.valuation.ordering != program.cq.ordering {
-        return error(&program.valuation, "VO ordering inputs must preserve the recorded CQ facts");
+    if let Some(ordering) = &program.valuation.ordering {
+        ordering.check()?;
     }
     if let Some(evidence) = &program.valuation.evidence {
         evidence.check(&program.cq)?;

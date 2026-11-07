@@ -25,6 +25,9 @@ pub struct PlanOptions {
     /// `known(Rel@i at k)`: request a ready boundary after positive read k;
     /// I2 drains the negation earlier when ready (transported by Datalog Fork).
     pub known: Vec<cq_order::Known>,
+    /// `ordering(seed = .., delta = .., driver = .., permutation = [..], shared_demand = ..)`:
+    /// upstream ordering inputs recorded unchanged in VO; no ordering choice reads them.
+    pub ordering: Option<vo::ordering::OrderingFacts>,
 }
 
 impl Parse for PlanOptions {
@@ -32,8 +35,13 @@ impl Parse for PlanOptions {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
         while !input.is_empty() {
-            if input.peek(vo::evidence::kw::evidence) && options.evidence.is_none() {
-                options.evidence = Some(input.parse()?);
+            let ordering = input.peek(vo::ordering::kw::ordering) && options.ordering.is_none();
+            if ordering || input.peek(vo::evidence::kw::evidence) && options.evidence.is_none() {
+                if ordering {
+                    options.ordering = Some(input.parse()?);
+                } else {
+                    options.evidence = Some(input.parse()?);
+                }
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                     if input.is_empty() {
@@ -98,7 +106,7 @@ impl Parse for PlanOptions {
             } else {
                 return Err(syn::Error::new_spanned(
                     option,
-                    "expected order(Relation, ...), no_reduce, reduce/skip(Target with Support), known(Relation@clause at level), or evidence from \"provenance\" { count R = n; key R [columns]; }",
+                    "expected order(Relation, ...), no_reduce, reduce/skip(Target with Support), known(Relation@clause at level), ordering(seed = .., delta = .., driver = .., permutation = [..], shared_demand = ..), or evidence from \"provenance\" { count R = n; key R [columns]; }",
                 ));
             }
             if !input.is_empty() {
@@ -202,6 +210,7 @@ fn normalized_advice(
         reduce: pairs(&args.reduce)?,
         skip: pairs(&args.skip)?,
         evidence: args.evidence.clone(),
+        ordering: args.ordering.clone(),
         known,
     }))
 }
@@ -227,6 +236,8 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
         cq_order::check(&normal, &plan, &ordering)?;
         plan
     };
+    // Plan-Prefix: upstream ordering inputs are recorded unchanged; no choice above read them.
+    plan.valuation.ordering = args.ordering.clone();
     for known in &args.known {
         known.place(&mut plan)?;
     }
@@ -701,5 +712,36 @@ mod tests {
                 assert!(early.known[0].check(&plan).is_err());
             }
         }
+    }
+
+    #[test]
+    fn ordering_option_is_recorded_unchanged_and_checked_in_vo() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i64,y:i64);
+            relation S(y:i64,z:i64);
+            answer(x) :- R(x,y), S(y,z);
+        };
+        let facts = quote::quote!(ordering(seed = false, delta = 1, driver = DeltaFirst,
+            permutation = [1, 0], shared_demand = [R(0)]));
+        let unordered = prefix_valuation(&source, &PlanOptions::default()).unwrap();
+        let options: PlanOptions = syn::parse2(quote::quote!(#facts)).unwrap();
+        let recorded = prefix_valuation(&source, &options).unwrap();
+        let mut expected = unordered.clone();
+        expected.valuation.ordering = Some(syn::parse2(facts.clone()).unwrap());
+        assert_eq!(recorded, expected);
+        let printed: vo::Program = syn::parse2(quote::quote!(#recorded)).unwrap();
+        assert_eq!(printed, recorded);
+        let explicit: PlanOptions =
+            syn::parse2(quote::quote!(order(S@1, R@0), #facts, no_reduce)).unwrap();
+        assert_eq!(
+            prefix_valuation(&source, &explicit).unwrap().valuation.ordering,
+            expected.valuation.ordering,
+        );
+        assert!(syn::parse2::<PlanOptions>(quote::quote!(#facts, #facts)).is_err());
+        let invalid: PlanOptions = syn::parse_quote!(ordering(seed = false, delta = 1,
+            driver = DeltaFirst, permutation = [0, 0], shared_demand = none));
+        let error = prefix_valuation(&source, &invalid).unwrap_err().to_string();
+        assert!(error.contains("VO-OrderingInputs"), "{error}");
     }
 }

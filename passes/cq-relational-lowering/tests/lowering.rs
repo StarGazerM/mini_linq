@@ -19,8 +19,7 @@ fn cq(tokens: TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 fn vo(source: &cq::Program, steps: TokenStream) -> valuation::Program {
-    let ordering = &source.ordering;
-    syn::parse2(quote! { #source valuation #ordering { #steps } }).unwrap()
+    syn::parse2(quote! { #source valuation { #steps } }).unwrap()
 }
 fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source
