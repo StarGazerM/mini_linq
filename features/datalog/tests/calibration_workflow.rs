@@ -247,8 +247,11 @@ fn parallel_cartesian(edges: &[(i32,i32)], seeds: &[(i32,)]) -> BTreeSet<(i32,i3
     }.into_iter().collect()
 }
 
+/// M6: record a stream-work correspondence certificate for repeated inputs
+/// (`features/planners/cost/src/calibration/report.rs::evaluation_scopes`).
+/// Sparse lowering Steps are not that certificate; report unknown bounds.
 #[test]
-fn keyless_rhs_replay_uses_join_scope_not_a_single_scan_cap() {
+fn keyless_rhs_replay_reports_unknown_without_stream_work_certificate() {
     let edges = [(0,1),(1,2),(2,3),(3,4)]; let seeds = [(10,),(20,)];
     let expected = edges.iter().flat_map(|&(x,y)| seeds.iter().map(move |&(z,)| (x,y,z))).collect::<BTreeSet<_>>();
     let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
@@ -260,12 +263,18 @@ fn keyless_rhs_replay_uses_join_scope_not_a_single_scan_cap() {
             if parallel { parallel_cartesian(&edges, &seeds) } else { cartesian(&edges, &seeds) }
         })).unwrap();
         assert_eq!(result.value, expected);
-        let replayed = result.report.physical_steps.iter().filter(|step| step.bound_role.starts_with("keyless RHS replay:")).collect::<Vec<_>>();
+        let replayed = result.report.physical_steps.iter().filter(|step|
+            step.bound_role == "unmodeled repeated-input evaluation scope"
+        ).collect::<Vec<_>>();
         assert!(!replayed.is_empty(), "the repeated operand scope must be explicit");
-        assert_eq!(replayed.iter().map(|step| step.measured.rows.value.unwrap()).sum::<u64>(), 8);
-        if !parallel {
-            assert!(replayed.iter().any(|step| step.measured.rows.value.unwrap() > 4), "aggregate source rows exceed either single-input cardinality");
+        for step in &replayed {
+            assert!(step.planned_comparison.is_none());
+            assert!(step.measured.comparison.is_none());
+            assert!(!step.planned_unknown.is_empty());
+            assert!(!step.measured.unknown.is_empty());
         }
+        // Without the stream-work certificate, these diagnostic scopes cannot
+        // be summed as one join-output counter. Exact output is checked above.
         assert!(result.report.physical_steps.iter().all(|step| step.measured.comparison.as_ref().is_none_or(|bound| bound.within_bound)));
         result.evidence.check().unwrap();
     }
