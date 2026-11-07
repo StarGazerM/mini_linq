@@ -6,7 +6,7 @@ use quote::{ToTokens, quote};
 fn host_set_text_round_trips_and_removes_only_implied_canon() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation E(a:i64,b:i64);
-        e = pipe rename E@0 {a -> x,b -> y};
+        e = pipe rename E {a -> x,b -> y};
         p = let canon project e keep {x,y};
         return p as answer(x,y);
     }};
@@ -14,7 +14,7 @@ fn host_set_text_round_trips_and_removes_only_implied_canon() {
     let expected: ir::Program = syn::parse_quote! { physical {
         relation E(a:i64,b:i64);
         host_set E;
-        e = pipe rename E@0 {a -> x,b -> y};
+        e = pipe rename E {a -> x,b -> y};
         p = let project e keep {x,y};
         return p as answer(x,y);
     }};
@@ -37,7 +37,7 @@ fn host_set_text_round_trips_and_removes_only_implied_canon() {
 fn dropping_full_heading_key_keeps_canon() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation E(a:i64,b:i64);
-        e = pipe rename E@0 {a -> x,b -> y};
+        e = pipe rename E {a -> x,b -> y};
         p = let canon project e keep {x};
         return p as answer(x);
     }};
@@ -96,7 +96,7 @@ fn duplicate_and_unknown_fact_text_is_rejected() {
         let program: ir::Program = syn::parse2(quote! { physical {
             relation E(a:i64);
             #facts
-            e = pipe rename E@0 {a -> x};
+            e = pipe rename E {a -> x};
             return canon e as answer(x);
         }})
         .unwrap();

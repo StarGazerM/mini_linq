@@ -6,7 +6,7 @@ fn main() {
  pipeline { ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
             relation l(a: i32, b: i32) host [a] reads [ordered];
-            left = pipe rename l@0 {a -> a, b -> b};
+            left = pipe rename l {a -> a, b -> b};
             j = let canon range select left if (a > 0); return j as answer(a, b);
         }
     }.count();

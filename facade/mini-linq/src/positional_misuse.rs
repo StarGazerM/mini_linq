@@ -18,7 +18,7 @@
 //!     pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation L(a:i64) = (left); relation R(b:i64,c:i64) = (right);
-//!         l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {b -> x,c -> z};
+//!         l = pipe rename L {a -> x}; r = pipe rename R {b -> x,c -> z};
 //!         s = let point select r if (z = 1);
 //!         t = pipe semi eager [x] l,s;
 //!         out = let canon project t keep {x}; return out as answer(x);

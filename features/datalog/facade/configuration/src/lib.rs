@@ -150,6 +150,7 @@ impl DatalogConfiguration {
             observer: None,
             output_consumer: None,
             calibration: None,
+            planning: None,
         })
     }
 }

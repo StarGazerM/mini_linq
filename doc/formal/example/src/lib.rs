@@ -62,9 +62,9 @@ pub fn boundaries(
     };
     valuation::contract::check(&valuation).unwrap();
     assert_eq!(valuation.cq, normal);
-    let relational = cq_relational_lowering::compile(&valuation).unwrap();
+    let (relational, lowering_steps) = cq_relational_lowering::compile(&valuation).unwrap();
     ra::contract::check(&relational).unwrap();
-    cq_relational_lowering::check(&valuation, &relational).unwrap();
+    cq_relational_lowering::check(&valuation, &relational, &lowering_steps).unwrap();
     let indexes = cq_index_policy::compile(&relational).unwrap();
     index_requirements::contract::check(&indexes).unwrap();
     cq_index_policy::check(&relational, &indexes).unwrap();

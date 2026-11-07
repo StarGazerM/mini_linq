@@ -42,8 +42,8 @@ fn contract(physical: &physical::Program, program: &structures::Program) -> syn:
 fn cartesian_probe_scans_retained_rows_and_rejects_empty_key_indexes() {
     let source: physical::Program = syn::parse_quote!(physical {
         relation r0(c0:i32); relation r1(c0:i32,c1:i32);
-        left = pipe rename r0@0 {c0 -> v0};
-        right = let rename r1@1 {c0 -> v1, c1 -> v2};
+        left = pipe rename r0 {c0 -> v0};
+        right = let rename r1 {c0 -> v1, c1 -> v2};
         joined = pipe probe first [] left,right;
         result = let canon project joined keep {v0,v2};
         return result as answer(v0,v2);
@@ -62,7 +62,7 @@ fn cartesian_probe_scans_retained_rows_and_rejects_empty_key_indexes() {
 fn nonleading_native_point_uses_scan_and_rejects_authored_native() {
     let source: physical::Program = syn::parse_quote!(physical {
         relation R(a:i32,b:i32) host [b] reads [exact];
-        r = pipe rename R@0 {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y};
         p = let canon point select r if (y = 2);
         return p as answer(x,y);
     });
@@ -81,8 +81,8 @@ fn full_row_positive_probes_record_membership_without_a_filtered_source() {
         let source: physical::Program = syn::parse_quote! { physical {
             relation L(a: CallerOwnedAlias, id:i64);
             relation R(a: CallerOwnedAlias);
-            l = pipe rename L@0 {a -> x,id -> id};
-            r = #mode rename R@1 {a -> x};
+            l = pipe rename L {a -> x,id -> id};
+            r = #mode rename R {a -> x};
             joined = pipe probe first [x] l,r;
             result = let canon project joined keep {id};
             return result as answer(id);
@@ -116,8 +116,8 @@ fn raw_membership_proof_rejects_unbound_payload_columns() {
     let (physical, mut source) = parse_fixture(quote::quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x,b -> y};
             joined = pipe probe first [x] l,r;
             result = let canon project joined keep {x,y};
             return result as answer(x,y);
@@ -141,7 +141,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(k:i32,id:i32,v:i32);
         relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
-        r = pipe rename R@0 {k -> k,id -> id,v -> v};
+        r = pipe rename R {k -> k,id -> id,v -> v};
         valuations = let canon project r keep {k,id,v};
         grouped = pipe group valuations by [k] {
             n:usize = count();
@@ -206,7 +206,7 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
 fn global_group_is_unique_by_the_empty_key() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(v:i32); relation answer(n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
-        r = let canon rename R@0 {v -> v};
+        r = let canon rename R {v -> v};
         grouped = pipe group r by [] {
             n:usize = count(); total:i32 = sum(v);
             lo:Option<i32> = min(v); hi:Option<i32> = max(v);
@@ -234,7 +234,7 @@ fn global_group_is_unique_by_the_empty_key() {
 fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
     let scanned: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);
-        r = let canon rename R@0 {a -> x} constants {b = 7};
+        r = let canon rename R {a -> x} constants {b = 7};
         return r as answer(x);
     }};
     let selected = compile(&scanned).unwrap();
@@ -248,8 +248,8 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
     );
     let probed: physical::Program = syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x} constants {b = 7};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x} constants {b = 7};
         j = let canon probe first [x] l,r;
         return j as answer(x);
     }};
@@ -275,8 +275,8 @@ fn literal_occurrences_select_ordinary_rows_or_shared_indices() {
 fn literal_occurrences_retain_ordinary_rows_for_multiple_indices() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation L(a:i32); relation R(tag:i32,a:i32,b:i32);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x,b -> y} constants {tag = 7};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x,b -> y} constants {tag = 7};
         p = pipe probe first [x] l,r;
         q = pipe project p keep {y};
         j = let canon probe first [y] q,r;
@@ -298,7 +298,7 @@ fn literal_occurrences_retain_ordinary_rows_for_multiple_indices() {
 fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation L(a:i64); relation R(a:i64,b:i64);
-        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x}; r = pipe rename R {a -> x,b -> y};
         selected = let range select r if (y > 1);
         joined = pipe probe first [x] l,selected;
         result = let canon project joined keep {x}; return result as answer(x);
@@ -397,8 +397,8 @@ fn existential_filtered_probe_records_key_only_storage_and_checks_projection() {
 fn composite_filtered_keys_retain_their_original_provider() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {a -> x,b -> y,c -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y,c -> z};
         selected = let range select r if (z > 1);
         joined = pipe probe first [x,y] l,selected;
         result = let canon project joined keep {x,y};
@@ -433,8 +433,8 @@ fn composite_filtered_keys_retain_their_original_provider() {
 fn reconstructed_key_constants_do_not_disable_singleton_membership() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y};
         selected = let point select r if (y = 1);
         joined = pipe probe first [x,y] l,selected;
         result = let canon project joined keep {x,y};
@@ -458,8 +458,8 @@ fn reconstructed_key_constants_do_not_disable_singleton_membership() {
 fn overlapping_union_cannot_drop_its_final_dedup_provider() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation R(a:i32); relation S(a:i32);
-        r = pipe rename R@0.0.0 {a -> x}; s = pipe rename S@0.1.0 {a -> x};
-        u = pipe union r,s block @0 free[] interface[x]; return canon u as answer(x);
+        r = pipe rename R {a -> x}; s = pipe rename S {a -> x};
+        u = pipe union r,s block free[] interface[x]; return canon u as answer(x);
     }};
     let target = compile(&source).unwrap();
     assert!(
@@ -484,7 +484,7 @@ fn head_dedup_types_exactly_the_recorded_physical_obligation() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation R(a:i32);
         host_set R;
-        r = pipe rename R@0 {a -> x};
+        r = pipe rename R {a -> x};
         return dedup r as answer(x);
     }};
     let head = |program: &structures::Program| {
@@ -538,7 +538,7 @@ fn reader_choice_prints_the_keyset_laziness() {
     ] {
         let source: physical::Program = syn::parse2(quote::quote! {physical {
             relation R(x:i32); relation S(x:i32);
-            r = pipe rename R@0 {x -> x}; s = pipe rename S@1 {x -> x};
+            r = pipe rename R {x -> x}; s = pipe rename S {x -> x};
             m = pipe semi #choice [x] r,s;
             o = let canon project m keep {x};
             return o as answer(x);
@@ -584,8 +584,8 @@ fn reader_choice_prints_the_keyset_laziness() {
 fn independent_union_indices_share_canonical_rows() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation L(a:i32); relation A(a:i32,b:i32); relation B(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x}; a = pipe rename A@1.0.0 {a -> x,b -> y}; b = pipe rename B@1.1.0 {a -> x,b -> y};
-        d = let canon union a,b block @1 free[x] interface[y];
+        l = pipe rename L {a -> x}; a = pipe rename A {a -> x,b -> y}; b = pipe rename B {a -> x,b -> y};
+        d = let canon union a,b block free[x] interface[y];
         j = pipe probe first [x] l,d; q = pipe project j keep {y}; out = let canon semi eager [y] q,d; return out as answer(y);
     }};
     let target = compile(&source).unwrap();
@@ -606,8 +606,8 @@ fn independent_union_indices_share_canonical_rows() {
 fn union_curried_indices_and_an_explicit_scan_keep_both_decisions() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation L(a:i32,b:i32); relation A(a:i32,b:i32,c:i32); relation B(a:i32,b:i32,c:i32);
-        l = pipe rename L@0 {a -> x,b -> y}; a = pipe rename A@1.0.0 {a -> x,b -> y,c -> z}; b = pipe rename B@1.1.0 {a -> x,b -> y,c -> z};
-        d = let canon union a,b block @1 free[x,y] interface[z];
+        l = pipe rename L {a -> x,b -> y}; a = pipe rename A {a -> x,b -> y,c -> z}; b = pipe rename B {a -> x,b -> y,c -> z};
+        d = let canon union a,b block free[x,y] interface[z];
         p = pipe project l keep {x}; checked = pipe semi eager [x] p,d;
         c = pipe probe first [x] checked,l; j = pipe probe first [x,y] c,d;
         aux = let project d keep {x,y}; out = let canon semi eager [x,y] j,aux; result = let canon project out keep {x,z}; return result as answer(x,z);
@@ -623,9 +623,9 @@ fn union_curried_indices_and_an_explicit_scan_keep_both_decisions() {
 fn proven_disjoint_union_rejects_cross_arm_canon_but_retains_final_canon() {
     let source: physical::Program = syn::parse_quote! {physical {
         relation R(a:i32); relation S(a:i32);
-        rr = pipe rename R@0.0.0 {a -> x}; ss = pipe rename S@0.1.0 {a -> x};
+        rr = pipe rename R {a -> x}; ss = pipe rename S {a -> x};
         r = pipe point select rr if (x = 1); s = pipe point select ss if (x = 2);
-        u = pipe union r,s block @0 free[] interface[x]; return canon u as answer(x);
+        u = pipe union r,s block free[] interface[x]; return canon u as answer(x);
     }};
     let target = compile(&source).unwrap();
     check(&source, &target).unwrap();
@@ -653,7 +653,7 @@ fn scenarios_discharge_every_physical_read_and_reject_changed_targets() {
 fn chain() -> physical::Program {
     syn::parse_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32);
-        l = let rename L@0 {a -> a}; r = let rename R@1 {a -> a,b -> b}; s = pipe rename S@2 {b -> b};
+        l = let rename L {a -> a}; r = let rename R {a -> a,b -> b}; s = pipe rename S {b -> b};
         j = pipe probe first [a] l,r; x = pipe semi eager [a] j,l; p = let canon semi eager [b] x,s; return p as answer(a,b);
     } }
 }
@@ -690,7 +690,7 @@ fn concrete_types_and_preservation_are_checked_independently() {
 #[test]
 fn host_reads_record_fallback_types_for_every_read_kind() {
     for op in ["probe first [a] l,r", "semi eager [a] l,r", "merge[a] l,r"] {
-        let p: physical::Program = syn::parse_str(&format!("physical {{ relation L(a:i32); relation R(a:i32); l = pipe rename L@0 {{a -> a}}; r = pipe rename R@1 {{a -> a}}; j = let canon {op}; return j as answer(a); }}")).unwrap();
+        let p: physical::Program = syn::parse_str(&format!("physical {{ relation L(a:i32); relation R(a:i32); l = pipe rename L {{a -> a}}; r = pipe rename R {{a -> a}}; j = let canon {op}; return j as answer(a); }}")).unwrap();
         let target = compile(&p).unwrap();
         assert!(
             target
@@ -701,7 +701,7 @@ fn host_reads_record_fallback_types_for_every_read_kind() {
         );
         check(&p, &target).unwrap();
     }
-    let p: physical::Program = syn::parse_quote!(physical { relation R(a:i32); r = pipe rename R@0 {a -> x}; w = let canon point select r if (x = 2); return w as answer(x); });
+    let p: physical::Program = syn::parse_quote!(physical { relation R(a:i32); r = pipe rename R {a -> x}; w = let canon point select r if (x = 2); return w as answer(x); });
     let target = compile(&p).unwrap();
     assert!(
         target
@@ -716,7 +716,7 @@ fn host_reads_record_fallback_types_for_every_read_kind() {
 fn const_supplies_on_host_and_materialized_inputs_never_build() {
     for mode in ["pipe", "let"] {
         let p: physical::Program = syn::parse_str(&format!(
-            "physical {{ relation R(a:i32); r = {mode} rename R@0 {{a -> x}}; w = let canon point select r if (x = 2); return w as answer(x); }}"
+            "physical {{ relation R(a:i32); r = {mode} rename R {{a -> x}}; w = let canon point select r if (x = 2); return w as answer(x); }}"
         )).unwrap();
         let target = compile(&p).unwrap();
         assert!(
@@ -740,7 +740,7 @@ fn const_supplies_on_host_and_materialized_inputs_never_build() {
 fn ordered_read_provider_capabilities_are_rustc_obligations() {
     let p: physical::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32);
-        l = pipe rename L@0 {a -> x}; r = let rename R@1 {a -> x};
+        l = pipe rename L {a -> x}; r = let rename R {a -> x};
         w = let canon merge[x] l,r; return w as answer(x);
     });
     let target = compile(&p).unwrap();
@@ -762,7 +762,7 @@ fn ordered_read_provider_capabilities_are_rustc_obligations() {
 fn compatible_membership_chains_use_recorded_trie_levels() {
     let p: physical::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> a,b -> b}; r = let rename R@1 {a -> a,b -> b};
+        l = pipe rename L {a -> a,b -> b}; r = let rename R {a -> a,b -> b};
         p = pipe project l keep {a}; x = pipe semi eager [a] p,r;
         j = let canon probe first [a,b] r,r;
         k = let canon semi eager [a] j,x; return k as answer(a,b);
@@ -792,9 +792,9 @@ fn compatible_membership_chains_use_recorded_trie_levels() {
 fn smallest_shared_full_key_adapters_retain_one_seek_representation() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(b:i64,c:i64); relation S(a:i64,c:i64);
-        l = pipe rename L@0 {a -> a,b -> b};
-        r = pipe rename R@1 {b -> b,c -> c};
-        s = pipe rename S@2 {a -> a,c -> c};
+        l = pipe rename L {a -> a,b -> b};
+        r = pipe rename R {b -> b,c -> c};
+        s = pipe rename S {a -> a,c -> c};
         candidate = pipe probe smallest [b] l,r;
         result = let canon probe first [a,c] candidate,s;
         return result as answer(a,b,c);
@@ -827,9 +827,9 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation L(a: i32, b: i32);
         relation A(a: i32, c: i32); relation B(b: i32, c: i32);
-        l = pipe rename L@0 { a -> a, b -> b };
-        a = let rename A@1 { a -> a, c -> c };
-        b = let rename B@2 { b -> b, c -> c };
+        l = pipe rename L { a -> a, b -> b };
+        a = let rename A { a -> a, c -> c };
+        b = let rename B { b -> b, c -> c };
         p = pipe probe smallest [a] l,a;
         result = let canon semi eager [b,c] p,b;
         return result as answer(a,b,c);
@@ -877,19 +877,19 @@ fn smallest_candidate_let_levels_keep_independent_mutation_checks() {
 fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
     for (retained, host, prefix) in [("r", "s", "b"), ("s", "r", "a")] {
         let r = if retained == "r" {
-            "r0 = pipe rename R@0 {b -> b,c -> c}; r = let project r0 keep {b,c};"
+            "r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};"
         } else {
-            "r = pipe rename R@0 {b -> b,c -> c};"
+            "r = pipe rename R {b -> b,c -> c};"
         };
         let s = if retained == "s" {
-            "s0 = pipe rename S@0 {a -> a,c -> c}; s = let project s0 keep {a,c};"
+            "s0 = pipe rename S {a -> a,c -> c}; s = let project s0 keep {a,c};"
         } else {
-            "s = pipe rename S@0 {a -> a,c -> c};"
+            "s = pipe rename S {a -> a,c -> c};"
         };
         let source: physical::Program = syn::parse_str(&format!(
             "physical {{
                 relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-                l = pipe rename L@0 {{a -> a,b -> b}}; {r} {s}
+                l = pipe rename L {{a -> a,b -> b}}; {r} {s}
                 candidate = pipe probe smallest [b] l,r;
                 checked = let canon semi eager [a,c] candidate,s;
                 return checked as answer(a,b,c);
@@ -964,9 +964,9 @@ fn mixed_smallest_selects_each_retained_projection_and_checks_mutations() {
 fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
     let source: physical::Program = syn::parse_quote!(physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l0 = pipe rename L@0 {a -> a,b -> b};
-        r0 = pipe rename R@1 {b -> b,c -> c}; r = let project r0 keep {b,c};
-        s = pipe rename S@2 {a -> a,c -> c};
+        l0 = pipe rename L {a -> a,b -> b};
+        r0 = pipe rename R {b -> b,c -> c}; r = let project r0 keep {b,c};
+        s = pipe rename S {a -> a,c -> c};
         payload = pipe probe first [b] l0,r;
         l1 = pipe project payload keep {a,b};
         members = let semi eager [c] s,r;
@@ -1028,7 +1028,7 @@ fn candidate_levels_coexist_with_payload_membership_and_ordered_reads() {
 fn nonemptiness_scans_rows_beside_a_nonempty_keyed_membership_index() {
     let p: physical::Program = syn::parse_quote! { physical {
         relation L(a: i32); relation R(a: i32);
-        l = pipe rename L@0 { a -> x }; r = let rename R@1 { a -> x };
+        l = pipe rename L { a -> x }; r = let rename R { a -> x };
         unit = pipe unit;
         nonempty = pipe semi eager [] unit,r;
         members = pipe probe first [] nonempty,l;
@@ -1055,8 +1055,8 @@ fn built_entries(target: &structures::Program) -> structures::Structures {
 fn filtered_source() -> physical::Program {
     syn::parse_quote!(physical {
         relation L(k:i32); relation R(tag:StringCode,k:i32,value:i32,unused:i32);
-        l = pipe rename L@0 {k -> k};
-        r = pipe rename R@1 {tag -> tag,k -> k,value -> value,unused -> unused};
+        l = pipe rename L {k -> k};
+        r = pipe rename R {tag -> tag,k -> k,value -> value,unused -> unused};
         selected = let point select r if (tag = "a");
         joined = pipe probe first [k] l,selected;
         keys = pipe project joined keep {k};
@@ -1108,17 +1108,6 @@ fn filtered_readers_share_one_projected_index_and_check_column_coverage() {
         .entries
         .push(syn::parse_quote!(selected rows = @vec as ::std::vec::Vec<_>;));
     assert!(check(&source, &bad).is_err());
-    let mut changed_occurrence = source.clone();
-    let physical::Operator::Rename(rename) =
-        &mut changed_occurrence.program.definitions[1].operator
-    else {
-        unreachable!()
-    };
-    rename.occurrence = syn::parse_quote!(2);
-    // The filtered layout still covers every read; correspondence must also
-    // preserve the identity of the source occurrence supplying those rows.
-    contract(&changed_occurrence, &target).unwrap();
-    assert!(structures::check_rewrite(&source, &target, &changed_occurrence, &target).is_err());
     let mut reordered = source.clone();
     reordered.program.definitions.swap(0, 1);
     // Structures is representation-only, including definition order.
@@ -1189,7 +1178,7 @@ fn filtered_payload_covers_rust_uses_and_keeps_opaque_environments() {
 fn a_later_merge_does_not_remove_an_earlier_scan_requirement() {
     let source: physical::Program = syn::parse_quote!(physical {
         relation R(a:i32);
-        r0 = pipe rename R@0 {a -> a}; r = let point select r0 if (a = 1);
+        r0 = pipe rename R {a -> a}; r = let point select r0 if (a = 1);
         rows = let canon project r keep {a};
         joined = pipe merge[a] r,rows;
         out = let canon project joined keep {a}; return out as answer(a);
@@ -1209,7 +1198,7 @@ fn a_later_merge_does_not_remove_an_earlier_scan_requirement() {
 fn selection_records_context_before_choosing_dedup_types() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32);
-        r = let canon rename R@0 {a -> x};
+        r = let canon rename R {a -> x};
         return dedup r as answer(*x % 2);
     }};
     let (selected_physical, selected) = cq_structure_selection::compile_with(
@@ -1246,7 +1235,7 @@ fn redundant_context_packets_preserve_explicit_canon() {
         relation R(a:i32);
         host_set R discharged;
         consumer canonical;
-        r = let canon rename R@0 {a -> x};
+        r = let canon rename R {a -> x};
         return r as answer(*x % 2);
     }};
     let ordinary = compile(&source).unwrap();
@@ -1273,8 +1262,8 @@ fn named_host_consumers_do_not_alias_reader_roles() {
         let result = syn::Ident::new(name, proc_macro2::Span::call_site());
         let source = syn::parse_quote! { physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> x};
-            r = pipe rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = pipe rename R {a -> x,b -> y};
             #result = let canon probe first [x] l,r;
             return #result as answer(x,y);
         }};

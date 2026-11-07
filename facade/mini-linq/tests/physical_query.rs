@@ -169,8 +169,8 @@ mod custom_indexes {
             ::mini_linq::passes::select! { pipeline { ::core_pass_fixtures::custom_indexes, ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
                 physical {
                     relation L(a: Value); relation R(a: Value, b: Value); relation S(b: Value, c: Value);
-                    l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a, b -> b};
-                    s = let rename S@2 {b -> b, c -> c};
+                    l = pipe rename L {a -> a}; r = pipe rename R {a -> a, b -> b};
+                    s = let rename S {b -> b, c -> c};
                     j = pipe probe first [a] l, r; p = pipe probe first [b] j, s;
                     out = let canon project p keep {a, c}; return out as answer(a, c);
                 }
@@ -433,8 +433,8 @@ fn key_only_filtered_index_preserves_existential_answers_without_primary_keys() 
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation l(a:i64); relation r(a:i64,b:i64);
-            left = pipe rename l@0 {a -> x};
-            right = pipe rename r@1 {a -> x,b -> y};
+            left = pipe rename l {a -> x};
+            right = pipe rename r {a -> x,b -> y};
             selected = let range select right if (y > 1);
             joined = pipe probe first [x] left,selected;
             result = let canon project joined keep {x}; return result as answer(x);

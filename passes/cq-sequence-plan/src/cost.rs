@@ -1110,7 +1110,7 @@ mod tests {
         fixture! {
             physical {
                 relation R(a:i32);
-                r = pipe canon rename R@0 {a -> a};
+                r = pipe canon rename R {a -> a};
                 return r as answer(a);
             }
             structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; } r host scan = @reader as Reader []; r canon = host; }
@@ -1233,9 +1233,9 @@ mod tests {
         let (physical, structures, program) = fixture! {
             physical {
                 relation R(a:i32); relation P(a:i32);
-                r = pipe canon rename R@0 {a -> a};
+                r = pipe canon rename R {a -> a};
                 selected = let select r if (a > 0);
-                probe = pipe rename P@1 {a -> a};
+                probe = pipe rename P {a -> a};
                 out = let canon probe first [a] probe,selected;
                 return out as answer(a);
             }
@@ -1382,8 +1382,8 @@ mod tests {
         fixture! {
             physical {
                 relation L(a:i32); relation R(a:i32,b:i32);
-                l = pipe rename L@0 {a -> a};
-                r = let rename R@1 {a -> a,b -> b};
+                l = pipe rename L {a -> a};
+                r = let rename R {a -> a,b -> b};
                 j = let canon probe first [a] l,r;
                 return j as answer(a,b);
             }

@@ -1207,15 +1207,18 @@ fn step_advice_remaps_delta_occurrences_and_uses_cq_checkers() {
             .clone());
         let selectors = parser.parse2(args).unwrap().into_iter().collect::<Vec<_>>();
         let normal = cq_lang_datalog_round::cq::normal::normalize(&hole.cq).unwrap();
-        // compile_explicit runs WF-VO and the selected CK-Le phases.
-        cq_order::compile_explicit(&normal, &selectors).unwrap();
+        // compile_explicit resolves the advice; check_advice runs WF-VO,
+        // VO-Order and the selected CK-Le phases on the produced schedule.
+        let planned = cq_order::compile_explicit(&normal, &selectors).unwrap();
+        cq_order::check_advice(&normal, &planned, &selectors).unwrap();
         let mut incomplete = selectors.clone();
         incomplete.remove(if incomplete[1].occurrence == Some(1) {
             2
         } else {
             3
         });
-        assert!(cq_order::compile_explicit(&normal, &incomplete).is_err());
+        let planned = cq_order::compile_explicit(&normal, &incomplete).unwrap();
+        assert!(cq_order::check_advice(&normal, &planned, &incomplete).is_err());
         let mut invalid = selectors.clone();
         invalid[1].columns = Some(vec![syn::parse_quote!(not_a_column)]);
         assert!(cq_order::compile_explicit(&normal, &invalid).is_err());
@@ -1436,5 +1439,6 @@ fn heapalloc_disconnected_authored_order_is_rejected_at_cq_boundary() {
         entries.parse_terminated(cq_order::OrderAtom::parse, syn::Token![,])
     }).parse2(arguments).unwrap().into_iter().collect::<Vec<_>>();
     let normal = cq_lang_cq::normal::normalize(&hole.cq).unwrap();
-    assert!(cq_order::compile_explicit(&normal, &selectors).is_err());
+    let advised = cq_order::compile_explicit(&normal, &selectors).unwrap();
+    assert!(cq_order::check_advice(&normal, &advised, &selectors).is_err());
 }

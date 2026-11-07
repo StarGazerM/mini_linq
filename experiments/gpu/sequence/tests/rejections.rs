@@ -7,7 +7,7 @@ fn fold_at_noncollaborative_device_is_rejected() {
     let Stack { physical, structures, program } = syn::parse_quote! {
         physical {
             relation R(a:i32) = (&data.r);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
         structures { providers { reader = Reader { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -30,7 +30,7 @@ fn rust_below_host_requires_identity_representation() {
     let Stack { physical, mut structures, mut program } = syn::parse_quote! {
         physical {
             relation R(a:i32) = (&data.r);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             bound = let canon bind r with n:i32 = (opaque(*a));
             return bound as answer(a,n);
         }
@@ -95,7 +95,7 @@ fn scalar_fold_host_code_parses() {
         let Stack { physical, structures, program } = syn::parse2(quote! {
             physical {
                 relation R(a:i64) = (&data.r);
-                r = let canon rename R@0 {a -> a};
+                r = let canon rename R {a -> a};
                 return r as answer(a);
             }
             structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -129,9 +129,9 @@ fn host_choice_of_expanded_rows_preserves_upstream_range_translation() {
             relation R(a:u32) = (&data.r);
             relation P(a:u32,b:u32) = (&data.p);
             relation Q(b:u32,c:u32) = (&data.q);
-            r = pipe rename R@0 {a -> a};
-            p = let rename P@1 {a -> a,b -> b};
-            q = let rename Q@2 {b -> b,c -> c};
+            r = pipe rename R {a -> a};
+            p = let rename P {a -> a,b -> b};
+            q = let rename Q {b -> b,c -> c};
             joined = pipe probe first [a] r,p;
             expanded = pipe probe first [b] joined,q;
             answer = let canon project expanded keep {a,b,c};

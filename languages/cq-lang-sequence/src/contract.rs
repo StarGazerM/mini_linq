@@ -1885,7 +1885,7 @@ mod tests {
         let fixture: Fixture = syn::parse_quote! {
             physical {
                 relation R(k:i32, value:i64);
-                r = let canon rename R@0 {k -> k, value -> value};
+                r = let canon rename R {k -> k, value -> value};
                 grouped = let group r by [k] { n: usize = count(); };
                 return grouped as answer(k,n);
             }
@@ -1917,7 +1917,7 @@ mod tests {
         let fixture: Fixture = syn::parse_quote! {
             physical {
                 relation R(a:i32);
-                r = pipe rename R@0 {a -> a};
+                r = pipe rename R {a -> a};
                 output = let canon project r keep {a};
                 return output as answer(a);
             }

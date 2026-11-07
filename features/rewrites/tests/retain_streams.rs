@@ -6,10 +6,10 @@ use quote::quote;
 fn chain() -> ir::Program {
     syn::parse_quote! { physical {
         relation A(a:i64); relation B(a:i64,b:i64); relation C(b:i64,c:i64);
-        a = pipe rename A@0 {a -> x};
-        b = let rename B@1 {a -> x,b -> y};
+        a = pipe rename A {a -> x};
+        b = let rename B {a -> x,b -> y};
         p = pipe probe first [x] a,b;
-        c = let rename C@2 {b -> y,c -> z};
+        c = let rename C {b -> y,c -> z};
         q = let canon probe first [y] p,c;
         return q as answer(x,y,z);
     }}
@@ -56,7 +56,7 @@ fn hoisting_closes_dependencies_without_dropping_operators() {
 fn hoisting_refuses_an_opaque_dependency() {
     let source: ir::Program = syn::parse_quote! { physical {
         relation R(a:i32);
-        r = pipe rename R@0 {a -> x};
+        r = pipe rename R {a -> x};
         guarded = pipe guard r if (opaque(x));
         projected = let canon project guarded keep {x};
         return projected as answer(x);

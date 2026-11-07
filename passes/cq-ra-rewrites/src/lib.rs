@@ -14,11 +14,6 @@ mod reductions;
 /// may be replaced by `R` when the other operand is contained in `T` on
 /// every column shared by `R` and `T`. Right-side support pruning takes
 /// precedence; a left-side bypass must be justified by the surviving RHS.
-/// An I2-moved check may restore its old input only when its recorded former
-/// introducing occurrence supplies the reduction support and a unique
-/// key-preserving nonintroducing prefix reaches that exact support's join.
-/// Rust, negation, branching, projection loss and other introductions stop
-/// this preservation rule. Unmoved plans do not gain future absorptions.
 /// This is a local pass, not a maximal fixed-point guarantee.
 /// Containment follows only the same
 /// named result through projections, selections, semijoin left inputs and

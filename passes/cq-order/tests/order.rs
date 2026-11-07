@@ -149,7 +149,6 @@ fn drainage_records_only_moved_checks_and_preserves_their_provider() {
     // PH-Smallest alternatives remain available.
     let valuation::Step::Atom(check, _) = &mut source.valuation.steps[2] else { panic!() };
     check.check = None;
-    check.moved_after = None;
     let stationary = source.clone();
     cq_order::drain_ready_checks(&mut source).unwrap();
     assert_eq!(source, stationary);
@@ -331,10 +330,7 @@ fn step_order_rejects_invalid_columns_and_phases_but_accepts_advised_roots() {
         ],
         vec![syn::parse_quote!(Seed), syn::parse_quote!(R@1(x))],
     ] {
-        assert!(
-            cq_order::compile_explicit(&source, &order).is_err(),
-            "{order:?}"
-        );
+        assert!(advice_refused(&source, &order), "{order:?}");
     }
     // Advice may choose a different root, but cannot bypass a connected
     // expansion in favor of a disconnected one.
@@ -344,8 +340,9 @@ fn step_order_rejects_invalid_columns_and_phases_but_accepts_advised_roots() {
         vec![syn::parse_quote!(S), syn::parse_quote!(Seed),
              syn::parse_quote!(R@1(x,y)), syn::parse_quote!(R@1)],
     ] {
-        let error = cq_order::compile_explicit(&source, &order).unwrap_err().to_string();
-        assert!(error.contains("Q") && error.contains("I3"), "{error}");
+        let plan = cq_order::compile_explicit(&source, &order).unwrap();
+        let error = cq_order::check_advice(&source, &plan, &order).unwrap_err().to_string();
+        assert!(error.contains("I3"), "{error}");
     }
     cq_order::compile_explicit(
         &source,
@@ -361,20 +358,15 @@ fn explicit_order_rejects_dependency_conflicts_instead_of_ignoring_advice() {
         relation S(a:i32);
         answer(x) :- R(x), let y:i32 = *x + 1, S(y);
     });
-    let mut invalid = cq_order::compile_explicit(
-        &source, &[syn::parse_quote!(R), syn::parse_quote!(S)],
-    ).unwrap();
-    let atom = invalid.valuation.steps.iter().position(
-        |step| matches!(step, valuation::Step::Atom(atom, _) if atom.relation == "S"),
-    ).unwrap();
-    let step = invalid.valuation.steps.remove(atom);
-    invalid.valuation.steps.insert(0, step);
-    let checker_error = valuation::contract::check(&invalid).unwrap_err();
-    let advice_error =
-        cq_order::compile_explicit(&source, &[syn::parse_quote!(S), syn::parse_quote!(R)])
-            .unwrap_err();
-    // The public API adds query context, but preserves the VO checker's diagnosis.
-    assert_eq!(advice_error.to_string(), format!("query `Q`: {checker_error}"));
+    let order = [syn::parse_quote!(S), syn::parse_quote!(R)];
+    let invalid = cq_order::compile_explicit(&source, &order).unwrap();
+    // The authored read of `S` precedes its Rust binder: the producer
+    // records the advice and the checkers refuse it.
+    assert!(valuation::contract::check(&invalid).is_err());
+    assert!(cq_order::check_advice(&source, &invalid, &order).is_err());
+    let valid = [syn::parse_quote!(R), syn::parse_quote!(S)];
+    let planned = cq_order::compile_explicit(&source, &valid).unwrap();
+    cq_order::check_advice(&source, &planned, &valid).unwrap();
 }
 
 #[test]
@@ -406,12 +398,11 @@ fn fine_advice_uses_the_vo_subatom_checker() {
         answer(x,y,z,w) :- Seed(x), R(x,y,z,w);
         valuation { Seed@0(x); R@1(x,y,z,_); R@1(x,y,z,w); }
     };
-    let checker_error = valuation::contract::check(&invalid).unwrap_err();
-    let advice_error = cq_order::compile_explicit(
-        &invalid.cq,
-        &[syn::parse_quote!(Seed), syn::parse_quote!(R@1(x,y,z)), syn::parse_quote!(R@1)],
-    ).unwrap_err();
-    assert_eq!(advice_error.to_string(), format!("query `Q`: {checker_error}"));
+    assert!(valuation::contract::check(&invalid).is_err());
+    let order = [syn::parse_quote!(Seed), syn::parse_quote!(R@1(x,y,z)), syn::parse_quote!(R@1)];
+    let planned = cq_order::compile_explicit(&invalid.cq, &order).unwrap();
+    assert!(valuation::contract::check(&planned).is_err());
+    assert!(cq_order::check_advice(&invalid.cq, &planned, &order).is_err());
 }
 
 #[test]
@@ -565,10 +556,7 @@ fn explicit_block_order_preserves_branches_and_checks_dependencies() {
         answer(x,y) :- R(x), { let y:i32 = *x + 1, S(y) }
             | { let y:i32 = *x + 2, S(y) };
     });
-    assert!(
-        cq_order::compile_explicit(&opaque, &[syn::parse_quote!(block@1), syn::parse_quote!(R)])
-            .is_err()
-    );
+    assert!(advice_refused(&opaque, &[syn::parse_quote!(block@1), syn::parse_quote!(R)]));
 }
 
 fn triangle() -> cq::Program {
@@ -598,6 +586,20 @@ fn plan(source: &cq::Program, heuristic: Heuristic, split: Split) -> valuation::
     valuation::contract::check(&plan).unwrap();
     assert!(cq_order::check(source, &plan, &options).is_ok());
     plan
+}
+
+/// The ordering is total; CK-Order refuses the schedule it produced.
+fn refused(source: &cq::Program, heuristic: Heuristic, split: Split) -> String {
+    let options = Options { heuristic, split };
+    let plan = cq_order::compile(source, &options).unwrap();
+    cq_order::check(source, &plan, &options).unwrap_err().to_string()
+}
+
+/// Advice resolution or CK-StepAdvice refuses the advice.
+fn advice_refused(source: &cq::Program, order: &[cq_order::OrderAtom]) -> bool {
+    cq_order::compile_explicit(source, order)
+        .is_ok_and(|plan| cq_order::check_advice(source, &plan, order).is_err())
+        || cq_order::compile_explicit(source, order).is_err()
 }
 
 /// The plan with the given steps over the source program.
@@ -683,10 +685,7 @@ fn written_coarse_retains_legal_body_order_and_rejects_disconnected_choices() {
         relation S(b: i32, c: i32);
         answer(x, z) :- R(x, 5), S(_, z), R(x, x), if { z > 1 }, let w: i32 = x + z;
     });
-    let error = cq_order::compile(
-        &messy,
-        &Options { heuristic: Heuristic::Written, split: Split::Coarse },
-    ).unwrap_err().to_string();
+    let error = refused(&messy, Heuristic::Written, Split::Coarse);
     assert!(error.contains("I3"), "{error}");
     plan(&messy, Heuristic::Prefix(Ranking::Connected), Split::Coarse);
 }
@@ -876,7 +875,7 @@ fn prefix_rankings_place_clauses_in_the_pinned_sequences() {
             (Heuristic::Prefix(Ranking::GreedyWidth), *prefix),
         ] {
             if expected.is_empty() {
-                assert!(cq_order::compile(source, &Options { heuristic, split: Split::Coarse }).is_err());
+                refused(source, heuristic, Split::Coarse);
                 continue;
             }
             assert_eq!(
@@ -920,10 +919,7 @@ fn literals_stay_in_atoms_without_relational_steps() {
         }
     }
     for split in [Split::Coarse, Split::Fine] {
-        let error = cq_order::compile(
-            &normal,
-            &Options { heuristic: Heuristic::Written, split },
-        ).unwrap_err().to_string();
+        let error = refused(&normal, Heuristic::Written, split);
         assert!(error.contains("I3"), "{split:?}: {error}");
     }
 }
@@ -1628,4 +1624,58 @@ fn step_advice_defers_unused_rust_bindings_past_adjacent_advised_steps() {
         })
         .collect();
     assert_eq!(atoms, ["Seed", "R", "S", "R", "S", "rust"]);
+}
+
+#[test]
+fn a_union_whose_arm_needs_a_nested_domain_is_correlated() {
+    // The outer union takes no finite prefix domain, but in its first arm
+    // only the nested union generates `y`, and that union needs a domain
+    // for `y`. From no seed that arm cannot place, so O-BlockPlacement
+    // correlates the outer union instead of failing to schedule it.
+    let source = normal(quote! {
+        struct Q;
+        relation A(a:i32,b:i32); relation R(a:i32,b:i32); relation S(a:i32); relation T(a:i32,b:i32);
+        answer(x,y) :- A(x,y), { { R(x,y) } | { S(x) } } | { T(x,y) };
+    });
+    let steps: proc_macro2::TokenStream = "A @ 0 (x , y) ; \
+        block @ 1 (x , y) correlated { \
+            block @ 1.0 . 0 (x , y) hoisted { R @ 1.0 . 0.0 . 0 (x , y) ; } \
+                | { S @ 1.0 . 0.1 . 0 (x) ; } ; \
+        } | { T @ 1.1 . 0 (x , y) ; } ;"
+        .parse()
+        .unwrap();
+    assert_eq!(
+        plan(&source, Heuristic::Prefix(Ranking::Connected), Split::Coarse),
+        expected(&source, steps),
+    );
+    for heuristic in [
+        Heuristic::Written,
+        Heuristic::WrittenConnected,
+        Heuristic::Filtered,
+        Heuristic::Prefix(Ranking::GreedyWidth),
+        Heuristic::Elimination,
+    ] {
+        for split in [Split::Coarse, Split::Fine] {
+            plan(&source, heuristic, split);
+        }
+    }
+}
+
+#[test]
+fn known_placement_resolves_its_negation_read_and_bindings_first() {
+    let source = normal(quote! {
+        struct Q;
+        relation R(a:i32); relation S(a:i32,b:i32); relation N(a:i32,b:i32);
+        answer(x,y) :- R(x), S(x,y), !N(x,y);
+    });
+    let plan = cq_order::compile(&source, &Options::default()).unwrap();
+    for refused in ["N@2 at 1", "N@2 at 3", "S@1 at 2", "N@0 at 2"] {
+        let known: cq_order::Known = syn::parse_str(refused).unwrap();
+        assert!(known.place(&mut plan.clone()).is_err(), "{refused}");
+    }
+    let known: cq_order::Known = syn::parse_str("N@2 at 2").unwrap();
+    let mut placed = plan.clone();
+    known.place(&mut placed).unwrap();
+    assert_eq!(placed, plan);
+    known.check(&placed).unwrap();
 }

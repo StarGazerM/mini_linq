@@ -226,7 +226,9 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
         split: Split::Coarse,
     };
     let mut plan = if let Some(relations) = &args.order {
-        cq_order::compile_explicit(&normal, relations)?
+        let plan = cq_order::compile_explicit(&normal, relations)?;
+        cq_order::check_advice(&normal, &plan, relations)?;
+        plan
     } else if let Some(evidence) = &args.evidence {
         let plan = cq_order::evidence::compile(&normal, evidence, &ordering)?;
         cq_order::evidence::check_evidence(&normal, &plan, &ordering)?;
@@ -315,27 +317,126 @@ fn advise_prefix(reduced: &mut vo::Program, args: &PlanOptions) -> syn::Result<(
 /// Formal rule Plan-Prefix: Normalize, order Prefix(Connected)/Coarse or explicit order, reduce by Masks unless disabled, apply advice, and elaborate.
 pub fn compile_prefix(source: &cq::Program, options: &PlanOptions) -> syn::Result<ra::Program> {
     let reduced = prefix_valuation(source, options)?;
-    let target = cq_relational_lowering::compile(&reduced)?;
-    cq_relational_lowering::check(&reduced, &target)?;
+    let (target, steps) = cq_relational_lowering::compile(&reduced)?;
+    cq_relational_lowering::check(&reduced, &target, &steps)?;
     Ok(target)
 }
 
-pub use cq_relational_lowering::Origins;
+pub use cq_relational_lowering::Steps;
 
 /// Optional diagnostics from the same selected VO and actual lowering run.
-pub fn compile_prefix_with_origins(
+pub fn compile_prefix_with_steps(
     source: &cq::Program,
     options: &PlanOptions,
-) -> syn::Result<(ra::Program, vo::Program, Origins)> {
+) -> syn::Result<(ra::Program, vo::Program, Steps)> {
     let valuation = prefix_valuation(source, options)?;
-    let (target, origins) = cq_relational_lowering::compile_with_origins(&valuation)?;
-    cq_relational_lowering::check(&valuation, &target)?;
-    Ok((target, valuation, origins))
+    let (target, steps) = cq_relational_lowering::compile(&valuation)?;
+    cq_relational_lowering::check(&valuation, &target, &steps)?;
+    Ok((target, valuation, steps))
+}
+
+/// Produce authored occurrence-to-first-read paths from the actual selected VO.
+/// Unique top-level relation aliases support unqualified advice; nested reads
+/// retain their full CQ occurrence paths. No future invocation is inspected.
+pub fn first_reads(valuation: &vo::Program) -> std::collections::BTreeMap<String, Vec<usize>> {
+    use std::collections::BTreeMap;
+    fn visit(reads: &[vo::Step], path: &mut Vec<usize>, result: &mut BTreeMap<String, Vec<usize>>) {
+        for (index, step) in reads.iter().enumerate() {
+            path.push(index);
+            match step {
+                vo::Step::Atom(atom, _) => {
+                    result.entry(format!("{}@{}", cq::symbol_name(&atom.relation), atom.clause)).or_insert_with(|| path.clone());
+                }
+                vo::Step::Block(block, _) => {
+                    for (branch, body) in block.branches.iter().enumerate() {
+                        path.push(branch);
+                        visit(&body.steps, path, result);
+                        path.pop();
+                    }
+                }
+                _ => (),
+            }
+            path.pop();
+        }
+    }
+    let mut result = BTreeMap::new();
+    visit(&valuation.valuation.steps, &mut Vec::new(), &mut result);
+    let mut aliases = BTreeMap::new();
+    for (clause, item) in valuation.cq.query.body.iter().enumerate() {
+        if let cq::BodyItem::Positive { atom } = item {
+            aliases.entry(cq::symbol_name(&atom.relation)).and_modify(|entry| *entry = None).or_insert(Some(clause));
+        }
+    }
+    for (relation, clause) in aliases {
+        if let Some(path) = clause.and_then(|clause| result.get(&format!("{relation}@{clause}"))).cloned() {
+            result.insert(relation, path);
+        }
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_reads_normalizes_raw_relation_names() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation r#R(x:i32);
+            answer(x) :- r#R(x);
+        };
+        let (_, valuation, _) = compile_prefix_with_steps(
+            &source, &syn::parse_quote!(no_reduce),
+        ).unwrap();
+        let reads = first_reads(&valuation);
+        assert_eq!(reads["R"], reads["R@0"]);
+        assert!(!reads.contains_key("r#R"));
+        assert!(!reads.contains_key("r#R@0"));
+    }
+
+
+    #[test]
+    fn first_reads_records_nested_occurrence_paths() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation R(x:i32);
+            relation S(x:i32);
+            answer(x) :- { R(x) } | { S(x) };
+        };
+        let (_, valuation, _) = compile_prefix_with_steps(
+            &source, &syn::parse_quote!(no_reduce),
+        ).unwrap();
+        let reads = first_reads(&valuation);
+        let (block_index, block) = valuation.valuation.steps.iter().enumerate().find_map(
+            |(index, step)| match step {
+                vo::Step::Block(block, _) => Some((index, block)),
+                _ => None,
+            },
+        ).unwrap();
+        let read_index = block.branches[1].steps.iter().position(
+            |step| matches!(step, vo::Step::Atom(atom, _) if atom.relation == "S"),
+        ).unwrap();
+        assert_eq!(reads["S@0.1.0"], vec![block_index, 1, read_index]);
+        assert!(!reads.contains_key("S"));
+    }
+
+    #[test]
+    fn first_reads_records_only_the_first_subatom_read() {
+        let source: cq::Program = syn::parse_quote! {
+            struct Q;
+            relation Seed(x:i32);
+            relation R(x:i32,y:i32);
+            answer(x,y) :- Seed(x), R(x,y);
+        };
+        let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
+        let (_, valuation, _) = compile_prefix_with_steps(&source, &options).unwrap();
+        let reads = first_reads(&valuation);
+        let first = valuation.valuation.steps.iter().position(
+            |step| matches!(step, vo::Step::Atom(atom, _) if atom.clause() == 1),
+        ).unwrap();
+        assert_eq!(reads["R@1"], vec![first]);
+        assert_eq!(reads["R"], vec![first]);
+    }
 
     #[test]
     fn step_advice_elaborates_lookup_and_expand_on_the_same_occurrence() {

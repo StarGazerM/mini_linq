@@ -454,8 +454,8 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
             relation Delta(x:i32,y:i32) = (&delta);
             relation Edge(y:i32,z:i32) = (&edge);
             consumer canonical;
-            d = pipe rename Delta@0 {x -> x,y -> y};
-            e = pipe rename Edge@1 {y -> y,z -> z};
+            d = pipe rename Delta {x -> x,y -> y};
+            e = pipe rename Edge {y -> y,z -> z};
             joined = pipe probe first [y] d,e;
             result = pipe project joined keep {x,z};
             return result as answer(x,z);

@@ -243,13 +243,13 @@ pub fn compile_source(
         name: "vo:reduce".into(),
         outcome: judge(&|db| cq_testkit::valuation_semantics::evaluate(&reduced, db)),
     });
-    let ra = pass(
+    let (ra, steps) = pass(
         "ra:relational_lowering",
         cq_relational_lowering::compile(&reduced),
     )?;
     pass(
         "ra:relational_lowering",
-        cq_relational_lowering::check(&reduced, &ra),
+        cq_relational_lowering::check(&reduced, &ra, &steps),
     )?;
     stages.push(Stage {
         name: "ra:relational_lowering".into(),

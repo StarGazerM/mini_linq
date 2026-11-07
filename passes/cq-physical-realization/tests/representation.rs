@@ -37,7 +37,7 @@ fn grouped_adapter_emits_one_typed_hash_fold_over_complete_valuations() {
     let physical = syn::parse_quote! { physical {
         relation R(k:i32,id:i32,v:i32);
         relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
-        r = let canon rename R@0 {k -> k,id -> id,v -> v};
+        r = let canon rename R {k -> k,id -> id,v -> v};
         grouped = pipe group r by [k] {
             n:usize = count(); total:i32 = sum(v);
             lo:Option<i32> = min(v); hi:Option<i32> = max(v);
@@ -98,7 +98,7 @@ fn global_group_emits_an_identity_row_even_when_the_input_loop_is_empty() {
     let physical = syn::parse_quote! { physical {
         relation R(v:i32);
         relation answer(n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
-        r = let canon rename R@0 {v -> v};
+        r = let canon rename R {v -> v};
         grouped = pipe group r by [] {
             n:usize = count(); total:i32 = sum(v);
             lo:Option<i32> = min(v); hi:Option<i32> = max(v);
@@ -131,9 +131,9 @@ fn positions_print_fetches_and_tuple_boundaries_after_probes() {
     let physical = syn::parse_quote! {
         physical {
             relation L(k:i32); relation R(k:i32,v:i32);
-            l = pipe rename L@0 {k -> k};
+            l = pipe rename L {k -> k};
             s = pipe select l if (k >= 2);
-            r = let rename R@1 {k -> k,v -> v};
+            r = let rename R {k -> k,v -> v};
             j = let canon probe first [k] s,r;
             return j as answer(k,v);
         }
@@ -159,8 +159,8 @@ fn retained_lookup_is_a_pruned_non_column_cursor() {
     let (physical, program) = parse_fixture(quote::quote! {
         physical {
             relation L(k:i32); relation R(k:i32,v:i32);
-            l = pipe rename L@0 {k -> k};
-            r = let rename R@1 {k -> k,v -> v};
+            l = pipe rename L {k -> k};
+            r = let rename R {k -> k,v -> v};
             s = pipe semi eager [k] l,r;
             kept = pipe select s if (k >= 1);
             projected = pipe project kept keep {k};
@@ -237,9 +237,9 @@ fn smallest_witness_selection_is_exact_and_native_prefix_retention_is_rejected()
     let (physical, program) = parse_fixture(quote::quote! {
         physical {
             relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = let rename R@1 {b -> b,c -> c};
-            s = let rename S@2 {a -> a,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            r = let rename R {b -> b,c -> c};
+            s = let rename S {a -> a,c -> c};
             pre_r = pipe semi eager [b] l,r;
             pre_s = pipe semi eager [a] pre_r,s;
             candidate = pipe probe smallest [b] pre_s,r;
@@ -305,8 +305,8 @@ fn retained_host_fallback_is_shared_and_consumes_the_same_cursor() {
     let (physical, program) = parse_fixture(quote::quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {a -> x};
-            r = pipe rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = pipe rename R {a -> x,b -> y};
             s = pipe semi eager [x] l,r;
             p = let canon probe first [x] s,r;
             return p as answer(x,y);

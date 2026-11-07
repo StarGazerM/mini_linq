@@ -85,14 +85,15 @@
 //! inadmissible. Reapplying a rewrite is idempotent. A projection already known
 //! to preserve a key needs no additional canonical boundary.
 //!
-//! `smallest_intersections(smallest(R@1, S@2, T@3))` instead selects one
-//! complete intersection site by relation occurrence; two or more distinct
-//! occurrences are required. Multiple sites are comma-separated `smallest(...)`
+//! `smallest_intersections(smallest(r0, r1, r2))` instead selects one
+//! complete intersection site by Physical rename definition name; two or more
+//! distinct names are required. Multiple sites are comma-separated `smallest(...)`
 //! clauses. Their list order is immaterial; each must match exactly one admissible
 //! site, including every candidate provider. Missing, duplicate, ambiguous,
-//! partial, or blocked selections are errors. Positional paths such as `R@1.0.2`
-//! preserve nested-branch provenance. Unary relational filters/projections retain
-//! occurrence identity; opaque Rust and multi-input providers do not invent it.
+//! partial, or blocked selections are errors. Authored CQ selectors such as
+//! `R@1.0.2` resolve at this invocation through the carried planning side tables.
+//! Unary filters/projections retain the named provider; opaque Rust and
+//! multi-input providers do not invent one.
 //! For an explicit site, a semijoin side with extra payload receives a retained
 //! projection of exactly its membership keys. This private candidate view does
 //! not replace the complete occurrence used by later expansions; Physical
@@ -233,7 +234,7 @@
 //!     pipeline { mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
 //!     physical {
 //!         relation R(a: i32, b: i32) = (input);
-//!         r = pipe rename R@0 { a -> x, b -> y };
+//!         r = pipe rename R { a -> x, b -> y };
 //!         projected = pipe project r keep { x };
 //!         return projected as answer(x);
 //!     }
@@ -301,7 +302,14 @@ macro_rules! physical_rewrites {
     ($($name:ident => $implementation:path;)*) => {$(
         #[proc_macro]
         pub fn $name(input: TokenStream) -> TokenStream {
-            cq_stage::rewrite::<cq_lang_physical::Program>(input.into(), $implementation).into()
+            cq_stage::rewrite_with_planning::<cq_lang_physical::Program>(input.into(), |source, arguments, planning| {
+                let arguments = if stringify!($name) == "smallest_intersections" {
+                    cq_stage::planning::resolve_smallest(arguments, planning)?
+                } else {
+                    arguments
+                };
+                $implementation(source, arguments)
+            }).into()
         }
     )*};
 }

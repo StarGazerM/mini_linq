@@ -77,6 +77,7 @@ pub struct Read {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lineage {
     pub base: String,
+    /// Physical rename definition name, not a CQ/VO occurrence path.
     pub occurrence: String,
     pub columns: BTreeMap<String, String>,
 }

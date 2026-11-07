@@ -2,8 +2,8 @@
 //!
 //! An authored probe chain
 //! ```text
-//! l = pipe rename L@0 {a -> a};
-//! r = let rename R@1 {a -> a, b -> b};
+//! l = pipe rename L {a -> a};
+//! r = let rename R {a -> a, b -> b};
 //! j = pipe probe first [a] l,r;
 //! out = pipe canon project j keep {b};
 //! return out as answer(b);

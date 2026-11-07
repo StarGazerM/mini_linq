@@ -36,7 +36,7 @@ fn demands_cover_joins_preserve_answers_and_reject_mutation() {
 fn cartesian_and_repeated_join_reads_share_one_demand() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32); relation S(b:i32);
-        r = rename R@0 {a -> a}; s = rename S@1 {b -> b};
+        r = rename R {a -> a}; s = rename S {b -> b};
         x = semijoin r with s; y = natural_join x with s;
         output y as answer(a,b);
     }};
@@ -51,10 +51,10 @@ fn versions() -> ra::Program {
         relation S(a: i32, b: i32, c: i32);
         relation T(k: i32);
         unit = unit;
-        r = rename R@0 {a -> x, b -> y, c -> z};
+        r = rename R {a -> x, b -> y, c -> z};
         seed = natural_join unit with r;
-        s = rename S@1 {a -> x, b -> y, c -> w};
-        t = rename T@2 {k -> z};
+        s = rename S {a -> x, b -> y, c -> w};
+        t = rename T {k -> z};
         left = semijoin seed with s;
         right = semijoin s with r;
         again = semijoin left with s;
@@ -86,9 +86,9 @@ fn logical_heading_coordinates_ignore_declaration_and_rename_order() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a: i32, b: i32, c: i32);
         relation S(a: i32, b: i32, c: i32);
-        seed = rename R@0 {c -> z, a -> x, b -> y};
-        first = rename S@1 {c -> w, b -> x, a -> z};
-        second = rename S@2 {b -> x, c -> q, a -> z};
+        seed = rename R {c -> z, a -> x, b -> y};
+        first = rename S {c -> w, b -> x, a -> z};
+        second = rename S {b -> x, c -> q, a -> z};
         joined = natural_join seed with first;
         repeated = natural_join joined with second;
         result = project repeated keep {x, w};
@@ -130,7 +130,7 @@ fn independent_derivation_rejects_mutations() {
     bad.indexes[1].requirement.columns = syn::parse_quote!(2, 1);
     reject(&source, &bad);
     let mut bad = target.clone();
-    bad.ra.plan.definitions[1].operator = syn::parse_quote!(rename R@0 {c -> z, b -> y, a -> x});
+    bad.ra.plan.definitions[1].operator = syn::parse_quote!(rename R {c -> z, b -> y, a -> x});
     reject(&source, &bad);
     let mut bad = target.clone();
     bad.indexes = syn::parse_quote!(i0 = @r[] stream; i1 = @s[1,2] stream; i2 = @t[0] stream; i3 = @r[0,1] stream; i4 = @right[1,2] stream;);
@@ -155,7 +155,7 @@ fn independent_derivation_rejects_mutations() {
 fn ix_const_covers_all_literal_conjunctions_and_keeps_supply_in_identity() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a: i32, b: i32); relation S(a: i32, b: i32);
-        r = rename R@0 { a -> x, b -> y }; s = rename S@1 { a -> x, b -> y };
+        r = rename R { a -> x, b -> y }; s = rename S { a -> x, b -> y };
         fixed = select r if (y = 7, x = -2);
         repeated = select r if (x = 3, y = 8);
         streamed = natural_join s with r;
@@ -190,7 +190,7 @@ fn ix_const_covers_all_literal_conjunctions_and_keeps_supply_in_identity() {
 fn rust_chain_nodes_and_column_equalities_create_no_demands() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a: i32, b: i32);
-        r = rename R@0 { a -> x, b -> y };
+        r = rename R { a -> x, b -> y };
         equal = select r if (x = y);
         guarded = guard equal if (*x != 0);
         bound = bind guarded with z: i32 = (10 / *x);
@@ -207,7 +207,7 @@ fn rust_chain_nodes_and_column_equalities_create_no_demands() {
 fn membership_and_parameters_are_const_but_disjunction_and_variable_bounds_are_filters() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32);
-        r = rename R@0 {a -> x,b -> y};
+        r = rename R {a -> x,b -> y};
         points = select r if (x = @(captured), y in {1,2,3});
         alternatives = select points if ((x < 0 and y = 2) or (x > 5 and y = 3));
         variables = select alternatives if (x < y);
@@ -229,8 +229,8 @@ fn membership_and_parameters_are_const_but_disjunction_and_variable_bounds_are_f
 fn occurrence_constants_are_not_index_keys_or_selection_demands() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32,c:i32); relation S(a:i32);
-        r = rename R@0 {a -> x, c -> y} constants {b = 7};
-        s = rename S@1 {a -> x};
+        r = rename R {a -> x, c -> y} constants {b = 7};
+        s = rename S {a -> x};
         j = natural_join s with r;
         output j as answer(x,y);
     }};
@@ -242,7 +242,7 @@ fn occurrence_constants_are_not_index_keys_or_selection_demands() {
     check(&source, &target).unwrap();
     let lone: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32);
-        r = rename R@0 {} constants {a = 7};
+        r = rename R {} constants {a = 7};
         output r as answer();
     }};
     assert!(compile(&lone).unwrap().indexes.is_empty());
@@ -252,7 +252,7 @@ fn occurrence_constants_are_not_index_keys_or_selection_demands() {
 fn coverage_rejects_missing_extra_and_wrong_supply_requirements() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32);
-        r = rename R@0 {a -> x,b -> y};
+        r = rename R {a -> x,b -> y};
         point = select r if (x = 2);
         window = select r if (y >= 1);
         joined = natural_join point with window;

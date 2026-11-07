@@ -23,7 +23,7 @@ fn canonical_projection() {
                 };
                 physical {
                     relation Edges(a:i64,b:i64) = ($resident);
-                    scan = pipe rename Edges@0 {a -> x,b -> y};
+                    scan = pipe rename Edges {a -> x,b -> y};
                     output = let canon project scan keep {x};
                     return output as answer(x);
                 }
@@ -94,7 +94,7 @@ fn repeated_head_projection() {
         };
         physical {
             relation R(a:i64,b:i64) = (&resident);
-            scan = pipe rename R@0 {a -> x,b -> y};
+            scan = pipe rename R {a -> x,b -> y};
             output = let canon project scan keep {x};
             return output as answer(x,x);
         }

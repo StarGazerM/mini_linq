@@ -1,7 +1,7 @@
 //! RA prime: named relational operators and unchanged opaque Rust expressions.
 //!
 //! Rust expressions are pure and total by premise and depend only on their free
-//! variables. Structural contracts preserve source occurrences, relational
+//! variables. Structural contracts preserve source renames, relational
 //! predicates and Rust payloads without imposing written-order barriers.
 //! They visit the DAG and its derived headings without unfolding shared rows
 //! or searching for atom mappings. Split-witness wiring admits local set
@@ -12,7 +12,7 @@
 //!
 //! This language separates logical query planning from index selection and
 //! Rust execution. Declared relation names are atomic input expressions;
-//! [`Rename`] turns one occurrence into a query-variable heading. Result IDs
+//! [`Rename`] turns one relation into a query-variable heading. Result IDs
 //! such as `r0` are serialized DAG references, not algebra operators or an
 //! assumed prerequisite for relational algebra.
 //!
@@ -41,7 +41,7 @@
 //! Union siblings are unordered; fallback retains its relational anti steps.
 //! Only fallback construction proves union arms disjoint; literal values prove nothing.
 //!
-//! `scope[names] @c.j.k` records a Rust step's lexical inputs and source path.
+//! `scope[names]` records a Rust step's lexical inputs.
 //! Prefix Rust reached through a positive semijoin remains outside the arm;
 //! no such context reduction may modify a negated original branch.
 //! Group consumes a set of complete named valuations projected by the frontend,
@@ -49,7 +49,7 @@
 //! the keys plus fresh typed fold results; empty global input produces identities.
 //!
 pub use cq_syntax::algebra::{
-    Absorption, AggregateBinding, AggregateKind, Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain,
+    AggregateBinding, AggregateKind, Anti, AttributeRename, Bind, BlockOrigin, Correlation, Domain,
     Environment, Group, Guard, OccurrenceConstants, Project, Rename, Select, Theta, Union, Unit,
 };
 pub use cq_syntax::{Equality, EqualityValue};
@@ -67,7 +67,6 @@ pub mod kw {
     syn::custom_keyword!(output);
     syn::custom_keyword!(relational);
     syn::custom_keyword!(semijoin);
-    syn::custom_keyword!(check);
 }
 
 /// A complete named relational program.
@@ -115,13 +114,6 @@ pub struct Definition {
     pub result: Ident,
     pub eq_token: Token![=],
     pub operator: Operator,
-    /// Transported standalone membership phase; not a candidate provider.
-    pub check: Option<kw::check>,
-    #[parse(cq_syntax::algebra::parse_moved_after)]
-    pub moved_after: Option<cq_syntax::algebra::MovedAfter>,
-    #[parse(cq_syntax::algebra::parse_absorptions)]
-    #[to_tokens(|tokens, facts| quote::TokenStreamExt::append_all(tokens, facts))]
-    pub absorptions: Vec<cq_syntax::algebra::Absorption>,
     pub semi_token: Token![;],
 }
 
@@ -203,23 +195,6 @@ pub struct Output {
 /// Checked headings and column types of all named results.
 pub type Analysis = BTreeMap<String, RelationInfo>;
 pub mod contract {
-    /// Structural facts of a checked relational schedule. DAG nodes refer to
-    /// earlier nodes; VO states its obligations here without running elaboration.
-    #[derive(Default, Clone)]
-    pub struct Schedule {
-        pub(super) nodes: Vec<super::structural::Node>,
-        pub(super) atoms: std::collections::HashMap<usize, super::structural::Atom>,
-        pub(super) rust_steps: Vec<super::structural::Rust>,
-        pub(super) reductions: Vec<super::structural::Reduction>,
-        pub(super) output: Option<usize>,
-        pub(super) head: String,
-        pub(super) split_nodes: Vec<(usize, usize)>,
-        pub(super) full_reads: Vec<(usize, usize)>,
-        pub(super) row_views: Vec<super::structural::RowView>,
-        pub(super) view_requests: Vec<super::structural::ViewRequest>,
-        pub(super) paths: std::collections::BTreeMap<cq_syntax::Occurrence, usize>,
-    }
-
     /// Formal rule RA-H-Heading: Combine local operator typing with the standalone heading contract.
     pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
         super::check_in(&program.plan.declarations, &program.plan)
@@ -267,7 +242,7 @@ fn check_in<'a>(
             _ => Vec::new(),
         })
         .collect();
-    // Formal rule RA-H-Payloads: Check implicit lexical uses or explicit available scope names and paths.
+    // Formal rule RA-H-Payloads: Check implicit lexical uses or explicit available scope names.
     let check_uses = |expr: &syn::Expr, heading: &Heading| -> syn::Result<()> {
         if let Some(name) = cq_syntax::rust::known_uses(expr, &logical)
             .difference(heading)
@@ -284,7 +259,6 @@ fn check_in<'a>(
     plan.captures.check(&logical)?;
     let captures = plan.captures.names();
 
-    let mut occurrences = BTreeSet::new();
     for definition in &plan.definitions {
         let result_name = symbol_name(&definition.result);
         if relations.contains_key(&result_name) {
@@ -332,7 +306,6 @@ fn check_in<'a>(
                     operands.push(name);
                 }
                 if let Some(origin) = &union.origin {
-                    origin.occurrence.check()?;
                     let free: BTreeSet<_> = origin.free.iter().map(symbol_name).collect();
                     let interface: BTreeSet<_> = origin.interface.iter().map(symbol_name).collect();
                     if free.len() != origin.free.len()
@@ -399,15 +372,6 @@ fn check_in<'a>(
             }
             Operator::Unit(_) => (Heading::new(), Vec::new()),
             Operator::Rename(rename) => {
-                // Formal rule RA-H-Renames: Require valid, globally unique rename occurrence paths.
-                rename.occurrence.check()?;
-                let occurrence = &rename.occurrence;
-                if !occurrences.insert(occurrence.clone()) {
-                    return Err(syn::Error::new_spanned(
-                        &rename.occurrence,
-                        format!("atom occurrence @{occurrence} is realized more than once"),
-                    ));
-                }
                 let Some(declaration) = declarations.get(&symbol_name(&rename.relation)) else {
                     return Err(syn::Error::new_spanned(
                         &rename.relation,
@@ -537,27 +501,6 @@ fn check_in<'a>(
                 (heading, vec![name])
             }
         };
-        if let Some(after) = &definition.moved_after {
-            for occurrence in &after.occurrences { occurrence.check()?; }
-            if definition.check.is_none() || after.occurrences.is_empty() {
-                return Err(syn::Error::new_spanned(definition, "moved support requires a check phase"));
-            }
-        }
-        // Formal rule RA-CheckPhase: a recorded check preserves the left
-        // heading and may not manufacture an introducing stream.
-        if definition.check.is_some() {
-            let left = match &definition.operator {
-                Operator::NaturalJoin(join) => &join.left,
-                Operator::Semijoin(join) => &join.left,
-                _ => return Err(syn::Error::new_spanned(definition, "check phase requires a join or semijoin")),
-            };
-            let left_heading = &earlier_relation(left, &relations)?.1.heading;
-            if *left_heading != heading
-                || (left_heading.is_empty() && matches!(definition.operator, Operator::NaturalJoin(_)))
-            {
-                return Err(syn::Error::new_spanned(definition, "check phase introduces columns"));
-            }
-        }
 
         let mut types = BTreeMap::new();
         let mut logical_type_ids = BTreeMap::new();
@@ -842,24 +785,9 @@ pub fn disjoint_unions(program: &Program) -> syn::Result<BTreeSet<String>> {
 /// downstream implicit join keys as well as projections, selections and output.
 /// These are set (under-canonicalization) laws, not bag or Rust execution laws.
 pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    let source_schedule = contract::Schedule::from_program(source)?;
-    let target_schedule = contract::Schedule::from_program(target)?;
-    let mut added_absorptions = false;
-    for definition in &target.plan.definitions {
-        if let Some(original) = source.plan.definitions.iter()
-            .find(|original| original.result == definition.result)
-        {
-            if original.check.is_some() != definition.check.is_some()
-                || original.moved_after != definition.moved_after
-            {
-                return Err(syn::Error::new_spanned(definition, "RA rewrite changes recorded check phase"));
-            }
-            if !definition.absorptions.starts_with(&original.absorptions) {
-                return Err(syn::Error::new_spanned(definition, "RA rewrite erases recorded reduction facts"));
-            }
-            added_absorptions |= definition.absorptions.len() != original.absorptions.len();
-        }
-    }
+    let mut atoms = structural::Atoms::default();
+    let source_schedule = structural::Structure::from_program(source, &mut atoms)?;
+    let target_schedule = structural::Structure::from_program(target, &mut atoms)?;
     if source.plan.declarations != target.plan.declarations {
         return Err(syn::Error::new_spanned(
             &target.plan.output,
@@ -872,17 +800,10 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             "RA rewrite changes captures",
         ));
     }
-    if added_absorptions {
-        return if structural::check_reduction_rewrite(source, target, &source_schedule) {
-            Ok(())
-        } else {
-            Err(syn::Error::new_spanned(target, "invalid moved-support preservation certificate"))
-        };
-    }
     source_schedule
-        .check(&target_schedule, &[])
+        .check(&target_schedule)
         .or_else(|message| {
-            if structural::check_reduction_rewrite(source, target, &source_schedule) {
+            if structural::check_reduction_rewrite(source, target, &source_schedule, &mut atoms) {
                 Ok(())
             } else {
                 Err(message)

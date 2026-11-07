@@ -812,12 +812,11 @@ cq_lang_vo::Step::Reduce::1	{"struct_field":{"resolved_path":{"args":null,"id":"
 cq_lang_vo::Step::Restrict	{"variant":{"discriminant":null,"kind":{"tuple":["cq_lang_vo::Step::Restrict::0","cq_lang_vo::Step::Restrict::1"]}}}
 cq_lang_vo::Step::Restrict::0	{"struct_field":{"resolved_path":{"args":null,"id":"cq_lang_vo::Restrict","path":"Restrict"}}}
 cq_lang_vo::Step::Restrict::1	{"struct_field":{"resolved_path":{"args":null,"id":"syn::token::Semi","path":"$crate::token::Semi"}}}
-cq_lang_vo::Subatom	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_vo::Subatom::relation","cq_lang_vo::Subatom::at","cq_lang_vo::Subatom::clause","cq_lang_vo::Subatom::paren","cq_lang_vo::Subatom::columns","cq_lang_vo::Subatom::check","cq_lang_vo::Subatom::moved_after"],"has_stripped_fields":false}}}}
+cq_lang_vo::Subatom	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_vo::Subatom::relation","cq_lang_vo::Subatom::at","cq_lang_vo::Subatom::clause","cq_lang_vo::Subatom::paren","cq_lang_vo::Subatom::columns","cq_lang_vo::Subatom::check"],"has_stripped_fields":false}}}}
 cq_lang_vo::Subatom::at	{"struct_field":{"resolved_path":{"args":null,"id":"syn::token::At","path":"$crate::token::At"}}}
 cq_lang_vo::Subatom::check	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_vo::kw::check","path":"kw::check"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_lang_vo::Subatom::clause	{"struct_field":{"resolved_path":{"args":null,"id":"cq_syntax::occurrence::Occurrence","path":"Occurrence"}}}
 cq_lang_vo::Subatom::columns	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_vo::Column","path":"Column"}}}],"constraints":[]}},"id":"cq_syntax::CommaList","path":"CommaList"}}}
-cq_lang_vo::Subatom::moved_after	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_syntax::algebra::MovedAfter","path":"cq_syntax::algebra::MovedAfter"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_lang_vo::Subatom::paren	{"struct_field":{"resolved_path":{"args":null,"id":"syn::token::Paren","path":"token::Paren"}}}
 cq_lang_vo::Subatom::relation	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::Ident","path":"syn::Ident"}}}
 cq_lang_vo::Valuation	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_vo::Valuation::valuation_token","cq_lang_vo::Valuation::evidence","cq_lang_vo::Valuation::ordering","cq_lang_vo::Valuation::brace","cq_lang_vo::Valuation::steps"],"has_stripped_fields":false}}}}

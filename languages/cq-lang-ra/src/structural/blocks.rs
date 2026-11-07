@@ -1,5 +1,5 @@
 //! Structural branch boundaries, negative references and the surrounding CQ.
-//! Named occurrence paths fix branch membership. A branch is checked as a
+//! Block identities (heading signature and the renames of their arms) fix branch membership. A branch is checked as a
 //! subprogram with a symbolic context; the surrounding program sees its checked
 //! interface. Relational semijoins may restrict positive arms through a named
 //! operand of that surrounding program, on interface/context columns only.
@@ -8,27 +8,21 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
-fn frames(schedule: &Schedule) -> Result<BTreeMap<String, usize>, String> {
+fn frames(schedule: &Structure) -> Result<BTreeMap<usize, usize>, String> {
     let mut result = BTreeMap::new();
     for (index, node) in schedule.nodes.iter().enumerate() {
         if !matches!(node.kind, Kind::Union(..)) {
             continue;
         }
-        let origin = node.origin.as_ref().ok_or("union has no block origin")?;
-        if result
-            .insert(origin.occurrence.to_string(), index)
-            .is_some()
-        {
+        let block = node.block.ok_or("union has no block origin")?;
+        if result.insert(block, index).is_some() {
             return Err("a block origin is defined more than once".into());
         }
     }
     Ok(result)
 }
 
-pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> {
-    if source.paths != target.paths {
-        return Err("block occurrence paths differ".into());
-    }
+pub(super) fn check(source: &Structure, target: &Structure) -> Result<(), String> {
     if source
         .nodes
         .iter()
@@ -61,14 +55,13 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
         let ti = tf[&path];
         let (s, t) = (&source.nodes[si], &target.nodes[ti]);
         let (so, to) = (s.origin.as_ref().unwrap(), t.origin.as_ref().unwrap());
-        if so.occurrence != to.occurrence
-            || so.free != to.free
+        if so.free != to.free
             || so.interface != to.interface
             || so.fallback.is_some() != to.fallback.is_some()
             || s.operands.len() != t.operands.len()
         {
             return Err(format!(
-                "block @{path} changes its operator, heading or branch count"
+                "block #{path} changes its operator, heading or branch count"
             ));
         }
         let (sn, tn) = (
@@ -80,15 +73,15 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
             reject_negative_context_cuts(source, &sn, sc, &source_root.memo)?;
             reject_negative_context_cuts(target, &tn, tc, &target_root.memo)?;
         }
-        unique_branch_rust(source, &sn, sc, &so.occurrence)?;
-        unique_branch_rust(target, &tn, tc, &to.occurrence)?;
-        let rust = has_rust(source, &sn, sc, &so.occurrence);
-        if rust != has_rust(target, &tn, tc, &to.occurrence) {
-            return Err(format!("block @{path} changes its Rust tree"));
+        unique_branch_rust(source, &sn, sc)?;
+        unique_branch_rust(target, &tn, tc)?;
+        let rust = has_rust(source, &sn, sc);
+        if rust != has_rust(target, &tn, tc) {
+            return Err(format!("block #{path} changes its Rust tree"));
         }
         if rust {
             let required: BTreeSet<_> = so.free.iter().map(symbol_name).collect();
-            let context = |schedule: &Schedule, node: Option<usize>| {
+            let context = |schedule: &Structure, node: Option<usize>| {
                 node.map(|node| schedule.nodes[node].heading.keys().cloned().collect())
                     .unwrap_or_default()
             };
@@ -102,7 +95,7 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
                     .any(|id| target_names.contains(&symbol_name(id)))
             {
                 return Err(format!(
-                    "block @{path} loses free-variable bindings or binds an interface column outside the block"
+                    "block #{path} loses free-variable bindings or binds an interface column outside the block"
                 ));
             }
             // Rust dependencies retain their lexical scope; total expressions
@@ -113,20 +106,20 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
             if let (Some(sd), Some(td)) = (s.domain, t.domain) {
                 let mut sv = View::new(source, None, BTreeMap::new(), None);
                 let mut tv = View::new(target, None, BTreeMap::new(), None);
-                sv.finish(sd, format!("domain @{path}"))?;
-                tv.finish(td, format!("domain @{path}"))?;
+                sv.finish(sd, format!("domain #{path}"))?;
+                tv.finish(td, format!("domain #{path}"))?;
                 compare(&sv.result, &tv.result)?;
             }
         }
         let context_names: BTreeSet<_> = so.free.iter().map(symbol_name).collect();
         let mut heading = context_names.clone();
         heading.extend(so.interface.iter().map(symbol_name));
-        let signature = format!("branch @{path} {heading:?}");
+        let signature = format!("branch #{path} {heading:?}");
         let negative_names = |roots: &[usize]| {
             roots
                 .iter()
                 .enumerate()
-                .map(|(j, node)| (*node, format!("@{path}.{j}")))
+                .map(|(j, node)| (*node, format!("#{path}.{j}")))
                 .collect::<BTreeMap<_, _>>()
         };
         let mut source_views = Vec::new();
@@ -134,7 +127,7 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
         for operand in &s.operands {
             let mut view = View::new(
                 source,
-                sc.map(|node| (node, path.clone(), context_names.clone())),
+                sc.map(|node| (node, path.to_string(), context_names.clone())),
                 negative_names(&sn),
                 None,
             );
@@ -142,7 +135,7 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
                 *operand,
                 &heading,
                 &context_names,
-                &path,
+                &path.to_string(),
                 sc.is_none(),
                 signature.clone(),
             )?;
@@ -151,7 +144,7 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
         for operand in &t.operands {
             let mut view = View::new(
                 target,
-                tc.map(|node| (node, path.clone(), context_names.clone())),
+                tc.map(|node| (node, path.to_string(), context_names.clone())),
                 negative_names(&tn),
                 Some(&target_root.memo),
             );
@@ -159,7 +152,7 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
                 *operand,
                 &heading,
                 &context_names,
-                &path,
+                &path.to_string(),
                 tc.is_none(),
                 signature.clone(),
             )?;
@@ -167,12 +160,12 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
         }
         if so.fallback.is_some() {
             for (j, (sv, tv)) in source_views.iter().zip(&target_views).enumerate() {
-                compare(sv, tv).map_err(|e| format!("else block @{path} branch {j}: {e}"))?;
+                compare(sv, tv).map_err(|e| format!("else block #{path} branch {j}: {e}"))?;
             }
         } else {
             // Exact occurrence/fact keys identify unordered siblings. This is
             // lookup of given branch identities, never an atom-mapping search.
-            let mut candidates: BTreeMap<Footprint, Vec<&Schedule>> = BTreeMap::new();
+            let mut candidates: BTreeMap<Footprint, Vec<&Structure>> = BTreeMap::new();
             for tv in &target_views {
                 candidates.entry(footprint(tv)).or_default().push(tv);
             }
@@ -180,8 +173,8 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
                 let tv = candidates
                     .get_mut(&footprint(sv))
                     .and_then(Vec::pop)
-                    .ok_or_else(|| format!("union block @{path} dropped or changed branch {j}"))?;
-                compare(sv, tv).map_err(|e| format!("union block @{path} branch {j}: {e}"))?;
+                    .ok_or_else(|| format!("union block #{path} dropped or changed branch {j}"))?;
+                compare(sv, tv).map_err(|e| format!("union block #{path} branch {j}: {e}"))?;
             }
         }
     }
@@ -189,7 +182,7 @@ pub(super) fn check(source: &Schedule, target: &Schedule) -> Result<(), String> 
 }
 
 fn reject_negative_context_cuts(
-    schedule: &Schedule,
+    schedule: &Structure,
     roots: &[usize],
     boundary: Option<usize>,
     context: &HashMap<usize, usize>,
@@ -221,10 +214,9 @@ fn reject_negative_context_cuts(
 }
 
 fn unique_branch_rust(
-    schedule: &Schedule,
+    schedule: &Structure,
     roots: &[usize],
     boundary: Option<usize>,
-    block: &cq_syntax::Occurrence,
 ) -> Result<(), String> {
     let mut owners = HashSet::new();
     for root in roots {
@@ -234,10 +226,10 @@ fn unique_branch_rust(
             if boundary == Some(node) || !seen.insert(node) {
                 continue;
             }
-            if branch_rust(schedule, node, block) && !owners.insert(node) {
+            if branch_rust(schedule, node) && !owners.insert(node) {
                 return Err("a Rust step is shared between sibling branch paths".into());
             }
-            let count = if matches!(schedule.nodes[node].kind, Kind::Anti(_)) {
+            let count = if matches!(schedule.nodes[node].kind, Kind::Anti(_) | Kind::Join(true)) {
                 1
             } else {
                 schedule.nodes[node].operands.len()
@@ -248,21 +240,16 @@ fn unique_branch_rust(
     Ok(())
 }
 
-fn branch_rust(schedule: &Schedule, node: usize, block: &cq_syntax::Occurrence) -> bool {
-    schedule.nodes[node].rust_index.is_some_and(|index| {
-        schedule.rust_steps[index]
-            .environment
-            .as_ref()
-            .and_then(|env| env.path.as_ref())
-            .is_none_or(|path| path.0.starts_with(&block.0))
-    })
+/// A Rust node of a branch lies on its arm's own lineage: a positive
+/// semijoin's support (for example a prefix cut) stays outside the arm.
+fn branch_rust(schedule: &Structure, node: usize) -> bool {
+    schedule.nodes[node].rust_index.is_some()
 }
 
 fn has_rust(
-    schedule: &Schedule,
+    schedule: &Structure,
     roots: &[usize],
     boundary: Option<usize>,
-    block: &cq_syntax::Occurrence,
 ) -> bool {
     let mut seen = HashSet::new();
     let mut pending = roots.to_vec();
@@ -270,16 +257,22 @@ fn has_rust(
         if boundary == Some(node) || !seen.insert(node) {
             continue;
         }
-        if branch_rust(schedule, node, block) {
+        if branch_rust(schedule, node) {
             return true;
         }
-        pending.extend(&schedule.nodes[node].operands);
+        let node = &schedule.nodes[node];
+        let count = if matches!(node.kind, Kind::Join(true)) {
+            1
+        } else {
+            node.operands.len()
+        };
+        pending.extend(node.operands.iter().take(count));
     }
     false
 }
 
 fn foreign_semi(
-    schedule: &Schedule,
+    schedule: &Structure,
     node: usize,
     allowed: &HashMap<usize, usize>,
     heading: &Heading,
@@ -298,7 +291,7 @@ fn foreign_semi(
         .all(|name| heading.contains_key(name))
 }
 fn originals(
-    schedule: &Schedule,
+    schedule: &Structure,
     frame: &Node,
     allowed: Option<&HashMap<usize, usize>>,
 ) -> Result<Vec<usize>, String> {
@@ -330,7 +323,7 @@ struct Footprint {
     predicates: Vec<(String, Vec<Column>)>,
     rust: Vec<String>,
 }
-fn footprint(schedule: &Schedule) -> Footprint {
+fn footprint(schedule: &Structure) -> Footprint {
     let mut atoms: Vec<_> = schedule.atoms.keys().copied().collect();
     atoms.sort_unstable();
     let columns: BTreeSet<_> = schedule
@@ -386,8 +379,8 @@ fn footprint(schedule: &Schedule) -> Footprint {
 }
 
 struct View<'a> {
-    original: &'a Schedule,
-    result: Schedule,
+    original: &'a Structure,
+    result: Structure,
     memo: HashMap<usize, usize>,
     columns: HashMap<Column, Column>,
     boundary: Option<(usize, String, BTreeSet<String>)>,
@@ -397,17 +390,16 @@ struct View<'a> {
 }
 impl<'a> View<'a> {
     fn new(
-        original: &'a Schedule,
+        original: &'a Structure,
         boundary: Option<(usize, String, BTreeSet<String>)>,
         negatives: BTreeMap<usize, String>,
         allowed: Option<&'a HashMap<usize, usize>>,
     ) -> Self {
         Self {
             original,
-            result: Schedule {
-                paths: original.paths.clone(),
+            result: Structure {
                 row_views: original.row_views.clone(),
-                ..Schedule::default()
+                ..Structure::default()
             },
             memo: HashMap::new(),
             columns: HashMap::new(),
@@ -494,18 +486,8 @@ impl<'a> View<'a> {
             self.original
                 .view_requests
                 .iter()
-                .filter_map(|request| {
-                    if !ids.contains(&request.occurrence)
-                        || !views.contains(&request.earlier)
-                        || !views.contains(&request.later)
-                    {
-                        return None;
-                    }
-                    Some(super::ViewRequest {
-                        node: *self.memo.get(&request.node)?,
-                        ..*request
-                    })
-                }),
+                .filter(|(a, b, _)| views.contains(a) && views.contains(b))
+                .copied(),
         );
         self.result
             .split_nodes
@@ -741,13 +723,12 @@ impl<'a> View<'a> {
     fn block(&mut self, index: usize) -> Result<usize, String> {
         let original = &self.original.nodes[index];
         let origin = original.origin.as_ref().ok_or("block origin missing")?;
-        let path = origin.occurrence.to_string();
+        let path = original.block.ok_or("block identity missing")?;
         let roots = originals(self.original, original, self.allowed)?;
         let rust = has_rust(
             self.original,
             &roots,
             original.correlation.or(original.domain),
-            &origin.occurrence,
         );
         let common: BTreeSet<_> = origin
             .free
@@ -763,7 +744,7 @@ impl<'a> View<'a> {
             };
             let ordinal = self.result.rust_steps.len();
             let mut node = Node {
-                kind: Kind::Rust(format!("block @{path} {}", origin.fallback.is_some())),
+                kind: Kind::Rust(format!("block #{path} {}", origin.fallback.is_some())),
                 heading: self.result.nodes[input].heading.clone(),
                 origins: self.result.nodes[input].origins.clone(),
                 operands: vec![input],
@@ -783,14 +764,14 @@ impl<'a> View<'a> {
             for id in &origin.interface {
                 let name = symbol_name(id);
                 let column = Column::Bind(
-                    format!("block @{path} {}", origin.fallback.is_some()),
+                    format!("block #{path} {}", origin.fallback.is_some()),
                     name.clone(),
                 );
                 node.heading.insert(name.clone(), column.clone());
                 node.origins.insert(name, HashSet::from([column]));
             }
             self.result.rust_steps.push(Rust {
-                payload: format!("block @{path} {}", origin.fallback.is_some()),
+                payload: format!("block #{path} {}", origin.fallback.is_some()),
                 input,
                 arguments,
                 expression: syn::parse_quote!(()),
@@ -799,7 +780,7 @@ impl<'a> View<'a> {
             });
             self.result.push(node)
         } else {
-            let id = self.original.paths[&origin.occurrence];
+            let id = path;
             let mapping = common
                 .iter()
                 .map(|name| {

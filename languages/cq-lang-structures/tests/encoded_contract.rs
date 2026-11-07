@@ -32,7 +32,7 @@ fn fixture() -> Fixture {
     let mut program: Fixture = fixture_quote! {
         physical {
             relation R(a: u32 in [7] (symbols), b: u32 in [7] (symbols));
-            r = pipe rename R@0 {a -> x, b -> y};
+            r = pipe rename R {a -> x, b -> y};
             s = pipe guard r if (*x != 0);
             return canon s as answer(x,y);
         }
@@ -687,8 +687,8 @@ fn index_role_requires_existing_byte_addressable_layout() {
         physical {
             relation L(a: u32 in [7] (symbols));
             relation R(a: u32 in [7] (symbols), b: u32 in [7] (symbols));
-            l = pipe rename L@1 {a -> x};
-            r = let rename R@0 {a -> x, b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x, b -> y};
             s = pipe probe first [x] l,r;
             return canon s as answer(x,y);
         }
@@ -819,7 +819,7 @@ fn blocked_fixture() -> Fixture {
     let mut program: Fixture = fixture_quote! {
         physical {
             relation R(a: Alias [42], b: Alias [42]);
-            r = pipe rename R@0 { a -> x, b -> y };
+            r = pipe rename R { a -> x, b -> y };
             p = pipe range select r if (x >= 3);
             g = pipe guard p if (opaque(x));
             return canon g as answer(x, y);

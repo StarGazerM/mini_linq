@@ -7,7 +7,7 @@ Physical ::= physical { Decl* Fact* Def* return [canon] [dedup] r as Head; }
 Fact ::= host_set R [discharged];
        | consumer canonical;
 Def ::= r = (pipe | let | exists) [canon] Op;
-Op  ::= unit | rename R@path {..} [constants {source = literal, ...}]
+Op  ::= unit | rename R {..} [constants {source = literal, ...}]
       | select ... | point select ... | range select ...
       | bind ... | guard ... | project r keep {..} | merge [K] l, r
       | probe [first|smallest] [K] l, r
@@ -35,16 +35,12 @@ to two inclusive comparisons and orients comparisons with the column on
 the left; it is undefined for any other constraint.
 $\operatorname{closed}(s)$ is the set of literal and parameter terms of $s$;
 $\operatorname{deps}(e,H)$ is the Rust free-variable dependency set in $H$.
-\[
- \mathsf{PPath}(p)\triangleq |p|>0\land |p|\bmod 2=1.
-\]
 \begin{mathpar}
 \Rule{PH-H-Definitions}{
  |\{R.name\mid R\in t.declarations\}|=|t.declarations|
  \quad\forall R\in t.declarations.\ |C(R)|>0\land|\operatorname{set}C(R)|=|C(R)|\\
  |N|=n\quad\forall i.\ \operatorname{operands}(d_i)\subseteq\{d_j.name\mid j<i\}\\
  \forall r=\operatorname{rename}(R)\in D.\ R\in t.declarations\land
- \mathsf{PPath}(r.path)\land
  |\operatorname{dom}M(r)|=|M(r)|=|\operatorname{ran}M(r)|\land
  |\operatorname{sources}K(r)|=|K(r)|\land
  \operatorname{dom}M(r)\mathbin{\dot\cup}\operatorname{sources}K(r)=\operatorname{set}C(R)\\
@@ -56,8 +52,7 @@ $\operatorname{deps}(e,H)$ is the Rust free-variable dependency set in $H$.
  \forall d\in D,\ e\in\operatorname{rustPayloads}(d).\ d.environment=\bot\Rightarrow U(e,L)\subseteq h(d.input)\\
  \forall d\in D.\ d.environment\ne\bot\Rightarrow
  (|\operatorname{set}d.environment.variables|=|d.environment.variables|
- \land\operatorname{set}d.environment.variables\subseteq h(d.input)
- \land(d.environment.path\ne\bot\Rightarrow\mathsf{PPath}(d.environment.path)))\\
+ \land\operatorname{set}d.environment.variables\subseteq h(d.input))\\
  o\in N\quad N=\operatorname{ancestors}(o)
  \quad\forall e\in t.head.args.\ U(e,L)\subseteq h(o)}
  {\mathsf{PHDefinitions}(t,A)}
@@ -84,8 +79,7 @@ $\operatorname{deps}(e,H)$ is the Rust free-variable dependency set in $H$.
  \forall a,b\in u.operands.\ h(a)=h(b)\land
  \forall c\in\operatorname{dom}T_a\cap\operatorname{dom}T_b.\ T_a(c)=T_b(c)\\
  \forall u\in D_{union}.\ u.origin\ne\bot\Rightarrow
- \bigl(\mathsf{PPath}(u.origin.occurrence)\land
- h(u.name)=\operatorname{set}(u.origin.free)\cup\operatorname{set}(u.origin.interface)
+ \bigl(h(u.name)=\operatorname{set}(u.origin.free)\cup\operatorname{set}(u.origin.interface)
  \cup\!\!\bigcup_{p\in\operatorname{prefixes}(u.origin)}h(p)
  \land(u.origin.interface=\varnothing\iff u.witness\ne\bot)\bigr)\\
  \forall u\in D_{union}.\ (u.origin=\bot\land u.witness\ne\bot)\Rightarrow h(u.name)=\varnothing\\
@@ -171,11 +165,8 @@ $v\notin\mathsf{heading}(p)$. Each provider is retained or a reusable host.
 The introducing key is $K_1$; subsequent keys are $K_i\cup\{v\}$.
 Every intermediate result is a noncanonical pipe, consumed by the next check.
 The final result retains its written mode and canonicalization.
-A definition may carry the transported \code{check} suffix. Such a read
-preserves its left heading and is not an intersection candidate, even when
-I2 drainage has placed it immediately after an introducing probe.
 \begin{mathpar}
-\Rule{PH-Smallest}{k\ge2\quad\forall i.\neg d_i.\mathsf{check}\quad C_i(p)=\{v\mid(p[K_i],v)\in R_i\}\\
+\Rule{PH-Smallest}{k\ge2\quad C_i(p)=\{v\mid(p[K_i],v)\in R_i\}\\
  j=\mathop{\mathrm{arg\,min}}_{1\le i\le k}|C_i(p)|}
  {\bigcap_{i=1}^{k}C_i(p)
    =\{v\in C_j(p)\mid\forall i\ne j,\ v\in C_i(p)\}}
@@ -184,14 +175,9 @@ I2 drainage has placed it immediately after an introducing probe.
  R_J=\pi_J(R)\ \text{retained}\\
  R_J\text{ is private to one smallest membership edge}}
  {p\ltimes_J R=p\ltimes_J R_J}
-
-\Rule{PH-CheckPhase}{d.\mathsf{check}\quad
- d\in\{\mathsf{probeFirst},\mathsf{semi},\mathsf{merge}\}\\
- \mathsf{heading}(d)=\mathsf{heading}(\mathsf{left}(d))}
- {d\notin\mathsf{smallestCandidates}}
 \end{mathpar}
 The opt-in \code{smallest_intersections} rewrite records this choice without
-altering keys or Rust payloads. Explicit occurrence advice may additionally
+altering keys or Rust payloads. Explicit site advice may additionally
 retain the exact key projection of a membership provider with extra payload,
 by PH-KeyProjection. Later full reads still use the original provider.
 The correspondence checker permits only these private projections, used once
@@ -200,8 +186,12 @@ graph. Ordinary empty/\code{all}/result selections do not introduce key views.
 Independent interposed relational definitions may move before the entire chain in stable dependency order;
 Rust nodes and dependencies on intermediate results block this exposure.
 Empty/\code{all}/result-name advice retains its existing selection meaning.
-Occurrence advice \code{smallest(R@a,S@b,...)} names every provider of exactly
-one complete admissible site, through rename or unary relational provenance.
+Site advice \code{smallest(r_a,r_b,...)} names, by Physical definition name,
+the rename of every provider of exactly one complete admissible site, reached
+through unary relational provenance. Authored source advice
+\code{smallest(R@a,S@b,...)} is resolved at the planning front: occurrence
+$R@a$ to its first VO read step, then through the relational-lowering side
+table to the rename's result name, which Physical keeps as its definition name.
 Repeated, missing, partial, ambiguous or blocked sites are rejected, not widened.
 The public Physical contract and rewrite correspondence check the result.
 Selection uses only recorded columns and provenance, never Rust type inspection.

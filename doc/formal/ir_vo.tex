@@ -8,7 +8,7 @@ Evidence ::= evidence from "provenance" { (count R = n; | key R [col, ...];)* }
 OrderingInputs ::= ordering(seed = Bool, delta = none | Index,
     driver = WrittenOrder | DeltaFirst, permutation = [Index, ...],
     shared_demand = none | [Relation(ColumnIndex, ...), ...])
-Step ::= R@path(x, _, ...) [check [after [path, ...]]]; | !R(Arg, ...); | x = y; | where Constraint;
+Step ::= R@path(x, _, ...) [check]; | !R(Arg, ...); | x = y; | where Constraint;
        | if Expr; | let Pat [: Type] = Expr;
        | for Pat in Expr;
        | reduce R@path with S@path(...);
@@ -31,19 +31,13 @@ checks I1--I3 (VO-Order, Section~\ref{sec:planning-order}) in every scope;
 Written and authored schedules are not exempt. CQ occurrence-coverage proof
 references used by correspondence checks are not executable VOs.
 The optional \code{check} suffix records a standalone membership phase: all
-its retained columns must already be supplied, and no later Physical choice
-may turn that phase into an alternate introducing provider. I2 drainage
+its retained columns must already be supplied. I2 drainage
 records this role when a check crosses an introduction, preserving the fixed
 occurrence and columns. It does not reclassify stationary phases; previously
 legal candidate intersections remain eligible. This is a producer-owned
 role, not a printer or scheduler-replay inference.
-Drainage also records the introducing occurrences it crossed as
-\code{after [path,...]}. This old positive-prefix provenance is transported
-through RA/Physical and bounds restoration of the check's former reduction
-input; it is not permission to optimize unmoved plans using future support.
 An empty projected read before a later introduction of the same occurrence
-is redundant and forbidden; a residual root check denotes Unit semijoin,
-with at most one outgoing unit, regardless of source cardinality.
+is redundant and forbidden. The role is not transported to RA or Physical.
 
 \paragraph{Contract.}
 The six judgments below define $\mathsf{Schedule}$, scope by scope.

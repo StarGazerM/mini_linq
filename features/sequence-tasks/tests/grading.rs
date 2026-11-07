@@ -66,7 +66,7 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
     syn::parse2(quote::quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #sequence }
@@ -189,7 +189,7 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
         let physical = syn::parse2(quote::quote! {
             physical {
                 relation R(a:i32,b:i32);
-                r = let canon rename R@0 {a -> a,b -> b};
+                r = let canon rename R {a -> a,b -> b};
                 #projection
                 return canon #returned as answer(#head);
             }
@@ -265,8 +265,8 @@ fn tasks_wide_valuation_canon_compares_every_field() {
         physical {
             relation L(#(#left:i32),*);
             relation R(a0:i32,#(#right:i32),*);
-            l = pipe rename L@0 {#(#left -> #left),*};
-            r = let rename R@1 {a0 -> a0,#(#right -> #right),*};
+            l = pipe rename L {#(#left -> #left),*};
+            r = let rename R {a0 -> a0,#(#right -> #right),*};
             j = let canon probe first [a0] l,r;
             return j as answer(#(#columns),*);
         }
@@ -494,8 +494,8 @@ fn segment_program() -> Fixture {
         physical {
             relation L(a:i32,x:i32); relation R(a:i32,b:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,x -> x};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a,x -> x};
+            r = let rename R {a -> a,b -> b};
             joined = pipe probe first [a] l,r;
             selected = pipe select joined if (b > 0);
             mapped = pipe bind selected with n:i32 = (*b * 100 + 1);
@@ -624,7 +624,7 @@ fn grouped_program(global: bool) -> Fixture {
     let physical = syn::parse2(quote::quote! {
         physical {
             relation rows(k:i32, witness:i32, value:i64);
-            r = let canon rename rows@0 {k -> k, witness -> witness, value -> value};
+            r = let canon rename rows {k -> k, witness -> witness, value -> value};
             grouped = pipe group r by [#keys] {
                 n: usize = count();
                 total: i64 = sum(value);
@@ -942,8 +942,8 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Fi
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = let rename R@1 {a -> a,b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            r = let rename R {a -> a,b -> b,c -> c};
             joined = pipe probe first [a,b] l,r;
             return joined as answer(a,b,c);
         }
@@ -1063,9 +1063,9 @@ fn catalog_retention_materializes_new_providers_and_preserves_native_entry_ident
     let source: Fixture = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
-            s = let rename S@2 {b -> b,c -> c};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
+            s = let rename S {b -> b,c -> c};
             joined = pipe probe first [a] l,r;
             result = let canon probe first [b] joined,s;
             return result as answer(a,b,c);
@@ -1203,8 +1203,8 @@ fn task_catalog_retains_membership_fallbacks_before_shared_reads() {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
             result = pipe anti eager [a] l,r;
             return result as answer(a);
         }
@@ -1249,8 +1249,8 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a,b -> b};
+            r = pipe rename R {a -> a,b -> b};
             member = pipe probe first [a,b] l,r;
             return member as answer(a,b);
         }
@@ -1337,8 +1337,8 @@ fn membership_projected_probes_keep_native_keysets() {
         physical {
             relation L(a:i64); relation R(a:i64);
             consumer canonical;
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
             result = pipe probe first [a] l,r;
             return result as answer(a);
         }
@@ -1374,8 +1374,8 @@ fn type_directed_membership_keeps_routed_provider_construction() {
         physical {
             relation L(a:i64); relation R(a:i64);
             consumer canonical;
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
             result = pipe probe first [a] l,r;
             return result as answer(a);
         }
@@ -1583,8 +1583,8 @@ fn deferred_provider_program(tiled: bool, host_bound: bool) -> Fixture {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            raw = pipe rename R@1 {a -> a,b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            raw = pipe rename R {a -> a,b -> b,c -> c};
             r = let select raw if (c > 0);
             joined = pipe probe first [a,b] l,r;
             return joined as answer(a,b,c);
@@ -2025,8 +2025,8 @@ fn late_covering_program(input: proc_macro2::TokenStream) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i64,b:i64); relation R(c:i64,d:i64);
-            l = pipe rename L@0 {a -> x,b -> y};
-            r = pipe rename R@1 {c -> x,d -> z};
+            l = pipe rename L {a -> x,b -> y};
+            r = pipe rename R {c -> x,d -> z};
             s = pipe range select r if (z > 1);
             b = let project s keep {x,z};
             j = pipe probe first [x] l,b;
@@ -2190,8 +2190,8 @@ fn constant_key_provider_program() -> Fixture {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a,b -> b};
-            raw = pipe rename R@1 {a -> a,b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            raw = pipe rename R {a -> a,b -> b,c -> c};
             r = let point select raw if (a = 7);
             joined = pipe probe first [a,b] l,r;
             return joined as answer(a,b,c);
@@ -2336,7 +2336,7 @@ fn literal_filtered_host_tiles_retain_the_source_predicate() {
         physical {
             relation R(tag:i32,a:i32);
             consumer canonical;
-            r = let rename R@0 {a -> a} constants {tag = 7};
+            r = let rename R {a -> a} constants {tag = 7};
             return r as answer(a);
         }
     };
@@ -2367,7 +2367,7 @@ fn flattened_key_covers_restore_positional_reads() {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i64);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             selected = pipe range select r if (a > 1);
             out = let canon project selected keep {a};
             return out as answer(a);
@@ -2523,13 +2523,13 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             selected = pipe select r if (a > 0);
             positive = let bind selected with b:i64 = (i64::from(*a) * 10);
             absent = pipe anti eager [a] r,positive;
             negative = pipe bind absent with b:i64 = (0);
             answer = pipe union fused positive,negative
-                block @1 free [a] interface [b] fallback over r;
+                block free [a] interface [b] fallback over r;
             valuations = let canon project answer keep {a,b};
             grouped = pipe group valuations by [] { n:usize = count(); total:i64 = sum(b); };
             return grouped as answer(n,total);
@@ -2596,9 +2596,9 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
         physical {
             relation keys(k:i32); relation payload(k:i32,v:i32);
             relation closing(v:i32,w:i32);
-            left = pipe rename keys@0 {k -> k};
-            right = let rename payload@1 {k -> k,v -> v};
-            last = let rename closing@2 {v -> v,w -> w};
+            left = pipe rename keys {k -> k};
+            right = let rename payload {k -> k,v -> v};
+            last = let rename closing {v -> v,w -> w};
             joined = pipe probe first [k] left,right;
             expanded = pipe probe first [v] joined,last;
             selected = pipe guard expanded if (*w >= 30);
@@ -2663,7 +2663,7 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
 fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
     let physical = syn::parse_quote!(physical {
         relation R(a:i64 [1], b:i64 [1]);
-        r = pipe rename R@0 {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y};
         p = pipe range select r if (x >= 3);
         q = pipe range select p if (y < 4);
         g = pipe guard q if (observe(x));

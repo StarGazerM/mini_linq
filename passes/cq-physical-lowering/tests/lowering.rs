@@ -8,7 +8,7 @@ fn group_survives_ix_erasure_and_canonicalizes_all_input_valuations() {
         "relational {
             relation R(k:i32,id:i32,v:i32);
             relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
-            r = rename R@0 {k -> k,id -> id,v -> v};
+            r = rename R {k -> k,id -> id,v -> v};
             valuations = project r keep {k,id,v};
             grouped = group valuations by [k] {
                 n:usize = count(); total:i32 = sum(v);
@@ -48,7 +48,7 @@ fn global_group_preserves_empty_key_and_inherited_input_uniqueness() {
     let source: ix::Program = syn::parse_quote! {
         relational {
             relation R(v:i32); relation answer(n:usize);
-            r = rename R@0 {v -> v};
+            r = rename R {v -> v};
             grouped = group r by [] { n:usize = count(); };
             output grouped as answer(n);
         } indexes {}
@@ -73,7 +73,7 @@ fn global_group_preserves_empty_key_and_inherited_input_uniqueness() {
 fn literal_occurrences_lower_to_retained_sources_without_select_or_guard() {
     let (source, target) = lower(
         "relational { relation R(a:i32,b:i32);
-        r = rename R@0 {a -> x} constants {b = 7}; output r as answer(x);
+        r = rename R {a -> x} constants {b = 7}; output r as answer(x);
         } indexes {}",
     );
     assert_eq!(target.program.definitions.len(), 1);
@@ -86,7 +86,7 @@ fn literal_occurrences_lower_to_retained_sources_without_select_or_guard() {
     assert_eq!(erase(&target), source.ra);
     let (_, target) = lower(
         "relational { relation R(a:i32);
-        r = rename R@0 {} constants {a = 7}; output r as answer();
+        r = rename R {} constants {a = 7}; output r as answer();
         } indexes {}",
     );
     assert!(matches!(
@@ -164,7 +164,7 @@ fn lower(source: &str) -> (ix::Program, physical::Program) {
 #[test]
 fn const_demand_and_point_modifier_are_independent_obligations() {
     let (source, target) = lower(
-        "relational { relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        "relational { relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
         s = select r if (x = 2); output s as answer(x,y);
         } indexes {i = @r[0] const;}",
     );
@@ -186,7 +186,7 @@ fn const_demand_and_point_modifier_are_independent_obligations() {
 #[test]
 fn relational_column_equality_is_a_select_and_rust_is_a_guard() {
     let (_, target) = lower(
-        "relational {relation R(a:i32,b:i32); r = rename R@0 {a -> x,b -> y};
+        "relational {relation R(a:i32,b:i32); r = rename R {a -> x,b -> y};
         s = select r if (x = y); g = guard s if (*x > 2); output g as answer(x,y);
         } indexes {}",
     );
@@ -203,7 +203,7 @@ fn relational_column_equality_is_a_select_and_rust_is_a_guard() {
 #[test]
 fn admissible_join_and_canonicalization_rewrites_are_accepted() {
     let source = "relational { relation L(a:i32); relation R(a:i32,b:i32);
-        l = rename L@0 {a -> a}; r = rename R@1 {a -> a,b -> b}; j = natural_join l with r;
+        l = rename L {a -> a}; r = rename R {a -> a,b -> b}; j = natural_join l with r;
         p = project j keep {a}; e = bind p with n:i32 = (1); output e as answer(a,n);
     } indexes { i = @r[0] stream; }";
     let (source, target) = lower(source);
@@ -223,7 +223,7 @@ fn admissible_join_and_canonicalization_rewrites_are_accepted() {
 #[test]
 fn chain_reordering_fails_erasure_even_if_local_program_is_scoped() {
     let (source, target) = lower(
-        "relational {relation R(a:i32); r = rename R@0 {a -> x};
+        "relational {relation R(a:i32); r = rename R {a -> x};
         g = guard r if (*x != 0); b = bind g with y:i32 = (10 / *x);
         output b as answer(x,y); } indexes {}",
     );
@@ -240,7 +240,7 @@ fn consumer_canonical_relaxes_only_the_return_boundary() {
     let source: ix::Program = syn::parse_quote! {
         relational {
             relation R(a:i32);
-            r = rename R@0 {a -> x};
+            r = rename R {a -> x};
             b = bind r with y:i32 = (*x % 2);
             p = project b keep {y};
             output p as answer(y);
@@ -271,7 +271,7 @@ fn discharged_host_sets_seed_uniqueness_without_a_consumer_fact() {
     let source: ix::Program = syn::parse_quote! {
         relational {
             relation R(a:i32,b:i32);
-            r = rename R@0 {a -> x,b -> y};
+            r = rename R {a -> x,b -> y};
             p = project r keep {x,y};
             output p as answer(x,y);
         } indexes {}
@@ -326,9 +326,9 @@ fn consumer_fact_preserves_internal_union_canonicalization() {
 fn recorded_requirements_distinguish_reads_of_the_same_result() {
     let ra: ix::ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32); relation L(a:i32); relation M(b:i32);
-        r = rename R@0 {a -> x,b -> y};
-        l = rename L@1 {a -> x};
-        m = rename M@2 {b -> y};
+        r = rename R {a -> x,b -> y};
+        l = rename L {a -> x};
+        m = rename M {b -> y};
         point = select r if (x = 2);
         window = select r if (x >= 1);
         equal = select r if (x = y);

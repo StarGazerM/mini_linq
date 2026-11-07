@@ -12,7 +12,7 @@ fn program(body: proc_macro2::TokenStream) -> Program {
     syn::parse2(quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             r host scan = @reader as Reader [];
@@ -74,7 +74,7 @@ fn publication_alias_preserves_original_carrier_across_reheading() {
     let p: Program = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             s = let canon project r keep {a};
             return s as answer(a);
         }
@@ -188,9 +188,9 @@ fn deferred_publication_program(body: proc_macro2::TokenStream) -> Program {
     syn::parse2(quote! {
         physical {
             relation R(a:i32,b:i32); relation P(a:i32);
-            r = let canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R {a -> a,b -> b};
             selected = let select r if (b > 0);
-            probe = pipe rename P@1 {a -> a};
+            probe = pipe rename P {a -> a};
             out = let canon probe first [a] probe,selected;
             return out as answer(a,b);
         }
@@ -533,10 +533,10 @@ fn deferred_rows_reject_support_equal_source_and_consumer_reheading() {
         let p: Program = syn::parse2(quote! {
             physical {
                 relation R(a:i32,b:i32); relation P(a:i32);
-                r = let canon rename R@0 {a -> a,b -> b};
+                r = let canon rename R {a -> a,b -> b};
                 selected = let select r if (b > 0);
                 alias = let project selected keep {a,b};
-                probe = pipe rename P@1 {a -> a};
+                probe = pipe rename P {a -> a};
                 first = pipe probe first [a] probe,selected;
                 out = let canon probe first [a,b] first,alias;
                 return out as answer(a,b);
@@ -578,11 +578,11 @@ fn deferred_rows_pin_sources_with_shadowed_join_filter_bindings() {
     let mut p: Program = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64); relation O(a:i64);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a};
             b = let select r if (a > 0);
             selected = let probe first [a] l,b;
-            probe = pipe rename O@2 {a -> a};
+            probe = pipe rename O {a -> a};
             out = let canon probe first [a] probe,selected;
             return out as answer(a);
         }
@@ -632,8 +632,8 @@ fn lookup_program(body: proc_macro2::TokenStream) -> Program {
     syn::parse2(quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -652,8 +652,8 @@ fn rewrite_rejects_equivalent_physical_join_reordering() {
     let source: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
             j = let canon probe first [a] l,r;
             return j as answer(a);
         }
@@ -672,9 +672,9 @@ fn rewrite_rejects_equivalent_physical_join_reordering() {
     };
     let mut target = source.clone();
     target.physical.program.definitions[0] =
-        syn::parse_quote!(l = let rename L@0 {a -> a};);
+        syn::parse_quote!(l = let rename L {a -> a};);
     target.physical.program.definitions[1] =
-        syn::parse_quote!(r = pipe rename R@1 {a -> a};);
+        syn::parse_quote!(r = pipe rename R {a -> a};);
     target.physical.program.definitions[2] =
         syn::parse_quote!(j = let canon probe first [a] r,l;);
     target.structures.structures.entries[2] = syn::parse_quote!(l = @provider as Provider [a];);
@@ -844,8 +844,8 @@ fn compact_publication_program(union: bool) -> Program {
     syn::parse2(quote! {
         physical {
             relation L(a:i32,parent:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a,parent -> parent};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a,parent -> parent};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             #union_definition
             return #output as answer(a,parent,b);
@@ -1286,7 +1286,7 @@ fn physical_rows_name_is_preserved_in_sequence_references() {
     let p: Program = syn::parse2(quote! {
         physical {
             relation R(a:i32);
-            rows = let canon rename R@0 {a -> a};
+            rows = let canon rename R {a -> a};
             return rows as answer(a);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
             rows host scan = @reader as Reader [];
@@ -1377,8 +1377,8 @@ fn native_lookup_program(body: proc_macro2::TokenStream) -> Program {
         physical {
             relation L(a:i32);
             relation R(a:i32,b:i32) host [a] reads [exact];
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         }
@@ -1441,9 +1441,9 @@ fn mixed_native_exact_and_merge_fallback_keep_reader_requirements_separate() {
                 relation L(a:i32);
                 relation S(a:i32);
                 relation R(a:i32,b:i32) host [a] reads [exact];
-                l = pipe rename L@0 {a -> a};
-                s = pipe rename S@1 {a -> a};
-                r = pipe rename R@2 {a -> a,b -> b};
+                l = pipe rename L {a -> a};
+                s = pipe rename S {a -> a};
+                r = pipe rename R {a -> a,b -> b};
                 j = pipe probe first [a] l,r;
                 m = let canon merge[a] s,r;
                 answer = let canon union j,m;
@@ -1502,7 +1502,7 @@ fn tiled_host_sources_cannot_discard_native_scan_records() {
         let p: Program = syn::parse2(quote! {
             physical {
                 relation R(a:i32,b:i32) host [a] reads [exact];
-                r = let rename R@0 {b -> b} constants {a = 7};
+                r = let rename R {b -> b} constants {a = 7};
                 out = let canon project r keep {b};
                 return out as answer(b);
             }
@@ -1838,7 +1838,7 @@ fn rust_without_identity_representation_stays_host() {
     let mut p: Program = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             b = let canon bind r with n:i32 = (1 / *a);
             return b as answer(a,n);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -1860,7 +1860,7 @@ fn arbitrary_rust_on_identity_columns_earns_device_placement() {
     let mut p: Program = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             b = pipe bind r with n:i32 = (row_function(a));
             g = let canon guard b if (*n / -1 != 0);
             return g as answer(a,n);
@@ -1932,8 +1932,8 @@ fn bind_rejects_membership_as_range_cursor() {
     let p: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,tag:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,tag -> tag};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,tag -> tag};
             selected = let point select r if (tag = 7);
             j = let canon probe first [a] l,selected;
             return j as answer(a,tag);
@@ -1980,7 +1980,7 @@ fn compact_and_total_map_derive_the_physical_result() {
     let p: Program = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             s = let canon select r if (a >= 0);
             return s as answer(a);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -2041,8 +2041,8 @@ fn host_retained_probe_stores_rows_without_requiring_range_offsets() {
     let p: Program = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -2128,8 +2128,8 @@ fn membership_compact_records_polarity_and_never_enumerates() {
         let text = format!(
             "physical {{
             relation L(a:i32); relation R(a:i32);
-            l = pipe rename L@0 {{a -> a}};
-            r = let rename R@1 {{a -> a}};
+            l = pipe rename L {{a -> a}};
+            r = let rename R {{a -> a}};
             j = let canon {operation} eager [a] l,r;
             return j as answer(a);
         }} structures {{ providers {{
@@ -2160,8 +2160,8 @@ fn empty_key_membership_reads_the_whole_relation_without_an_index_obligation() {
         let program: Program = syn::parse_str(&format!(
             "physical {{
                 relation L(a:i32); relation R(b:i32);
-                l = pipe rename L@0 {{a -> a}};
-                r = pipe rename R@1 {{b -> b}};
+                l = pipe rename L {{a -> a}};
+                r = pipe rename R {{b -> b}};
                 scan = let canon {operation} eager [] l,r;
                 return scan as answer(a);
             }} structures {{ providers {{
@@ -2519,7 +2519,7 @@ fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStrea
     let mut program: Program = syn::parse2(quote! {
         physical {
             relation R(k:i32, witness:i32, value:i64);
-            r = let canon rename R@0 {k -> k, witness -> witness, value -> value};
+            r = let canon rename R {k -> k, witness -> witness, value -> value};
             grouped = pipe group r by [#keys] {
                 n: usize = count();
                 total: i64 = sum(value);
@@ -2575,7 +2575,7 @@ fn nested_group_does_not_certify_outer_group_canon_removal() {
     let p: Program = syn::parse_quote! {
         physical {
             relation R(k:i32);
-            r = let canon rename R@0 {k -> k};
+            r = let canon rename R {k -> k};
             inner = pipe group r by [k] { n: usize = count(); };
             projected = let canon project inner keep {n};
             outer = pipe group projected by [] { total: usize = count(); };
@@ -2971,7 +2971,7 @@ fn key_partition_canon_rejects_projection_losing_the_routing_key() {
     let p: Program = syn::parse_quote! {
         physical {
             relation R(a:i32, b:i32);
-            r = pipe rename R@0 {a -> a, b -> b};
+            r = pipe rename R {a -> a, b -> b};
             projected = let canon project r keep {a};
             return projected as answer(a);
         }
@@ -3004,8 +3004,8 @@ fn key_partition_provider_accepts_projected_and_reordered_lookup_keys() {
         let p: Program = syn::parse2(quote! {
             physical {
                 relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
-                l = pipe rename L@0 {a -> a,b -> b};
-                r = let rename R@1 {a -> a,b -> b,c -> c};
+                l = pipe rename L {a -> a,b -> b};
+                r = let rename R {a -> a,b -> b,c -> c};
                 j = let canon probe first [a,b] l,r;
                 return j as answer(a,b,c);
             }
@@ -3120,7 +3120,7 @@ fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
     let mut p: Program = syn::parse_quote! {
         physical {
             relation R(k:i32, witness:i64, value:i64);
-            r = let canon rename R@0 {k -> k, witness -> witness, value -> value};
+            r = let canon rename R {k -> k, witness -> witness, value -> value};
             by_key = let canon group r by [k] { subtotal:i64 = sum(value); };
             all_rows = pipe group by_key by [] { grand_total:i64 = sum(subtotal); };
             return all_rows as answer(grand_total);

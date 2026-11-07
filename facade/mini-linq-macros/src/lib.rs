@@ -163,6 +163,7 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
         observer: None,
         output_consumer: None,
         calibration: None,
+        planning: None,
     })
 }
 
@@ -241,22 +242,57 @@ pub fn plan(input: TokenStream) -> TokenStream {
     if sequence_plan_source(&input) {
         return plan_sequential(input.into());
     }
-    cq_stage::pass_with_calibration::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args, enabled| {
+    cq_stage::pass_with_calibration::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args, enabled, planning| {
         let args: PlanOptions = syn::parse2(args)?;
+        use cq_stage::calibration::{Seed, Stage};
+        let (target, valuation, steps) = cq_planning::compile_prefix_with_steps(source, &args)?;
+        let reads = cq_planning::first_reads(&valuation);
         if !enabled {
-            return cq_planning::compile_prefix(source, &args).map(|target| (target, None));
+            *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
+            return Ok((target, None));
         }
-        use cq_stage::calibration::{Coverage, Seed, Stage};
-        let (target, valuation, origins) = cq_planning::compile_prefix_with_origins(source, &args)?;
         let seed = Seed {
             valuation: Stage::of(&valuation),
             lowering: Stage::of(&target),
-            origins: origins.definitions.into_iter().map(|(node, origins)| Coverage {node, origins}).collect(),
-            elided: origins.elided,
+            steps: steps.0.clone(),
         };
+        *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
         Ok((target, Some(seed)))
     })
     .into()
+}
+
+
+#[cfg(test)]
+mod smallest_resolution_tests {
+    #[test]
+    fn carries_actual_tables_without_rewriting_future_invocations() {
+        use quote::ToTokens;
+        let source = syn::parse_quote! {
+            struct Q;
+            relation R(x:i32);
+            relation S(x:i32);
+            answer(x) :- R(x), S(x);
+        };
+        let (_, valuation, steps) = cq_planning::compile_prefix_with_steps(
+            &source, &syn::parse_quote!(no_reduce, order(R, S)),
+        ).unwrap();
+        let mut pipeline: cq_stage::Pipeline = syn::parse_quote!(
+            pipeline { rewrites::smallest_intersections(smallest(R@0, S@1)), custom }
+        );
+        let pending = pipeline.passes.iter().map(ToTokens::to_token_stream).map(|tokens| tokens.to_string()).collect::<Vec<_>>();
+        pipeline.planning = Some(cq_stage::planning::Planning {
+            reads: cq_planning::first_reads(&valuation), steps: steps.0,
+        });
+        let pipeline: cq_stage::Pipeline = syn::parse2(pipeline.to_token_stream()).unwrap();
+        assert_eq!(pipeline.passes.iter().map(ToTokens::to_token_stream).map(|tokens| tokens.to_string()).collect::<Vec<_>>(), pending);
+        let planning = pipeline.planning.as_ref().unwrap();
+        let resolved = cq_stage::planning::resolve_smallest(pipeline.passes[0].arguments.clone(), Some(planning)).unwrap();
+        assert!(!resolved.to_string().contains('@'));
+        for arguments in [quote::quote!(smallest(Missing)), quote::quote!(smallest(R@1))] {
+            assert!(cq_stage::planning::resolve_smallest(arguments, Some(planning)).is_err());
+        }
+    }
 }
 
 /// RA′ → IX exact demand analysis.
@@ -628,7 +664,7 @@ mod tests {
         syn::parse2(quote!(physical {
             relation R(a: i32);
             #facts
-            r = pipe rename R@0 { a -> x };
+            r = pipe rename R { a -> x };
             return r as answer(x);
         }))
         .unwrap()
@@ -753,7 +789,7 @@ mod tests {
         let physical: cq_lang_physical::Program = syn::parse_quote!(physical {
             relation R(a: i32);
             capture { let group: i32 = 0; }
-            r = pipe rename R@0 { a -> x };
+            r = pipe rename R { a -> x };
             return canon r as answer(group, x);
         });
         let demand: cq_stage::OutputConsumer = syn::parse_quote!(output_consumer {
@@ -806,7 +842,7 @@ mod tests {
     fn ordinary_row_host_rust_is_unchanged_by_consumer_demand() {
         let physical = syn::parse_quote!(physical {
             relation R(a: i32);
-            r = let canon rename R@0 { a -> x };
+            r = let canon rename R { a -> x };
             return r as answer(x);
         });
         let ordinary = cq_structure_selection::compile(&physical).unwrap();
@@ -833,23 +869,21 @@ mod tests {
     }
     #[test]
     fn facade_records_each_checked_stage_and_keeps_executable_ir() {
-        use cq_stage::calibration::{Coverage, Seed, Stage, Trace};
+        use cq_stage::calibration::{Seed, Stage, Trace};
         let source = syn::parse_quote! {
             struct Q; relation R(x:i32,y:i32); relation S(y:i32);
             answer(x) :- R(x,y), where x >= 1, S(y), if accept(x);
         };
         let options: PlanOptions = syn::parse_quote!(no_reduce);
         let ordinary = cq_planning::compile_prefix(&source, &options).unwrap();
-        let (lowered, valuation, origins) =
-            cq_planning::compile_prefix_with_origins(&source, &options).unwrap();
+        let (lowered, valuation, steps) =
+            cq_planning::compile_prefix_with_steps(&source, &options).unwrap();
         assert_eq!(ordinary, lowered);
         let mut trace = Trace::default();
         trace.initialize(Seed {
             valuation: Stage::of(&valuation),
             lowering: Stage::of(&lowered),
-            origins: origins.definitions.into_iter().map(|(node, origins)|
-                Coverage {node, origins}).collect(),
-            elided: origins.elided,
+            steps: steps.0,
         }).unwrap();
         trace.check_source(&Stage::of(&lowered)).unwrap();
         let indexed = cq_index_policy::compile(&lowered).unwrap();

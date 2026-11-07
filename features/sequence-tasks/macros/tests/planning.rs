@@ -35,12 +35,12 @@ impl ToTokens for Fixture {
 use quote::quote;
 
 macro_rules! capture {
-    (pipeline {}; realization {
+    (pipeline {} $(planning_tables { $($tables:tt)* })?; realization {
         physical { $($physical:tt)* }
         structures { $($structures:tt)* }
         sequence { $($sequence:tt)* }
     }) => { stringify!($($physical)* $($structures)* $($sequence)*) };
-    (pipeline {}; $($program:tt)*) => { stringify!($($program)*) };
+    (pipeline {} $(planning_tables { $($tables:tt)* })?; $($program:tt)*) => { stringify!($($program)*) };
 }
 
 macro_rules! source {
@@ -49,7 +49,7 @@ macro_rules! source {
             $($prefix)*
             physical {
                 relation R(a:i32);
-                r = let canon rename R@0 {a -> a};
+                r = let canon rename R {a -> a};
                 return r as answer(a);
             }
             structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
@@ -96,7 +96,7 @@ fn authored_grade_output_and_tile_precede_facade_planning() {
     let expected: Fixture = syn::parse2(quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }

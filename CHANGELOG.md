@@ -13,17 +13,27 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
-- Calibration descriptor version 3 records separately printed base programs in
+- Calibration descriptor version 4 records separately printed base programs in
   `calibration::Stage::bases`: Physical for Structures, and Physical plus
   Structures for Sequence. `Stage::annotation` retains the selected layer's
   language and printed-program identity; continuation agreement also compares
-  bases. Flat stages have no bases. Version 2 descriptors are no longer accepted.
+  bases. Flat stages have no bases. Versions 2 and 3 are no longer accepted.
   Structures no longer embeds Physical: its parser receives Physical explicitly,
   its printer emits only annotations, and readers/checkers take separate programs.
   Sequence likewise no longer embeds Structures; lowering, planning, grading,
   and realization receive separate Physical/Structures/Sequence programs.
   Provider-changing rewrites return all changed layers. CQ entry validation
   also checks restricted Physical facts inside realization carriers.
+- RA and Physical erase occurrence paths (IR redesign M2b). Relational
+  lowering returns a `Steps` side table for the VO↔RA seam; its total entry
+  accepts a checker-created `Checked` input. Downstream identities use Physical
+  definition names. Planning transports its occurrence/read and `Steps` tables
+  beside the program; each Smallest invocation resolves only its own selectors.
+  No pass inspects the remaining queue. Calibration
+  descriptor version 4 records `Steps`, not replayed origins; stream-work facts
+  absent from that table remain explicit unknown bounds pending M6.
+  The integrated descriptor uses version 4 because both independent branches
+  changed version 2 to incompatible version 3 schemas.
 - Calibration stage observation moved out of the IR crates (IR redesign M2d):
   `cq_stage::Language` no longer has `calibration_snapshot`; the facade records
   each checked stage as `calibration::Stage { language, program }` (Rust type
@@ -39,6 +49,18 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   serializes them into the owned planning invocation (DL-OrderingInputs).
   `DriverPolicy` is defined by DL-Incremental. Printed VO loses only the
   embedded CQ header's `ordering(...)` line.
+- Ordering is total (IR redesign M2c). `cq_order::order`, `order_unrestricted`,
+  `order_written`, `order_advised` and `evidence::order` take a WF-NF witness
+  (`Normal`) and resolved advice (`Advice`, from `resolve`, rule
+  O-AdviceResolve) and return the VO without an error type; the producer no
+  longer checks its own output. The `compile*` functions are the fronts: WF-NF
+  check, advice/evidence resolution, then the total ordering. Output
+  invariants are checked once by the pipeline: CK-Order, CK-EvidenceLe, and the
+  new `cq_order::check_advice` (CK-StepAdvice) on the facade's explicit-order
+  route. `Known::place` resolves its negation, read level and bindings first
+  (O-KnownResolve). O-BlockPlacement correlates a Rust-free union whose arm
+  cannot place from no seed (a nested union needing a domain), which every
+  ordering previously refused.
 
 - Explicit order advice now delegates dependency, subatom and phase legality to
   the VO and lookup/expand checkers instead of duplicating producer-side errors.

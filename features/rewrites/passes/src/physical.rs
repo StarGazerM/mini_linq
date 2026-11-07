@@ -105,7 +105,7 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
 
 /// Expose k-way intersections by hoisting independent relational definitions
 /// before their candidate probe. Empty/all/result advice retains its existing
-/// meaning; `smallest(R@a, S@b, ...)` selects one exact occurrence site.
+/// meaning; `smallest(r0, r1, ...)` selects one exact definition-name site.
 /// Admissibility and correspondence belong to the public Physical Set law.
 pub fn smallest_intersections(
     source: &ir::Program,
@@ -171,7 +171,7 @@ pub fn smallest_intersections(
                         else {
                             unreachable!()
                         };
-                        provider_occurrence(definitions, &key.right)
+                        provider_definition(definitions, &key.right)
                     })
                     .collect();
                 let mut selected = false;
@@ -199,7 +199,7 @@ pub fn smallest_intersections(
                         format!(
                             "smallest({}) must identify exactly one admissible complete intersection site; matched {count}",
                             site.iter()
-                                .map(|(relation, occurrence)| format!("{relation}@{occurrence}"))
+                                .map(String::as_str)
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         ),
@@ -284,11 +284,11 @@ pub fn smallest_intersections(
     Ok(target)
 }
 
-type OccurrenceSite = BTreeSet<(String, ir::syntax::Occurrence)>;
+type DefinitionSite = BTreeSet<String>;
 
 enum SmallestSelection {
     Results(Results),
-    Sites(Vec<OccurrenceSite>),
+    Sites(Vec<DefinitionSite>),
 }
 
 impl syn::parse::Parse for SmallestSelection {
@@ -305,21 +305,18 @@ impl syn::parse::Parse for SmallestSelection {
             if name != "smallest" {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "expected smallest(R@a, S@b, ...)",
+                    "expected smallest(r0, r1, ...)",
                 ));
             }
             let content;
             syn::parenthesized!(content in input);
             let mut site = BTreeSet::new();
             while !content.is_empty() {
-                let relation: Ident = content.parse()?;
-                content.parse::<Token![@]>()?;
-                let occurrence: ir::syntax::Occurrence = content.parse()?;
-                occurrence.check()?;
-                if !site.insert((symbol_name(&relation), occurrence)) {
+                let definition: Ident = content.parse()?;
+                if !site.insert(symbol_name(&definition)) {
                     return Err(syn::Error::new_spanned(
-                        relation,
-                        "duplicate smallest occurrence",
+                        definition,
+                        "duplicate smallest definition",
                     ));
                 }
                 if !content.is_empty() {
@@ -329,7 +326,7 @@ impl syn::parse::Parse for SmallestSelection {
             if site.len() < 2 {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "smallest requires at least two distinct occurrences",
+                    "smallest requires at least two distinct definitions",
                 ));
             }
             if sites.contains(&site) {
@@ -344,19 +341,19 @@ impl syn::parse::Parse for SmallestSelection {
     }
 }
 
-/// Follow only unary relational provenance, never infer a relation from Rust.
-fn provider_occurrence(
+/// Follow unary inputs to their Physical rename definition.
+fn provider_definition(
     definitions: &[ir::Definition],
     result: &syn::Ident,
-) -> Option<(String, ir::syntax::Occurrence)> {
+) -> Option<String> {
     let mut result = result;
     loop {
         let definition = definitions
             .iter()
             .find(|definition| &definition.name == result)?;
         result = match &definition.operator {
-            Operator::Rename(rename) => {
-                return Some((symbol_name(&rename.relation), rename.occurrence.clone()));
+            Operator::Rename(_) => {
+                return Some(symbol_name(&definition.name));
             }
             Operator::Project(project) => &project.input,
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {

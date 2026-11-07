@@ -89,6 +89,7 @@
 
 /// Optional diagnostic provenance carried outside every executable language.
 pub mod calibration;
+pub mod planning;
 
 mod realization;
 pub use realization::{Annotation, Sequence, Structures};
@@ -113,6 +114,7 @@ mod kw {
     syn::custom_keyword!(head);
     syn::custom_keyword!(value_reads);
     syn::custom_keyword!(calibration_trace);
+    syn::custom_keyword!(planning_tables);
 }
 
 /// Public contract implemented by standalone IR languages and realization carriers.
@@ -363,6 +365,8 @@ pub struct Pipeline {
     pub output_consumer: Option<OutputConsumer>,
     /// Absent on ordinary paths; never printed when disabled.
     pub calibration: Option<calibration::Trace>,
+    /// Producer-owned side tables, consumed by advice at its own invocation.
+    pub planning: Option<planning::Planning>,
 }
 impl Parse for Pipeline {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -391,7 +395,8 @@ impl Parse for Pipeline {
         } else {
             None
         };
-        Ok(Self { passes, observer, output_consumer, calibration })
+        let planning = if input.peek(kw::planning_tables) { Some(input.parse()?) } else { None };
+        Ok(Self { passes, observer, output_consumer, calibration, planning })
     }
 }
 impl ToTokens for Pipeline {
@@ -403,6 +408,7 @@ impl ToTokens for Pipeline {
         }
         self.output_consumer.to_tokens(output);
         self.calibration.to_tokens(output);
+        self.planning.to_tokens(output);
     }
 }
 impl Pipeline {
@@ -495,17 +501,18 @@ pub fn pass<In: Language, Out: Language>(
     input: TokenStream,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), |_, _| Ok(()))
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _, _| f(source, args), |_, _| Ok(()))
 }
 
 /// A planning/lowering producer supplies provenance from the actual compilation.
 /// The boolean is false on ordinary paths, which need not allocate diagnostics.
+/// The producer records side tables without inspecting future invocations.
 pub fn pass_with_calibration<In: Language, Out: Language>(
     input: TokenStream,
-    f: impl FnOnce(&In, TokenStream, bool) -> syn::Result<(Out, Option<calibration::Seed>)>,
+    f: impl FnOnce(&In, TokenStream, bool, &mut Option<planning::Planning>) -> syn::Result<(Out, Option<calibration::Seed>)>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _, trace| {
-        let (target, seed) = f(source, args, trace.is_some())?;
+    run(input, |_| Ok(Context::default()), false, |source, args, _, trace, planning| {
+        let (target, seed) = f(source, args, trace.is_some(), planning)?;
         match (trace.as_mut(), seed) {
             (Some(trace), Some(seed)) => trace.initialize(seed)?,
             (None, Some(_)) => return Err(syn::Error::new_spanned(&target,
@@ -514,6 +521,15 @@ pub fn pass_with_calibration<In: Language, Out: Language>(
         }
         Ok(target)
     }, |_, _| Ok(()))
+}
+
+/// Run a rewrite with producer-owned side tables; never inspect future passes.
+pub fn rewrite_with_planning<L: Language>(
+    input: TokenStream,
+    f: impl FnOnce(&L, TokenStream, Option<&planning::Planning>) -> syn::Result<L>,
+) -> TokenStream {
+    run(input, |_| Ok(Context::default()), false,
+        |source, args, _, _, planning| f(source, args, planning.as_ref()), L::check_rewrite)
 }
 
 /// Introduce facts named by a lower/select argument packet into a fact-free source.
@@ -529,7 +545,7 @@ pub fn pass_with_context<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, false, |source, args, _, _| f(source, args), |_, _| Ok(()))
+    run(input, authorize, false, |source, args, _, _, _| f(source, args), |_, _| Ok(()))
 }
 
 /// Bind a pending outer-consumer requirement into the selected target exactly
@@ -539,7 +555,7 @@ pub fn pass_with_output_consumer<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, true, |source, args, consumer, _| f(source, args, consumer), |_, _| Ok(()))
+    run(input, authorize, true, |source, args, consumer, _, _| f(source, args, consumer), |_, _| Ok(()))
 }
 
 /// Run an L → L pass and the language's exported correspondence check.
@@ -547,7 +563,7 @@ pub fn rewrite<L: Language>(
     input: TokenStream,
     f: impl FnOnce(&L, TokenStream) -> syn::Result<L>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), L::check_rewrite)
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _, _| f(source, args), L::check_rewrite)
 }
 
 /// Delegate an invocation's checked packet to a target-owned macro path.
@@ -597,7 +613,7 @@ fn run<In: Language, Out: Language>(
     input: TokenStream,
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     bind_consumer: bool,
-    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>, &mut Option<calibration::Trace>) -> syn::Result<Out>,
+    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>, &mut Option<calibration::Trace>, &mut Option<planning::Planning>) -> syn::Result<Out>,
     correspondence: impl FnOnce(&In, &Out) -> syn::Result<()>,
 ) -> TokenStream {
     let result = (|| {
@@ -635,7 +651,7 @@ fn run<In: Language, Out: Language>(
         } else {
             None
         };
-        let target = f(&input.program, input.args, consumer.as_ref(), &mut input.pipeline.calibration)?;
+        let target = f(&input.program, input.args, consumer.as_ref(), &mut input.pipeline.calibration, &mut input.pipeline.planning)?;
         if bind_consumer {
             if input.program.output_consumer().is_some()
                 || target.output_consumer() != consumer.as_ref()
@@ -961,6 +977,6 @@ impl Configuration {
         } else {
             None
         };
-        Ok(Pipeline { passes, observer, output_consumer: None, calibration: None })
+        Ok(Pipeline { passes, observer, output_consumer: None, calibration: None, planning: None })
     }
 }

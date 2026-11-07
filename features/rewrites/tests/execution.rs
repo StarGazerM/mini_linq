@@ -47,7 +47,7 @@ macro_rules! intersection_runner {
 
 intersection_runner!(three_way_default;);
 intersection_runner!(three_way_all; cq_rewrites::smallest_intersections,);
-intersection_runner!(three_way_site; cq_rewrites::smallest_intersections(smallest(R@1,S@2,T@3)),);
+intersection_runner!(three_way_site; cq_rewrites::smallest_intersections(smallest(r,s,t)),);
 
 #[test]
 fn three_way_smallest_executes_each_provider_as_minimum() {

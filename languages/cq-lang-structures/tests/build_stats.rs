@@ -26,8 +26,8 @@ fn program() -> Fixture {
     fixture_quote! {
         physical {
             relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
-            l = pipe rename L@0 {a -> x,b -> y};
-            r = let rename R@1 {a -> x,b -> y,c -> z};
+            l = pipe rename L {a -> x,b -> y};
+            r = let rename R {a -> x,b -> y,c -> z};
             j = let canon probe first [x,y] l,r;
             return j as answer(x,y,z);
         }

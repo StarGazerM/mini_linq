@@ -58,8 +58,8 @@ fn capture_ownership_clones_values_at_every_closure_level() {
 fn membership_plan() -> (cq_lang_structures::physical::Program, cq_lang_structures::Program) {
     let source = syn::parse_quote! { physical {
         relation L(a: ::opaque::KeyAlias); relation R(a: ::opaque::KeyAlias,b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {a -> x,b -> y};
         selected = let range select r if (y > 1);
         joined = pipe probe first [x] l,selected;
         result = let canon project joined keep {x};
@@ -135,8 +135,8 @@ fn raw_membership_fallback_dispatches_build_with_inferred_provider_output() {
     use quote::quote;
     let physical = syn::parse_quote! { physical {
         relation L(a: ::opaque::KeyAlias); relation R(a: ::opaque::KeyAlias);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {a -> x};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {a -> x};
         joined = pipe probe first [x] l,r;
         return canon joined as answer(x);
     }};
@@ -188,8 +188,8 @@ fn lazy_host_fallback_omits_unrequested_maximum_without_forcing_build() {
     use quote::quote;
     let physical = syn::parse_quote! { physical {
         relation L(a: i64); relation R(a: i64, b: i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {a -> x, b -> y};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {a -> x, b -> y};
         joined = pipe probe first [x] l,r;
         return canon joined as answer(x,y);
     }};
@@ -211,8 +211,8 @@ fn join_filters_emit_dense_builds_and_provider_independent_identity_predicates()
     use quote::quote;
     let source = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = pipe rename R {a -> x,b -> y};
         selected = let range select r if (y > 1);
         joined = pipe probe first [x] l,selected;
         result = let canon project joined keep {x,y};
@@ -426,7 +426,7 @@ fn native_constant_scan_emits_its_point_guard() {
     use quote::quote;
     let physical = syn::parse_quote! { physical {
         relation R(a:i32,b:i32) host [a] reads [exact];
-        r = let rename R@0 {b -> y} constants {a = 7};
+        r = let rename R {b -> y} constants {a = 7};
         return canon r as answer(y);
     }};
     let program = cq_structure_selection::compile(&physical).unwrap();

@@ -123,7 +123,7 @@ fn scan(sequence: TokenStream) -> (Physical, Structures, Program) {
     fixture! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
         structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -138,8 +138,8 @@ fn join() -> (Physical, Structures, Program) {
     fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         }
@@ -163,10 +163,10 @@ fn filtered_multi_join() -> (Physical, Structures, Program) {
         physical {
             relation L(a:i32); relation R(a:i32,rtag:i32); relation S(a:i32,stag:i32);
             relation Q(a:i32,qtag:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a,rtag -> rtag};
-            s = pipe rename S@2 {a -> a,stag -> stag};
-            q = pipe rename Q@3 {a -> a,qtag -> qtag};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,rtag -> rtag};
+            s = pipe rename S {a -> a,stag -> stag};
+            q = pipe rename Q {a -> a,qtag -> qtag};
             qf = let point select q if (qtag = 5);
             rf = let point select r if (rtag = 7);
             sf = let point select s if (stag = 9);
@@ -192,9 +192,9 @@ fn reorderable_multi_join() -> (Physical, Structures, Program) {
     let (physical, structures) = structure_fixture! {
         physical {
             relation L(a:i32); relation R(a:i32); relation S(a:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
-            s = let rename S@2 {a -> a};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
+            s = let rename S {a -> a};
             jr = pipe probe first [a] l,r;
             result = let canon probe first [a] jr,s;
             return result as answer(a);
@@ -547,9 +547,9 @@ fn distinct_union_drivers_publish_in_deterministic_separate_dispatches() {
     let (physical, structures, source) = fixture! {
         physical {
             relation L(a:i32); relation R(a:i32); relation P(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = pipe rename R@1 {a -> a};
-            p = let rename P@2 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a};
+            p = let rename P {a -> a,b -> b};
             left = pipe probe first [a] l,p;
             right = pipe probe first [a] r,p;
             joined = let union left,right;
@@ -602,11 +602,11 @@ fn rust_without_identity_facts_and_its_feeds_stay_host() {
     let (physical, structures, source) = fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             joined = pipe probe first [a] l,r;
             selected = pipe guard joined if (opaque(b));
-            s = let rename S@2 {b -> b,c -> c};
+            s = let rename S {b -> b,c -> c};
             after = pipe probe first [b] selected,s;
             answer = let canon project after keep {a,b,c};
             return answer as answer(a,b,c);
@@ -650,7 +650,7 @@ fn relational_code_predicates_do_not_imply_host_placement() {
     let (physical, structures, source) = fixture! {
         physical {
             relation R(a:i32,s:StringCode);
-            r = pipe rename R@0 {a -> a,s -> s};
+            r = pipe rename R {a -> a,s -> s};
             selected = pipe select r if (s = 7);
             numeric = pipe project selected keep {a};
             answer = let canon project numeric keep {a};
@@ -679,10 +679,10 @@ fn host_opaque_filter_uploads_projected_index_before_device_lookups() {
     let physical = syn::parse_quote! {
         physical {
             relation L(a:i32); relation P(a:i32,s:StringCode);
-            p = pipe rename P@0 {a -> a,s -> s};
+            p = pipe rename P {a -> a,s -> s};
             filtered = pipe guard p if (accept(s));
             selected = let project filtered keep {a};
-            l = pipe rename L@1 {a -> a};
+            l = pipe rename L {a -> a};
             joined = pipe probe first [a] l,selected;
             answer = let canon project joined keep {a};
             return answer as answer(a);
@@ -729,19 +729,19 @@ fn automatic_h09_keeps_retained_dependencies_in_their_read_extent() {
             relation PartSupp(part_key:i32,supplier_key:i32);
             relation Supplier(supplier_key:i32,nation_key:i32);
             relation Nation(nation_key:i32);
-            p = pipe rename Part@0 {part_key -> part_key,part_name -> part_name};
+            p = pipe rename Part {part_key -> part_key,part_name -> part_name};
             green = pipe guard p if (accept(part_name));
-            o = let rename Orders@2 {order_key -> order_key};
+            o = let rename Orders {order_key -> order_key};
             po = pipe probe first [] green,o;
-            l = let rename Lineitem@3 {
+            l = let rename Lineitem {
                 order_key -> order_key,part_key -> part_key,supplier_key -> supplier_key
             };
             pol = pipe probe first [order_key,part_key] po,l;
-            ps = let rename PartSupp@4 {part_key -> part_key,supplier_key -> supplier_key};
+            ps = let rename PartSupp {part_key -> part_key,supplier_key -> supplier_key};
             valid = pipe probe first [part_key,supplier_key] pol,ps;
-            s = let rename Supplier@5 {supplier_key -> supplier_key,nation_key -> nation_key};
+            s = let rename Supplier {supplier_key -> supplier_key,nation_key -> nation_key};
             supplied = pipe probe first [supplier_key] valid,s;
-            n = let rename Nation@6 {nation_key -> nation_key};
+            n = let rename Nation {nation_key -> nation_key};
             joined = pipe probe first [nation_key] supplied,n;
             answer = let canon project joined keep {order_key,part_key,supplier_key};
             return answer as answer(order_key,part_key,supplier_key);
@@ -772,8 +772,8 @@ fn host_predicate_publishes_a_retained_lookup_without_moving_its_producer() {
     let (physical, structures, source) = fixture! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             joined = let probe first [a] l,r;
             selected = pipe guard joined if (opaque(b));
             answer = let canon project selected keep {a,b};
@@ -869,8 +869,8 @@ fn retained_row_comparisons_publish_before_provider_lookup() {
             physical {
                 relation Driver(a:i32);
                 relation Provider(a:i32,value:i32,bound:i32);
-                driver = pipe rename Driver@0 {a -> a};
-                provider = pipe rename Provider@1 {a -> a,value -> value,bound -> bound};
+                driver = pipe rename Driver {a -> a};
+                provider = pipe rename Provider {a -> a,value -> value,bound -> bound};
                 selected = let select provider if (#condition);
                 present = pipe semi eager [a] driver,selected;
                 answer = let canon project present keep {a};
@@ -922,10 +922,10 @@ fn expanding_resource_fixture() -> (Physical, Structures, Program) {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             relation S(b:i32,c:i32); relation T(c:i32,d:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
-            s = let rename S@2 {b -> b,c -> c};
-            t = let rename T@3 {c -> c,d -> d};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
+            s = let rename S {b -> b,c -> c};
+            t = let rename T {c -> c,d -> d};
             j = pipe probe first [a] l,r;
             k = pipe probe first [b] j,s;
             m = let canon probe first [c] k,t;

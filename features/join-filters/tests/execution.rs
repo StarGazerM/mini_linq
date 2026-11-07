@@ -51,8 +51,8 @@ fn selected_run_filter_borrows_nonclone_keys_and_ignores_unneeded_columns() {
         physical {
             relation L(a:Key,b:i64,unused:Unused) = (&left);
             relation R(c:Key,d:i64,unused:Unused) = (&right);
-            l = pipe rename L@0 {a -> x,b -> y,unused -> ignored_left};
-            r = pipe rename R@1 {c -> x,d -> z,unused -> ignored_right};
+            l = pipe rename L {a -> x,b -> y,unused -> ignored_left};
+            r = pipe rename R {c -> x,d -> z,unused -> ignored_right};
             s = pipe range select r if (z > 1);
             b = let project s keep {x,z};
             j = pipe probe first [x] l,b;
@@ -76,8 +76,8 @@ macro_rules! run {
             physical {
                 relation L(a:i64,b:i64) = (&$left);
                 relation R(c:i64,d:i64) = (&$right);
-                l = pipe rename L@0 {a -> x,b -> y};
-                r = pipe rename R@1 {c -> x,d -> z};
+                l = pipe rename L {a -> x,b -> y};
+                r = pipe rename R {c -> x,d -> z};
                 s = pipe range select r if (z > 1);
                 b = let project s keep {x,z};
                 j = pipe probe first [x] l,b;
@@ -236,8 +236,8 @@ macro_rules! counted_plan {
             physical {
                 relation L(a:i64,b:i64) = (&$left);
                 relation R(c:i64,d:i64) = (&$right);
-                l = pipe rename L@0 {a -> x,b -> y};
-                r = pipe rename R@1 {c -> x,d -> z};
+                l = pipe rename L {a -> x,b -> y};
+                r = pipe rename R {c -> x,d -> z};
                 s = pipe range select r if (z > 1);
                 b = let project s keep {x,z};
                 $($plan)*
@@ -291,7 +291,7 @@ fn runtime_filter_identity_shares_only_equivalent_work() {
     );
 
     let (rows, work) = counted_plan!(left, right, [l,m],
-        m = pipe rename L@2 {a -> x,b -> y};
+        m = pipe rename L {a -> x,b -> y};
         q = pipe probe first [x] l,b;
         j = pipe probe first [x] m,b;
         out = let canon union q,j;

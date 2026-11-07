@@ -38,7 +38,7 @@ fn simple(body: TokenStream) -> (cq_lang_structures::physical::Program, cq_lang_
     let physical = syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
     };

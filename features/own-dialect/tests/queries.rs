@@ -10,8 +10,8 @@ fn both_printers_follow_whole_relation_access_for_empty_keys() {
                 pipeline { $($passes),+ };
                 physical {
                     relation L(a:i32); relation $right(b:i32);
-                    l = pipe rename L@0 {a -> a};
-                    r = $mode rename $right@1 {b -> b};
+                    l = pipe rename L {a -> a};
+                    r = $mode rename $right {b -> b};
                     out = let canon $operation $choice [] l,r;
                     return out as answer($($head),+);
                 }
@@ -117,7 +117,7 @@ fn staged_selection_chain_pushes_only_survivors_into_partial_suffix() {
         pipeline {};
         physical {
             relation R(a:i32,b:i32,unused:i32);
-            r = pipe rename R@0 {a -> x,b -> y,unused -> unused};
+            r = pipe rename R {a -> x,b -> y,unused -> unused};
             s = pipe select r if (x > 0);
             t = pipe select s if (y = 7);
             p = pipe project t keep {x,y};
@@ -193,7 +193,7 @@ fn filtered_storage_reconstructs_constants_in_both_printers() {
                 pipeline { $($($passes),*)? };
                 physical {
                     relation L(k:i32); relation R(a:i32,k:i32,value:i32);
-                    l = pipe rename L@0 {k -> k}; r = pipe rename R@1 {a -> a,k -> k,value -> value};
+                    l = pipe rename L {k -> k}; r = pipe rename R {a -> a,k -> k,value -> value};
                     filtered = let point select r if (a = 7);
                     joined = pipe probe first [k] l,filtered;
                     out = let canon project joined keep {a,k}; return out as answer(a,k);
@@ -291,7 +291,7 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
                 pipeline { $($($passes),*)? };
                 physical {
                     relation R(a: Value,b: Value);
-                    r = let canon rename R@0 { a -> a, b -> b };
+                    r = let canon rename R { a -> a, b -> b };
                     p = pipe project r keep { a };
                     j = pipe probe first[a] p,r;
                     o = let canon project j keep { a,b };
@@ -342,7 +342,7 @@ fn computed_head_deduplicates_its_image_with_the_recorded_type() {
                 pipeline { $($($passes),*)? };
                 physical {
                     relation R(x: i32);
-                    r = pipe rename R@0 { x -> x };
+                    r = pipe rename R { x -> x };
                     o = let canon project r keep { x };
                     return dedup o as answer(*x % 2);
                 }
@@ -380,7 +380,7 @@ fn exists_retains_only_nonemptiness_under_total_rust() {
                 pipeline { $($($passes),*)? };
                 physical {
                     relation R(x: i32);
-                    r = pipe rename R@0 { x -> x };
+                    r = pipe rename R { x -> x };
                     g = pipe guard r if (checked(x));
                     e = exists canon project g keep {};
                     return e as answer();
@@ -505,8 +505,8 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
                 physical {
                     relation R(a: i32,b: i32,c: i32);
                     relation L(a: i32,b: i32);
-                    r = let rename R@0 { a -> a,b -> b,c -> c };
-                    l = pipe rename L@1 { a -> a,b -> b };
+                    r = let rename R { a -> a,b -> b,c -> c };
+                    l = pipe rename L { a -> a,b -> b };
                     p = pipe project l keep { a };
                     m = pipe semi eager[a] p,r;
                     n = pipe probe first[a] m,l;
@@ -550,8 +550,8 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
                 physical {
                     relation R(x: i32);
                     relation S(x: i32);
-                    r = pipe rename R@0 { x -> x };
-                    s = pipe rename S@1 { x -> x };
+                    r = pipe rename R { x -> x };
+                    s = pipe rename S { x -> x };
                     m = pipe semi lazy[x] r,s;
                     o = let canon project m keep { x };
                     return o as answer(x);
@@ -579,7 +579,7 @@ fn nested_stream_canonical_boundaries_have_separate_state() {
         pipeline {};
         physical {
             relation R(a: i32,b: i32);
-            r = let canon rename R@0 { a -> a,b -> b };
+            r = let canon rename R { a -> a,b -> b };
             o = let canon project r keep { a };
             return o as answer(a);
         }
@@ -656,7 +656,7 @@ fn nested_stage_boundaries_run_within_their_bound() {
         pipeline {};
         physical {
             relation R(a:i32,b:i32);
-            r = pipe rename R@0 {a -> x,b -> y};
+            r = pipe rename R {a -> x,b -> y};
             s = pipe select r if (x >= 0);
             out = let canon project s keep {x,y};
             return out as answer(x,y);
@@ -847,7 +847,7 @@ fn both_printers_apply_ir_generator_annotations_to_items() {
                 physical {
                     relation rows(n:i32);
                     relation answer(value:i32,label:Vec<i32>);
-                    r = pipe rename rows@0 {n -> n};
+                    r = pipe rename rows {n -> n};
                     g = pipe bind r with for (value,label):(i32,Vec<i32>) =
                         ((0..*n).map(|i| (i, vec![i])));
                     out = let canon project g keep {value,label};
@@ -940,7 +940,7 @@ fn canonical_consumer_delegates_duplicate_answers_and_keeps_internal_canon() {
         physical {
             relation R(a:i32,b:i32);
             consumer canonical;
-            r = let canon rename R@0 {a -> a,b -> b};
+            r = let canon rename R {a -> a,b -> b};
             return r as answer(*a % 2);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -967,7 +967,7 @@ fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
                 physical {
                     relation R(a:NoHash);
                     host_set R discharged;
-                    r = pipe rename R@0 {a -> a};
+                    r = pipe rename R {a -> a};
                     return r as answer(a);
                 }
                 structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
@@ -995,8 +995,8 @@ fn authored_group_provider_and_role_named_readers_execute() {
                 pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
                 physical {
                     relation L(k:i32); relation R(k:i32,v:i32);
-                    l = pipe rename L@0 {k -> k};
-                    r = pipe rename R@1 {k -> k,v -> v};
+                    l = pipe rename L {k -> k};
+                    r = pipe rename R {k -> k,v -> v};
                     $reader = let canon probe first[k] l,r;
                     grouped = pipe group $reader by [k] { n:usize=count(); total:i32=sum(v); };
                     return grouped as answer(k,n,total);

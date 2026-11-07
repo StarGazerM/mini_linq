@@ -176,8 +176,6 @@ pub struct Subatom {
     pub columns: CommaList<Column>,
     /// A standalone membership phase, never an alternate introducing provider.
     pub check: Option<kw::check>,
-    #[parse(cq_syntax::algebra::parse_moved_after)]
-    pub moved_after: Option<cq_syntax::algebra::MovedAfter>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -561,12 +559,6 @@ fn analyze_steps(
                     return error(subatom, "atom occurrence escaped its source branch path");
                 }
                 let variables = columns(subatom)?;
-                if let Some(after) = &subatom.moved_after {
-                    for occurrence in &after.occurrences { occurrence.check()?; }
-                    if subatom.check.is_none() || after.occurrences.is_empty() {
-                        return Err(syn::Error::new_spanned(subatom, "moved support requires a check and crossed prefix"));
-                    }
-                }
                 // Formal rule VO-CheckPhase: a standalone check consumes
                 // supplied columns, never an alternate introducing phase.
                 if subatom.check.is_some()

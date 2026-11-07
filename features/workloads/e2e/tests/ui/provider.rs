@@ -11,7 +11,7 @@ fn main() {
  pipeline { cq_rewrites::retype(providers { missing_read = crate::MissingRead<_,_> { reads [exact, membership], build typed }; } payload => @missing_read as crate::MissingRead<_,_>), mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation l(a: i32); relation r(a: i32, b: i32);
-            left = pipe rename l@0 {a -> a}; right = let rename r@1 {a -> a, b -> b};
+            left = pipe rename l {a -> a}; right = let rename r {a -> a, b -> b};
             j = let canon probe first[a] left, right; return j as answer(a, b);
         }
     }.count();

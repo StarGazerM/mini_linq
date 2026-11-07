@@ -20,8 +20,8 @@ fn only_coarse_total_scans_use_lookahead() {
         let physical = syn::parse_str(&format!(
             "physical {{
                 relation L(k:i32); relation R(k:i32,v:i32);
-                l = pipe rename L@0 {{k -> k}};
-                r = let rename R@1 {{k -> k,v -> v}};
+                l = pipe rename L {{k -> k}};
+                r = let rename R {{k -> k,v -> v}};
                 {guard}
                 j = let canon probe first [k] {outer},r;
                 return j as answer(k,v);
@@ -43,7 +43,7 @@ fn recorded_scan_selections_use_chunk_masks_before_rust() {
     let physical = syn::parse_quote! {
         physical {
             relation L(k:i32);
-            l = pipe rename L@0 {k -> k};
+            l = pipe rename L {k -> k};
             s = pipe select l if (k >= 2);
             t = pipe select s if (k <= 9);
             g = let canon guard t if (*k != 7);

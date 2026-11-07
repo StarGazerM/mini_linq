@@ -69,7 +69,6 @@ pub mod kw {
     syn::custom_keyword!(consumer);
     syn::custom_keyword!(canonical);
     syn::custom_keyword!(dedup);
-    syn::custom_keyword!(check);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
@@ -309,13 +308,6 @@ pub struct Definition {
     pub mode: Mode,
     pub canon: Option<kw::canon>,
     pub operator: Operator,
-    /// Standalone membership phase, preserved from relational lowering.
-    pub check: Option<kw::check>,
-    #[parse(cq_syntax::algebra::parse_moved_after)]
-    pub moved_after: Option<cq_syntax::algebra::MovedAfter>,
-    #[parse(cq_syntax::algebra::parse_absorptions)]
-    #[to_tokens(|tokens, facts| quote::TokenStreamExt::append_all(tokens, facts))]
-    pub absorptions: Vec<cq_syntax::algebra::Absorption>,
     pub semi_token: Token![;],
 }
 
@@ -726,7 +718,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                     analysis.scanned.insert(symbol_name(operand));
                 }
                 if let Some(origin) = &union.origin {
-                    origin.occurrence.check()?;
                     let mut expected: BTreeSet<_> = origin
                         .free
                         .iter()
@@ -768,7 +759,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
 
             Operator::Unit(_) => Row::default(),
             Operator::Rename(r) => {
-                r.occurrence.check()?;
                 let host = symbol_name(&r.relation);
                 let Some(declaration) = declarations.get(&host) else {
                     return error(r, format!("`{name}` renames undeclared relation `{host}`"));
@@ -1065,27 +1055,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 row
             }
         };
-        if let Some(after) = &definition.moved_after {
-            for occurrence in &after.occurrences { occurrence.check()?; }
-            if definition.check.is_none() || after.occurrences.is_empty() {
-                return Err(syn::Error::new_spanned(definition, "moved support requires a check phase"));
-            }
-        }
-        // Formal rule PH-CheckPhase: transport a nonintroducing phase,
-        // never a PH-Smallest candidate, independently of adjacency.
-        if definition.check.is_some() {
-            let keyed = match &definition.operator {
-                Operator::Probe(_, keyed) | Operator::Semi(_, keyed)
-                | Operator::Merge(_, keyed) => keyed,
-                _ => return error(definition, "check phase requires a keyed relational read"),
-            };
-            if matches!(keyed.choice, Some(Choice::Smallest(_)))
-                || row.bindings.keys().ne(of(&keyed.left)?.bindings.keys())
-                || (row.bindings.is_empty() && !matches!(definition.operator, Operator::Semi(..)))
-            {
-                return error(definition, "check phase cannot introduce or select candidates");
-            }
-        }
         analysis
             .headings
             .insert(name.clone(), row.bindings.keys().cloned().collect());
@@ -1402,7 +1371,7 @@ pub fn binary_intersection<'a>(
     Some((a, b, column.clone()))
 }
 
-/// Admit one membership check after an introducing probe and its existing
+/// Admit one membership check following an introducing probe and its existing
 /// checks. Intermediate results must remain uncanonicalized linear pipes.
 pub fn intersection_extension<'a>(
     first: &Definition,
@@ -1438,9 +1407,6 @@ fn intersection_extension_impl<'a>(
     let (Operator::Probe(_, b) | Operator::Semi(_, b)) = &next.operator else {
         return None;
     };
-    if first.check.is_some() || next.check.is_some() {
-        return None;
-    }
     if !matches!(previous.mode, Mode::Pipe(_))
         || previous.canon.is_some()
         || b.left != previous.name
@@ -1758,9 +1724,6 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             target_definitions
                 .get(&symbol_name(&definition.name))
                 .is_none_or(|target| {
-                    definition.check.is_some() != target.check.is_some()
-                        || definition.moved_after != target.moved_after
-                        || definition.absorptions != target.absorptions ||
                     !same_logical_operator(&definition.operator, &target.operator)
                         && !projected_memberships.contains(&symbol_name(&definition.name))
                         && !constant_guards.contains(&symbol_name(&definition.name))

@@ -195,8 +195,8 @@ fn authored_exact_only_semi_reads_a_cursor_without_membership() {
         physical {
             relation L(q:i32) = (&left);
             relation R(b:i32,a:i32) = (&right) host [b] reads [exact];
-            l = pipe rename L@0 {q -> k};
-            r = pipe rename R@1 {b -> k,a -> x};
+            l = pipe rename L {q -> k};
+            r = pipe rename R {b -> k,a -> x};
             s = pipe semi eager [k] l,r;
             out = let canon project s keep {k};
             return out as answer(k);
@@ -568,7 +568,7 @@ fn direct_merge_requires_ordered_read_without_requiring_payload_lookup() {
     let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
             relation l(a:i32) host [a] reads [membership, ordered]; relation r(a:i32) host [a] reads [membership, ordered];
-            left = pipe rename l@0 {a -> a}; right = pipe rename r@1 {a -> a};
+            left = pipe rename l {a -> a}; right = pipe rename r {a -> a};
             j = let canon merge[a] left,right; return j as answer(a);
         }
     }
@@ -588,7 +588,7 @@ fn retained_opaque_guards_preserve_unsigned_comparisons() {
     let r = [(1_u64, 0), (2, 5), (9, 1)];
     let got: Vec<_> = ::mini_linq::passes::select! { pipeline { ::mini_linq::passes::sequence, ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
-            relation r(a:u64,b:i32); rows = let rename r@0 {a -> a,b -> b};
+            relation r(a:u64,b:i32); rows = let rename r {a -> a,b -> b};
             w = let canon guard rows if (*a < 9); return w as answer(a,b);
         }
     }
@@ -1080,8 +1080,8 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
         pipeline { ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
             relation L(q:i32) = (&left); relation R(a:i32,b:i32,c:i32) = (&right) host [b] reads [exact, membership] supports [expand];
-            l = pipe rename L@0 {q -> k};
-            r = pipe rename R@1 {a -> x,b -> k,c -> z};
+            l = pipe rename L {q -> k};
+            r = pipe rename R {a -> x,b -> k,c -> z};
             s = pipe semi eager [k] l,r;
             p = pipe probe first [k] s,r;
             observed = pipe guard p if ({ visits.borrow_mut().push((*x,*k,*z)); true });

@@ -665,7 +665,6 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> Subat
         paren: Default::default(),
         columns,
         check: None,
-        moved_after: None,
     }
 }
 

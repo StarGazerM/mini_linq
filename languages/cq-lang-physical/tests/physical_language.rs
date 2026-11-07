@@ -5,7 +5,7 @@ fn computed_outputs_use_the_declared_logical_identity() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a: Logical [7]);
         relation answer(value: Logical [8]);
-        r = pipe rename R@0 {a -> x};
+        r = pipe rename R {a -> x};
         b = pipe bind r with y: Logical = (*x);
         p = let canon project b keep {y};
         return p as answer(y);
@@ -25,7 +25,7 @@ fn computed_outputs_use_the_declared_logical_identity() {
 fn constant_occurrences_drop_source_columns_and_require_retention() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);
-        r = let canon rename R@0 {a -> x} constants {b = -7};
+        r = let canon rename R {a -> x} constants {b = -7};
         return r as answer(x);
     }};
     let facts = physical::contract::check(&source).unwrap();
@@ -36,11 +36,11 @@ fn constant_occurrences_drop_source_columns_and_require_retention() {
         source
     );
     for definition in [
-        syn::parse_quote!(r = pipe canon rename R@0 {a -> x} constants {b = -7};),
-        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {a = 7};),
-        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {missing = 7};),
-        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {b = x};),
-        syn::parse_quote!(r = let canon rename R@0 {a -> x} constants {};),
+        syn::parse_quote!(r = pipe canon rename R {a -> x} constants {b = -7};),
+        syn::parse_quote!(r = let canon rename R {a -> x} constants {a = 7};),
+        syn::parse_quote!(r = let canon rename R {a -> x} constants {missing = 7};),
+        syn::parse_quote!(r = let canon rename R {a -> x} constants {b = x};),
+        syn::parse_quote!(r = let canon rename R {a -> x} constants {};),
     ] {
         let mut invalid = source.clone();
         invalid.program.definitions[0] = definition;
@@ -50,7 +50,7 @@ fn constant_occurrences_drop_source_columns_and_require_retention() {
 
 const SOURCE: &str = "physical {
     relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-    r = pipe rename R@0 {a -> x,b -> y}; s = let rename S@1 {b -> y,c -> z};
+    r = pipe rename R {a -> x,b -> y}; s = let rename S {b -> y,c -> z};
     j = pipe probe first [y] r,s; f = pipe guard j if (*x < *z);
     e = pipe bind f with w:i32 = (*x + *z);
     p = let canon project e keep {x,w}; return p as answer(x,w);
@@ -92,7 +92,7 @@ fn invalid_operators_modes_and_heads_are_rejected() {
         ("return p", "return missing"),
         (
             "return p",
-            "unused = pipe rename R@0 {a -> a,b -> b}; return p",
+            "unused = pipe rename R {a -> a,b -> b}; return p",
         ),
         ("guard j if (*x < *z)", "guard p if (*x < *z)"),
     ] {
@@ -102,7 +102,7 @@ fn invalid_operators_modes_and_heads_are_rejected() {
 }
 #[test]
 fn merge_and_point_record_supply_kinds() {
-    let source: physical::Program = syn::parse_str("physical { relation R(a:i32); relation S(a:i32); r = let rename R@0 {a -> x}; s = let rename S@1 {a -> x}; j = pipe merge[x] r,s; f = pipe point select j if (x = 1); return f as answer(x); }").unwrap();
+    let source: physical::Program = syn::parse_str("physical { relation R(a:i32); relation S(a:i32); r = let rename R {a -> x}; s = let rename S {a -> x}; j = pipe merge[x] r,s; f = pipe point select j if (x = 1); return f as answer(x); }").unwrap();
     let a = physical::contract::check(&source).unwrap();
     assert_eq!(a.merge_reads["r"][0].0, "j");
     assert_eq!(a.merge_reads["s"][0].0, "j");
@@ -111,9 +111,9 @@ fn merge_and_point_record_supply_kinds() {
 
 const HASH_CHAIN: &str = "physical {
     relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
-    l = let canon rename L@0 {a -> a};
-    r = let canon rename R@1 {a -> a, b -> b};
-    s = let canon rename S@2 {b -> b, c -> c};
+    l = let canon rename L {a -> a};
+    r = let canon rename R {a -> a, b -> b};
+    s = let canon rename S {b -> b, c -> c};
     j0 = let canon probe first [a] l, r;
     j1 = let canon probe first [b] j0, s;
     x = let canon semi eager [a] j1, l;
@@ -138,9 +138,9 @@ fn intermediate_lets_admit_canon_and_semijoins_record_key_reads() {
 fn a_merge_result_read_by_key_stays_materialized() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation L(a: i32); relation R(a: i32, b: i32); relation S(b: i32, c: i32);
-        l = let rename L@0 {a -> a};
-        r = let rename R@1 {a -> a, b -> b};
-        s = let rename S@2 {b -> b, c -> c};
+        l = let rename L {a -> a};
+        r = let rename R {a -> a, b -> b};
+        s = let rename S {b -> b, c -> c};
         j0 = let merge[a] l, r;
         j1 = let merge[b] j0, s;
         x = pipe semi eager [a] l, j1;
@@ -157,7 +157,7 @@ fn a_merge_result_read_by_key_stays_materialized() {
 #[test]
 fn point_reads_require_literal_keys_and_canon_host_pipes_require_linear_reads() {
     let mut p: physical::Program = syn::parse_quote!(physical {
-        relation R(a:i32,b:i32); r = pipe rename R@0 {a -> x,b -> y};
+        relation R(a:i32,b:i32); r = pipe rename R {a -> x,b -> y};
         w = let canon point select r if (x = 2); return w as answer(x,y);
     });
     physical::contract::check(&p).unwrap();
@@ -173,14 +173,14 @@ fn point_reads_require_literal_keys_and_canon_host_pipes_require_linear_reads() 
 #[test]
 fn rust_branches_are_independent_and_types_are_host_obligations() {
     let p: physical::Program = syn::parse_quote!(physical {
-        relation R(a:i32); r = pipe rename R@0 {a -> x};
+        relation R(a:i32); r = pipe rename R {a -> x};
         g = pipe guard r if (*x != 0);
         b = let bind r with y:i32 = (10 / *x);
         j = pipe probe first [x] g,b; return j as answer(x,y);
     });
     physical::contract::check(&p).unwrap();
     let p: physical::Program = syn::parse_quote!(physical {
-        relation R(price:f64); r = pipe rename R@0 {price -> price};
+        relation R(price:f64); r = pipe rename R {price -> price};
         p = let canon point select r if (price = 0.0); return p as answer(price);
     });
     physical::contract::check(&p).unwrap();
@@ -196,7 +196,7 @@ fn rust_branches_are_independent_and_types_are_host_obligations() {
 fn rewrite_accepts_physical_choices_and_rejects_changed_logical_operands() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32); relation S(a:i32);
-        r = let rename R@0 {a -> x}; s = let rename S@1 {a -> x};
+        r = let rename R {a -> x}; s = let rename S {a -> x};
         j = pipe probe first [x] r,s; return j as answer(x);
     }};
     let mut merged = source.clone();
@@ -217,7 +217,7 @@ fn rewrite_accepts_physical_choices_and_rejects_changed_logical_operands() {
 #[test]
 fn rewrite_preserves_selection_and_rust_payload_without_an_ra_dependency() {
     let source: physical::Program = syn::parse_quote! { physical {
-        relation R(a:i32); r = pipe rename R@0 {a -> x};
+        relation R(a:i32); r = pipe rename R {a -> x};
         s = pipe select r if (x = 2);
         g = pipe guard s if (accept(x)); return g as answer(x);
     }};
@@ -281,8 +281,8 @@ fn interleaved_context_facts_round_trip_and_remain_distinct() {
         host_set R discharged;
         consumer canonical;
         host_set S;
-        r = pipe rename R@0 {a -> x};
-        s = pipe rename S@1 {a -> x};
+        r = pipe rename R {a -> x};
+        s = pipe rename S {a -> x};
         u = pipe union r,s;
         return u as answer(x);
     }};
@@ -312,7 +312,7 @@ fn interleaved_context_facts_round_trip_and_remain_distinct() {
 fn collapsing_computed_heads_record_their_dedup_obligation() {
     let program: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32,b:i32);
-        r = pipe rename R@0 {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y};
         return dedup r as answer(*x % 2);
     }};
     physical::contract::check(&program).unwrap();
@@ -337,7 +337,7 @@ fn collapsing_computed_heads_record_their_dedup_obligation() {
     // An injective head admits a harmless extra dedup.
     let extra: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32);
-        r = pipe rename R@0 {a -> x};
+        r = pipe rename R {a -> x};
         return dedup r as answer(x);
     }};
     physical::contract::check(&extra).unwrap();

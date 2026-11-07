@@ -908,8 +908,8 @@ mod tests {
         let (physical, structures) = structure_fixture! {
             physical {
                 relation L(a:i32); relation R(a:i32,s:StringCode);
-                l = pipe rename L@0 {a -> a};
-                r = let rename R@1 {a -> a,s -> s};
+                l = pipe rename L {a -> a};
+                r = let rename R {a -> a,s -> s};
                 answer = let canon semi eager [a] l,r;
                 return answer as answer(a);
             }
@@ -948,7 +948,7 @@ mod tests {
         fixture! {
             physical {
                 relation R(a:i32,s:#ty);
-                r = pipe rename R@0 {a -> a,s -> s};
+                r = pipe rename R {a -> a,s -> s};
                 selected = pipe select r if (#condition);
                 answer = let canon project selected keep {a};
                 return answer as answer(a);
@@ -974,7 +974,7 @@ mod tests {
             let (physical, structures, source) = fixture! {
                 physical {
                     relation R(a:i32);
-                    r = pipe rename R@0 {a -> a};
+                    r = pipe rename R {a -> a};
                     selected = pipe guard r if (#condition);
                     answer = let canon project selected keep {a};
                     return answer as answer(a);
@@ -1179,8 +1179,8 @@ mod tests {
             physical {
                 relation R(a:i32); relation L(a:i32);
                 consumer canonical;
-                l = pipe rename L@1 {a -> a};
-                r = let rename R@0 {a -> a};
+                l = pipe rename L {a -> a};
+                r = let rename R {a -> a};
                 answer = pipe probe first [a] l,r;
                 return answer as answer(a);
             }

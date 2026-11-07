@@ -132,6 +132,7 @@ pub struct Declaration {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
     pub relation: String,
+    /// Physical rename definition name, shared with positional lineage.
     pub occurrence: String,
     pub snapshot: SnapshotId,
 }

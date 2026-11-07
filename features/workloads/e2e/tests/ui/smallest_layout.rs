@@ -12,10 +12,10 @@ fn main() {
             relation L(a:i32,b:i32);
             relation R(b:i32,c:i32);
             relation S(a:i32,c:i32);
-            l = pipe rename L@0 {a -> a,b -> b};
-            r0 = pipe rename R@0 {b -> b,c -> c};
+            l = pipe rename L {a -> a,b -> b};
+            r0 = pipe rename R {b -> b,c -> c};
             r = let project r0 keep {b,c};
-            s = pipe rename S@0 {a -> a,c -> c};
+            s = pipe rename S {a -> a,c -> c};
             candidate = pipe probe smallest [b] l,r;
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);

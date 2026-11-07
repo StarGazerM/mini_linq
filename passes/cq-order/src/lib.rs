@@ -148,13 +148,13 @@ fn clauses<'a>(body: &'a cq::CommaList<BodyItem>, context: &BTreeSet<String>) ->
                             .cloned()
                             .collect()
                     };
-                    // A Rust block, or a hoisted block taking a finite prefix
-                    // domain, waits for its free columns.
-                    let domain = !facts.rust && block.needs_domain(&facts);
+                    // A correlated block, or a hoisted block taking a finite
+                    // prefix domain, waits for its free columns.
+                    let seeded = correlated(block, &facts) || block.needs_domain(&facts);
                     let requires = facts
                         .free
                         .keys()
-                        .filter(|name| facts.rust || domain || let_bound.contains(*name))
+                        .filter(|name| seeded || let_bound.contains(*name))
                         .cloned()
                         .collect();
                     (provides, requires)
@@ -240,31 +240,57 @@ fn ready(clauses: &[Clause<'_>], bound: &BTreeSet<String>, clause: usize) -> boo
     clauses[clause].requires.is_subset(bound)
 }
 
+/// Ordinary ordering correlates a block containing Rust steps, and a
+/// Rust-free block that takes no finite prefix domain while some arm cannot
+/// place all its clauses from no seed; it hoists every other block.
+/// Formal rule O-BlockPlacement: Correlate b iff Rust(b), or b takes no finite prefix domain and some arm is not Placeable from the empty seed; hoist otherwise.
+fn correlated(block: &cq::blocks::Block, facts: &cq::blocks::Analysis) -> bool {
+    facts.rust
+        || !block.needs_domain(facts) && {
+            let context = facts.free.keys().cloned().collect();
+            block
+                .branches
+                .iter()
+                .any(|branch| !placeable(&clauses(&branch.body, &context), &BTreeSet::new()))
+        }
+}
+
+/// Whether C-Ready places every clause from `seed`. The placed set is the
+/// least fixpoint of readiness, so it does not depend on any ranking.
+fn placeable(clauses: &[Clause<'_>], seed: &BTreeSet<String>) -> bool {
+    let mut provided = seed.clone();
+    let mut pending: Vec<usize> = (0..clauses.len()).collect();
+    while let Some(index) = pending.iter().position(|&c| ready(clauses, &provided, c)) {
+        let clause = pending.remove(index);
+        provided.extend(clauses[clause].provides.iter().cloned());
+    }
+    pending.is_empty()
+}
+
 /// Structural rank; the single final drainage producer records I2 moves.
 type Rank = (bool, bool, usize, usize);
 
 /// Choose introducing order by structural rank, then drain ready checks once.
 /// Readiness and connectivity see only what the seed and earlier clauses
 /// supply, not visible-but-unsupplied names in a seedless hoisted arm.
+/// CQ scoping (CQ-Where, CQ-Neg, IF-Environment, CQ-Bind, CQ-For) and
+/// O-BlockPlacement keep some pending clause ready at every step
+/// (design-notes/m2c-total-report.md, C1), so the ready loop places every clause.
 fn schedule(
-    query: &cq::Query,
     clauses: &[Clause<'_>],
     seed: &BTreeSet<String>,
     rank: impl Fn(usize, &BTreeSet<String>) -> Rank,
     connect_written: bool,
-) -> syn::Result<Vec<usize>> {
+) -> Vec<usize> {
     let mut provided = seed.clone();
     let mut pending: Vec<usize> = (0..clauses.len()).collect();
     let mut sequence = Vec::with_capacity(clauses.len());
-    while !pending.is_empty() {
-        let choice = pending
-            .iter()
-            .copied()
-            .filter(|&c| ready(clauses, &provided, c))
-            .min_by_key(|&c| rank(c, &provided));
-        let Some(mut choice) = choice else {
-            return Err(syn::Error::new_spanned(query, "no clause is ready"));
-        };
+    while let Some(mut choice) = pending
+        .iter()
+        .copied()
+        .filter(|&c| ready(clauses, &provided, c))
+        .min_by_key(|&c| rank(c, &provided))
+    {
         if connect_written && clauses[choice].is_atom()
             && !clauses[choice].provides.is_empty()
             && clauses[choice].provides.iter().all(|name| !provided.contains(name))
@@ -280,7 +306,7 @@ fn schedule(
         provided.extend(clauses[choice].provides.iter().cloned());
         sequence.push(choice);
     }
-    Ok(sequence)
+    sequence
 }
 
 /// After I2 drainage, prioritize ready bindings, then connected atoms,
@@ -346,21 +372,22 @@ fn elimination(
     source: &cq::Program,
     clauses: &[Clause<'_>],
     seed: &BTreeSet<String>,
-) -> syn::Result<(Vec<usize>, Vec<String>)> {
+) -> (Vec<usize>, Vec<String>) {
+    // S-Elimination ranks by the numbered variables an atom provides; a free
+    // column of a nested block that this scope analysis does not number adds nothing.
     let order = cq::hypergraph::Analysis::of(source).elimination_order;
-    let mut earliest = vec![order.len(); clauses.len()];
-    for (clause, facts) in clauses.iter().enumerate().filter(|(_, f)| f.is_atom()) {
-        for variable in &facts.provides {
-            let Some(position) = order.iter().position(|v| v == variable) else {
-                return Err(syn::Error::new_spanned(
-                    facts.item,
-                    format!("`{variable}` has no place in the elimination order"),
-                ));
-            };
-            earliest[clause] = earliest[clause].min(position);
-        }
-    }
-    let sequence = schedule(&source.query, clauses, seed, |clause, bound| {
+    let earliest: Vec<usize> = clauses
+        .iter()
+        .map(|facts| {
+            facts
+                .provides
+                .iter()
+                .filter(|_| facts.is_atom())
+                .filter_map(|variable| order.iter().position(|v| v == variable))
+                .fold(order.len(), usize::min)
+        })
+        .collect();
+    let sequence = schedule(clauses, seed, |clause, bound| {
         if clauses[clause].is_atom() {
             let connected = clauses[clause].provides.iter().any(|name| bound.contains(name));
             (true, !connected, earliest[clause], clause)
@@ -375,8 +402,8 @@ fn elimination(
                 clause,
             )
         }
-    }, false)?;
-    Ok((sequence, order))
+    }, false);
+    (sequence, order)
 }
 
 /// Variables in the order the clause sequence first binds them.
@@ -411,7 +438,6 @@ fn subatom(clause: usize, atom: &cq::Atom, keep: impl Fn(&str) -> bool) -> valua
             paren: Default::default(),
             columns,
             check: None,
-            moved_after: None,
         },
         Default::default(),
     )
@@ -527,15 +553,17 @@ impl Fine<'_> {
 /// One variable at a time, in `variables` order: its first atom in plan
 /// order binds it over the bound columns, every other atom holding it
 /// checks; a variable a binding supplies waits for that binding.
+/// CQ-WF makes some remaining variable eligible while any remains, and an
+/// eligible unbound variable has a ready holding atom by the filter itself
+/// (design-notes/m2c-total-report.md, C2 and C3).
 /// Formal rule O-Fine: Iterate variables with ready bindings and guards; introduce then check.
 fn fine(
-    query: &cq::Query,
     clauses: &[Clause<'_>],
     sequence: &[usize],
     variables: &[String],
     context: &BTreeSet<String>,
     seed: &BTreeSet<String>,
-) -> syn::Result<Vec<valuation::Step>> {
+) -> Vec<valuation::Step> {
     let atoms: Vec<usize> = sequence
         .iter()
         .copied()
@@ -568,7 +596,7 @@ fn fine(
         }
     }
     let mut remaining: Vec<&String> = variables.iter().collect();
-    while !remaining.is_empty() {
+    loop {
         plan.place_ready();
         let Some(next) = remaining.iter().enumerate().filter(|(_, v)| {
             plan.bound.contains(**v)
@@ -585,10 +613,7 @@ fn fine(
             });
             (!connected, *position)
         }).map(|(position, _)| position) else {
-            return Err(syn::Error::new_spanned(
-                query,
-                "no variable can be bound next",
-            ));
+            break;
         };
         let variable = remaining.remove(next);
         let holding: Vec<_> = atoms
@@ -596,32 +621,26 @@ fn fine(
             .copied()
             .filter(|&c| clauses[c].provides.contains(variable))
             .collect();
-        let binder = if !plan.bound.contains(variable) {
-            let Some(binder) = holding
+        let binder = if plan.bound.contains(variable) {
+            None
+        } else {
+            holding
                 .iter()
                 .copied()
                 .filter(|&c| ready(clauses, &plan.provided, c))
                 .min_by_key(|&c| !clauses[c].provides.iter().any(|name| plan.provided.contains(name)))
-            else {
-                return Err(syn::Error::new_spanned(
-                    query,
-                    format!("`{variable}` is not a variable of the query"),
-                ));
-            };
+        };
+        if let Some(binder) = binder {
             plan.bound.insert(variable.clone());
             plan.subatom(binder, clauses[binder].atom.as_ref().expect("atom heading"));
             plan.place_ready();
-            Some(binder)
-        } else {
-            None
-        };
+        }
         for check in holding.into_iter().filter(|&c| Some(c) != binder) {
             plan.subatom(check, clauses[check].atom.as_ref().expect("atom heading"));
             plan.place_ready();
         }
     }
-    plan.place_ready();
-    Ok(plan.steps)
+    plan.steps
 }
 
 /// Split Written atoms in place; the assembled schedule subsequently drains checks.
@@ -657,32 +676,59 @@ fn written_fine(
     steps
 }
 
-/// Order the normal-form query under `options`, record its occurrence
-/// restrictions (O-Restrict), then check the VO contract.
-/// Formal rule S-Written: Written retains introducing body order, drains ready checks, and rejects I1/I3 violations.
-pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
-    let mut program = compile_unrestricted(source, options)?;
-    restrict(&mut program)?;
-    Ok(program)
+/// A CQ accepted by WF-NF (`cq::normal::check`). The total orderings take
+/// it, so they never run on unchecked input.
+#[derive(Clone, Copy, Debug)]
+pub struct Normal<'a>(&'a cq::Program);
+
+impl<'a> Normal<'a> {
+    /// Check WF-NF.
+    pub fn check(source: &'a cq::Program) -> syn::Result<Self> {
+        cq::normal::check(source)?;
+        Ok(Self(source))
+    }
+
+    pub fn program(self) -> &'a cq::Program {
+        self.0
+    }
 }
 
-/// The ordered schedule with every predicate at its prefix position. A
-/// planner that reschedules prefix steps does so here, then calls [`restrict`].
+/// Front: check WF-NF, then [`order`] (total).
+pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
+    Ok(order(Normal::check(source)?, options))
+}
+
+/// Order the normal-form query under `options` and record its occurrence
+/// restrictions (O-Restrict). Total; the pipeline checks the result once
+/// (WF-VO, VO-Order, CK-Order).
+/// Formal rule S-Written: Written retains introducing body order and drains ready checks; VO-Order, not the producer, refuses an I1/I3 violation.
+pub fn order(source: Normal<'_>, options: &Options) -> valuation::Program {
+    let mut program = order_unrestricted(source, options);
+    restrict::restrict(&mut program);
+    program
+}
+
+/// Front: check WF-NF, then [`order_unrestricted`] (total).
 pub fn compile_unrestricted(
     source: &cq::Program,
     options: &Options,
 ) -> syn::Result<valuation::Program> {
-    cq::normal::check(source)?;
-    let mut program = assemble(source, options)?;
-    drain_ready_checks(&mut program)?;
-    valuation::contract::check(&program)?;
-    Ok(program)
+    Ok(order_unrestricted(Normal::check(source)?, options))
 }
 
-/// Assemble an intermediate schedule before I2 drainage and VO-Order checking.
-fn assemble(source: &cq::Program, options: &Options) -> syn::Result<valuation::Program> {
-    let steps = compile_body(source, options, &BTreeSet::new(), &BTreeSet::new(), None)?;
-    Ok(valuation::Program {
+/// The ordered schedule with every predicate at its prefix position. A
+/// planner that reschedules prefix steps does so here, then calls [`restrict`].
+pub fn order_unrestricted(source: Normal<'_>, options: &Options) -> valuation::Program {
+    let mut program = assemble(source, options);
+    drain(&mut program);
+    program
+}
+
+/// Assemble an intermediate schedule before I2 drainage.
+fn assemble(source: Normal<'_>, options: &Options) -> valuation::Program {
+    let source = source.0;
+    let steps = compile_body(source, options, &BTreeSet::new(), &BTreeSet::new(), None);
+    valuation::Program {
         cq: source.clone(),
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
@@ -692,13 +738,32 @@ fn assemble(source: &cq::Program, options: &Options) -> syn::Result<valuation::P
             brace: Default::default(),
             steps,
         },
-    })
+    }
+}
+
+/// Front: establish the WF-VO binding facts of `program` (`order::analyze`,
+/// which omits VO-Order), then drain (total).
+pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
+    let analysis = valuation::order::analyze(program)?;
+    drain_with(program, &analysis);
+    Ok(())
+}
+
+/// Drain a schedule this crate assembled. Drainage is defined on schedules
+/// with WF-VO binding facts; a schedule from a WF-NF CQ has them (C5), and
+/// one built from resolved advice may not (an authored read before its Rust
+/// binder). Such a schedule is returned undrained: the pipeline's WF-VO
+/// check, which contains the same analysis, judges it.
+fn drain(program: &mut valuation::Program) {
+    if let Ok(analysis) = valuation::order::analyze(program) {
+        drain_with(program, &analysis);
+    }
 }
 
 /// Drain ready nonintroducing steps before every introduction, preserving
 /// introducing choices and exact projected subatoms. This is producer logic;
 /// the independent VO-Order checker validates the resulting schedule.
-pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
+fn drain_with(program: &mut valuation::Program, analysis: &valuation::Analysis) {
     fn scope(steps: &mut Vec<valuation::Step>, analysis: &valuation::Analysis) {
         for step in steps.iter_mut() {
             if let valuation::Step::Block(block, _) = step {
@@ -732,23 +797,6 @@ pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
                     let facts = &analysis.order[order[next]];
                     !facts.preprocessing && facts.ready(&bound) && !facts.introduces(&bound)
                 }) {
-                    // I2 moves an existing check, not its provider phase.
-                    // Newly adjacent introductions must not turn it into an
-                    // alternate supplier during Physical selection.
-                    let crossed = (position..next).filter_map(|crossed| {
-                        if analysis.introduces[order[crossed]].is_empty() {
-                            return None;
-                        }
-                        match &steps[crossed] {
-                            valuation::Step::Atom(atom, _) => Some(atom.clause.clone()),
-                            _ => None,
-                        }
-                    }).collect::<Vec<_>>();
-                    let moved_after = (!crossed.is_empty()).then(|| cq::syntax::algebra::MovedAfter {
-                        after_token: Default::default(),
-                        bracket: Default::default(),
-                        occurrences: crossed.into_iter().collect(),
-                    });
                     // Removing a separating check must not make the following
                     // standalone check an alternate candidate provider.
                     if next != position && next + 1 < steps.len()
@@ -758,14 +806,14 @@ pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
                             following.check = Some(Default::default());
                         }
                     }
+                    // I2 moves an existing check, not its provider phase.
+                    // Newly adjacent introductions must not turn it into an
+                    // alternate supplier during Physical selection.
                     if next != position || matches!(&steps[next],
                         valuation::Step::Atom(atom, _) if atom.variables().next().is_none())
                     {
                         if let valuation::Step::Atom(atom, _) = &mut steps[next] {
                             atom.check = Some(Default::default());
-                            if moved_after.is_some() {
-                                atom.moved_after = moved_after;
-                            }
                         }
                     }
                     steps[position..=next].rotate_right(1);
@@ -775,22 +823,26 @@ pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
             bound.extend(analysis.order[order[position]].provides.iter().cloned());
         }
     }
-    let analysis = valuation::order::analyze(program)?;
-    scope(&mut program.valuation.steps, &analysis);
+    scope(&mut program.valuation.steps, analysis);
+}
+
+/// Front: check WF-VO of the unrestricted schedule, then record its
+/// occurrence restrictions (O-Restrict, total).
+pub fn restrict(program: &mut valuation::Program) -> syn::Result<()> {
+    valuation::contract::check(program)?;
+    restrict::restrict(program);
     Ok(())
 }
 
-/// Record the occurrence restrictions (O-Restrict) of an unrestricted
-/// schedule, then check the VO contract.
-pub fn restrict(program: &mut valuation::Program) -> syn::Result<()> {
-    restrict::restrict(program);
-    valuation::contract::check(program).map(drop)
+/// Front: check WF-NF, then [`order_written`] (total).
+pub fn compile_written(source: &cq::Program) -> syn::Result<valuation::Program> {
+    Ok(order_written(Normal::check(source)?))
 }
 
 /// Record Written/Coarse with per-prefix block arms and earliest-ready checks.
 /// It records no restriction: every predicate stays a prefix step.
 /// Formal rule O-WrittenBlocks: Written-reference construction records Correlated on every block recursively.
-pub fn compile_written(source: &cq::Program) -> syn::Result<valuation::Program> {
+pub fn order_written(source: Normal<'_>) -> valuation::Program {
     fn correlate(steps: &mut [valuation::Step]) {
         for step in steps {
             if let valuation::Step::Block(block, _) = step {
@@ -801,11 +853,10 @@ pub fn compile_written(source: &cq::Program) -> syn::Result<valuation::Program> 
             }
         }
     }
-    let mut program = compile_unrestricted(source, &Options::default())?;
+    let mut program = order_unrestricted(source, &Options::default());
     correlate(&mut program.valuation.steps);
-    drain_ready_checks(&mut program)?;
-    valuation::contract::check(&program)?;
-    Ok(program)
+    drain(&mut program);
+    program
 }
 
 /// A top-level positive atom selected by relation, optionally qualified by its
@@ -913,64 +964,102 @@ impl OrderAtom {
     }
 }
 
+/// Top-level step advice resolved against one normal-form body: each read
+/// names its clause and, for a subatom, the variables it retains.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Advice {
+    reads: Vec<(usize, Option<BTreeSet<String>>)>,
+}
+
+/// Resolve authored step advice against the normal-form body: the
+/// well-formedness of the advice itself, not of the schedule it yields.
+/// Formal rule O-AdviceResolve: Each selector names one top-level positive atom or block; subatom columns are distinct variables of a positive atom; a full read of an occurrence is named at most once.
+pub fn resolve(source: Normal<'_>, selectors: &[OrderAtom]) -> syn::Result<Advice> {
+    let source = source.0;
+    let body = &source.query.body;
+    let resolve = |selector: &OrderAtom| -> syn::Result<(usize, Option<BTreeSet<String>>, bool)> {
+        let clause = selector.resolve_in(body)?;
+        let atom = match &body[clause] {
+            BodyItem::Positive { atom } => Some(atom),
+            _ => None,
+        };
+        let Some(columns) = &selector.columns else {
+            return Ok((clause, None, true));
+        };
+        let Some(atom) = atom else {
+            return Err(syn::Error::new_spanned(
+                &selector.relation,
+                "subatom advice requires a positive atom, not a block",
+            ));
+        };
+        let mut selected = BTreeSet::new();
+        for column in columns {
+            let name = symbol_name(column);
+            if !atom.variables().any(|v| symbol_name(v) == name) {
+                return Err(syn::Error::new_spanned(
+                    column,
+                    "order subatom column does not belong to this occurrence",
+                ));
+            }
+            if !selected.insert(name) {
+                return Err(syn::Error::new_spanned(
+                    column,
+                    "duplicate order subatom column",
+                ));
+            }
+        }
+        let full = selected.len() == atom.variables().count();
+        Ok((clause, Some(selected), full))
+    };
+    let mut full_occurrences = BTreeSet::new();
+    let mut reads = Vec::with_capacity(selectors.len());
+    for selector in selectors {
+        let (clause, columns, full) = resolve(selector).map_err(|error| {
+            syn::Error::new_spanned(&source.name, format!("query `{}`: {error}", source.name))
+        })?;
+        if full && !full_occurrences.insert(clause) {
+            return Err(syn::Error::new_spanned(
+                &source.name,
+                format!("query `{}`: occurrence named twice in order advice", source.name),
+            ));
+        }
+        reads.push((clause, columns));
+    }
+    Ok(Advice { reads })
+}
+
 /// Author a top-level occurrence or subatom order without rewriting the query.
 /// Unqualified relations must occur exactly once; `R@i` selects the positive
 /// atom named R at normal-body clause i, including non-atom clauses in the
 /// numbering. `block@i` selects a block as a unit. Unnamed introducing atoms
 /// retain written priority after named atoms/blocks. Ready nonintroducing
-/// checks drain first; illegal readiness or connectivity choices are rejected.
-/// `R@i(cols)` retains exactly those columns: a bound-only partial read is
-/// a lookup, otherwise a partial read may introduce one variable (Fine).
-/// Named partial occurrences must be explicitly completed by a full read.
+/// checks drain first. `R@i(cols)` retains exactly those columns: a
+/// bound-only partial read is a lookup, otherwise a partial read may
+/// introduce one variable (Fine). Named partial occurrences must be
+/// explicitly completed by a full read; [`check_advice`] refuses schedules
+/// that violate WF-VO, VO-Order or the advised lookup phases.
+/// Front: check WF-NF, resolve the advice (O-AdviceResolve), then
+/// [`order_advised`] (total).
 pub fn compile_explicit(
     source: &cq::Program,
     relations: &[OrderAtom],
 ) -> syn::Result<valuation::Program> {
-    cq::normal::check(source)?;
-    compile_steps(source, relations).map_err(|error| {
-        syn::Error::new_spanned(
-            &source.name,
-            format!("query `{}`: {error}", source.name),
-        )
-    })
+    let normal = Normal::check(source)?;
+    Ok(order_advised(normal, &resolve(normal, relations)?))
 }
 
-/// Formal rule O-StepAdvice: Preserve authored introductions, drain ready checks, and check VO-Order plus selected CK-Le phases.
-fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<valuation::Program> {
+/// Formal rule O-StepAdvice: Preserve authored introductions and unnamed written priority, then drain ready checks; total on resolved advice.
+pub fn order_advised(source: Normal<'_>, advice: &Advice) -> valuation::Program {
     let context = BTreeSet::new();
-    let clauses = clauses(&source.query.body, &context);
-    let mut program = assemble(source, &Options::default())?;
+    let clauses = clauses(&source.0.query.body, &context);
+    let mut program = assemble(source, &Options::default());
     let mut ordinary: Vec<_> = program.valuation.steps.into_iter().map(Some).collect();
     let mut pending = Vec::new();
     let mut named = BTreeSet::new();
-    let mut full_occurrences = BTreeSet::new();
-    for selector in selectors {
-        let clause = selector.resolve(source)?;
-        named.insert(clause);
-        let mut step = ordinary[clause].as_ref().expect("source clause").clone();
-        if let Some(columns) = &selector.columns {
-            let valuation::Step::Atom(atom, _) = &mut step else {
-                return Err(syn::Error::new_spanned(
-                    &selector.relation,
-                    "subatom advice requires a positive atom, not a block",
-                ));
-            };
-            let mut selected = BTreeSet::new();
-            for column in columns {
-                let name = symbol_name(column);
-                if !atom.variables().any(|(_, v)| symbol_name(v) == name) {
-                    return Err(syn::Error::new_spanned(
-                        column,
-                        "order subatom column does not belong to this occurrence",
-                    ));
-                }
-                if !selected.insert(name) {
-                    return Err(syn::Error::new_spanned(
-                        column,
-                        "duplicate order subatom column",
-                    ));
-                }
-            }
+    for (clause, columns) in &advice.reads {
+        named.insert(*clause);
+        let mut step = ordinary[*clause].as_ref().expect("source clause").clone();
+        if let (Some(selected), valuation::Step::Atom(atom, _)) = (columns, &mut step) {
             atom.columns = atom
                 .columns
                 .iter()
@@ -982,24 +1071,13 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
                 })
                 .collect();
         }
-        let full = match &step {
-            valuation::Step::Atom(atom, _) => atom.variables().count() == atom.columns.len(),
-            valuation::Step::Block(_, _) => true,
-            _ => unreachable!("advice selects positive atoms or blocks"),
-        };
-        if full && !full_occurrences.insert(clause) {
-            return Err(syn::Error::new_spanned(
-                &selector.relation,
-                "occurrence named twice in order advice",
-            ));
-        }
-        pending.push((clause, step, selector.columns.is_some()));
+        pending.push((*clause, step));
     }
     // Partial occurrences must be completed explicitly. Only entirely unnamed
     // occurrences retain the old written-priority completion.
     for (clause, facts) in clauses.iter().enumerate() {
         if facts.atom.is_some() && !named.contains(&clause) {
-            pending.push((clause, ordinary[clause].take().unwrap(), false));
+            pending.push((clause, ordinary[clause].take().expect("unnamed source clause")));
         }
     }
     let mut waiting: BTreeSet<_> = clauses
@@ -1009,10 +1087,8 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
         .collect();
     let mut bound = BTreeSet::new();
     let mut steps = Vec::new();
-    let mut lookups = BTreeSet::new();
-    let mut fine = BTreeSet::new();
-    let partial_advice = selectors.iter().any(|selector| selector.columns.is_some());
-    for (clause, step, explicit_columns) in pending {
+    let partial_advice = advice.reads.iter().any(|(_, columns)| columns.is_some());
+    for (clause, step) in pending {
         let demand = partial_advice.then(|| match &step {
             valuation::Step::Atom(atom, _) => {
                 atom.variables().map(|(_, v)| symbol_name(v)).collect::<BTreeSet<_>>()
@@ -1029,23 +1105,9 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
         );
         match &step {
             valuation::Step::Atom(atom, _) => {
-                let introduced: Vec<_> = atom
-                    .variables()
-                    .map(|(_, v)| symbol_name(v))
-                    .filter(|name| !bound.contains(name))
-                    .collect();
-                let partial = atom.variables().count() < atom.columns.len();
-                if explicit_columns && partial && introduced.is_empty() && !fine.contains(&clause) {
-                    lookups.insert(clause);
-                } else if explicit_columns && partial {
-                    fine.insert(clause);
-                }
-                bound.extend(introduced);
+                bound.extend(atom.variables().map(|(_, v)| symbol_name(v)));
             }
-            valuation::Step::Block(_, _) => {
-                bound.extend(clauses[clause].provides.iter().cloned());
-            }
-            _ => unreachable!("advice selects positive atoms or blocks"),
+            _ => bound.extend(clauses[clause].provides.iter().cloned()),
         }
         steps.push(step);
     }
@@ -1058,10 +1120,51 @@ fn compile_steps(source: &cq::Program, selectors: &[OrderAtom]) -> syn::Result<v
         None,
     );
     program.valuation.steps = steps;
-    drain_ready_checks(&mut program)?;
+    drain(&mut program);
     restrict::restrict(&mut program);
-    le::check_advice(source, &program, &lookups)?;
-    Ok(program)
+    program
+}
+
+/// Check a schedule produced from step advice: WF-VO, VO-Order and the
+/// CK-Le phases of the advised lookups.
+/// Formal rule CK-StepAdvice: With L the occurrences whose first advised partial read introduces nothing in t, t passes WF-VO, VO-Order and CK-Le over L.
+pub fn check_advice(
+    source: &cq::Program,
+    target: &valuation::Program,
+    relations: &[OrderAtom],
+) -> syn::Result<()> {
+    let advice = resolve(Normal::check(source)?, relations)?;
+    let analysis = valuation::contract::check(target)?;
+    let mut first_partial = BTreeMap::new();
+    for (clause, columns) in &advice.reads {
+        if let (BodyItem::Positive { atom }, Some(columns)) = (&source.query.body[*clause], columns) {
+            if columns.len() < atom.variables().count() {
+                first_partial.entry(*clause).or_insert(columns);
+            }
+        }
+    }
+    // A zero-column read introduces nothing; O-EmptyCheck may omit it.
+    let lookups = first_partial
+        .into_iter()
+        .filter(|&(clause, columns)| {
+            columns.is_empty()
+                || target
+                    .valuation
+                    .steps
+                    .iter()
+                    .zip(&analysis.introduces)
+                    .find(|(step, _)| {
+                        matches!(step, valuation::Step::Atom(atom, _)
+                            if atom.clause() == clause
+                                && atom.variables().count() < atom.columns.len()
+                                && atom.variables().map(|(_, v)| symbol_name(v))
+                                    .collect::<BTreeSet<_>>() == *columns)
+                    })
+                    .is_some_and(|(_, introduced)| introduced.is_empty())
+        })
+        .map(|(clause, _)| clause)
+        .collect();
+    le::check_advice(source, target, &analysis, &lookups)
 }
 
 /// Place ready unadvised clauses before the next advised step. Filters
@@ -1105,7 +1208,7 @@ fn place_ready_advice(
     }
 }
 
-/// Formal rule O-BlockPlacement: Ordinary ordering hoists Rust-free blocks and correlates blocks containing Rust steps.
+/// Order one scope; blocks are placed by O-BlockPlacement ([`correlated`]).
 /// `context` is the scope's visible lexical context; `seed` the columns its
 /// seed provides (all of `context`, except in a hoisted arm without a finite
 /// domain, which starts from none).
@@ -1115,7 +1218,7 @@ fn compile_body(
     context: &BTreeSet<String>,
     seed: &BTreeSet<String>,
     parent: Option<(valuation::Occurrence, usize)>,
-) -> syn::Result<Vec<valuation::Step>> {
+) -> Vec<valuation::Step> {
     let query = &source.query;
     let clauses = clauses(&query.body, context);
     let hypergraph = cq::hypergraph::Analysis::of_body(&query.body, context);
@@ -1130,12 +1233,11 @@ fn compile_body(
                     .flat_map(cq::hypergraph::LocalPredicate::restrictions),
             );
             let sequence = schedule(
-                query,
                 &clauses,
                 seed,
                 filtered_rank(&clauses, &filters),
                 false,
-            )?;
+            );
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
@@ -1146,23 +1248,22 @@ fn compile_body(
         }
         Heuristic::WrittenConnected => {
             let sequence = schedule(
-                query, &clauses, seed, |clause, _| (false, false, 0, clause), true,
-            )?;
+                &clauses, seed, |clause, _| (false, false, 0, clause), true,
+            );
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
         Heuristic::Prefix(ranking) => {
             let sequence = schedule(
-                query,
                 &clauses,
                 seed,
                 prefix_rank(&clauses, ranking),
                 false,
-            )?;
+            );
             let variables = binding_order(&clauses, &sequence);
             (sequence, variables)
         }
-        Heuristic::Elimination => elimination(source, &clauses, seed)?,
+        Heuristic::Elimination => elimination(source, &clauses, seed),
     };
     // Elimination removes leaves first. Enumerating in that direction joins
     // their independent projections before any connecting variable is bound.
@@ -1200,7 +1301,7 @@ fn compile_body(
     let steps = match options.split {
         Split::Coarse => coarse(&clauses, &sequence),
         Split::Fine if written_preference => written_fine(&clauses, &sequence, context),
-        Split::Fine => fine(query, &clauses, &sequence, &variables, context, seed)?,
+        Split::Fine => fine(&clauses, &sequence, &variables, context, seed),
     };
     let mut prefix = context.clone();
     let mut written_contexts = Vec::new();
@@ -1222,7 +1323,8 @@ fn compile_body(
         if let BodyItem::Block(block) = clauses[clause].item {
             let facts = block.analyze(&written_contexts[clause]);
             let context = facts.free.keys().cloned().collect();
-            let seed = if facts.rust || block.needs_domain(&facts) {
+            let correlated = correlated(block, &facts);
+            let seed = if correlated || block.needs_domain(&facts) {
                 &context
             } else {
                 &BTreeSet::new()
@@ -1239,13 +1341,13 @@ fn compile_body(
                         &context,
                         seed,
                         Some((atom.clause.clone(), j)),
-                    )?,
+                    ),
                 });
             }
             result.push(valuation::Step::Block(
                 valuation::blocks::Block {
                     source: atom,
-                    placement: if facts.rust {
+                    placement: if correlated {
                         valuation::blocks::Placement::Correlated
                     } else {
                         valuation::blocks::Placement::Hoisted
@@ -1259,7 +1361,7 @@ fn compile_body(
             result.push(valuation::Step::Atom(atom, semi));
         }
     }
-    Ok(result)
+    result
 }
 
 /// Check normal form, unchanged CQ, split granularity and explicit order.

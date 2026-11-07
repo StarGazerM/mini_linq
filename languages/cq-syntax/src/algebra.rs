@@ -26,50 +26,6 @@ pub mod kw {
     syn::custom_keyword!(sum);
     syn::custom_keyword!(min);
     syn::custom_keyword!(max);
-    syn::custom_keyword!(absorbed);
-    syn::custom_keyword!(via);
-    syn::custom_keyword!(after);
-    syn::custom_keyword!(left);
-}
-
-/// Named restoration of an I2-moved check's former reduction input. The
-/// source-to-target RA certificate checks the exact restoring join; later
-/// representations transport the fact without selecting again.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct Absorption {
-    pub absorbed_token: kw::absorbed,
-    pub left_token: Option<kw::left>,
-    pub reduced: Ident,
-    pub via_token: kw::via,
-    pub consumer: Ident,
-}
-
-pub fn parse_absorptions(input: syn::parse::ParseStream<'_>) -> syn::Result<Vec<Absorption>> {
-    let mut facts = Vec::new();
-    while input.peek(kw::absorbed) {
-        facts.push(input.parse()?);
-    }
-    Ok(facts)
-}
-
-/// Introducing occurrences crossed by an I2-drained check. These supplied
-/// its old positive prefix; provenance is transported, never reconstructed.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
-pub struct MovedAfter {
-    pub after_token: kw::after,
-    #[syn(bracketed)]
-    pub bracket: token::Bracket,
-    #[syn(in = bracket)]
-    #[parse(CommaList::parse_terminated)]
-    pub occurrences: CommaList<crate::Occurrence>,
-}
-
-pub fn parse_moved_after(input: syn::parse::ParseStream<'_>) -> syn::Result<Option<MovedAfter>> {
-    if input.peek(kw::after) {
-        input.parse().map(Some)
-    } else {
-        Ok(None)
-    }
 }
 
 /// Group a set of complete named valuations; aggregate arguments retain
@@ -240,8 +196,6 @@ pub struct Union {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct BlockOrigin {
     pub block_token: kw::block,
-    pub at: Token![@],
-    pub occurrence: crate::Occurrence,
     pub free_token: kw::free,
     #[syn(bracketed)]
     pub free_bracket: token::Bracket,
@@ -333,7 +287,7 @@ pub struct AttributeRename {
 /// Filter literal source columns, drop them, and rename the remaining columns.
 ///
 /// ```text
-/// Rename ::= "rename" RelationName "@" Int "{"
+/// Rename ::= "rename" RelationName "{"
 ///              [AttributeRename ("," AttributeRename)* [","]]
 ///            "}" ["constants" "{" Equality ("," Equality)* [","] "}"]
 /// ```
@@ -341,8 +295,6 @@ pub struct AttributeRename {
 pub struct Rename {
     pub rename_token: kw::rename,
     pub relation: Ident,
-    pub at: Token![@],
-    pub occurrence: crate::Occurrence,
     #[syn(braced)]
     pub mapping_brace: token::Brace,
     #[syn(in = mapping_brace)]
@@ -745,20 +697,6 @@ pub struct Environment {
     #[syn(in = bracket)]
     #[parse(CommaList::parse_terminated)]
     pub variables: CommaList<Ident>,
-    /// Written clause path, including branch ancestry for block programs.
-    #[parse(parse_environment_path)]
-    #[to_tokens(|tokens: &mut proc_macro2::TokenStream, path: &Option<crate::Occurrence>| if let Some(path) = path { tokens.extend(quote::quote!(@ #path)); })]
-    pub path: Option<crate::Occurrence>,
-}
-fn parse_environment_path(
-    input: syn::parse::ParseStream<'_>,
-) -> syn::Result<Option<crate::Occurrence>> {
-    if input.peek(Token![@]) {
-        input.parse::<Token![@]>()?;
-        input.parse().map(Some)
-    } else {
-        Ok(None)
-    }
 }
 impl Environment {
     pub fn check(
@@ -766,9 +704,6 @@ impl Environment {
         heading: &std::collections::BTreeSet<String>,
         _expression: &syn::Expr,
     ) -> syn::Result<()> {
-        if let Some(path) = &self.path {
-            path.check()?;
-        }
         let names: std::collections::BTreeSet<_> =
             self.variables.iter().map(crate::symbol_name).collect();
         if names.len() != self.variables.len() || !names.is_subset(heading) {

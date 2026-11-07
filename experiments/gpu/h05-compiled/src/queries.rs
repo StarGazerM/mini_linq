@@ -73,17 +73,17 @@ macro_rules! compiled_le {
                 relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&$data.orders);
                 relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&$data.lineitem);
                 relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&$data.supplier);
-                region_base = pipe rename Region@0 {r_regionkey -> region,r_name -> region_name};
+                region_base = pipe rename Region {r_regionkey -> region,r_name -> region_name};
                 region_selected = pipe select region_base if (region_name = 2);
                 r1 = let project region_selected keep {region};
-                nation_base = pipe rename Nation@1 {n_nationkey -> nation,n_regionkey -> region};
+                nation_base = pipe rename Nation {n_nationkey -> nation,n_regionkey -> region};
                 r2 = let semi eager [region] nation_base,r1;
-                customer = let rename Customer@2 {c_custkey -> customer,c_nationkey -> nation};
-                orders_base = pipe rename Orders@3 {o_orderkey -> order,o_custkey -> customer,o_orderdate -> date};
+                customer = let rename Customer {c_custkey -> customer,c_nationkey -> nation};
+                orders_base = pipe rename Orders {o_orderkey -> order,o_custkey -> customer,o_orderdate -> date};
                 orders_selected = pipe select orders_base if (date >= 8766,date < 9131);
                 orders = let project orders_selected keep {order,customer};
-                lineitem = let rename Lineitem@4 {l_orderkey -> order,l_suppkey -> supplier};
-                supplier = let rename Supplier@5 {s_suppkey -> supplier,s_nationkey -> nation};
+                lineitem = let rename Lineitem {l_orderkey -> order,l_suppkey -> supplier};
+                supplier = let rename Supplier {s_suppkey -> supplier,s_nationkey -> nation};
                 $($physical)*
                 answer = let canon project matched keep {order,supplier,nation};
                 return answer as answer(order,supplier,nation);
@@ -199,16 +199,16 @@ macro_rules! reference {
             relation Orders(o_orderkey:u32,o_custkey:u32,o_orderdate:i32) = (&$data.orders);
             relation Lineitem(l_orderkey:u32,l_suppkey:u32) = (&$data.lineitem);
             relation Supplier(s_suppkey:u32,s_nationkey:u32) = (&$data.supplier);
-            region_base = pipe rename Region@0 {r_regionkey -> region,r_name -> region_name};
+            region_base = pipe rename Region {r_regionkey -> region,r_name -> region_name};
             region_selected = pipe select region_base if (region_name = 2);
             region_asia = let project region_selected keep {region};
-            nation_index = let rename Nation@1 {n_nationkey -> nation,n_regionkey -> region};
-            customer_index = let rename Customer@2 {c_custkey -> customer,c_nationkey -> nation};
-            orders_base = pipe rename Orders@3 {o_orderkey -> order,o_custkey -> customer,o_orderdate -> order_date};
+            nation_index = let rename Nation {n_nationkey -> nation,n_regionkey -> region};
+            customer_index = let rename Customer {c_custkey -> customer,c_nationkey -> nation};
+            orders_base = pipe rename Orders {o_orderkey -> order,o_custkey -> customer,o_orderdate -> order_date};
             orders_selected = pipe select orders_base if (order_date >= 8766,order_date < 9131);
             orders_index = let project orders_selected keep {order,customer};
-            lineitem_index = let rename Lineitem@4 {l_orderkey -> order,l_suppkey -> supplier};
-            supplier_index = let rename Supplier@5 {s_suppkey -> supplier,s_nationkey -> nation};
+            lineitem_index = let rename Lineitem {l_orderkey -> order,l_suppkey -> supplier};
+            supplier_index = let rename Supplier {s_suppkey -> supplier,s_nationkey -> nation};
             rn = pipe probe first [region] region_asia,nation_index;
             rnc = let probe first [nation] rn,customer_index;
             rnco = pipe probe first [customer] rnc,orders_index;
@@ -292,7 +292,7 @@ pub fn chain<'a>(input: &'a DeviceColumns<'_, Answer>) -> DeviceColumns<'a, Answ
         };
         physical {
             relation Input(order:u32,supplier:u32,nation:u32) = (input);
-            source = pipe rename Input@0 {order -> order,supplier -> supplier,nation -> nation};
+            source = pipe rename Input {order -> order,supplier -> supplier,nation -> nation};
             answer = let canon project source keep {order,supplier,nation};
             return answer as answer(order,supplier,nation);
         }

@@ -203,8 +203,8 @@ mini_linq::passes::select! {{
     }};
     physical {{
         relation L(a:i64) = (&left); relation R(a:i64,b:i64) = (&right);
-        l = pipe rename L@0 {{a -> x}};
-        r = let rename R@1 {{a -> x,b -> y}};
+        l = pipe rename L {{a -> x}};
+        r = let rename R {{a -> x,b -> y}};
         {semi}
         p = pipe {operator} [x] {outer},r;
         out = let canon project p keep {{x,y}};
@@ -320,8 +320,8 @@ mini_linq::passes::select! {{
         mini_linq::passes::translate_pull }};
     physical {{
         relation L(a:i64) = (&left) {host_reads}; relation R(a:i64,b:i64) = (&right) {host_reads};
-        l = pipe rename L@0 {{a -> x}};
-        r = pipe rename R@1 {{a -> x,b -> y}};
+        l = pipe rename L {{a -> x}};
+        r = pipe rename R {{a -> x,b -> y}};
         p = let canon merge [x] l,r;
         return p as answer(x,y);
     }}
@@ -352,8 +352,8 @@ mini_linq::passes::select! {{
                 mini_linq::passes::translate_pull }};
             physical {{
                 relation L(a:i64,b:i64) = (&left); relation R(b:i64,c:i64) = (&right);
-                l = pipe rename L@0 {{a -> x,b -> y}};
-                r = pipe rename R@1 {{b -> x,c -> z}};
+                l = pipe rename L {{a -> x,b -> y}};
+                r = pipe rename R {{b -> x,c -> z}};
                 s = let point select r if (z = 1);
                 t = let semi eager [x] l,s;
                 u = pipe semi eager [x] s,t;
@@ -411,9 +411,9 @@ fn candidate_directory_requires_candidates_not_just_matching_level_syntax() {
                 relation L(a:i64,b:i64) = (&lrows);
                 relation R(b:i64,c:i64) = (&rrows);
                 relation S(a:i64,c:i64) = (&srows);
-                l = pipe rename L@0 {{a -> a,b -> b}};
-                r = let rename R@1 {{b -> b,c -> c}};
-                s = let rename S@2 {{a -> a,c -> c}};
+                l = pipe rename L {{a -> a,b -> b}};
+                r = let rename R {{b -> b,c -> c}};
+                s = let rename S {{a -> a,c -> c}};
                 candidate = pipe probe smallest [b] l,r;
                 checked = let canon semi eager [a,c] candidate,s;
                 return checked as answer(a,b,c);
@@ -447,7 +447,7 @@ mini_linq::passes::sequence! {
     pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
     physical {
         relation R(a:i64,b:i64) = (&right);
-        r = pipe rename R@0 {a -> a,b -> b};
+        r = pipe rename R {a -> a,b -> b};
         selected = pipe point select r if (a = 1);
         out = let canon project selected keep {a,b};
         return out as answer(a,b);
@@ -466,8 +466,8 @@ mini_linq::passes::sequence! {
             physical {
                 relation L(k:i64,payload:i64) = (&left);
                 relation R(k:i64,v:i64) = (&right);
-                l = pipe rename L@0 {k -> k,payload -> p};
-                r = let rename R@1 {k -> k,v -> v};
+                l = pipe rename L {k -> k,payload -> p};
+                r = let rename R {k -> k,v -> v};
                 joined = pipe probe first [k] l,r;
                 out = let canon project joined keep {k,p,v};
                 return out as answer(k,p,v);

@@ -60,7 +60,7 @@ fn named_tile_pipeline_preserves_rows_across_join() {
     let program = program(syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = pipe rename R@0 {a -> a};
+            r = pipe rename R {a -> a};
             out = let canon project r keep {a};
             return out as answer(a);
         }
@@ -81,8 +81,8 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
             consumer canonical;
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             return j as answer(a,b);
         }
@@ -114,8 +114,8 @@ fn join() {
     let program = program(syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
@@ -140,9 +140,9 @@ fn chain() {
     let program = program(syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32,c:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
-            s = let rename S@2 {b -> b,c -> c};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
+            s = let rename S {b -> b,c -> c};
             j = pipe probe first [a] l,r;
             k = let canon probe first [b] j,s;
             return k as answer(a,b,c);
@@ -172,8 +172,8 @@ fn semi() {
     let program = program(syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a};
             j = let canon semi eager [a] l,r;
             return j as answer(a);
         } structures { providers {  }}
@@ -194,7 +194,7 @@ fn canon_sorts_the_whole_stream_across_task_boundaries() {
     let program = program(syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         } structures { providers {  }}
         sequence {
@@ -215,7 +215,7 @@ fn empty_and_partial_tiles_have_equal_answers() {
     let program = program(syn::parse_quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         } structures { providers {  }}
         sequence { input = store rows r; result = store tile 2 canon input; }

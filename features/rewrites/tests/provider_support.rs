@@ -78,8 +78,8 @@ fn declared() -> proc_macro2::TokenStream {
 fn source() -> (ir::physical::Program, ir::Program) {
     let physical = syn::parse_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x,b -> y};
         s = pipe semi eager [x] l,r;
         p = pipe probe first [x] s,r;
         out = let canon project p keep {x,y};
@@ -252,8 +252,8 @@ macro_rules! query {
             };
             physical {
                 relation L(a:i64) = ($left); relation R(a:i64,b:i64) = ($right);
-                l = pipe rename L@0 {a -> x};
-                r = let rename R@1 {a -> x,b -> y};
+                l = pipe rename L {a -> x};
+                r = let rename R {a -> x,b -> y};
                 s = pipe semi eager [x] l,r;
                 p = pipe probe first [x] s,r;
                 observed = pipe guard p if ({ $visits.borrow_mut().push((*x, *y)); true });
@@ -330,8 +330,8 @@ fn whole_relation_reads_preserve_cartesian_occurrences() {
         pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(a:i64) = (&left); relation R(b:i64) = (&right);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {b -> y};
             s = pipe semi eager [] l,r;
             p = pipe probe first [] s,r;
             observed = pipe guard p if ({ visits.borrow_mut().push((*x,*y)); true });

@@ -1135,14 +1135,14 @@ mod tests {
         let db = database(&[("R", &[&[1, 2]]), ("S", &[&[1, 3], &[9, 2]])]);
         let full: physical::Program = syn::parse_quote!(physical {
             relation R(a: i32, b: i32); relation S(a: i32, b: i32); relation answer(a: i32, b: i32);
-            r = pipe rename R@0 { a -> a, b -> b }; s = let rename S@1 { a -> a, b -> b };
+            r = pipe rename R { a -> a, b -> b }; s = let rename S { a -> a, b -> b };
             j = pipe probe first [a, b] r, s; return j as answer(a, b);
         });
         assert_eq!(run(full, &db).unwrap(), TypedRows::new());
         // Dropping key column `b` keeps the stream-side `b`: (1, 2) via S(1, 3).
         let dropped: physical::Program = syn::parse_quote!(physical {
             relation R(a: i32, b: i32); relation S(a: i32, b: i32); relation answer(a: i32, b: i32);
-            r = pipe rename R@0 { a -> a, b -> b }; s = let rename S@1 { a -> a, b -> b };
+            r = pipe rename R { a -> a, b -> b }; s = let rename S { a -> a, b -> b };
             j = pipe probe first [a] r, s; return j as answer(a, b);
         });
         assert_eq!(run(dropped, &db).unwrap(), rows(&[&[1, 2]]));
@@ -1153,19 +1153,19 @@ mod tests {
         let db = database(&[("R", &[&[1], &[3], &[i32::MAX]])]);
         let contradictory: physical::Program = syn::parse_quote!(physical {
             relation R(x: i32); relation answer(x: i32);
-            r = pipe rename R@0 { x -> x }; s = pipe select r if (x < 2, x = 3);
+            r = pipe rename R { x -> x }; s = pipe select r if (x < 2, x = 3);
             return s as answer(x);
         });
         assert_eq!(run(contradictory, &db).unwrap(), TypedRows::new());
         let overflow: physical::Program = syn::parse_quote!(physical {
             relation R(x: i32); relation answer(y: i32);
-            r = pipe rename R@0 { x -> x }; b = pipe bind r with y: i32 = (x.to_owned() + 1);
+            r = pipe rename R { x -> x }; b = pipe bind r with y: i32 = (x.to_owned() + 1);
             p = let canon project b keep { y }; return p as answer(y);
         });
         assert!(matches!(run(overflow, &db), Err(Error::Panic(_))));
         let bounded: physical::Program = syn::parse_quote!(physical {
             relation R(x: i32); relation answer(y: i32);
-            r = pipe rename R@0 { x -> x }; g = pipe guard r if (*x < 3);
+            r = pipe rename R { x -> x }; g = pipe guard r if (*x < 3);
             b = pipe bind g with y: i32 = ((10i32 / (((x.to_owned()) % 3) + 4)));
             p = let canon project b keep { y }; return p as answer(y);
         });
@@ -1177,7 +1177,7 @@ mod tests {
         let db = database(&[("R", &[&[1, 5], &[1, 7], &[2, 5]])]);
         let program: physical::Program = syn::parse_quote!(physical {
             relation R(k: i32, v: i32); relation answer(k: i32, s: i32, n: usize);
-            r = let canon rename R@0 { k -> k, v -> v };
+            r = let canon rename R { k -> k, v -> v };
             g = let group r by [k] { s: i32 = sum(*v); n: usize = count(); };
             return g as answer(k, s, n);
         });

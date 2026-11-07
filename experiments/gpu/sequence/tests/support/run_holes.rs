@@ -31,8 +31,8 @@ pub fn fixture(name: &str) -> StructuresStack {
                 relation Delta(x:i32,y:i32) = (&delta);
                 relation Edge(y:i32,z:u32) = (&edge);
                 consumer canonical;
-                d = pipe rename Delta@0 {x -> x,y -> y};
-                e = let rename Edge@1 {y -> y,z -> z};
+                d = pipe rename Delta {x -> x,y -> y};
+                e = let rename Edge {y -> y,z -> z};
                 joined = pipe probe first [y] d,e;
                 result = pipe project joined keep {x,z};
                 return result as answer(x,z);
@@ -48,8 +48,8 @@ pub fn fixture(name: &str) -> StructuresStack {
                 relation Delta(x:i32,y:i32) = (&delta);
                 relation Edge(y:i32,z:u32) = (&edge);
                 consumer canonical;
-                d = pipe rename Delta@0 {x -> x,y -> y};
-                e = pipe rename Edge@1 {y -> y,z -> z};
+                d = pipe rename Delta {x -> x,y -> y};
+                e = pipe rename Edge {y -> y,z -> z};
                 joined = pipe probe first [y] d,e;
                 // Match Datalog's owned scalar head projections.
                 owned_x = pipe bind joined with out_x:i32 = (*x);
@@ -68,8 +68,8 @@ pub fn fixture(name: &str) -> StructuresStack {
                 relation Delta(x:i32,y:i32) = (&delta);
                 relation Full(y:i32,z:i32) = (&full);
                 consumer canonical;
-                d = pipe rename Delta@0 {x -> x,y -> y};
-                e = let rename Full@1 {y -> y,z -> z};
+                d = pipe rename Delta {x -> x,y -> y};
+                e = let rename Full {y -> y,z -> z};
                 joined = pipe probe first [y] d,e;
                 result = pipe project joined keep {x,z};
                 return result as answer(x,z);
@@ -85,9 +85,9 @@ pub fn fixture(name: &str) -> StructuresStack {
                 relation Delta(a:i32,b:i32) = (&delta);
                 relation Edge(a:i32,x:u32) = (&edge);
                 consumer canonical;
-                d = pipe rename Delta@0 {a -> a,b -> b};
-                left = let rename Edge@1 {a -> a,x -> x};
-                right = let rename Edge@2 {a -> b,x -> y};
+                d = pipe rename Delta {a -> a,b -> b};
+                left = let rename Edge {a -> a,x -> x};
+                right = let rename Edge {a -> b,x -> y};
                 first = pipe probe first [a] d,left;
                 second = pipe probe first [b] first,right;
                 result = pipe project second keep {x,y};
@@ -106,8 +106,8 @@ pub fn fixture(name: &str) -> StructuresStack {
                 relation Delta(x:i32,y:i32) = (&delta);
                 relation Blocked(x:i32) = (&blocked);
                 consumer canonical;
-                d = pipe rename Delta@0 {x -> x,y -> y};
-                b = let rename Blocked@1 {x -> x};
+                d = pipe rename Delta {x -> x,y -> y};
+                b = let rename Blocked {x -> x};
                 allowed = pipe anti eager [x] d,b;
                 result = pipe project allowed keep {x,y};
                 return result as answer(x,y);
@@ -123,8 +123,8 @@ pub fn fixture(name: &str) -> StructuresStack {
                 relation Delta(x:i32,y:i32) = (&delta);
                 relation Blocked(x:i32) = (&blocked);
                 consumer canonical;
-                d = pipe rename Delta@0 {x -> x,y -> y};
-                b = pipe rename Blocked@1 {x -> x};
+                d = pipe rename Delta {x -> x,y -> y};
+                b = pipe rename Blocked {x -> x};
                 allowed = pipe anti eager [x] d,b;
                 result = pipe project allowed keep {x,y};
                 return result as answer(x,y);
@@ -139,7 +139,7 @@ pub fn fixture(name: &str) -> StructuresStack {
             physical {
                 relation Edge(x:i32,y:u32) = (&edge);
                 consumer canonical;
-                e = pipe rename Edge@0 {x -> x,y -> y};
+                e = pipe rename Edge {x -> x,y -> y};
                 result = pipe project e keep {x,y};
                 return result as answer(x,y);
             }
@@ -151,7 +151,7 @@ pub fn fixture(name: &str) -> StructuresStack {
             physical {
                 relation Edge(x:i64,y:i64) = (&edge);
                 consumer canonical;
-                e = pipe rename Edge@0 {x -> x,y -> y};
+                e = pipe rename Edge {x -> x,y -> y};
                 result = pipe project e keep {x,y};
                 return result as answer(x,y);
             }
@@ -163,7 +163,7 @@ pub fn fixture(name: &str) -> StructuresStack {
             physical {
                 relation Edge(x:i32,y:u32) = (&edge);
                 consumer canonical;
-                e = pipe rename Edge@0 {x -> x,y -> y};
+                e = pipe rename Edge {x -> x,y -> y};
                 selected = pipe guard e if (*x == host_key() && allow());
                 bound = pipe bind selected with z:u32 = (host_value());
                 result = pipe project bound keep {x,z};
@@ -177,7 +177,7 @@ pub fn fixture(name: &str) -> StructuresStack {
             physical {
                 relation Edge(x:i32,y:u32) = (&edge);
                 consumer canonical;
-                e = let rename Edge@0 {y -> y} constants {x = -7};
+                e = let rename Edge {y -> y} constants {x = -7};
                 result = pipe project e keep {y};
                 return result as answer(y);
             }
@@ -189,7 +189,7 @@ pub fn fixture(name: &str) -> StructuresStack {
             physical {
                 relation Edge(x:i64,y:i32,z:i64) = (&edge);
                 consumer canonical;
-                e = pipe rename Edge@0 {x -> x,y -> y,z -> z};
+                e = pipe rename Edge {x -> x,y -> y,z -> z};
                 result = pipe project e keep {x,y,z};
                 return result as answer(x,y,z);
             }
@@ -201,7 +201,7 @@ pub fn fixture(name: &str) -> StructuresStack {
             physical {
                 relation Edge(a:i64,b:i32,c:i64,d:i32,e:i32) = (&edge);
                 consumer canonical;
-                input = pipe rename Edge@0 {a -> a,b -> b,c -> c,d -> d,e -> e};
+                input = pipe rename Edge {a -> a,b -> b,c -> c,d -> d,e -> e};
                 result = pipe project input keep {a,b,c,d,e};
                 return result as answer(a,b,c,d,e);
             }

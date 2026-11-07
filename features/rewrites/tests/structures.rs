@@ -39,8 +39,8 @@ fn replacement(ty: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
 fn membership_advice_preserves_a_fully_bound_physical_probe() {
     let (physical, source): Fixture = fixture_quote! { physical {
         relation L(a:u32,b:u32); relation R(a:u32,b:u32);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = let rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x,b -> y};
+        r = let rename R {a -> x,b -> y};
         joined = let canon probe first [x,y] l,r;
         return joined as answer(x,y);
     } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -71,8 +71,8 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
 fn membership_advice_cannot_discard_a_demanded_payload() {
     let (physical, source): Fixture = fixture_quote! { physical {
         relation L(a:u32); relation R(a:u32,b:u32);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x,b -> y};
         joined = let canon probe first [x] l,r;
         return joined as answer(x,y);
     } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -87,9 +87,9 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
 fn smallest_expand_source() -> Fixture {
     fixture_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l = pipe rename L@0 {a -> a,b -> b};
-        r = let rename R@1 {b -> b,c -> c};
-        s = let rename S@2 {a -> a,c -> c};
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
+        s = let rename S {a -> a,c -> c};
         candidate = pipe probe smallest [b] l,r;
         checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
@@ -204,12 +204,12 @@ fn membership_bridge_source() -> Fixture {
     fixture_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
         relation M(b:i64,tag:i64); relation S(b:i64,c:i64); relation T(c:i64,d:i64);
-        l = pipe rename L@0 {a -> a};
-        r = let rename R@1 {a -> a,b -> b};
-        m = pipe rename M@2 {b -> b,tag -> tag};
+        l = pipe rename L {a -> a};
+        r = let rename R {a -> a,b -> b};
+        m = pipe rename M {b -> b,tag -> tag};
         selected = let point select m if (tag = 7);
-        s = let rename S@3 {b -> b,c -> c};
-        t = let rename T@4 {c -> c,d -> d};
+        s = let rename S {b -> b,c -> c};
+        t = let rename T {c -> c,d -> d};
         first = pipe probe first [a] l,r;
         member = pipe probe first [b] first,selected;
         after = pipe probe first [b] member,s;
@@ -512,14 +512,14 @@ fn provider_trait_compatibility_is_not_inferred_from_type_spelling() {
 #[test]
 fn computed_head_uses_sort_without_touching_physical() {
     let source: cq_testkit::physical::Program = syn::parse_quote!(physical {
-        relation R(a:i32); r = let canon rename R@0 {a -> x};
+        relation R(a:i32); r = let canon rename R {a -> x};
         return dedup r as answer(*x % 2);
     });
     let physical = source;
     let source = cq_structure_selection::compile(&physical).unwrap();
     let (_, expected): Fixture = fixture_quote! {
         physical {
-            relation R(a:i32); r = let canon rename R@0 {a -> x};
+            relation R(a:i32); r = let canon rename R {a -> x};
             return dedup r as answer(*x % 2);
         }
         structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
@@ -536,7 +536,7 @@ fn computed_head_uses_sort_without_touching_physical() {
 fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
     let source: cq_testkit::physical::Program = syn::parse_quote!(physical {
         relation L(a:i32); relation R(a:i32);
-        l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
+        l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
         s = pipe semi eager [x] l,r;
         p = let canon probe first [x] s,r; return p as answer(x);
     });
@@ -558,7 +558,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
     let (_, expected): Fixture = fixture_quote! {
         physical {
             relation L(a:i32); relation R(a:i32);
-            l = pipe rename L@0 {a -> x}; r = pipe rename R@1 {a -> x};
+            l = pipe rename L {a -> x}; r = pipe rename R {a -> x};
             s = pipe semi eager [x] l,r;
             p = let canon probe first [x] s,r; return p as answer(x);
         }
@@ -588,7 +588,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
 fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
     let physical = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(b:i64,c:i64);
-        l = pipe rename L@0 {a -> x,b -> y}; r = pipe rename R@1 {b -> x,c -> z};
+        l = pipe rename L {a -> x,b -> y}; r = pipe rename R {b -> x,c -> z};
         s = let point select r if (z = 1);
         t = let semi eager [x] l,s;
         u = pipe semi eager [x] s,t; j = pipe probe first [x] u,t;
@@ -675,8 +675,8 @@ fn selection_and_keyset_retype_preserve_lineage_policy_and_physical() {
 fn sorted_runs_keeps_two_column_payload_keys_hashed() {
     let physical = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = let rename R@1 {a -> x,b -> y,c -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = let rename R {a -> x,b -> y,c -> z};
         p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
     }};
@@ -697,8 +697,8 @@ fn sorted_runs_keeps_two_column_payload_keys_hashed() {
 fn hashed_runs_records_composite_keys_and_preserves_single_key_selection() {
     let physical = syn::parse_quote! { physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = let rename R@1 {a -> x,b -> y,c -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = let rename R {a -> x,b -> y,c -> z};
         p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
     }};
@@ -723,7 +723,7 @@ fn sorted_runs_records_owned_singleton_probe_as_automatic_codec_request() {
         relation R(a:i64,b:i64);
         u = pipe unit;
         l = pipe bind u with x:i64 = (meta.x);
-        r = let rename R@0 {a -> x,b -> y};
+        r = let rename R {a -> x,b -> y};
         p = let canon probe first[x] l,r;
         return p as answer(x,y);
     }};
@@ -752,8 +752,8 @@ fn hashed_runs_leaves_scalar_encoding_to_rust_traits() {
     ] {
         let physical = syn::parse_quote! { physical {
             relation L(a:#ty,b:i64); relation R(a:#ty,b:i64,c:i64);
-            l = pipe rename L@0 {a -> x,b -> y};
-            r = let rename R@1 {a -> x,b -> y,c -> z};
+            l = pipe rename L {a -> x,b -> y};
+            r = let rename R {a -> x,b -> y,c -> z};
             p = let canon probe first[x,y] l,r;
             return p as answer(x,y,z);
         }};

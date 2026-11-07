@@ -14,7 +14,7 @@ fn chain() -> (cq_lang_structures::physical::Program, structures::Program) {
     parse_fixture(quote! {
         physical {
             relation L(k:i32,v:i32);
-            l = pipe rename L@0 {k -> k,v -> v};
+            l = pipe rename L {k -> k,v -> v};
             s = pipe select l if (k >= 2);
             p = pipe project s keep {v};
             c = let canon project p keep {v};
@@ -50,8 +50,8 @@ fn joins_and_opaque_binds_end_the_positional_chain() {
     let (physical, source) = parse_fixture(quote::quote! {
         physical {
             relation L(k:i32); relation R(k:i32,v:i32);
-            l = pipe rename L@0 {k -> k};
-            r = let rename R@1 {k -> k,v -> v};
+            l = pipe rename L {k -> k};
+            r = let rename R {k -> k,v -> v};
             j = pipe probe first [k] l,r;
             b = pipe bind j with n: i32 = (*k + 1);
             c = let canon project b keep {k,v,n};

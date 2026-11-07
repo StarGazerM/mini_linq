@@ -137,7 +137,7 @@ pub(crate) fn check_witnesses(
                 if next == share.force {
                     continue;
                 }
-                if !share::forwarding(&definition.operator, &next, &share.keys, facts)
+                if !share::forwarding(&definition.operator)
                     || definition
                         .operator
                         .input()

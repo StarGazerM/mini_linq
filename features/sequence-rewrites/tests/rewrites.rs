@@ -21,7 +21,7 @@ fn program(body: TokenStream) -> (Physical, Structures, Program) {
     parse_program(quote! {
         physical {
             relation R(a:i32);
-            r = let canon rename R@0 {a -> a};
+            r = let canon rename R {a -> a};
             return r as answer(a);
         }
         structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
@@ -276,7 +276,7 @@ fn grouped_key_premises_remove_only_proven_valuation_canon() {
     let (physical, structures, source) = parse_program(quote! {
         physical {
             relation R(id:i64, value:i64);
-            r = let canon rename R@0 {id -> id, value -> value};
+            r = let canon rename R {id -> id, value -> value};
             grouped = let group r by [] { total: i64 = sum(value); };
             return grouped as answer(total);
         }
@@ -340,8 +340,8 @@ fn grouped_join_requires_keys_for_every_enumerated_atom() {
     let (physical, structures, mut source) = parse_program(quote! {
         physical {
             relation L(id:i64, a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {id -> id,a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {id -> id,a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             grouped = let group j by [] { total:i64=sum(b); };
             return grouped as answer(total);

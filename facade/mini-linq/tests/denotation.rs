@@ -36,8 +36,8 @@ fn every_planner_preserves_total_rust_and_relational_selection() {
                         let reduction = cq_reduce::Options { semijoins };
                         let vo = cq_reduce::compile(&ordered, &reduction).unwrap();
                         cq_reduce::check(&ordered, &vo, &reduction).unwrap();
-                        let ra = cq_relational_lowering::compile(&vo).unwrap();
-                        cq_relational_lowering::check(&vo, &ra).unwrap();
+                        let (ra, steps) = cq_relational_lowering::compile(&vo).unwrap();
+                        cq_relational_lowering::check(&vo, &ra, &steps).unwrap();
                         let ix = cq_index_policy::compile(&ra).unwrap();
                         cq_index_policy::check(&ra, &ix).unwrap();
                         let physical = cq_physical_lowering::compile(&ix).unwrap();
@@ -59,11 +59,11 @@ fn every_planner_preserves_total_rust_and_relational_selection() {
     // regardless of where its expression is evaluated after its inputs bind.
     let ra = syn::parse_quote!(relational {
         relation R(x:i32); relation S(w:i32); relation T(y:i32);
-        r = rename R@0 {x -> x}; s = rename S@1 {w -> w};
+        r = rename R {x -> x}; s = rename S {w -> w};
         j = natural_join r with s;
         g = guard j if (*x != 0 && *w > 1);
         b = bind g with y:i32 = (10 / (*x).max(1));
-        t = rename T@2 {y -> y}; indexed = natural_join t with b;
+        t = rename T {y -> y}; indexed = natural_join t with b;
         p = project indexed keep {x,y}; output p as answer(x,y);
     });
     let ix = cq_index_policy::compile(&ra).unwrap();

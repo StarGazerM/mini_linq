@@ -62,7 +62,7 @@
 //!     };
 //!     physical {
 //!         relation R(x: i32) = (rows);
-//!         r = pipe rename R@0 {x -> x};
+//!         r = pipe rename R {x -> x};
 //!         out = let canon project r keep {x};
 //!         return out as answer(x);
 //!     }

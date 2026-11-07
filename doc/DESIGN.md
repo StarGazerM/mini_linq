@@ -56,7 +56,7 @@ Normalization leaves literals in body atoms, makes their other arguments distinc
 variables, inserts positioned equalities and Rust binds, and turns computed heads
 into final binds. A literal such as `R(a, 7)` reads the relation of matching rows
 with the literal column dropped; it is not the guard `R(a,b), if b == 7`.
-Elaboration records `rename R@0 {a -> a} constants {b = 7}`. Expressions such as
+Elaboration records `rename R {a -> a} constants {b = 7}`. Expressions such as
 `meta.asia` still use positioned binds. Ordering records
 valuation order and coarse/fine granularity in VO; reduction records relational
 tree semijoins; elaboration writes RA′. IX adds exact demand descriptors without

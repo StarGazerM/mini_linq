@@ -10,6 +10,25 @@ Checks are sufficient structural conditions under the
 premises of Section~\ref{sec:premises}: they reject some equal plans and decide
 no equivalence.
 
+\begin{mathpar}
+\Rule{Smallest-Resolve}
+ {a\text{ selects one positive CQ occurrence }i\quad
+  p=\mathit{Reads}(a)\quad
+  \{r\mid Steps(r)=p\land RA(r)\text{ is Rename}\}=\{r_i\}}
+ {\code{smallest}(\ldots,a,\ldots)\leadsto
+  \code{smallest}(\ldots,r_i,\ldots)}
+\end{mathpar}
+Planning produces $\mathit{Reads}$, the occurrence-to-first-VO-read table, and
+$Steps$ once from its actual compilation. The stage protocol carries both
+beside the program, not in any IR. Each Smallest invocation (including the
+Datalog wrapper) resolves only its own arguments when it executes. Planning
+does not inspect or rewrite any pending invocation. Missing or ambiguous table
+entries refuse the selector; downstream code never reconstructs CQ occurrences
+from relational definitions. Explicit paths alternate clause and branch
+indices; $\mathit{Reads}$ records the corresponding enclosing VO step and branch
+indices before the first local read. Unqualified aliases exist only for unique
+top-level positive occurrences, never for nested branch reads.
+
 \subsection{Normalization: CQ $\to$ CQ$_{\rm NF}$}
 For an atom at clause $i$, walk its arguments left to right against the declared
 types $\tau_j$. $B$ holds names bound by earlier clauses, $L$ names already seen in
@@ -191,7 +210,7 @@ expression or a generator yielding no names.
 Identities and constraints require their variables and provide none
 (D-Constraint). A Rust-free block provides its free/interface heading; a Rust
 block requires its free names and is Rust. Heuristics repeatedly place the
-least-ranked ready clause; an empty ready set is an error. Connectivity counts
+least-ranked ready clause until none is ready. Connectivity counts
 only names actually shared after normalization, $s_i=|O_i\cap B|$: an unsolved
 equality class (A-Alias declined) is not a realizable join key.
 Let $a_i=[O_i\not\subseteq B]$. The scheduler first minimizes $a_i$,
@@ -199,6 +218,25 @@ then the structural rank below, so ready nonintroducing work precedes
 introducing lets as well as introducing atoms. A final stable drainage
 applies the same I2 obligation to assembled Fine and authored schedules
 without changing projected subatoms or introducing choices.
+
+\emph{Totality.} Ordering is a total function of a WF-NF query and resolved
+advice; it never checks its output. User-authored inputs are resolved at the
+front (O-AdviceResolve, O-KnownResolve, WF-Evidence), and the pipeline checks
+the produced schedule once (CK-Order, CK-StepAdvice or CK-EvidenceLe, each
+including WF-VO and VO-Order). The ready set is never empty while clauses
+remain. In a seeded scope, the written-earliest pending clause $c$ is ready:
+CQ-Where, CQ-Neg and IF-Environment bound every predicate, negation and Rust
+input of $c$ by its written prefix, CQ-Bind and CQ-For make every Rust binder
+fresh for its prefix (so a let-bound atom column is bound by an earlier
+clause), and every earlier clause is placed. A hoisted arm without a finite
+domain starts from no seed, and O-BlockPlacement hoists such a block only when
+every arm is $\mathsf{Placeable}_\varnothing$. Placeability is the least
+fixpoint of C-Ready, $P_{n+1}=\{i\mid R_i\subseteq S\cup\bigcup_{j\in P_n}O_j\}$,
+which no ranking changes, so every ranked schedule places every clause. Fine
+binds an eligible variable at every step for the same reason, and its binder
+exists by the eligibility filter. Elimination ranks an atom by the numbered
+variables it provides (S-Elimination); a free column of a nested block that
+the scope analysis does not number contributes nothing, so the rank is total.
 \begin{mathpar}
 \Rule{S-Written}{}{\mathsf{sequence}_{Written}(q)=\mathsf{drain}_{I2}([0,\ldots,m-1])}
 
@@ -222,7 +260,7 @@ without changing projected subatoms or introducing choices.
  {\mathsf{rank}_{r}(i,B)=(a_i,1,[s_i=0],|B\cup O_i|,i)}
 
 \Rule{S-Elimination}{c_i\text{ atom}\quad E=\mathsf{analysis}(q).\mathit{elimination\_order}\\
- e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\}\cup\{|E|\})}
+ e_i=\min(\{\operatorname{pos}_E(x)\mid x\in O_i\cap E\}\cup\{|E|\})}
  {\mathsf{rank}_{Elimination}(i,B)=(a_i,1,[|O_i\cap B|=0],e_i,i)}
 
 \Rule{O-Coarse}{\mathit{seq}\text{ chosen}}
@@ -243,23 +281,31 @@ without changing projected subatoms or introducing choices.
 \Rule{VO-CheckPhase}{s_k=R@i(K)\ \code{check}}
  {K\subseteq P_k\quad\mathsf{candidateProvider}(s_k)=\mathsf{false}}
 
-\Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering}}
- {b.placement={\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\\
+\Rule{O-BlockPlacement}{b\text{ a block in ordinary ordering, free heading }F,\ \text{arms }b_1,\ldots,b_m}
+ {b.placement={\begin{cases}\mathsf{correlated}&\mathsf{Rust}(b)\lor
+ (\neg\mathsf{domain}(b)\land\exists j.\ \neg\mathsf{Placeable}_{\varnothing}(\mathsf{clauses}_F(b_j)))\\
  \mathsf{hoisted}&\text{otherwise}\end{cases}}}
 
 \Rule{O-WrittenBlocks}{t=\mathsf{WrittenCoarse}(s)}
  {\mathsf{compileWritten}_{order}(s)=
  t[\forall b\text{ recursively}.\ b.placement:=\mathsf{correlated}]}
 
-\Rule{O-StepAdvice}{n=N(q)\quad
- \forall c.\ |\{a\in A\mid \mathsf{resolve}(a)=c\land\mathsf{full}(a)\}|\le 1\\
- t=\mathsf{authorSteps}(n,A)\quad
- \mathsf{erase}(t)=n\\
- \mathsf{WF}_{VO}(t)\quad\mathsf{VOOrder}(t)\\
- (L\ne\varnothing\Rightarrow\mathsf{CK\text{-}Le}(n,t,L))}
- {\mathsf{orderAdvice}(q,A)=t}
-% Resolution checks the selector reference set; the output checkers, not
-% the planning walk, diagnose dependency, subatom, and occurrence-phase errors.
+\Rule{O-AdviceResolve}{\forall a\in\bar a.\ c_a=\mathsf{resolve}(a)\text{ names one top-level positive atom or block of }n\\
+ \forall a.\ K_a\ne\bot\Rightarrow c_a\text{ positive}\land K_a\subseteq\mathsf{vars}(c_a)\land K_a\text{ distinct}\\
+ \forall c.\ |\{a\in\bar a\mid c_a=c\land\mathsf{full}(a)\}|\le 1}
+ {\mathsf{resolve}(n,\bar a)=[(c_a,K_a)]_{a\in\bar a}}
+
+\Rule{O-StepAdvice}{n=N(q)\quad A=\mathsf{resolve}(n,\bar a)\quad
+ t=\mathsf{authorSteps}(n,A)}
+ {\mathsf{orderAdvice}(q,A)=\mathsf{restrict}(\mathsf{drain}_{I2}(t))}
+
+\Rule{CK-StepAdvice}{A=\mathsf{resolve}(n,\bar a)\quad\mathsf{WF}_{VO}(t)\quad\mathsf{VOOrder}(t)\\
+ L=\{c\mid (c,K)\text{ the first partial read of }c\text{ in }A,\
+ K=\varnothing\lor\mathsf{introduces}_t(\mathsf{firstRead}_t(c,K))=\varnothing\}\quad
+ \mathsf{CK\text{-}Le}(n,t,L)}
+ {\mathsf{checkAdvice}(n,\bar a,t)\Downarrow\ok}
+% Resolution checks the selector reference set; CK-StepAdvice, not the
+% planning walk, diagnoses dependency, subatom, and occurrence-phase errors.
 
 \Rule{O-EvidenceLe}{n=N(q)\quad \mathcal{E}\text{ recorded counts and keys}\quad
  \forall i\in\mathsf{occ}(n).\ \mathsf{count}_{\mathcal{E}}(i)\text{ defined}\\
@@ -281,10 +327,15 @@ without changing projected subatoms or introducing choices.
  \mathcal{E}=\{\mathsf{count}\ R=n_{SF1}(T_R),\ \mathsf{key}\ R\ [\mathit{pk}(T_R)]\mid R\ \text{a base relation of }q\}\ne\varnothing}
  {\mathsf{plan}(q)=\mathsf{order}^{\mathcal{E}}(q)}
 
-\Rule{O-KnownAt}{\neg R(\bar x)\text{ at top-level clause }i\quad
- t'=t\text{ with }\neg R(\bar x)\text{ moved after the }k\text{-th positive read}\\
- \mathsf{WFBindings}(t')\quad t''=\mathsf{drain}_{I2}(t')\quad\mathsf{WF}_{VO}(t'')}
- {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=t''}
+\Rule{O-KnownResolve}{\mathsf{WFBindings}(t)\quad \neg R(\bar x)\text{ at top-level clause }i\text{ of }t.cq\quad
+ 1\le k\le|\{j\mid s_j\text{ a top-level positive read}\}|\\
+ p=\mathsf{boundary}_k(t\setminus\neg R(\bar x))\quad
+ \mathsf{logical}(\bar x)\subseteq B_p}
+ {\mathsf{resolve}(R@i\ \mathsf{at}\ k,t)=p}
+
+\Rule{O-KnownAt}{p=\mathsf{resolve}(R@i\ \mathsf{at}\ k,t)\quad
+ t'=t\text{ with }\neg R(\bar x)\text{ moved to position }p}
+ {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=\mathsf{drain}_{I2}(t')}
 \end{mathpar}
 A read of occurrence $i$ is \emph{keyed} under bound variables $B$
 ($\mathsf{keyBound}_{\mathcal{E}}(i,B)$) when every column of some recorded key
@@ -629,17 +680,26 @@ survives every semijoin.\end{proof}
 the join, so meanings are equal; Rust steps are untouched.
 
 \subsection{Relational lowering: VO $\to$ RA prime}
+The total entry has type
+$\mathsf{CheckedVO}\to(\mathsf{RA},T)$, where the private carrier pairs an
+immutable VO borrow with the analysis returned by WF-VO. Only the checker
+constructs this carrier; a caller-supplied analysis is not evidence of WF-VO.
 State $(D,M,p,B)$: emitted definitions, latest result per clause, optional
-prefix, its heading. Relations are emitted lazily at first mention with their
-fixed occurrence paths.
+prefix, its heading. Relations are emitted lazily at first mention. Beside
+the RA, lowering returns the seam side table
+$T:\operatorname{names}(D)\rightharpoonup\mathsf{Pos}(s)$ from RA result names
+to VO step positions (the step index, then branch and step index inside each
+enclosing block step); neither program records the other's identities.
+Write $\mathsf{first}_s(i)$ for the position of the first step of the scope
+of $s$ that reads clause $i$ (an atom read, or the first block step of a block).
 \begin{mathpar}
 \Rule{RL-Emit}{r=\text{next unused }\code{rN}\text{ in emission order}}
  {\emit(D,o)=(D\concat[r=o],r)}
 
 \Rule{RL-Occurrence}{i\notin\dom M\quad C_i=\{c_j=a_j\mid a_j\text{ is literal}\}\\
  m_i:\operatorname{cols}(R_i)\setminus\dom C_i\cong\bar X_i\quad
- (D',r)=\emit(D,\delta_{m_i}(\pi_{\dom m_i}\sigma_{C_i}(R_i@i)))}
- {\mathsf{relation}(i;D,M)=(D',M[i\mapsto r],r)}
+ (D',r)=\emit(D,\delta_{m_i}(\pi_{\dom m_i}\sigma_{C_i}(R_i)))}
+ {\mathsf{relation}(i;D,M,T)=(D',M[i\mapsto r],T[r\mapsto\mathsf{first}_s(i)],r)}
 
 \Rule{RL-Check}{\mathsf{introduces}=\emptyset\quad(K\subsetneq X_i\lor p=\bot\lor B=\emptyset)\\
  p_0=\mathsf{unitize}(p)}
@@ -655,16 +715,6 @@ fixed occurrence paths.
 \Rule{RL-Join}{p\ne\bot\quad\text{RL-Check inapplicable}\quad s=\mathsf{subatomRight}(i,K)\\
  (D',t)=\emit(D,p\bowtie s)}
  {(D,M,p,B)\xrightarrow{i,K}(D',M,t,B\cup K)}
-
-\Rule{CK-CheckPhase}{s=R@i(K)\ \code{check}\quad
- \mathsf{survives}(i,K,d)\quad
- \mathsf{origin}(\mathsf{right}(d))=i\\
- K=\mathsf{heading}(\mathsf{left}(d))\cap\mathsf{heading}(\mathsf{right}(d))\quad
- \mathsf{heading}(d)=\mathsf{heading}(\mathsf{left}(d))}
- {d.\mathsf{check}=\mathsf{true}}
-
-\Rule{RA-CheckPhase}{d.\mathsf{check}\quad d\in\{\bowtie,\ltimes\}}
- {\mathsf{heading}(d)=\mathsf{heading}(\mathsf{left}(d))}
 
 \Rule{RL-Guard}{\mathsf{step}=\mathsf{Guard}(e)\quad p_0=\mathsf{unitize}(p)\\
  (D',s)=\emit(D,\operatorname{guard}_e p_0)}
@@ -690,13 +740,15 @@ fixed occurrence paths.
  \vars(P)\subseteq B\quad p_0=\mathsf{unitize}(p)}
  {\mathsf{elaborate}(P,p)=\sigma_Pp_0\text{ at its recorded VO placement}}
 
-\Rule{RL-Restrict}{\mathsf{restrict}\ R@i\ \mathsf{where}\ P_1,\ldots,P_n\text{ recorded in the scope}\\
+\Rule{RL-Restrict}{\mathsf{restrict}\ R_i\ \mathsf{where}\ P_1,\ldots,P_n\text{ recorded in the scope}\\
  E=\{P_k\text{ literal equalities}\}\quad G_1,\ldots,G_m=\text{the others grouped by }\vars}
- {\mathsf{relation}(i)=\sigma_{G_m}\cdots\sigma_{G_1}\sigma_E(\delta_{m_i}(R@i))}
+ {\mathsf{relation}(i)=\sigma_{G_m}\cdots\sigma_{G_1}\sigma_E(\delta_{m_i}(R_i))}
 
-\Rule{CK-RelationalLoweringRestrict}{\mathsf{restrict}\ R@i\ \mathsf{where}\ P\in s\\
- \text{every conjunct of }P\text{ selects the selection chain over }\mathsf{rename}\ R@i\text{ in }t}
- {\mathsf{restrictionPlaced}(s,t,P)}
+\Rule{CK-RelationalLoweringRestrict}{(\mathsf{restrict}\ i\ \mathsf{where}\ P)\text{ in a scope of }s\quad
+ T(r)=\mathsf{first}_s(i)\\
+ r=r_0,\ t(r_{k+1})=\sigma_{\theta_{k+1}}r_k\ (0\leq k<n),\ \text{no }\sigma\text{ reads }r_n\quad
+ \mathsf{conj}(P)\subseteq\textstyle\bigcup_{k\leq n}\mathsf{conj}(\theta_k)}
+ {\mathsf{restrictionPlaced}(s,t,T,P)}
 
 \Rule{E-Domain}{C=\bigvee_i\bigwedge_j C_{ij}\quad
  D_{ix}=\{C_{ij}\mid C_{ij}\text{ restricts only }x\text{ against literals or CQ-Closed operands}\}\\
@@ -719,11 +771,31 @@ fixed occurrence paths.
  \mathsf{arms}(b,H,\mathsf{over}=
    [p\mid b.placement=\mathsf{correlated}])}
 
-\Rule{CK-BlockPlacement}{\forall b\in\mathsf{Blocks}(s).\ \exists u\in\mathsf{Unions}(t).\
- u.origin.path=b.path\\
- \forall b,u\text{ with }u.origin.path=b.path.\
- (u.origin.over\ne\bot)\Longleftrightarrow(b.placement=\mathsf{correlated})}
- {\mathsf{BlockPlacements}(s,t)\Downarrow\ok}
+\Rule{CK-BlockPlacement}{(\mathsf{block}\ b)\text{ at }\mathsf{first}_s(b)\quad
+ T(u)=\mathsf{first}_s(b)\quad t(u)=\mathsf{union}(u_1,\ldots,u_n)\ \mathsf{block}\ O\\
+ n=|b.branches|\quad(O.fallback\ne\bot)\Leftrightarrow(b.kind=\mathsf{else})\quad
+ (O.over\ne\bot)\Leftrightarrow(b.placement=\mathsf{correlated})}
+ {\mathsf{BlockPlaced}(s,t,T,b)}
+
+\Rule{RL-Seam}{T\text{ injective}\quad
+ \dom T=\{r\mid t(r)=\mathsf{rename}\ldots\}\cup\{u\mid t(u)=\mathsf{union}\ldots\ \mathsf{block}\ O\}\\
+ \operatorname{ran}T=\{\mathsf{first}_s(i)\mid i\text{ read in its scope}\}\cup\mathsf{Neg}(s)\\
+ \forall r.\ t(r)=\mathsf{rename}\ldots\Leftrightarrow T(r)\notin\mathsf{Blocks}(s)}
+ {\mathsf{SeamTable}(s,t,T)}
+
+\Rule{RL-SeamRename}{T(r)=\mathsf{first}_s(i)\quad i=R_i(\bar a)\quad
+ t(r)=\mathsf{rename}\ R\ m\ C\\
+ R=R_i\quad m=\{c_j\mapsto a_j\mid a_j\text{ variable}\}\quad C=\{c_j=a_j\mid a_j\text{ literal}\}\\
+ T(r')=k\in\mathsf{Neg}(s),\ s_k=\neg R'(\ldots)\Rightarrow t(r')=\mathsf{rename}\ R'\ldots}
+ {\mathsf{SeamRenames}(s,t,T)}
+
+\Rule{RL-SeamReduce}{(\mathsf{reduce}\ i\ \mathsf{with}\ j(K))\text{ in a scope of }s\quad
+ T(r_i)=\mathsf{first}_s(i)\quad T(r_j)=\mathsf{first}_s(j)\\
+ Q=\{\{x,y\}\mid x\in\bar X_i,\ y\in\vars(K),\ x\ne y,\ x\equiv y\}\\
+ \bigl(Q=\emptyset\land t(d)=l\ltimes g\bigr)\lor
+ \bigl(Q\ne\emptyset\land t(d)=\pi(\sigma_\theta(l\bowtie g))\land Q\subseteq\mathsf{eqs}(\theta)\bigr)\\
+ r_i\in\operatorname{reach}(l)\quad r_j\in\operatorname{reach}(g)}
+ {\mathsf{reductionNamed}(s,t,T,i,j)}
 \end{mathpar}
 A full subatom always joins; a partial check uses the whole clause relation.
 $\mathsf{unitize}$ emits Unit when no prefix exists; binds copy pattern,
@@ -762,105 +834,49 @@ Rust expression identity is required. Domain derivation uses only equalities,
 comparisons, inclusive ranges and membership over literal or CQ-Closed operands,
 never database statistics or foreign-key assumptions.
 \[
-\Rule{CK-RelationalLowering}{\mathsf{WF}_{VO}(s)\quad\mathsf{WF}_{RA}(t)\\
- t.declarations=s.cq.declarations\quad t.captures=s.cq.captures\\
- \mathsf{StructuralFacts}(s,t)\quad
- \mathsf{BlockPlacements}(s,t)\Downarrow\ok\\
- \forall(\mathsf{restrict}\ R@i\ \mathsf{where}\ P)\in s.\ \mathsf{restrictionPlaced}(s,t,P)\\
- \forall(R@i(K)\ \code{check})\in s.\ \forall d\in t.\ \mathsf{survives}(i,K,d)\Rightarrow d.\mathsf{check}=\mathsf{true}\\
- \mathsf{OutputBindings}(s)=\mathsf{OutputBindings}(t)}
- {\mathsf{check}_{lowering}(s,t,())\Downarrow\ok}
+\Rule{CK-RelationalLowering}{\mathsf{WF}_{VO}(s)\quad
+ \mathsf{StructuralFacts}(s,t)\quad\mathsf{SeamTable}(s,t,T)\quad\mathsf{SeamRenames}(s,t,T)\\
+ \forall(\mathsf{restrict}\ i\ \mathsf{where}\ P)\in s.\ \mathsf{restrictionPlaced}(s,t,T,P)\\
+ \forall b\in\mathsf{Blocks}(s).\ \mathsf{BlockPlaced}(s,t,T,b)\quad
+ \forall(\mathsf{reduce}\ i\ \mathsf{with}\ j)\in s.\ \mathsf{reductionNamed}(s,t,T,i,j)}
+ {\mathsf{check}_{lowering}(s,t,T)\Downarrow\ok}
 
-\Rule{CK-RLStructure}{\Sigma=\mathsf{RL}(s)\quad
- \{\!\{(o,R_o,\kappa_o,\dom\beta_o)\}\!\}_{o\in\mathsf{occ}(t)}=\{\!\{(o,R_o,\kappa_o,\dom\beta_o)\}\!\}_{o\in\mathsf{occ}(\Sigma)}\\
- {\equiv_t}={\equiv_\Sigma}\quad
- \forall o,c.\ \beta^t_o(c)=\beta^\Sigma_o(c)\lor\beta^t_o(c)\equiv_\Sigma\beta^\Sigma_o(c)\\
- \{(\mathsf{shape}(P),[\vars(P)]_{\equiv})\mid P\in\mathsf{preds}(t)\}=
- \{(\mathsf{shape}(P),[\vars(P)]_{\equiv})\mid P\in\mathsf{preds}(\Sigma)\}\\
- \{\!\{(e,\fv(e))\mid e\in\mathsf{rust}(t)\}\!\}=\{\!\{(e,\fv(e))\mid e\in\mathsf{rust}(\Sigma)\}\!\}\quad
- \mathsf{red}(s)\subseteq\mathsf{supports}(t)\quad t.head=\Sigma.head}
+\Rule{CK-RLStructure}{\Sigma=\mathsf{RL}(s)\quad\mathsf{WF}_{RA}(t)\\
+ t.declarations=s.cq.declarations\quad t.captures=s.cq.captures\quad
+ t.output.head=s.cq.head\\
+ \mathsf{check}_{RA\text{-}rewrite}(\Sigma,t)\Downarrow\ok}
  {\mathsf{StructuralFacts}(s,t)}
 \]
-\[
-\mathsf{OutputBindings}(s)\triangleq(s.cq.head,\ \mathsf{valuationVariables}(s.cq))\qquad
-\mathsf{OutputBindings}(t)\triangleq(t.output.head,\ \mathsf{heading}(\mathsf{ungrouped}(t.output.input)))
-\]
-In CK-RLStructure, $\Sigma=\mathsf{RL}(s)$ is the structural schedule obtained by
-folding the RL rules over the supplied VO steps (no order is chosen);
-$\mathsf{occ}$ are occurrence paths with relation $R_o$, literal constants
-$\kappa_o$ and column bindings $\beta_o$; $\equiv$ is the union-find closure of the
-relational equalities on primary nodes; $\mathsf{preds}$ the predicate facts
-(CT-Constraint); $\mathsf{rust}$ the Rust payloads with their lexical
-free-variable bindings; $\mathsf{supports}(t)$ the named reduction supports.
-Split views compare wiring (CT-FullWitness, CT-SelectConjunction); union
-siblings match by occurrence footprint, fallback siblings in order, negated
-references by original branch; an under-canon certificate may discharge a
-primary expansion witness from $t$ itself.
-The former $\mathsf{FixedFacts}$ and $\mathsf{RustPayloadsAndBindings}$ are both
-StructuralFacts (one comparison decides them); the former
-$\mathsf{RecordedPlacement}$ is exactly the restrictionPlaced and CK-CheckPhase
-premises, now quantified directly. \emph{Refinement:} occurrences, constraints,
-Rust expressions and their recorded placements are those of the source;
-totality and the representation laws establish equal answers.
+In CK-RLStructure, $\Sigma=\mathsf{RL}(s)$ is the structural reference: the RA
+program obtained by folding the RL rules over the supplied VO steps (no
+order is chosen, no target name is consulted), with renames, joins,
+projections, selections, Rust payloads with their lexical scopes, block
+unions and anti joins exactly as the steps state them. The RA rewrite check
+(Section~\ref{sec:ra}) then compares $\Sigma$ with $t$: equal rename
+multisets (a rename is identified by its relation, mapping and constants),
+equality closure, predicate shapes, Rust payloads and their free-variable
+bindings, union siblings by footprint, fallback siblings in order, negated
+references by original branch, and its absorption and dead-expansion
+certificates. $\mathsf{first}_s$, $\mathsf{Neg}(s)$ and $\mathsf{Blocks}(s)$ are
+the positions of first reads, negation steps and first block steps of every
+scope of $s$; $\mathsf{Neg}(s)$ positions name their negated relation's rename.
+In RL-SeamReduce, $\equiv$ is the scope's CQ equality closure and
+$\mathsf{eqs}(\theta)$ the unordered variable pairs of $\theta$'s equalities.
+The structural check \code{check_reference} needs no side table and also
+relates a target to a VO it was not lowered from (a written reference).
+\emph{Refinement:} renames, constraints, Rust expressions and their recorded
+placements are those of the source; totality and the representation laws
+establish equal answers.
 
-\paragraph{Two independent witness-preserving proof laws.}
-Structural comparison normally retains the exact wiring of independent
-projected row witnesses. It admits the following local certificates without
-changing either supplied schedule or selecting a new execution order.
-\begin{mathpar}
-\Rule{CT-SelectConjunction}{
- P,Q\text{ are adjacent central selections over the same row witness }R}
- {\mathsf{wire}(\sigma_P(\sigma_Q(R)))=
-  \mathsf{wire}(\sigma_{P\land Q}(R))}
-
-\Rule{CT-FullWitness}{
- n\text{ requests compatibility of occurrence }o\text{ views }v_1,v_2\\
- K=\text{all }o\text{-bindings participating in the two operands of }n\\
- m=\mathsf{naturalJoin}(q,f)\text{ is a later primary read}\\
- f\text{ is a complete }o\text{ row with }v_f\preceq v_1,\ v_f\preceq v_2\\
- n\leadsto_K q\text{ along one positive, binding-preserving lineage}}
- {\mathsf{viewRequest}(n,o,v_1,v_2)\Downarrow\mathsf{correlated}}
-\end{mathpar}
-In CT-SelectConjunction, exact predicate shapes and fixed column identities
-are unioned; no predicate crosses a projection, join, Rust operator or other
-non-selection node. This permits a VO's separate restrictions and lowering's
-coalesced relational theta to state the same witness obligation.
-
-In CT-FullWitness, $v_f\preceq v$ means recorded restricted-view ancestry,
-not equality of occurrence numbers. The lineage $n\leadsto_K q$ must retain
-every binding in $K$ with its original column origin at every node. It may
-follow selections, projections that retain all of $K$, the left operand of
-a semijoin, or either operand of a natural join. It never crosses Rust,
-antijoin, union or grouping. A full row on an unrelated branch, an ancestor
-instead of a descendant restricted view, or a dropped and later rebound key
-does not discharge the obligation. Branch extraction remaps the requesting
-node together with its occurrence and both restricted views.
-
-\emph{Local equivalence argument.} The final join matches every participating
-binding with the complete row $f$. Since $f$ descends from both restricted
-views, it can supply both earlier existential projected witnesses with those
-same values. The binding-preserving lineage does not forget a match or
-introduce an opaque observation between the request and this join. Thus
-using that one complete row establishes the original correlation; the
-reverse implication is immediate from the already-present full read.
-This discharges only that request. Every other projected-view obligation,
-fixed occurrence, equality, predicate, reduction edge, Rust payload and output
-binding remains checked. It is not an occurrence-only witness unification.
 
 For pure positive targets produced by \code{cq_ra_rewrites::simplify_expansions},
-CK-RelationalLowering also permits an inverse dead-expansion certificate. Starting
+the RA rewrite check's inverse dead-expansion certificate applies: starting
 only from the supplied RA target, it tentatively replaces a semijoin by a
-natural join. Independent demand analysis of that \emph{expanded source}
+natural join, and independent demand analysis of that \emph{expanded source}
 must prove all added columns unobservable, including newly created implicit
-downstream join keys. The ordinary structural comparison then checks the
-resulting equivalent witness against the supplied VO schedule. Required
-named reductions are still checked on the \emph{original target}; inverse
-expansion cannot invent their edges or column matches. This certificate
-does not recompile the VO, select a planner, or merge equality facts from
-independent existential supports. An unresolved split projected-witness view
-in either original schedule excludes this fallback: an inverse expansion
-cannot invent the actual full-row certificate required by CT-FullWitness.
-Rust, negative and block programs retain their existing checker.
+downstream join keys. Recorded reductions are still checked on the target
+itself by RL-SeamReduce; inverse expansion cannot invent their edges or
+column matches.
 
 \paragraph{Example: free variables determine eligibility.}
 In \code{answer(a,w) :- R(a,x), S(a,y), T(y,z), let k = combine(*x,*y), let
@@ -1481,42 +1497,6 @@ Dead reduced copies are removed; independent consumers that still need a
 reduction keep the same restricted witness alive.
 The rewrite is checked against the original RA and does not alter the reduction
 algorithm.
-
-\Rule{RA-MovedSupport}{
- d=L\mathbin{\diamond}(B\ltimes S)\quad\diamond\in\{\bowtie,\ltimes\}\\
- d.\mathsf{check}\quad\mathsf{occurrence}(S)\in d.\mathsf{after}\\
- K=H_B\cap H_S\ne\emptyset\quad K\subseteq H_d\\
- d\leadsto_K q\text{ is a unique positive prefix}\\
- m=q\bowtie S\text{ restores the exact named former support}
-}{
- d:=L\mathbin{\diamond}B\quad
- d.\mathsf{absorbed}\mathrel{+}=(B\ltimes S,m)
-}
-\Rule{CK-MovedSupport}{
- d.\mathsf{absorbed}=(r,m)\quad r=B\ltimes S\\
- \text{the supplied source DAG proves every RA-MovedSupport premise}
-}{
- \mathsf{validBypass}(d,r,m)
-}
-Here \code{check after [i,...]} records the introducing occurrences crossed
-by the producer's I2 move, hence present in its former positive prefix.
-Lowering transports it. $\leadsto_K$ follows the sole
-consumer's left input, retaining every already-bound key in $K$. It stops
-at Rust, negation, a branch, projection loss, another introduction, or the
-returned result. The restoring join must read the exact named support,
-not merely a descendant with the same occurrence. The restricted result
-must become dead. Ordinary local absorption completes first, so a declined
-proposal cannot undo an existing local realization. The producer records
-\code{absorbed r via m}; the independent certificate checks the transported
-former occurrence, exact support, local intermediate RHS and restoring join.
-This is only preservation of a moved check's pre-I2 input, not the general
-future-support reducer law. Unmoved plans cannot acquire this absorption.
-For a moved check separating $(P\ltimes L)$ from its former join with $L$
-or with the reciprocal reduction $L\ltimes(P\ltimes L)$, the same recorded
-restoring join may certify \code{absorbed left r via m}. The certificate
-requires that exact support or exact source reciprocal pair and preserved
-keys, not arbitrary descendant support. Ordinary absorption and liveness resolve
-together, so the moved check cannot keep either redundant reduction alive.
 
 For LE's checked RA \code{cq_ra_rewrites::simplify_expansions} pass, let $H_L,H_R$ be the
 source operand headings, $K=H_L\cap H_R$, and $D_s(r)$ the demanded columns of source result

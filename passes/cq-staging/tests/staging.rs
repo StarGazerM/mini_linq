@@ -5,7 +5,7 @@ fn scan() -> (cq_lang_structures::physical::Program, structures::Program) {
     let physical = syn::parse_quote! {
         physical {
             relation R(x:i32);
-            r = pipe rename R@0 {x -> x};
+            r = pipe rename R {x -> x};
             s = pipe select r if (x >= 0);
             b = let canon bind s with y: i32 = (*x + 1);
             return b as answer(x,y);
@@ -35,8 +35,8 @@ fn default_records_only_the_eligible_built_probe_outer() {
     let physical = syn::parse_quote! {
         physical {
             relation L(k:i32); relation R(k:i32,v:i32);
-            l = pipe rename L@0 {k -> k};
-            r = let rename R@1 {k -> k,v -> v};
+            l = pipe rename L {k -> k};
+            r = let rename R {k -> k,v -> v};
             j = let canon probe first [k] l,r;
             return j as answer(k,v);
         }
@@ -87,7 +87,7 @@ fn retained_rows_start_a_new_total_segment() {
     let physical = syn::parse_quote! {
         physical {
             relation R(x:i32);
-            r = let rename R@0 {x -> x};
+            r = let rename R {x -> x};
             s = pipe select r if (x >= 0);
             b = let canon bind s with y:i32 = (*x + 1);
             return b as answer(x,y);

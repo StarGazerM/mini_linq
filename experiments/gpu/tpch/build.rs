@@ -514,7 +514,7 @@ fn compile_stage(
         pipeline.plan.clone()
     };
     let reduced = checked("CQ plan advice", &normal, advice::valuation(&cq, &plan))?;
-    let ra = checked(
+    let (ra, steps) = checked(
         "CQ relational lowering",
         &reduced,
         cq_relational_lowering::compile(&reduced),
@@ -522,7 +522,7 @@ fn compile_stage(
     checked(
         "CQ relational lowering check",
         &ra,
-        cq_relational_lowering::check(&reduced, &ra),
+        cq_relational_lowering::check(&reduced, &ra, &steps),
     )?;
     let ix = checked("index demands", &ra, cq_index_policy::compile(&ra))?;
     let mut pipeline = pipeline.clone();

@@ -130,7 +130,7 @@ fn input_declarations_share_the_relation_identity_namespace() {
     let program: Fixture = fixture_quote! {
         physical {
             relation R(a: First, b: Second);
-            r = pipe rename R@0 {a -> a, b -> b};
+            r = pipe rename R {a -> a, b -> b};
             return r as answer(a,b);
         }
         structures {
@@ -216,7 +216,7 @@ fn check_rewrite(source: &Fixture, target: &Fixture) -> syn::Result<()> {
 fn constant_occurrences_use_ordinary_storage() {
     let source: Fixture = fixture_quote! { physical {
         relation R(a:i32,b:i32);
-        r = let canon rename R@0 {a -> x} constants {b = 7};
+        r = let canon rename R {a -> x} constants {b = 7};
         return r as answer(x);
     } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
@@ -236,8 +236,8 @@ fn constant_occurrences_use_ordinary_storage() {
     }
     let indexed: Fixture = fixture_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32,c:i32);
-        l = pipe rename L@0 {a -> x};
-        r = let rename R@1 {a -> x,c -> y} constants {b = 7};
+        l = pipe rename L {a -> x};
+        r = let rename R {a -> x,c -> y} constants {b = 7};
         j = let canon probe first [x] l,r;
         return j as answer(x,y);
     } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -265,9 +265,9 @@ fn constant_occurrences_use_ordinary_storage() {
 fn smallest_expand_program() -> Fixture {
     fixture_quote! { physical {
         relation L(a:i32,b:i32); relation R(b:i32,c:i32); relation S(a:i32,c:i32);
-        l = pipe rename L@0 {a -> a,b -> b};
-        r = let rename R@1 {b -> b,c -> c};
-        s = let rename S@2 {a -> a,c -> c};
+        l = pipe rename L {a -> a,b -> b};
+        r = let rename R {b -> b,c -> c};
+        s = let rename S {a -> a,c -> c};
         candidate = pipe probe smallest [b] l,r;
         checked = let canon semi eager [a,c] candidate,s;
         return checked as answer(a,b,c);
@@ -287,8 +287,8 @@ fn smallest_expand_program() -> Fixture {
 fn resident_expand_program() -> Fixture {
     fixture_quote! { physical {
         relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
-        l = pipe rename L@0 {a -> x,b -> y};
-        r = pipe rename R@1 {a -> x,b -> y,c -> z};
+        l = pipe rename L {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y,c -> z};
         p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
     } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot = ::custom::Snapshot<_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -320,8 +320,8 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
     let source: Fixture = fixture_quote! {
         physical {
             relation L(a:i64,b:i64); relation R(a:i64,b:i64,c:i64);
-            l = pipe rename L@0 {a -> x,b -> y};
-            r = let rename R@1 {a -> x,b -> y,c -> z};
+            l = pipe rename L {a -> x,b -> y};
+            r = let rename R {a -> x,b -> y,c -> z};
             s = pipe semi eager [x,y] l,r;
             p = let canon probe first [x,y] s,r;
             return p as answer(x,y,z);
@@ -363,7 +363,7 @@ fn expansion_rejects_missing_support_and_wrong_exact_keys() {
     }
     let mut hashed = resident_expand_program();
     hashed.0.program.definitions[1] =
-        syn::parse_quote!(r = let rename R@1 {a -> x,b -> y,c -> z};);
+        syn::parse_quote!(r = let rename R {a -> x,b -> y,c -> z};);
     hashed.1.structures.entries[2] = syn::parse_quote!(r = @index as ::custom::Index<_,_> [x,y];);
     hashed
         .1.structures
@@ -385,12 +385,12 @@ fn membership_bridge_program() -> Fixture {
     fixture_quote! { physical {
         relation L(a:i64); relation R(a:i64,b:i64);
         relation M(b:i64,tag:i64); relation S(b:i64,c:i64); relation T(c:i64,d:i64);
-        l = pipe rename L@0 {a -> a};
-        r = let rename R@1 {a -> a,b -> b};
-        m = pipe rename M@2 {b -> b,tag -> tag};
+        l = pipe rename L {a -> a};
+        r = let rename R {a -> a,b -> b};
+        m = pipe rename M {b -> b,tag -> tag};
         selected = let point select m if (tag = 7);
-        s = let rename S@3 {b -> b,c -> c};
-        t = let rename T@4 {c -> c,d -> d};
+        s = let rename S {b -> b,c -> c};
+        t = let rename T {c -> c,d -> d};
         first = pipe probe first [a] l,r;
         member = pipe probe first [b] first,selected;
         after = pipe probe first [b] member,s;
@@ -600,7 +600,7 @@ fn smallest_expansion_rejects_missing_or_misshaped_candidate_facts() {
 fn program() -> Fixture {
     fixture_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x}; r = let rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x}; r = let rename R {a -> x,b -> y};
         j = let canon probe first [x] l,r; return j as answer(x,y);
     } structures { providers { user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r = @user_index as UserIndex [x]; r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; l host scan = @host_scan as ::core::iter::Map<_, _> []; j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows; } }
 }
@@ -654,7 +654,7 @@ fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
 fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
     let p: Fixture = fixture_quote! { physical {
         relation R(a:i32,b:i32);
-        r = let canon rename R@0 {a -> a,b -> b};
+        r = let canon rename R {a -> a,b -> b};
         e = pipe bind r with n: i32 = (1);
         p = pipe project e keep {a,b}; return p as answer(a,b);
     } structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort; r host scan = @host_scan as ::core::iter::Map<_, _> []; } };
@@ -673,7 +673,7 @@ fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
 fn ordered_premises_require_storage_or_a_same_key_merge_stream() {
     let p: Fixture = fixture_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32);
-        l = pipe rename L@0 {a -> a}; r = pipe rename R@1 {a -> a,b -> b}; s = pipe rename S@2 {b -> b};
+        l = pipe rename L {a -> a}; r = pipe rename R {a -> a,b -> b}; s = pipe rename S {b -> b};
         j = let merge[a] l,r; k = let canon merge[b] j,s; return k as answer(a,b);
     } structures { providers { ordered = Ordered { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
         j = @ordered as Ordered [b]; j rows = @vec as ::std::vec::Vec<_>; k rows = @sort as ::cq_storage::dedup::Sort; k canon = rows;
@@ -706,7 +706,7 @@ fn leveled_entries_cover_prefixes_but_do_not_prove_uniqueness() {
 fn complete_read_structures_take_precedence_over_candidate_prefixes() {
     let source: Fixture = fixture_quote!(physical {
         relation L(x:i32); relation R(x:i32,y:i32);
-        l = pipe rename L@0 {x -> x}; r = let rename R@1 {x -> x,y -> y};
+        l = pipe rename L {x -> x}; r = let rename R {x -> x,y -> y};
         j = pipe probe first [x] l,r;
         checked = let canon probe first [x,y] j,r;
         return checked as answer(x,y);
@@ -744,7 +744,7 @@ fn complete_read_structures_take_precedence_over_candidate_prefixes() {
 fn a_const_only_read_cannot_justify_a_built_entry() {
     let p: Fixture = fixture_quote! { physical {
         relation R(a: i32);
-        r = let rename R@0 { a -> x };
+        r = let rename R { a -> x };
         p = let canon point select r if (x = 5);
         return p as answer(x);
     } structures { providers { vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows; } };
@@ -761,7 +761,7 @@ fn a_const_only_read_cannot_justify_a_built_entry() {
 fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
     let p: Fixture = fixture_quote! { physical {
         relation L(a: i32); relation R(a: i32);
-        l = pipe rename L@0 { a -> x }; r = let rename R@1 { a -> x };
+        l = pipe rename L { a -> x }; r = let rename R { a -> x };
         p = let point select r if (x = 5);
         j = pipe probe first [x] l,r;
         out = let canon semi eager [x] j,p;
@@ -774,8 +774,8 @@ fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
 fn payload_probes_must_cover_every_built_key_level() {
     let p: Fixture = fixture_quote! { physical {
         relation L(a: i32); relation R(a: i32, payload: f64);
-        l = pipe rename L@0 { a -> x };
-        r = let rename R@1 { a -> x, payload -> y };
+        l = pipe rename L { a -> x };
+        r = let rename R { a -> x, payload -> y };
         j = pipe probe first [x] l,r;
         out = let canon project j keep {x};
         return out as answer(x);
@@ -805,7 +805,7 @@ fn representation_and_stage_entries_round_trip() {
 fn represented_program() -> Fixture {
     fixture_quote! { physical {
         relation R(a:i32,b:i32);
-        r = pipe rename R@0 {a -> x,b -> y};
+        r = pipe rename R {a -> x,b -> y};
         s = pipe select r if (x >= 0);
         b = pipe bind s with z: i32 = (x + y);
         out = let canon project b keep {x,y,z};
@@ -963,8 +963,8 @@ fn generator_bind_round_trip_drops_inherited_uniqueness() {
 fn shared_program() -> Fixture {
     fixture_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x};
-        b = let rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        b = let rename R {a -> x,b -> y};
         s = pipe semi eager [x] l,b;
         p = let canon probe first [x] s,b;
         return p as answer(x,y);
@@ -1003,8 +1003,8 @@ fn lookup_sharing_witness_and_expansion_are_additive() {
 fn retained_snapshot_witness_requires_identical_provider_and_key() {
     let mut program: Fixture = fixture_quote! { physical {
         relation L(a:i32); relation R(a:i32,b:i32);
-        l = pipe rename L@0 {a -> x};
-        b = pipe rename R@1 {a -> x,b -> y};
+        l = pipe rename L {a -> x};
+        b = pipe rename R {a -> x,b -> y};
         s = pipe semi eager [x] l,b;
         p = let canon probe first [x] s,b;
         return p as answer(x,y);
@@ -1123,7 +1123,7 @@ fn witness_cannot_escape_into_fused_prefix() {
     p.0.program.definitions[3] = syn::parse_quote!(p = pipe probe first [x] s,b;);
     p.0.program.definitions.extend([
         syn::parse_quote!(q = pipe probe first [x] s,b;),
-        syn::parse_quote!(u = let canon union fused p,q block @2 free [x] interface [y] over s;),
+        syn::parse_quote!(u = let canon union fused p,q block free [x] interface [y] over s;),
     ]);
     p.0.program.returned = syn::parse_quote!(u);
     p.0.program.head = syn::parse_quote!(answer(x, y));
@@ -1138,7 +1138,7 @@ fn canonical_consumer_accepts_bag_return_and_forbids_head_dedup() {
         physical {
             relation R(a:i32);
             consumer canonical;
-            r = pipe rename R@0 {a -> x};
+            r = pipe rename R {a -> x};
             return r as answer(*x % 2);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
@@ -1163,7 +1163,7 @@ fn discharged_host_uniqueness_does_not_survive_a_lossy_projection() {
         physical {
             relation R(a:i32,b:i32);
             host_set R discharged;
-            r = pipe rename R@0 {a -> x,b -> y};
+            r = pipe rename R {a -> x,b -> y};
             p = pipe project r keep {x,y};
             return p as answer(x,y);
         }
@@ -1308,8 +1308,8 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
     let source: Fixture = fixture_quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x,b -> y};
             p = let canon probe first [x] l,r;
             return p as answer(x,y);
         } structures { providers { scan = Scan { reads [exact, range, membership], build inferred }; index = ::custom::Index<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; filter = Filter { reads [exact, range, membership], build inferred }; }
@@ -1341,8 +1341,8 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
     scalar.0 = syn::parse_quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> x};
-            r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            r = let rename R {a -> x,b -> y};
             p = let canon probe first [x] l,r;
             return p as answer(x,y);
         }
@@ -1352,8 +1352,8 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
     partial.0 = syn::parse_quote! {
         physical {
             relation L(a:i64); relation R(a:i64,b:i64);
-            l = pipe rename L@0 {a -> x};
-            raw = pipe rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x};
+            raw = pipe rename R {a -> x,b -> y};
             r = let bind raw with z: i64 = (1);
             p = let canon probe first [x] l,r;
             return p as answer(x,y,z);
@@ -1420,7 +1420,7 @@ fn ordered_canon_requires_complete_direct_source() {
     let source: Fixture = fixture_quote! {
         physical {
             relation R(a:i32,b:i32);
-            r = pipe canon rename R@0 {a -> x,b -> y};
+            r = pipe canon rename R {a -> x,b -> y};
             return r as answer(x,y);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
@@ -1432,7 +1432,7 @@ fn ordered_canon_requires_complete_direct_source() {
     let projected: Fixture = fixture_quote! {
         physical {
             relation R(a:i32,b:i32);
-            r = pipe rename R@0 {a -> x,b -> y};
+            r = pipe rename R {a -> x,b -> y};
             p = let canon project r keep {x};
             return p as answer(x);
         }
@@ -1448,7 +1448,7 @@ fn provider_program(structures: proc_macro2::TokenStream) -> Fixture {
     parse_fixture(quote::quote! {
         physical {
             relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L@0 {a -> x}; r = let rename R@1 {a -> x,b -> y};
+            l = pipe rename L {a -> x}; r = let rename R {a -> x,b -> y};
             j = let canon probe first [x] l,r; return j as answer(x,y);
         }
         #structures

@@ -5,8 +5,8 @@ const MERGE: &str = r#"
 physical {
     relation R(a: i32, b: i32);
     relation S(a: i32, c: i32);
-    l = pipe rename R@0 { a -> a, b -> b };
-    r = pipe rename S@1 { a -> a, c -> c };
+    l = pipe rename R { a -> a, b -> b };
+    r = pipe rename S { a -> a, c -> c };
     j = let canon merge[a] l,r;
     return j as answer(a,b,c);
 }"#;
@@ -16,9 +16,9 @@ physical {
     relation R(a: i32, b: i32);
     relation S(a: i32, c: i32);
     relation T(b: i32, c: i32);
-    l = pipe rename R@0 { a -> a, b -> b };
-    r = pipe rename S@1 { a -> a, c -> c };
-    t = pipe rename T@2 { b -> b, c -> c };
+    l = pipe rename R { a -> a, b -> b };
+    r = pipe rename S { a -> a, c -> c };
+    t = pipe rename T { b -> b, c -> c };
     j = pipe probe smallest[a] l,r;
     k = pipe semi eager[b,c] j,t;
     out = let canon project k keep { a,b,c };
@@ -218,7 +218,7 @@ fn positional_advice_requires_a_positional_host() {
             pipeline {{ {printer} }};
             physical {{
                 relation R(a:i32,b:i32);
-                r = pipe rename R@0 {{a -> x,b -> y}};
+                r = pipe rename R {{a -> x,b -> y}};
                 s = pipe point select r if (y = 2);
                 out = let canon project s keep {{x}}; return out as answer(x);
             }}
@@ -239,7 +239,7 @@ fn positions_representation_is_explicitly_refused() {
                 pipeline {};
                 physical {
                     relation R(a:i32,b:i32);
-                    r = pipe rename R@0 {a -> x,b -> y};
+                    r = pipe rename R {a -> x,b -> y};
                     out = let canon project r keep {x,y};
                     return out as answer(x,y);
                 }
@@ -271,8 +271,8 @@ fn lookup_witness_and_expansion_are_refused() {
             pipeline {{}};
             physical {{
                 relation R(a:i32,b:i32); relation S(a:i32,c:i32);
-                l = pipe rename R@0 {{a -> k,b -> b}};
-                r = let rename S@1 {{a -> k,c -> v}};
+                l = pipe rename R {{a -> k,b -> b}};
+                r = let rename S {{a -> k,c -> v}};
                 s = pipe semi eager [k] l,r;
                 p = pipe probe first [k] s,r;
                 out = let canon project p keep {{k,v}};

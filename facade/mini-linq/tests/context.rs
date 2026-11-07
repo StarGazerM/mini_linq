@@ -30,7 +30,7 @@ fn selection_records_consumer_and_discharged_host_facts() {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation rows(x:i32);
-            r = pipe rename rows@0 {x -> x};
+            r = pipe rename rows {x -> x};
             return dedup r as answer(*x % 2);
         }
     }
@@ -60,7 +60,7 @@ fn certified_host_fact_still_checks_duplicate_rows() {
         physical {
             relation rows(x:i32);
             host_set rows;
-            r = pipe rename rows@0 {x -> x};
+            r = pipe rename rows {x -> x};
             return r as answer(x);
         }
     }

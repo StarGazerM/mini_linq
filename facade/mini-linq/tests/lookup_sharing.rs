@@ -10,8 +10,8 @@ fn shared_lookup_expands_ranges_in_scalar_order() {
         pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(k:i32) = (left); relation R(k:i32,v:i32) = (right);
-            l = pipe rename L@0 {k -> k};
-            r = let rename R@1 {k -> k,v -> v};
+            l = pipe rename L {k -> k};
+            r = let rename R {k -> k,v -> v};
             s = pipe semi eager [k] l,r;
             kept = pipe select s if (k >= 1);
             projected = pipe project kept keep {k};
@@ -44,8 +44,8 @@ fn positional_witness_is_consumed_by_scalar_probe() {
         pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
             relation L(k:i32) = (left); relation R(k:i32,v:i32) = (right);
-            l = pipe rename L@0 {k -> k};
-            r = let rename R@1 {k -> k,v -> v};
+            l = pipe rename L {k -> k};
+            r = let rename R {k -> k,v -> v};
             s = pipe semi eager [k] l,r;
             kept = pipe select s if (k >= 1);
             p = pipe probe first [k] kept,r;

@@ -6,21 +6,24 @@ use std::collections::{BTreeMap, BTreeSet};
 
 // Formal rule CK-Le: Check occurrence phases and column ownership independently of scheduling.
 pub fn check(normal: &cq::Program, target: &vo::Program) -> syn::Result<()> {
-    check_selected(normal, target, None)
+    check_selected(normal, target, &vo::contract::check(target)?, None)
 }
 
-/// Check explicitly selected lookup/expand occurrences; other reads obey WF-VO.
+/// Check explicitly selected lookup/expand occurrences of a WF-VO schedule
+/// with its `analysis`; other reads obey WF-VO.
 pub(crate) fn check_advice(
     normal: &cq::Program,
     target: &vo::Program,
+    analysis: &vo::Analysis,
     lookups: &BTreeSet<usize>,
 ) -> syn::Result<()> {
-    check_selected(normal, target, Some(lookups))
+    check_selected(normal, target, analysis, Some(lookups))
 }
 
 fn check_selected(
     normal: &cq::Program,
     target: &vo::Program,
+    analysis: &vo::Analysis,
     selected: Option<&BTreeSet<usize>>,
 ) -> syn::Result<()> {
     if normal != &target.cq {
@@ -29,7 +32,6 @@ fn check_selected(
             "LE must preserve normalized CQ",
         ));
     }
-    let analysis = vo::contract::check(target)?;
     fn scope(
         body: &cq::CommaList<cq::BodyItem>,
         steps: &[vo::Step],
@@ -181,7 +183,7 @@ fn check_selected(
     scope(
         &normal.query.body,
         &target.valuation.steps,
-        &analysis,
+        analysis,
         &BTreeSet::new(),
         selected,
     )

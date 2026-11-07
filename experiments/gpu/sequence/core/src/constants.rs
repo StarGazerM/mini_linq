@@ -97,7 +97,7 @@ mod tests {
     fn source() -> Program {
         syn::parse_quote! { physical {
             relation R(x:i32,y:i32);
-            r = let rename R@0 {y -> y} constants {x = 7};
+            r = let rename R {y -> y} constants {x = 7};
             return r as answer(y);
         } }
     }
@@ -145,7 +145,7 @@ mod tests {
         let source = source();
         let target: Program = syn::parse_quote! { physical {
             relation R(x:i32,y:i32);
-            input = pipe rename R@0 {y -> y, x -> literal_column};
+            input = pipe rename R {y -> y, x -> literal_column};
             restricted = pipe select input if (literal_column = 7);
             r = let project restricted keep {y};
             return r as answer(y);
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn unchanged_atoms_remain_exact() {
         let source: Program = syn::parse_quote! { physical {
-            relation R(x:i32); r = pipe rename R@0 {x -> x}; return r as answer(x);
+            relation R(x:i32); r = pipe rename R {x -> x}; return r as answer(x);
         } };
         assert_eq!(compile(&source).unwrap(), source);
     }

@@ -39,8 +39,8 @@ fn lookup_program(body: proc_macro2::TokenStream, grades: proc_macro2::TokenStre
     syn::parse2(quote! {
         physical {
             relation L(a:u32); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -75,8 +75,8 @@ fn predicates_survive_projection_without_carrying_dead_columns() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32,x:i64,dead:i64); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a,x -> x,dead -> dead};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a,x -> x,dead -> dead};
+            r = let rename R {a -> a,b -> b};
             j = pipe probe first [a] l,r;
             selected = pipe select j if (x > 0);
             projected = let canon project selected keep {b};
@@ -191,8 +191,8 @@ fn membership_reads_do_not_allocate_payload_scratch() {
         let program: Program = syn::parse2(quote! {
             physical {
                 relation L(a:u32); relation R(a:u32);
-                l = pipe rename L@0 {a -> a};
-                r = let rename R@1 {a -> a};
+                l = pipe rename L {a -> a};
+                r = let rename R {a -> a};
                 j = let canon #operation eager [a] l,r;
                 return j as answer(a);
             } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
@@ -218,9 +218,9 @@ fn later_lookup_keys_are_live_across_an_earlier_payload() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32,x:u32); relation R(a:u32,b:u32); relation S(x:u32,c:u32);
-            l = pipe rename L@0 {a -> a,x -> x};
-            r = let rename R@1 {a -> a,b -> b};
-            s = let rename S@2 {x -> x,c -> c};
+            l = pipe rename L {a -> a,x -> x};
+            r = let rename R {a -> a,b -> b};
+            s = let rename S {x -> x,c -> c};
             first = pipe probe first [a] l,r;
             second = pipe probe first [x] first,s;
             projected = let canon project second keep {c};
@@ -248,8 +248,8 @@ fn union_retains_every_arm_without_reusing_allocations() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let probe first [a] l,r;
             out = let canon union j,j;
             return out as answer(a,b);
@@ -280,8 +280,8 @@ fn a_host_consumer_requires_expanded_rows_instead_of_virtual_ranges() {
     let program: Program = syn::parse_quote! {
         physical {
             relation L(a:u32); relation R(a:u32,b:u32);
-            l = pipe rename L@0 {a -> a};
-            r = let rename R@1 {a -> a,b -> b};
+            l = pipe rename L {a -> a};
+            r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             guarded = pipe guard j if (a % 2 == 0);
             return guarded as answer(a,b);
