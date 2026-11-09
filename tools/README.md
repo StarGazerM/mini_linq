@@ -72,7 +72,7 @@ checker refusals; never wording, never downstream. (5) Seam data is a side
 table returned by the lowering. (6) Read before you measure applies to merge
 batches, where the full gates and the baseline run once.
 Per-step gate for a single-IR change (owner declared, scope check zero):
-the owner crate's tests with expected-output fixtures (a step that changes the stage protocol, Structures or Sequence APIs also runs the GPU host-side checks: `cargo build -p cq-gpu-tpch` (its build script generates and checks all advised queries; the crate's lib tests execute on the device and run only in gpu_gate.sh) and the GPU Datalog/Sequence crates' host tests) (input program ->
+the owner crate's tests with expected-output fixtures (a step that changes the stage protocol, Structures or Sequence APIs also runs the GPU host-side checks: `cargo build --lib -p cq-gpu-tpch` (its build script generates and checks all advised queries; binaries and lib tests need oxide finalization and run only in gpu_gate.sh) and the GPU Datalog/Sequence crates' host tests) (input program ->
 expected printed program, and the checker), the IR-level census (re-lower
 every recorded plan and compare printed plans against the base; no
 codegen), and `check_ir_scope.py`. Nothing else: a later layer cannot have
