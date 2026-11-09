@@ -551,9 +551,6 @@ pub struct Analysis {
     pub partial_groups: BTreeMap<String, Vec<bool>>,
     /// BE-PrefixBound: checked cardinality/key facts, indexed by Physical result.
     pub prefix_bounds: BTreeMap<String, bounds::Bound>,
-    /// BE-GroupKey: owners whose slot-zero Group valuation stream remains
-    /// unique after removal of its upstream canonicalizers.
-    pub canon_free_groups: BTreeSet<String>,
     pub views: BTreeSet<String>,
     pub stores: BTreeMap<String, Len>,
     /// Publication ownership, derived once from checked provenance and consumers.

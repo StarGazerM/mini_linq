@@ -146,8 +146,8 @@ empty heading. \code{probe smallest} needs an adjacent admissible intersection
 of $k\ge2$ providers, as specified by \textsc{PH-Smallest}.
 Lazy semi/anti needs a reusable host read only lazily on that key. A witness
 union (\code{any}) has an empty interface; a fused union names its prefix and
-every arm depends on it; cross-arm canon on a statically disjoint union is
-rejected. Physical checks neither IX demands nor canonical return evidence.
+every arm depends on it. Redundant canon on a statically disjoint union is
+permitted. The IX seam checks PH-CanonPlacement and IX demands independently.
 $\mathsf{collapses}(H,K)$ holds when some head argument is computed and some
 returned column is not a bare head argument: distinct valuations may then
 yield one answer. The return-boundary dedup obligation is
@@ -155,6 +155,54 @@ yield one answer. The return-boundary dedup obligation is
 exactly when the head collapses and the return is not \code{canon}, and an
 extra obligation is admissible. Structures types the recorded obligation
 with the answer identity index (\code{r head}) and never recomputes it.
+
+\paragraph{Canonical placement.}
+Physical owns canonical boundaries; later stages consume their recorded flags.
+Let $K_t(r)$ be the optional uniqueness key inferred from the actual Physical
+operators and flags. Unit has the empty key; a rename of a checked
+\code{host_set} has its full heading. Probe/merge combine both operand keys;
+semi/anti inherit the left key; selection, scalar bind and guard inherit their
+input key. Generator bind has no inherited key. Projection inherits only a
+key contained in its retained heading. Group has its grouping columns as key
+(captured keys are fixed host values). Union alone has no inherited key,
+including a union with disjoint arms: disjointness does not prove uniqueness
+within an arm. A recorded \code{canon} supplies the full heading when no key
+is inherited.
+\begin{mathpar}
+\Rule{PH-CanonPlacement}{
+ \forall g=\operatorname{group}(r,\ldots)\in D.\ K_t(r)\ne\bot\\
+ K_t(o)\ne\bot\ \lor\ t.return\_canon\ \lor\ t.consumer\_canonical}
+ {\mathsf{canonicalBoundaries}(t)\Downarrow\ok}
+\end{mathpar}
+This is an admissibility check, not a replay of default lowering: a missing
+boundary is refused when duplicate valuations can reach a group or the
+returned relation. Additional redundant canon, including on a disjoint union
+or a return to a canonical consumer, is admissible subject to PH-Canon's
+storage modes. Answer dedup for a collapsing computed head remains the
+separate PH-HeadDedup obligation.
+
+The existing default lowering uses an operator-key traversal $K_L$ and its
+set $U$ of results whose keys were inherited. Its transfers are those above,
+except that a nondisjoint binding union is assigned its full heading because
+lowering records canon there. Write $B(r)$ when $r$ is a union with no origin
+or a nonempty origin interface, $D_s$ for unions proved disjoint by fallback
+construction, $G$ for group inputs, $c$ for the consumer-canonical fact, and
+$n(r)$ for operand uses plus the return use. The exact defaults are
+\[
+\begin{aligned}
+\mathsf{canon}_L(r)={}&(r\in G\land r\notin U)\\
+ &{}\lor(r=o\land(\neg c\lor n(r)>1)\land r\notin U\land r\notin D_s)\\
+ &{}\lor(B(r)\land r\notin D_s),\\
+\mathsf{returnCanon}_L={}&\neg c\land o\notin U\land o\in D_s .
+\end{aligned}
+\]
+If a result has no inherited key and is the returned result, the traversal
+seeds its full heading for subsequent definitions without adding it to $U$.
+The traversal does not feed group-input canon decisions back into $U$.
+These details describe the current constructor, not additional checker
+restrictions. In particular, neither a heading drop alone nor a relation
+declaration is a canonicality policy. No Sequence pass may remove a recorded
+boundary because a group follows it.
 
 \paragraph{Smallest candidate intersection.}
 Let $p$ be the outer valuation and $v$ one new column. An introducing probe
@@ -284,5 +332,5 @@ not silently commute operands or invent demands.
 pass the contract; declarations, head, returned result and the definition graph
 of named logical operators and operands are preserved; execution choices and
 modes may change; recorded join and predicate placement decisions and
-branch-scoped free-variable bindings are kept (PH-Block). It has no IX source and does not establish final
-canonicality.
+branch-scoped free-variable bindings are kept (PH-Block). It has no IX source;
+the IX seam independently establishes final canonicality.

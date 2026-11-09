@@ -32,8 +32,6 @@ struct Fact {
     materializes: bool,
     /// A key proved for these positions, not merely for their relational support.
     unique: Option<Vec<String>>,
-    /// Positional key preserved if valuation canonicalizers on this stream are removed.
-    canon_free_unique: Option<Vec<String>>,
     reads: BTreeSet<(String, Vec<String>)>,
     /// Routing columns whose equal values inhabit exactly one outer part.
     partition: Option<Vec<String>>,
@@ -331,7 +329,6 @@ fn analyze_in(
             tilings: BTreeMap::new(),
             partial_groups: BTreeMap::new(),
             prefix_bounds: crate::bounds::record(&prefix.physical_program, program),
-            canon_free_groups: BTreeSet::new(),
             views: BTreeSet::new(),
             stores: BTreeMap::new(),
             publications: BTreeMap::new(),
@@ -681,7 +678,6 @@ impl Checked<'_> {
                 result.meaning = meaning;
                 result.materializes = false;
                 result.unique = None;
-                result.canon_free_unique = None;
                 Ok(result)
             }
             Term::Rows(name) => {
@@ -720,7 +716,6 @@ impl Checked<'_> {
                     }),
                 };
                 Ok(Fact {
-                    canon_free_unique: unique.clone(),
                     unique,
                     shape: vec![if matches!(meaning, Meaning::Result(_))
                         && matches!(self.physical(name)?.operator, Operator::Unit(_))
@@ -922,8 +917,6 @@ impl Checked<'_> {
                     }
                 }
                 for segment in segments.iter().rev() {
-                    fact.canon_free_unique =
-                        self.inferred_key(segment, Some((&fact.meaning, &fact.canon_free_unique)));
                     fact.unique = self.inferred_key(segment, Some((&fact.meaning, &fact.unique)));
                     fact.meaning = Meaning::Result(symbol_name(segment));
                 }
@@ -1106,7 +1099,6 @@ impl Checked<'_> {
                     })
                 };
                 fact.unique = combine(fact.unique.take());
-                fact.canon_free_unique = combine(fact.canon_free_unique.take());
                 fact.meaning = Meaning::Lookup(provider_name, names, Box::new(fact.meaning));
                 fact.depth += 1;
                 fact.max_depth += 1;
@@ -1236,11 +1228,6 @@ impl Checked<'_> {
                     fact.shape = vec![fact.len.clone()];
                 }
                 fact.unique = Some(group.keys.iter().map(symbol_name).collect());
-                if group_slot == 0 && fact.canon_free_unique.is_some() {
-                    self.analysis.canon_free_groups.insert(owner.into());
-                }
-                // Canon removal does not cross a Group boundary.
-                fact.canon_free_unique = fact.unique.clone();
                 fact.meaning = Meaning::Result(symbol_name(name));
                 fact.materializes = true;
                 self.analysis
@@ -1262,8 +1249,6 @@ impl Checked<'_> {
                 }
                 fact.meaning = Meaning::Fold(monoid.clone(), Box::new(fact.meaning));
                 fact.unique = (fact.depth == 0).then(Vec::new);
-                // Canon removal does not cross a Fold boundary.
-                fact.canon_free_unique = fact.unique.clone();
                 fact.len = match fact.shape.len() {
                     1 => Len::Lit(1),
                     2 => fact.shape[0].clone(),
@@ -1390,9 +1375,7 @@ impl Checked<'_> {
                         result = Some(next);
                     }
                 }
-                let mut result = result.expect("nonempty alternatives checked");
-                // Canon removal does not cross a Choose boundary.
-                result.canon_free_unique = result.unique.clone();
+                let result = result.expect("nonempty alternatives checked");
                 Ok(result)
             }
         }

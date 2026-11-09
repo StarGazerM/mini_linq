@@ -13,6 +13,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Physical lowering alone places valuation canonicalization. Sequence executes
+  the recorded canon boundaries; the `group_without_canon` rewrite and its
+  separate canon-free uniqueness proof state have been removed. Grouping still
+  consumes complete distinct valuations, including under partitioned execution.
 - Calibration descriptor version 4 records separately printed base programs in
   `calibration::Stage::bases`: Physical for Structures, and Physical plus
   Structures for Sequence. `Stage::annotation` retains the selected layer's

@@ -1,6 +1,6 @@
 //! Machine-selected collective and provider decomposition. Keyed groups route
 //! their keys; global groups route complete valuations before per-part Canon,
-//! or use contiguous tiles when BE-GroupKey already proves global uniqueness.
+//! or use contiguous tiles when BE-GroupPartial checks global uniqueness.
 use crate::rewrites::KeyPartition;
 use cq_lang_sequence::structures::{self, physical};
 use crate::{Advice, Planned};
@@ -132,7 +132,6 @@ pub(crate) fn apply(
     enabled: bool,
     providers: bool,
     partial_groups: bool,
-    unique_groups: &BTreeSet<String>,
 ) -> syn::Result<()> {
     let applies = |policy: &&KeyPartitionPolicy| {
         policy.select
@@ -199,13 +198,8 @@ pub(crate) fn apply(
         else {
             continue;
         };
-        if group_name(&definition.term).is_some()
-            && (partial_groups || !keyed_group(&planned.physical, &definition.term))
-        {
-            // BE-GroupKey was checked once before candidate enumeration.
-            if unique_groups.contains(&symbol_name(&definition.name)) {
-                keys.clear();
-            }
+        if group_name(&definition.term).is_some() && partial_groups {
+            keys.clear();
         } else if keys.is_empty() {
             continue;
         }
@@ -653,24 +647,9 @@ fn group_name(term: &Term) -> Option<&Ident> {
     }
 }
 
-fn keyed_group(physical: &physical::Program, term: &Term) -> bool {
-    group_name(term).is_some_and(|name| {
-        physical
-            .program
-            .definitions
-            .iter()
-            .any(|definition| {
-                definition.name == *name
-                    && matches!(&definition.operator,
-                Operator::Group(group) if !group.keys.is_empty())
-            })
-    })
-}
-
-pub(crate) fn has_keyed_partials(physical: &physical::Program, program: &Program, unique_groups: &BTreeSet<String>) -> bool {
+pub(crate) fn has_partial_groups(program: &Program) -> bool {
     program.sequence.definitions.iter().any(|definition| {
-        unique_groups.contains(&symbol_name(&definition.name))
-            && keyed_group(physical, &definition.term)
+        group_name(&definition.term).is_some()
     })
 }
 

@@ -741,7 +741,7 @@ sortedness. Every fact records `from authored("source")` or the original
 `from vo("source")`; mapping subjects preserves that source. PL-Evidence lets
 estimates and `planning_key` select checked shapes only. The separately spelled
 `trusted_key` is an authored semantic premise: false trusted keys can change
-answers through BE-GroupKey. VO sources cannot author trusted keys.
+answers through group input uniqueness. VO sources cannot author trusted keys.
 
 Evidence syntax (a complete advice block, also serialized in a planner trace):
 
@@ -863,14 +863,10 @@ Unlike estimates, a false key can change answers: the author is responsible
 for its truth. The manifest-driven TPC-H suite asserts dbgen's declared keys
 only when a loader projection carries every key column.
 
-`group_without_canon(grouped_definition)` is checked by BE-GroupKey and
-BE-Group: the rewritten input must retain positional uniqueness after every
-valuation canonicalizer is removed. Keys transfer through renaming, filters,
-scalar binds and joins; projections must preserve them. Missing keys, unions
-and expanding Rust binds do not supply a certificate. The planner records
-successful rewrites in its replay trace. GPU groups can then read resident
-columns directly, evaluating group arguments without materializing complete
-named valuations. With no key advice the existing canonical path is unchanged.
+Physical lowering owns canonicalization, including key-derived uniqueness,
+checked host sets, disjoint union arms and consumer canonicalization. Sequence
+preserves that decision; it does not remove valuation canonicalizers or record
+a second canon-removal decision in its replay trace.
 
 Measured SF10 acceptance (advised suite, one warmup and five measured runs;
 before: baseline suite, after: historical key-aware grouping and retired arithmetic recognition):

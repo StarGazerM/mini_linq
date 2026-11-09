@@ -18,7 +18,6 @@ impl Parse for Advice {
         parenthesized!(arguments in input);
         let result = match kind.to_string().as_str() {
             "store" => Self::Store(arguments.parse()?),
-            "group_without_canon" => Self::GroupWithoutCanon(arguments.parse()?),
             "key_partition" => Self::KeyPartition(arguments.parse()?),
             "store_level" => Self::StoreLevel(arguments.parse()?),
             "retain" => {
@@ -96,7 +95,6 @@ impl ToTokens for Advice {
         let invocation = match self {
             Self::Evidence(evidence) => quote!(#evidence),
             Self::Store(name) => quote!(store(#name)),
-            Self::GroupWithoutCanon(name) => quote!(group_without_canon(#name)),
             Self::StoreLevel(name) => quote!(store_level(#name)),
             Self::Retain {
                 name,
@@ -146,7 +144,6 @@ mod tests {
     fn authored_advice_is_the_serialized_planner_trace() {
         for invocation in [
             "store(result)",
-            "group_without_canon(grouped)",
             "store_level(joined)",
             "retain(joined, 150000, 1024, 10000)",
             "publish(result, producer)",

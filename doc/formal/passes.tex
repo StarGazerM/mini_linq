@@ -1103,7 +1103,7 @@ stream source retains filtered rows rather than filtering a reusable host scan.
 
 \Rule{CK-Physical}{\mathsf{WF}_{IX}(s)\quad\mathsf{WF}_{Physical}(t)\\
  \mathsf{erase}(t)=s.ra\quad\mathsf{demands}(s,t)\quad
- \textsc{CK-Return}(t,\Gamma)}
+ \mathsf{canonicalBoundaries}(t)\quad\textsc{CK-Return}(t,\Gamma)}
  {\mathsf{check}_{physical}(s,t)\Downarrow\ok}
 \end{mathpar}
 No missing demand is synthesized; merge has its own ordering premise; the check
@@ -1113,6 +1113,15 @@ In PH-Lower, $A$ is the parsed fact packet passed to
 \code{cq_physical_lowering::compile_with}; fields of the Physical body are
 written directly on $t$. The relation constrains successful producer outputs,
 without requiring every admissible Physical choice to be a default choice.
+PH-CanonPlacement states the existing canonicality obligations and exact default
+placement cases in Section~\ref{sec:physical}. The independent checker propagates
+keys through the submitted Physical operators and recorded canon boundaries;
+it does not call the lowering's \code{canonical()} traversal. Local checking
+refuses noncanonical group inputs; seam checking refuses a noncanonical return
+unless a return canon or an authorized canonical consumer owns that boundary.
+Removing union canon is consequently refused when it leaves either observation
+uncanonicalized, not simply because the default constructor chose that flag.
+Redundant canon is permitted, even on fallback-disjoint arms.
 The optional \textsc{PH-ConstantGuard} Physical rewrite exposes a literal-bearing
 rename as a private pipe rename, a private pipe selection of the same literal
 equalities, and a projection onto exactly the original mapped columns.

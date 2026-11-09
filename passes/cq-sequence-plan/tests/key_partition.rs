@@ -274,7 +274,7 @@ fn known_small_collectives_pay_setup_and_large_collectives_amortize_it() {
 }
 
 #[test]
-fn grouped_named_canon_moves_inside_routed_parts_and_replays() {
+fn grouped_named_canon_routes_before_partial_grouping_and_replays() {
     for global in [false, true] {
         let (mut physical, mut structures, source) = named_grouped(global);
         let machine = machine(Some(8));
@@ -292,18 +292,20 @@ fn grouped_named_canon_moves_inside_routed_parts_and_replays() {
             .iter()
             .find(|d| d.name == "distinct")
             .unwrap();
-        assert!(
-            matches!(&distinct.term, Term::Ref(name) if name == "input"),
-            "named Canon must not execute before routing: {}",
-            planned.program.to_token_stream()
+        // Global uniqueness comes from the retained full-valuation Canon,
+        // routed before the contiguous partial fold. No key advice removes it.
+        assert_eq!(
+            distinct.term,
+            syn::parse_quote!(store flatten canon partition_k
+                [extendedprice, linenumber, linestatus, orderkey, quantity, returnflag]
+                (8) __cq_key_input_distinct)
         );
-        assert!(
-            planned
-                .program
-                .to_token_stream()
-                .to_string()
-                .contains("group totals canon partition_k")
-        );
+        let alias = planned.program.sequence.definitions.iter()
+            .find(|d| d.name == "alias").unwrap();
+        assert_eq!(alias.term, syn::parse_quote!(tile 8 distinct));
+        let result = planned.program.sequence.definitions.iter()
+            .find(|d| d.name == "result").unwrap();
+        assert_eq!(result.term, syn::parse_quote!(store group totals alias));
         replay(&physical, &structures, &source, &planned);
     }
 }
@@ -568,43 +570,6 @@ fn global_groups_route_full_valuations_and_merge_to_one_row() {
             .any(|a| matches!(a, Advice::KeyPartition(_)))
     );
     replay(&physical, &structures, &source, &forced);
-}
-
-#[test]
-fn globally_unique_aggregates_use_tiles_without_canonicalizers() {
-    let (mut physical, mut structures, mut source) = grouped(true);
-    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
-    let machine = machine(Some(8));
-    let planned =
-        decompose_with_key_partitions(&physical, &structures, &source, &machine, &catalog(), &[policy("result", true)])
-            .unwrap();
-    let result = planned
-        .program
-        .sequence
-        .definitions
-        .iter()
-        .find(|d| d.name == "result")
-        .unwrap();
-    assert!(matches!(&result.term, Term::Store { inner, .. }
-        if matches!(inner.as_ref(), Term::Group(_, input)
-            if matches!(input.as_ref(), Term::Tile { n: 8, .. }))));
-    assert!(
-        planned
-            .trace
-            .iter()
-            .any(|a| matches!(a, Advice::KeyPartition(k) if k.keys.is_empty()))
-    );
-    let facts = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine).unwrap();
-    assert_eq!(facts.shapes["result"], vec![cq_lang_sequence::Len::Lit(1)]);
-    let forbidden =
-        decompose_with_key_partitions(&physical, &structures, &source, &machine, &catalog(), &[policy("result", false)])
-            .unwrap();
-    assert!(
-        cost(&planned.physical, &planned.structures, &planned.program, &machine)
-            .unwrap()
-            .better_than(&cost(&forbidden.physical, &forbidden.structures, &forbidden.program, &machine).unwrap())
-    );
-    replay(&physical, &structures, &source, &planned);
 }
 
 #[test]
@@ -1598,6 +1563,8 @@ fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
 fn unknown_partial_map_merge_is_symbolic_not_free() {
     let (mut physical, mut structures, mut source) = grouped(false);
     source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
+    source.sequence.definitions.last_mut().unwrap().term =
+        syn::parse_quote!(store group totals input);
     let planned = decompose(&physical, &structures, &source, &machine(Some(8)), &catalog()).unwrap();
     assert!(
         planned
@@ -1959,33 +1926,6 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
         physical
     );
     replay(&physical, &structures, &source, &planned);
-}
-
-#[test]
-fn group_canon_removal_consumes_recorded_valuation_uniqueness() {
-    for named in [false, true] {
-        let (physical, structures, mut source) = if named {
-            named_grouped(true)
-        } else {
-            grouped(true)
-        };
-        let absent = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
-        assert!(!absent.canon_free_groups.contains("result"));
-        let advice = Advice::GroupWithoutCanon(syn::parse_quote!(result));
-        assert!(advice.apply(&physical, &structures, &source).is_err());
-        // Either declared key is an independent legal proof. The checker does
-        // not require the producer's preferred key or canonicalizer spelling.
-        for trusted_key in [
-            quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; }),
-            quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber, quantity]; }),
-        ] {
-            source.evidence = syn::parse2(trusted_key).unwrap();
-            let facts = cq_lang_sequence::contract::check(&physical, &structures, &source).unwrap();
-            assert!(facts.canon_free_groups.contains("result"));
-            let (target_physical, target_structures, target) = advice.apply(&physical, &structures, &source).unwrap();
-            cq_lang_sequence::check_rewrite(&physical, &structures, &source, &target_physical, &target_structures, &target).unwrap();
-        }
-    }
 }
 
 #[test]

@@ -31,7 +31,6 @@ pub use crate::rewrites::select_from_catalog;
 pub enum Advice {
     Evidence(cq_lang_sequence::Evidence),
     KeyPartition(crate::rewrites::KeyPartition),
-    GroupWithoutCanon(Ident),
     Store(Ident),
     StoreLevel(Ident),
     /// GR-RetainPrefix: store an expansion whose evidence bound is `rows`.
@@ -103,9 +102,6 @@ impl Advice {
         let result = match self {
             Self::Evidence(evidence) => rewrites::record_evidence_in(checker, physical, structures, source, evidence),
             Self::KeyPartition(_) => unreachable!("handled above"),
-            Self::GroupWithoutCanon(name) => {
-                rewrites::group_without_canon_in(checker, physical, structures, source, quote!(#name))
-            }
             Self::Store(name) => rewrites::store_in(checker, physical, structures, source, quote!(#name)),
             Self::StoreLevel(name) => rewrites::store_level_in(checker, physical, structures, source, quote!(#name)),
             Self::Retain {
@@ -206,37 +202,6 @@ fn decompose_in(
         program: program.clone(),
         trace: Vec::new(),
     };
-    fn has_group(term: &Term) -> bool {
-        match term {
-            Term::Group(_, _) => true,
-            Term::Store { inner, .. } | Term::Canon(inner) => has_group(inner),
-            _ => false,
-        }
-    }
-    let groups: Vec<_> = program
-        .sequence
-        .definitions
-        .iter()
-        .filter(|definition| {
-            has_group(&definition.term)
-                && analysis
-                    .canon_free_groups
-                    .contains(&symbol_name(&definition.name))
-        })
-        .map(|definition| definition.name.clone())
-        .collect();
-    let mut unique_groups = std::collections::BTreeSet::new();
-    for name in groups {
-        let advice = Advice::GroupWithoutCanon(name.clone());
-        let (_, target) = advice.apply_program_in(checker, &prepared.physical, &prepared.structures, &prepared.program)?;
-        unique_groups.insert(symbol_name(&name));
-        if target == prepared.program {
-            continue;
-        }
-        prepared.program = target;
-        prepared.trace.push(advice);
-    }
-    let analysis = checker.check_shared(&prepared.physical, &prepared.structures, &prepared.program)?;
     for advice in retain::advise(&prepared.program, &analysis, machine) {
         push(checker, &mut prepared, advice)?;
     }
@@ -353,7 +318,7 @@ fn decompose_in(
         });
         let facts = checker.check_shared(&prepared.physical, &prepared.structures, &prepared.program)?;
         let partition_choices = key_partition::choices(&prepared.physical, &prepared.structures, &prepared.program, &facts, policies)?;
-        let keyed_partials = key_partition::has_keyed_partials(&prepared.physical, &prepared.program, &unique_groups);
+        let partial_groups = key_partition::has_partial_groups(&prepared.program);
         for &(width, items) in &schedules {
             let mut best: Option<(Cost, Planned)> = None;
             for segmented in [true, false] {
@@ -362,7 +327,7 @@ fn decompose_in(
                 }
                 for (keyed, candidate_policies, partial_groups) in partition_choices
                     .iter()
-                    .filter(|_| keyed_partials)
+                    .filter(|_| partial_groups)
                     .map(|choice| (true, choice.as_slice(), true))
                     .chain(std::iter::once((false, policies, false)))
                     .chain(
@@ -383,7 +348,6 @@ fn decompose_in(
                         candidate_policies,
                         keyed,
                         partial_groups,
-                        &unique_groups,
                     ) {
                         Ok((analysis, planned)) => {
                             let cost = Cost::from_analysis(&planned.physical, &planned.structures, &planned.program, machine, &analysis)?;
@@ -527,7 +491,6 @@ fn candidate(
     policies: &[KeyPartitionPolicy],
     keyed: bool,
     partial_groups: bool,
-    unique_groups: &std::collections::BTreeSet<String>,
 ) -> syn::Result<(Analysis, Planned)> {
     let mut planned = source.clone();
     key_partition::apply(
@@ -540,7 +503,6 @@ fn candidate(
         keyed,
         false,
         partial_groups,
-        unique_groups,
     )?;
     if !machine.root.children.is_empty() {
         let mut decomposed =
@@ -560,7 +522,6 @@ fn candidate(
         keyed,
         true,
         partial_groups,
-        unique_groups,
     )?;
     // Formal rule PL-Precedence: Recorded grades, tiles and output are never replaced by generated advice.
     if source.program.sequence.output.is_none() {

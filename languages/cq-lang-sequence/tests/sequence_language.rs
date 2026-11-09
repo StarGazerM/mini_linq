@@ -2601,7 +2601,6 @@ fn nested_group_does_not_certify_outer_group_canon_removal() {
     };
     let analysis = common::check_grading(&p, &sequential()).unwrap();
     assert_eq!(analysis.partial_groups["out"].len(), 2);
-    assert!(!analysis.canon_free_groups.contains("out"));
     let mut without_outer_canon = p.clone();
     without_outer_canon.sequence.definitions[1].term =
         syn::parse_quote!(store group outer map projected group inner rows r);

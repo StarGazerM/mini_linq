@@ -303,9 +303,9 @@ fn interleaved_context_facts_round_trip_and_remain_distinct() {
         .host_sets
         .push(program.program.host_sets[0].clone());
     assert!(physical::contract::check(&duplicate).is_err());
-    let mut invalid = program;
-    invalid.program.return_canon = Some(Default::default());
-    assert!(physical::contract::check(&invalid).is_err());
+    let mut redundant = program;
+    redundant.program.return_canon = Some(Default::default());
+    physical::contract::check(&redundant).unwrap();
 }
 
 #[test]

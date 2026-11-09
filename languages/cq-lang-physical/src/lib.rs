@@ -607,9 +607,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
             );
         }
     }
-    if program.consumer_canonical.is_some() && program.return_canon.is_some() {
-        return error(&program.returned, "consumer canonical forbids return canon");
-    }
     let mut output_logical_type_ids = BTreeMap::new();
     if let Some(output) = declarations.get(&symbol_name(&program.head.relation)) {
         output.check_result()?;
@@ -1284,17 +1281,6 @@ fn analyze(module: &Program) -> syn::Result<Analysis> {
                 _ => None,
             }
         }));
-    for definition in &program.definitions {
-        if definition.canon.is_some()
-            && matches!(definition.operator, Operator::Union(_))
-            && analysis.disjoint.contains(&symbol_name(&definition.name))
-        {
-            return error(
-                &definition.name,
-                "disjoint union arms defer canonicalization to their consumers; cross-branch dedup is unnecessary",
-            );
-        }
-    }
     // Formal rule PH-HeadDedup: answers that may collapse distinct canonical
     // valuations record their dedup obligation; an extra one is harmless.
     if !program.head_dedup()

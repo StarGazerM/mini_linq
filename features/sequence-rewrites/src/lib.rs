@@ -15,7 +15,6 @@
 //! | `roots` | `spread` | Size fold-free dispatches' root tiles at launch to fill resident blocks, at most the declared tile (GPU-RootSpread). |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
 //! | `evidence` | `evidence from authored("origin") { ... }` | Record sourced advice and explicit `trusted_key` premises. Only false trusted keys can change grouped answers. |
-//! | `group_without_canon` | group definition | Remove valuation canon only with checked positional uniqueness. |
 //!
 //! Every pass checks the source, target and construction-based support equality.
 //! Grading records advice only: it neither resolves the machine nor certifies
@@ -84,4 +83,3 @@ sequence_rewrite!(output, bounded);
 sequence_rewrite!(roots, declared);
 sequence_rewrite!(grade, custom, missing at host);
 sequence_rewrite!(evidence, evidence from authored("sequence-rewrites syntax fixture") { count missing = 1; });
-sequence_rewrite!(group_without_canon, missing);
