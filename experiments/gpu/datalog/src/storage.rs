@@ -1213,7 +1213,6 @@ mod tests {
     fn admitted_order_certificates_share_full_and_delta_sorting() {
         let mut source = source();
         let reach = 2;
-        source.certificates.clear();
         let mut extra = source.layouts[source.providers[reach].canonical].clone();
         extra.columns.reverse();
         extra.key = 0;
@@ -1294,7 +1293,6 @@ mod tests {
             assert_eq!(after.provider.token, RADIX_RELATION);
             assert_eq!(after.hasher, Hasher::None);
         }
-        assert_eq!(target.certificates, source.certificates);
         assert_eq!(target.policy, source.policy);
         let ty: Type = syn::parse_quote!(i32);
         let word = word_type([&ty, &ty]).unwrap();
@@ -1667,8 +1665,6 @@ mod tests {
             |p| p.negations[0].columns.clear(),
             |p| p.negations[0].filters.push((0, syn::parse_quote!(7))),
             |p| p.negations[0].equalities.push((0, 1)),
-            |p| p.certificates.clear(),
-            |p| p.certificates.reverse(),
             |p| p.policy.insertion = syn::parse_quote!(keys_only),
         ];
         for (index, mutate) in mutations.iter().enumerate() {
@@ -1726,9 +1722,8 @@ mod tests {
     }
 
     #[test]
-    fn preserves_authored_extra_layouts_and_optional_certificates() {
+    fn preserves_authored_extra_layouts() {
         let mut source = source();
-        source.certificates.clear();
         let mut extra = source.layouts[0].clone();
         extra.columns.reverse();
         extra.key = 0;
@@ -1737,7 +1732,6 @@ mod tests {
         source.layouts.push(extra);
         storage::contract::check(&source).unwrap();
         let target = compile(&source).unwrap();
-        assert!(target.certificates.is_empty());
         assert_eq!(target.layouts.len(), source.layouts.len());
         assert_eq!(
             target.layouts.last().unwrap().columns,

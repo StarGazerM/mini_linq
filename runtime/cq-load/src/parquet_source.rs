@@ -173,12 +173,17 @@ impl<S: Relation> std::iter::FusedIterator for Parquet<S> {}
 pub fn read_parquet<S: Relation>(
     path: impl AsRef<Path>,
     options: ParquetOptions,
-) -> Result<Vec<S::Row>> {
+) -> Result<Vec<S::Row>>
+where
+    S::Row: Ord,
+{
     // DECODE ?: this fold drives Parquet::next reconstruction before the generic caller's downstream use is known.
-    Parquet::<S>::open(path, options)?.try_fold(Vec::new(), |mut rows, batch| {
+    let mut rows = Parquet::<S>::open(path, options)?.try_fold(Vec::new(), |mut rows, batch| {
         rows.extend(batch?);
-        Ok(rows)
-    })
+        Ok::<_, Error>(rows)
+    })?;
+    crate::canonicalize(&mut rows);
+    Ok(rows)
 }
 
 pub(crate) fn native_values<T>(

@@ -793,34 +793,21 @@ fn compile_stage(
     )?;
     if !pipeline.complete {
         let evidence = cq_lang_sequence::Evidence {
-            facts: relation_facts(kernel, manifest)
-                .into_iter()
-                .flat_map(|(subject, rows, key)| {
-                    std::iter::once(cq_lang_sequence::EvidenceFact::Count {
-                        source: cq_lang_sequence::EvidenceSource::Authored {
-                            provenance: syn::LitStr::new(
-                                &format!(
-                                    "{} row counts",
-                                    manifest.root.join("manifest.json").display()
-                                ),
-                                proc_macro2::Span::call_site(),
+            facts: kernel
+                .relations
+                .iter()
+                .map(|relation| cq_lang_sequence::EvidenceFact::Count {
+                    source: cq_lang_sequence::EvidenceSource::Authored {
+                        provenance: syn::LitStr::new(
+                            &format!(
+                                "{} row counts",
+                                manifest.root.join("manifest.json").display()
                             ),
-                        },
-                        subject: subject.clone(),
-                        rows,
-                    })
-                    .chain(key.map(|columns| {
-                        cq_lang_sequence::EvidenceFact::TrustedKey {
-                            source: cq_lang_sequence::EvidenceSource::Authored {
-                                provenance: syn::LitStr::new(
-                                    "TPC-H schema primary keys retained by the loader",
-                                    proc_macro2::Span::call_site(),
-                                ),
-                            },
-                            subject,
-                            columns,
-                        }
-                    }))
+                            proc_macro2::Span::call_site(),
+                        ),
+                    },
+                    subject: relation.name.clone(),
+                    rows: manifest.relations[&relation.table.to_string()].rows,
                 })
                 .collect(),
         };
@@ -996,11 +983,14 @@ fn compile_stage(
                 let ty = &column.ty;
                 quote!(let mut #variable = <#ty as crate::manifest::HostValue>::read(manifest, #table, #name)?.into_iter();)
             });
+            // Formal rule DR-HostSet: canonicalize complete typed tuples before host execution.
             bindings.push(quote!({
                 #(#reads)*
-                (0..manifest.relations[#table].rows)
+                let mut rows: Vec<#row> = (0..manifest.relations[#table].rows)
                     .map(|_| (#(#columns.next().expect("validated manifest row count"),)*))
-                    .collect()
+                    .collect();
+                cq_load::canonicalize(&mut rows);
+                rows
             }));
             sequential_bindings.push(quote!(let #field = &data.#field;));
         } else {
@@ -1229,7 +1219,11 @@ fn compile_stage(
 fn string_guard_regression(out: &Path) -> Result<TokenStream> {
     let directory = out.join("string-guard-fixture");
     fs::create_dir_all(&directory)?;
-    for (name, values) in [("keys.bin", [1_i32, 2, 3]), ("names.bin", [0_i32, 1, 0])] {
+    for (name, values) in [
+        ("keys.bin", [1_i32, 2, 3, 1]),
+        ("names.bin", [0_i32, 1, 0, 0]),
+        ("unique-keys.bin", [1_i32, 2, 3, 4]),
+    ] {
         fs::write(
             directory.join(name),
             values
@@ -1250,8 +1244,15 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         serde_json::to_vec(&json!({
             "schema_version": 2, "sf": 1, "byte_order": "little",
             "relations": {
-                "keys": {"rows": 3, "columns": [key("key")]},
-                "part": {"rows": 3, "columns": [key("p_partkey"), {
+                "keys": {"rows": 4, "columns": [key("key")]},
+                "unique_rows": {"rows": 4, "columns": [
+                    {
+                        "name": "id", "type": "i32", "logical_type": "Integer",
+                        "encoding": "plain", "file": "unique-keys.bin"
+                    },
+                    key("payload"), key("extra")
+                ]},
+                "part": {"rows": 4, "columns": [key("p_partkey"), {
                     "name": "p_name", "type": "i32", "logical_type": "String",
                     "encoding": "dictionary", "file": "names.bin",
                     "dictionary": "names.txt", "dictionary_index_base": 0,
@@ -1269,8 +1270,11 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
             input Part(p_partkey: i32, p_name: StringCode in Names) = table(part);
             input GreenNames(code: StringCode in Names) = dictionary(Names)
                 where { |value: &str| value.contains("green") };
+            input DuplicatedNames(code: StringCode in Names) = host uses [GreenNames] rust {
+                GreenNames.iter().chain(GreenNames.iter()).copied().collect::<Vec<_>>()
+            };
             stage s0 {
-                inputs { Keys = Keys; Part = Part; GreenNames = GreenNames; }
+                inputs { Keys = Keys; Part = Part; GreenNames = DuplicatedNames; }
                 captures [];
                 evidence {}
                 cq {
@@ -1297,6 +1301,15 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         Some(&pipeline),
     )
     .map_err(|error| format!("String guard regression {}: {}", error.phase, error.error))?;
+    pipeline.target = advice::Target::Host;
+    let (host_code, _) = build_stages::compile(
+        &program,
+        "string_guard",
+        &manifest,
+        "advised",
+        Some(&pipeline),
+    )
+    .map_err(|error| format!("Host set regression {}: {}", error.phase, error.error))?;
     let preprocessing = program.preprocessing_tokens()?;
     let directory = directory.to_string_lossy();
     Ok(quote! {
@@ -1309,19 +1322,108 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
             fn synthetic_string_literal_guard_preserves_manifest_codes() -> crate::manifest::Result<()> {
                 let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory)).unwrap();
                 #preprocessing
+                assert_eq!(__cq_prepared_DuplicatedNames, vec![(0_u32,)]);
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0).unwrap();
                 let data = stage_0::load(&manifest, pool).unwrap();
-                let result = stage_0::execute(&data, &__cq_prepared_GreenNames).unwrap();
+                let result = stage_0::execute(&data, &__cq_prepared_DuplicatedNames).unwrap();
                 let mut actual = stage_0::decode(&data, &manifest, result).unwrap();
                 actual.sort();
                 assert_eq!(actual, vec![
                     vec!["1".to_owned(), "green part".to_owned()],
                     vec!["3".to_owned(), "green part".to_owned()],
                 ]);
-                let reference = stage_0::sequential(&data, &__cq_prepared_GreenNames).unwrap();
+                let reference = stage_0::sequential(&data, &__cq_prepared_DuplicatedNames).unwrap();
                 let mut reference = stage_0::decode(&data, &manifest, reference).unwrap();
                 reference.sort();
                 assert_eq!(actual, reference);
+                Ok(())
+            }
+            #[test]
+            fn projected_sets_share_only_identical_resident_tables() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                let full = loader.bind::<(i32, i32)>("part", &["p_partkey", "p_name"])?;
+                assert_eq!(full.to_host()?, vec![(1, 0), (2, 1), (3, 0)]);
+                let projected = loader.bind::<(i32,)>("part", &["p_name"])?;
+                assert_eq!(projected.to_host()?, vec![(0,), (1,)]);
+                let alias = loader.bind::<(i32,)>("part", &["p_name"])?;
+                assert!(::std::sync::Arc::ptr_eq(
+                    &projected.storage().columns[0], &alias.storage().columns[0],
+                ));
+                assert!(::std::sync::Arc::ptr_eq(
+                    &projected.storage().metadata, &alias.storage().metadata,
+                ));
+                assert!(!::std::sync::Arc::ptr_eq(
+                    &full.storage().columns[1], &projected.storage().columns[0],
+                ));
+                let source = gpu_compress::Source::load_manifest(&manifest.root)?;
+                let schema = gpu_compress_host::Schema {
+                    domains: vec![],
+                    tables: vec![("part".into(), vec![("p_name".into(), gpu_compress_host::Kind::I32)])],
+                };
+                let catalog = gpu_compress::Catalog::compress(&pool, &source, &schema)?;
+                assert_eq!(catalog.rows("part")?, 2);
+                assert_eq!(catalog.device_columns::<(i32,)>("part")?.to_host()?, vec![(0,), (1,)]);
+                Ok(())
+            }
+            #[test]
+            fn distinct_projections_reuse_base_columns_and_repeated_names() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool);
+                let full = loader.bind::<(i32, i32)>("unique_rows", &["id", "payload"])?;
+                assert_eq!(full.to_host()?, vec![(1, 1), (2, 2), (3, 3), (4, 1)]);
+                let ids = loader.bind::<(i32,)>("unique_rows", &["id"])?;
+                assert_eq!(ids.to_host()?, vec![(1,), (2,), (3,), (4,)]);
+                assert!(::std::sync::Arc::ptr_eq(
+                    &full.storage().columns[0], &ids.storage().columns[0],
+                ));
+                let repeated = loader.bind::<(i32, i32, i32)>("unique_rows", &["payload", "id", "id"])?;
+                assert_eq!(repeated.to_host()?, vec![(1, 1, 1), (2, 2, 2), (3, 3, 3), (1, 4, 4)]);
+                assert!(::std::sync::Arc::ptr_eq(
+                    &full.storage().columns[1], &repeated.storage().columns[0],
+                ));
+                assert!(::std::sync::Arc::ptr_eq(
+                    &ids.storage().columns[0], &repeated.storage().columns[1],
+                ));
+                assert!(::std::sync::Arc::ptr_eq(
+                    &repeated.storage().columns[1], &repeated.storage().columns[2],
+                ));
+                let duplicates = loader.bind::<(i32, i32)>("unique_rows", &["payload", "payload"])?;
+                assert_eq!(duplicates.to_host()?, vec![(1, 1), (2, 2), (3, 3)]);
+                assert!(!::std::sync::Arc::ptr_eq(
+                    &full.storage().columns[1], &duplicates.storage().columns[0],
+                ));
+                assert!(::std::sync::Arc::ptr_eq(
+                    &duplicates.storage().columns[0], &duplicates.storage().columns[1],
+                ));
+                let extended = loader.bind::<(i32, i32)>("unique_rows", &["id", "extra"])?;
+                assert_eq!(extended.to_host()?, vec![(1, 1), (2, 2), (3, 3), (4, 1)]);
+                assert!(::std::sync::Arc::ptr_eq(
+                    &ids.storage().columns[0], &extended.storage().columns[0],
+                ));
+                Ok(())
+            }
+        }
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod host_input_regression {
+            #host_code
+            #[test]
+            fn typed_host_inputs_and_prepared_producers_are_sets() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                #preprocessing
+                assert_eq!(__cq_prepared_DuplicatedNames, vec![(0_u32,)]);
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let data = stage_0::load(&manifest, pool)?;
+                let result = stage_0::execute(&data, &__cq_prepared_DuplicatedNames)?;
+                let mut actual = stage_0::decode(&data, &manifest, result)?;
+                actual.sort();
+                assert_eq!(actual, vec![
+                    vec!["1".to_owned(), "green part".to_owned()],
+                    vec!["3".to_owned(), "green part".to_owned()],
+                ]);
                 Ok(())
             }
         }

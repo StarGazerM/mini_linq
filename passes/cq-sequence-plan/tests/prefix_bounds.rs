@@ -35,9 +35,9 @@ fn program() -> (Physical, Structures, Program) {
             result = store canon map answer last;
         }
         evidence from authored("passes/cq-sequence-plan/tests/prefix_bounds.rs fixture") {
-            count R = 1; trusted_key R [a];
-            count S = 100; trusted_key S [a,b];
-            count T = 1000; trusted_key T [b,c];
+            count R = 1;
+            count S = 100;
+            count T = 1000;
         }
     }
 }
@@ -47,6 +47,14 @@ fn prefix_bound_checker_accepts_weaker_records_and_rejects_missing_premises() {
     let (physical, structures, source) = program();
     let analysis = contract::check(&physical, &structures, &source).unwrap();
     assert_eq!(analysis.prefix_bounds["joined"].rows, Some(100));
+    assert_eq!(analysis.prefix_bounds["last"].rows, None);
+    assert_eq!(analysis.prefix_bounds["s"].keys, vec![["a".to_owned(), "b".to_owned()].into_iter().collect()]);
+    let mut partial_key = analysis.prefix_bounds.clone();
+    partial_key.get_mut("s").unwrap().keys = vec![["a".to_owned()].into_iter().collect()];
+    assert!(bounds::check(&physical, &source, &partial_key).is_err());
+    let mut fabricated_bound = analysis.prefix_bounds.clone();
+    fabricated_bound.get_mut("last").unwrap().rows = Some(1000);
+    assert!(bounds::check(&physical, &source, &fabricated_bound).is_err());
     let mut alternative = analysis.prefix_bounds.clone();
     alternative.get_mut("joined").unwrap().rows = Some(101);
     bounds::check(&physical, &source, &alternative).unwrap();

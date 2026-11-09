@@ -558,8 +558,8 @@ mod tests {
             })
     }
     /// EXT-SetFold premise: the fact-free hole is a set by CK-Return. A non-key
-    /// projection records its canonical boundary; a keyed return needs none; a
-    /// forged set claim (dropped canon or key fact) fails the core check.
+    /// projection records its canonical boundary; a full-row return needs none;
+    /// dropping a required canon fails the core check.
     #[test]
     fn fact_free_hole_returns_a_core_checked_set() {
         let projected = "by(d); n=count(); s=sum(a); struct G;
@@ -574,15 +574,12 @@ mod tests {
             definition.canon = None;
         }
         assert!(cq_physical_lowering::check(&ix, &forged).is_err());
-        // Legal alternative: a discharged host set keys the full-row return.
+        // Input sets establish the full-row return key without context facts.
         let keyed = "by(d); n=count(); s=sum(a); struct G;
             relation Sale(d:i32,id:i32,a:i32); rows(d,id,a) :- Sale(d,id,a);";
-        let (ix, target) = lower_hole(keyed, quote!(host_set Sale discharged));
+        let (ix, target) = lower_hole(keyed, TokenStream::new());
         assert!(!returned_canon(&target));
         cq_physical_lowering::check(&ix, &target).unwrap();
-        let mut forged = target;
-        forged.program.host_sets.clear();
-        assert!(cq_physical_lowering::check(&ix, &forged).is_err());
         // The only other discharge is the consumer fact, which drops the set
         // boundary; the aggregate never starts its hole with it (see render).
         let (_, relaxed) = lower_hole(projected, quote!(consumer = canonical));

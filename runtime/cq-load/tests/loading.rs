@@ -239,7 +239,7 @@ fn csv_headers_reorder_columns_quoting_and_dbgen_trailing_separator() {
     .unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(
-        rows[0],
+        rows[1],
         (
             i64::MAX,
             "a|b".into(),
@@ -250,8 +250,8 @@ fn csv_headers_reorder_columns_quoting_and_dbgen_trailing_separator() {
             true
         )
     );
-    assert_eq!(rows[1].1, "a\"b");
-    assert_eq!(rows[1].3.scaled(), -1);
+    assert_eq!(rows[0].1, "a\"b");
+    assert_eq!(rows[0].3.scaled(), -1);
 }
 
 #[test]
@@ -291,6 +291,28 @@ fn csv_batches_are_bounded_default_and_custom() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn collected_csv_is_a_set_across_batch_boundaries() {
+    let file = FileFixture::csv("3\n1\n3\n2\n1\n");
+    for batch_size in [1, 2, 64] {
+        assert_eq!(
+            read_csv::<Ids>(&file.0, CsvOptions { batch_size, ..Default::default() }).unwrap(),
+            [(1,), (2,), (3,)],
+        );
+    }
+}
+
+#[test]
+fn canonicalization_moves_nonclone_rows_in_the_existing_allocation() {
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Row(i32, i32);
+    let mut rows = vec![Row(2, 1), Row(1, 3), Row(2, 1), Row(1, 2)];
+    let allocation = rows.as_ptr();
+    cq_load::canonicalize(&mut rows);
+    assert_eq!(rows, [Row(1, 2), Row(1, 3), Row(2, 1)]);
+    assert_eq!(rows.as_ptr(), allocation);
 }
 
 #[test]
@@ -514,7 +536,7 @@ mod parquet_tests {
     }
 
     #[test]
-    fn parquet_interning_sorts_across_batches_and_preserves_source_rows() {
+    fn parquet_interning_canonicalizes_complete_rows_across_batches() {
         let file = write(
             vec![
                 Field::new("name", DataType::Utf8, false),
@@ -545,13 +567,12 @@ mod parquet_tests {
         assert_eq!(
             rows.iter().map(|row| (row.0, row.1)).collect::<Vec<_>>(),
             [
-                (2, StringCode(2)),
                 (1, StringCode(0)),
+                (2, StringCode(2)),
                 (3, StringCode(1)),
-                (2, StringCode(2))
             ]
         );
-        assert_eq!(rows[0], rows[3]);
+        assert_eq!(rows.len(), 3);
         assert_eq!(
             ::cq_storage::domain::exact(dictionaries.domain("name"), "missing"),
             StringCode::MAX
@@ -576,7 +597,7 @@ mod parquet_tests {
             &mut dictionaries,
         )
         .unwrap();
-        assert_eq!(one_row_batches[0].1, StringCode(2));
+        assert_eq!(one_row_batches[0].1, StringCode(0));
         assert_eq!(one_row_batches[2].1, StringCode(1));
     }
 
@@ -633,8 +654,10 @@ mod parquet_tests {
             .collect::<Result<Vec<_>>>()
             .unwrap();
         assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1]);
+        let mut rows: Vec<_> = batches.into_iter().flatten().collect();
+        cq_load::canonicalize(&mut rows);
         assert_eq!(
-            batches.into_iter().flatten().collect::<Vec<_>>(),
+            rows,
             // DECODE P: the CSV side of the Parquet-equivalence diagnostic publishes expected logical rows.
             read_csv::<Typed>(&text.0, CsvOptions::default()).unwrap()
         );
@@ -727,7 +750,7 @@ mod parquet_tests {
 
     #[test]
     fn parquet_rejects_user_decoder_that_changes_column_length() {
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
         struct Invalid;
         impl Load for Invalid {
             // DECODE P: this deliberately invalid test loader constructs a value only for loader-contract diagnostics.

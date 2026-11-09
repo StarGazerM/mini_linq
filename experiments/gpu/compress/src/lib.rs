@@ -182,10 +182,9 @@ impl Domain {
     pub fn id(&self, value: i64) -> Option<u32> {
         self.values.binary_search(&value).ok().map(|id| id as u32)
     }
-    fn ids(&self, column: &[i64]) -> Vec<u32> {
+    fn ids(&self, column: impl Iterator<Item = i64>) -> Vec<u32> {
         column
-            .iter()
-            .map(|v| self.values.binary_search(v).expect("value in its domain") as u32)
+            .map(|v| self.values.binary_search(&v).expect("value in its domain") as u32)
             .collect()
     }
 }
@@ -211,7 +210,7 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Intern every domain, then FOR-pack and upload every table column.
+    /// Canonicalize complete schema projections, then FOR-pack and upload their columns.
     pub fn compress(pool: &Arc<Pool>, source: &Source, schema: &Schema) -> Result<Self> {
         let mut domains = BTreeMap::new();
         for (name, members) in &schema.domains {
@@ -224,14 +223,19 @@ impl Catalog {
         let mut tables = BTreeMap::new();
         let mut stored_texts = BTreeMap::new();
         for (table, columns) in &schema.tables {
-            let mut rows = None;
-            let mut stored = Vec::new();
-            for (column, kind) in columns {
+            let projected = columns
+                .iter()
+                .map(|(column, _)| source.col(&format!("{table}.{column}")))
+                .collect::<Result<Vec<_>>>()?;
+            let source_rows = projected.first().map_or(0, |column| column.len());
+            let selected = gpu_compress_host::unique_rows(&projected, source_rows)?;
+            let rows = selected.as_ref().map_or(source_rows, Vec::len);
+            let mut stored = Vec::with_capacity(columns.len());
+            for ((column, kind), values) in columns.iter().zip(projected) {
                 let qualified = format!("{table}.{column}");
-                let values = source.col(&qualified)?;
-                if *rows.get_or_insert(values.len()) != values.len() {
-                    return Err(format!("{qualified}: row count differs within {table}").into());
-                }
+                let values = (0..rows).map(|row| {
+                    values[selected.as_ref().map_or(row, |indices| indices[row] as usize)]
+                });
                 let encoded =
                     match kind {
                         Kind::Id(domain) => {
@@ -251,8 +255,7 @@ impl Catalog {
                         }
                         Kind::I32 => {
                             let values = values
-                                .iter()
-                                .map(|&v| Ok(i32::try_from(v)?))
+                                .map(|v| Ok(i32::try_from(v)?))
                                 .collect::<Result<Vec<i32>>>()?;
                             EncodedColumn::from_host(pool.clone(), &values, Codec::For)?
                         }
@@ -269,7 +272,7 @@ impl Catalog {
             tables.insert(
                 table.clone(),
                 CompressedTable {
-                    rows: rows.unwrap_or(0),
+                    rows,
                     columns: stored,
                 },
             );

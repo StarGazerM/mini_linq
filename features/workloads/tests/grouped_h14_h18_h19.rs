@@ -36,7 +36,7 @@ fn integer(value: i64) -> i32 {
 fn h14_components_preserve_identity_dates_and_empty_global_group() {
     let rows = vec![
         vec![1, 1, 1, 1234, 7, 0],
-        vec![1, 1, 1, 1234, 7, 0], // Physical duplicate counts once.
+        vec![1, 1, 1, 1234, 7, 0], // Input duplicate is removed before the query.
         vec![1, 2, 1, 1234, 7, 0], // Equal revenue, distinct line.
         vec![2, 1, 2, 2001, 3, 29],
         vec![3, 1, 1, 9000, 0, -1],
@@ -48,7 +48,7 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
     for rows in [rows.clone(), rows.into_iter().rev().collect(), Vec::new()] {
         let mut dictionaries = cq_load::Dictionaries::default();
         dictionaries.insert("p_type", ["PROMO BRASS", "STANDARD BRASS", "promo BRASS"]);
-        let data = h14::Data {
+        let mut data = h14::Data {
             lineitem: rows
                 .iter()
                 .map(|r| {
@@ -94,6 +94,8 @@ fn h14_components_preserve_identity_dates_and_empty_global_group() {
             ),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.lineitem);
+        cq_load::canonicalize(&mut data.part);
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,
@@ -144,7 +146,7 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
     for rows in [rows.clone(), rows.into_iter().rev().collect(), Vec::new()] {
         let mut dictionaries = cq_load::Dictionaries::default();
         dictionaries.insert("c_name", ["A", "B"]);
-        let data = h18::Data {
+        let mut data = h18::Data {
             lineitem: rows
                 .iter()
                 .map(|r| (r[0].into(), r[1].into(), decimal(r[2])))
@@ -176,6 +178,9 @@ fn h18_threshold_is_strict_and_joins_follow_identity_preserving_sum() {
                 .collect(),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.lineitem);
+        cq_load::canonicalize(&mut data.orders);
+        cq_load::canonicalize(&mut data.customer);
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber,
@@ -252,7 +257,7 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
     rows.push(vec![99, 1, 99, 1000, 1234, 7, 0, 0]); // Missing part.
     parts.push(parts[0].clone());
     for rows in [rows.clone(), rows.into_iter().rev().collect(), Vec::new()] {
-        let data = h19::Data::from_strings(
+        let mut data = h19::Data::from_strings(
             rows.iter()
                 .map(|r| {
                     (
@@ -279,6 +284,8 @@ fn h19_three_branches_boundaries_shipping_and_duplicate_identity() {
                 })
                 .collect(),
         );
+        cq_load::canonicalize(&mut data.lineitem);
+        cq_load::canonicalize(&mut data.part);
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber, c2 AS l_partkey,

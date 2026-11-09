@@ -246,36 +246,6 @@ impl<'a> Context<'a> {
         )
     }
 
-    /// Emit eager, exact certificates over entire declared host rows.
-    /// Formal rule IF-HostSet: Certify exact full-row host distinctness before query execution.
-    /// Formal rule CTX-Certify: Only locally certified facts emit eager checks.
-    ///
-    /// CPU source preparation calls this before emitting any operator builds or
-    /// reads. `Rows` preserves declaration layout, including columns discarded
-    /// by later projections. Only opted-in hosts require `Eq + Hash`; the set
-    /// stores borrowed column tuples and is dropped before query evaluation.
-    pub fn certify_host_sets(&mut self, physical: &physical::Program) {
-        for fact in &physical.program.host_sets {
-            if fact.discharged.is_some() {
-                continue;
-            }
-            let name = symbol_name(&fact.relation);
-            let host = &self.hosts[&name].value;
-            let message = format!("host_set {name} certificate failed: duplicate full host row");
-            self.statements.push(syn::parse_quote! {
-                {
-                    let mut __cq_host_set_seen = ::std::collections::HashSet::new();
-                    for __cq_host_set_row in ::cq_storage::rows::Rows::rows(#host) {
-                        ::core::assert!(
-                            __cq_host_set_seen.insert(__cq_host_set_row),
-                            #message
-                        );
-                    }
-                }
-            });
-        }
-    }
-
     /// Construct printer state from separate Physical/Structures programs and checked analysis.
     pub fn new(physical: &'a physical::Program, module: &'a structures::Program, analysis: &'a structures::Analysis) -> Self {
         Self::capture_scope(physical, module, analysis, false, None)

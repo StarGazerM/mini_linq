@@ -3,15 +3,15 @@ use cq_storage::counters;
 
 #[test]
 fn counts_filter_join_dedup_and_final_answer() {
-    let l = [(1_i32,), (1,), (2,), (3,)];
+    let l = [(1_i32, 0_i32), (1, 1), (2, 0), (3, 0)];
     let r = [(1_i32, 10_i32), (1, 11), (2, 20), (9, 90)];
     counters::reset();
     let rows: Vec<_> = mini_linq::compile! {
         pipeline { plan = mini_linq::passes::plan(no_reduce); }
         struct ProfileJoin;
-        relation L(a:i32) = (l);
+        relation L(a:i32,witness:i32) = (l);
         relation R(a:i32,b:i32) = (r);
-        answer(a,b) :- L(a), R(a,b), where b < 20;
+        answer(a,b) :- L(a,_), R(a,b), where b < 20;
     }
     .collect();
     assert_eq!(

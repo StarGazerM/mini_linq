@@ -9,15 +9,16 @@ and opaque concrete Rust providers, while retaining the
 Structural checks examine the supplied IR and never rerun a producer to compare
 with its chosen output.
 Declaration pruning removes unused hole-local declarations and bindings.
-The Fx-default cutover changes hash-provider type paths. The context-discharge
-cutover assigns each hole's returned set boundary to its checked consumer and
-derives input uniqueness from structural storage certificates, eliminating
-the default hole-local deduplication rewrite. It does not change the
-set-valued source meaning or the core CQ compiler.
+The Fx-default cutover changes hash-provider type paths. Each hole's returned
+set boundary belongs to its checked consumer, eliminating the default
+hole-local deduplication rewrite. Every CQ input is unconditionally a set;
+input uniqueness is not an optional compiler fact.
 
 \paragraph{Semantic domain and limits.}
 Each relation declares a model slot $M$; the base accepts only \code{set}.
-EDB hosts denote sets even when their physical traversal contains duplicates.
+EDB inputs contain distinct complete rows at the actual CQ boundary. Raw IO
+deduplicates before that boundary and outside query timers; Datalog binding
+admission also constructs canonical storage before any hole reads it.
 Outputs denote sets, not their iteration order. Rust expressions are opaque,
 pure and total by premise; a panic violates that premise. Purity, totality and
 lawful provider operations are not syntactic checks. A terminating
@@ -293,49 +294,35 @@ provider laws, and these operations introduce no new panic on successful
 reference executions. These are semantic premises, not proofs obtained by
 parsing a type name or by checking method availability.
 
-\paragraph{Canonical host certificates.}
-The \code{certificates} vector records typed \code{HostCanonical} entries:
-each has a \code{kind}, structure \code{index}, structural \code{source}
-and \code{columns} provenance. Admitted kind/source pairs are
-\code{canonical/admission} for every relation (index: the relation; columns:
-its canonical layout's permutation), \code{delta/admission} for IDBs,
-\code{layout/canonical} and \code{delta\_layout/delta} for maintained layouts,
-and \code{negation/projection} for frozen projected keys.
-A layout certificate requires its exact complete column permutation,
-maintenance operation and certified canonical/delta root; a negation
-certificate requires a canonical root for its relation. Certificates may cover
-only a subset of the storage hosts; an uncertified host receives no discharged
-fact. Eligibility follows structural provenance, not a provider-type whitelist.
-Opaque lawful collection and maintenance remain premises, not properties
-proved by inspecting Rust type names.
-EDB loading admits each input row into the canonical layout by
+\paragraph{Canonical storage and input admission.}
+Canonical layouts, admitted IDB deltas, maintained full/delta layouts and
+frozen projected keys retain their independent storage obligations. These
+obligations do not authorize CQ input setness: every compiler input is a set.
+Eligibility follows the recorded layout and maintenance protocol, not a
+provider-type whitelist. Opaque lawful collection and maintenance remain
+premises, not properties proved by inspecting Rust type names.
+EDB binding admission inserts each input row into the canonical layout by
 insert-if-absent and inserts only newly admitted rows into the relation's other
-full layouts, so it establishes distinct complete rows even when the
-original EDB traversal repeats them. An IDB canonical layout starts empty and
-receives only admitted fresh batches; \code{delta} is precisely one such batch.
-A full layout receives each admitted row once, and a delta layout is reset and
-rebuilt from the current batch. Their complete column permutations preserve
-full-row identity, including the key/payload split. Thus buckets may contain
-many payloads with the same key, but not repeated complete represented rows.
-Frozen-key collection separately establishes a set of the recorded projected
-keys; projection alone would not establish uniqueness.
-\begin{mathpar}
-\Rule{DL-HostCanonical}{
- \mathrm{WF}_{\mathrm{Storage}}(D)\quad
- \mathsf{certified}_D(H)\quad
- \mathsf{provenance}(H)\in
- \{\mathsf{canonicalLayout},\mathsf{admittedDelta},
-   \mathsf{maintainedLayout},\mathsf{collectedKeys}\}\quad
- \mathsf{operations}(H)\text{ satisfy the corresponding provider laws}}
- {\mathsf{fullRows}(H)\text{ has no duplicates}}
-\end{mathpar}
-The Storage checker establishes the relation/version, permutation and
-maintenance premises from supplied records. Round additionally checks copied
-storage, publication coverage and order, and frozen-key construction before
-using a certificate at a hole. Neither checker reruns storage selection or
-Fork, and neither proves the laws of an opaque provider from its Rust type.
-A complete immutable scan or an independently checked slice of such a host
-inherits uniqueness; a raw external binding does not.
+full layouts. Thus even a malformed duplicate raw binding is normalized before
+any CQ hole reads it. Raw dataset loading deduplicates earlier, outside query
+timers; canonical layout construction remains necessary storage preparation.
+An IDB canonical layout starts empty and receives only admitted fresh batches;
+\code{delta} is precisely one such batch. A full layout receives each admitted
+row once, and a delta layout is reset and rebuilt from the current batch.
+Complete column permutations preserve full-row identity, including the
+key/payload split. Buckets may contain many payloads with the same key, but not
+repeated complete represented rows. Frozen-key collection separately
+establishes a set of projected keys; projection alone does not preserve uniqueness.
+Storage checks relation/version, permutation and maintenance records. Round
+additionally checks copied storage, publication coverage and order, and
+frozen-key construction. Neither checker reruns storage selection or Fork,
+and neither proves the laws of an opaque provider from its Rust type.
+GPU EDB binding initialization packs and uploads the raw rows, then performs
+full-key sort/unique admission against the empty canonical layout before
+publishing any full layout. Thus duplicate raw GPU bindings also cannot reach
+a CQ hole. Its admitted-order records remain necessary: they distinguish
+already sorted unique storage batches from injective full-heading permutations
+that require sorting, and govern layout publication rather than CQ input setness.
 
 \paragraph{Defaults and checked alternatives.} Let \code{Fx} abbreviate the
 recorded concrete type
@@ -528,12 +515,8 @@ Equality here concerns the admitted set and subsequent relational state, not
 candidate traversal order, insertion-attempt counts or timing.
 Under \textsc{DL-Admit-Owner}, a rule hole records
 \code{consumer canonical}; a frozen-key hole records the same fact under
-the key provider's collection/insertion law. For every positively read host
-$H$ with a valid structural certificate, \textsc{DL-HostCanonical} justifies
-\code{host\_set H discharged}; uncertified hosts receive no such fact.
-Facts refer to the hole's actual positive declarations after any checked scan
-substitution, not to unused relation names. A negative key-set declaration is
-canonical but is not a positive host-set argument for these facts.
+the key provider's collection/insertion law. Input setness is unconditional,
+including after checked scan substitution; no host-set facts are recorded.
 
 These typed per-hole facts are part of the checked Round interface.
 Raw CQ entry remains fact-free. Fork records the facts in the selected
@@ -542,29 +525,29 @@ An explicit \code{fork lower=<usize>} argument selects a custom lowering
 alias; otherwise the queue must contain a unique path with suffix
 \code{lower}. Round independently parses the invocation at
 \code{Hole.lower} as \code{cq\_stage::Context} and requires exact equality
-with \code{Hole.facts}. Execution erasure renames both the discharged-host
-facts and that packet; checks before erasure reject facts naming non-read
-inputs. The core protocol also supports introduction through \code{select}.
+with \code{Hole.facts}. Execution erasure preserves this consumer context;
+scan renaming updates declared relational evidence, not input-set facts.
+The core protocol also supports introduction through \code{select}.
 Once the facts are recorded in Physical, every factful reentry carries
 the exact explicit \code{context} envelope of Section~\ref{sec:context}:
 \begin{lstlisting}
-context { consumer = canonical, host_set H discharged };
+context { consumer = canonical };
 pipeline { ... };
 Program
 \end{lstlisting}
-The envelope equals the recorded consumer and discharged-host facts in both
-directions; neither an omitted fact nor an additional authorization is allowed.
+The envelope equals the recorded consumer context in both directions;
+neither an omitted fact nor an additional authorization is allowed.
 A matching lower/select packet does not authorize reentry to an already
 factful source. Ordinary continuation derives its next envelope from the
 next source rather than blindly forwarding the previous envelope.
-The provenance check complements, rather than replaces, Round's proof of the
-consumer and host facts.
+The provenance check complements, rather than replaces, Round's proof of
+consumer ownership.
 
 \paragraph{Redundant return deduplication.}
 Rule holes retain their projected heads. The consumer fact removes the
 hole-return \code{\_\_cq\_seen} set and unnecessary \code{return canon};
-there is no need to widen the head to all body variables. Discharged host facts
-also seed CQ's uniqueness analysis without runtime host certification.
+there is no need to widen the head to all body variables. CQ's uniqueness
+analysis starts from unconditional full-row input uniqueness.
 Internal canonicalization required by intermediate operators is unchanged.
 Pull iterators, direct push consumers, and phase-timed candidate buffers all
 end at the same checked canonical consumer; buffering does not transfer
@@ -1662,8 +1645,8 @@ extension's shard and layout owner certificates. A candidate buffer may contain
 duplicate heads from one hole, several holes or several workers; the
 anti-join and NEW construction keep each fresh complete tuple once.
 Consequently sharded admission discharges the same \code{consumer canonical}
-fact, and exclusive-layout publication preserves \textsc{DL-HostCanonical}
-for the subsequent snapshot. Optional \code{per\_task} execution deduplication
+fact, and exclusive-layout publication preserves complete-row identity and
+fresh-batch maintenance for the next snapshot. Optional \code{per\_task} execution deduplication
 is only a candidate-volume optimization, not a CQ-owned canonical boundary.
 Sequential holes remain free of local dedup state, and neither execution mode
 weakens the exact context-envelope requirement.

@@ -2342,13 +2342,10 @@ fn evidence_forms_round_trip_without_changing_lengths_or_capabilities() {
         evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") {
             count R = 0;
             count R = 999;
-            planning_key R [b];
-            trusted_key R [a];
             foreign_key L [a] -> R [b];
             selectivity answer = 0 / 1;
             bounds R.b = 12 ..= -3;
             sorted R [b, a];
-            trusted_key answer [a, b];
         }
     };
     let evidence = &target.evidence;
@@ -2369,10 +2366,6 @@ fn evidence_forms_round_trip_without_changing_lengths_or_capabilities() {
             denominator: 1
         })
     );
-    assert!(evidence.has_trusted_key("answer", &["b".into(), "a".into()]));
-    assert!(!evidence.has_trusted_key("R", &["b".into()]));
-    assert!(evidence.has_planning_key("R", &["b".into()]));
-    assert!(!evidence.has_trusted_key("R", &["b".into()]));
     let before = common::check(&source).unwrap();
     let after = common::check(&target).unwrap();
     assert_eq!(after.evidence, target.evidence);
@@ -2380,10 +2373,13 @@ fn evidence_forms_round_trip_without_changing_lengths_or_capabilities() {
     assert_eq!(before.shapes, after.shapes);
     assert_eq!(before.capabilities, after.capabilities);
     assert_eq!(before.obligations, after.obligations);
-    assert_eq!(
-        structures::physical::contract::check(&source.physical).unwrap().discharged_host_sets,
-        structures::physical::contract::check(&target.physical).unwrap().discharged_host_sets
-    );
+    let unique = |program: &structures::physical::Program| {
+        let facts = structures::physical::contract::check(program).unwrap();
+        structures::physical::uniqueness(program, &facts.headings, &facts.disjoint, |definition, _| {
+            definition.canon.is_some()
+        })
+    };
+    assert_eq!(unique(&source.physical), unique(&target.physical));
     check_stack_rewrite(&source, &target).unwrap();
 }
 
@@ -2405,11 +2401,6 @@ fn evidence_rejects_bad_syntax_and_references_not_false_claims() {
     }
     for syntax in [
         quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { count missing = 1; }),
-        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [missing]; }),
-        quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [a, a]; }),
-        quote!(evidence from authored("planning-key mutation fixture") { planning_key R [missing]; }),
-        quote!(evidence from authored("planning-key mutation fixture") { planning_key R [a, a]; }),
-        quote!(evidence from vo("VO advice mutation fixture") { trusted_key R [a]; }),
         quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { foreign_key R [a] -> missing [a]; }),
         quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { foreign_key R [a] -> r [missing]; }),
         quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { bounds R.missing = 0 ..= 10; }),
@@ -2448,7 +2439,6 @@ fn evidence_mapping_and_composition_preserve_original_sources() {
     let vo: Evidence = syn::parse_quote! {
         evidence from vo("original VO manifest provenance") {
             count Original = 999;
-            planning_key Original [a];
         }
     };
     let mut combined = authored.clone();
@@ -2464,8 +2454,6 @@ fn evidence_mapping_and_composition_preserve_original_sources() {
     assert_eq!(mapped.facts[2].source(), vo.facts[0].source());
     assert_eq!(mapped.count("R"), Some(999));
     assert_eq!(mapped.count("Original"), None);
-    assert!(mapped.has_planning_key("R", &["a".into()]));
-    assert!(!mapped.has_trusted_key("R", &["a".into()]));
     assert_eq!(
         syn::parse2::<Evidence>(mapped.to_token_stream()).unwrap(),
         mapped
@@ -2476,21 +2464,9 @@ fn evidence_mapping_and_composition_preserve_original_sources() {
 }
 
 #[test]
-fn evidence_wf_rechecks_mutated_sources_and_trusted_key_owners() {
+fn evidence_wf_rechecks_mutated_sources() {
     use cq_lang_sequence::{EvidenceFact, EvidenceSource};
     let mut target = program(quote!(out = store rows r;));
-    target.evidence = syn::parse_quote! {
-        evidence from authored("trusted-key mutation fixture") { trusted_key R [a]; }
-    };
-    common::check(&target).unwrap();
-    let EvidenceFact::TrustedKey { source, .. } = &mut target.evidence.facts[0] else {
-        unreachable!()
-    };
-    *source = EvidenceSource::Vo {
-        provenance: syn::parse_quote!("original VO source"),
-    };
-    assert!(common::check(&target).is_err());
-
     target.evidence = syn::parse_quote! {
         evidence from authored("count mutation fixture") { count R = 1; }
     };
@@ -2539,6 +2515,25 @@ fn grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStrea
     program.structures.structures.declare(&[syn::parse_quote!(
         group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed };
     )]).unwrap();
+    program
+}
+
+fn nonunique_grouped_program(keys: proc_macro2::TokenStream, body: proc_macro2::TokenStream) -> Program {
+    let mut program = grouped_program(keys, body);
+    program.physical.program.definitions.insert(
+        1,
+        syn::parse_quote!(projected = let canon project r keep {k, value};),
+    );
+    let structures::physical::Operator::Group(group) =
+        &mut program.physical.program.definitions[2].operator
+    else {
+        unreachable!()
+    };
+    group.input = syn::parse_quote!(projected);
+    program.structures.structures.entries.extend([
+        syn::parse_quote!(projected rows = @sort as ::cq_storage::dedup::Sort;),
+        syn::parse_quote!(projected canon = rows;),
+    ]);
     program
 }
 
@@ -2610,22 +2605,22 @@ fn nested_group_does_not_certify_outer_group_canon_removal() {
 #[test]
 fn grouped_fold_requires_complete_globally_distinct_valuations() {
     for body in [
-        quote!(r = rows r; groups = group grouped r;),
-        quote!(r = canon rows r; groups = map grouped r;),
-        quote!(r = canon rows r; groups = group r r;),
-        quote!(r = rows r; groups = group grouped tile 2 r;),
-        quote!(r = rows r; groups = group grouped canon tile 2 r;),
-        quote!(r = canon rows r; groups = group grouped fold count r;),
-        quote!(r = flatten canon tile 2 rows r; groups = group grouped r;),
+        quote!(r = map projected rows r; groups = group grouped r;),
+        quote!(r = canon map projected rows r; groups = map grouped r;),
+        quote!(r = canon map projected rows r; groups = group r r;),
+        quote!(r = map projected rows r; groups = group grouped tile 2 r;),
+        quote!(r = map projected rows r; groups = group grouped canon tile 2 r;),
+        quote!(r = canon map projected rows r; groups = group grouped fold count r;),
+        quote!(r = flatten canon tile 2 map projected rows r; groups = group grouped r;),
     ] {
-        reject(&grouped_program(quote!(k), body), "BE-Group");
+        reject(&nonunique_grouped_program(quote!(k), body), "BE-Group");
     }
     // Global canonicalization establishes uniqueness across the contiguous
     // parts; this is now a legal keyed partial fold with a flat merged result.
-    let accepted = grouped_program(
+    let accepted = nonunique_grouped_program(
         quote!(k),
         quote!(
-            r = canon rows r; groups = group grouped tile 2 r;
+            r = canon map projected rows r; groups = group grouped tile 2 r;
         ),
     );
     let facts = common::check(&accepted).unwrap();
@@ -3051,7 +3046,6 @@ fn global_partial_group_accepts_key_canon_or_globally_unique_tiles() {
             out = store group grouped tile 4 input;
         ),
     );
-    tiled.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; });
     grade(&mut tiled, quote!(input at host; out at pool;));
     let facts = common::check_grading(&tiled, &key_pool()).unwrap();
     assert_eq!(facts.shapes["out"], vec![Len::Lit(1)]);
@@ -3066,7 +3060,6 @@ fn keyed_partial_groups_merge_globally_unique_contiguous_parts() {
             out = store group grouped tile 4 input;
         ),
     );
-    tiled.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; });
     grade(&mut tiled, quote!(input at host; out at pool;));
     let facts = common::check_grading(&tiled, &key_pool()).unwrap();
     assert_eq!(facts.shapes["out"], vec![Len::Scan("out".into())]);
@@ -3082,23 +3075,20 @@ fn keyed_partial_groups_merge_globally_unique_contiguous_parts() {
     check_stack_rewrite(&source, &tiled).unwrap();
 
     // Empty keyed input yields no groups, unlike the unkeyed identity row.
-    tiled.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; count R = 0; });
+    tiled.evidence = syn::parse_quote!(evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { count R = 0; });
     assert_ne!(
         common::check_grading(&tiled, &key_pool()).unwrap().lengths["out"],
         Len::Lit(1)
     );
-    for input in [quote!(tile 4 input), quote!(canon tile 4 input)] {
-        reject(
-            &grouped_program(
-                quote!(k),
-                quote!(
-                    input = store rows r;
-                    out = store group grouped #input;
-                ),
-            ),
-            "BE-GroupPartial",
-        );
-    }
+    // A local canon forgets the original global key; without key-disjoint
+    // routing it cannot certify a partial fold across the contiguous parts.
+    reject(&grouped_program(
+        quote!(k),
+        quote!(
+            input = store rows r;
+            out = store group grouped canon tile 4 input;
+        ),
+    ), "BE-GroupPartial");
     // Key routing still represents independent groups, not host map merging.
     let routed = grouped_program(
         quote!(k),
@@ -3133,7 +3123,6 @@ fn partial_group_metadata_uses_constructor_preorder_and_definition_ownership() {
             input = store rows r;
             output_rows = store group all_rows group by_key tile 4 input;
         }
-        evidence from authored("languages/cq-lang-sequence/tests/sequence_language.rs fixture") { trusted_key R [witness]; }
     };
     assert_eq!(
         common::check(&p).unwrap().partial_groups["output_rows"],
@@ -3166,10 +3155,10 @@ fn global_partial_group_rejects_nonunique_tiles_even_with_local_canon() {
         quote!(partition_k[k](4) input),
     ] {
         reject(
-            &grouped_program(
+            &nonunique_grouped_program(
                 quote!(),
                 quote!(
-                    input = store rows r;
+                    input = store map projected rows r;
                     out = store group grouped #input;
                 ),
             ),
@@ -3177,10 +3166,10 @@ fn global_partial_group_rejects_nonunique_tiles_even_with_local_canon() {
         );
     }
     // Canonicalizing globally before contiguous tiling is also sound.
-    common::check(&grouped_program(
+    common::check(&nonunique_grouped_program(
         quote!(),
         quote!(
-            input = store canon rows r;
+            input = store canon map projected rows r;
             out = store group grouped tile 4 input;
         ),
     ))

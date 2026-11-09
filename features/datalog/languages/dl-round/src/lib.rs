@@ -389,16 +389,10 @@ impl PartialEq for Hole {
 }
 impl Eq for Hole {}
 impl Hole {
-    /// Rename a certified scan input and its exact lowering argument packet.
-    pub fn rename_host_fact(&mut self, old: &Ident, new: &Ident) {
+    /// Rename relational evidence after a checked scan-input substitution.
+    pub fn rename_host_evidence(&mut self, old: &Ident, new: &Ident) {
         if let Some(evidence) = &mut self.cq.declared_evidence {
             evidence.rename_relation(old, new);
-        }
-        if self.facts.discharged_host_sets.remove(&symbol_name(old)) {
-            self.facts.discharged_host_sets.insert(symbol_name(new));
-            if let Some(lower) = self.pipeline.passes.get_mut(self.lower) {
-                lower.arguments = self.facts.to_token_stream();
-            }
         }
     }
 }
@@ -850,7 +844,7 @@ pub fn erase(program: &Program) -> syn::Result<Program> {
             "execution certificate does not name its occurrence",
         )?;
         atom.relation = scan.binding.clone();
-        hole.rename_host_fact(&entry.binding, &scan.binding);
+        hole.rename_host_evidence(&entry.binding, &scan.binding);
     }
     erased.execution.clear();
     Ok(erased)
@@ -889,21 +883,6 @@ pub fn check_pipeline(hole: &Hole, terminals: &TerminalRegistry) -> syn::Result<
         }),
         hole,
         "hole binding invocation must follow lowering and precede the terminal",
-    )?;
-    let reads: BTreeSet<_> = hole
-        .cq
-        .query
-        .body
-        .iter()
-        .filter_map(|item| match item {
-            BodyItem::Positive { atom } => Some(symbol_name(&atom.relation)),
-            _ => None,
-        })
-        .collect();
-    ensure(
-        hole.facts.discharged_host_sets.is_subset(&reads),
-        hole,
-        "discharged fact names must be actual positive hole inputs",
     )?;
     let lower = hole
         .pipeline
@@ -1108,13 +1087,6 @@ fn check_admit_once(program: &Program) -> syn::Result<()> {
 /// Formal rule DL-Admit-Owner: every candidate has exactly one matching set consumer.
 fn check_facts(program: &Program) -> syn::Result<()> {
     let context = &program.context;
-    let certified = |kind: &str, index: usize| {
-        program
-            .storage
-            .certificates
-            .iter()
-            .any(|c| c.kind == kind && c.index == index)
-    };
     let mut owners = vec![0usize; program.holes.len()];
     for (index, relation) in context.relations.iter().enumerate() {
         let expected: BTreeSet<_> = context
@@ -1148,49 +1120,6 @@ fn check_facts(program: &Program) -> syn::Result<()> {
             owners[index] == 1 && hole.facts.consumer_canonical,
             hole,
             "consumer canonical requires exactly one matching admission or key-set owner",
-        )?;
-        let mut expected = BTreeSet::new();
-        for item in &hole.cq.query.body {
-            let BodyItem::Positive { atom } = item else {
-                continue;
-            };
-            let name = &atom.relation;
-            let relation_host = context
-                .relations
-                .iter()
-                .enumerate()
-                .any(|(i, r)| r.delta.as_ref() == Some(name) && certified("delta", i));
-            let layout_host = context
-                .layouts
-                .iter()
-                .enumerate()
-                .any(|(i, l)| &l.name == name && certified("layout", i))
-                || context
-                    .delta_layouts
-                    .iter()
-                    .enumerate()
-                    .any(|(i, l)| &l.name == name && certified("delta_layout", i));
-            let scan_host = context
-                .strata
-                .iter()
-                .flat_map(|s| s.seeds.iter().chain(&s.steps))
-                .filter(|rule| rule.hole == index)
-                .filter_map(|rule| rule.scan.as_ref())
-                .any(|scan| {
-                    &scan.binding == name
-                        && match scan.source {
-                            InputSource::Delta(i) => certified("delta", i),
-                            InputSource::Layout(i) => certified("layout", i),
-                        }
-                });
-            if relation_host || layout_host || scan_host {
-                expected.insert(symbol_name(name));
-            }
-        }
-        ensure(
-            hole.facts.discharged_host_sets == expected,
-            hole,
-            "discharged inputs must exactly name the certified hosts actually read",
         )?;
     }
     Ok(())

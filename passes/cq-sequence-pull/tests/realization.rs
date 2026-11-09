@@ -124,8 +124,8 @@ fn recorded_statistic_reads_use_completed_provider_and_missing_value_fallback() 
         }
         impl<T> PublishedRows for T {}
         fn main() {
-            let L = [(1i32,), (2,), (2,)];
-            let R = [(1i32, 4i32), (2, 5), (2, 5)];
+            let L = [(1i32,), (2,)];
+            let R = [(1i32, 4i32), (2, 5)];
             for (value, expected_cover) in [(None, 2), (Some(0), 1), (Some(9), 1), (Some(10), 2), (Some(u64::MAX), 2)] {
                 STAT.with(|stat| stat.set(value));
                 READS.with(|count| count.set(0));
@@ -198,13 +198,13 @@ fn selected_construction_publishes_real_rows_and_group_maxima() {
         let source = quote! {
             fn main() {
                 let L = [(1i32,), (2,)];
-                let populated = [(1i32, 4i32), (1, 4), (2, 5)];
+                let populated = [(1i32, 4i32), (1, 6), (2, 5)];
                 for R in [&populated[..], &[][..]] {
                     let selected_cover = std::cell::Cell::new(0usize);
                     let mut rows: Vec<_> = (#expression).into_iter()
                         .map(|(a,b)| (*a,*b)).collect();
                     rows.sort();
-                    assert_eq!(rows, if R.is_empty() { vec![] } else { vec![(1,4), (2,5)] });
+                    assert_eq!(rows, if R.is_empty() { vec![] } else { vec![(1,4), (1,6), (2,5)] });
                     assert_eq!(selected_cover.get(), if R.is_empty() { 1 } else { #populated_cover });
                 }
             }
@@ -270,7 +270,7 @@ fn zero_heading_exists_can_be_scanned_and_probed_against_itself() {
     let source = quote!(
         fn main() {
             for (rows, expected) in [
-                (&[(1i32,), (1,), (2,)][..], vec![()]),
+                (&[(1i32,), (2,)][..], vec![()]),
                 (&[][..], vec![]),
             ] {
                 let actual: Vec<()> = (#expression).collect();
@@ -569,8 +569,8 @@ fn projected_membership_probes_keep_flat_rows_inside_outer_tiles() {
             .unwrap();
             checks.push(quote! {
                 for empty in [false, true] {
-                    let left: &[(i32,i32)] = &[(1,10),(1,10),(2,20),(3,30),(4,40)];
-                    let right: &[(i32,i32)] = if empty { &[] } else { &[(1,7),(1,7),(2,8),(3,7)] };
+                    let left: &[(i32,i32)] = &[(1,10),(2,20),(3,30),(4,40)];
+                    let right: &[(i32,i32)] = if empty { &[] } else { &[(1,7),(2,8),(3,7)] };
                     let more: &[(i32,i32)] = if empty { &[] } else { &[(2,9),(5,7)] };
                     let payload: &[(i32,i32)] = &[(10,100),(20,200),(30,300),(40,400)];
                     let actual: ::std::collections::BTreeSet<_> = (#expression)
@@ -699,17 +699,15 @@ fn mixed_smallest_checks() -> Vec<proc_macro2::TokenStream> {
     ]];
     for seed in 0..24 {
         let database = cq_testkit::databases::binary_database(&query, seed);
-        inputs.push(["L", "R", "S"].map(|name| {
-            let mut rows: Vec<_> = database[name].iter().cloned().collect();
-            if let Some(first) = rows.first().cloned() {
-                rows.push(first);
-            }
-            rows
-        }));
+        inputs.push(["L", "R", "S"].map(|name| database[name].iter().cloned().collect()));
     }
     let fixtures: Vec<_> = inputs
         .into_iter()
-        .map(|inputs| {
+        .map(|mut inputs| {
+            for rows in &mut inputs {
+                rows.sort();
+                rows.dedup();
+            }
             let database = ["L", "R", "S"]
                 .into_iter()
                 .zip(&inputs)
@@ -891,8 +889,8 @@ fn filtered_checks() -> Vec<proc_macro2::TokenStream> {
                 let expression = sequence_rows(&source, &target).unwrap();
                 assert!(!text(&expression).contains("__cq_f_rows"));
                 checks.push(quote!({
-                    let L: &[(i32,)] = &[(1,), (1,), (2,), (9,)];
-                    let R: &[(i32,i32,i32,i32)] = &[(7,1,10,999), (7,1,10,999), (8,1,20,888), (7,2,30,777)];
+                    let L: &[(i32,)] = &[(1,), (2,), (9,)];
+                    let R: &[(i32,i32,i32,i32)] = &[(7,1,10,999), (8,1,20,888), (7,2,30,777)];
                     let chosen = 7;
                     fn make_chosen() -> i32 { 7 }
                     let actual: ::std::collections::BTreeSet<(i32,i32,i32)> = (#expression).map(|(a,k,v)| (*a,*k,*v)).collect();
@@ -976,7 +974,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         let expression = sequence_rows(&source, &selected).unwrap();
         checks.push(quote!({
             let L: &[(i32,)] = &[(1,), (2,), (3,)];
-            let R: &[(i32,i32)] = &[(-7,1),(-7,1),(7,2),(-7,3)];
+            let R: &[(i32,i32)] = &[(-7,1),(7,2),(-7,3)];
             let actual: ::std::collections::BTreeSet<_> =
                 (#expression).map(|(x,)| *x).collect();
             assert_eq!(actual, [1,3].into_iter().collect());
@@ -1044,7 +1042,6 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         let R = vec![
             (1_u32,1,true),
             (1_u32,2,true),
-            (1_u32,2,true),
             (0_u32,3,true),
             (1_u32,4,false),
         ];
@@ -1059,7 +1056,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
     let expression = sequence_rows(&source, &cq_structure_selection::compile(&source).unwrap()).unwrap();
     checks.push(quote!({
         for (R, expected) in [
-            (&[(7,), (7,), (8,)][..], vec![()]),
+            (&[(7,), (8,)][..], vec![()]),
             (&[(8,)][..], vec![]),
             (&[][..], vec![]),
         ] {
@@ -1090,7 +1087,8 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
             .map(|d| {
                 let name = &d.name;
                 let rows = data.inputs.iter().find(|(n, _)| name == *n).unwrap().1;
-                let tuples = rows.iter().map(|r| quote!((#(#r,)*)));
+                let unique: ::std::collections::BTreeSet<_> = rows.iter().collect();
+                let tuples = unique.into_iter().map(|r| quote!((#(#r,)*)));
                 let types = d.columns.iter().map(|c| &c.ty);
                 quote!(let #name: &[(#(#types,)*)] = &[#(#tuples),*];)
             })
@@ -1130,8 +1128,8 @@ fn complete_scenarios_compile_and_execute_against_authored_answers() {
     let expression = sequence_rows(&unordered.physical, &complete).unwrap();
     let fallback = quote! {
         #[allow(non_snake_case)] fn main() {
-            let L: &[(i32,)] = &[(2,), (1,), (1,)];
-            let R: &[(i32,)] = &[(3,), (1,), (2,), (2,)];
+            let L: &[(i32,)] = &[(2,), (1,)];
+            let R: &[(i32,)] = &[(3,), (1,), (2,)];
             let actual: ::std::collections::BTreeSet<_> =
                 (#expression).map(|(a,)| (*a,)).collect();
             let expected: ::std::collections::BTreeSet<_> = [(1,), (2,)].into_iter().collect();
@@ -1175,26 +1173,6 @@ fn adapter_carriers_drop_columns_after_their_last_reader() {
     assert!(printed.contains("(a , b , _ ,)"), "{printed}");
     assert!(printed.contains("& (a , _ ,)"), "{printed}");
     assert!(!printed.contains("dead"), "{printed}");
-}
-
-#[test]
-fn host_certificates_only_emit_for_locally_checked_facts() {
-    for (fact, certified) in [
-        (quote!(host_set R;), true),
-        (quote!(host_set R discharged;), false),
-    ] {
-        let module: Stack = syn::parse2(quote! {
-            physical {
-                relation R(a:i32); #fact
-                r = pipe rename R {a -> a};
-                return r as answer(a);
-            }
-            structures { providers {  }}
-        })
-        .unwrap();
-        let printed = program(&module);
-        assert_eq!(printed.contains("__cq_host_set_seen"), certified);
-    }
 }
 
 #[test]
@@ -1253,7 +1231,7 @@ fn grouped_folds_share_full_named_valuations_and_empty_identities() {
     let source = quote! {
         fn main() {
             let populated: &[(i32,i32,i64,i32)] = &[
-                (1,10,7,100), (1,10,7,100), (1,10,7,200),
+                (1,10,7,100), (1,10,7,200),
                 (1,11,7,100), (1,12,-2,100), (2,20,5,100),
             ];
             for rows in [populated, &[][..]] {
@@ -1266,7 +1244,7 @@ fn grouped_folds_share_full_named_valuations_and_empty_identities() {
                     assert_eq!(global, vec![(0,0,None,None)]);
                 } else {
                     // Two witnesses with value 7 contribute twice; wildcard
-                    // differences and repeated host rows contribute only once.
+                    // differences contribute only once after projection.
                     assert_eq!(keyed, vec![(1,3,12,Some(-2),Some(7)), (2,1,5,Some(5),Some(5))]);
                     assert_eq!(global, vec![(4,17,Some(-2),Some(7))]);
                 }
@@ -1415,7 +1393,7 @@ fn blocked_predicates_execute_exact_formulas_and_own_only_demanded_fields() {
             for len in [0usize,1,1024,1027,2051] {
                 let a: Vec<i64> = (0..len).map(|i| (i % 11) as i64).collect();
                 let b: Vec<i64> = (0..len).map(|i| (i % 13) as i64).collect();
-                let unused = vec![NeverMaterialize(7);len];
+                let unused: Vec<_> = (0..len).map(|i| NeverMaterialize(i as u64)).collect();
                 #(#checks)*
                 let R = ScanTable::new((
                     ScanColumn::<i64,Bytes>::new(&a,geometry,true),
@@ -1447,9 +1425,9 @@ fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
     let mut checks = Vec::new();
     for (family, storage) in [(quote!(plain), quote!(Plain)), (quote!(bytes), quote!(Bytes))] {
         let physical = syn::parse_quote!(physical {
-            relation R(key: NeverMaterialize [2], price: i64 [1]);
+            relation R(key: NeverMaterialize [2], price: i64 [1], position: NeverMaterialize [2]);
             capture { let group: u64 = 0; }
-            r = pipe rename R {key -> witness, price -> price};
+            r = pipe rename R {key -> witness, price -> price, position -> position};
             v = pipe bind r with amount: i64 = (*price * 2);
             out = pipe project v keep {witness,amount};
             return canon out as rows(group,witness,amount);
@@ -1460,7 +1438,7 @@ fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
             value_reads: ["group", "amount"].map(String::from).into(),
         };
         let (physical, selected) = cq_structure_selection::compile_with_consumer(&physical, quote!(
-            blocks(R { block_rows 1024; summary none; columns [key: #family u64, price: #family u64]; })
+            blocks(R { block_rows 1024; summary none; columns [key: #family u64, price: #family u64, position: plain u64]; })
         ), Some(&demand)).unwrap();
         let expression = sequence_rows(&physical, &selected).unwrap();
         let reads = &selected.encoded.blocks.reads;
@@ -1473,7 +1451,8 @@ fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
                 let R = ScanTable::new((
                     ScanColumn::<NeverMaterialize, #storage>::new(&keys, geometry, false),
                     ScanColumn::<i64, #storage>::new(&prices, geometry, false),
-                )).bind_domains(&[domain(5),domain(3)]).unwrap();
+                    ScanColumn::<NeverMaterialize, Plain>::new(&positions, geometry, false),
+                )).bind_domains(&[domain(5),domain(3),domain(5)]).unwrap();
                 let mut actual: Vec<_> = (#expression).collect();
                 actual.sort();
                 assert_eq!(actual, vec![(0u64,1u64,14i64),(0,2,16),(0,3,14)]);
@@ -1502,6 +1481,7 @@ fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
             // Dedup must produce three values, not 1027 occurrence identities.
             let keys: Vec<_> = (0..1027).map(|i| NeverMaterialize(1 + (i % 3) as u64)).collect();
             let prices: Vec<i64> = (0..1027).map(|i| if i % 3 == 1 { 8 } else { 7 }).collect();
+            let positions: Vec<_> = (0..1027).map(|i| NeverMaterialize(i as u64)).collect();
             #(#checks)*
         }
     };

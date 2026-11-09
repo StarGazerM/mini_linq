@@ -307,8 +307,7 @@ pub fn index_demands(input: TokenStream) -> TokenStream {
 }
 
 /// IX → Physical with probe/keep/first/eager defaults.
-/// Comma-separated `consumer = canonical` and `host_set R discharged`
-/// arguments explicitly supply restricted context facts.
+/// `consumer = canonical` explicitly supplies the restricted consumer context.
 #[proc_macro]
 pub fn lower(input: TokenStream) -> TokenStream {
     cq_stage::pass_with_context::<cq_lang_ix::Program, cq_lang_physical::Program>(
@@ -689,8 +688,6 @@ mod tests {
     fn cq_entries_and_direct_pass_reject_printed_lower_ir_facts() {
         for facts in [
             quote!(consumer canonical;),
-            quote!(host_set R discharged;),
-            quote!(host_set R discharged; consumer canonical;),
         ] {
             let physical = physical(facts);
             rejects_printed_entry(&physical);
@@ -721,10 +718,15 @@ mod tests {
     }
 
     #[test]
-    fn plain_host_certificates_are_not_restricted_entry_facts() {
-        let physical = physical(quote!(host_set R;));
-        assert!(physical.context().is_empty());
-        super::check_entry(&physical.to_token_stream()).unwrap();
+    fn removed_host_facts_are_rejected() {
+        for facts in [quote!(host_set R;), quote!(host_set R discharged;)] {
+            assert!(syn::parse2::<cq_lang_physical::Program>(quote!(physical {
+                relation R(a: i32);
+                #facts
+                r = pipe rename R { a -> x };
+                return r as answer(x);
+            })).is_err());
+        }
     }
 
     #[test]
@@ -732,7 +734,7 @@ mod tests {
         let cq = quote!(struct Q; relation R(a: i32); answer(x) :- R(x););
         let output = expand_compile(quote!(
             pipeline {
-                lower = lower(consumer = canonical, host_set R discharged);
+                lower = lower(consumer = canonical);
                 select = select(positional(R));
             }
             #cq
@@ -743,7 +745,7 @@ mod tests {
             quote!(::mini_linq::passes::plan! {
                 pipeline {
                     ::mini_linq::passes::index_demands,
-                    lower(consumer = canonical, host_set R discharged),
+                    lower(consumer = canonical),
                     select(positional(R)),
                     ::mini_linq::passes::represent,
                     ::mini_linq::passes::stage,
@@ -763,7 +765,7 @@ mod tests {
         let output =
             cq_stage::pass_with_output_consumer::<cq_lang_physical::Program, super::Structures>(
                 quote!(
-                    arguments { consumer = canonical, positional(R), host_set R discharged };
+                    arguments { consumer = canonical, positional(R) };
                     pipeline { printer };
                     #physical
                 ),
@@ -778,7 +780,6 @@ mod tests {
                 assert!(args.is_empty());
                 let context = physical.context();
                 assert!(context.consumer_canonical);
-                assert_eq!(context.discharged_host_sets, ["R".to_owned()].into());
                 Ok(syn::parse_quote!(42))
             },
         );

@@ -92,7 +92,7 @@ impl SrdResults {
     }
 }
 
-fn load_rows<const N: usize, T>(path: &Path, make: impl Fn([i32; N]) -> T) -> Result<Vec<T>> {
+fn load_rows<const N: usize, T: Ord>(path: &Path, make: impl Fn([i32; N]) -> T) -> Result<Vec<T>> {
     let mut rows = Vec::new();
     for (line_no, line) in BufReader::new(File::open(path)?).lines().enumerate() {
         let line = line?;
@@ -118,6 +118,8 @@ fn load_rows<const N: usize, T>(path: &Path, make: impl Fn([i32; N]) -> T) -> Re
         }
         rows.push(make(row));
     }
+    rows.sort_unstable();
+    rows.dedup();
     Ok(rows)
 }
 
@@ -140,6 +142,15 @@ fn export_rows<const N: usize>(path: &Path, rows: impl Iterator<Item = [i32; N]>
 mod witness_tests {
     use super::*;
     use bench_check::{Mode, Policy};
+
+    #[test]
+    fn prepared_input_loading_preserves_full_row_support() {
+        let path = std::env::temp_dir().join(format!("srd-set-input-{}.csv", std::process::id()));
+        std::fs::write(&path, "2\t7\n1\t9\n2\t7\n1\t8\n").unwrap();
+        let rows = load_rows(&path, |[left, right]| (left, right)).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(rows, [(1, 8), (1, 9), (2, 7)]);
+    }
 
     #[test]
     fn witnesses_preserve_schema_and_exact_logical_integer_rows() {

@@ -9,7 +9,6 @@ macro_rules! physical_registry {
             smallest_intersections => $crate::smallest_intersections;
             lazy_semijoins => $crate::lazy_semijoins;
             build_host_reads => $crate::build_host_reads;
-            host_sets => $crate::host_sets;
             retain_streams => $crate::retain_streams;
             hoist => $crate::hoist;
         }

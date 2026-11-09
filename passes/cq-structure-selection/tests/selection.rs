@@ -199,6 +199,8 @@ fn grouped_folds_keep_complete_valuations_and_infer_only_the_group_key() {
 
     let mut noncanonical = source;
     noncanonical.program.definitions[1].canon = None;
+    compile(&noncanonical).unwrap();
+    noncanonical.program.definitions[1].operator = syn::parse_quote!(project r keep {k,v});
     assert!(compile(&noncanonical).is_err());
 }
 
@@ -483,7 +485,6 @@ fn head_dedup_types_exactly_the_recorded_physical_obligation() {
     // is admissible and selection types it with an answer identity index.
     let source: physical::Program = syn::parse_quote! {physical {
         relation R(a:i32);
-        host_set R;
         r = pipe rename R {a -> x};
         return dedup r as answer(x);
     }};
@@ -1203,23 +1204,21 @@ fn selection_records_context_before_choosing_dedup_types() {
     }};
     let (selected_physical, selected) = cq_structure_selection::compile_with(
         &source,
-        quote::quote!(consumer = canonical, host_set R discharged,),
+        quote::quote!(consumer = canonical,),
     )
     .unwrap();
     let facts = contract(&selected_physical, &selected).unwrap();
     assert!(facts.physical.consumer_canonical);
-    assert!(facts.physical.discharged_host_sets.contains("R"));
     assert!(facts.canonical.is_empty());
     assert!(facts.head_dedup.is_empty());
     assert!(selected_physical.program.definitions[0].canon.is_none());
     check(&selected_physical, &selected).unwrap();
     assert!(structures::check_rewrite(&source, &compile(&source).unwrap(), &selected_physical, &selected).is_err());
     let context = cq_structure_selection::context(quote::quote!(
-        host_set R discharged, positional(R), consumer = canonical,
+        positional(R), consumer = canonical,
     ))
     .unwrap();
     assert!(context.consumer_canonical);
-    assert!(context.discharged_host_sets.contains("R"));
     let ordinary = compile(&source).unwrap();
     let (empty_physical, empty) = cq_structure_selection::compile_with(&source, Default::default()).unwrap();
     assert_eq!(empty_physical, source);
@@ -1233,7 +1232,6 @@ fn selection_records_context_before_choosing_dedup_types() {
 fn redundant_context_packets_preserve_explicit_canon() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a:i32);
-        host_set R discharged;
         consumer canonical;
         r = let canon rename R {a -> x};
         return r as answer(*x % 2);
@@ -1241,8 +1239,6 @@ fn redundant_context_packets_preserve_explicit_canon() {
     let ordinary = compile(&source).unwrap();
     for arguments in [
         quote::quote!(consumer = canonical),
-        quote::quote!(host_set R discharged),
-        quote::quote!(host_set R discharged, consumer = canonical),
     ] {
         let (selected_physical, selected) = cq_structure_selection::compile_with(&source, arguments).unwrap();
         assert_eq!(selected_physical, source);
@@ -1253,6 +1249,17 @@ fn redundant_context_packets_preserve_explicit_canon() {
         let facts = contract(&selected_physical, &selected).unwrap();
         assert!(facts.canonical.contains_key("r"));
         assert!(facts.head_dedup.is_empty());
+    }
+}
+
+#[test]
+fn selection_rejects_removed_host_fact_arguments() {
+    for arguments in [
+        quote::quote!(host_set R),
+        quote::quote!(host_set R discharged),
+        quote::quote!(consumer = canonical, host_set R discharged),
+    ] {
+        assert!(cq_structure_selection::context(arguments).is_err());
     }
 }
 

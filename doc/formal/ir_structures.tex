@@ -392,11 +392,16 @@ This rule does not depend on Rust type spelling or on a preceding selection.
  \textsc{CK-Return}(t,\Gamma)}
  {\mathsf{WF}_{Structures}(t)\Downarrow A}
 \end{mathpar}
-Uniqueness: Unit has the empty key; a rename of a certified or discharged
-\code{host_set} has its full heading as key, and other host renames have none; join needs both
-keys and unions them; semi/anti keep the left key; union infers none;
-selections, guards and binds preserve it; projection preserves it only if no key
-column is dropped; a canon flag gives the full heading through its checked canonical reference.
+Structures obtains its uniqueness map from the shared whole-program Physical
+analysis using the already checked Physical headings; it introduces no separate
+key-transfer rules. Physical establishes the returned set boundary before
+Structures checks its storage evidence. Unit has the empty key; every input
+relation is a set, so a rename has its full heading as key; joins need both keys;
+semi/anti retain the left key; certified disjoint unions require unique arms;
+filters and scalar binds preserve keys, but opaque generators do not.
+Projection must retain every key column, and grouping establishes its grouping
+key. A recorded canon boundary supplies the full-heading key when inference
+does not already establish one; Structures checks its canonical reference.
 A built structure alone proves no uniqueness.
 An explicit \code{membership} modifier on a single-level filtered build proves
 that every downstream observation is a supplied key or reconstructed constant.
@@ -1145,9 +1150,7 @@ requires a future explicit relational carrier/group protocol, not an opaque
 read or an inverse-codec fallback. Computed-only grouping remains supported.
 Any blocked occurrence reaching a join, index, noncanonical
 retained store, fused scope or restricted Rename (source atom literals) is
-rejected by the Structures checker before printing. A blocked source also
-rejects runtime \code{host\_set} certification through the borrowed-row
-protocol; an already-discharged uniqueness premise remains admissible.
+rejected by the Structures checker before printing.
 This is an explicit checkpoint boundary, not a
 claim of complete blocked join/index support. Unknown and unadvised hosts keep
 the prior Structures decisions. Correspondence checks Physical preservation;

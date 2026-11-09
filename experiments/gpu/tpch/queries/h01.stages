@@ -8,7 +8,7 @@ program h01 {
     stage s0 {
         inputs { Lineitem = Lineitem; }
         captures [cutoff];
-        evidence { from authored("TPC-H dbgen line identity retained by loader") trusted_key Lineitem [l_orderkey, l_linenumber]; }
+        evidence {}
         cq {
             struct Query;
             relation Lineitem(l_orderkey: i64, l_linenumber: i64,

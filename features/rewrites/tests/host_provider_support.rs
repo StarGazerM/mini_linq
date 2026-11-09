@@ -83,17 +83,9 @@ macro_rules! query {
 
 #[test]
 fn retained_host_alias_uses_native_copy_cursor_without_rebuilding_or_reprobing() {
-    let left = [(2_i64,), (1,), (4,), (1,)];
-    let right = NativeHost::new(vec![(1, 10), (2, 20), (1, 11), (1, 10)]);
-    let expected = vec![
-        (2, 20),
-        (1, 10),
-        (1, 11),
-        (1, 10),
-        (1, 10),
-        (1, 11),
-        (1, 10),
-    ];
+    let left = [(2_i64,), (1,), (4,)];
+    let right = NativeHost::new(vec![(1, 10), (2, 20), (1, 11)]);
+    let expected = vec![(2, 20), (1, 10), (1, 11)];
     let visits = &RefCell::new(Vec::new());
     let answers: BTreeSet<_> = query!(&left, &right, visits,
         [host [a] reads [exact] supports [expand]], [],
@@ -108,21 +100,13 @@ fn retained_host_alias_uses_native_copy_cursor_without_rebuilding_or_reprobing()
 }
 
 #[test]
-fn noncopy_native_cursor_uses_declared_snapshot_fallback_and_preserves_duplicates() {
-    let left = [(2_i64,), (1,), (4,), (1,)];
+fn noncopy_native_cursor_uses_declared_snapshot_fallback_on_set_inputs() {
+    let left = [(2_i64,), (1,), (4,)];
     let right = BTreeMap::from([
-        ((1_i64,), vec![(10_i64,), (11,), (10,)]),
+        ((1_i64,), vec![(10_i64,), (11,)]),
         ((2,), vec![(20,)]),
     ]);
-    let expected = vec![
-        (2, 20),
-        (1, 10),
-        (1, 11),
-        (1, 10),
-        (1, 10),
-        (1, 11),
-        (1, 10),
-    ];
+    let expected = vec![(2, 20), (1, 10), (1, 11)];
     let visits = &RefCell::new(Vec::new());
     let answers: BTreeSet<_> = query!(&left, &right, visits, [],
         [snapshot_alias = SnapshotAlias<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed };],

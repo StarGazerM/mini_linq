@@ -5,11 +5,23 @@ use std::path::Path;
 
 use crate::{Csv, CsvOptions, Relation, Result};
 
+/// Canonicalize complete relation rows in place before passing them to a query.
+///
+/// Formal rule LD-RelationSet: sorting and adjacent deduplication preserve
+/// full-row support and establish the unconditional input-set contract.
+/// `Ord` equality must be the relation's equality. No row is cloned and no
+/// additional row buffer is allocated.
+pub fn canonicalize<T: Ord>(rows: &mut Vec<T>) {
+    rows.sort_unstable();
+    rows.dedup();
+}
+
 /// Split a declared row at a leading column prefix, without cloning fields.
 ///
 /// The declaration macro implements every prefix from zero through the arity.
-/// Key constraints belong to the selected collection, so an unordered payload
-/// (including `f64`) does not prevent grouping by an ordered leading column.
+/// Keys satisfy the chosen collection's equality/order bounds; payloads must
+/// implement `Ord` so grouped loaders can deduplicate complete rows in place.
+/// Raw batch decoders remain available for unordered types such as `f64`.
 pub trait Group<const PREFIX: usize>: Relation {
     type Key;
     type Value;
@@ -26,8 +38,11 @@ impl<S: Relation> Loader<S> {
         Csv::open(path, options)
     }
 
-    /// Read rows directly into the dispatch rule's tuple-vector host.
-    pub fn csv(path: impl AsRef<Path>, options: CsvOptions) -> Result<Vec<S::Row>> {
+    /// Read a full-row set into the dispatch rule's tuple-vector host.
+    pub fn csv(path: impl AsRef<Path>, options: CsvOptions) -> Result<Vec<S::Row>>
+    where
+        S::Row: Ord,
+    {
         // DECODE ?: read_csv reconstructs the entire host relation; this generic convenience API records no final consumer.
         crate::read_csv::<S>(path, options)
     }
@@ -40,6 +55,7 @@ impl<S: Relation> Loader<S> {
     where
         S: Group<PREFIX>,
         S::Key: Eq + Hash,
+        S::Value: Ord,
     {
         // DECODE V: CSV row decoding precedes hash grouping; P4 owns retained index keys.
         collect_hash::<S, PREFIX>(Self::csv_batches(path, options)?)
@@ -53,6 +69,7 @@ impl<S: Relation> Loader<S> {
     where
         S: Group<PREFIX>,
         S::Key: Ord,
+        S::Value: Ord,
     {
         // DECODE V: CSV row decoding precedes ordered grouping; P4 owns retained index keys.
         collect_btree::<S, PREFIX>(Self::csv_batches(path, options)?)
@@ -67,9 +84,12 @@ impl<S: Relation> Loader<S> {
         crate::Parquet::open(path, options)
     }
 
-    /// Read Arrow batches into the dispatch rule's tuple-vector host.
+    /// Read Arrow batches and canonicalize the complete declared rows once.
     #[cfg(feature = "parquet")]
-    pub fn parquet(path: impl AsRef<Path>, options: crate::ParquetOptions) -> Result<Vec<S::Row>> {
+    pub fn parquet(path: impl AsRef<Path>, options: crate::ParquetOptions) -> Result<Vec<S::Row>>
+    where
+        S::Row: Ord,
+    {
         // DECODE ?: read_parquet reconstructs a tuple-vector host but this generic loader records no publication or Rust-read boundary.
         crate::read_parquet::<S>(path, options)
     }
@@ -84,8 +104,13 @@ impl<S: crate::InternedRelation> Loader<S> {
     pub fn intern(
         rows: Vec<<S::Source as Relation>::Row>,
         dictionaries: &mut crate::Dictionaries,
-    ) -> Vec<S::Row> {
-        S::intern(rows, dictionaries)
+    ) -> Vec<S::Row>
+    where
+        S::Row: Ord,
+    {
+        let mut rows = S::intern(rows, dictionaries);
+        canonicalize(&mut rows);
+        rows
     }
 
     /// Borrow source string cells directly into per-column dictionaries and
@@ -100,7 +125,10 @@ impl<S: crate::InternedRelation> Loader<S> {
         path: impl AsRef<Path>,
         options: crate::ParquetOptions,
         dictionaries: &mut crate::Dictionaries,
-    ) -> Result<Vec<S::Row>> {
+    ) -> Result<Vec<S::Row>>
+    where
+        S::Row: Ord,
+    {
         let mut source = crate::Parquet::<S::Source>::open(path, options)?;
         let mut state = S::state();
         let mut rows = Vec::new();
@@ -108,6 +136,7 @@ impl<S: crate::InternedRelation> Loader<S> {
             rows.extend(batch?);
         }
         S::finish(&mut rows, state, dictionaries);
+        canonicalize(&mut rows);
         Ok(rows)
     }
 }
@@ -118,6 +147,7 @@ fn collect_hash<S, const PREFIX: usize>(
 where
     S: Group<PREFIX>,
     S::Key: Eq + Hash,
+    S::Value: Ord,
 {
     let mut groups = HashMap::<_, Vec<_>>::new();
     for batch in batches {
@@ -125,6 +155,9 @@ where
             let (key, value) = S::split(row);
             groups.entry(key).or_default().push(value);
         }
+    }
+    for values in groups.values_mut() {
+        canonicalize(values);
     }
     Ok(groups)
 }
@@ -135,6 +168,7 @@ fn collect_btree<S, const PREFIX: usize>(
 where
     S: Group<PREFIX>,
     S::Key: Ord,
+    S::Value: Ord,
 {
     let mut groups = BTreeMap::<_, Vec<_>>::new();
     for batch in batches {
@@ -142,6 +176,9 @@ where
             let (key, value) = S::split(row);
             groups.entry(key).or_default().push(value);
         }
+    }
+    for values in groups.values_mut() {
+        canonicalize(values);
     }
     Ok(groups)
 }

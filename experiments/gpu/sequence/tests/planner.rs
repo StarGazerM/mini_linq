@@ -115,18 +115,18 @@ fn step_r() -> (cq_lang_sequence::structures::physical::Program, cq_lang_sequenc
 }
 
 #[test]
-fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
+fn evidence_without_partial_keys_skips_unbounded_prefix_retention() {
     let machine = cq_gpu_sequence::machine();
     let (physical, structures) = step_r();
     let source = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     let source = cq_gpu_sequence_core::runs::record_representation(&physical, &structures, &source).unwrap();
     let evidence: cq_sequence_plan::Advice = syn::parse_quote!(evidence from authored("experiments/gpu/sequence/tests/planner.rs fixture") {
-        count Region = 5; trusted_key Region [r_regionkey];
-        count Nation = 25; trusted_key Nation [n_nationkey];
-        count Customer = 150000; trusted_key Customer [c_custkey];
-        count Orders = 1500000; trusted_key Orders [o_orderkey];
+        count Region = 5;
+        count Nation = 25;
+        count Customer = 150000;
+        count Orders = 1500000;
         count Lineitem = 6001215;
-        count Supplier = 10000; trusted_key Supplier [s_suppkey];
+        count Supplier = 10000;
     });
     let (physical, structures, source) = evidence.apply(&physical, &structures, &source).unwrap();
     let result =
@@ -140,27 +140,21 @@ fn evidence_retains_a_small_rooted_prefix_and_segments_its_fan_out() {
             next
         });
     assert_eq!(replayed, (result.physical.clone(), result.structures.clone(), result.program.clone()), "PL-Closure");
-    let trace: Vec<String> = result
-        .trace
-        .iter()
-        .map(|advice| quote::ToTokens::to_token_stream(advice).to_string())
-        .collect();
-    // Region (5) and the Nation prefix (25) fill less than a tile; the
-    // Customer prefix is bounded by its 150000 customers. Orders and Lineitem
-    // fan out (their lookups cover no provider key); Supplier is membership.
-    assert_eq!(
-        &trace[..4],
-        [
-            "retain (rnc , 150000 , 256 , 65536)",
-            "partition (__sequence_output , 256)",
-            "segment (rnco , 1024 , items 4)",
-            "segment (rncol , 1024 , items 4)",
-        ]
+    // Input sets prove only full-heading uniqueness. Neither side of the
+    // Region/Nation join is keyed by region alone, so its size is unknown.
+    // Counts cannot justify retaining the later Customer prefix.
+    assert!(
+        !result
+            .trace
+            .iter()
+            .any(|advice| matches!(advice, cq_sequence_plan::Advice::Retain { .. }))
     );
     let analysis = check_grading(&result.physical, &result.structures, &result.program, &machine).unwrap();
+    assert_eq!(analysis.prefix_bounds["rn"].rows, None);
+    assert_eq!(analysis.prefix_bounds["rnc"].rows, None);
     cq_gpu_sequence::translate(&result.physical, &result.structures, &result.program, &analysis).unwrap();
     // A recorded bound that the evidence does not establish is rejected.
-    let forged: cq_sequence_plan::Advice = syn::parse_quote!(retain(rnc, 1, 256, 65536));
+    let forged: cq_sequence_plan::Advice = syn::parse_quote!(retain(rnc, 150000, 256, 65536));
     assert!(forged.apply(&physical, &structures, &source).is_err());
     // Without evidence the order keeps its single small root.
     let (physical, structures) = step_r();

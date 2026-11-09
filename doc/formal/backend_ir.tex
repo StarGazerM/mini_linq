@@ -126,6 +126,14 @@ flatten under a tile preserves that tile. Analysis records lengths at every
 level (a tile has $\lceil L/n\rceil$ parts and at most $n$ rows per part),
 while $\alpha$ forgets all partition levels. A collaborative store can hold
 one part; a separated store publishes the concatenation of its outer parts.
+For merge admission, $\mathsf{partial}(t)$ records \emph{partition ancestry},
+not merely current nesting depth: Tile and PartitionK introduce it, and
+Flatten, aliases and ordinary row functions preserve it. A named flat Store
+published at host closes that ancestry. A merge's provider capability proves
+the provider cursor's order, not the order of an arbitrary tile of its row
+stream. Therefore neither reopening that complete cursor once per tile nor
+silently treating the tile as sorted is admissible. The existing legal
+schedule evaluates the complete merge before tiling its output.
 \begin{mathpar}
 \Rule{BE-Alpha}{}
  {\alpha(\mathsf{map}\,f\,t)=\mathrm{Bag}(f)(\alpha t)\quad
@@ -137,6 +145,10 @@ one part; a separated store publishes the concatenation of its outer parts.
 
 \Rule{BE-OrderedFallback}{\mathsf{host}(r)\quad\text{reader }c\text{ of }r\text{ is a merge}\quad\mathsf{fallback}(r,c)=T}
  {\text{the ordered read of }r\text{ is typed }T\text{, not by another reader's fallback}}
+
+\Rule{BE-MergeInput}{m=\mathsf{merge}[K](l,r)\quad
+ t\text{ supplies }l\quad\mathsf{partial}(t)}
+ {\text{rejected: a merge requires its complete order-owning input boundary}}
 
 \Rule{BE-NativeBind}{\mathsf{host}(r)\quad c=\mathsf{result}(\mathsf{reader})\quad
  \mathsf{native}(r,c,K)=(\rho,\ldots)\\
@@ -478,10 +490,15 @@ translation, including for explicitly advised programs. Resource recovery
 enumerates checked alternatives in fixed order: nested inner-flatten
 segmentation at preferred geometry, smaller item counts, then smaller strips
 derived by halving the machine width. Only after these fail may it add
-dispatch-splitting publications. Every candidate satisfies all grading and
-catalog premises, including BE-Resource; PL-Cost compares the legal segmented
-and plain schedules at the first feasible geometry. If none fits, rejection
-retains all diagnostics from every attempted candidate.
+dispatch-splitting publications. On machines without a resource-layout model,
+a final alternative leaves decomposition untiled and places all unauthored
+work at host; it preserves explicit grades and tiles and must satisfy grading and catalog
+premises. In particular, a failed partial Merge schedule does not make a
+well-formed default program unplannable when its complete host execution is
+admissible. Every candidate satisfies all grading and catalog premises,
+including BE-Resource; PL-Cost compares the legal segmented and plain
+schedules at the first feasible geometry. If none fits, rejection retains
+all diagnostics from every attempted candidate.
 
 The laws mention only labels of the machine parameter. A term that uses a
 collective at a level the target marks separated is rejected for that
@@ -1072,18 +1089,16 @@ governed by \textsc{BE-Choose}; they do not authorize automatic relational
 replanning or optional-filter discovery.
 
 Sequence evidence records a nonempty source on every fact: authored provenance
-or the unchanged originating VO provenance. \code{planning\_key} is advice
-only. The distinct \code{trusted\_key} spelling is an authored semantic premise;
-VO advice and measured statistics cannot synthesize it. The former ambiguous
-\code{key} syntax is rejected. Contradictory numeric estimates remain advice,
+or the unchanged originating VO provenance. Evidence contains estimates only;
+it has no uniqueness-key syntax. Contradictory numeric estimates remain advice,
 not certified allocation bounds, truncation limits or uniqueness certificates.
+Every compiler input is a set supplied by IO, proving only its full heading
+unique; VO partial keys never become Sequence semantic premises.
 \begin{mathpar}
 \Rule{WF-SequenceEvidence}{
- \mathsf{source}(e)\ne\epsilon\quad\mathsf{referencesValid}(e)\quad
- e=\mathsf{trustedKey}\Longrightarrow\mathsf{source}(e)=\mathsf{authored}
+ \mathsf{source}(e)\ne\epsilon\quad\mathsf{referencesValid}(e)
 }{e\text{ is well formed}}
 \end{mathpar}
-In PL-Evidence, $E_{\rm key}$ denotes only explicitly trusted semantic keys.
 Statistic guards use typed publication references, never free-form provenance
 labels; absent scalars take the recorded else arm. All alternatives have the
 same checked construction. P7.1 admits host reads only; no device visibility,
@@ -1110,11 +1125,11 @@ remain available. Lazy demanded-initializer dispatch is outside the ordinary
 
 \begin{mathpar}
 \Rule{PL-Evidence}{E\text{ is syntactically well-formed advice}\quad
- E_{\rm key}\text{ holds}\quad (t',\rho)=\mathsf{plan}(t,M,K,E)}
+ (t',\rho)=\mathsf{plan}(t,M,K,E)}
  {\mathrm{supp}(\alpha(t'))=\mathrm{supp}(\alpha(t))\quad
-  \rho\text{ satisfies PL-Closure under }E_{\rm key}}
+  \rho\text{ satisfies PL-Closure}}
 
-\Rule{BE-PrefixBound}{\beta(\mathsf{rename}\ R)=(\mathsf{count}_E(R),\mathsf{keys}_E(R))\quad
+\Rule{BE-PrefixBound}{\beta(\mathsf{rename}\ R)=(\mathsf{count}_E(R),\{\mathsf{heading}(\mathsf{rename}\ R)\})\quad
  \beta(\mathsf{unit})=(1,\{\varnothing\})\quad
  \beta(\sigma\,x)=\beta(\mathsf{guard}\ x)=\beta(\mathsf{scalarBind}\ x)
  =\beta(x\ltimes y)=\beta(x\rhd y)=\beta(x)\\
@@ -1124,7 +1139,7 @@ remain available. Lazy demanded-initializer dispatch is outside the ordinary
  \beta(\mathsf{probe}[\bar k]\,x,y)={\begin{cases}\beta(x)&\exists K\in\mathsf{keys}(y).\ K\subseteq\bar k\\
  \beta(y)&\exists K\in\mathsf{keys}(x).\ K\subseteq\bar k\\
  \bot&\text{otherwise}\end{cases}}}
- {|\alpha(p)|\le\beta(p).rows\text{ whenever }E_{\rm key}\text{ and the counts hold}}
+ {|\alpha(p)|\le\beta(p).rows\text{ whenever the count estimates hold}}
 
 \Rule{GR-RetainPrefix}{M.gpu\quad \beta(\mathsf{root}(d))<w_M\quad
  e_1,\ldots,e_n\text{ the expansions of }d\text{ from its root}\\
@@ -1854,16 +1869,20 @@ BE-KeyPartGroup, never as a collective at the separated pool.
 
 \paragraph{Key-aware grouped fold.}
 \begin{mathpar}
-\Rule{BE-GroupKey}{E_{\rm key}\models K_R\to R\ \text{with unique physical keys for every positive atom }R
- \quad V\text{ determines every }K_R}
+\Rule{BE-GroupKey}{\mathsf{PhysicalTransfer}(V,K_1,\ldots,K_n)=K\quad
+ K\subseteq\mathsf{heading}(V)\quad
+ \forall i.\ K_i\text{ is proved by the actual Sequence operand}}
  {\mathsf{valuations}_V\text{ is globally unique}}
 \end{mathpar}
-Under these asserted premises, each complete named valuation identifies at
-most one physical witness combination. Renames translate keys, joins combine
-them, scalar binds and filters preserve them, and projection must retain a key.
-The checker uses this uniqueness premise for BE-Group and BE-GroupPartial;
-it does not authorize a canonicalizer-removal rewrite. Proof caches include
-evidence, so removing an assertion cannot reuse its proof.
+Each complete input row is a unique witness under the IO set contract.
+Shared Physical transfer translates keys through renames, combines them through
+joins, preserves them through scalar binds and filters, and requires projections
+to retain a key. For a checked fallback-disjoint union, every actual arm must
+be unique; the shared transfer supplies the complete union heading.
+Evidence never supplies a partial key. Recorded Physical canons do not prove
+that a Sequence term has executed them: only the actual Canon term establishes
+that boundary. The checker uses these facts for BE-Group and BE-GroupPartial,
+not for a separate canonicalizer-removal rewrite.
 
 Physical lowering owns valuation canonicalization. Sequence preserves that
 decision and checks group input uniqueness; it does not remove canonicalizers

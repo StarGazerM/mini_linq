@@ -36,8 +36,7 @@ pub use registry::{invoke_physical, invoke_structures};
 
 pub use indexes::{chain_cover, check_chain_cover, sorted_indexes};
 pub use physical::{
-    canon_prefixes, hoist, host_sets, lazy_semijoins, merge_joins, retain_streams,
-    smallest_intersections,
+    canon_prefixes, hoist, lazy_semijoins, merge_joins, retain_streams, smallest_intersections,
 };
 pub use structures::{
     expand_lookups, hashed_runs, join_filter, membership, packed_canon, radix_runs, retain_lookups,

@@ -6,11 +6,22 @@ use gpu_device_columns::{OutputCount, Table};
 use std::{collections::BTreeMap, sync::Arc};
 
 /// One manifest-driven loader for every query. Only referenced columns are read;
-/// repeated aliases share the same immutable resident column allocations.
+/// aliases of the same complete projection share immutable resident tables.
 pub struct Loader<'a> {
     manifest: &'a Manifest,
     pool: Arc<Pool>,
-    columns: BTreeMap<(String, String), Arc<EncodedColumn>>,
+    tables: BTreeMap<String, CachedTable>,
+}
+
+#[derive(Default)]
+struct CachedTable {
+    columns: BTreeMap<String, Arc<EncodedColumn>>,
+    projections: Vec<CachedProjection>,
+}
+
+struct CachedProjection {
+    names: Vec<String>,
+    storage: Table,
 }
 
 impl<'a> Loader<'a> {
@@ -18,7 +29,7 @@ impl<'a> Loader<'a> {
         Self {
             manifest,
             pool,
-            columns: BTreeMap::new(),
+            tables: BTreeMap::new(),
         }
     }
 
@@ -38,35 +49,96 @@ impl<'a> Loader<'a> {
         if relation.rows >= u32::MAX as usize {
             return Err("relation exceeds device row-ID domain".into());
         }
-        let mut columns = Vec::with_capacity(names.len());
-        for &name in names {
-            let key = (table.to_owned(), name.to_owned());
-            if !self.columns.contains_key(&key) {
-                let values = self.manifest.read_column(table, name)?;
-                let column = EncodedColumn::from_host(self.pool.clone(), &values, Codec::For)?;
-                self.columns.insert(key.clone(), Arc::new(column));
-            }
-            columns.push(self.columns[&key].clone());
+        if !self.tables.contains_key(table) {
+            self.tables.insert(table.to_owned(), CachedTable::default());
         }
-        let views: Vec<ColumnView> = columns
-            .iter()
-            .map(|column| unsafe { column.view() })
-            .collect();
-        let bounds = columns.iter().map(|column| column.bounds()).collect();
-        let storage = Table {
-            columns,
-            views: Arc::new(Buffer::from_host(self.pool.clone(), &views)?),
-            metadata: Arc::new(Buffer::from_host(
-                self.pool.clone(),
-                &[OutputCount {
-                    rows: relation.rows as u64,
-                    error: 0,
-                    padding: 0,
-                }],
-            )?),
-            capacity: relation.rows,
-            bounds,
-            statuses: Vec::new(),
+        let cache = self.tables.get_mut(table).expect("inserted table cache");
+        let cached = cache.projections.iter().find(|projection| {
+            projection.names.iter().map(String::as_str).eq(names.iter().copied())
+        });
+        let storage = if let Some(projection) = cached {
+            projection.storage.clone()
+        } else {
+            // Formal rule DR-ProjectionReuse: an actually distinct cached subset proves its supersets distinct.
+            let proven_set = cache.projections.iter().any(|projection| {
+                projection.storage.capacity == relation.rows
+                    && projection.names.iter().all(|name| names.contains(&name.as_str()))
+            });
+            let values = if proven_set {
+                Vec::new()
+            } else {
+                names
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, name)| !names[..*index].contains(name))
+                    .map(|(_, name)| self.manifest.read_column(table, name))
+                    .collect::<Result<Vec<_>>>()?
+            };
+            let selected = if proven_set {
+                None
+            } else {
+                gpu_compress_host::unique_rows(&values, relation.rows)?
+            };
+            let rows = selected.as_ref().map_or(relation.rows, Vec::len);
+            let mut values = values.into_iter();
+            let mut scratch = Vec::new();
+            let mut columns: Vec<Arc<EncodedColumn>> = Vec::with_capacity(names.len());
+            for (index, &name) in names.iter().enumerate() {
+                if let Some(previous) = names[..index].iter().position(|&previous| previous == name) {
+                    columns.push(columns[previous].clone());
+                    continue;
+                }
+                let raw = values.next();
+                if selected.is_none()
+                    && let Some(column) = cache.columns.get(name)
+                {
+                    columns.push(column.clone());
+                    continue;
+                }
+                let raw = match raw {
+                    Some(values) => values,
+                    None => self.manifest.read_column(table, name)?,
+                };
+                let projected = if let Some(selected) = &selected {
+                    scratch.clear();
+                    scratch.extend(selected.iter().map(|&row| raw[row as usize]));
+                    scratch.as_slice()
+                } else {
+                    raw.as_slice()
+                };
+                let column = Arc::new(EncodedColumn::from_host(
+                    self.pool.clone(), projected, Codec::For,
+                )?);
+                if selected.is_none() {
+                    cache.columns.insert(name.to_owned(), column.clone());
+                }
+                columns.push(column);
+            }
+            let views: Vec<ColumnView> = columns
+                .iter()
+                .map(|column| unsafe { column.view() })
+                .collect();
+            let bounds = columns.iter().map(|column| column.bounds()).collect();
+            let storage = Table {
+                columns,
+                views: Arc::new(Buffer::from_host(self.pool.clone(), &views)?),
+                metadata: Arc::new(Buffer::from_host(
+                    self.pool.clone(),
+                    &[OutputCount {
+                        rows: rows as u64,
+                        error: 0,
+                        padding: 0,
+                    }],
+                )?),
+                capacity: rows,
+                bounds,
+                statuses: Vec::new(),
+            };
+            cache.projections.push(CachedProjection {
+                names: names.iter().map(|name| (*name).to_owned()).collect(),
+                storage: storage.clone(),
+            });
+            storage
         };
         // SAFETY: generated bindings use the manifest's scalar lane ABI and
         // column order, including transparent Decimal/Date values. All views,

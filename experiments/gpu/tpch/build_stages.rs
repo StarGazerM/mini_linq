@@ -78,10 +78,6 @@ pub fn compile(
             .iter()
             .map(|(name, publication)| (name.clone(), publication.domains.clone()))
             .collect();
-        kernel
-            .evidence
-            .facts
-            .extend(advice::Pipeline::staged_keys(query, index));
         let mut pipeline = if let Some(pipeline) = override_pipeline {
             pipeline.clone()
         } else if mode == "automatic" {

@@ -50,6 +50,25 @@ clears a `Bulk` layout, before filling it from that batch. The recorded
 operations. The same realization suite checks that canonicalization precedes
 and supplies layouts, frozen keys, and outputs.
 
+Every compiler input contains distinct complete rows at the CQ boundary, not
+merely a set interpretation of duplicate physical rows. Raw DOOP loading uses
+in-place full-row `sort_unstable` followed by `dedup` before query timing;
+the CPU harness includes that work in `load_seconds`, not `compute_seconds`.
+CPU Datalog binding
+admission still builds canonical storage and only publishes newly admitted rows
+to other layouts before any hole executes; duplicate raw bindings therefore
+cannot reach a CQ read. This storage preparation is separate from the loader's
+sort/dedup cost. Consumer-canonical context remains checked, while optional
+host-set certificates and their discharged facts are absent.
+GPU Datalog similarly packs/uploads EDB rows and runs full-key sort/unique
+admission against empty canonical storage before publishing hole inputs.
+Its `sorted_unique`/`unique_permutation` admitted-order records are retained:
+they control ordering, sort reuse and publication of storage batches, not
+compiler input setness. CPU binding construction remains inside engine compute
+time. GPU packing/upload/sorting remains inside end-to-end evaluation (setup),
+while raw fact loading is excluded. Removing proof annotations removes neither
+storage preparation nor its accounting. No loader timing is claimed here.
+
 ### Non-exact conformance and decisions without a governing rule
 
 | Rule / inventory | TeX file:line | Opened code anchor | Premises as written | What the code checks/does | Status | Invariant maintained |
@@ -78,7 +97,6 @@ and supplies layouts, frozen keys, and outputs.
 | WF-DL-Incremental — `I185`, implementation | `doc/formal/datalog.tex:109-110` | `features/datalog/languages/dl-incremental/src/lib.rs:192-273,288-330` | `WF_Strata(S)`; valid deltas, erasure and seminaive covering coverage. | Checks Strata, fresh IDB delta declarations, seed/delta classification, variant CQ contracts, exact erasure and at-least-once changing-position coverage. | exact | Checked covering semi-naive expansion |
 | DL-OccurrenceOrder — `I212`, implementation | `doc/formal/datalog.tex:798-804` | `features/datalog/languages/dl-incremental/src/lib.rs:158-188,218-261`; inventory pass anchor `features/datalog/passes/incremental/src/lib.rs:273-280` | Permutation of all positions; positions outside first positive interval fixed; interval maps to itself; `WF_CQ(V)`; inverse permutation of delta erasure equals source query. | Checks a full permutation, confines movement to the first contiguous positive interval, restores selected delta and source order, and compares the complete query. Pass delegates to the target contract. | exact | No occurrence moves across Rust/negative barriers |
 | WF-DL-Storage — `I187`, implementation | `doc/formal/datalog.tex:214-215` | `features/datalog/languages/dl-storage/src/lib.rs:280-342`; `features/datalog/languages/dl-storage/src/layouts.rs:10-159`; `features/datalog/languages/dl-storage/src/provider.rs` (`check_table`) | `WF_Incremental(I)`; complete providers, usable reads and maintained layouts; token `reads`/`supports` listed once, supports only with `exact`. | Checks provider coverage, relation-kind reserved fields, delta/next move compatibility, policies, permutations, key availability, full/delta version identity, read coverage and negative projections; the token table's declared host reads and supports are duplicate-free and supports require an `exact` read. No Rust type is inspected. | exact, conditional on opaque provider laws | Every occurrence has a usable maintained representation |
-| DL-HostCanonical — `I166`, implementation | `doc/formal/datalog.tex:264-270` | `features/datalog/languages/dl-storage/src/lib.rs:195-275`; `features/datalog/languages/dl-round/src/lib.rs:714-800` | Storage well formed; host certified; provenance is canonical layout/admitted delta/maintained layout/collected keys; operations satisfy provider laws. | Checks certificate roots (canonical certificates name the canonical layout's permutation; layout and negation certificates require a canonical root), complete headings/permutations and maintenance provenance; Round discharges facts only for certified hosts actually read. Provider laws remain explicit external premises. | exact, conditional on provider laws | Only justified hosts discharge uniqueness facts |
 | WF-DL-Hole — implementation | `doc/formal/datalog.tex` (WF-DL-Hole) | `features/datalog/languages/dl-round/src/lib.rs` (`check_pipeline`) | CQ well formed; terminal registry matches interface; recorded lower packet equals facts; any planning owner precedes lower; recorded answer ownership is sound (borrowed only where DL-AnswerOwnership admits a borrow; owned always). | Checks those premises without owner path discovery or rerunning fork. | exact | Calling convention and invocation ownership are checked records |
 | DL-AnswerOwnership — implementation | `doc/formal/datalog.tex` (DL-AnswerOwnership) | `features/datalog/languages/dl-round/src/lib.rs` (`answer_ownership`); `features/datalog/passes/fork/src/lib.rs` | Host interface, head variable whose defining (first top-level, written-order) binder is a positive atom ⇒ a borrow exists; batch ⇒ none. | Fork records borrowed exactly where a borrow exists; WF-DL-Hole admits any sound record (rejects a borrow claim on a computed, generator-defined or batch column); no Rust type is read. | exact, conditional on the CQ terminal yielding stored columns as `&T` | Round printers know each answer column's representation |
 | EXT-ActiveDomain | `doc/formal/datalog.tex` (EXT-ActiveDomain) | `features/extensions/cq-ext-recursion/src/expansion.rs` (`domain`) | Plain-variable heads from positive atoms; linear steps; nonempty seeds and steps. | Checks relational syntax and membership, rejecting even Rust copy spellings rather than interpreting them. | exact | Finite active domain under finite inputs and faithful Clone |

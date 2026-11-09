@@ -810,17 +810,6 @@ fn blocks_restricted_source_literals_reject_before_printing() {
 }
 
 #[test]
-fn blocks_host_set_requires_an_already_discharged_premise() {
-    let mut source = block_source();
-    source.program.host_sets.push(syn::parse_quote!(host_set R;));
-    cq_structure_selection::compile(&source).unwrap();
-    assert!(cq_structure_selection::compile_with(&source, block_advice()).is_err());
-    source.program.host_sets[0] = syn::parse_quote!(host_set R discharged;);
-    let (physical, selected) = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
-    cq_structure_selection::check(&physical, &selected).unwrap();
-}
-
-#[test]
 fn blocks_external_consumer_preserves_witness_values_and_owned_computations() {
     let source: physical::Program = syn::parse_quote! { physical {
         relation R(a: Alias [17], b: Alias [17]);
@@ -837,7 +826,6 @@ fn blocks_external_consumer_preserves_witness_values_and_owned_computations() {
     };
     let (physical, selected) = cq_structure_selection::compile_with_consumer(&source, block_advice(), Some(&demand)).unwrap();
     assert_eq!(physical, source);
-    assert!(physical.program.host_sets.is_empty());
     assert!(physical.program.consumer_canonical.is_none());
     let reads = &selected.encoded.blocks.reads;
     assert!(!reads.contains_key("rows"));

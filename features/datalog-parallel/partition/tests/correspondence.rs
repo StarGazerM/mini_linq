@@ -136,7 +136,7 @@ fn partition_metadata_selects_flat_slices_and_preserves_schemas() {
 }
 
 #[test]
-fn partition_renames_only_certified_scan_facts_and_preserves_admission_owners() {
+fn partition_preserves_consumer_context_and_admission_owners() {
     let source = authored();
     let target = compile_sharded(&source).unwrap();
     for (before, after) in source
@@ -156,23 +156,8 @@ fn partition_renames_only_certified_scan_facts_and_preserves_admission_owners() 
         let before = &source.holes[rule.hole];
         let after = &target.round.holes[rule.hole];
         assert_eq!(before.lower, after.lower);
-        let mut expected = before.facts.clone();
-        if let Some(scan) = &rule.scan {
-            let binding = &target
-                .round
-                .execution
-                .iter()
-                .find(|entry| entry.hole == rule.hole)
-                .unwrap()
-                .binding;
-            assert!(
-                expected
-                    .discharged_host_sets
-                    .remove(&scan.binding.to_string())
-            );
-            assert!(expected.discharged_host_sets.insert(binding.to_string()));
-        }
-        assert_eq!(after.facts, expected);
+        let expected = &before.facts;
+        assert_eq!(&after.facts, expected);
         assert_eq!(
             after.pipeline.passes[after.lower].arguments.to_string(),
             expected.to_token_stream().to_string(),
@@ -183,42 +168,14 @@ fn partition_renames_only_certified_scan_facts_and_preserves_admission_owners() 
 }
 
 #[test]
-fn partition_rejects_lost_forged_or_stale_context_and_admission_owners() {
+fn partition_rejects_lost_context_and_admission_owners() {
     rejected(|target| {
         let hole = target.execution[0].hole;
         target.holes[hole].facts.consumer_canonical = false;
     });
     rejected(|target| {
-        let hole = target.execution[0].hole;
-        target.holes[hole].facts.discharged_host_sets.clear();
-    });
-    rejected(|target| {
-        let hole = target.execution[0].hole;
-        target.holes[hole]
-            .facts
-            .discharged_host_sets
-            .insert("forged".into());
-    });
-    rejected(|target| {
         let hole = &mut target.holes[target.execution[0].hole];
-        hole.pipeline.passes[hole.lower].arguments = quote!(consumer = canonical);
-    });
-    rejected(|target| {
-        let rule = &target.context.strata[0].seeds[0];
-        let scan = rule.scan.as_ref().unwrap();
-        let chunk = target
-            .execution
-            .iter()
-            .find(|entry| entry.hole == rule.hole)
-            .unwrap();
-        let hole = &mut target.holes[rule.hole];
-        hole.facts
-            .discharged_host_sets
-            .remove(&chunk.binding.to_string());
-        hole.facts
-            .discharged_host_sets
-            .insert(scan.binding.to_string());
-        hole.pipeline.passes[hole.lower].arguments = hole.facts.to_token_stream();
+        hole.pipeline.passes[hole.lower].arguments = quote!();
     });
     rejected(|target| {
         let head = target.context.strata[0].seeds[0].head;

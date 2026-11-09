@@ -50,7 +50,7 @@ tuple_row!(A, B, C, D, E);
 tuple_row!(A, B, C, D, E, F);
 tuple_row!(A, B, C, D, E, F, G);
 
-pub(crate) fn load<T: Row>(path: &Path) -> io::Result<Vec<T>> {
+pub(crate) fn load<T: Row + Ord>(path: &Path) -> io::Result<Vec<T>> {
     // The upstream harness treats omitted input relations as empty.
     let file = match File::open(path) {
         Ok(file) => file,
@@ -73,6 +73,9 @@ pub(crate) fn load<T: Row>(path: &Path) -> io::Result<Vec<T>> {
         })?);
         line.clear();
     }
+    // IO owns the full-row set boundary; query execution never certifies files.
+    rows.sort_unstable();
+    rows.dedup();
     Ok(rows)
 }
 
@@ -109,6 +112,15 @@ pub(crate) fn method_descriptors(
 mod tests {
     use super::*;
     use crate::interner::res;
+
+    #[test]
+    fn file_loading_deduplicates_complete_rows_not_leading_keys() {
+        let path = std::env::temp_dir().join(format!("doop-set-input-{}.facts", std::process::id()));
+        std::fs::write(&path, "2\t7\n1\t9\n2\t7\n1\t8\n").unwrap();
+        let rows = load::<(i32, i32)>(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(rows, [(1, 8), (1, 9), (2, 7)]);
+    }
 
     #[test]
     fn descriptors_join_projections_and_deduplicate() {

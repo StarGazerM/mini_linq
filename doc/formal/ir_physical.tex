@@ -4,8 +4,7 @@
 \paragraph{Grammar.} A complete standalone program.
 \begin{lstlisting}
 Physical ::= physical { Decl* Fact* Def* return [canon] [dedup] r as Head; }
-Fact ::= host_set R [discharged];
-       | consumer canonical;
+Fact ::= consumer canonical;
 Def ::= r = (pipe | let | exists) [canon] Op;
 Op  ::= unit | rename R {..} [constants {source = literal, ...}]
       | select ... | point select ... | range select ...
@@ -158,16 +157,64 @@ with the answer identity index (\code{r head}) and never recomputes it.
 
 \paragraph{Canonical placement.}
 Physical owns canonical boundaries; later stages consume their recorded flags.
-Let $K_t(r)$ be the optional uniqueness key inferred from the actual Physical
-operators and flags. Unit has the empty key; a rename of a checked
-\code{host_set} has its full heading. Probe/merge combine both operand keys;
-semi/anti inherit the left key; selection, scalar bind and guard inherit their
-input key. Generator bind has no inherited key. Projection inherits only a
-key contained in its retained heading. Group has its grouping columns as key
-(captured keys are fixed host values). Union alone has no inherited key,
-including a union with disjoint arms: disjointness does not prove uniqueness
-within an arm. A recorded \code{canon} supplies the full heading when no key
-is inherited.
+Let $K_t(r)$ be the optional uniqueness key derived by one analysis of the
+actual Physical program, its set inputs, and recorded boundaries.
+Write $H(r)$ for its heading and $\bot$ for an unknown key. The following
+transfers are shared by local checking and boundary placement; neither
+key advice nor a second lowering analysis supplies premises.
+\begin{mathpar}
+\Rule{PH-UniqueUnit}{r=\operatorname{unit}}{K_t(r)=\varnothing}
+\and
+\Rule{PH-UniqueJoin}{r=l\Join s\quad K_t(l)\ne\bot\quad K_t(s)\ne\bot}
+ {K_t(r)=K_t(l)\cup K_t(s)}
+\and
+\Rule{PH-UniqueAnti}{r=\operatorname{anti}(l,s)\ \lor\
+ r=\operatorname{semi}(l,s)}{K_t(r)=K_t(l)}
+\and
+\Rule{PH-UniqueFilter}{r=\operatorname{guard}(s)\ \lor\
+ r=\operatorname{bind}_{scalar}(s)}{K_t(r)=K_t(s)}
+\and
+\Rule{PH-UniqueSelect}{r=\sigma_\theta(s)\quad K_t(s)\ne\bot\quad
+ C=\{c\mid(c=v)\in\theta,\ v\text{ is literal or query-closed}\}}
+ {K_t(r)=K_t(s)\setminus C}
+\and
+\Rule{PH-UniqueGenerator}{r=\operatorname{bind}_{for}(s)}{K_t(r)=\bot}
+\and
+\Rule{PH-UniqueProject}{r=\pi_H(s)\quad K_t(s)\subseteq H}
+ {K_t(r)=K_t(s)}
+\and
+\Rule{PH-UniqueProjectDrop}{r=\pi_H(s)\quad
+ K_t(s)=\bot\ \lor\ K_t(s)\not\subseteq H}{K_t(r)=\bot}
+\and
+\Rule{PH-UniqueUnion}{r=\bigcup_i s_i\quad
+ \mathsf{operatorDisjoint}(r)\quad\forall i.\ K_t(s_i)\ne\bot}
+ {K_t(r)=H(r)}
+\and
+\Rule{PH-UniqueCanon}{r.\mathsf{canon}\quad K_t(r)=\bot}
+ {K_t(r)=H(r)}
+\and
+\Rule{PH-UniqueGroup}{r=\operatorname{group}_{G}(s)}
+ {K_t(r)=G\cap H(r)}
+\end{mathpar}
+PH-UniqueInput supplies the rename case: every input column is mapped or
+constrained, so renaming an input set has its full output heading as key.
+Union has no key unless PH-UniqueUnion applies; disjointness alone does not
+prove uniqueness inside an arm. Capture keys are fixed host values, not columns.
+Write $x\preceq_C y$ when every row of $x$ agrees on $C$ with a row of $y$.
+The proof is reflexive and requires $C$ to remain in every intervening heading.
+Selection, guard, scalar or generator bind, projection, semi and anti preserve
+the input (left) relation; natural join preserves either operand; union
+preserves a relation common to every arm. No lineage is inferred through group.
+These are support-inclusion facts, independent of uniqueness.
+\begin{mathpar}
+\Rule{PH-DisjointAnti}{
+ \forall i<j.\ \exists a=\operatorname{anti}_C(l,b)\in D.\
+ (s_i\preceq_C a\land s_j\preceq_C b)\ \lor\
+ (s_j\preceq_C a\land s_i\preceq_C b)}
+ {\mathsf{operatorDisjoint}(\bigcup_i s_i)}
+\end{mathpar}
+A fallback origin annotation alone proves nothing: the actual anti graph and
+column-preserving paths must establish every pair's exclusion.
 \begin{mathpar}
 \Rule{PH-CanonPlacement}{
  \forall g=\operatorname{group}(r,\ldots)\in D.\ K_t(r)\ne\bot\\
@@ -181,28 +228,12 @@ or a return to a canonical consumer, is admissible subject to PH-Canon's
 storage modes. Answer dedup for a collapsing computed head remains the
 separate PH-HeadDedup obligation.
 
-The existing default lowering uses an operator-key traversal $K_L$ and its
-set $U$ of results whose keys were inherited. Its transfers are those above,
-except that a nondisjoint binding union is assigned its full heading because
-lowering records canon there. Write $B(r)$ when $r$ is a union with no origin
-or a nonempty origin interface, $D_s$ for unions proved disjoint by fallback
-construction, $G$ for group inputs, $c$ for the consumer-canonical fact, and
-$n(r)$ for operand uses plus the return use. The exact defaults are
-\[
-\begin{aligned}
-\mathsf{canon}_L(r)={}&(r\in G\land r\notin U)\\
- &{}\lor(r=o\land(\neg c\lor n(r)>1)\land r\notin U\land r\notin D_s)\\
- &{}\lor(B(r)\land r\notin D_s),\\
-\mathsf{returnCanon}_L={}&\neg c\land o\notin U\land o\in D_s .
-\end{aligned}
-\]
-If a result has no inherited key and is the returned result, the traversal
-seeds its full heading for subsequent definitions without adding it to $U$.
-The traversal does not feed group-input canon decisions back into $U$.
-These details describe the current constructor, not additional checker
-restrictions. In particular, neither a heading drop alone nor a relation
-declaration is a canonicality policy. No Sequence pass may remove a recorded
-boundary because a group follows it.
+Default lowering invokes the shared Physical analysis on its operator graph.
+It records binding-union boundaries unless the arms are operator-disjoint,
+plus missing group-input and return boundaries, propagating each effective
+boundary's key to later operators. A canonical consumer owns only the return.
+The checker analyzes the submitted program, not the producer's choices.
+No Sequence pass may remove a recorded boundary because a group follows it.
 
 \paragraph{Smallest candidate intersection.}
 Let $p$ be the outer valuation and $v$ one new column. An introducing probe
@@ -281,29 +312,25 @@ move by value into that reader (STR-RowsByValue).
 Such a canon result is a canonical stream, as a canon pipe was; a merge on it
 would add an ordered index the probe does not need. Modes are never changed.
 
-\paragraph{Checked host sets.}
-The opt-in Physical rewrite \code{cq_rewrites::host_sets(R,...)} consumes
-relation-name advice and records \code{host_set R;} in the program text.
-Each host-set fact names a used declared host, occurs once, and requires
-admissible Leibniz equality on every declared column. It is not a host-type
-inference or an unchecked assertion: a certified fact requires the exact
-runtime certificate obligation \textsc{IF-HostSet}; a \code{discharged} fact
-requires the invoking compiler's proof (\textsc{CTX-Discharge}).
-Host-set and consumer facts may be interleaved in the fact prefix.
-Section~\ref{sec:context} specifies their admission and discharge.
+\paragraph{Input sets.}
+Every input relation is a set at the compiler boundary: its physical traversal
+enumerates each complete row once. Producing that representation is the
+IO/load layer's responsibility, by deduplicating or verifying complete rows
+before query execution. It is not an optional compiler fact, context flag,
+trusted partial key, or query-time certificate. Raw duplicate-bearing data
+must cross this IO boundary before it is a relation input.
 \begin{mathpar}
-\Rule{PH-HostSet}{\code{host\_set R}\in t\quad r=\mathsf{rename}(R)\quad
- H=\mathsf{heading}(r)}
+\Rule{PH-UniqueInput}{r=\mathsf{rename}(R)\quad
+ R\in\mathsf{inputs}(t)\quad H=\mathsf{heading}(r)}
  {\mathsf{key}(r)=H}
 \end{mathpar}
-Join combines operand keys; projection preserves a key only when it retains
-every key column. A returned heading containing the inherited key needs no
-\code{canon}; a projection dropping that key still does. The rewrite removes
-only boundaries implied by this transfer, leaving all other decisions intact.
-The current \code{smallest} intersection law denotes Set. In bag/K-relation
-semantics, replacing candidate enumeration by membership also requires this
-checked set fact or a derived uniqueness key on the candidate source;
-multiplicity gating belongs to the future K-relation contract.
+Rename maps or constrains every input column, so no varying input column is
+lost. Joins combine operand keys; projection preserves a key only when it
+retains every key column. A returned heading retaining the key needs no
+\code{canon}; a projection dropping it still does. The input contract proves
+only full-row uniqueness, never uniqueness on an arbitrary proper subset.
+The current \code{smallest} intersection law denotes Set; bag/K-relation
+semantics require a separate contract and are not admitted here.
 
 \paragraph{Meaning.} Erasure to RA prime: probe and merge are joins, semi is a
 semijoin, point/range are selections, modes and canon flags are dropped, union

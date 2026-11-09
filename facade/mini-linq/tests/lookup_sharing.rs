@@ -3,14 +3,14 @@
 
 #[test]
 fn shared_lookup_expands_ranges_in_scalar_order() {
-    let left = [(0_i32,), (2,), (1,), (3,), (2,), (4,)];
+    let left = [(0_i32, 0_i32), (2, 0), (1, 0), (3, 0), (2, 1), (4, 0)];
     let right = [(2_i32, 20_i32), (1, 11), (2, 21), (2, 22), (4, 40)];
     cq_storage::counters::reset();
     let result: Vec<_> = mini_linq::passes::sequence! {
         pipeline { mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
-            relation L(k:i32) = (left); relation R(k:i32,v:i32) = (right);
-            l = pipe rename L {k -> k};
+            relation L(k:i32,witness:i32) = (left); relation R(k:i32,v:i32) = (right);
+            l = pipe rename L {k -> k,witness -> witness};
             r = let rename R {k -> k,v -> v};
             s = pipe semi eager [k] l,r;
             kept = pipe select s if (k >= 1);

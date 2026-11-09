@@ -836,28 +836,6 @@ mod tests {
         }, tokens)
     }
 
-    #[test]
-    fn certificates_distinguish_local_checks_from_discharged_facts() {
-        for (fact, certified) in [
-            (quote!(host_set R;), true),
-            (quote!(host_set R discharged;), false),
-        ] {
-            let (physical, module) = parse_stack(quote! {
-                physical {
-                    relation R(a:i32); #fact
-                    r = pipe rename R {a -> a};
-                    return r as answer(a);
-                }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
-            })
-            .unwrap();
-            let printed = compile(&physical, &module, None)
-                .unwrap()
-                .to_token_stream()
-                .to_string();
-            assert_eq!(printed.contains("__cq_host_set_seen"), certified);
-        }
-    }
 
     #[test]
     fn canonical_consumer_expansion_has_no_local_answer_set() {

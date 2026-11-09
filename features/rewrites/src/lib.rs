@@ -104,7 +104,6 @@
 //! |---|---|---|
 //! | `merge_joins` | `probe` becomes `merge` | Nonempty Ord key; each side is retained, a reusable host, or a merge stream ordered on that same key. Native ordered host reads still require `OrderedRead` from rustc. |
 //! | `canon_prefixes` | Adds `canon` on a projection | Drops columns without retaining an inferred uniqueness key; retained columns satisfy the language's Leibniz checks. Existing canonical boundaries remain. |
-//! | `host_sets(E, ...)` | Records `host_set E;` and removes canon implied by full-heading keys | Names used host relations. Every printer checks exact input distinctness before execution and fails on duplicates; this is not an unchecked promise. Dropping a key still needs canon. |
 //! | `smallest_intersections` | Hoists independent relational definitions and records `probe smallest` | The public Physical `intersection` law accepts a maximal k-way probe/check chain, k >= 2, and every interposed definition can move before the chain without moving Rust or breaking dependencies. |
 //! | `lazy_semijoins` | `semi eager` becomes `semi lazy` | The right input is a reusable host and all readers sharing its key are lazy membership reads after the rewrite. Named selections must include every eager peer. |
 //! | `build_host_reads` | Reusable host rename becomes retained `let` | Has keyed stream reads, including an empty Cartesian key, and no lazy membership reader. Keys and predicates are unchanged; selection records providers afterwards and rustc checks key capabilities. Const-only point/range scans remain host scans. |
@@ -122,9 +121,9 @@
 //! inadmissible result. `hoist` moves only the selected relational dependency
 //! closure; the remaining definitions retain their relative order. Other passes
 //! preserve definition order.
-//! `smallest_intersections` currently has Set semantics. For future bag/K-relation
-//! semantics, discarding candidate multiplicity additionally requires the checked
-//! `host_set` fact (or a derived uniqueness key); bag gating is not implicit here.
+//! `smallest_intersections` has Set semantics under the unconditional input-set
+//! contract. Future bag/K-relation inputs require a separate multiplicity law
+//! and are not admitted by this contract.
 //! Every provider binds the same one new column from a nonempty prefix. Retained
 //! providers receive two-level candidate directories; reusable hosts dispatch
 //! through their declared candidate/membership capabilities. At each prefix the
@@ -236,7 +235,7 @@
 //!         relation R(a: i32, b: i32) = (input);
 //!         r = pipe rename R { a -> x, b -> y };
 //!         projected = pipe project r keep { x };
-//!         return projected as answer(x);
+//!         return canon projected as answer(x);
 //!     }
 //! }.map(|(x,)| *x).collect();
 //! assert_eq!(output, vec![1]);
@@ -246,7 +245,7 @@
 //! oracles, and executable written-order refinement. Sixty generated tests enter
 //! at corpus IX or Physical and use the default lower/select/print macros. Other
 //! tests exercise active merge and smallest choices, custom runtime traits,
-//! representation obligations, exact IR fixtures, duplicates, and empty inputs.
+//! representation obligations, exact IR fixtures, set inputs, and empty inputs.
 //!
 //! The authored adjacent triangle's finite 48-wide fan test resets runtime counters after fixture/oracle
 //! construction and exhausts a fresh query before each snapshot:
@@ -267,7 +266,7 @@
 //! The mandatory `generated` regression uses `cq_planners::order(written, fine)`
 //! through the public macro pipeline, captures its selected Physical program,
 //! and checks its active smallest intersection, both contracts, and public
-//! correspondence. Executed triangle and fan answers, duplicates, and empty inputs
+//! correspondence. Executed triangle and fan answers, set inputs, and empty inputs
 //! agree with cq-testkit's CQ oracle. A generated query with opaque guards and a
 //! partial division bind retains the exact Rust definitions and positions after
 //! the active hoist, and refines executed written-order answers. The mandatory

@@ -59,8 +59,6 @@ crate::tpch_runtime::standalone_configs! { $;
             // coefficients, Date days, i64): the canonical rows record is the
             // packed sorted run (PL-PackedCanon) instead of a comparison sort.
             canon(packed);
-            // dbgen's line identity is retained by the loader and group valuation.
-            evidence { from authored("TPC-H dbgen line identity retained by loader") trusted_key Lineitem [l_orderkey, l_linenumber]; }
             struct Query;
             relation Lineitem(l_orderkey: i64, l_linenumber: i64,
                 l_returnflag: StringCode, l_linestatus: StringCode, l_quantity: Decimal,

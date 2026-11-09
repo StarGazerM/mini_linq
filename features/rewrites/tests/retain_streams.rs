@@ -65,10 +65,10 @@ fn hoisting_refuses_an_opaque_dependency() {
 }
 
 #[test]
-fn retained_prefix_preserves_answers_and_duplicates_until_canon() {
-    let a = [(1i64,), (2,), (1,)];
+fn retained_prefix_preserves_set_input_answers() {
+    let a = [(1i64,), (2,)];
     let b = [(1i64, 10i64), (1, 11), (2, 20), (3, 30)];
-    let c = [(10i64, 100i64), (11, 110), (20, 200), (10, 100)];
+    let c = [(10i64, 100i64), (11, 110), (20, 200)];
     macro_rules! run {
         ($($physical:tt)*) => {{
             let mut rows: Vec<_> = mini_linq::compile! {

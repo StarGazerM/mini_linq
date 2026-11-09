@@ -33,6 +33,8 @@ fn rows<const N: usize>(path: &Path) -> Result<Vec<[i64; N]>, Error> {
         result.push(row);
         line.clear();
     }
+    result.sort_unstable();
+    result.dedup();
     Ok(result)
 }
 pub fn load(path: &Path) -> Result<Facts, Error> {
@@ -169,4 +171,16 @@ pub fn load_with_meta(path: &Path, metadata: &Path) -> Result<Facts, Error> {
             .map(|r| (r[0], r[1], r[2], r[3]))
             .collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn file_inputs_are_full_row_sets() {
+        let path = std::env::temp_dir().join(format!("ddisasm-set-input-{}.csv", std::process::id()));
+        std::fs::write(&path, "2,7\n1,9\n2,7\n1,8\n").unwrap();
+        let rows = super::rows::<2>(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(rows, [[1, 8], [1, 9], [2, 7]]);
+    }
 }

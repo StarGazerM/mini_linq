@@ -417,3 +417,53 @@ fn explicit_slot_domains_bind_without_reencoding() {
     let bad = Domain { carrier: Width::W32, ..domain };
     assert!(matches!(table.bind_domains(&[bad]), Err(FormatError::Domain)));
 }
+
+#[test]
+fn input_set_boundary_compacts_full_encoded_rows_without_materializing_values() {
+    use cq_storage::scan::format::{Domain, DomainId};
+    let block_rows = BlockRows::new(1024).unwrap();
+    let domain = Domain {
+        id: DomainId { namespace: 7, version: 1 },
+        carrier: Width::W64,
+        equality: true,
+        order: true,
+    };
+    let first = [2, 1, 2, 1, 2].map(NeverMaterialize);
+    let second = [8_u64, 9, 8, 7, 6];
+    for summaries in [false, true] {
+        let mut first_column = ScanColumnBuilder::<NeverMaterialize, Bytes>::with_domain(
+            block_rows, summaries, summaries, domain,
+        ).unwrap();
+        first_column.extend(first);
+        let table = ScanTable::new((
+            first_column.finish(),
+            ScanColumn::<u64, Plain>::new(&second, block_rows, summaries),
+        )).into_set();
+        let rows: Vec<_> = table.scan_positions(0..table.len(), |_| {})
+            .map(|position| (
+                table.read_ordinal::<0>(position),
+                table.read_ordinal::<1>(position),
+            ))
+            .collect();
+        assert_eq!(rows, [(1, 7), (1, 9), (2, 6), (2, 8)]);
+        assert_eq!(table.column::<0>().declared_domain(), Some(domain));
+        assert_eq!(table.column::<0>().summaries().is_some(), summaries);
+        assert_eq!(table.column::<0>().vector_summaries().is_some(), summaries);
+        assert_eq!(table.column::<0>().summaries().map(|values| values[0]), summaries.then_some(MinMax { lo: 1, hi: 2 }));
+    }
+}
+
+#[test]
+fn distinct_encoded_inputs_keep_their_allocations_and_snapshots() {
+    for values in [vec![], vec![1_u64], vec![1, 2, 3], vec![3, 1, 2]] {
+        let table = ScanTable::new((
+            ScanColumn::<u64, Bytes>::new(&values, BlockRows::new(1024).unwrap(), false),
+        ));
+        let payload = table.column::<0>().payload().as_ptr();
+        let snapshot = table.snapshot();
+        let table = table.into_set();
+        assert_eq!(table.column::<0>().payload().as_ptr(), payload);
+        assert_eq!(table.snapshot(), snapshot);
+        assert_eq!(table.len(), values.len());
+    }
+}

@@ -1,8 +1,8 @@
 //! Caller-side, typed relation loading, independent of the query compiler.
 //!
 //! A generated [`Relation`] supplies column names and a tuple decoder from the
-//! authored relation declaration. [`Loader`] collects tuples or groups them by a
-//! caller-selected leading key prefix; [`Csv`] and, with the `parquet` feature,
+//! authored relation declaration. [`Loader`] canonicalizes complete rows or
+//! groups them by a caller-selected leading key prefix; [`Csv`] and, with the `parquet` feature,
 //! `Parquet` expose bounded batches. The default batch size is 2048 rows. CSV
 //! records are parsed once and released after each decoded batch. Parquet reads
 //! Arrow record batches and decodes primitive columns in bulk. The underlying
@@ -35,8 +35,8 @@
 //!
 //! `f64` loading preserves Rust's IEEE-754 values, including NaN and infinities.
 //! It is not totally ordered and does not implement `Eq`, `Ord`, or `Hash`:
-//! declarations using it may load tuples, but cannot use that field directly as
-//! a hash/ordered grouping key or in query plans requiring total ordering. No
+//! declarations using it may decode batches, but cannot use collected relation
+//! loaders, hash/ordered grouping keys or query plans requiring total ordering. No
 //! implicit wrapper changes the query language's comparison semantics.
 //!
 //! [`ZoneRows`] stores immutable decoded tuples with per-column block bounds.
@@ -54,7 +54,9 @@
 //! is hashed once, and only distinct dictionary entries allocate owned strings.
 //! Finalization sorts distinct entries and remaps integer IDs in the loaded rows.
 //! No source text is hashed or searched again during that remapping.
-//! Existing plain CSV/Parquet readers retain their original behavior.
+//! All collected CSV/Parquet/interned relations sort and deduplicate full rows
+//! once at load time. Grouped loaders deduplicate each complete key/payload
+//! pair. Bounded decoder batches remain raw streams, not compiler input sets.
 //!
 //! Codes preserve exact lexicographic string order within one column only.
 //! Column names must be unique across the retained dictionaries; joining codes
@@ -100,7 +102,7 @@ pub use intern::{
     Dictionaries, InternedField, InternedRelation, StringCode, StringDictionary, StringInterner,
     dictionary_where,
 };
-pub use loader::{Group, Loader};
+pub use loader::{Group, Loader, canonicalize};
 pub use scalar::{Date, Decimal};
 pub use zone::{ColumnAt, MinMax, NoBounds, ZoneField, ZoneMetadata, ZoneRows, ZoneSchema, column};
 

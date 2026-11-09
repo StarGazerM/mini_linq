@@ -196,6 +196,7 @@ pub(crate) fn check_grading_in(
         )?;
         checker.roots.push(root);
     }
+    checker.check_merge_inputs(&analysis.shapes)?;
     analysis.dispatches = checker.dispatches()?;
     // Formal rule PL-Distinct: record each canon boundary's graded level, the
     // level of the dispatch publishing its owner (else the owner's own grade).
@@ -360,6 +361,62 @@ impl<'a> Checker<'a> {
 
     fn name(&self, owner: usize) -> String {
         symbol_name(&self.program.sequence.definitions[owner].name)
+    }
+
+    // Formal rule BE-MergeInput: partition ancestry cannot stand in for a
+    // complete ordered provider; only a flat host publication closes it.
+    fn check_merge_inputs(&self, shapes: &BTreeMap<String, Vec<Len>>) -> syn::Result<()> {
+        use crate::structures::physical::Operator;
+        let mut partial = Vec::with_capacity(self.nodes.len());
+        let mut results: Vec<Option<&Ident>> = Vec::with_capacity(self.nodes.len());
+        for (index, node) in self.nodes.iter().enumerate() {
+            let input_partial = node.inputs.iter().any(|&input| partial[input]);
+            let source = node.inputs.first().and_then(|&input| results[input]);
+            let result = match node.term {
+                Term::Rows(name) | Term::Map(name, _) | Term::Compact(name, _)
+                | Term::Group(name, _) => Some(name),
+                Term::Lookup { .. } => self.lookup_readers
+                    .get(&self.lookup_slots[&(node.term as *const Term)])
+                    .and_then(|reader| match reader {
+                        crate::structures::ReaderRef::Result(name) => {
+                            self.physical.get(name).map(|definition| &definition.name)
+                        }
+                        _ => None,
+                    }),
+                _ => source,
+            };
+            if input_partial {
+                let mut current = match node.term {
+                    Term::Map(name, _) | Term::Compact(name, _) => Some(name),
+                    Term::Lookup { .. } => result,
+                    _ => None,
+                };
+                while let Some(name) = current {
+                    if source == Some(name) {
+                        break;
+                    }
+                    let Some(definition) = self.physical.get(&symbol_name(name)) else {
+                        break;
+                    };
+                    if matches!(definition.operator, Operator::Merge(..)) {
+                        return Err(self.error(node.owner,
+                            "BE-MergeInput: evaluate the complete ordered merge before tiling its output"));
+                    }
+                    if matches!(node.term, Term::Lookup { .. }) {
+                        break;
+                    }
+                    current = definition.operator.input();
+                }
+            }
+            let closes_partition = self.roots[node.owner] == index
+                && node.level == 0
+                && matches!(node.term, Term::Store { .. })
+                && shapes.get(&self.name(node.owner)).is_some_and(|shape| shape.len() == 1);
+            partial.push(!closes_partition
+                && (input_partial || matches!(node.term, Term::Tile { .. } | Term::PartitionK { .. })));
+            results.push(result);
+        }
+        Ok(())
     }
 
     fn reference(&self, name: &Ident, owner: usize, level: usize) -> syn::Result<usize> {

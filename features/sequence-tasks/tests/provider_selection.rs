@@ -177,7 +177,7 @@ fn positional_spine_preserves_raw_host_membership_at_host_when_retention_is_ille
     ]);
     for setup in [
         quote::quote! { let R: Vec<(i32,i32)> = vec![]; let S: Vec<(i32,)> = vec![]; },
-        quote::quote! { let R = vec![(1i32,2i32),(1,2),(2,3)]; let S = vec![(1i32,),(1,)]; },
+        quote::quote! { let R = vec![(1i32,2i32),(2,3)]; let S = vec![(1i32,)]; },
     ] {
         cq_sequence_conformance::assert_conformant_with_runtime(&source.physical, &source.structures, &source.program,
             &[Target::Sequential, Target::Tasks],
@@ -341,7 +341,7 @@ fn run_positional_selection(physical: cq_lang_sequence::structures::physical::Pr
                     (10i64, 1i64, 19950101i32),
                     (11, 2, 19941231),
                     (12, 3, 19961231),
-                    (10, 1, 19950101),
+                    (10, 1, 19950102),
                     (13, 4, 19970101),
                     (14, 5, 19960101),
                     (15, 6, 19960101),
@@ -428,7 +428,7 @@ fn positional_selection_keeps_its_recorded_constructor_through_tasks_catalog() {
     ]);
     for setup in [
         quote::quote! { let R: Vec<(i64,i64)> = vec![]; },
-        quote::quote! { let R = vec![(-1i64,9i64),(1,2),(1,2),(2,3),(0,8)]; },
+        quote::quote! { let R = vec![(-1i64,9i64),(1,2),(2,3),(0,8)]; },
     ] {
         cq_sequence_conformance::assert_conformant_with_runtime(&source.physical, &source.structures, &source.program,
             &[Target::Sequential, Target::Tasks],

@@ -3,6 +3,8 @@
 //! indexes, a user-defined index type, merge joins over compiler-built
 //! ordered maps, the acyclic planner's Yannakakis plan, and a bounded scan
 //! of an ordered host. Every query evaluates to an iterator of answers.
+//! Relation fixtures contain distinct full rows; duplicate answer witnesses
+//! come from joins and projections, not duplicate input rows.
 #![recursion_limit = "1024"]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -116,9 +118,10 @@ fn compiler_built_indexes_feed_the_pull_program() {
     let (l, r, s) = fixture();
     let actual: HashSet<_> = built::run(&l, &r, &s).into_iter().collect();
     assert_eq!(actual, oracle(&l, &r, &s));
-    // Canonical return: duplicated inputs do not duplicate answers.
-    let doubled: Vec<_> = l.iter().chain(&l).cloned().collect();
-    assert_eq!(built::run(&doubled, &r, &s).len(), oracle(&l, &r, &s).len());
+    // Distinct join witnesses project to the same answer.
+    let mut fanout = s.clone();
+    fanout.push((Value(11), Value(100)));
+    assert_eq!(built::run(&l, &r, &fanout).len(), oracle(&l, &r, &fanout).len());
 }
 
 /// A caller-selected provider builds a user index for materialized results.
@@ -305,7 +308,7 @@ mod computed {
 #[test]
 fn computed_columns_follow_the_head_order() {
     assert_eq!(
-        computed::run(&[(1, 2), (1, 2)], &[(2, 3)]),
+        computed::run(&[(1, 2), (1, 4)], &[(2, 3), (4, 3)]),
         vec![(&1, vec![1], &3)]
     );
 }
@@ -344,7 +347,7 @@ mod generic_canon {
 
 #[test]
 fn generic_prefix_canonicalization_preserves_total_guard_answers() {
-    let r = [(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
+    let r = [(1, 2), (1, 3), (2, 3), (4, 5)];
     let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
     let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
     let visits = std::cell::Cell::new(0);
@@ -427,8 +430,8 @@ fn generic_join_reads_multiple_host_keys_through_dispatch() {
 
 #[test]
 fn key_only_filtered_index_preserves_existential_answers_without_primary_keys() {
-    let l = [(1_i64,), (1,), (2,), (3,), (4,)];
-    let r = [(1_i64, 2_i64), (1, 3), (1, 3), (2, 0), (3, 2), (9, 5)];
+    let l = [(1_i64,), (2,), (3,), (4,)];
+    let r = [(1_i64, 2_i64), (1, 3), (2, 0), (3, 2), (9, 5)];
     let rows: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical {
@@ -515,10 +518,12 @@ mod wcoj {
     }
 
     #[test]
-    fn candidate_choice_preserves_nonempty_answers_with_duplicate_rows() {
-        let r = [(V(1), V(2)), (V(1), V(2)), (V(1), V(3)), (V(4), V(5))];
+    fn candidate_choice_preserves_nonempty_answers_with_canonicalized_inputs() {
+        let mut r = vec![(V(1), V(2)), (V(1), V(2)), (V(1), V(3)), (V(4), V(5))];
         let s = [(V(2), V(6)), (V(2), V(7)), (V(3), V(6)), (V(5), V(8))];
-        let t = [(V(1), V(6)), (V(1), V(6)), (V(4), V(8)), (V(4), V(9))];
+        let mut t = vec![(V(1), V(6)), (V(1), V(6)), (V(4), V(8)), (V(4), V(9))];
+        cq_load::canonicalize(&mut r);
+        cq_load::canonicalize(&mut t);
         let expected = oracle(&r, &s, &t);
         assert!(!expected.is_empty());
         for run in [binary::run, first::run, smallest::run] {

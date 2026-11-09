@@ -13,6 +13,11 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Physical checking, lowering and canonical rewrites share one operator-based
+  uniqueness analysis. Every input relation is a set by the IO contract;
+  collected loaders canonicalize complete rows before query execution.
+  Compiler host-set certificates and Sequence trusted/planning key annotations
+  are removed. Group and output boundary obligations are checked locally.
 - Physical lowering alone places valuation canonicalization. Sequence executes
   the recorded canon boundaries; the `group_without_canon` rewrite and its
   separate canon-free uniqueness proof state have been removed. Grouping still

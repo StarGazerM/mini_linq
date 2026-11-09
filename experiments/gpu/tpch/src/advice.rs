@@ -134,44 +134,6 @@ impl Pipeline {
         })
     }
 
-    /// Explicitly trusted authored stage keys shared by automatic and advised schedules.
-    pub fn staged_keys(query: &str, stage: usize) -> Vec<cq_lang_sequence::EvidenceFact> {
-        let keys: &[(&str, &[&str])] = match (query, stage) {
-            ("h02", 1) => &[("MinimumCost", &["part_key"])],
-            ("h11", 1 | 2) => &[("Stock", &["part_key", "supplier_key"])],
-            ("h11", 3) => &[("PartValue", &["part_key"])],
-            ("h12", 1) => &[("MatchingLines", &["order_key", "line_number"])],
-            ("h12", 2) => &[
-                ("MatchingLines", &["order_key", "line_number"]),
-                ("HighPriorities", &["name"]),
-            ],
-            ("h12", 3 | 4) => &[("Totals", &["shipmode"]), ("HighCounts", &["shipmode"])],
-            ("h15", 1 | 2) => &[("Revenue", &["supplier_key"])],
-            ("h18", 1) => &[("Quantity", &["order_key"])],
-            ("h20", 1) => &[("Shipped", &["part_key", "supplier_key"])],
-            _ => &[],
-        };
-        // Groups publish one row per key. MatchingLines retains the Lineitem
-        // identity through a unique Orders join; dictionary code sets are unique.
-        keys.iter()
-            .map(
-                |(relation, columns)| cq_lang_sequence::EvidenceFact::TrustedKey {
-                    source: cq_lang_sequence::EvidenceSource::Authored {
-                        provenance: syn::LitStr::new(
-                            &format!("TPC-H {query} stage {stage} publication contract"),
-                            proc_macro2::Span::call_site(),
-                        ),
-                    },
-                    subject: quote::format_ident!("{relation}"),
-                    columns: columns
-                        .iter()
-                        .map(|column| quote::format_ident!("{column}"))
-                        .collect(),
-                },
-            )
-            .collect()
-    }
-
     /// Stage-local authored or measured orders; historical measurements are in
     /// compare/tpch_statistics.md. Publications are ordinary relation inputs.
     pub fn staged(query: &str, stage: usize) -> Self {

@@ -74,9 +74,9 @@ fn retains_nonintegral_hosts_but_skips_lazy_membership() {
 }
 
 #[test]
-fn public_pipeline_preserves_duplicates_until_canon() {
-    let left = [(1i64,), (2,), (1,)];
-    let right = [(1i64, 8i64), (1, 9), (2, 7), (1, 8)];
+fn public_pipeline_preserves_set_input_answers() {
+    let left = [(1i64,), (2,)];
+    let right = [(1i64, 8i64), (1, 9), (2, 7)];
     let mut answer: Vec<_> = mini_linq::compile! {
         pipeline {
             physical = [cq_rewrites::build_host_reads];

@@ -668,9 +668,8 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
             hole.facts,
         );
         assert!(hole.facts.consumer_canonical);
-        assert_eq!(hole.facts.discharged_host_sets.len(), 1);
 
-        // Author an independent IX projection of the actual certified input.
+        // Author an independent IX projection of an actual positive input.
         // The non-injective head still needs no per-hole result canonicalizer:
         // the rule admission/key-set consumer supplies that boundary.
         let declaration = hole
@@ -678,9 +677,10 @@ fn rule_and_key_lower_continuations_carry_exact_recorded_context() {
             .declarations
             .iter()
             .find(|declaration| {
-                hole.facts
-                    .discharged_host_sets
-                    .contains(&declaration.name.to_string())
+                hole.cq.query.body.iter().any(|item| {
+                    matches!(item, round::cq::BodyItem::Positive { atom }
+                        if atom.relation == declaration.name)
+                })
             })
             .unwrap();
         let host = &declaration.name;

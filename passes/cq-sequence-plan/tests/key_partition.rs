@@ -582,13 +582,12 @@ fn global_partial_advice_roundtrips_and_rejects_zero_tile_width() {
 
 #[test]
 fn empty_global_partial_plans_keep_the_singleton_identity_shape() {
-    for unique in [false, true] {
+    for canonicalized in [false, true] {
         let (mut physical, mut structures, mut source) = grouped(true);
-        source.evidence = if unique {
-            syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count Lineitem = 0; trusted_key Lineitem [orderkey, linenumber]; })
-        } else {
-            syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count Lineitem = 0; })
-        };
+        source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { count Lineitem = 0; });
+        if canonicalized {
+            source.sequence.definitions[0].term = syn::parse_quote!(store canon rows lineitem);
+        }
         let machine = machine(Some(8));
         let planned =
             decompose_with_key_partitions(&physical, &structures, &source, &machine, &catalog(), &[policy("result", true)])
@@ -1356,7 +1355,6 @@ fn unique_keyed_groups_stream_tiles_through_single_use_valuation_spines() {
         panic!("group fixture")
     };
     group.input = syn::parse_quote!(selected);
-    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     source.sequence.definitions = vec![
         syn::parse_quote!(input = rows lineitem;),
         syn::parse_quote!(filtered = compact selected input;),
@@ -1426,7 +1424,6 @@ fn unique_keyed_groups_stream_tiles_through_single_use_valuation_spines() {
 #[test]
 fn streaming_partial_group_preserves_existing_stores_and_rejects_shared_pipes() {
     let (mut physical, mut structures, mut source) = grouped(false);
-    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     source.sequence.definitions.last_mut().unwrap().term =
         syn::parse_quote!(store group totals input);
     let (rewritten_physical, rewritten_structures, rewritten) = key_partition(&physical, &structures, &source, quote!(result, unused, [], 8)).unwrap();
@@ -1468,7 +1465,6 @@ fn total_rust_partial_group_streams_without_an_extra_host_publication() {
         panic!("group fixture")
     };
     group.input = syn::parse_quote!(mapped);
-    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     source.sequence.definitions = vec![
         syn::parse_quote!(input = store rows lineitem;),
         syn::parse_quote!(valuations = map mapped input;),
@@ -1523,7 +1519,6 @@ fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
         source.sequence.definitions.last_mut().unwrap().term =
             syn::parse_quote!(store group totals input);
         source.evidence = syn::parse2(quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") {
-            trusted_key Lineitem [orderkey, linenumber];
             count Lineitem = 4096;
             count totals = #groups;
         }))
@@ -1562,7 +1557,6 @@ fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
 #[test]
 fn unknown_partial_map_merge_is_symbolic_not_free() {
     let (mut physical, mut structures, mut source) = grouped(false);
-    source.evidence = syn::parse_quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") { trusted_key Lineitem [orderkey, linenumber]; });
     source.sequence.definitions.last_mut().unwrap().term =
         syn::parse_quote!(store group totals input);
     let planned = decompose(&physical, &structures, &source, &machine(Some(8)), &catalog()).unwrap();

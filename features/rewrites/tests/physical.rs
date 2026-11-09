@@ -208,13 +208,43 @@ fn canon_output_is_pinned_and_existing_boundaries_are_preserved() {
 #[test]
 fn canon_avoids_projection_that_preserves_an_inferred_key() {
     let source: ir::Program = syn::parse_quote!(physical {
-        relation R(a:i32); r = let canon rename R {a -> x};
+        relation R(a:i32); r = let rename R {a -> x};
         b = pipe bind r with y:i32 = (*x + 1);
         p = pipe project b keep {x}; return p as answer(x);
     });
     assert_eq!(canon_prefixes(&source, quote!()).unwrap(), source);
     assert_eq!(canon_prefixes(&source, quote!(p)).unwrap(), source);
     cq_structure_selection::compile(&source).unwrap();
+}
+
+#[test]
+fn canon_prefixes_propagates_new_boundaries_before_later_decisions() {
+    let source: ir::Program = syn::parse_quote!(physical {
+        relation R(a:i32,b:i32,c:i32);
+        r = pipe rename R {a -> x,b -> y,c -> z};
+        p = pipe project r keep {x,y};
+        b = pipe bind p with extra:i32 = (*x + 1);
+        q = pipe project b keep {x,y};
+        return canon q as answer(x,y);
+    });
+    let target = canon_prefixes(&source, quote!(all)).unwrap();
+    assert!(target.program.definitions[1].canon.is_some());
+    assert!(target.program.definitions[3].canon.is_none());
+}
+
+#[test]
+fn canonical_projects_preserves_needed_upstream_union_boundary() {
+    let source: ir::Program = syn::parse_quote!(physical {
+        relation R(a:i32);
+        r = let rename R {a -> x};
+        copy = pipe project r keep {x};
+        combined = let canon union r,copy;
+        projected = pipe project combined keep {x};
+        return projected as answer(x);
+    });
+    let target = cq_testkit::rewrites::canonical_projects(&source).unwrap();
+    assert_eq!(target, source);
+    ir::contract::check(&target).unwrap();
 }
 
 #[test]

@@ -37,17 +37,19 @@ mini_linq::interned_relation_loaders! {
 pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {
     assert!(CONFIGS.contains(&config), "unknown H13 configuration");
     let mut dictionaries = cq_load::Dictionaries::default();
+    let customer = <relation_loader!(Customer)>::parquet_interned(
+        root.join("customer.parquet"),
+        cq_load::ParquetOptions::default(),
+        &mut dictionaries,
+    )?;
+    let orders = <relation_loader!(Orders)>::parquet_interned(
+        root.join("orders.parquet"),
+        cq_load::ParquetOptions::default(),
+        &mut dictionaries,
+    )?;
     Ok(Data {
-        customer: <relation_loader!(Customer)>::parquet_interned(
-            root.join("customer.parquet"),
-            cq_load::ParquetOptions::default(),
-            &mut dictionaries,
-        )?,
-        orders: <relation_loader!(Orders)>::parquet_interned(
-            root.join("orders.parquet"),
-            cq_load::ParquetOptions::default(),
-            &mut dictionaries,
-        )?,
+        customer,
+        orders,
         qualified_comments: cq_storage::DenseMembership::<_, 16777216>::from_dense_keys(
             cq_load::dictionary_where(&dictionaries, "o_comment", |value: &str| {
                 !value
@@ -65,12 +67,12 @@ crate::tpch_runtime::standalone_configs! { $;
     pub(super) fn run(data: &Data, config: &str) -> Vec<Answer> {
         assert!(CONFIGS.contains(&config), "unknown H13 configuration");
         let Customer = data.customer.as_slice();
-        // Project before canonical valuation: distinct comments do not make
-        // distinct order/customer pairs, and no input key is assumed.
-        let QualifiedOrders: Vec<(i64, i64)> = data.orders.iter()
+        // Query-derived projection owns its DISTINCT inside the query timer.
+        let mut QualifiedOrders: Vec<(i64, i64)> = data.orders.iter()
             .filter(|(_, _, comment)| cq_storage::ExactMembership::contains(&data.qualified_comments, comment))
             .map(|(order_key, customer_key, _)| (*order_key, *customer_key))
             .collect();
+        cq_load::canonicalize(&mut QualifiedOrders);
         let counts: Vec<Answer> = query! {
             plan(no_reduce, order(Customer, QualifiedOrders));
             struct Counts;

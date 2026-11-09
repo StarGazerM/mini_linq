@@ -58,18 +58,17 @@ fn generated_fine_triangle_and_fan_have_active_smallest_intersections() {
 }
 
 #[test]
-fn generated_triangle_and_fan_answers_match_cq_oracle_with_duplicates_and_empty_inputs() {
+fn generated_triangle_and_fan_answers_match_cq_oracle_with_set_and_empty_inputs() {
     let triangle: Inputs = [
-        vec![(1, 10), (1, 10), (1, 11), (2, 20), (3, 30)],
-        vec![(10, 100), (10, 100), (11, 101), (20, 200), (30, 300)],
-        vec![(1, 100), (1, 100), (2, 200), (9, 900)],
+        vec![(1, 10), (1, 11), (2, 20), (3, 30)],
+        vec![(10, 100), (11, 101), (20, 200), (30, 300)],
+        vec![(1, 100), (2, 200), (9, 900)],
     ];
-    let mut duplicated_fan = fan(7);
-    for rows in &mut duplicated_fan {
-        rows.extend(rows.clone());
+    let mut reversed_fan = fan(7);
+    for rows in &mut reversed_fan {
         rows.reverse();
     }
-    for inputs in [triangle, fan(6), duplicated_fan] {
+    for inputs in [triangle, fan(6), reversed_fan] {
         let expected = oracle(&inputs);
         assert!(!expected.is_empty());
         for run in [binary as Run, generic] {
@@ -124,7 +123,7 @@ fn step_order_and_occurrence_smallest_advice_reach_three_provider_execution() {
     assert_eq!(sites.len(), 1);
     assert_eq!(sites[0].sides.len(), 3);
     let seed = [(1,)];
-    let r = [(1, 7, 10), (1, 7, 11), (1, 8, 12), (1, 7, 10)];
+    let r = [(1, 7, 10), (1, 7, 11), (1, 8, 12)];
     let s = [(1, 7, 20), (1, 9, 21)];
     let t = [(1, 7, 30), (1, 7, 31), (1, 10, 32)];
     let expected: Rows = [

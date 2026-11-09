@@ -5,7 +5,7 @@ use cq_storage::{Answers, GroupedAnswers};
 
 #[test]
 fn computed_head_images_are_sets_after_projection() {
-    let R = [(2, 3), (2, 4), (2, 4), (4, 5)];
+    let R = [(2, 3), (2, 4), (4, 5)];
     let projected: Vec<_> = ::mini_linq::mini_linq! {
         struct ProjectedImage; relation R(x: i32, y: i32); relation answer(x: i32);
         answer(*x) :- R(x, _);
@@ -25,7 +25,7 @@ fn computed_head_images_are_sets_after_projection() {
 
 #[test]
 fn literal_and_arithmetic_keys_use_owned_host_fallbacks() {
-    let R = [(-2, 7), (3, 7), (3, 8), (-2, 7)];
+    let R = [(-2, 7), (3, 7), (3, 8)];
     let positive: std::collections::BTreeSet<_> = ::mini_linq::mini_linq! {
         struct Nonleading; relation R(x: i32, tag: i32); relation answer(x: i32);
         answer(*x) :- R(x, 7);
@@ -46,7 +46,7 @@ fn literal_and_arithmetic_keys_use_owned_host_fallbacks() {
     assert_eq!(complete, [(1,)]);
 
     let Seed = [(1,), (2,)];
-    let Dest = [(2, 10), (3, 20), (3, 20)];
+    let Dest = [(2, 10), (3, 20)];
     let computed: std::collections::BTreeSet<_> = ::mini_linq::mini_linq! {
         struct ArithmeticKey;
         relation Seed(x: i32); relation Dest(key: i32, value: i32);
@@ -69,7 +69,7 @@ fn literal_and_arithmetic_keys_use_owned_host_fallbacks() {
 
 #[test]
 fn reduced_literal_keys_probe_built_indexes() {
-    let R = [(1, 7), (2, 7), (-1, 7), (1, 7)];
+    let R = [(1, 7), (2, 7), (-1, 7)];
     let actual: std::collections::BTreeSet<_> =
         ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_hypergraph; }
             struct ReducedLiteral; relation R(x: i32, tag: i32); relation answer(x: i32);
@@ -84,7 +84,7 @@ mod computed_candidate_keys {
     #[test]
     fn arithmetic_prefix_keys_intersect_borrowed_candidates() {
         let Seed = [(1,)];
-        let R = [(2, 5), (2, 6), (2, 5)];
+        let R = [(2, 5), (2, 6)];
         let S = [(2, 6), (3, 8)];
         let actual: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_generic; physical = [::core_pass_fixtures::smallest]; }
             struct Candidates;
@@ -100,9 +100,9 @@ mod computed_candidate_keys {
 #[test]
 fn answers_from_a_query_are_a_zero_copy_canonical_host() {
     // Vec is deliberately non-Copy; both stages keep references to it.
-    let R = [(vec![1_i64],), (vec![2_i64],), (vec![1_i64],)];
+    let R = [(vec![1_i64], 0), (vec![2_i64], 0), (vec![1_i64], 1)];
     let A = Answers::collect_from(::mini_linq::mini_linq! {
-        struct First; relation R(x: Vec<i64>); answer(x) :- R(x);
+        struct First; relation R(x: Vec<i64>, witness:i32); answer(x) :- R(x,_);
     });
     let allowed = [2_i64];
     let B = Answers::collect_from(::mini_linq::mini_linq! {
@@ -118,10 +118,10 @@ fn answers_from_a_query_are_a_zero_copy_canonical_host() {
 
 #[test]
 fn grouped_answers_are_probed_in_place() {
-    let R = [(1, 10), (1, 10), (2, 20), (2, 21)];
+    let R = [(1, 10, 0), (1, 10, 1), (2, 20, 0), (2, 21, 0)];
     let G = &GroupedAnswers::collect_from(
         ::mini_linq::mini_linq! {
-            struct First; relation R(k: i32, v: i32); answer(k, v) :- R(k, v);
+            struct First; relation R(k: i32, v: i32, witness:i32); answer(k, v) :- R(k, v,_);
         }
         .map(|(k, v)| ((k,), (v,))),
     );
@@ -232,7 +232,7 @@ mod fuzz_owned_merge_keys {
     #[test]
     fn constant_atom_merges_owned_literal_with_borrowed_host() {
         // Differential seed 2: the two merge cursors exposed i32 and &i32 keys.
-        let R = std::collections::BTreeMap::from([((2,), vec![(), ()]), ((3,), vec![()])]);
+        let R = std::collections::BTreeMap::from([((2,), vec![()]), ((3,), vec![()])]);
         let rows: Vec<_> = ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::merged, ::core_pass_fixtures::canonical_projects]; }
             struct LiteralMerge;
             relation R(x: i32);
@@ -263,7 +263,7 @@ fn repeated_plain_head_variables_preserve_positions_and_input_references() {
 #[test]
 fn fine_plan_probes_a_nonleading_literal_key() {
     // The fine-plan case found beside differential seed 5's computed keys.
-    let R = [(1, -3, 4), (2, -3, 5), (2, -3, 5), (3, 7, 8)];
+    let R = [(1, -3, 4), (2, -3, 5), (4, -3, 5), (3, 7, 8)];
     let mut rows: Vec<_> =
         ::mini_linq::compile! { pipeline { plan = ::core_pass_fixtures::plan_prefix_greedy_fine; }
             struct FineLiteral;
@@ -282,8 +282,8 @@ macro_rules! wide_distinct_regressions {
             fn thirteen_internal_columns_have_unbounded_distinct_keys() {
                 // Differential seed 27 exposed std tuples' twelve-field Ord limit.
                 // Five atoms of arity at most three legitimately bind thirteen columns.
-                let R = [(1, 2, 3), (4, 5, 6), (1, 2, 3)];
-                let S = [(7,), (8,), (7,)];
+                let R = [(1, 2, 3), (4, 5, 6)];
+                let S = [(7,), (8,)];
                 let mut rows: Vec<_> = ::mini_linq::compile! { pipeline { physical = [::core_pass_fixtures::canonical_projects]; structures = [$provider]; }
                     struct Wide;
                     relation R(x: i32, y: i32, z: i32);

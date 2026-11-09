@@ -1125,7 +1125,6 @@ fn rewrites_preserve_occurrence_constants_without_inventing_union_disjointness()
         output u as answer(x);
     }};
     ra::contract::check(&source).unwrap();
-    assert!(ra::disjoint_unions(&source).unwrap().is_empty());
     let mut changed = source.clone();
     if let ra::Operator::Rename(rename) = &mut changed.plan.definitions[0].operator {
         rename.constants = Some(syn::parse_quote!(constants {b = 9}));

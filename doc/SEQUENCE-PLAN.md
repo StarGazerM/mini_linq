@@ -736,19 +736,17 @@ They select execution shape without rediscovering relational order.
 Authored `choose` alternatives remain subject to BE-Choose equal support.
 
 Evidence advice: estimation is not part of the query. A sourced evidence block
-carries row counts, planning keys, foreign keys, selectivities, bounds and
-sortedness. Every fact records `from authored("source")` or the original
+carries row counts, foreign keys, selectivities, bounds and sortedness.
+Every fact records `from authored("source")` or the original
 `from vo("source")`; mapping subjects preserves that source. PL-Evidence lets
-estimates and `planning_key` select checked shapes only. The separately spelled
-`trusted_key` is an authored semantic premise: false trusted keys can change
-answers through group input uniqueness. VO sources cannot author trusted keys.
+estimates select checked shapes only. Compiler inputs are sets at the IO
+boundary; that proves uniqueness of the full heading, not a partial key.
 
 Evidence syntax (a complete advice block, also serialized in a planner trace):
 
 ```text
 evidence from authored("manifest and schema") {
     count Lineitem = 60000000;
-    planning_key Orders [order_key];
     foreign_key Lineitem [order_key] -> Orders [order_key];
     selectivity filtered_part = 1 / 10;
     bounds Orders.order_key = 0 ..= 60000000;
@@ -757,8 +755,8 @@ evidence from authored("manifest and schema") {
 ```
 
 Facts validate names, nonempty provenance and syntax, not their truth. Later
-scalar estimates take precedence for planning, never establish a memory bound
-or uniqueness proof, and remain distinct from explicitly authored trusted keys.
+scalar estimates take precedence for planning and never establish a memory
+bound or uniqueness proof.
 `Program.evidence` and `Analysis.evidence` retain their original sources.
 `Advice` implements parsing and token printing, so author-written
 `store(name)`, `store_level(name)`, `publish(name, producer)`,
@@ -855,18 +853,16 @@ owner-offset construction, segment-local monoid reduction and publication.
 
 ### Box 12d key-aware grouped fold
 
-`evidence from authored("schema") { trusted_key Lineitem [l_orderkey, l_linenumber]; }`
-asserts that no two physical input rows have the same key. Legacy `key` and
-postfix key spellings are rejected rather than silently reinterpreted.
-These assertions are not inferred from counts, bounds or sampled statistics.
-Unlike estimates, a false key can change answers: the author is responsible
-for its truth. The manifest-driven TPC-H suite asserts dbgen's declared keys
-only when a loader projection carries every key column.
+Compiler input relations are sets at the IO boundary. Rename therefore proves
+full-heading uniqueness without an authored key annotation. A projection keeps
+that proof only when it retains a proven key; input set semantics alone never
+proves uniqueness of a proper subset of the input heading. Counts, bounds and
+sampled statistics remain planning estimates, not uniqueness premises.
 
-Physical lowering owns canonicalization, including key-derived uniqueness,
-checked host sets, disjoint union arms and consumer canonicalization. Sequence
-preserves that decision; it does not remove valuation canonicalizers or record
-a second canon-removal decision in its replay trace.
+Physical lowering owns canonicalization, including inherited uniqueness,
+disjoint union arms and consumer canonicalization. Sequence preserves that
+decision; it does not remove valuation canonicalizers or record a second
+canon-removal decision in its replay trace.
 
 Measured SF10 acceptance (advised suite, one warmup and five measured runs;
 before: baseline suite, after: historical key-aware grouping and retired arithmetic recognition):

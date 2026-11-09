@@ -76,7 +76,12 @@ pub struct Inputs {
     relations: Vec<RelationData>,
 }
 impl Inputs {
-    pub fn from_dataset(dataset: Dataset) -> Self {
+    pub fn from_dataset(mut dataset: Dataset) -> Self {
+        // Preserve raw manifest/statistics semantics until validation finishes;
+        // the engine-facing hosts expose each complete input row only once.
+        for relation in &mut dataset.relations {
+            cq_load::canonicalize(&mut relation.rows);
+        }
         Self {
             relations: dataset.relations,
         }

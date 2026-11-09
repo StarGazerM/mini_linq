@@ -834,8 +834,8 @@ pub struct Analysis {
     pub membership: BTreeSet<(String, Vec<String>)>,
     /// Emitted row layouts, derived from the recorded filtered projections.
     pub layouts: BTreeMap<String, Vec<String>>,
-    /// Results that are canonical (a set) by inference or flag, with the key
-    /// that makes them so when inferred.
+    /// Duplicate-free results and their keys from the shared Physical analysis.
+    /// Recorded canon boundaries contribute their full heading when needed.
     pub unique: BTreeMap<String, Vec<String>>,
 }
 
@@ -995,15 +995,19 @@ fn error<T>(spanned: &impl quote::ToTokens, message: impl std::fmt::Display) -> 
     ))
 }
 
-/// Formal rule WF-Structures: Check entries, read coverage and inferred canonical return.
+/// Formal rule WF-Structures: Check entries and read coverage over checked Physical.
 /// Formal rule STR-Key: Answer probe and semi reads by host dispatch or a built level prefix.
 /// Formal rule STR-Merge: Answer each merge side by ordered storage or a same-key merge pipe.
-/// Formal rule CK-Return: A canonical consumer may own the returned set boundary.
+/// Formal rule CK-Return: Physical checks the returned set boundary, including canonical consumers.
 fn analyze(physical: &crate::physical::Program, program: &Program) -> syn::Result<Analysis> {
     let module = &program.structures;
     provider::check(module)?;
+    let checked_physical = physical::contract::check(physical)?;
+    let unique = physical::uniqueness(physical, &checked_physical.headings, &checked_physical.disjoint, |definition, _| {
+        definition.canon.is_some()
+    });
     let mut analysis = Analysis {
-        physical: physical::contract::check(physical)?,
+        physical: checked_physical,
         providers: module.providers.clone(),
         publications: BTreeMap::new(),
         host_layouts: physical
@@ -1038,7 +1042,7 @@ fn analyze(physical: &crate::physical::Program, program: &Program) -> syn::Resul
         filtered: BTreeMap::new(),
         membership: BTreeSet::new(),
         layouts: BTreeMap::new(),
-        unique: BTreeMap::new(),
+        unique,
     };
     analysis.lineage = lineages(physical, &analysis.physical);
     let candidates = physical::candidate_prefixes(physical, &analysis.physical);
@@ -1699,38 +1703,8 @@ fn analyze(physical: &crate::physical::Program, program: &Program) -> syn::Resul
                 }
             }
         }
-        let op = &definition.operator;
-        let Some(heading) = analysis.physical.headings.get(&name).cloned() else {
-            return error(
-                &module.structures_token,
-                format!("result `{name}` has no heading"),
-            );
-        };
-        let key =
-            physical::inherited_key(op, &heading, &physical.program.host_sets, |id| {
-                analysis.unique.get(&symbol_name(id)).cloned()
-            });
-        let key = match key {
-            Some(key) => Some(key),
-            None if analysis.physical.canon.contains(&name) => Some(heading.clone()),
-            None => None,
-        };
-        if let Some(key) = key {
-            analysis.unique.insert(name, key);
-        }
     }
     let returned = symbol_name(&physical.program.returned);
-    if !analysis.unique.contains_key(&returned)
-        && physical.program.return_canon.is_none()
-        && !analysis.physical.consumer_canonical
-    {
-        return error(
-            &module.structures_token,
-            format!(
-                "returned `{returned}` is not canonical: flag it `canon` or make its inputs canonical"
-            ),
-        );
-    }
     if physical.program.head_dedup() && !analysis.head_dedup.contains_key(&returned) {
         return error(
             &physical.program.returned,

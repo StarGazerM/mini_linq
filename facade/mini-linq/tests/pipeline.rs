@@ -1,7 +1,7 @@
 //! Public pipeline boundaries, argument forwarding and language rewrites.
 #[test]
 fn defaults_and_surface_expansion_before_the_cq_contract_agree() {
-    let rows = [(1,), (1,), (2,)];
+    let rows = [(1,), (2,)];
     let default: Vec<_> =
         mini_linq::mini_linq! { struct Q; relation rows(x:i32); answer(x) :- rows(x); }.collect();
     let surfaced: Vec<_> = mini_linq::compile! {
@@ -15,7 +15,7 @@ fn defaults_and_surface_expansion_before_the_cq_contract_agree() {
 #[test]
 fn hand_lookup_expand_and_fine_orders_preserve_default_answers() {
     let seed = [(1,), (2,), (3,)];
-    let r = [(1, 10, 100), (1, 11, 101), (2, 20, 200), (2, 20, 200)];
+    let r = [(1, 10, 100), (1, 11, 101), (2, 20, 200)];
     let s = [(1, 10, 1000), (1, 12, 1200), (2, 20, 2000)];
     let default: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q;
@@ -66,7 +66,7 @@ fn exists_retains_nonemptiness_and_consumes_its_entire_source() {
     assert_eq!(retained.iter().count(), 1);
     let empty: cq_storage::Exists = std::iter::empty().collect();
     assert_eq!(empty.iter().count(), 0);
-    let rows = [(1,), (2,), (2,)];
+    let rows = [(1,), (2,)];
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation rows(x:i32);
@@ -144,14 +144,14 @@ fn lazy_semijoin_state_stops_at_a_match_and_keeps_prior_keys() {
 
 #[test]
 fn point_fallback_types_use_logical_keys_while_native_reads_keep_declaration_order() {
-    let rows = [(1, 2), (3, 4), (1, 2)];
+    let rows = [(1, 2), (3, 4)];
     let answer: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation rows(first:i32, second:i32);
         answer(z,a) :- rows(z,a), where z == 1 && a == 2;
     }
     .collect();
     assert_eq!(answer, [(&1, &2)]);
-    let grouped = std::collections::BTreeMap::from([((1, 2), vec![(), ()]), ((3, 4), vec![()])]);
+    let grouped = std::collections::BTreeMap::from([((1, 2), vec![()]), ((3, 4), vec![()])]);
     let answer: Vec<_> = mini_linq::mini_linq! {
         struct Q; relation grouped(first:i32, second:i32);
         answer(z,a) :- grouped(z,a), where z == 1 && a == 2;
@@ -162,7 +162,7 @@ fn point_fallback_types_use_logical_keys_while_native_reads_keep_declaration_ord
 
 #[test]
 fn a_shared_host_point_read_cannot_supply_the_stream_fallback_type() {
-    let rows = [(1,), (1,), (2,)];
+    let rows = [(1,), (2,)];
     let answer: Vec<_> = mini_linq::passes::select! {
         pipeline { mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull };
         physical { relation rows(x:i32);
@@ -278,10 +278,11 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
 
 #[test]
 fn default_reduction_and_opt_out_agree_on_host_and_fallback_inputs() {
-    let left = [(1, 10), (1, 10), (2, 20), (3, 30)];
-    let rows = [(10, 100), (10, 100), (30, 300), (40, 400)];
+    let left = [(1, 10), (1, 11), (2, 20), (3, 30)];
+    let rows = [(10, 100), (11, 100), (30, 300), (40, 400)];
     let host = std::collections::HashMap::from([
-        ((10,), vec![(100,), (100,)]),
+        ((10,), vec![(100,)]),
+        ((11,), vec![(100,)]),
         ((30,), vec![(300,)]),
         ((40,), vec![(400,)]),
     ]);
@@ -433,7 +434,7 @@ fn load_time_string_code_sets_and_country_domains_execute_exactly() {
         (2, code("blue")),
         (3, code("green dangling")),
     ];
-    let lines = [(1,), (1,), (2,)];
+    let lines = [(1,), (2,)];
     // Pattern predicates run once per distinct dictionary entry at load time.
     let green = cq_load::dictionary_where(&dictionaries, "name", |name| name.contains("green"));
     let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
@@ -529,7 +530,7 @@ fn total_identifier_remains_available_in_let_bindings_and_guards() {
 
 #[test]
 fn cq_negation_excludes_matching_keys_with_constants_and_wildcards() {
-    let rows = [(1,), (2,), (3,), (4,), (4,)];
+    let rows = [(1,), (2,), (3,), (4,)];
     let blocked = [(1, 7, 10), (1, 7, 11), (2, 8, 10), (3, 7, 12)];
     let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q;
@@ -559,7 +560,7 @@ fn cq_negation_respects_repeated_variables() {
 
 #[test]
 fn cq_negation_normalizes_raw_relations_and_repeated_variables() {
-    let rows = [(1,), (2,), (3,), (4,), (4,)];
+    let rows = [(1,), (2,), (3,), (4,)];
     let blocked = [(1, 2, 7, 9), (2, 2, 7, 8), (3, 3, 8, 9)];
     let expected: std::collections::BTreeSet<_> = rows
         .iter()
@@ -589,7 +590,7 @@ fn cq_negation_normalizes_raw_relations_and_repeated_variables() {
 
 #[test]
 fn cq_negation_of_an_empty_relation_retains_every_key() {
-    let rows = [(1,), (2,), (2,)];
+    let rows = [(1,), (2,)];
     let blocked: [(i32,); 0] = [];
     let actual: std::collections::BTreeSet<_> = mini_linq::mini_linq! {
         struct Q; relation rows(key:i32); relation blocked(key:i32);
@@ -727,7 +728,7 @@ fn named_sequence_decomposition_preserves_authored_advice_and_target_delegation(
         parse_plan(planned!(mini_linq::passes::plan_sequential(preserve_order);));
     assert_eq!(explicitly_decomposed, default);
 
-    let rows = [(1,), (1,), (2,)];
+    let rows = [(1,), (2,)];
     let custom: Vec<_> = mini_linq::compile! {
         pipeline { plan = core_pass_fixtures::plan_reserve(expected); }
         physical {

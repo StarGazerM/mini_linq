@@ -10,8 +10,8 @@
 //! publication still occurs only after the complete phase has evaluated.
 //!
 //! A hole's CQ input is fact-free, so its first invocation has the empty context.
-//! Round records discharged facts in the checked lower-owner argument packet;
-//! the core protocol introduces them there and emits their exact `context`
+//! Round records consumer context in the checked lower-owner argument packet;
+//! the core protocol introduces it there and emits its exact `context`
 //! envelope on every subsequent factful continuation, including key holes.
 use cq_datalog_support::ensure;
 pub use cq_lang_datalog_round as round;

@@ -34,7 +34,6 @@ fn program_with_orders(
     })
     .unwrap();
     if extra_order {
-        host.certificates.clear();
         let mut extra = host.layouts[host.providers[1].canonical].clone();
         extra.columns.reverse();
         host.layouts.push(extra.clone());

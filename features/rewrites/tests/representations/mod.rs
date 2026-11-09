@@ -116,7 +116,7 @@ fn standard_hash_state_retypes_execute_after_fast_default_selection() {
 #[allow(non_snake_case)]
 fn membership_trie_and_rows_retypes_execute_their_trait_obligations() {
     let L = BTreeMap::from([((1,), vec![()]), ((2,), vec![()]), ((3,), vec![()])]);
-    let R = [(1, 10), (1, 11), (2, 20), (3, 30), (1, 10)];
+    let R = [(1, 10), (1, 11), (2, 20), (3, 30)];
     let S = [(1,), (3,)];
     let T = [(1, 10), (2, 20), (3, 30)];
     let actual: Rows = mini_linq::passes::select! {
@@ -169,7 +169,7 @@ fn facade_pipeline_keeps_opaque_rust_steps_in_written_order() {
             answer(x, quotient) :- R(x,y), if (allowed(x)), let quotient:i32 = 100 / *x, if (*y < quotient + 1);
         }.map(|(x, quotient)| vec![*x, quotient]).collect()
     }
-    let input = [(0, 999), (1, 2), (1, 2), (2, 60), (-1, -101)];
+    let input = [(0, 999), (1, 2), (2, 60), (-1, -101)];
     harness::check_refinement_on(
         &input,
         |rows| {

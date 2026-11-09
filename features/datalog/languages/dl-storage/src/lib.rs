@@ -37,7 +37,6 @@ pub struct Program {
     pub delta_layouts: Vec<Layout>,
     pub reads: Vec<Read>,
     pub negations: Vec<Negative>,
-    pub certificates: Vec<HostCanonical>,
     pub policy: Policy,
     /// Explicit device realization records, never recovered from provider types.
     pub device: Option<DeviceStorage>,
@@ -312,21 +311,12 @@ pub fn default_key_set() -> (Provider, Hasher) {
         Hasher::Fx,
     )
 }
-/// Structural provenance of a canonical host, indexed in its storage vector.
-/// Opaque collection implementations still owe their declared collection laws.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HostCanonical {
-    pub kind: Ident,
-    pub index: usize,
-    pub source: Ident,
-    pub columns: Vec<usize>,
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub insertion: Ident,
     pub negation_keys: Ident,
 }
-record!(Program { incremental: incremental::Program, tokens: Vec<provider::Token>, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, certificates: Vec<HostCanonical>, policy: Policy, device: Option<DeviceStorage> });
+record!(Program { incremental: incremental::Program, tokens: Vec<provider::Token>, providers: Vec<Providers>, layouts: Vec<Layout>, delta_layouts: Vec<Layout>, reads: Vec<Read>, negations: Vec<Negative>, policy: Policy, device: Option<DeviceStorage> });
 record!(Providers {
     canonical: usize,
     delta: Provider,
@@ -358,7 +348,6 @@ pub fn row_type(declaration: &cq_syntax::RelationDecl) -> Type {
 }
 record!(Read { variant: usize, position: usize, kind: Ident, index: usize, columns: Vec<usize> });
 record!(Negative { component: usize, relation: usize, columns: Vec<usize>, filters: Vec<(usize, Expr)>, equalities: Vec<(usize, usize)>, provider: Provider, hasher: Hasher });
-record!(HostCanonical { kind: Ident, index: usize, source: Ident, columns: Vec<usize> });
 record!(Policy {
     insertion: Ident,
     negation_keys: Ident
@@ -459,86 +448,6 @@ pub fn read_plan(
         }
     }
     Ok((reads, negations))
-}
-/// Formal rule DL-HostCanonical: check provenance, complete headings and maintenance.
-fn check_certificates(program: &Program, analysis: &Analysis) -> syn::Result<()> {
-    let declarations = &program.incremental.strata.source.declarations;
-    let mut seen = BTreeSet::new();
-    for certificate in &program.certificates {
-        ensure(
-            seen.insert((symbol_name(&certificate.kind), certificate.index)),
-            certificate,
-            "duplicate canonical host certificate",
-        )?;
-        let full_heading = |relation: usize| -> Option<Vec<usize>> {
-            declarations
-                .get(relation)
-                .map(|d| (0..d.columns.len()).collect())
-        };
-        let valid = match symbol_name(&certificate.kind).as_str() {
-            "canonical" => program
-                .providers
-                .get(certificate.index)
-                .and_then(|provider| program.layouts.get(provider.canonical))
-                .is_some_and(|layout| {
-                    certificate.source == "admission" && certificate.columns == layout.columns
-                }),
-            "delta" => declarations
-                .get(certificate.index)
-                .is_some_and(|declaration| {
-                    declaration.value.is_none()
-                        && analysis
-                            .deltas
-                            .contains_key(&symbol_name(&declaration.name))
-                        && certificate.source == "admission"
-                        && certificate.columns == full_heading(certificate.index).unwrap()
-                }),
-            "layout" | "delta_layout" => {
-                let delta = certificate.kind == "delta_layout";
-                let layouts = if delta {
-                    &program.delta_layouts
-                } else {
-                    &program.layouts
-                };
-                layouts.get(certificate.index).is_some_and(|layout| {
-                    let relation = analysis.positions[&symbol_name(&layout.relation)];
-                    let mut columns = layout.columns.clone();
-                    columns.sort_unstable();
-                    certificate.columns == layout.columns
-                        && Some(columns) == full_heading(relation)
-                        && certificate.source == if delta { "delta" } else { "canonical" }
-                        && layout.maintenance
-                            == if delta {
-                                "replace_each_run"
-                            } else {
-                                "admitted_rows"
-                            }
-                        && program.certificates.iter().any(|root| {
-                            root.index == relation
-                                && root.kind == if delta { "delta" } else { "canonical" }
-                        })
-                })
-            }
-            "negation" => program
-                .negations
-                .get(certificate.index)
-                .is_some_and(|negative| {
-                    certificate.source == "projection"
-                        && certificate.columns == negative.columns
-                        && program
-                            .certificates
-                            .iter()
-                            .any(|root| root.kind == "canonical" && root.index == negative.relation)
-                }),
-            _ => false,
-        };
-        ensure(
-            valid,
-            certificate,
-            "unsupported canonical host provenance or heading",
-        )?;
-    }
-    Ok(())
 }
 pub mod contract {
     use super::*;
@@ -747,7 +656,6 @@ pub mod contract {
             program,
             "unsupported storage insertion or negation semantics",
         )?;
-        check_certificates(program, &analysis)?;
         Ok(analysis)
     }
 }

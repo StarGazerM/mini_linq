@@ -135,28 +135,27 @@ fn encoded_statistics_work_without_parquet_stats_and_across_row_groups() {
                 &mut dictionaries,
             )
             .unwrap();
-            assert_eq!(host.len(), 7);
+            assert_eq!(host.len(), 6);
             let columns = host.columns();
-            check_column(&columns.0, &[9, -1, 7, 0, 0, 42, 5]);
+            check_column(&columns.0, &[-1, 0, 5, 7, 9, 42]);
             let dates: Vec<Date> = [
-                "1970-01-01",
                 "1969-12-31",
+                "1970-01-01",
+                "1970-04-09",
                 "2000-02-29",
                 "1970-01-01",
-                "1970-01-01",
                 "1970-04-10",
-                "1970-04-09",
             ]
             .into_iter()
             .map(|s| s.parse().unwrap())
             .collect();
             check_column(&columns.1, &dates);
-            let prices: Vec<Decimal> = ["12.30", "-0.01", "1.00", "0", "0", "20.00", "99.99"]
+            let prices: Vec<Decimal> = ["-0.01", "0", "99.99", "1.00", "12.30", "20.00"]
                 .into_iter()
                 .map(|s| s.parse().unwrap())
                 .collect();
             check_column(&columns.2, &prices);
-            let text: Vec<StringCode> = ["é", "a", "e\u{301}", "", "", "a long text", "中"]
+            let text: Vec<StringCode> = ["a", "", "中", "e\u{301}", "é", "a long text"]
                 .into_iter()
                 .map(|s| StringCode(dictionaries.get("text").unwrap().lookup(s).unwrap()))
                 .collect();
@@ -165,7 +164,7 @@ fn encoded_statistics_work_without_parquet_stats_and_across_row_groups() {
             columns
                 .0
                 .filter(&Predicate::Point(0_i64.ordinal()), |row| selected.push(row));
-            assert_eq!(selected, [3, 4]);
+            assert_eq!(selected, [1]);
         }
         std::fs::remove_file(path).unwrap();
     }

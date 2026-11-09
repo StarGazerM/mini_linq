@@ -45,7 +45,8 @@ DuckDB tables, per-query projected Parquet files, manifests, executable crates,
 Cargo timing reports, answer witnesses and output reports live under target/bench.
 Exports contain only declared columns, in declaration order, without filters,
 preaggregation or casts. Typed relation_loaders! read the Parquet schemas into
-Vec hosts. The file cache is local and engine-version/projection keyed.
+Vec hosts and sort/deduplicate complete declared rows once before query timing.
+The file cache is local and engine-version/projection keyed.
 Interned loaders borrow Arrow string cells directly into column-local hash
 tables. Each source cell is hashed once; table growth reuses cached hashes.
 Only distinct dictionary entries allocate text. After input is exhausted,
@@ -60,17 +61,20 @@ exact sorted codes additionally require deduplication, dictionary allocation,
 distinct-value ordering, and integer output writes. The cq-load `intern` release
 example reports five interleaved former/new passes and byte scans over a retained
 Parquet column, excluding I/O/decompression, and asserts exact row codes.
-H01 and H13 author physical-row key evidence in their shared query sources,
-independent of configuration. H01 retains Lineitem(l_orderkey,l_linenumber);
-H13 retains Customer(c_custkey) and QualifiedOrders(order_key), the latter
-preserved by filtering Orders and projecting its unique o_orderkey. These are
-dbgen key premises, not estimated cardinalities or assertions about group keys.
-Hand-built fixtures for these workloads must satisfy the same uniqueness
-contract; equal aggregate values on different identities remain valid inputs.
-The standalone evidence prefix uses the Sequence Evidence grammar and is
-forwarded to the checked sequence lowering phase for every CPU configuration.
-The GPU importer preserves the same stage-local evidence and merges it with
-its existing manifest and planning evidence before Sequence planning.
+Every compiler input is a set, unconditionally; no host_set or Sequence key
+annotation grants setness. IO owns the boundary: CSV, Parquet and interned
+tuple loaders sort/deduplicate full rows in place, and columnar loaders
+canonicalize exact projected row positions before publishing encoded columns.
+H01 therefore needs no dbgen key premise: duplicate complete seven-column
+Lineitem rows collapse, but different full rows sharing an order/line pair
+remain distinct. H13's comment filtering and (order,customer) projection remain
+inside run(), followed by full-row deduplication of QualifiedOrders; these are
+query operations and remain inside every route's query timer. H04 NOT EXISTS
+likewise deduplicates its projected LateLineitem during query setup. Dictionary
+predicate relations contain one row per selected dictionary code; zone layouts
+retain their canonical loaded rows. Hand-built fixtures must canonicalize
+their input relations too. VO count/key evidence remains planning information,
+not an input-set proof or a license to infer a narrower semantic key.
 
 For SF 1 and SF 10, every executable/configuration is checked against authored
 DuckDB SQL on SF 0.1 before any query measurements. At SF 0.1 the timed workers

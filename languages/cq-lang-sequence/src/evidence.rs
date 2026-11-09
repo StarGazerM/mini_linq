@@ -1,20 +1,17 @@
-//! Planning estimates and explicitly trusted relational key premises.
+//! Sourced planning estimates, never relational uniqueness premises.
 //!
 //! ```text
 //! evidence from authored("schema contract and workload estimates") {
 //!     count R = 100;
-//!     planning_key R [id];
-//!     trusted_key R [id];
 //!     foreign_key S [rid] -> R [id];
 //!     selectivity filtered = 1 / 10;
 //!     bounds R.id = -5 ..= 100;
 //!     sorted R [id];
 //! }
 //! ```
-//! Every fact retains its source when mapped or appended. Counts, planning
-//! keys, and other estimates are advice, not correctness certificates.
-//! Only an explicitly authored `trusted_key` asserts uniqueness; a false
-//! trusted premise may change answers when canonicalization is eliminated.
+//! Every fact retains its source when mapped or appended. All estimates are
+//! advice, not correctness certificates. Input uniqueness follows from the
+//! IO set contract on complete headings, independently of evidence.
 
 use cq_syntax::symbol_name;
 use proc_macro2::TokenStream;
@@ -28,8 +25,6 @@ use crate::Analysis;
 pub(crate) mod kw {
     syn::custom_keyword!(evidence);
     syn::custom_keyword!(count);
-    syn::custom_keyword!(planning_key);
-    syn::custom_keyword!(trusted_key);
     syn::custom_keyword!(from);
     syn::custom_keyword!(authored);
     syn::custom_keyword!(vo);
@@ -39,7 +34,7 @@ pub(crate) mod kw {
     syn::custom_keyword!(sorted);
 }
 
-/// Ordered, sourced estimates and explicitly trusted authored key premises.
+/// Ordered, sourced planning estimates.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Evidence {
     pub facts: Vec<EvidenceFact>,
@@ -78,23 +73,13 @@ pub struct Selectivity {
     pub denominator: u64,
 }
 
-/// Only TrustedKey is a semantic premise; every other variant is planning advice.
+/// Planning advice, never a semantic uniqueness premise.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EvidenceFact {
     Count {
         source: EvidenceSource,
         subject: Ident,
         rows: usize,
-    },
-    PlanningKey {
-        source: EvidenceSource,
-        subject: Ident,
-        columns: Vec<Ident>,
-    },
-    TrustedKey {
-        source: EvidenceSource,
-        subject: Ident,
-        columns: Vec<Ident>,
     },
     ForeignKey {
         source: EvidenceSource,
@@ -129,8 +114,6 @@ impl Evidence {
         for fact in &mut self.facts {
             let subject = match fact {
                 EvidenceFact::Count { subject, .. }
-                | EvidenceFact::PlanningKey { subject, .. }
-                | EvidenceFact::TrustedKey { subject, .. }
                 | EvidenceFact::ForeignKey { subject, .. }
                 | EvidenceFact::Selectivity { subject, .. }
                 | EvidenceFact::Bounds { subject, .. }
@@ -168,63 +151,13 @@ impl Evidence {
         })
     }
 
-    /// Whether this exact column set has an explicitly trusted authored premise.
-    pub fn has_trusted_key(&self, subject: &str, columns: &[String]) -> bool {
-        self.facts.iter().any(|fact| match fact {
-            EvidenceFact::TrustedKey {
-                subject: name,
-                columns: key,
-                ..
-            } => {
-                symbol_name(name) == subject
-                    && key.len() == columns.len()
-                    && key
-                        .iter()
-                        .all(|column| columns.contains(&symbol_name(column)))
-            }
-            _ => false,
-        })
-    }
-
-    /// Planning keys never establish uniqueness for a semantic rewrite.
-    pub fn has_planning_key(&self, subject: &str, columns: &[String]) -> bool {
-        self.facts.iter().any(|fact| match fact {
-            EvidenceFact::PlanningKey {
-                subject: name,
-                columns: key,
-                ..
-            } => {
-                symbol_name(name) == subject
-                    && key.len() == columns.len()
-                    && key
-                        .iter()
-                        .all(|column| columns.contains(&symbol_name(column)))
-            }
-            _ => false,
-        })
-    }
-
     /// Check grammar invariants and references, never the truth of a fact.
-    // Formal rule WF-SequenceEvidence: Require structured nonempty provenance and valid references; VO planning advice never supplies a trusted semantic key premise.
+    // Formal rule WF-SequenceEvidence: Require structured nonempty provenance and valid references for planning advice.
     pub(crate) fn check(&self, physical: &crate::structures::physical::Program, structure_analysis: &crate::structures::Analysis, analysis: &Analysis) -> syn::Result<()> {
         for fact in &self.facts {
             fact.source().check()?;
-            if matches!(
-                fact,
-                EvidenceFact::TrustedKey {
-                    source: EvidenceSource::Vo { .. },
-                    ..
-                }
-            ) {
-                return Err(syn::Error::new_spanned(
-                    fact,
-                    "evidence: VO planning advice cannot supply a trusted key premise",
-                ));
-            }
             let subject = match fact {
                 EvidenceFact::Count { subject, .. }
-                | EvidenceFact::PlanningKey { subject, .. }
-                | EvidenceFact::TrustedKey { subject, .. }
                 | EvidenceFact::ForeignKey { subject, .. }
                 | EvidenceFact::Selectivity { subject, .. }
                 | EvidenceFact::Bounds { subject, .. }
@@ -232,9 +165,7 @@ impl Evidence {
             };
             check_subject(physical, structure_analysis, analysis, subject)?;
             match fact {
-                EvidenceFact::PlanningKey { columns, .. }
-                | EvidenceFact::TrustedKey { columns, .. }
-                | EvidenceFact::Sorted { columns, .. } => {
+                EvidenceFact::Sorted { columns, .. } => {
                     check_columns(physical, structure_analysis, analysis, subject, columns)?;
                 }
                 EvidenceFact::ForeignKey {
@@ -421,8 +352,6 @@ impl EvidenceFact {
     pub fn source(&self) -> &EvidenceSource {
         match self {
             Self::Count { source, .. }
-            | Self::PlanningKey { source, .. }
-            | Self::TrustedKey { source, .. }
             | Self::ForeignKey { source, .. }
             | Self::Selectivity { source, .. }
             | Self::Bounds { source, .. }
@@ -452,28 +381,6 @@ impl EvidenceFact {
                 source,
                 subject,
                 rows,
-            }
-        } else if lookahead.peek(kw::planning_key) || lookahead.peek(kw::trusted_key) {
-            let trusted = input.peek(kw::trusted_key);
-            if trusted {
-                input.parse::<kw::trusted_key>()?;
-            } else {
-                input.parse::<kw::planning_key>()?;
-            }
-            let subject = input.parse()?;
-            let columns = columns(input)?;
-            if trusted {
-                Self::TrustedKey {
-                    source,
-                    subject,
-                    columns,
-                }
-            } else {
-                Self::PlanningKey {
-                    source,
-                    subject,
-                    columns,
-                }
             }
         } else if lookahead.peek(kw::foreign_key) {
             input.parse::<kw::foreign_key>()?;
@@ -562,8 +469,6 @@ impl ToTokens for EvidenceFact {
         tokens.extend(quote!(from #source));
         tokens.extend(match self {
             Self::Count { subject, rows, .. } => quote! { count #subject = #rows; },
-            Self::PlanningKey { subject, columns, .. } => quote! { planning_key #subject [#(#columns),*]; },
-            Self::TrustedKey { subject, columns, .. } => quote! { trusted_key #subject [#(#columns),*]; },
             Self::ForeignKey { subject, columns, referenced, referenced_columns, .. } => {
                 quote! { foreign_key #subject [#(#columns),*] -> #referenced [#(#referenced_columns),*]; }
             }

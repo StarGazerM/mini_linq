@@ -13,8 +13,9 @@ AND l.l_commitdate < l.l_receiptdate)"#;
     advise plan(no_reduce, order(Orders));
     setup {
         let start = date("1993-07-01"); let end = date("1993-10-01");
-        let LateLineitem: Vec<(i64,)> = Lineitem.iter()
+        let mut LateLineitem: Vec<(i64,)> = Lineitem.iter()
             .filter(|row| row.1 < row.2).map(|row| (row.0,)).collect();
+        cq_load::canonicalize(&mut LateLineitem);
     }
     relations {
         relation Orders => orders(o_orderkey: i64, o_orderdate: Date);

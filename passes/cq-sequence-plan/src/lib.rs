@@ -385,6 +385,24 @@ fn decompose_in(
             }
         }
     }
+    if parallel && machine.layout.is_none() {
+        // Complete host execution is an explicit final candidate, not a
+        // replacement for an authored grade or an ignored admission failure.
+        let host = prepare(checker, physical, structures, program, machine, catalog, false)
+            .and_then(|mut prepared| {
+                prepared.trace.splice(0..0, prefix_trace.iter().cloned());
+                candidate(
+                    checker, &prepared, machine, catalog, None, 1, false,
+                    program, policies, false, false,
+                )
+            });
+        match host {
+            Ok((_, planned)) => return Ok(planned),
+            Err(failure) => candidate_error(
+                &mut error, stages, None, Some(1), Some(false), failure,
+            ),
+        }
+    }
     Err(error
         .unwrap_or_else(|| syn::Error::new(machine.name.span(), "P-Decompose: no legal candidate")))
 }

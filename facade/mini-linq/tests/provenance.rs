@@ -270,7 +270,10 @@ fn seed_997_hypergraph_executes_against_the_written_reference() {
         ],
     ];
     let mut cases = Vec::new();
-    for (i, inputs) in inputs.iter().enumerate() {
+    for (i, mut inputs) in inputs.into_iter().enumerate() {
+        for rows in &mut inputs {
+            cq_load::canonicalize(rows);
+        }
         let r0_rows = inputs[0].iter().map(|row| {
             let (a, b, c) = (row[0], row[1], row[2]);
             quote!((#a, #b, #c))
@@ -374,12 +377,14 @@ fn total_generators_preserve_answers_across_plans() {
                             if value == 0 { 0 } else { 12 / denominator }
                         })
                     }
-                    for (rows_r, rows_s) in [
+                    for (mut rows_r, mut rows_s) in [
                         (vec![(0,), (2,)], vec![(2,)]),
                         (vec![(0,)], vec![]),
                         (vec![(0,)], vec![(0,)]),
                         (vec![(2,), (2,)], vec![(2,), (2,)]),
                     ] {
+                        rows_r.sort_unstable(); rows_r.dedup();
+                        rows_s.sort_unstable(); rows_s.dedup();
                         let R = rows_r.as_slice();
                         let S = rows_s.as_slice();
                         let expected = (#written).collect::<::std::collections::BTreeSet<_>>();
@@ -509,7 +514,10 @@ answer(((v1.to_owned() + v1.to_owned()) - (-(v0.to_owned()))), v1) :- r3(v0, v0)
             ],
         ],
     ];
-    let cases = inputs.iter().enumerate().map(|(case, inputs)| {
+    let cases = inputs.into_iter().enumerate().map(|(case, mut inputs)| {
+        for rows in &mut inputs {
+            cq_load::canonicalize(rows);
+        }
         let rows0 = inputs[0].iter().map(|row| {
             let a = row[0];
             quote!((#a,))

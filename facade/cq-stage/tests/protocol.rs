@@ -192,7 +192,7 @@ fn sequence_planning_follows_all_authored_advice() {
 #[test]
 fn target_delegation_preserves_context_and_continuation_verbatim() {
     let packet = quote!(
-        context { consumer = canonical, host_set R discharged };
+        context { consumer = canonical };
         pipeline { grade, printer };
         opaque source tokens
     );
@@ -348,8 +348,6 @@ fn next_input(tokens: TokenStream) -> TokenStream {
 fn recorded_facts_require_exact_envelope_on_direct_entry() {
     for facts in [
         quote!(consumer = canonical),
-        quote!(host_set R discharged),
-        quote!(consumer = canonical, host_set R discharged),
     ] {
         let output = pass::<Facts, Facts>(quote!(pipeline { printer }; { #facts }), |_, _| {
             panic!("unauthorized facts reached transform")
@@ -369,8 +367,6 @@ fn recorded_facts_require_exact_envelope_on_direct_entry() {
 fn matching_lower_select_packets_cannot_replace_source_envelopes() {
     for facts in [
         quote!(consumer = canonical),
-        quote!(host_set R discharged),
-        quote!(consumer = canonical, host_set R discharged),
     ] {
         let output = cq_stage::pass_with_context::<Facts, Facts>(
             quote!(arguments { #facts }; pipeline { printer }; { #facts }),
@@ -398,25 +394,10 @@ fn matching_lower_select_packets_cannot_replace_source_envelopes() {
 }
 
 #[test]
-fn packets_cannot_add_facts_to_already_factful_sources() {
-    let output = cq_stage::pass_with_context::<Facts, Facts>(
-        quote!(
-            arguments { consumer = canonical, host_set R discharged };
-            context { consumer = canonical };
-            pipeline { printer };
-            { consumer = canonical }
-        ),
-        syn::parse2,
-        |_, _| panic!("packet added facts to a factful source"),
-    );
-    assert!(output.to_string().contains("CTX-Entry"));
-}
-
-#[test]
 fn checked_continuation_preserves_facts_and_opaque_arguments() {
     let output = cq_stage::pass_with_context::<Facts, Facts>(
         quote!(
-            arguments { consumer = canonical, host_set R discharged };
+            arguments { consumer = canonical };
             pipeline { arbitrary(x + (y * z)), printer };
             {}
         ),
@@ -429,7 +410,6 @@ fn checked_continuation_preserves_facts_and_opaque_arguments() {
     });
     let output = pass::<Facts, syn::Expr>(next_input(output), |source, args| {
         assert!(source.0.consumer_canonical);
-        assert!(source.0.discharged_host_sets.contains("R"));
         assert!(args.is_empty());
         Ok(syn::parse_quote!(42))
     });
@@ -438,7 +418,7 @@ fn checked_continuation_preserves_facts_and_opaque_arguments() {
 
 #[test]
 fn printed_program_reentry_does_not_inherit_context() {
-    let source: Facts = syn::parse_quote!({ consumer = canonical, host_set R discharged });
+    let source: Facts = syn::parse_quote!({ consumer = canonical });
     let pipeline: cq_stage::Pipeline = syn::parse_quote!(pipeline {
         continuation,
         printer
@@ -459,11 +439,7 @@ fn continuation_context_must_equal_source_not_authorize_future_facts() {
             pipeline { printer }; {}
         ),
         quote!(
-            context { consumer = canonical };
-            pipeline { printer }; { consumer = canonical, host_set R discharged }
-        ),
-        quote!(
-            context { consumer = canonical, host_set R discharged };
+            context {};
             pipeline { printer }; { consumer = canonical }
         ),
     ] {
@@ -473,10 +449,10 @@ fn continuation_context_must_equal_source_not_authorize_future_facts() {
 
     let output = rewrite::<Facts>(
         quote!(
-            context { consumer = canonical };
-            pipeline { printer }; { consumer = canonical }
+            context {};
+            pipeline { printer }; {}
         ),
-        |_, _| Ok(syn::parse_quote!({ consumer = canonical, host_set R discharged })),
+        |_, _| Ok(syn::parse_quote!({ consumer = canonical })),
     );
     diagnostic_message(output);
 }
@@ -513,40 +489,14 @@ fn dropping_recorded_facts_drops_the_continuation_envelope() {
 }
 
 #[test]
-fn dropping_one_fact_forwards_only_remaining_facts() {
-    let output = pass::<Facts, Facts>(
-        quote!(
-            context { consumer = canonical, host_set R discharged };
-            pipeline { continuation, printer };
-            { consumer = canonical, host_set R discharged }
-        ),
-        |_, _| Ok(syn::parse_quote!({ host_set R discharged })),
-    );
-    assert_eq!(
-        output.to_string(),
-        quote!(continuation! {
-            context { host_set R discharged };
-            pipeline { printer };
-            { host_set R discharged }
-        })
-        .to_string()
-    );
-    let output = pass::<Facts, Facts>(next_input(output), |source, _| Ok(source.clone()));
-    assert!(!output.to_string().contains("compile_error"));
-}
-
-#[test]
-fn continuation_context_normalizes_raw_host_names() {
-    let facts: cq_stage::Context = syn::parse_quote!(host_set r#type discharged);
-    assert!(facts.discharged_host_sets.contains("type"));
-    assert_eq!(
-        syn::parse2::<cq_stage::Context>(facts.to_token_stream()).unwrap(),
-        facts
-    );
-    assert!(
-        syn::parse2::<cq_stage::Context>(quote!(host_set R discharged, host_set r#R discharged))
-            .is_err()
-    );
+fn continuation_context_rejects_removed_host_facts() {
+    for facts in [
+        quote!(host_set R),
+        quote!(host_set R discharged),
+        quote!(consumer = canonical, host_set R discharged),
+    ] {
+        assert!(syn::parse2::<cq_stage::Context>(facts).is_err());
+    }
 }
 
 #[test]
@@ -782,7 +732,6 @@ fn consumer_requirements_do_not_authorize_restricted_context_or_skip_selection()
     for envelope in [
         quote!(),
         quote!(context {};),
-        quote!(context { consumer = canonical, host_set R discharged };),
     ] {
         let output = cq_stage::pass_with_output_consumer::<Facts, ConsumedNumber>(
             quote!(#envelope pipeline { printer } #demand; { consumer = canonical }),

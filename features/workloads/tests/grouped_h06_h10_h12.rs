@@ -59,7 +59,7 @@ fn h06_exact_revenue_preserves_lines_and_empty_identity() {
         vec![7, 1, 100, 6, 2300, -1],
     ];
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
-        let data = h06::Data {
+        let mut data = h06::Data {
             lineitem: rows
                 .iter()
                 .map(|r| {
@@ -78,6 +78,7 @@ fn h06_exact_revenue_preserves_lines_and_empty_identity() {
                 })
                 .collect(),
         };
+        cq_load::canonicalize(&mut data.lineitem);
         let sql = format!(
             r#"WITH lineitem AS (
             SELECT c0 AS l_orderkey, c1 AS l_linenumber,
@@ -119,7 +120,7 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
         dictionaries.insert("c_comment", ["X"].into_iter());
         dictionaries.insert("n_name", ["N"].into_iter());
         dictionaries.insert("l_returnflag", ["N", "R"].into_iter());
-        let data = h10::Data {
+        let mut data = h10::Data {
             customer: vec![(
                 1,
                 ::cq_storage::domain::exact(dictionaries.domain("c_name"), "C"),
@@ -161,6 +162,10 @@ fn h10_customer_revenue_matches_duckdb_without_limit() {
                 .collect(),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.customer);
+        cq_load::canonicalize(&mut data.nation);
+        cq_load::canonicalize(&mut data.orders);
+        cq_load::canonicalize(&mut data.lineitem);
         let sql = format!(
             r#"WITH customer AS (SELECT 1 AS c_custkey, 'C' AS c_name,
             123.45::DECIMAL(18,2) AS c_acctbal, 1 AS c_nationkey, 'A' AS c_address,
@@ -232,7 +237,7 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
             "o_orderpriority",
             ["1-URGENT", "2-HIGH", "3-MEDIUM"].into_iter(),
         );
-        let data = h12::Data {
+        let mut data = h12::Data {
             orders: rows
                 .iter()
                 .map(|r| {
@@ -260,6 +265,9 @@ fn h12_priority_counts_match_duckdb_and_date_guards() {
             }),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.orders);
+        cq_load::canonicalize(&mut data.lineitem);
+        cq_load::canonicalize(&mut data.high_priorities);
         let sql = format!(
             r#"WITH orders AS (SELECT DISTINCT c0 AS o_orderkey,
             CASE c6 WHEN 0 THEN '1-URGENT' WHEN 1 THEN '2-HIGH' ELSE '3-MEDIUM' END AS o_orderpriority
@@ -322,7 +330,7 @@ fn authored_wrapping_arithmetic_is_preserved_in_queries_and_guards() {
 #[test]
 #[allow(non_snake_case)]
 fn h06_integer_coefficient_query_is_exact() {
-    let Lineitem = &[
+    let mut rows = vec![
         (1_i64, 123_i64, 5_i64, 23_i64, 365_i32),
         (2, 123, 5, 23, 365),
         (3, 321, 7, 23, 400),
@@ -330,6 +338,8 @@ fn h06_integer_coefficient_query_is_exact() {
         (5, 100, 6, 23, 730),
         (1, 123, 5, 23, 365),
     ];
+    cq_load::canonicalize(&mut rows);
+    let Lineitem = rows.as_slice();
     let actual: Vec<(i64,)> = mini_linq::compile! {
         pipeline {}
         struct Query;
@@ -368,6 +378,9 @@ fn h03_radix_variants_preserve_duplicate_and_empty_answers() {
         ],
         dictionaries,
     };
+    cq_load::canonicalize(&mut data.customer);
+    cq_load::canonicalize(&mut data.orders);
+    cq_load::canonicalize(&mut data.lineitem);
     assert_eq!(
         tpch_runtime::same_plan_answers(|config| h03::run(&data, config), h03::canonical),
         [(10, 1)]
@@ -411,6 +424,13 @@ fn h09_configurations_preserve_filtered_join_answers() {
         }),
         dictionaries,
     };
+    cq_load::canonicalize(&mut data.part);
+    cq_load::canonicalize(&mut data.partsupp);
+    cq_load::canonicalize(&mut data.supplier);
+    cq_load::canonicalize(&mut data.nation);
+    cq_load::canonicalize(&mut data.orders);
+    cq_load::canonicalize(&mut data.lineitem);
+    cq_load::canonicalize(&mut data.green_names);
     for config in h09::CONFIGS {
         assert_eq!(h09::run(&data, config), [(10, 1, 100)], "{config}");
     }

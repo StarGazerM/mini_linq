@@ -1,6 +1,6 @@
 //! Checked sharded admission and exclusive-layout publication around CQ evaluation.
 //! Bindings, synchronous seeds, observers and outputs reuse the base printer.
-//! Certified chunk inputs retain their renamed host-set facts. The checked
+//! Chunk inputs remain sets after checked scan substitution. The checked
 //! per-task realization removes local duplicates without cloning owned rows.
 //! Cross-task/round duplicates still reach the recorded canonical admission owner.
 //! Recorded waves join in order; completed heads admit and publish alongside
@@ -943,7 +943,7 @@ mod tests {
     /// an individual CQ. Sequence must carry those facts across both serialized
     /// pass boundaries; dropping an envelope must not silently restore dedup.
     #[test]
-    fn discharged_holes_preserve_sequence_envelopes_without_local_dedup() {
+    fn canonical_consumers_preserve_sequence_envelopes_without_local_dedup() {
         use cq_stage::Language;
 
         let pull = pull_program();
@@ -961,7 +961,6 @@ mod tests {
             assert_eq!(splices.len(), program.holes.len());
             for (hole, splice) in program.holes.iter().zip(splices) {
                 assert!(hole.facts.consumer_canonical);
-                assert!(!hole.facts.discharged_host_sets.is_empty());
                 let arguments = &hole.pipeline.passes[hole.lower].arguments;
                 assert_eq!(
                     cq_physical_lowering::context(arguments.clone()).unwrap(),

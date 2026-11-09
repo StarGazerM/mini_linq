@@ -587,51 +587,19 @@ impl Checked<'_> {
         input: Option<(&Meaning, &Option<Vec<String>>)>,
     ) -> Option<Vec<String>> {
         let definition = self.physical(name).ok()?;
-        // Formal rule BE-GroupKey: Explicitly trusted keys survive renaming and inherited-key transfer.
-        if let Operator::Rename(rename) = &definition.operator {
-            for fact in &self.program.evidence.facts {
-                if let crate::EvidenceFact::TrustedKey {
-                    subject, columns, ..
-                } = fact
-                    && *subject == rename.relation
-                    && let Some(key) = columns
-                        .iter()
-                        .filter(|column| {
-                            !rename.constants.as_ref().is_some_and(|constants| {
-                                constants.equalities.iter().any(|equality| {
-                                    equality.left == **column
-                                        && matches!(
-                                            equality.right,
-                                            cq_syntax::EqualityValue::Literal(_)
-                                        )
-                                })
-                            })
-                        })
-                        .map(|column| {
-                            rename
-                                .mapping
-                                .iter()
-                                .find(|mapping| mapping.source == *column)
-                                .map(|mapping| symbol_name(&mapping.target))
-                        })
-                        .collect::<Option<Vec<_>>>()
-                {
-                    return Some(key);
-                }
-            }
-        }
+        // Formal rule BE-GroupKey: Shared Physical transfer derives keys from full-heading input sets and operators, independently of evidence.
         physical::inherited_key(
             &definition.operator,
             &self.prefix.analysis.physical.headings[&symbol_name(name)],
-            &self.prefix.physical_program.program.host_sets,
+            self.prefix.analysis.physical.disjoint.contains(&symbol_name(name)),
             |operand| {
                 let result = symbol_name(operand);
                 if let Some((meaning, unique)) = input
                     && matches!(meaning, Meaning::Result(name) if *name == result)
                 {
-                    return unique.clone();
+                    return unique.as_deref();
                 }
-                self.result_keys.get(&result).map(|(_, key)| key.clone())
+                self.result_keys.get(&result).map(|(_, key)| key.as_slice())
             },
         )
     }
@@ -664,6 +632,13 @@ impl Checked<'_> {
                         syn::Error::new_spanned(term, "BE-Alpha: union arms differ from Physical")
                     })?;
                 let meaning = Meaning::Result(symbol_name(&definition.name));
+                let mut arm_keys = facts.iter();
+                let unique = physical::inherited_key(
+                    &definition.operator,
+                    &self.prefix.analysis.physical.headings[&symbol_name(&definition.name)],
+                    self.prefix.analysis.physical.disjoint.contains(&symbol_name(&definition.name)),
+                    |_| arm_keys.next().and_then(|fact| fact.unique.as_deref()),
+                );
                 let mut result = facts.remove(0);
                 for fact in facts {
                     result.len = if matches!(result.len, Len::Unknown(_))
@@ -677,7 +652,7 @@ impl Checked<'_> {
                 }
                 result.meaning = meaning;
                 result.materializes = false;
-                result.unique = None;
+                result.unique = unique;
                 Ok(result)
             }
             Term::Rows(name) => {
@@ -1753,18 +1728,6 @@ fn check_rewrite_in(source_physical: &physical::Program, source_structures: &cq_
     {
         return Ok(());
     }
-    if (!unchanged || source.sequence != target.sequence)
-        && target.evidence.facts.iter().any(|fact| {
-            matches!(fact, crate::EvidenceFact::TrustedKey { .. })
-                && !source.evidence.facts.contains(fact)
-        })
-    {
-        return fail(
-            target,
-            "PL-Evidence",
-            "a structural rewrite cannot invent trusted key premises; record authored evidence first",
-        );
-    }
     let target_facts = analyze_in(target, context, target_prefix)?;
     let support = &context.support;
     // Catalog selection may retain host renames and replace their keyed
@@ -1899,15 +1862,16 @@ mod tests {
     fn indexed_publication_keys_do_not_promote_unstored_views() {
         let fixture: Fixture = syn::parse_quote! {
             physical {
-                relation R(a:i32);
-                r = pipe rename R {a -> a};
+                relation R(a:i32, b:i32);
+                raw = pipe rename R {a -> a, b -> b};
+                r = let project raw keep {a};
                 output = let canon project r keep {a};
                 return output as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; output rows = @sort as ::cq_storage::dedup::Sort; output canon = rows; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } raw host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; output rows = @sort as ::cq_storage::dedup::Sort; output canon = rows; }
             sequence {
-                a_view = canon rows r;
-                before = rows r;
+                a_view = canon map r rows raw;
+                before = map r rows raw;
                 z_store = store a_view;
                 after = rows r;
                 output = canon map output after;

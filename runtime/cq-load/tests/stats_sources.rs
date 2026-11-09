@@ -59,12 +59,12 @@ fn csv_matches_existing_parser_with_reordering_quotes_and_multiline_fields() {
                 delimiter: b'|', headers, trailing_delimiter, batch_size,
                 ..SourceOptions::default()
             };
-            let oracle = cq_load::read_csv::<Pair>(&file.0, CsvOptions {
+            let oracle: Vec<_> = cq_load::Csv::<Pair>::open(&file.0, CsvOptions {
                 delimiter: options.delimiter,
                 headers,
                 trailing_delimiter,
                 batch_size,
-            }).unwrap();
+            }).unwrap().collect::<Result<Vec<_>>>().unwrap().into_iter().flatten().collect();
             assert_eq!(pairs(&file, &options).unwrap(), oracle);
             assert_eq!(oracle, vec![
                 (1, "a|b".into()), (-2, "line\nnext".into()),
@@ -286,7 +286,9 @@ mod parquet_tests {
         let values = vec![Some(-7), Some(2), Some(2), Some(4), Some(0), Some(9), Some(10)];
         let file = parquet(values);
         for batch_size in [1, 2, 9] {
-            let oracle = cq_load::read_parquet::<Pair>(&file.0, cq_load::ParquetOptions { batch_size }).unwrap();
+            let oracle: Vec<_> = cq_load::Parquet::<Pair>::open(
+                &file.0, cq_load::ParquetOptions { batch_size },
+            ).unwrap().collect::<Result<Vec<_>>>().unwrap().into_iter().flatten().collect();
             assert_eq!(pairs(&file, &options(batch_size)).unwrap(), oracle);
             assert_eq!(oracle.iter().map(|row| row.0).collect::<Vec<_>>(), [-7, 2, 2, 4, 0, 9, 10]);
             let mut visited = 0;

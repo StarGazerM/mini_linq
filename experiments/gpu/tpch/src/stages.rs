@@ -798,7 +798,7 @@ impl Program {
                 .as_ref()
                 .ok_or("stage input requires columns")?;
             if columns.iter().all(|column| column.domain.is_none()) {
-                tokens.extend(quote!(let #prepared = #name;));
+                tokens.extend(quote!(let mut #prepared = #name;));
             } else {
                 let fields = columns.iter().enumerate().map(|(index, column)| {
                     let slot = syn::Index::from(index);
@@ -808,8 +808,10 @@ impl Program {
                         quote!(row.#slot)
                     }
                 });
-                tokens.extend(quote!(let #prepared: Vec<_> = #name.into_iter().map(|row| (#(#fields,)*)).collect();));
+                tokens.extend(quote!(let mut #prepared: Vec<_> = #name.into_iter().map(|row| (#(#fields,)*)).collect();));
             }
+            // Formal rule DR-PreparedSet: canonicalize the adapted tuples actually bound to stages.
+            tokens.extend(quote!(cq_load::canonicalize(&mut #prepared);));
         }
         Ok(tokens)
     }
@@ -1069,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn key_evidence_is_preserved_as_an_authored_record() {
+    fn stages_need_no_authored_key_evidence() {
         let h01 = Program::import(
             crate::source::SOURCES
                 .iter()
@@ -1078,11 +1080,7 @@ mod tests {
                 .1,
         )
         .unwrap();
-        assert!(
-            h01.stages[0]
-                .evidence
-                .has_trusted_key("Lineitem", &["l_orderkey".into(), "l_linenumber".into()])
-        );
+        assert!(h01.stages[0].evidence.facts.is_empty());
         let h13 = Program::import(
             crate::source::SOURCES
                 .iter()

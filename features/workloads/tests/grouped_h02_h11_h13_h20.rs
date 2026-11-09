@@ -60,7 +60,7 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
         dictionaries.insert("s_comment", ["C"].into_iter());
         dictionaries.insert("n_name", ["N", "O"].into_iter());
         dictionaries.insert("r_name", ["EUROPE", "ASIA"].into_iter());
-        let data = h02::Data {
+        let mut data = h02::Data {
             part: vec![
                 (
                     1,
@@ -133,6 +133,12 @@ fn h02_minimum_preserves_ties_and_restricts_the_minimum_to_europe() {
             }),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.part);
+        cq_load::canonicalize(&mut data.partsupp);
+        cq_load::canonicalize(&mut data.supplier);
+        cq_load::canonicalize(&mut data.nation);
+        cq_load::canonicalize(&mut data.region);
+        cq_load::canonicalize(&mut data.brass_types);
         let sql = format!(
             r#"WITH
             part(p_partkey,p_mfgr,p_size,p_type) AS (VALUES
@@ -187,7 +193,7 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
     for rows in [rows.clone(), rows.into_iter().rev().collect(), vec![]] {
         let mut dictionaries = cq_load::Dictionaries::default();
         dictionaries.insert("n_name", ["GERMANY", "FRANCE"].into_iter());
-        let data = h11::Data {
+        let mut data = h11::Data {
             partsupp: rows
                 .iter()
                 .map(|r| {
@@ -206,6 +212,9 @@ fn h11_threshold_is_strict_and_both_sums_preserve_supplier_identity() {
             ],
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.partsupp);
+        cq_load::canonicalize(&mut data.supplier);
+        cq_load::canonicalize(&mut data.nation);
         let sql = format!(
             r#"WITH partsupp AS (SELECT c0 AS ps_partkey,c1 AS ps_suppkey,
             c2 AS ps_availqty,CAST(c3 * 0.01 AS DECIMAL(18,2)) AS ps_supplycost
@@ -257,7 +266,7 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
             ]
             .into_iter(),
         );
-        let data = h13::Data {
+        let mut data = h13::Data {
             customer: vec![(1,), (2,), (3,), (4,), (5,)],
             orders: rows
                 .iter()
@@ -280,6 +289,8 @@ fn h13_counts_zero_and_obeys_ordered_comment_pattern() {
             ),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.customer);
+        cq_load::canonicalize(&mut data.orders);
         let sql = format!(
             r#"WITH customer(c_custkey) AS (VALUES (1),(2),(3),(4),(5)),
             orders AS (SELECT c0 AS o_orderkey,c1 AS o_custkey,
@@ -327,7 +338,7 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
         dictionaries.insert("s_name", ["A", "B", "C"].into_iter());
         dictionaries.insert("s_address", ["X", "Y", "Z"].into_iter());
         dictionaries.insert("n_name", ["CANADA", "FRANCE"].into_iter());
-        let data = h20::Data {
+        let mut data = h20::Data {
             part: vec![
                 (1, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "forest green")),
                 (2, ::cq_storage::domain::exact(dictionaries.domain("p_name"), "xforest")),
@@ -382,6 +393,12 @@ fn h20_preserves_line_identity_date_bounds_and_absent_group_null_semantics() {
             }),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.part);
+        cq_load::canonicalize(&mut data.partsupp);
+        cq_load::canonicalize(&mut data.supplier);
+        cq_load::canonicalize(&mut data.nation);
+        cq_load::canonicalize(&mut data.lineitem);
+        cq_load::canonicalize(&mut data.forest_names);
         let sql = format!(
             r#"WITH part(p_partkey,p_name) AS (VALUES
             (1,'forest green'),(2,'xforest'),(3,'forest')),
@@ -438,7 +455,7 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
         dictionaries.insert("s_name", ["A", "B", "C", "D"].into_iter());
         dictionaries.insert("s_address", ["X", "Y", "Z", "W"].into_iter());
         dictionaries.insert("s_phone", ["P", "Q", "R", "S"].into_iter());
-        let data = h15::Data {
+        let mut data = h15::Data {
             supplier: vec![
                 (
                     1,
@@ -487,6 +504,8 @@ fn h15_grouped_max_preserves_all_maximum_ties_and_quarter_boundaries() {
                 .collect(),
             dictionaries,
         };
+        cq_load::canonicalize(&mut data.supplier);
+        cq_load::canonicalize(&mut data.lineitem);
         let sql = format!(
             r#"WITH
             supplier(s_suppkey,s_name,s_address,s_phone) AS (VALUES

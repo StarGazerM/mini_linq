@@ -394,17 +394,6 @@ pub fn physical(
             c.push(Operator::DropConstraint, format!("capture gate {i}"), m);
         }
     }
-    for i in 0..body.host_sets.len() {
-        let mut m = program.clone();
-        m.program.host_sets.remove(i);
-        c.push(Operator::DropFlag, format!("host_set {i}"), m);
-        let mut m = program.clone();
-        m.program.host_sets[i].discharged = match body.host_sets[i].discharged {
-            Some(_) => None,
-            None => Some(Default::default()),
-        };
-        c.push(Operator::DropFlag, format!("host_set {i} discharged"), m);
-    }
     if body.consumer_canonical.is_some() {
         let mut m = program.clone();
         m.program.consumer_canonical = None;

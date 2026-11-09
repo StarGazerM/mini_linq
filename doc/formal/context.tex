@@ -16,28 +16,21 @@ model and belong to a dialect with a checked translation
 containment into Structures and Sequence.
 \begin{lstlisting}
 Physical ::= physical { Decl* Fact* Def* return [canon] r as Head; }
-Fact     ::= host_set R [discharged];
-           | consumer canonical;
+Fact     ::= consumer canonical;
 \end{lstlisting}
-The two fact forms may be interleaved before definitions. Each host has at
-most one host-set fact (certified or discharged), and the consumer fact occurs
-at most once. With no facts, the grammar and generated program retain the
-unconditional defaults.
-A fact without \code{discharged} is \emph{certified}: the generated program
-establishes it at runtime before the query executes (\textsc{IF-HostSet}).
-A fact marked \code{discharged} is established by the compiler that invoked
-this pass; it costs nothing at runtime and is admissible only under
-\textsc{CTX-Discharge} below. \code{consumer canonical} has no certified
-form: no program can test what its consumer will do.
+The consumer fact occurs at most once before definitions. With no fact,
+the program retains the unconditional return obligation.
+Every input relation is a set independently of context: IO establishes
+full-row uniqueness before engine execution, outside query timers.
+There is no compiler input-set fact or runtime certification form.
+The consumer fact has no runtime-testable form: no program can test what
+its consumer will do.
 
 \paragraph{Meaning of a program under facts.} Let $\Gamma$ be the recorded
 facts. The judgment $\Gamma\vdash P$ reads: $P$ denotes
 $\llbracket P\rrbracket$ in every context satisfying $\Gamma$. For
 $\Gamma=\emptyset$ this is the unconditional meaning used everywhere else.
 \begin{mathpar}
-\Rule{CTX-HostSet}{\code{host\_set R}\in\Gamma}
- {\alpha(R)\text{ is a set: }\mathsf{fullRows}(R)\text{ has no duplicate}}
-
 \Rule{CTX-Consumer}{\code{consumer canonical}\in\Gamma\quad
  \kappa\text{ consumes the returned stream}}
  {\kappa(B)=\kappa(\mathrm{supp}(B))\text{ for every bag }B}
@@ -48,18 +41,14 @@ boundary is owned by $\kappa$. This is the statement, already present in
 Section~\ref{sec:incremental} (INC-Supp), that a consumer may own the final
 canonical boundary only when multiplicity is unobservable there.
 
-\paragraph{What a fact relaxes.} Exactly two obligations consult $\Gamma$;
-every other contract is unchanged.
-\textsc{PH-HostSet} (Section~\ref{sec:physical}) and:
+\paragraph{What a fact relaxes.} Only the returned boundary consults
+$\Gamma$; every other contract is unchanged.
 \begin{mathpar}
 \Rule{CK-Return}{\mathsf{unique}(t.returned)\ \vee\
  \code{return canon}\in t\ \vee\ \code{consumer canonical}\in\Gamma}
  {\text{the returned boundary of }t\text{ is admissible}}
 \end{mathpar}
-\textsc{PH-HostSet} seeds the uniqueness lattice at a host rename; joins
-combine keys and projections keep a key they retain, so a hole whose head
-keeps the inherited key needs no \code{canon} at all. \textsc{CK-Return}
-replaces the third premise of \textsc{CK-Physical} and the corresponding
+\textsc{CK-Return} replaces the third premise of \textsc{CK-Physical} and the corresponding
 Structures rule: with \code{consumer canonical} lowering records no
 \code{return canon}, Structures records no head dedup strategy, and the
 printers emit no local canonicalization. Internal \code{canon} boundaries (union arms,
@@ -68,23 +57,18 @@ intermediate joins, not the result's set-ness.
 
 \paragraph{Discharge.} A fact is sound only if someone establishes it.
 \begin{mathpar}
-\Rule{CTX-Certify}{\code{host\_set R}\in\Gamma\text{ certified}\quad
- \mathsf{certify}(R)\Downarrow\ok\ (\textsc{IF-HostSet})}
- {\text{the executing program establishes CTX-HostSet}}
-
-\Rule{CTX-Discharge}{\varphi\in\Gamma\text{ discharged}\quad
+\Rule{CTX-Discharge}{\varphi\in\Gamma\quad
  \varphi\in\mathsf{facts}(args)\quad
  \mathsf{check}_C(\text{invoking program})\text{ proves }\varphi}
  {\text{the invoking compiler }C\text{ establishes }\varphi}
 
-\Rule{CTX-Entry}{\Gamma_{\!d}(s)\ne\emptyset\quad
- \bigl(E\text{ absent}\ \vee\ \mathsf{facts}(E)\ne\Gamma_{\!d}(s)\bigr)}
+\Rule{CTX-Entry}{(\Gamma(s)\ne\emptyset\land E\text{ absent})\ \vee\
+ (E\text{ present}\land\mathsf{facts}(E)\ne\Gamma(s))}
  {\text{rejected: CTX-Entry requires an exact explicit context envelope}}
 \end{mathpar}
-Here $\Gamma_{\!d}(s)$ comprises the source's discharged host facts and
-consumer fact, excluding locally certified host facts; $E$ is the invocation's
+Here $\Gamma(s)$ comprises the source's consumer fact; $E$ is the invocation's
 explicit \code{context} envelope. An envelope, when present, must equal
-$\Gamma_{\!d}(s)$ even if that set is empty: neither missing nor extra facts
+$\Gamma(s)$ even if that set is empty: neither missing nor extra facts
 are allowed. A \code{lower} or \code{select} argument packet may introduce
 facts into a fact-free source, but cannot authorize entry to an already
 factful source, even when it names every recorded fact.
@@ -99,17 +83,15 @@ protocol without an envelope.
 The \code{lower} and \code{select} passes accept context facts in their own
 comma-separated argument packets, not as global pipeline configuration:
 \begin{lstlisting}
-ContextArg ::= consumer = canonical | host_set R discharged
+ContextArg ::= consumer = canonical
 LowerArgs  ::= [ContextArg ("," ContextArg)* [","]]
 SelectArgs ::= [SelectArg ("," SelectArg)* [","]]
 SelectArg  ::= ContextArg | positional(R, ...)
 \end{lstlisting}
-Thus \code{lower(consumer = canonical, host_set R discharged)} records
-\code{consumer canonical;} and \code{host_set R discharged;} in Physical.
+Thus \code{lower(consumer = canonical)} records
+\code{consumer canonical;} in Physical.
 The equals sign belongs only to the packet's consumer argument; semicolons
-belong only to the recorded facts. A host-set packet argument requires
-\code{discharged}; certified host sets continue to be recorded by
-\code{host_sets(R,...)}. Duplicate consumer or host arguments are rejected.
+belong only to the recorded fact. Duplicate consumer arguments are rejected.
 In \code{select}, \code{positional(...)} may occur at most once and may be
 interleaved with context arguments; it retains its existing host-capability
 meaning. Empty packets retain the existing lowering and selection defaults.
@@ -121,8 +103,8 @@ context { ContextArg ("," ContextArg)* [","] };
 pipeline { ... };
 Program
 \end{lstlisting}
-The envelope's facts must equal the parsed source's discharged host facts
-and consumer fact in both directions. It is not inserted into a later
+The envelope's facts must equal the parsed source's consumer fact
+in both directions. It is not inserted into a later
 pass's opaque arguments. Ordinary passes and rewrites may preserve or drop
 these facts, but cannot introduce new ones; only the lower/select packet
 boundary authorizes introduction.
@@ -136,16 +118,12 @@ even with a matching lower/select argument packet. These checks enforce
 provenance; they do not replace the invoking compiler's semantic proof.
 
 \begin{theorem}[Closed context]
-If $\Gamma\vdash P$, $C$ discharges every discharged fact of $\Gamma$, and
-the executing program certifies every certified fact, then $C[P]$ refines the
+If $\Gamma\vdash P$ and $C$ discharges every fact of $\Gamma$, then $C[P]$ refines the
 unconditional meaning of $C[P']$ where $P'$ is $P$ with $\Gamma=\emptyset$
 and the relaxed boundaries restored.
 \end{theorem}
 \begin{proof}
-\textsc{PH-HostSet}: a duplicate-free rename has its heading as key, so every
-key the lattice derives from it is a key of the unconditional program's
-canonical result; dropping a \code{canon} implied by such a key keeps the
-set. \textsc{CK-Return}: the returned bag $B$ satisfies
+\textsc{CK-Return}: the returned bag $B$ satisfies
 $\mathrm{supp}(B)=\llbracket P'\rrbracket$ by the unchanged pass
 refinements modulo $\mathrm{supp}$, and $\kappa(B)=\kappa(\mathrm{supp}(B))$
 by \textsc{CTX-Consumer}. Panics are unchanged: no relaxation adds a step.
@@ -159,6 +137,49 @@ t\rrbracket)$ and no new $\bot$; elsewhere it is unchanged. Reductions,
 disjoint-union rewrites and checked canonicalization strategy choices satisfy
 this: none changes a support.
 
+\paragraph{Input sets belong to IO.}
+Every compiler input is a set unconditionally. A raw file or decoder batch
+may repeat tuples, but a relation loader establishes full-row uniqueness
+before handing its result to the engine. No host-set fact, trusted key,
+type-based inference or compiler-side runtime certificate is involved.
+\begin{mathpar}
+\Rule{LD-RelationSet}{B:\operatorname{Vec}(X)\quad
+ \le_X\text{ is a total order whose equality is relational equality}\quad
+ S=\operatorname{unique}(\operatorname{sort}_{\le_X}(B))}
+ {\mathsf{loadSet}(B)=S\quad
+  \operatorname{supp}(S)=\operatorname{supp}(B)\quad\mathsf{unique}(S)}
+
+\Rule{LD-ColumnSet}{C=(C_0,\ldots,C_{k-1})\quad
+ I=\operatorname{unique}_{C}
+    (\operatorname{sort}_{C}([0,\ldots,|C|-1]))\quad
+ C'_j=[C_j[i]\mid i\in I]}
+ {\operatorname{supp}(\mathsf{rows}(C'))=\operatorname{supp}(\mathsf{rows}(C))
+  \quad\mathsf{unique}(\mathsf{rows}(C'))}
+\end{mathpar}
+Collected CSV, Parquet, interned and grouped loaders canonicalize their
+complete declared rows, never a presumed primary key. Tuple vectors sort
+and deduplicate in place without cloning or another row buffer. Columnar
+loaders compare complete encoded row ordinals and retain one row position
+per distinct tuple; they rebuild columns only when duplicates exist.
+Low-level bounded decoder batches and statistics streams are not relation
+inputs and retain raw multiplicities.
+
+CPU TPC-H projections cross this IO boundary once during load, outside query
+execution. Dictionary predicate relations are already constructed from
+distinct dictionary codes; zone-layout conversion preserves the canonical
+rows. Arbitrary host projections must also deduplicate before becoming a
+new compiler input. H01's seven-column Lineitem relation is unique even
+when a file repeats an entire line or reuses an order/line identifier with
+different remaining values. Neither case is rejected or collapsed by a
+two-column key assumption.
+
+DOOP's file loader establishes the same full-row set boundary once.
+Datalog's existing EDB admission (\textsc{DL-InsertNew}) still constructs
+canonical and maintained indexes, extending them only on first full-row
+admission. A logical set declaration alone never certifies a raw file or
+vector's traversal. IDB delta admission and negative key-set construction
+retain their existing uniqueness guarantees.
+
 \paragraph{Instances.} The following languages compile to CQ and may
 discharge facts; each names the checker that proves them.
 \begin{center}
@@ -166,16 +187,14 @@ discharge facts; each names the checker that proves them.
 \toprule
 Invoking compiler & Fact & Proof obligation of its checker\\
 \midrule
-Datalog Storage & \code{host\_set H discharged} & $H$ is a canonical EDB provider, an IDB \code{all}/\code{delta} fed only through admission, or a layout maintained from them\\
 Datalog Round & \code{consumer canonical} & the hole is listed in exactly one \code{admit R from [..]} with $R$ its head (DL-Admit-Owner)\\
-Recursion extension & both & delta is \code{Answers}; results enter \code{fixpoint\_seen}\\
+Recursion extension & \code{consumer canonical} & results enter \code{fixpoint\_seen}\\
 Aggregate extension & \code{consumer canonical} & results enter the extension's own set state\\
-Top-level \code{mini\_linq!} & \code{host\_set R} certified only & \textsc{IF-HostSet}\\
 \bottomrule
 \end{tabular}
 \end{center}
 \paragraph{What is not a context fact.} A context fact is an assumption about
-inputs or the consumer that only an enclosing compiler can establish and that
+the consumer that only an enclosing compiler can establish and that
 never changes which query runs. The following are therefore excluded.
 Declared keys are statements about data identity (a Skolem/provenance notion);
 assuming one would let a pass replace the query by a different one, so keys
@@ -190,8 +209,8 @@ A terminal's canonical return is a guarantee the lower level exports
 of a context fact.
 
 \paragraph{Multi-stage control.} Facts are the interface between stages of a
-stacked compiler: the upper stage decides what it will guarantee about inputs
-and consumers, records it in the lower program it emits, and the lower stage
+stacked compiler: the upper stage decides what it will guarantee about its
+consumer, records it in the lower program it emits, and the lower stage
 compiles against that interface without knowing the upper language. The
 lower program remains a complete, checkable text; the only trace of the
 upper stage is $\Gamma$, and \textsc{CTX-Entry} ensures it cannot be run

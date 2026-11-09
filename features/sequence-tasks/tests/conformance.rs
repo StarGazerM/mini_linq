@@ -59,8 +59,8 @@ fn program(mut program: Fixture) -> Fixture {
 fn named_tile_pipeline_preserves_rows_across_join() {
     let program = program(syn::parse_quote! {
         physical {
-            relation R(a:i32);
-            r = pipe rename R {a -> a};
+            relation R(a:i32,witness:i32);
+            r = pipe rename R {a -> a,witness -> witness};
             out = let canon project r keep {a};
             return out as answer(a);
         }
@@ -72,7 +72,7 @@ fn named_tile_pipeline_preserves_rows_across_join() {
             result = store canon map out renamed_rows;
         }
     });
-    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program, TARGETS, &[("R", &[&[3], &[1], &[3], &[2], &[9]])]);
+    assert_conformant_with_inputs(&program.physical, &program.structures, &program.program, TARGETS, &[("R", &[&[3,0], &[1,1], &[3,2], &[2,3], &[9,4]])]);
 }
 
 #[test]
@@ -103,8 +103,8 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
     assert_conformant_with_inputs(&program.physical, &program.structures, &program.program,
         TARGETS,
         &[
-            ("L", &[&[1], &[1], &[2]]),
-            ("R", &[&[1, 10], &[1, 10], &[2, 20]]),
+            ("L", &[&[1], &[2]]),
+            ("R", &[&[1, 10], &[2, 20]]),
         ],
     );
 }
@@ -113,15 +113,16 @@ fn host_hash_lookup_store_keeps_exact_capability_on_tasks_machine() {
 fn join() {
     let program = program(syn::parse_quote! {
         physical {
-            relation L(a:i32); relation R(a:i32,b:i32);
-            l = pipe rename L {a -> a};
+            relation L(a:i32,witness:i32); relation R(a:i32,b:i32);
+            raw = pipe rename L {a -> a,witness -> witness};
+            l = pipe project raw keep {a};
             r = let rename R {a -> a,b -> b};
             j = let canon probe first [a] l,r;
             return j as answer(a,b);
         } structures { providers { sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] }; } r = @sorted_run as ::cq_storage::SortedRun<_, _> [a]; }
         sequence {
             r = store rows r;
-            input = store rows l;
+            input = store map l rows raw;
             result = store tile 2 canon flatten lookup r [a] input;
         }
     });
@@ -129,7 +130,7 @@ fn join() {
     assert_conformant_with_inputs(&program.physical, &program.structures, &program.program,
         TARGETS,
         &[
-            ("L", &[&[1], &[2], &[1], &[9]]),
+            ("L", &[&[1,0], &[2,1], &[1,2], &[9,3]]),
             ("R", &[&[1, 10], &[1, 11], &[2, 20], &[4, 40]]),
         ],
     );
@@ -171,21 +172,23 @@ fn chain() {
 fn semi() {
     let program = program(syn::parse_quote! {
         physical {
-            relation L(a:i32); relation R(a:i32);
-            l = pipe rename L {a -> a};
-            r = let rename R {a -> a};
+            relation L(a:i32,witness:i32); relation R(a:i32,witness:i32);
+            raw_l = pipe rename L {a -> a,witness -> left_witness};
+            l = pipe project raw_l keep {a};
+            raw_r = pipe rename R {a -> a,witness -> right_witness};
+            r = let project raw_r keep {a};
             j = let canon semi eager [a] l,r;
             return j as answer(a);
         } structures { providers {  }}
         sequence {
-            r = store rows r;
-            input = store rows l;
+            r = store map r rows raw_r;
+            input = store map l rows raw_l;
             result = store tile 2 canon compact j lookup r [a] input;
         }
     });
     assert_conformant_with_inputs(&program.physical, &program.structures, &program.program,
         TARGETS,
-        &[("L", &[&[1], &[2], &[1], &[3]]), ("R", &[&[1], &[1], &[3]])],
+        &[("L", &[&[1,0], &[2,1], &[1,2], &[3,3]]), ("R", &[&[1,0], &[1,1], &[3,2]])],
     );
 }
 
@@ -193,19 +196,20 @@ fn semi() {
 fn canon_sorts_the_whole_stream_across_task_boundaries() {
     let program = program(syn::parse_quote! {
         physical {
-            relation R(a:i32);
-            r = let canon rename R {a -> a};
+            relation R(a:i32,witness:i32);
+            raw = pipe rename R {a -> a,witness -> witness};
+            r = let canon project raw keep {a};
             return r as answer(a);
         } structures { providers {  }}
         sequence {
-            input = rows r;
+            input = map r rows raw;
             parts = tile 64 input;
             joined = flatten parts;
             result = store canon joined;
         }
     });
-    // Duplicate rows straddle Rayon partition boundaries.
-    let rows: Vec<_> = (0..5000).map(|index| [index % 7]).collect();
+    // Duplicate projected rows straddle Rayon partition boundaries.
+    let rows: Vec<_> = (0..5000).map(|index| [index % 7, index]).collect();
     let borrowed: Vec<_> = rows.iter().map(|row| row.as_slice()).collect();
     assert_conformant_with_inputs(&program.physical, &program.structures, &program.program, TARGETS, &[("R", &borrowed)]);
 }

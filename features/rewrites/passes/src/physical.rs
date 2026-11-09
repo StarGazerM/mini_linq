@@ -72,30 +72,29 @@ pub fn canon_prefixes(source: &ir::Program, arguments: TokenStream) -> syn::Resu
     let selected = Results::parse(arguments)?;
     let mut target = source.clone();
     let mut matched = BTreeSet::new();
-    let mut unique = BTreeMap::<String, Vec<String>>::new();
-    for definition in &mut target.program.definitions {
+    let mut added = Vec::with_capacity(source.program.definitions.len());
+    ir::uniqueness(source, &facts.headings, &facts.disjoint, |definition, inherited| {
         let name = symbol_name(&definition.name);
-        let heading = facts.headings[&name].clone();
-        let inherited = ir::inherited_key(
-            &definition.operator,
-            &heading,
-            &target.program.host_sets,
-            |id| unique.get(&symbol_name(id)).cloned(),
-        );
+        let heading = &facts.headings[&name];
+        let mut add = false;
         if selected.includes(&definition.name) {
             if let Operator::Project(p) = &definition.operator {
                 if heading.len() < facts.headings[&symbol_name(&p.input)].len() {
-                    matched.insert(name.clone());
+                    matched.insert(name);
                     if inherited.is_none() {
-                        definition.canon = Some(Default::default());
-                        // PH-Canon: a canon result is stored in its canonical index.
-                        definition.mode = ir::Mode::Let(Default::default());
+                        add = true;
                     }
                 }
             }
         }
-        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then_some(heading)) {
-            unique.insert(name, key);
+        added.push(add);
+        definition.canon.is_some() || add
+    });
+    for (definition, add) in target.program.definitions.iter_mut().zip(added) {
+        if add {
+            definition.canon = Some(Default::default());
+            // PH-Canon: a canon result is stored in its canonical index.
+            definition.mode = ir::Mode::Let(Default::default());
         }
     }
     selected.require_matches(&matched)?;
@@ -518,64 +517,6 @@ pub fn hoist(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Pr
         .program
         .definitions
         .sort_by_key(|definition| !closure.contains(&symbol_name(&definition.name)));
-    ir::check_rewrite(source, &target)?;
-    Ok(target)
-}
-
-/// Record checked full-heading host sets, then remove only canon boundaries
-/// already implied by the resulting keys. Arguments name host relations.
-pub fn host_sets(source: &ir::Program, arguments: TokenStream) -> syn::Result<ir::Program> {
-    use syn::parse::Parser;
-    let relations = syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated
-        .parse2(arguments)?;
-    if relations.is_empty() {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "host_sets requires host relation names",
-        ));
-    }
-    let facts = ir::contract::check(source)?;
-    let mut target = source.clone();
-    for relation in relations {
-        if !target.program.host_is_set(&relation) {
-            target.program.host_sets.push(ir::HostSet {
-                host_set_token: Default::default(),
-                relation,
-                discharged: None,
-                semi_token: Default::default(),
-            });
-        }
-    }
-    ir::contract::check(&target)?;
-    let mut keys = BTreeMap::<String, Vec<String>>::new();
-    for definition in &mut target.program.definitions {
-        let name = symbol_name(&definition.name);
-        let heading = &facts.headings[&name];
-        let inherited = ir::inherited_key(
-            &definition.operator,
-            heading,
-            &target.program.host_sets,
-            |id| keys.get(&symbol_name(id)).cloned(),
-        );
-        if inherited.is_some() {
-            definition.canon = None;
-        }
-        if let Some(key) = inherited.or_else(|| definition.canon.is_some().then(|| heading.clone()))
-        {
-            keys.insert(name, key);
-        }
-    }
-    if keys.contains_key(&symbol_name(&target.program.returned))
-        && target.program.return_canon.is_some()
-    {
-        target.program.return_canon = None;
-        // PH-HeadDedup: the answer dedup the dropped canon recorded remains
-        // an obligation exactly when computed answers may still collapse.
-        let returned = &facts.headings[&symbol_name(&target.program.returned)];
-        if ir::head_collapses(&target.program, returned) {
-            target.program.return_dedup = Some(Default::default());
-        }
-    }
     ir::check_rewrite(source, &target)?;
     Ok(target)
 }

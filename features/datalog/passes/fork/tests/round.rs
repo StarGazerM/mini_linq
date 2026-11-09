@@ -276,7 +276,7 @@ fn input_certificates_erase_exactly_and_cannot_hide_other_changes() {
         unreachable!()
     };
     atom.relation = binding.clone();
-    target.holes[rule.hole].rename_host_fact(original, &binding);
+    target.holes[rule.hole].rename_host_evidence(original, &binding);
     target.execution.push(round::Execution {
         hole: rule.hole,
         occurrence: 0,
@@ -317,11 +317,18 @@ fn input_certificates_erase_exactly_and_cannot_hide_other_changes() {
     let mut invalid_mode = suppressed.clone();
     invalid_mode.execution[0].self_dedup = Some(syn::parse_quote!(unknown));
     assert!(round::erase(&invalid_mode).is_err());
-    let mut stale_facts = target.clone();
-    stale_facts.holes[rule.hole].facts = source.holes[rule.hole].facts.clone();
-    let hole = &mut stale_facts.holes[rule.hole];
-    hole.pipeline.passes[hole.lower].arguments = hole.facts.to_token_stream();
-    assert!(round::contract::check(&stale_facts).is_err());
+    // Scan substitution preserves consumer context but must replace the host origin.
+    let mut stale_host = target.clone();
+    let binding = &stale_host.execution[0].binding;
+    let declaration = stale_host.holes[rule.hole]
+        .cq
+        .declarations
+        .iter_mut()
+        .find(|declaration| declaration.name == *binding)
+        .unwrap();
+    declaration.value = Some(syn::parse_quote!(= (#original)));
+    assert!(round::contract::check(&stale_host).is_err());
+    assert!(round::check_rewrite(&source, &stale_host).is_err());
     let changes: &[fn(&mut round::Program)] = &[
         |p| p.execution.push(p.execution[0].clone()),
         |p| p.execution[0].occurrence = 1,
@@ -818,7 +825,7 @@ fn execution_records_have_authored_lossless_grammar() {
 }
 
 #[test]
-fn canonical_consumers_have_exact_owners_and_certified_inputs() {
+fn canonical_consumers_have_exact_owners_and_context() {
     let target = compile(&source()).unwrap();
     for (index, relation) in target.context.relations.iter().enumerate() {
         let expected: Vec<_> = target
@@ -833,19 +840,6 @@ fn canonical_consumers_have_exact_owners_and_certified_inputs() {
     }
     for hole in &target.holes {
         assert!(hole.facts.consumer_canonical);
-        let inputs: std::collections::BTreeSet<_> = hole
-            .cq
-            .query
-            .body
-            .iter()
-            .filter_map(|item| match item {
-                round::cq::BodyItem::Positive { atom } => {
-                    Some(cq_syntax::symbol_name(&atom.relation))
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(hole.facts.discharged_host_sets, inputs);
         let packet: cq_stage::Context =
             syn::parse2(hole.pipeline.passes[hole.lower].arguments.clone()).unwrap();
         assert_eq!(packet, hole.facts);
@@ -862,13 +856,6 @@ fn canonical_consumers_have_exact_owners_and_certified_inputs() {
         },
         |p| p.context.relations[1].admit[0] = usize::MAX,
         |p| p.holes[0].facts.consumer_canonical = false,
-        |p| {
-            p.holes[0]
-                .facts
-                .discharged_host_sets
-                .insert("Unknown".into());
-        },
-        |p| p.holes[0].facts.discharged_host_sets.clear(),
         |p| p.holes[0].cq.declarations[0].value = Some(syn::parse_quote!(= (unproved_rows))),
     ];
     for (index, change) in changes.iter().enumerate() {
@@ -884,18 +871,8 @@ fn canonical_consumers_have_exact_owners_and_certified_inputs() {
     }
     let mut changed = target.clone();
     let hole = &mut changed.holes[0];
-    hole.pipeline.passes[hole.lower].arguments = quote!(consumer = canonical);
+    hole.pipeline.passes[hole.lower].arguments = quote!();
     assert!(round::contract::check(&changed).is_err());
-}
-
-#[test]
-fn uncertified_hosts_do_not_receive_discharge_facts() {
-    let mut storage = source();
-    storage.certificates.clear();
-    let target = compile(&storage).unwrap();
-    assert!(target.holes.iter().all(|hole| hole.facts.consumer_canonical
-        && hole.facts.discharged_host_sets.is_empty()));
-    round::contract::check(&target).unwrap();
 }
 
 #[test]
@@ -909,7 +886,6 @@ fn custom_lower_aliases_require_an_explicit_role() {
         quote!(#queue lower = 7;),
         quote!(#queue lower = 0; lower = 0;),
         quote!(cq = pipeline { lower, lower, ::mini_linq::passes::translate_pull };),
-        quote!(cq = pipeline { lower(host_set Unknown discharged), ::mini_linq::passes::translate_pull };),
     ] {
         assert!(compile_with(&storage, arguments).is_err());
     }
@@ -955,7 +931,7 @@ fn scan_correspondence_accepts_an_unwrapped_read_and_rejects_wrong_sources() {
         .unwrap();
     declaration.name = name.clone();
     declaration.value = Some(syn::parse_quote!(= (&#host)));
-    hole.rename_host_fact(&scan.binding, &name);
+    hole.rename_host_evidence(&scan.binding, &name);
     check(&storage, &alternative).unwrap();
     let mut invalid = original.clone();
     invalid.context.strata[component].seeds[0]

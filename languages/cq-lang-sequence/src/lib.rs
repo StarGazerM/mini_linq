@@ -2,8 +2,8 @@
 //!
 //! A program appends `sequence { name = term; ... }` and an optional
 //! `graded machine { name at level.path; ... }` to a complete Structures program.
-//! Optional evidence records source-preserving estimates and planning keys,
-//! separately from explicitly authored trusted semantic key premises.
+//! Optional evidence records source-preserving planning estimates.
+//! Input uniqueness follows from the IO set contract and Physical transfer.
 //! Terms are prefix forms: `rows`, `map`, `flatten`, `compact`, `tile`, `lookup`,
 //! `partition_k[keys](parts)`, `fold`, `group`, `canon`, `store`, `union` and
 //! `choose`, or references to earlier definitions. A key partition reads a named
@@ -582,7 +582,7 @@ pub struct Analysis {
     pub collectives: Vec<(String, Monoid, Vec<String>)>,
     pub output: Option<(String, OutputProtocol)>,
     pub obligations: Vec<Obligation>,
-    /// Source-preserving planning advice and explicitly authored trusted keys.
+    /// Source-preserving planning advice, never uniqueness premises.
     pub evidence: Evidence,
     pub representation: Representation,
 }

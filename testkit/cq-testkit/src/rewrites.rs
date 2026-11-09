@@ -23,27 +23,24 @@ pub fn merged(source: &physical::Program) -> syn::Result<physical::Program> {
     Ok(target)
 }
 
-/// Mark projections and the returned relation canonical where no key is inherited.
+/// Add projection/return canons where needed, preserving other necessary boundaries.
 pub fn canonical_projects(source: &physical::Program) -> syn::Result<physical::Program> {
     let mut target = source.clone();
     let facts = physical::contract::check(source)?;
-    let mut keys: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for d in &mut target.program.definitions {
-        let name = d.name.to_string();
-        let heading = facts.headings[&name].clone();
-        let inherited =
-            physical::inherited_key(&d.operator, &heading, &target.program.host_sets, |id| {
-                keys.get(&id.to_string()).cloned()
-            });
-        d.canon = (inherited.is_none()
-            && (matches!(d.operator, Operator::Project(_)) || d.name == target.program.returned))
-            .then(Default::default);
+    let mut canonical = Vec::with_capacity(source.program.definitions.len());
+    physical::uniqueness(source, &facts.headings, &facts.disjoint, |definition, inherited| {
+        let canon = inherited.is_none()
+            && (definition.canon.is_some()
+                || matches!(definition.operator, Operator::Project(_))
+                || definition.name == source.program.returned);
+        canonical.push(canon);
+        canon
+    });
+    for (d, canon) in target.program.definitions.iter_mut().zip(canonical) {
+        d.canon = canon.then(Default::default);
         // PH-Canon: a canon result is stored in its canonical index.
         if d.canon.is_some() && matches!(d.mode, physical::Mode::Pipe(_)) {
             d.mode = physical::Mode::Let(Default::default());
-        }
-        if let Some(key) = inherited.or_else(|| d.canon.is_some().then_some(heading)) {
-            keys.insert(name, key);
         }
     }
     Ok(target)

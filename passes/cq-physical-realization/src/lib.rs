@@ -149,7 +149,6 @@ fn sources_prepared<'a>(
     if profile {
         printer.context.enable_profile(physical, module);
     }
-    printer.certify_host_sets(physical);
     let definitions = &physical.program.definitions;
     let mut position = 0;
     let deferred: std::collections::BTreeSet<_> = analysis

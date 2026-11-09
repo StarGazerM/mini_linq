@@ -148,7 +148,7 @@ fn multi_rule_sugar_has_a_head_only_interface_and_borrowed_answers() {
 
 #[test]
 fn computed_multi_rule_heads_keep_the_declared_output_types() {
-    let R = [(1,), (2,), (2,)];
+    let R = [(1,), (2,)];
     let result: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation R(x:i32); relation answer(x:i32);
@@ -226,7 +226,7 @@ fn union_leaf_expressions_run_once_for_all_disjuncts() {
     let calls = std::cell::Cell::new(0);
     let result: BTreeSet<_> = mini_linq::compile! { pipeline {}
        struct Leaves;
-       relation A(x:i32) = ({calls.set(calls.get()+1); [(1,),(2,),(2,)]});
+       relation A(x:i32) = ({calls.set(calls.get()+1); [(1,),(2,)]});
        relation answer(x:i32);
        answer(*x) :- A(x); answer(*x) :- A(x), where x > 1;
     }
@@ -236,14 +236,14 @@ fn union_leaf_expressions_run_once_for_all_disjuncts() {
 }
 
 #[test]
-fn union_matches_authored_sets_with_duplicates_and_empty_disjuncts() {
+fn union_matches_authored_sets_with_duplicate_witnesses_and_empty_disjuncts() {
     for (A, B, expected) in [
         (
-            vec![(1,), (1,), (2,)],
-            vec![(2,), (3,)],
+            vec![(1, 0), (1, 1), (2, 0)],
+            vec![(2, 0), (3, 0)],
             vec![vec![1], vec![2], vec![3]],
         ),
-        (vec![], vec![(4,), (4,)], vec![vec![4]]),
+        (vec![], vec![(4, 0), (4, 1)], vec![vec![4]]),
         (vec![], vec![], vec![]),
     ] {
         let expected: cq_testkit::Rows = expected.into_iter().collect();
@@ -251,14 +251,14 @@ fn union_matches_authored_sets_with_duplicates_and_empty_disjuncts() {
             || {
                 A.iter()
                     .chain(&B)
-                    .map(|&(x,)| vec![x])
+                    .map(|&(x, _)| vec![x])
                     .collect::<cq_testkit::Rows>()
             },
             || {
                 mini_linq::compile! {
                     pipeline {}
-                    struct U; relation A(x:i32); relation B(x:i32);
-                        answer(x) :- A(x); answer(x) :- B(x);
+                    struct U; relation A(x:i32,witness:i32); relation B(x:i32,witness:i32);
+                        answer(x) :- A(x,_); answer(x) :- B(x,_);
                 }
                 .map(|(x,)| vec![*x])
                 .collect::<cq_testkit::Rows>()
@@ -294,7 +294,7 @@ fn finite_branch_domains_keep_suffix_constraints() {
 
 #[test]
 fn closed_capture_where_restricts_answers_and_evaluates_host_values_once() {
-    let R = [(1_i32,), (2,), (2,), (3,)];
+    let R = [(1_i32,), (2,), (3,)];
     let literal: BTreeSet<_> = mini_linq::mini_linq! {
         struct CaptureLiteral;
         relation R(x: i32);

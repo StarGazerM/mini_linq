@@ -170,7 +170,6 @@ fn gpu_keyed_group_reads_resident_columns_and_filters_before_folding() -> Result
                 output count;
             }
             graded gpu {source at host; feed at host; result at host;}
-            evidence from authored("experiments/gpu/sequence/tests/group.rs fixture") { trusted_key R [k,id]; }
         };
         // DECODE P: publish filtered grouped answers to the host correctness oracle.
         let actual: Vec<(u32, usize, i64, Option<i64>, Option<i64>)> = result.to_host()?;

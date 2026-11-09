@@ -66,7 +66,7 @@ fn reserve_previous_rejects_non_arena_pull_terminals() {
 #[test]
 fn cq_pipeline_answers_equal_independent_expected_sets() {
     let data = quote! {
-        let L = vec![(1i32, 2i32), (1, 2), (2, 3), (3, 4)];
+        let L = vec![(1i32, 2i32), (2, 3), (3, 4)];
         let R = vec![(2i32, 7i32), (2, 8), (3, 9), (5, 10)];
         let S = vec![(7i32, 42i32), (8, 41), (9, 42)];
     };
@@ -226,7 +226,6 @@ fn deliberately_false_evidence_preserves_generated_code_and_answers() {
     advised.evidence = syn::parse_quote! {
         evidence from authored("passes/cq-sequence-pull/tests/translation.rs fixture") {
             count R = 0;
-            trusted_key R [a];
             foreign_key R [a] -> S [a];
             selectivity R = 0 / 1;
             bounds R.a = 100 ..= 200;
@@ -244,7 +243,7 @@ fn deliberately_false_evidence_preserves_generated_code_and_answers() {
     );
     run(quote! {
         fn main() {
-            let R = vec![(2i32, 20i32), (1, 10), (1, 11), (9, 90), (1, 10)];
+            let R = vec![(2i32, 20i32), (1, 10), (1, 11), (9, 90)];
             let S = vec![(1i32,), (2,)];
             let original: ::std::collections::BTreeSet<_> = (#original).into_iter().collect();
             let estimated: ::std::collections::BTreeSet<_> = (#estimated).into_iter().collect();
@@ -259,8 +258,9 @@ fn deliberately_false_evidence_preserves_generated_code_and_answers() {
 fn simple(body: TokenStream) -> Stack {
     let physical = syn::parse_quote! {
         physical {
-            relation R(a:i32);
-            r = let canon rename R {a -> a};
+            relation R(a:i32,witness:i32);
+            input = pipe rename R {a -> a,witness -> witness};
+            r = let canon project input keep {a};
             return r as answer(a);
         }
     };
@@ -300,14 +300,14 @@ fn sequence_owned_store_keeps_independent_row_accounting_live() {
 fn constructors_execute_and_choose_uses_the_else_arm() {
     let cases = [
         (
-            quote!(out = store canon flatten tile 3 rows r;),
+            quote!(out = store canon flatten tile 3 map r rows input;),
             quote!(vec![(&1i32,), (&2i32,)]),
         ),
-        (quote!(out = store fold count rows r;), quote!(vec![3usize])),
-        (quote!(out = store fold or rows r;), quote!(vec![true])),
-        (quote!(out = store fold sum a rows r;), quote!(vec![4i32])),
+        (quote!(out = store fold count map r rows input;), quote!(vec![3usize])),
+        (quote!(out = store fold or map r rows input;), quote!(vec![true])),
+        (quote!(out = store fold sum a map r rows input;), quote!(vec![4i32])),
         (
-            quote!(out = store canon choose [len R < 2 => rows r, else => rows r];),
+            quote!(out = store canon choose [len R < 2 => map r rows input, else => map r rows input];),
             quote!(vec![(&1i32,), (&2i32,)]),
         ),
     ];
@@ -318,7 +318,7 @@ fn constructors_execute_and_choose_uses_the_else_arm() {
             let analysis = contract::check(&physical, &structures, &program).unwrap();
             let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
             quote!({
-                let R = vec![(1i32,), (1,), (2,)];
+                let R = vec![(1i32, 0i32), (1, 1), (2, 2)];
                 assert_eq!((#output).into_iter().collect::<Vec<_>>(), #expected);
             })
         })
@@ -332,15 +332,15 @@ fn worker_choices_stream_flat_and_nested_alternatives() {
     for bound in [1usize, 2] {
         for body in [
             quote!(out = store canon choose [
-                workers < #bound => rows r, else => flatten tile 2 rows r
+                workers < #bound => map r rows input, else => flatten tile 2 map r rows input
             ];),
             quote!(out = store canon flatten choose [
-                workers < #bound => tile 1 rows r, else => tile 2 rows r
+                workers < #bound => tile 1 map r rows input, else => tile 2 map r rows input
             ];),
             quote!(out = store canon flatten flatten choose [
-                workers < #bound => tile 1 tile 2 rows r,
-                workers < 3 => tile 2 tile 1 rows r,
-                else => tile 3 tile 2 rows r
+                workers < #bound => tile 1 tile 2 map r rows input,
+                workers < 3 => tile 2 tile 1 map r rows input,
+                else => tile 3 tile 2 map r rows input
             ];),
         ] {
             let Stack { physical, structures, program } = simple(body);
@@ -364,7 +364,7 @@ fn worker_choices_stream_flat_and_nested_alternatives() {
                 "{printed}"
             );
             checks.push(quote!({
-                let R = vec![(1i32,), (1,), (2,)];
+                let R = vec![(1i32, 0i32), (1, 1), (2, 2)];
                 assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1i32,), (&2i32,)]);
             }));
         }
@@ -433,7 +433,7 @@ fn runtime_choices_keep_recorded_selection_owners_alive() {
                 ).unwrap(),
             ] {
                 checks.push(quote!({
-                    let R = vec![(3i64,), (1,), (2,), (3,)];
+                    let R = vec![(3i64,), (1,), (2,)];
                     assert_eq!(
                         (#output).into_iter().collect::<Vec<_>>(),
                         vec![(&2i64,), (&3i64,)]
@@ -462,7 +462,7 @@ fn runtime_choices_keep_recorded_selection_owners_alive() {
 
 #[test]
 fn translation_requires_host_grades_but_does_not_recheck_the_program() {
-    let Stack { physical, structures, program } = simple(quote!(out = store canon rows r;));
+    let Stack { physical, structures, program } = simple(quote!(out = store canon map r rows input;));
     let mut analysis = contract::check(&physical, &structures, &program).unwrap();
     analysis
         .levels
@@ -527,7 +527,7 @@ fn stored_row_lookup_uses_exact_buckets_without_range_cursor() {
     assert!(!output.to_token_stream().to_string().contains("RangeCursor"));
     run(quote!(
         fn main() {
-            let L = vec![(1i32,), (3,), (1,)];
+            let L = vec![(1i32,), (3,)];
             let R = vec![(1i32, 7i32), (1, 8), (2, 9)];
             assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1, &7), (&1, &8)]);
         }
@@ -568,8 +568,8 @@ fn whole_relation_access_preserves_host_and_retained_empty_key_reads() {
                 _ => unreachable!(),
             };
             checks.push(quote! {
-                for R in [vec![], vec![(7i32,), (8,), (7,)]] {
-                    let L = vec![(1i32,), (2,), (1,)];
+                for R in [vec![], vec![(7i32,), (8,)]] {
+                    let L = vec![(1i32,), (2,)];
                     let actual = (#output).into_iter().collect::<::std::collections::BTreeSet<_>>();
                     let expected = (#expected).collect::<::std::collections::BTreeSet<_>>();
                     assert_eq!(actual, expected);
@@ -582,12 +582,12 @@ fn whole_relation_access_preserves_host_and_retained_empty_key_reads() {
 
 #[test]
 fn canon_sorts_and_uniques_without_requiring_build() {
-    let Stack { physical, structures, program } = simple(quote!(out = store canon rows r;));
+    let Stack { physical, structures, program } = simple(quote!(out = store canon map r rows input;));
     let analysis = contract::check(&physical, &structures, &program).unwrap();
     let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
     run(quote!(
         fn main() {
-            let R = vec![(2i32,), (1,), (2,)];
+            let R = vec![(2i32, 0i32), (1, 1), (2, 2)];
             assert_eq!((#output).into_iter().collect::<Vec<_>>(), vec![(&1,), (&2,)]);
         }
     ));
@@ -609,7 +609,7 @@ fn membership_and_payload_reads_share_the_same_provider() {
     let check = assert_answers(
         (physical, structures),
         quote! {
-            let L = vec![(1i32,), (3,), (1,)];
+            let L = vec![(1i32,), (3,)];
             let R = vec![(1i32, 7i32), (1, 8), (2, 9)];
         },
         quote!([(&1i32, &7i32), (&1, &8)]),
@@ -633,7 +633,7 @@ fn non_host_exists_is_stored_before_a_membership_read() {
     let check = assert_answers(
         (physical, structures),
         quote! {
-            let L = vec![(1i32,), (3,), (1,)];
+            let L = vec![(1i32,), (3,)];
             let R = vec![(7i32,), (8,)];
         },
         quote!([(&1i32,), (&3,)]),
@@ -645,23 +645,23 @@ fn non_host_exists_is_stored_before_a_membership_read() {
 fn lifted_maps_folds_and_canon_preserve_tile_boundaries() {
     let cases = [
         (
-            quote!(out = store map r tile 2 rows r;),
+            quote!(out = store map r tile 2 rows input;),
             quote!(vec![(&1i32,), (&1,), (&2,)]),
         ),
         (
-            quote!(out = store fold count tile 2 rows r;),
+            quote!(out = store fold count tile 2 map r rows input;),
             quote!(vec![2usize, 1]),
         ),
         (
-            quote!(out = store canon tile 2 rows r;),
+            quote!(out = store canon tile 2 map r rows input;),
             quote!(vec![(&1i32,), (&2,)]),
         ),
         (
-            quote!(out = store fold sum a tile 2 rows r;),
+            quote!(out = store fold sum a tile 2 map r rows input;),
             quote!(vec![2i32, 2]),
         ),
         (
-            quote!(out = store flatten tile 1 tile 2 rows r;),
+            quote!(out = store flatten tile 1 tile 2 map r rows input;),
             quote!(vec![(&1i32,), (&1,), (&2,)]),
         ),
     ];
@@ -672,7 +672,7 @@ fn lifted_maps_folds_and_canon_preserve_tile_boundaries() {
             let analysis = contract::check(&physical, &structures, &program).unwrap();
             let output = cq_sequence_pull::translate(&physical, &structures, &program, &analysis).unwrap();
             quote!({
-                let R = vec![(1i32,), (1,), (2,)];
+                let R = vec![(1i32, 0i32), (1, 1), (2, 2)];
                 assert_eq!((#output).into_iter().collect::<Vec<_>>(), #expected);
             })
         })
@@ -686,9 +686,10 @@ fn canonical_consumer_receives_duplicate_witnesses_without_local_answer_sets() {
     for head in [quote!(a), quote!(*a % 2)] {
         let physical = syn::parse2(quote! {
             physical {
-                relation R(a:i32);
+                relation R(a:i32,witness:i32);
                 consumer canonical;
-                r = pipe rename R {a -> a};
+                input = pipe rename R {a -> a,witness -> witness};
+                r = pipe project input keep {a};
                 return r as answer(#head);
             }
         })
@@ -702,7 +703,7 @@ fn canonical_consumer_receives_duplicate_witnesses_without_local_answer_sets() {
         assert!(!printed.contains("HashSet"), "{printed}");
         checks.push(quote! {
             {
-                let R = [(1i32,), (1,), (3,)];
+                let R = [(1i32, 0i32), (1, 1), (3, 2)];
                 let rows: Vec<_> = (#output).into_iter().collect();
                 assert_eq!(rows.len(), 3);
             }
@@ -734,7 +735,7 @@ fn canonical_consumer_preserves_internal_canon() {
     );
     run(quote! {
         fn main() {
-            let R = [(1i32, 10i32), (1, 10), (1, 20)];
+            let R = [(1i32, 10i32), (1, 20)];
             let rows: Vec<_> = (#output).into_iter().collect();
             assert_eq!(rows, vec![(&1i32,), (&1i32,)]);
         }
@@ -766,12 +767,12 @@ fn ordered_canon_consumes_verified_source_without_hashing() {
     run(quote! {
         fn main() {
             let R = cq_storage::dedup::verify_prefix_order(
-                vec![(1i32, 9i32), (1, 3), (1, 9), (2, 4), (2, 4)],
+                vec![(1i32, 9i32), (1, 3), (2, 4)],
                 |left, right| left.0.cmp(&right.0),
             ).unwrap();
             let rows: Vec<_> = (#output).collect();
             assert_eq!(rows, vec![(&1, &3), (&1, &9), (&2, &4)]);
-            assert_eq!(R.len(), 5);
+            assert_eq!(R.len(), 3);
         }
     });
     let mut detached = program.clone();

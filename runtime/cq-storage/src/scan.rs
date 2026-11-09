@@ -254,7 +254,10 @@ impl<T: OrdinalDecode, F: Family> ScanColumnBuilder<T, F> {
     }
 
     pub fn push(&mut self, value: T) {
-        let ordinal = value.ordinal();
+        self.push_ordinal(value.ordinal());
+    }
+
+    fn push_ordinal(&mut self, ordinal: u64) {
         self.extrema.lo = self.extrema.lo.min(ordinal);
         self.extrema.hi = self.extrema.hi.max(ordinal);
         if let Some(summaries) = &mut self.column.vector_summary {
@@ -388,6 +391,19 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
             ordinal = h.base + code;
         });
         ordinal
+    }
+
+    fn select_rows(self, positions: &[usize]) -> Self {
+        let mut builder = ScanColumnBuilder::with_summaries(
+            self.block_rows,
+            self.summary.is_some(),
+            self.vector_summary.is_some(),
+        );
+        builder.column.declared_domain = self.declared_domain;
+        for &position in positions {
+            builder.push_ordinal(self.read_ordinal(position));
+        }
+        builder.finish()
     }
 
     /// Intersect a bounded vector in-place. No other vector's payload is read.
@@ -821,6 +837,10 @@ fn intersect_vector(
 /// Tuple metadata used to enforce a shared row count and block partition.
 pub trait ScanColumns {
     fn layout(&self) -> (usize, BlockRows);
+    fn compare_rows(&self, left: usize, right: usize) -> std::cmp::Ordering;
+    fn select_rows(self, positions: &[usize]) -> Self
+    where
+        Self: Sized;
     fn bind_domains(self, domains: &[format::Domain]) -> Result<Self, format::FormatError>
     where
         Self: Sized;
@@ -863,6 +883,16 @@ macro_rules! scan_columns {
                     assert_eq!(self.$slot.block_rows(), block_rows, "scan columns have different block sizes");
                 )*
                 (rows, block_rows)
+            }
+            fn compare_rows(&self, left: usize, right: usize) -> std::cmp::Ordering {
+                self.$index.read_ordinal(left).cmp(&self.$index.read_ordinal(right))
+                    $(.then_with(|| self.$slot.read_ordinal(left).cmp(&self.$slot.read_ordinal(right))))*
+            }
+            fn select_rows(self, positions: &[usize]) -> Self {
+                (
+                    self.$index.select_rows(positions),
+                    $(self.$slot.select_rows(positions),)*
+                )
             }
             fn bind_domains(self, domains: &[format::Domain]) -> Result<Self, format::FormatError> {
                 if domains.len() != 1 $(+ { let _ = $slot; 1 })* {
@@ -908,6 +938,27 @@ impl<C: ScanColumns> ScanTable<C> {
             block_rows,
             snapshot: format::SnapshotId::fresh(),
         }
+    }
+
+    /// Formal rule LD-ColumnSet: retain one complete encoded row per tuple.
+    /// A sorted-unique input returns unchanged without allocating. Otherwise
+    /// only row positions are sorted; columns are rebuilt only if duplicates
+    /// exist, without decoding logical tuples or disturbing distinct inputs.
+    pub fn into_set(self) -> Self {
+        if (1..self.rows).all(|row| {
+            self.columns.compare_rows(row - 1, row) == std::cmp::Ordering::Less
+        }) {
+            return self;
+        }
+        let mut positions: Vec<_> = (0..self.rows).collect();
+        positions.sort_unstable_by(|&left, &right| self.columns.compare_rows(left, right));
+        positions.dedup_by(|left, right| {
+            self.columns.compare_rows(*left, *right) == std::cmp::Ordering::Equal
+        });
+        if positions.len() == self.rows {
+            return self;
+        }
+        Self::new(self.columns.select_rows(&positions))
     }
 
     pub fn len(&self) -> usize {

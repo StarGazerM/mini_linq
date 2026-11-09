@@ -5306,7 +5306,6 @@ mod tests {
                 output count;
             }
             graded gpu { input at host; valuations at host; groups at host; }
-            evidence from authored("experiments/gpu/sequence/core/src/emit.rs fixture") { trusted_key R [id]; }
         };
         let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
@@ -5342,7 +5341,7 @@ mod tests {
                     relation R(id:i64,raw:i32) = (&data.r);
                     r = pipe rename R {id -> id,raw -> raw};
                     bound = pipe bind r with value:i64 = (*raw as i64);
-                    valuation = let canon project bound keep {id,value};
+                    valuation = let canon project bound keep {id,raw,value};
                     grouped = pipe group valuation by [] { total:i64=sum(value); rows:usize=count(); };
                     return grouped as answer(total,rows);
                 }
@@ -5358,7 +5357,6 @@ mod tests {
                     output count;
                 }
                 graded gpu { input at host; valuations at host; groups at host; }
-                evidence from authored("experiments/gpu/sequence/core/src/emit.rs fixture") { trusted_key R [id]; }
             }).unwrap();
             let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
             let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();

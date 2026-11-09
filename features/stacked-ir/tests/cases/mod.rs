@@ -354,7 +354,9 @@ mod generic_canon {
 
 #[test]
 fn generic_prefix_canonicalization_preserves_total_guard_answers() {
-    let r = [(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
+    let mut r = vec![(1, 2), (1, 3), (1, 3), (2, 3), (4, 5)];
+    r.sort_unstable();
+    r.dedup();
     let s = [(2, 3), (3, 4), (3, 1), (5, 6)];
     let t = [(1, 3), (1, 4), (2, 1), (4, 7)];
     let actual = generic_canon::run(&r, &s, &t);

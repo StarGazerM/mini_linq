@@ -6,8 +6,10 @@ use std::num::NonZeroUsize;
 
 #[test]
 fn retained_masks_and_payload_builds_work_on_vec_slice_array_and_zone_hosts() {
-    let left = vec![(1_i64, 10_i64), (1, 10), (1, 20), (2, 30), (3, 40), (5, 15)];
-    let right = vec![(1_i64, 1_i64), (1, 1), (2, 0), (3, 1), (9, 1)];
+    let mut left = vec![(1_i64, 10_i64), (1, 10), (1, 20), (2, 30), (3, 40), (5, 15)];
+    let mut right = vec![(1_i64, 1_i64), (1, 1), (2, 0), (3, 1), (9, 1)];
+    cq_load::canonicalize(&mut left);
+    cq_load::canonicalize(&mut right);
     let expected = BTreeSet::from([(1, 10), (1, 20)]);
     assert_eq!(
         cq_testkit::positional_reduced!(
@@ -174,7 +176,6 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
         (i64::MIN, 10_i64),
         (1, 9),
         (1, 20),
-        (1, 20),
         (2, 30),
         (3, 40),
         (i64::MAX, 50),
@@ -184,7 +185,7 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
     let right = vec![
         (1_i64, 2_i64),
         (1, 4),
-        (1, 4),
+        (8, 0),
         (2, 0),
         (i64::MAX, 4),
         (5, 0),
@@ -204,7 +205,7 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
         expected
     );
     let costs = cq_storage::counters::snapshot();
-    assert_eq!(costs.join_filter_passed, 3);
+    assert_eq!(costs.join_filter_passed, 2);
     assert!(costs.blocks_skipped_metadata > 0);
     cq_storage::counters::reset();
     assert_eq!(
@@ -214,7 +215,7 @@ fn covered_exact_scan_filters_preserve_answers_and_skip_blocks() {
         }),
         expected
     );
-    assert_eq!(cq_storage::counters::snapshot().join_filter_passed, 3);
+    assert_eq!(cq_storage::counters::snapshot().join_filter_passed, 2);
     let empty: Vec<(i64, i64)> = Vec::new();
     assert!(filtered_join!(left,empty,{b = let project s keep {x,z};}).is_empty());
     // A build keeping 2 distinct keys of 4 source rows (50%) is abandoned:

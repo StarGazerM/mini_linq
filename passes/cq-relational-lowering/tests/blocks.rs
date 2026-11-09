@@ -497,7 +497,6 @@ fn branch_generators_capture_written_environment_and_keep_kind() {
 #[test]
 fn branch_literal_constants_are_local_filters_not_disjoint_interface_values() {
     let (cq, vo, target) = plan("struct Q; relation R(a:i32,b:i32); answer(x) :- {R(x,7)} | {R(x,8)};");
-    assert!(cq_lang_ra::disjoint_unions(&target).unwrap().is_empty());
     let mut changed = target.clone();
     let rename = changed
         .plan

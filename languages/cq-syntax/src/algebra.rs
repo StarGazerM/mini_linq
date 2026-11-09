@@ -745,19 +745,6 @@ pub struct Project {
     pub attributes: CommaList<Ident>,
 }
 
-/// Union arms are disjoint only by construction: a fallback block runs a later
-/// arm only when the earlier arms are empty. Relational literals are operands
-/// like any other; the compiler never decodes their values, so differing
-/// literals prove nothing and such unions are canonicalized.
-pub fn disjoint_unions<'a>(
-    unions: impl IntoIterator<Item = (&'a Ident, Option<&'a BlockOrigin>)>,
-) -> std::collections::BTreeSet<String> {
-    unions
-        .into_iter()
-        .filter(|(_, origin)| origin.is_some_and(|o| o.fallback.is_some()))
-        .map(|(name, _)| crate::symbol_name(name))
-        .collect()
-}
 
 /// Accumulated heading and declared (noncomputed) column types of a union.
 #[derive(Default)]

@@ -125,7 +125,6 @@ fn every_generated_kernel_fits_the_parameter_area() {
 fn physical_and_sequence_contracts_preserve_the_written_join_chain() {
     let program = h05_program::program();
     let analysis = cq_lang_sequence::contract::check(&program.physical, &program.structures, &program.program).unwrap();
-    assert!(program.physical.program.host_sets.is_empty());
     assert_eq!(analysis.results["C"], "rnc");
     assert_eq!(analysis.results["result"], "answer");
     assert_eq!(

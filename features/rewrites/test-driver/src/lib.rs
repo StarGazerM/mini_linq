@@ -95,8 +95,8 @@ pub fn capture_structures_stack(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Generate compile-and-run tests from cq-testkit's raw inputs (duplicates
-/// retained), with every stage entered through the supplied macro queue.
+/// Generate compile-and-run tests with raw corpus inputs normalized to sets
+/// before entering any stage through the supplied macro queue.
 #[proc_macro]
 pub fn corpus_tests(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as Invocation);
@@ -122,8 +122,9 @@ pub fn corpus_tests(input: TokenStream) -> TokenStream {
             for declaration in &physical.program.declarations {
                 let name = &declaration.name;
                 let (_, rows) = case.inputs.iter().find(|(n, _)| name == *n).expect("input");
+                let rows: std::collections::BTreeSet<_> = rows.iter().collect();
                 let types = declaration.columns.iter().map(|c| &c.ty);
-                let values = rows.iter().map(|row| quote!((#(#row,)*)));
+                let values = rows.into_iter().map(|row| quote!((#(#row,)*)));
                 bindings.extend(quote! {
                     let #name: Vec<(#(#types,)*)> = vec![#(#values),*];
                 });

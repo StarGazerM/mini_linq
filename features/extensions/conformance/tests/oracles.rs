@@ -6,7 +6,7 @@ use cq_testkit::{Rows, harness::check_refinement};
 
 #[test]
 fn anti_membership_matches_an_independent_projection_oracle() {
-    let A = [(1,), (2,), (2,), (3,)];
+    let A = [(1,), (2,), (3,)];
     let S = [(2, 20), (2, 21), (9, 90)];
     let expected: Rows = [vec![1], vec![3]].into();
     let result = check_refinement(
@@ -56,15 +56,16 @@ fn aggregate_reference(sales: &[(i32, i32, i32)]) -> Rows {
 
 #[test]
 fn aggregate_matches_authored_set_folds_and_empty_input() {
-    for Sale in [vec![(1, 1, 10), (1, 2, -5), (2, 3, 7), (1, 1, 10)], vec![]] {
+    for Sale in [vec![(1, 1, 10, 0), (1, 2, -5, 1), (2, 3, 7, 2), (1, 1, 10, 3)], vec![]] {
+        let projected: Vec<_> = Sale.iter().map(|&(d, id, a, _)| (d, id, a)).collect();
         check_refinement(
-            || aggregate_reference(&Sale),
+            || aggregate_reference(&projected),
             || {
                 let groups = mini_linq::compile! {
                     pipeline { surface = [cq_ext_aggregate::aggregate]; }
                     aggregate! {
                         by(d); n=count(); s=sum(a); lo=min(a); hi=max(a);
-                        struct G; relation Sale(d:i32,id:i32,a:i32); rows(d,id,a) :- Sale(d,id,a);
+                        struct G; relation Sale(d:i32,id:i32,a:i32,witness:i32); rows(d,id,a) :- Sale(d,id,a,witness);
                     }
                 };
                 groups
@@ -107,7 +108,9 @@ fn paths(edges: &[(i32, i32)]) -> Rows {
 
 #[test]
 fn linear_recursion_matches_graph_search_with_cycles_and_empty_seeds() {
-    for Edge in [vec![(1, 2), (2, 3), (3, 2), (1, 2)], vec![]] {
+    for mut Edge in [vec![(1, 2), (2, 3), (3, 2), (1, 2)], vec![]] {
+        Edge.sort_unstable();
+        Edge.dedup();
         check_refinement(
             || paths(&Edge),
             || {
@@ -141,7 +144,7 @@ fn linear_recursion_matches_graph_search_with_cycles_and_empty_seeds() {
 #[test]
 fn correlated_exists_and_parameters_match_nested_loop_answers() {
     let A = [(1,), (2,), (3,)];
-    let S = [(1, 5), (1, 5), (2, 1), (9, 9)];
+    let S = [(1, 5), (1, 6), (2, 1), (9, 9)];
     let limit = 2;
     let result = check_refinement(
         || {
@@ -185,18 +188,19 @@ fn scalar_reference(outer: &[(i32,)], inner: &[(i32, i32)]) -> Rows {
 #[test]
 fn scalar_refines_the_written_cardinality_check_and_default() {
     let A = [(1,), (2,)];
-    for S in [vec![(1, 7), (1, 7)], vec![], vec![(1, 7), (1, 8)]] {
+    for S in [vec![(1, 7, 0), (1, 7, 1)], vec![], vec![(1, 7, 0), (1, 8, 1)]] {
+        let projected: Vec<_> = S.iter().map(|&(x, y, _)| (x, y)).collect();
         let result = check_refinement(
-            || scalar_reference(&A, &S),
+            || scalar_reference(&A, &projected),
             || {
                 mini_linq::compile! {
                 pipeline { surface = [cq_ext_correlated::correlated]; }
-                struct C; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32,v:i32);
-                answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y)};
+                struct C; relation A(x:i32); relation S(x:i32,y:i32,witness:i32); relation answer(x:i32,v:i32);
+                answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y,witness)};
             }.map(|(x,y)| vec![x,y]).collect::<Rows>()
             },
         );
-        if S.len() == 2 && S[0] != S[1] {
+        if projected.len() == 2 && projected[0] != projected[1] {
             assert!(matches!(
                 result,
                 Err(cq_testkit::harness::RefinementFailure::ReferencePanicked { .. })
@@ -213,7 +217,7 @@ fn scalar_refines_the_written_cardinality_check_and_default() {
 
 #[test]
 fn stacked_surfaces_forward_core_union_and_negation_matching_authored_answers() {
-    let A = [(1,), (2,), (2,)];
+    let A = [(1,), (2,)];
     let B = [(2,), (3,)];
     let S = [(2,)];
     let result = check_refinement(

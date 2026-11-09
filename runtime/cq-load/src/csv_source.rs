@@ -211,12 +211,17 @@ impl<S: Relation> Iterator for Csv<S> {
 impl<S: Relation> std::iter::FusedIterator for Csv<S> {}
 
 // DECODE ?: read_csv collects the logical batch decoder for arbitrary callers without a recorded final-use boundary.
-pub fn read_csv<S: Relation>(path: impl AsRef<Path>, options: CsvOptions) -> Result<Vec<S::Row>> {
+pub fn read_csv<S: Relation>(path: impl AsRef<Path>, options: CsvOptions) -> Result<Vec<S::Row>>
+where
+    S::Row: Ord,
+{
     // DECODE ?: try_fold drives Csv::next reconstruction; caller-specific relational and diagnostic uses are classified at their sites.
-    Csv::<S>::open(path, options)?.try_fold(Vec::new(), |mut rows, batch| {
+    let mut rows = Csv::<S>::open(path, options)?.try_fold(Vec::new(), |mut rows, batch| {
         rows.extend(batch?);
-        Ok(rows)
-    })
+        Ok::<_, Error>(rows)
+    })?;
+    crate::canonicalize(&mut rows);
+    Ok(rows)
 }
 
 enum RecordReader {

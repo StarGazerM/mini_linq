@@ -6,6 +6,6 @@ physical { relation R (first : i32 , second : i32);
  r2 = pipe probe first [b] r0 , r1;
  r3 = pipe rename T { first - > c , second - > a };
  r4 = pipe probe first [a , c] r2 , r3;
- r5 = let canon project r4 keep { a , b , c };
+ r5 = pipe project r4 keep { a , b , c };
  return r5 as answer (a , b , c);
  }

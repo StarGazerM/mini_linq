@@ -204,11 +204,10 @@ fn groups_lower_to_segmented_folds_after_complete_valuation_canon() {
 }
 
 #[test]
-fn certified_valuation_set_needs_no_redundant_group_input_canon() {
+fn input_valuation_set_needs_no_redundant_group_input_canon() {
     let physical = syn::parse_quote! {
         physical {
             relation R(k:i32, witness:i32);
-            host_set R;
             r = pipe rename R {k -> k, witness -> witness};
             grouped = pipe group r by [k] { n: usize = count(); };
             return grouped as answer(k,n);
@@ -224,6 +223,40 @@ fn certified_valuation_set_needs_no_redundant_group_input_canon() {
         target.sequence.definitions[1].term,
         syn::parse_quote!(group grouped r)
     );
+}
+
+#[test]
+fn unique_fallback_union_remains_unique_through_projection_into_group() {
+    let physical = syn::parse_quote! { physical {
+        relation R(x:i32,y:i32); relation S(x:i32,y:i32);
+        r = pipe rename R {x -> x,y -> y};
+        s = pipe rename S {x -> x,y -> y};
+        a = pipe anti eager [x] s,r;
+        u = pipe union r,a block free[x] interface[y] fallback;
+        p = pipe project u keep {x,y};
+        grouped = pipe group p by [] { n:usize = count(); };
+        return grouped as answer(n);
+    }};
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let target = accept(&physical, &structures);
+    assert_eq!(
+        target.sequence.definitions[3].term,
+        Term::Union(vec![Term::Ref(syn::parse_quote!(r)), Term::Ref(syn::parse_quote!(a))])
+    );
+    assert_eq!(target.sequence.definitions[4].term, syn::parse_quote!(map p u));
+    assert_eq!(target.sequence.definitions[5].term, syn::parse_quote!(group grouped p));
+    let mut overlapping = physical.clone();
+    let cq_lang_structures::physical::Operator::Union(union) =
+        &mut overlapping.program.definitions[3].operator else { unreachable!() };
+    union.origin = None;
+    overlapping.program.definitions[2].operator = syn::parse_quote!(semi eager [x,y] s,r);
+    assert!(cq_structure_selection::compile(&overlapping).is_err());
+    overlapping.program.definitions[3].canon = Some(Default::default());
+    overlapping.program.definitions[3].mode = syn::parse_quote!(let);
+    let structures = cq_structure_selection::compile(&overlapping).unwrap();
+    let mut missing = accept(&overlapping, &structures);
+    missing.sequence.definitions[3].term = target.sequence.definitions[3].term.clone();
+    assert!(cq_lang_sequence::contract::check(&overlapping, &structures, &missing).is_err());
 }
 
 #[test]

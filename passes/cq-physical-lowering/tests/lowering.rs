@@ -3,7 +3,7 @@ use cq_lang_physical as physical;
 use cq_physical_lowering::{check, compile, erase};
 use cq_testkit::{cases, corpus as scenarios, rewrites as authored, semantics as oracle, values};
 #[test]
-fn group_survives_ix_erasure_and_canonicalizes_all_input_valuations() {
+fn group_survives_ix_erasure_and_preserves_unique_input_valuations() {
     let (source, target) = lower(
         "relational {
             relation R(k:i32,id:i32,v:i32);
@@ -21,7 +21,7 @@ fn group_survives_ix_erasure_and_canonicalizes_all_input_valuations() {
         relation R(k:i32,id:i32,v:i32);
         relation answer(k:i32,n:usize,total:i32,lo:Option<i32>,hi:Option<i32>);
         r = pipe rename R {k -> k,id -> id,v -> v};
-        valuations = let canon project r keep {k,id,v};
+        valuations = pipe project r keep {k,id,v};
         grouped = pipe group valuations by [k] {
             n:usize = count(); total:i32 = sum(v);
             lo:Option<i32> = min(v); hi:Option<i32> = max(v);
@@ -36,7 +36,7 @@ fn group_survives_ix_erasure_and_canonicalizes_all_input_valuations() {
     let selected = cq_lang_structures::contract::check(&target, &structures).unwrap();
     assert_eq!(selected.unique["grouped"], ["k"]);
     assert_eq!(selected.unique["valuations"], ["id", "k", "v"]);
-    assert!(target.program.definitions[1].canon.is_some());
+    assert!(target.program.definitions[1].canon.is_none());
     assert!(target.program.definitions[2].canon.is_none());
     assert!(matches!(
         target.program.definitions[2].operator,
@@ -50,9 +50,34 @@ fn group_survives_ix_erasure_and_canonicalizes_all_input_valuations() {
         facts.rows["grouped"].types["lo"],
         syn::parse_quote!(Option<i32>)
     );
-    let mut broken = target;
-    broken.program.definitions[1].canon = None;
-    assert!(check(&source, &broken).is_err());
+    let mut redundant = target;
+    redundant.program.definitions[1].mode = syn::parse_quote!(let);
+    redundant.program.definitions[1].canon = Some(Default::default());
+    check(&source, &redundant).unwrap();
+}
+
+#[test]
+fn needed_group_boundary_supplies_later_consumers_in_the_same_analysis() {
+    let relational = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation answer(a:i32,n:usize);
+        r = rename R {a -> a,b -> b};
+        p = project r keep {a};
+        g = group p by [] { n:usize = count(); };
+        joined = natural_join p with g;
+        output joined as answer(a,n);
+    }};
+    let source = cq_index_policy::compile(&relational).unwrap();
+    let target = compile(&source).unwrap();
+    let expected: physical::Program = syn::parse_quote! { physical {
+        relation R(a:i32,b:i32); relation answer(a:i32,n:usize);
+        r = pipe rename R {a -> a,b -> b};
+        p = let canon project r keep {a};
+        g = let group p by [] { n:usize = count(); };
+        joined = pipe probe first [] p,g;
+        return joined as answer(a,n);
+    }};
+    assert_eq!(target, expected);
+    check(&source, &target).unwrap();
 }
 
 #[test]
@@ -65,8 +90,7 @@ fn global_group_preserves_empty_key_and_inherited_input_uniqueness() {
             output grouped as answer(n);
         } indexes {}
     };
-    let target =
-        cq_physical_lowering::compile_with(&source, quote::quote!(host_set R discharged)).unwrap();
+    let target = compile(&source).unwrap();
     assert!(
         target
             .program
@@ -83,14 +107,13 @@ fn global_group_preserves_empty_key_and_inherited_input_uniqueness() {
 
 #[test]
 fn canonical_placement_preserves_operator_keys_and_generator_multiplicity() {
-    for (source, arguments, expected) in [
+    for (source, expected) in [
         (
             "relational {
                 u = unit; b = bind u with x:i32 = (1);
                 g = guard b if (*x != 0); p = project g keep {x};
                 output p as answer(x);
             } indexes {}",
-            quote::quote!(),
             "physical {
                 u = pipe unit; b = pipe bind u with x:i32 = (1);
                 g = pipe guard b if (*x != 0); p = pipe project g keep {x};
@@ -102,7 +125,6 @@ fn canonical_placement_preserves_operator_keys_and_generator_multiplicity() {
                 u = unit; b = bind u with for x:i32 = ([1,1]);
                 p = project b keep {x}; output p as answer(x);
             } indexes {}",
-            quote::quote!(),
             "physical {
                 u = pipe unit; b = pipe bind u with for x:i32 = ([1,1]);
                 p = let canon project b keep {x}; return p as answer(x);
@@ -113,9 +135,8 @@ fn canonical_placement_preserves_operator_keys_and_generator_multiplicity() {
                 relation R(x:i32,y:i32); r = rename R {x -> x,y -> y};
                 p = project r keep {x}; output p as answer(x);
             } indexes {}",
-            quote::quote!(host_set R discharged),
             "physical {
-                relation R(x:i32,y:i32); host_set R discharged;
+                relation R(x:i32,y:i32);
                 r = pipe rename R {x -> x,y -> y};
                 p = let canon project r keep {x}; return p as answer(x);
             }",
@@ -123,7 +144,7 @@ fn canonical_placement_preserves_operator_keys_and_generator_multiplicity() {
     ] {
         let source: ix::Program = syn::parse_str(source).unwrap();
         let expected: physical::Program = syn::parse_str(expected).unwrap();
-        let target = cq_physical_lowering::compile_with(&source, arguments).unwrap();
+        let target = compile(&source).unwrap();
         assert_eq!(target, expected);
         check(&source, &target).unwrap();
     }
@@ -146,7 +167,7 @@ fn missing_binding_union_canon_requires_an_alternative_boundary() {
     assert_eq!(target, expected);
     let mut missing = target.clone();
     missing.program.definitions[2].canon = None;
-    physical::contract::check(&missing).unwrap();
+    assert!(physical::contract::check(&missing).is_err());
     assert!(check(&source, &missing).is_err());
 
     missing.program.return_canon = Some(Default::default());
@@ -181,7 +202,7 @@ fn consumer_canonical_cannot_replace_a_group_input_boundary() {
 }
 
 #[test]
-fn disjoint_union_keeps_final_canon_and_accepts_redundant_internal_canon() {
+fn disjoint_union_inherits_input_keys_and_accepts_redundant_canon() {
     let ra: ix::ra::Program = syn::parse_quote! { relational {
         relation R(x:i32,y:i32); relation S(x:i32,y:i32);
         r = rename R {x -> x,y -> y}; s = rename S {x -> x,y -> y};
@@ -196,17 +217,17 @@ fn disjoint_union_keeps_final_canon_and_accepts_redundant_internal_canon() {
         r = pipe rename R {x -> x,y -> y}; s = pipe rename S {x -> x,y -> y};
         a = pipe anti eager [x] s,r;
         u = pipe union r,a block free[x] interface[y] fallback;
-        return canon u as answer(x,y);
+        return u as answer(x,y);
     }};
     assert_eq!(target, expected);
-    let mut missing = target.clone();
-    missing.program.return_canon = None;
-    assert!(check(&source, &missing).is_err());
+    let mut returned = target.clone();
+    returned.program.return_canon = Some(Default::default());
+    check(&source, &returned).unwrap();
     let mut redundant = target;
     redundant.program.definitions[3].mode = syn::parse_quote!(let);
     redundant.program.definitions[3].canon = Some(Default::default());
     check(&source, &redundant).unwrap();
-    redundant.program.return_canon = None;
+    redundant.program.return_canon = Some(Default::default());
     check(&source, &redundant).unwrap();
 }
 
@@ -360,6 +381,7 @@ fn admissible_join_and_canonicalization_rewrites_are_accepted() {
     changed.program.definitions[3].canon = None;
     changed.program.definitions[4].canon = None;
     assert!(check(&source, &changed).is_err());
+    assert!(physical::contract::check(&changed).is_err());
 }
 
 #[test]
@@ -399,6 +421,7 @@ fn consumer_canonical_relaxes_only_the_return_boundary() {
     let mut missing = target.clone();
     missing.program.consumer_canonical = None;
     assert!(check(&source, &missing).is_err());
+    assert!(physical::contract::check(&missing).is_err());
     let mut redundant = target;
     redundant.program.return_canon = Some(Default::default());
     check(&source, &redundant).unwrap();
@@ -409,7 +432,7 @@ fn consumer_canonical_relaxes_only_the_return_boundary() {
 }
 
 #[test]
-fn discharged_host_sets_seed_uniqueness_without_a_consumer_fact() {
+fn input_sets_seed_uniqueness_without_compiler_facts() {
     let source: ix::Program = syn::parse_quote! {
         relational {
             relation R(a:i32,b:i32);
@@ -418,8 +441,7 @@ fn discharged_host_sets_seed_uniqueness_without_a_consumer_fact() {
             output p as answer(x,y);
         } indexes {}
     };
-    let target =
-        cq_physical_lowering::compile_with(&source, quote::quote!(host_set R discharged)).unwrap();
+    let target = compile(&source).unwrap();
     assert!(
         target
             .program
@@ -427,15 +449,11 @@ fn discharged_host_sets_seed_uniqueness_without_a_consumer_fact() {
             .iter()
             .all(|definition| definition.canon.is_none())
     );
-    assert!(target.program.host_sets[0].discharged.is_some());
     check(&source, &target).unwrap();
-    let mut missing = target;
-    missing.program.host_sets.clear();
-    assert!(check(&source, &missing).is_err());
-    assert!(
-        cq_physical_lowering::compile_with(&source, quote::quote!(host_set Missing discharged),)
-            .is_err()
-    );
+    let facts = physical::contract::check(&target).unwrap();
+    let keys = physical::uniqueness(&target, &facts.headings, &facts.disjoint, |d, _| d.canon.is_some());
+    assert_eq!(keys["r"], ["x", "y"]);
+    assert_eq!(keys["p"], ["x", "y"]);
 }
 
 #[test]

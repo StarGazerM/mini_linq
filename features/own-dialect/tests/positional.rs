@@ -22,14 +22,16 @@ macro_rules! compare_reduced {
 }
 #[test]
 fn retained_masks_reuse_payloads_on_vec_slice_array_and_partial_zone_blocks() {
-    let left = vec![(1_i64, 10_i64), (1, 10), (1, 20), (2, 30), (3, 40), (5, 15)];
-    let right = vec![(1_i64, 1_i64), (1, 1), (2, 0), (3, 1), (9, 1)];
+    let mut left = vec![(1_i64, 10_i64), (1, 10), (1, 20), (2, 30), (3, 40), (5, 15)];
+    let mut right = vec![(1_i64, 1_i64), (1, 1), (2, 0), (3, 1), (9, 1)];
+    cq_load::canonicalize(&mut left);
+    cq_load::canonicalize(&mut right);
     let expected = BTreeSet::from([(1, 10), (1, 20)]);
     assert_eq!(compare_reduced!(left, right), expected);
     assert_eq!(
         cq_storage::counters::snapshot().rows_copied,
-        3,
-        "only the three surviving occurrences enter the payload index; no retained tuple buffer"
+        2,
+        "only the two surviving input rows enter the payload index; no retained tuple buffer"
     );
     assert_eq!(
         compare_reduced!(left.as_slice(), right.as_slice()),
@@ -134,8 +136,8 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
             assert_eq!(push, $expected);
         }};
     }
-    let left = [(1_i64,), (1,), (2,), (3,), (i64::MAX,)];
-    let right = [(1_i64,), (1,), (3,)];
+    let left = [(1_i64,), (2,), (3,), (i64::MAX,)];
+    let right = [(1_i64,), (3,)];
     let empty: [(i64,); 0] = [];
     compare!(semi, 64, left, right, BTreeSet::from([1, 3]));
     compare!(anti, 64, left, right, BTreeSet::from([2, i64::MAX]));
@@ -183,9 +185,9 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
                 context { consumer = canonical };
                 pipeline { $($pass),* };
                 physical {
-                    relation R(a:i64,b:i64) = ($source);
+                    relation R(a:i64,b:i64,witness:i64) = ($source);
                     consumer canonical;
-                    r = pipe rename R {a -> x,b -> y};
+                    r = pipe rename R {a -> x,b -> y,witness -> witness};
                     first = $mode range select r if (x >= 1);
                     projected = pipe project first keep {x,y};
                     second = pipe range select projected if (y < 20);
@@ -194,7 +196,7 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
                 }
                 structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; selection = ::cq_storage::Selection<_> { reads [positions], build typed, shared }; }
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
-                    first read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
+                    first read = positional base R lineage{x -> a,y -> b,witness -> witness} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     second read = positional base R lineage{x -> a,y -> b} column b marker ::cq_load::ColumnAt<1> predicate physical;
                     last read = positional base R lineage{x -> a,y -> b} column a marker ::cq_load::ColumnAt<0> predicate physical;
                     $($extra)*
@@ -221,11 +223,11 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
             let retained = run!(
                 [mini_linq::passes::sequential, mini_linq::passes::translate_pull]
                 mini_linq::passes::sequence, $source, let, {
-                    first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                    first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b,witness -> witness} summary per_block;
                 }
             );
             let retained_push = run!([] own_push::push, $source, let, {
-                first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b} summary per_block;
+                first selection = @selection as ::cq_storage::Selection<_> base R lineage{x -> a,y -> b,witness -> witness} summary per_block;
             });
             assert_eq!(retained, retained_push);
             assert_eq!(retained.0, piped.0);
@@ -234,18 +236,19 @@ fn pipe_read_spines_allocate_only_the_retained_snapshot() {
             assert_eq!(retained.1.rows_copied, 0);
         }};
     }
-    let mut data = vec![(1_i64, 10_i64), (1, 10), (2, 30), (3, 15), (4, 10)];
-    data.extend(std::iter::repeat_n((0, 0), 252));
+    // Distinct host rows retain duplicate projected answers without violating input set semantics.
+    let mut data = vec![(1_i64, 10_i64, 0_i64), (1, 10, 1), (2, 30, 2), (3, 15, 3), (4, 10, 4)];
+    data.extend((5..257).map(|witness| (0, 0, witness)));
     let expected = BTreeSet::from([(1, 10), (3, 15)]);
     compare!(data.as_slice(), data.len(), 1usize, expected);
     for block_size in [1, 3, 63, 64, 65, 130] {
-        let host = ZoneRows::from_rows::<(MinMax<i64>, MinMax<i64>)>(
+        let host = ZoneRows::from_rows::<(MinMax<i64>, MinMax<i64>, MinMax<i64>)>(
             data.clone(),
             NonZeroUsize::new(block_size).unwrap(),
         );
         compare!(host, data.len(), data.len().div_ceil(block_size), expected);
     }
-    let empty: [(i64, i64); 0] = [];
+    let empty: [(i64, i64, i64); 0] = [];
     compare!(empty, 0usize, 0usize, BTreeSet::<(i64, i64)>::new());
 }
 

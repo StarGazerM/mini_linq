@@ -1,4 +1,4 @@
-use cq_syntax::algebra::{Bind, BlockOrigin, disjoint_unions};
+use cq_syntax::algebra::Bind;
 use quote::ToTokens;
 
 #[test]
@@ -19,17 +19,6 @@ fn generator_and_bind_round_trip_preserve_kind() {
     }
 }
 
-#[test]
-fn only_fallback_construction_proves_union_disjointness() {
-    let union: syn::Ident = syn::parse_quote!(union);
-    // Literal values are never decoded: an origin-free union or a union block
-    // is canonicalized whatever literals its arms select.
-    assert!(disjoint_unions([(&union, None)]).is_empty());
-    let block: BlockOrigin = syn::parse_quote!(block free [] interface [tag]);
-    assert!(disjoint_unions([(&union, Some(&block))]).is_empty());
-    let fallback: BlockOrigin = syn::parse_quote!(block free [] interface [tag] fallback);
-    assert!(disjoint_unions([(&union, Some(&fallback))]).contains("union"));
-}
 
 #[test]
 fn occurrence_constants_round_trip_and_require_literal_values() {

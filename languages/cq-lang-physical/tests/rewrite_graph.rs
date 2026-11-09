@@ -57,7 +57,7 @@ const RUST_SOURCE: &str = "physical {
     b = pipe bind g with c:i32 = (compute(a));
     j = pipe probe first [a] b,projected;
     checked = pipe semi eager [a] j,t;
-    return checked as answer(a,c);
+    return canon checked as answer(a,c);
 }";
 
 fn move_definition(source: &physical::Program, from: usize, to: usize) -> physical::Program {

@@ -58,7 +58,7 @@ mini_linq::interned_relation_loaders! {
 }
 
 impl Data {
-    /// Prepares exact source strings for equality predicates without changing rows.
+    /// Intern exact predicate strings and canonicalize each complete input relation.
     pub fn from_strings(lineitem: Vec<SourceLineitem>, part: Vec<SourcePart>) -> Self {
         let mut dictionaries = Dictionaries::default();
         let lineitem = <relation_loader!(Lineitem)>::intern(lineitem, &mut dictionaries);

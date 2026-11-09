@@ -41,14 +41,13 @@ mod loaders {
 }
 
 #[test]
-fn one_authored_callback_loads_every_prefix_without_losing_duplicates() {
+fn one_authored_callback_loads_full_row_sets_for_every_prefix() {
     let file = File::new("1,a,10\n1,a,10\n1,b,20\n2,c,30\n");
     let options = CsvOptions {
         batch_size: 2,
         ..CsvOptions::default()
     };
     let expected = vec![
-        (1, "a".into(), 10),
         (1, "a".into(), 10),
         (1, "b".into(), 20),
         (2, "c".into(), 30),
@@ -69,12 +68,12 @@ fn one_authored_callback_loads_every_prefix_without_losing_duplicates() {
     let one = loaders::ReadingLoader::csv_hash::<1>(file.path(), options).unwrap();
     assert_eq!(
         one[&(1,)],
-        [("a".into(), 10), ("a".into(), 10), ("b".into(), 20)]
+        [("a".into(), 10), ("b".into(), 20)]
     );
     let two = loaders::ReadingLoader::csv_hash::<2>(file.path(), options).unwrap();
-    assert_eq!(two[&(1, "a".into())], [(10,), (10,)]);
+    assert_eq!(two[&(1, "a".into())], [(10,)]);
     let full = loaders::ReadingLoader::csv_hash::<3>(file.path(), options).unwrap();
-    assert_eq!(full[&(1, "a".into(), 10)], [(), ()]);
+    assert_eq!(full[&(1, "a".into(), 10)], [()]);
     assert_eq!(
         loaders::ReadingLoader::csv_btree::<0>(file.path(), options)
             .unwrap()
@@ -99,7 +98,7 @@ fn one_authored_callback_loads_every_prefix_without_losing_duplicates() {
     assert_eq!(authored::module().unwrap().inputs().count(), 1);
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct OwnedUserType(String);
 impl cq_load::Load for OwnedUserType {
     fn load(value: &str) -> Result<Self, String> {
@@ -117,7 +116,7 @@ mod payload {
 }
 
 #[test]
-fn unordered_owned_payload_does_not_require_key_traits() {
+fn raw_batch_decoding_does_not_require_relational_equality_or_order() {
     let file = File::new("annotation|reading|key\n@first|NaN|42\n@second|1.5|42\n");
     let options = CsvOptions {
         headers: true,
@@ -125,11 +124,12 @@ fn unordered_owned_payload_does_not_require_key_traits() {
         batch_size: 1,
         ..CsvOptions::default()
     };
-    let groups = payload::SampleLoader::csv_hash::<1>(file.path(), options).unwrap();
-    assert!(groups[&(42,)][0].0.is_nan());
-    assert_eq!(groups[&(42,)][1], (1.5, OwnedUserType("second".into())));
-    let ordered = payload::SampleLoader::csv_btree::<1>(file.path(), options).unwrap();
-    assert_eq!(ordered[&(42,)][0].1, OwnedUserType("first".into()));
+    let rows: Vec<_> = payload::SampleLoader::csv_batches(file.path(), options)
+        .unwrap()
+        .flat_map(|batch| batch.unwrap())
+        .collect();
+    assert!(rows[0].1.is_nan());
+    assert_eq!(rows[1], (42, 1.5, OwnedUserType("second".into())));
 }
 
 mod interned {
@@ -145,7 +145,7 @@ mod interned {
     }
 
     #[test]
-    fn generated_interning_preserves_rows_and_custom_scalar_fields() {
+    fn generated_interning_canonicalizes_full_rows_and_custom_scalar_fields() {
         let mut dictionaries = cq_load::Dictionaries::default();
         let rows = <relation_loader!(Encoded)>::intern(
             vec![
@@ -158,12 +158,6 @@ mod interned {
         assert_eq!(
             rows,
             [
-                (
-                    2,
-                    StringCode(1),
-                    StringCode(0),
-                    OwnedUserType("first".into())
-                ),
                 (
                     1,
                     StringCode(0),
@@ -224,7 +218,7 @@ fn schema_column_names_survive_parse_errors_and_header_reordering() {
 mod names {
     use super::{CsvOptions, File};
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
     struct R(String);
     impl cq_load::Load for R {
         fn load(value: &str) -> Result<Self, String> {
@@ -374,13 +368,12 @@ mod columnar {
         assert_eq!(ids.headers()[2].rows, 17);
         assert_eq!(ids.summaries().unwrap().len(), 3);
         assert_eq!(amounts.summaries().unwrap().len(), 3);
-        assert_eq!(
-            decode(ids, 0)
-                .into_iter()
-                .zip(decode(amounts, 0))
-                .collect::<Vec<_>>(),
-            expected,
-        );
+        let mut actual = decode(ids, 0)
+            .into_iter()
+            .zip(decode(amounts, 0))
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -403,7 +396,7 @@ mod columnar {
             false,
         )
         .unwrap();
-        assert_eq!(decode(&table.columns().0, 0), [-7, -7]);
+        assert_eq!(decode(&table.columns().0, 0), [-7]);
         assert!(table.columns().0.summaries().is_none());
     }
 
@@ -485,9 +478,13 @@ mod columnar_interned {
             .map(|((id, label), other)| (id, label, other))
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
-        assert_eq!(labels.headers().len(), 3);
-        assert_eq!(labels.headers()[2].rows, 9);
-        assert_eq!(labels.summaries().unwrap().len(), 3);
+        let blocks = expected.len().div_ceil(VECTOR_ROWS);
+        assert_eq!(labels.headers().len(), blocks);
+        assert_eq!(
+            labels.headers().last().unwrap().rows as usize,
+            expected.len() - (blocks - 1) * VECTOR_ROWS,
+        );
+        assert_eq!(labels.summaries().unwrap().len(), blocks);
         for column in ["label", "other"] {
             for value in ["a", "z", "absent"] {
                 assert_eq!(

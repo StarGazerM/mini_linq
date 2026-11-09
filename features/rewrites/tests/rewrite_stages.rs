@@ -1,5 +1,5 @@
 //! R1 and C1 through the Physical rewrites: the core stage driver of
-//! `facade/mini-linq/tests/stage_support` plus six rewrite stages applied
+//! `facade/mini-linq/tests/stage_support` plus five rewrite stages applied
 //! cumulatively after lowering. Every stage must denote the reference answer;
 //! every one-fact Physical mutant must be rejected by its stage's checker or
 //! keep the answer. Opt-in target (`test = false`): run with
@@ -7,8 +7,6 @@
 //! (`CQ_STAGE_CASES`, `CQ_MUTANT_CASES`, `CQ_FUZZ_SEED`, `CQ_FUZZ_PROFILE`).
 #[path = "../../../facade/mini-linq/tests/stage_support/mod.rs"]
 mod stage_support;
-
-use std::collections::BTreeMap;
 
 use stage_support::{PassError, pass};
 
@@ -32,7 +30,7 @@ fn generated_records_reject_mutants_or_keep_the_answer() {
 fn rewrites(
     lowered: &cq_lang_physical::Program,
 ) -> Result<Vec<(String, cq_lang_physical::Program)>, PassError> {
-    use cq_lang_physical::{Mode, Operator, symbol_name};
+    use cq_lang_physical::{Mode, Operator};
     use cq_rewrite_passes as rw;
     let all = quote::quote!(all);
     let mut out = Vec::new();
@@ -69,25 +67,6 @@ fn rewrites(
     }
     if retained {
         out.push(("physical:retain_streams".into(), current.clone()));
-    }
-    // Original identifiers keep raw spellings (`r#in`).
-    let hosts: Vec<syn::Ident> = current
-        .program
-        .definitions
-        .iter()
-        .filter_map(|d| match &d.operator {
-            Operator::Rename(r) => Some((symbol_name(&r.relation), r.relation.clone())),
-            _ => None,
-        })
-        .collect::<BTreeMap<_, _>>()
-        .into_values()
-        .collect();
-    if !hosts.is_empty() {
-        current = pass(
-            "physical:host_sets",
-            rw::host_sets(&current, quote::quote!(#(#hosts),*)),
-        )?;
-        out.push(("physical:host_sets".into(), current.clone()));
     }
     Ok(out)
 }

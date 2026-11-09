@@ -14,7 +14,7 @@
 //! | `output` | `count`, `reserve`, `reserve_previous`, or `bounded` | Set the final store protocol; bounded requires declared capacity. |
 //! | `roots` | `spread` | Size fold-free dispatches' root tiles at launch to fill resident blocks, at most the declared tile (GPU-RootSpread). |
 //! | `grade` | `machine, d at host.device, ...` | Add/update placements; preserve other grades on the same machine. |
-//! | `evidence` | `evidence from authored("origin") { ... }` | Record sourced advice and explicit `trusted_key` premises. Only false trusted keys can change grouped answers. |
+//! | `evidence` | `evidence from authored("origin") { ... }` | Record sourced planning advice without asserting uniqueness. |
 //!
 //! Every pass checks the source, target and construction-based support equality.
 //! Grading records advice only: it neither resolves the machine nor certifies

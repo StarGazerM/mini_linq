@@ -236,7 +236,6 @@ fn evidence_advice_is_checked_replayable_metadata() {
     let (physical, structures, source) = program(quote!(out = store rows r;));
     let target = apply(cq_sequence_plan::rewrites::evidence, &physical, &structures, &source, quote!(evidence from authored("features/sequence-rewrites/tests/rewrites.rs fixture") {
         count R = 0;
-        trusted_key R [a];
         foreign_key R [a] -> r [a];
         selectivity out = 0 / 1;
         bounds R.a = 42 ..= -42;
@@ -250,7 +249,7 @@ fn evidence_advice_is_checked_replayable_metadata() {
         cq_sequence_plan::rewrites::record_evidence(&physical, &structures, &target, &target.evidence).unwrap(),
         target
     );
-    let extended = apply(cq_sequence_plan::rewrites::evidence, &physical, &structures, &target, quote!(evidence from vo("original VO append fixture") { count R = 123; planning_key R [a]; }));
+    let extended = apply(cq_sequence_plan::rewrites::evidence, &physical, &structures, &target, quote!(evidence from vo("original VO append fixture") { count R = 123; }));
     assert_eq!(
         &extended.evidence.facts[..target.evidence.facts.len()],
         &target.evidence.facts

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 macro_rules! check {
     ($expected:expr; $($query:tt)*) => {{
-        let left = [(1i32, 2i32), (1, 2), (2, 3), (3, 4)];
+        let left = [(1i32, 2i32), (2, 3), (3, 4)];
         let right = [(2i32, 7i32), (2, 8), (3, 9), (5, 10)];
         let extra = [(7i32, 2i32), (9, 3)];
         let actual: BTreeSet<_> = mini_linq::compile! {
@@ -55,7 +55,7 @@ fn union_block() {
 
 #[test]
 fn positional_point_and_range_reads_preserve_their_source_spine() {
-    let rows = [(1i32, 4i32), (2, 3), (2, 3), (3, 2), (4, 1)];
+    let rows = [(1i32, 4i32), (2, 3), (3, 2), (4, 1)];
     let cutoff = 2;
     macro_rules! check {
         ($expected:expr; $($query:tt)*) => {

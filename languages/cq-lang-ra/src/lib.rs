@@ -757,20 +757,6 @@ pub use cq_syntax as syntax;
 
 mod structural;
 
-/// Unions whose arms are disjoint by construction (fallback blocks).
-pub fn disjoint_unions(program: &Program) -> syn::Result<BTreeSet<String>> {
-    contract::check(program)?;
-    Ok(cq_syntax::algebra::disjoint_unions(
-        program
-            .plan
-            .definitions
-            .iter()
-            .filter_map(|definition| match &definition.operator {
-                Operator::Union(union) => Some((&definition.result, union.origin.as_ref())),
-                _ => None,
-            }),
-    ))
-}
 
 /// Check local contracts and fixed structural obligations of an RA rewrite.
 ///

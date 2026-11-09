@@ -386,8 +386,6 @@ fn fork_correspondence_erases_exactly_the_committed_read() {
 #[test]
 fn non_identity_canonical_order_permutes_the_committed_key() {
     let mut source = program();
-    // Host certificates describe the default layouts; this test authors one.
-    source.certificates.clear();
     let pair = source
         .incremental
         .strata

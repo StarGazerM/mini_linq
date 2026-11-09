@@ -66,11 +66,11 @@ fn core_negation_evaluates_each_leaf_once() {
 
 #[test]
 fn aggregate_grouped_output_is_a_native_leading_key_host() {
-    let Sale = [(1, 1, 10), (1, 2, -5), (2, 3, 7), (1, 1, 10)];
+    let Sale = [(1, 1, 10, 0), (1, 2, -5, 1), (2, 3, 7, 2), (1, 1, 10, 3)];
     let Keys = [(1,)];
     let Totals = mini_linq::compile! { pipeline { surface = [cq_ext_aggregate::aggregate]; } aggregate! {
-       by(d); n=count(); s=sum(a); struct Stats; relation Sale(d:i32,id:i32,a:i32);
-       rows(d,id,a) :- Sale(d,id,a);
+       by(d); n=count(); s=sum(a); struct Stats; relation Sale(d:i32,id:i32,a:i32,witness:i32);
+       rows(d,id,a) :- Sale(d,id,a,witness);
     } };
     let result: Vec<_> = ::mini_linq::mini_linq! {
         struct Reuse; relation Keys(d:i32); relation Totals(d:i32,n:usize,s:i32); relation answer(d:i32,n:usize,s:i32);
@@ -220,11 +220,11 @@ fn correlated_environment_keeps_borrowed_non_copy_hosts_and_parameters() {
 #[test]
 fn scalar_default_duplicate_rows_and_cardinality_error() {
     let A = [(1,), (2,)];
-    let S = [(1, 7), (1, 7)];
+    let S = [(1, 7, 0), (1, 7, 1)];
     let result: BTreeSet<_> =
         mini_linq::compile! { pipeline { surface = [cq_ext_correlated::correlated]; }
-           struct Scalar; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32,v:i32);
-           answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y)};
+           struct Scalar; relation A(x:i32); relation S(x:i32,y:i32,witness:i32); relation answer(x:i32,v:i32);
+           answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y,witness)};
         }
         .collect();
     assert_eq!(result, [(1, 7), (2, -1)].into());
@@ -266,13 +266,13 @@ fn correlated_leaf_inputs_are_evaluated_once_before_outer_iteration() {
 
 #[test]
 fn constant_group_fuses_owned_measures_without_losing_set_semantics() {
-    let Sale = [(1_i32, 10_i64), (1, 10), (2, 10), (3, -4)];
+    let Sale = [(1_i32, 10_i64, 0_i32), (1, 10, 1), (2, 10, 2), (3, -4, 3)];
     let groups = mini_linq::compile! {
         pipeline { surface = [cq_ext_aggregate::aggregate]; }
         aggregate! {
             by(group); n=count(); total=sum(amount); lo=min(amount); hi=max(amount);
-            struct Constant; relation Sale(id:i32,value:i64);
-            rows(group,id,amount) :- Sale(id,value),
+            struct Constant; relation Sale(id:i32,value:i64,witness:i32);
+            rows(group,id,amount) :- Sale(id,value,witness),
                 let group:i32 = 0, let amount:i64 = *value * 2;
         }
     };

@@ -606,15 +606,15 @@ fn program() -> Fixture {
 }
 
 #[test]
-fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
+fn only_built_lets_have_entries_and_input_sets_preserve_uniqueness() {
     let p = program();
     let a = check(&p).unwrap();
     assert!(a.host_read("l"));
     assert!(!a.host_read("r"));
     assert!(a.built_on("r", &["x".into()]).is_some());
     assert_eq!(a.host_layouts["R"], ["a", "b"]);
-    assert!(!a.unique.contains_key("l"));
-    assert!(!a.unique.contains_key("r"));
+    assert_eq!(a.unique["l"], ["x"]);
+    assert_eq!(a.unique["r"], ["x", "y"]);
     assert_eq!(
         parse_annotations(&p.0, p.1.to_token_stream()).unwrap(),
         p.1
@@ -651,7 +651,7 @@ fn only_built_lets_have_entries_and_host_reads_make_no_claims() {
 }
 
 #[test]
-fn canonicality_comes_only_from_plan_boundaries_and_key_preservation() {
+fn canonicality_comes_from_input_sets_plan_boundaries_and_key_preservation() {
     let p: Fixture = fixture_quote! { physical {
         relation R(a:i32,b:i32);
         r = let canon rename R {a -> a,b -> b};
@@ -1144,7 +1144,7 @@ fn canonical_consumer_accepts_bag_return_and_forbids_head_dedup() {
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r host scan = @host_scan as ::core::iter::Map<_,_> []; }
     };
     let facts = check(&program).unwrap();
-    assert!(!facts.unique.contains_key("r"));
+    assert_eq!(facts.unique["r"], ["x"]);
     assert!(!program.0.program.head_dedup());
     assert!(facts.head_dedup.is_empty());
     let mut missing = program.clone();
@@ -1158,11 +1158,10 @@ fn canonical_consumer_accepts_bag_return_and_forbids_head_dedup() {
 }
 
 #[test]
-fn discharged_host_uniqueness_does_not_survive_a_lossy_projection() {
+fn input_uniqueness_does_not_survive_a_lossy_projection() {
     let program: Fixture = fixture_quote! {
         physical {
             relation R(a:i32,b:i32);
-            host_set R discharged;
             r = pipe rename R {a -> x,b -> y};
             p = pipe project r keep {x,y};
             return p as answer(x,y);

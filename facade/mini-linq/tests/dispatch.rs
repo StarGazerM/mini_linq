@@ -119,7 +119,7 @@ macro_rules! window {
 
 #[test]
 fn leading_hash_reads_build_zero_indexes_and_nonleading_reads_build_once() {
-    let l = [(1,), (1,), (2,), (9,)];
+    let l = [(1,), (2,), (9,)];
     let rows = [(1, 7), (1, 8), (2, 7)];
     let r = Observed::new(HashMap::from([
         ((1,), vec![(7,), (8,)]),
@@ -132,7 +132,7 @@ fn leading_hash_reads_build_zero_indexes_and_nonleading_reads_build_once() {
     let got: Vec<_> = probe!(l, r).collect();
     assert_eq!(got.len(), 3);
     assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
-    let l = [(7,), (7,), (8,)];
+    let l = [(7,), (8,)];
     let r = Observed::new(HashMap::from([
         ((1,), vec![(7,), (8,)]),
         ((2,), vec![(7,)]),
@@ -141,7 +141,7 @@ fn leading_hash_reads_build_zero_indexes_and_nonleading_reads_build_once() {
     assert_eq!(got.len(), 3);
     assert_eq!((r.scans.get(), r.reads.get()), (1, 0));
     println!(
-        "hash leading: builds=0 lookups=4; slice: builds=1; nonleading same-type map: builds=1 direct-lookups=0"
+        "hash leading: builds=0 lookups=3; slice: builds=1; nonleading same-type map: builds=1 direct-lookups=0"
     );
 }
 
@@ -151,7 +151,7 @@ fn fallback_is_lazy_and_shared_for_membership() {
     let r = Observed::new([(1, 7)]);
     assert_eq!(probe!(l, r).count(), 0);
     assert_eq!(r.scans.get(), 0);
-    let l = [(1,), (1,), (2,)];
+    let l = [(1,), (2,)];
     let r = Observed::new(HashMap::from([
         ((1,), vec![(7,), (8,)]),
         ((2,), vec![(7,)]),
@@ -160,7 +160,7 @@ fn fallback_is_lazy_and_shared_for_membership() {
     let got: Vec<_> = ::mini_linq::compile! { pipeline { plan = ::mini_linq::passes::plan(no_reduce); } struct Q; relation l(a:i32); relation r(a:i32,b:i32) host [a] reads [exact, membership]; answer(a) :- l(a),r(a,_); }.collect();
     assert_eq!(got.len(), 2);
     assert_eq!(r.scans.get(), 0);
-    assert_eq!(r.reads.get(), 3);
+    assert_eq!(r.reads.get(), 2);
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn authored_exact_only_semi_reads_a_cursor_without_membership() {
         }
     }
 
-    let left = [(7,), (99,), (8,), (7,)];
+    let left = [(7,), (99,), (8,)];
     let right = Observed::new(ExactOnly(HashMap::from([
         ((7,), vec![(10,), (11,)]),
         ((8,), vec![(20,)]),
@@ -531,19 +531,19 @@ fn ordinary_hashmap_counters_separate_native_lookups_from_build_hashes() {
         }
     }
     macro_rules! run { ($l:ident,$r:ident $($host:tt)*) => { ::mini_linq::compile! { pipeline { } struct Q; relation $l(a:Key); relation $r(a:Key,b:i32) $($host)*; answer(a,b) :- $l(a),$r(a,b); } }; }
-    let l = [(Key(1, false),), (Key(1, false),), (Key(2, false),)];
+    let l = [(Key(1, false),), (Key(2, false),)];
     let r = HashMap::from([((Key(1, true),), vec![(7,)])]);
     HASHES.with(|h| h.set((0, 0)));
     assert_eq!(run!(l, r host [a] reads [exact, membership]).count(), 1);
-    // Three payload probes; unfiltered membership reducers are omitted.
-    assert_eq!(HASHES.with(Cell::get), (0, 3));
+    // Two payload probes; unfiltered membership reducers are omitted.
+    assert_eq!(HASHES.with(Cell::get), (0, 2));
     let rows = [(Key(1, true), 7)];
     let r = rows.as_slice();
     HASHES.with(|h| h.set((0, 0)));
     assert_eq!(run!(l, r).count(), 1);
     // The source row enters one bucket map; publishing it does not rehash keys.
     // The fallback supplies payload probes without a redundant membership pass.
-    assert_eq!(HASHES.with(Cell::get), (1, 3));
+    assert_eq!(HASHES.with(Cell::get), (1, 2));
 }
 
 #[test]
@@ -872,7 +872,8 @@ struct IndexedRows {
 }
 
 impl IndexedRows {
-    fn new(source: Vec<(i32, i32, i32)>) -> Self {
+    fn new(mut source: Vec<(i32, i32, i32)>) -> Self {
+        cq_load::canonicalize(&mut source);
         let index = cq_storage::RadixRun::from_pairs(
             source
                 .iter()
@@ -964,7 +965,7 @@ impl<'a> cq_storage::dispatch::IndexedColumn<1> for &'a IndexedRows {
 
 #[test]
 fn compiled_declared_column_reads_native_source_rows_without_fallback() {
-    let left = [(7,), (99,), (8,), (7,)];
+    let left = [(7,), (99,), (8,)];
     let owner = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200), (11, 7, 101), (10, 7, 100)]);
     // Exercise the extra borrowed binding used by generated workload hosts.
     let right = &owner;
@@ -984,11 +985,7 @@ fn compiled_declared_column_reads_native_source_rows_without_fallback() {
         [
             (10, 7, 100),
             (11, 7, 101),
-            (10, 7, 100),
             (20, 8, 200),
-            (10, 7, 100),
-            (11, 7, 101),
-            (10, 7, 100),
         ]
     );
     assert_eq!((owner.scans.get(), owner.reads.get()), (0, left.len()));
@@ -1073,14 +1070,14 @@ fn compiled_explicit_column_membership_uses_only_the_matching_slot() {
 
 #[test]
 fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
-    let left = [(7,), (99,), (8,), (7,)];
+    let left = [(7, 0), (99, 0), (8, 0), (7, 1)];
     let right = IndexedRows::new(vec![(10, 7, 100), (20, 8, 200), (11, 7, 101), (10, 7, 100)]);
     let visits = &std::cell::RefCell::new(Vec::new());
     let result: Vec<_> = ::mini_linq::passes::sequence! {
         pipeline { ::mini_linq::passes::sequential, ::mini_linq::passes::translate_pull };
         physical {
-            relation L(q:i32) = (&left); relation R(a:i32,b:i32,c:i32) = (&right) host [b] reads [exact, membership] supports [expand];
-            l = pipe rename L {q -> k};
+            relation L(q:i32,witness:i32) = (&left); relation R(a:i32,b:i32,c:i32) = (&right) host [b] reads [exact, membership] supports [expand];
+            l = pipe rename L {q -> k,witness -> witness};
             r = pipe rename R {a -> x,b -> k,c -> z};
             s = pipe semi eager [k] l,r;
             p = pipe probe first [k] s,r;
@@ -1107,11 +1104,9 @@ fn compiled_retained_column_cursor_expands_once_in_source_chronology() {
         [
             (10, 7, 100),
             (11, 7, 101),
-            (10, 7, 100),
             (20, 8, 200),
             (10, 7, 100),
             (11, 7, 101),
-            (10, 7, 100),
         ]
     );
     assert_eq!((right.scans.get(), right.reads.get()), (0, left.len()));

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[test]
 #[allow(non_snake_case)]
 fn both_printers_follow_whole_relation_access_for_empty_keys() {
-    let L = [(1_i32,), (2,), (1,)];
+    let L = [(1_i32,), (2,)];
     macro_rules! run {
         ($right:ident, $mode:ident, $operation:ident, $choice:ident, [$($head:ident),+], $($passes:path),+) => {
             mini_linq::passes::select! {
@@ -19,7 +19,7 @@ fn both_printers_follow_whole_relation_access_for_empty_keys() {
             .collect::<BTreeSet<_>>()
         };
     }
-    for R in [vec![], vec![(7_i32,), (8,), (7,)]] {
+    for R in [vec![], vec![(7_i32,), (8,)]] {
         macro_rules! check {
             ($mode:ident, $($passes:path),+) => {
                 assert_eq!(
@@ -58,8 +58,8 @@ fn both_printers_follow_whole_relation_access_for_empty_keys() {
 fn consumer_form_matches_pull_with_borrowed_and_owned_columns() {
     // The endpoint declaration, not this misleading alias, selects Structures.
     use own_push::push_into as translate_pull;
-    let R = [(1_i32,), (2,), (2,), (3,)];
-    let S = [(1_i32, 10_i32), (2, 20), (2, 20)];
+    let R = [(1_i32,), (2,), (3,)];
+    let S = [(1_i32, 10_i32), (2, 20)];
     let pull: BTreeSet<_> = mini_linq::compile! {
         pipeline {}
         struct Q; relation R(x:i32); relation S(x:i32,y:i32);
@@ -186,7 +186,7 @@ fn both_printers_keep_owned_non_copy_fallback_interfaces() {
 #[allow(non_snake_case)]
 fn filtered_storage_reconstructs_constants_in_both_printers() {
     let L = [(1,), (2,), (3,)];
-    let R = [(7, 1, 10), (8, 2, 20), (7, 3, 30), (7, 1, 10)];
+    let R = [(7, 1, 10), (8, 2, 20), (7, 3, 30), (7, 1, 11)];
     macro_rules! recorded {
         ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
@@ -251,8 +251,8 @@ fn push_chain_preserves_guard_and_binds_computed_columns_as_references() {
         }
         answers
     }
-    for r in [vec![], vec![(0,), (2,)], vec![(2,), (2,), (20,)]] {
-        for s in [vec![], vec![(1,)], vec![(3,), (3,)]] {
+    for r in [vec![], vec![(0,), (2,)], vec![(2,), (20,)]] {
+        for s in [vec![], vec![(1,)], vec![(3,), (4,)]] {
             cq_testkit::harness::check_refinement(
                 || reference(&r, &s),
                 || partial!(structures, own_push::push, r.as_slice(), s.as_slice()),
@@ -280,25 +280,26 @@ struct Value(i32);
 #[allow(non_snake_case)]
 fn authored_structures_control_build_retention_and_nested_canonical_states() {
     let R = [
-        (Value(1), Value(10)),
-        (Value(1), Value(10)),
-        (Value(1), Value(11)),
-        (Value(2), Value(20)),
+        (Value(1), Value(10), 0),
+        (Value(1), Value(10), 1),
+        (Value(1), Value(11), 2),
+        (Value(2), Value(20), 3),
     ];
     macro_rules! recorded {
         ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
                 pipeline { $($($passes),*)? };
                 physical {
-                    relation R(a: Value,b: Value);
-                    r = let canon rename R { a -> a, b -> b };
+                    relation R(a: Value,b: Value,witness:i32);
+                    raw = pipe rename R { a -> a, b -> b, witness -> witness };
+                    r = let canon project raw keep { a,b };
                     p = pipe project r keep { a };
                     j = pipe probe first[a] p,r;
                     o = let canon project j keep { a,b };
                     return o as answer(b,a);
                 }
                 structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; btree_map_grouped = ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> { reads [exact, membership, ordered], supports [keys], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
-                    r host scan = @host_scan as ::core::iter::Map<_,_> [];
+                    raw host scan = @host_scan as ::core::iter::Map<_,_> [];
                     r = @btree_map_grouped as ::std::collections::BTreeMap<_,::std::vec::Vec<_>> [a];
                     r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
                     o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
@@ -317,8 +318,8 @@ fn authored_structures_control_build_retention_and_nested_canonical_states() {
     assert_eq!(values(&push), values(&pull));
     assert_eq!(push.len(), 3);
     for (b, a) in push {
-        assert!(R.iter().any(|(ra, _)| std::ptr::eq(ra, a)));
-        assert!(R.iter().any(|(_, rb)| std::ptr::eq(rb, b)));
+        assert!(R.iter().any(|(ra, _, _)| std::ptr::eq(ra, a)));
+        assert!(R.iter().any(|(_, rb, _)| std::ptr::eq(rb, b)));
     }
 }
 
@@ -335,7 +336,7 @@ impl<T: Ord> HeadState<T> {
 #[test]
 #[allow(non_snake_case)]
 fn computed_head_deduplicates_its_image_with_the_recorded_type() {
-    let R = [(1,), (1,), (3,), (4,)];
+    let R = [(1,), (5,), (3,), (4,)];
     macro_rules! image {
         ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
@@ -438,10 +439,10 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
             .collect::<BTreeSet<_>>()
         }};
     }
-    let rows = [(1, 7), (2, 7), (2, 7), (3, 8), (4, 7)];
+    let rows = [(1, 7), (2, 7), (3, 8), (4, 7)];
     let ordered = std::collections::BTreeMap::from([
         ((1,), vec![(7,)]),
-        ((2,), vec![(7,), (7,)]),
+        ((2,), vec![(7,)]),
         ((3,), vec![(8,)]),
         ((4,), vec![(7,)]),
     ]);
@@ -496,7 +497,7 @@ fn native_and_fallback_point_range_reads_agree_with_pull() {
 #[test]
 #[allow(non_snake_case)]
 fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
-    let R = [(1, 10, 100), (1, 11, 101), (1, 10, 100), (2, 20, 200)];
+    let R = [(1, 10, 100), (1, 11, 101), (2, 20, 200)];
     let L = [(1, 10), (1, 11), (1, 12), (2, 20), (3, 30)];
     macro_rules! curried {
         ($([$($passes:path),*])? $($printer:ident)::+) => {
@@ -541,8 +542,8 @@ fn full_depth_curried_probes_and_prefix_membership_use_written_levels() {
 #[test]
 #[allow(non_snake_case)]
 fn written_lazy_host_membership_and_fallback_type_are_preserved() {
-    let R = [(1,), (2,), (2,), (3,)];
-    let S = [(2,), (4,), (2,)];
+    let R = [(1,), (2,), (3,)];
+    let S = [(2,), (4,)];
     macro_rules! lazy {
         ($([$($passes:path),*])? $($printer:ident)::+) => {
             $($printer)::+! {
@@ -574,17 +575,18 @@ fn written_lazy_host_membership_and_fallback_type_are_preserved() {
 #[test]
 #[allow(non_snake_case)]
 fn nested_stream_canonical_boundaries_have_separate_state() {
-    let R = [(1, 10), (1, 11), (1, 10), (2, 20)];
+    let R = [(1, 10, 0), (1, 11, 1), (1, 10, 2), (2, 20, 3)];
     let rows: Vec<_> = own_push::push! {
         pipeline {};
         physical {
-            relation R(a: i32,b: i32);
-            r = let canon rename R { a -> a,b -> b };
+            relation R(a: i32,b: i32,witness:i32);
+            raw = pipe rename R { a -> a,b -> b,witness -> witness };
+            r = let canon project raw keep { a,b };
             o = let canon project r keep { a };
             return o as answer(a);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
-            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            raw host scan = @host_scan as ::core::iter::Map<_,_> [];
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
             o rows = @sort as ::cq_storage::dedup::Sort; o canon = rows;
         }
@@ -600,7 +602,7 @@ fn nested_stream_canonical_boundaries_have_separate_state() {
 #[test]
 #[allow(non_snake_case)]
 fn wider_join_answers_use_grouped_keys_and_keep_flat_rows() {
-    let R = [(1, 2, 3, 4, 5, 6, 7), (1, 2, 3, 4, 5, 6, 7)];
+    let R = [(1, 2, 3, 4, 5, 6, 7)];
     let S = [(8, 9, 10, 11, 12, 13), (8, 9, 10, 11, 12, 14)];
     macro_rules! wide {
         ($endpoint:ident, $printer:path) => {
@@ -931,20 +933,21 @@ fn both_printers_borrow_generator_captures_inside_union_and_fallback() {
 #[test]
 #[allow(non_snake_case)]
 fn canonical_consumer_delegates_duplicate_answers_and_keeps_internal_canon() {
-    let R = [(1_i32, 10_i32), (1, 10), (1, 20), (3, 30)];
+    let R = [(1_i32, 10_i32, 0_i32), (1, 10, 1), (1, 20, 2), (3, 30, 3)];
     let mut witnesses = Vec::new();
     own_push::push_into! {
         arguments { consumer { |(a,): (i32,)| witnesses.push(a) }; };
         context { consumer = canonical };
         pipeline {};
         physical {
-            relation R(a:i32,b:i32);
+            relation R(a:i32,b:i32,witness:i32);
             consumer canonical;
-            r = let canon rename R {a -> a,b -> b};
+            raw = pipe rename R {a -> a,b -> b,witness -> witness};
+            r = let canon project raw keep {a,b};
             return r as answer(*a % 2);
         }
         structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
-            r host scan = @host_scan as ::core::iter::Map<_,_> [];
+            raw host scan = @host_scan as ::core::iter::Map<_,_> [];
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }
     };
@@ -955,18 +958,16 @@ fn canonical_consumer_delegates_duplicate_answers_and_keeps_internal_canon() {
 
 #[test]
 #[allow(non_snake_case)]
-fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
+fn input_sets_need_no_hashable_columns_in_either_printer() {
     #[derive(PartialEq, Eq)]
     struct NoHash(i32);
     let R = [(NoHash(1),), (NoHash(2),)];
     macro_rules! recorded {
         ($($printer:ident)::+; $($pipeline:tt)*) => {
             $($printer)::+! {
-                context { host_set R discharged };
                 pipeline { $($pipeline)* };
                 physical {
                     relation R(a:NoHash);
-                    host_set R discharged;
                     r = pipe rename R {a -> a};
                     return r as answer(a);
                 }
@@ -988,7 +989,7 @@ fn discharged_host_fact_needs_no_hashable_columns_in_either_printer() {
 #[allow(non_snake_case)]
 fn authored_group_provider_and_role_named_readers_execute() {
     let L = [(1,), (2,)];
-    let R = [(1, 10), (1, 10), (1, 20), (2, 7)];
+    let R = [(1, 10), (1, 20), (2, 7)];
     macro_rules! run {
         ($reader:ident) => {
             mini_linq::passes::sequence! {

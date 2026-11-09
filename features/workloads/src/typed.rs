@@ -77,7 +77,10 @@ pub enum Source {
 }
 
 /// Load a fixture with strict headers and small batches in either source format.
-pub fn load<S: Schema>(case: &str, source: Source) -> Vec<S::Row> {
+pub fn load<S: Schema>(case: &str, source: Source) -> Vec<S::Row>
+where
+    S::Row: Ord,
+{
     let directory = self::case(case).expect("known typed case").path("data");
     let result = match source {
         Source::Csv => cq_load::Loader::<S>::csv(

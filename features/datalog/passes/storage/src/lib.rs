@@ -8,7 +8,7 @@
 use cq_datalog_support::{ensure, key_columns};
 use cq_lang_datalog_incremental as incremental;
 use cq_lang_datalog_storage::{
-    BodyItem, Hasher, HostCanonical, Layout, Policy, Program, Provider, Providers, provider,
+    BodyItem, Hasher, Layout, Policy, Program, Provider, Providers, provider,
 };
 use cq_syntax::symbol_name;
 use std::collections::BTreeSet;
@@ -46,60 +46,12 @@ pub fn compile(source: &incremental::Program) -> syn::Result<Program> {
         delta_layouts,
         reads: Vec::new(),
         negations: Vec::new(),
-        certificates: Vec::new(),
         policy: Policy {
             insertion: syn::parse_quote!(all_columns),
             negation_keys: syn::parse_quote!(borrowed),
         },
     };
     (target.reads, target.negations) = cq_lang_datalog_storage::read_plan(&target, &analysis)?;
-    for (index, declaration) in source.strata.source.declarations.iter().enumerate() {
-        target.certificates.push(HostCanonical {
-            kind: syn::parse_quote!(canonical),
-            index,
-            source: syn::parse_quote!(admission),
-            columns: target.layouts[target.providers[index].canonical]
-                .columns
-                .clone(),
-        });
-        if analysis
-            .deltas
-            .contains_key(&symbol_name(&declaration.name))
-        {
-            target.certificates.push(HostCanonical {
-                kind: syn::parse_quote!(delta),
-                index,
-                source: syn::parse_quote!(admission),
-                columns: (0..declaration.columns.len()).collect(),
-            });
-        }
-    }
-    for (delta, layouts) in [(false, &target.layouts), (true, &target.delta_layouts)] {
-        for (index, layout) in layouts.iter().enumerate() {
-            target.certificates.push(HostCanonical {
-                kind: if delta {
-                    syn::parse_quote!(delta_layout)
-                } else {
-                    syn::parse_quote!(layout)
-                },
-                index,
-                source: if delta {
-                    syn::parse_quote!(delta)
-                } else {
-                    syn::parse_quote!(canonical)
-                },
-                columns: layout.columns.clone(),
-            });
-        }
-    }
-    for (index, negative) in target.negations.iter().enumerate() {
-        target.certificates.push(HostCanonical {
-            kind: syn::parse_quote!(negation),
-            index,
-            source: syn::parse_quote!(projection),
-            columns: negative.columns.clone(),
-        });
-    }
     check(source, &target)?;
     Ok(target)
 }

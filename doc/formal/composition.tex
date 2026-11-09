@@ -138,6 +138,26 @@ with the recipe cleared; the report retains the original recipe separately.
  \mathsf{terminalSlots}(s)}
  {\mathsf{stageSource}(T)=s\text{, with Rust payload tokens unchanged}}
 
+\Rule{DR-ProjectedSet}{C=(c_0,\ldots,c_{w-1})\quad
+ \forall c\in C.\ |c|=n\quad
+ r_i=(c_0[i],\ldots,c_{w-1}[i])\\
+ I=\mathsf{representatives}(\{r_i\mid 0\le i<n\})}
+ {\mathsf{loadProjection}(C,n)=C[I]\quad
+  |\mathsf{loadProjection}(C,n)|=|\{r_i\mid 0\le i<n\}|}
+
+\Rule{DR-ProjectionReuse}{P\subseteq Q\quad
+ |\mathsf{cachedProjection}(P)|=n=|\mathsf{sourceRows}|\quad
+ \mathsf{unique}(\mathsf{cachedProjection}(P))}
+ {\mathsf{unique}(Q)\quad
+  \mathsf{loadProjection}(Q)\text{ reuses unchanged cached base columns}}
+
+\Rule{DR-HostSet}{v=\mathsf{collectTypedProjection}(T,P)}
+ {\mathsf{hostInput}(T,P)=\mathsf{sortDedup}(v)}
+
+\Rule{DR-PreparedSet}{v=\mathsf{adaptDomains}(\mathsf{hostProducer}(p))\quad
+ p\text{ binds an actual stage input}}
+ {\mathsf{preparedInput}(p)=\mathsf{sortDedup}(v)}
+
 \Rule{DR-Target}{d=\mathsf{inputTarget}(p)\quad
  \mathsf{compile}(s,p,d)=r}
  {\mathsf{driver}(s,p)=r}
@@ -172,6 +192,28 @@ domain interface. A date payload executes on the host, not in the compiler.
 Terminal projections consume stored column slots and explicit dictionary
 publication domains; constants are opaque host-once values. Stage-source text
 is retained beside per-stage Sequence and publication records.
+
+DR-ProjectedSet is an IO boundary, not compiler evidence: every compiler input
+already denotes a set. The ordinary resident loader and compressed catalog
+select representatives of complete projected rows before encoding and upload.
+Unequal column lengths are rejected. A strictly increasing projection needs no
+row-selection buffer; otherwise row indices are sorted and deduplicated, and
+already-unique projections keep their original columns without copies.
+Only identical ordered projections share immutable resident tables. Independently
+checked duplicate-free projections also share unchanged base-column allocations;
+survivor-selected projections never reuse those full-row allocations. Repeated
+column names share their one allocation within a projection. DR-ProjectionReuse
+uses the measured distinctness of a cached subset of columns to establish
+distinctness of a larger projection, without rereading cached columns. It
+uses neither authored keys nor column types. Independent column caching alone
+cannot establish projected-row uniqueness. Domain encoding in the compressed
+catalog is injective on the loaded values and preserves this set.
+DR-HostSet canonicalizes the actual typed tuples, including host fallback.
+DR-PreparedSet canonicalizes opaque-host and dictionary producers after their
+final domain adaptation, once before stage execution. Earlier stage publications
+are already engine set outputs and are not canonicalized again at load time.
+All these operations occur outside query timers; no trusted-key declaration or
+compiler context fact substitutes for canonicalizing the supplied rows.
 
 DR-Target propagates rejection unchanged: it never retries another machine or
 deletes authored advice. DR-Publication derives extrema validity from aggregate

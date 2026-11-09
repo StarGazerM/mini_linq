@@ -684,8 +684,8 @@ with explicit fallback for missing optional values. Accessors are read-only,
 O(1) `Option<u64>` and must not force lazy construction. Code bounds are not
 count operands; overlapping-segment exact keys/maxima require an explicit
 merge/additional computation law. Device and round publication remain separate
-implementation slices. Sequence `planning_key` is never a uniqueness proof;
-only explicitly authored `trusted_key` retains that semantic premise.
+implementation slices. Sequence planning evidence never proves uniqueness;
+compiler input set semantics proves only full-heading uniqueness at Rename.
 
 None of these adds an observable. Each is either a representation law above,
 an access decision recorded in Structures/Sequence, or published evidence.

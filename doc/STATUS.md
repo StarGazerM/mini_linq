@@ -564,9 +564,9 @@ approval.
 - Holes are ordinary CQ programs (default tail `sequence → sequential →
   translate_pull`); typed hole interfaces (pull/push) are checked against a
   terminal registry; Round rewrites may change one hole's CQ sub-pipeline.
-- Dedup ownership: Storage proves hosts canonical and Round records `admit R
-  from [holes]`, discharging `host_set .. discharged` and `consumer canonical`
-  (`doc/formal/context.tex`); rule holes build no local `__cq_seen`.
+- Dedup ownership: Storage admits full-row sets before publishing CQ inputs;
+  Round records `admit R from [holes]`, authorizing `consumer canonical`
+  (`doc/formal/context.tex`). Rule holes build no local `__cq_seen`.
 - Negation is core `!R(..)` (anti-join, `doc/formal/guards.tex`) over key sets
   built once per stratum; zero per-call index builds.
 - Fx hashing is the default; keyed `cq_storage` providers, negation key sets

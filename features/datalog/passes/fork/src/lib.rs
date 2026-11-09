@@ -768,33 +768,6 @@ fn construct(
         }
         context.strata.push(stratum);
     }
-    let mut certified_hosts = std::collections::BTreeSet::new();
-    for certificate in &source.certificates {
-        let name = match symbol_name(&certificate.kind).as_str() {
-            "delta" => context.relations[certificate.index].delta.as_ref(),
-            "layout" => Some(&context.layouts[certificate.index].name),
-            "delta_layout" => Some(&context.delta_layouts[certificate.index].name),
-            _ => None,
-        };
-        if let Some(name) = name {
-            certified_hosts.insert(symbol_name(name));
-        }
-    }
-    for rule in context
-        .strata
-        .iter()
-        .flat_map(|s| s.seeds.iter().chain(&s.steps))
-    {
-        if let Some(scan) = &rule.scan {
-            let source_name = match scan.source {
-                InputSource::Delta(index) => context.relations[index].delta.as_ref(),
-                InputSource::Layout(index) => Some(&context.layouts[index].name),
-            };
-            if source_name.is_some_and(|name| certified_hosts.contains(&symbol_name(name))) {
-                certified_hosts.insert(symbol_name(&scan.binding));
-            }
-        }
-    }
     /// Formal rule DL-PlanningOwner: authored order targets only its recorded planning invocation.
     fn check_planning_owner(
         pipeline: &cq_stage::Pipeline,
@@ -844,19 +817,6 @@ fn construct(
         .map(|(cq, planning)| {
             let facts = cq_stage::Context {
                 consumer_canonical: true,
-                discharged_host_sets: cq
-                    .query
-                    .body
-                    .iter()
-                    .filter_map(|item| match item {
-                        BodyItem::Positive { atom }
-                            if certified_hosts.contains(&symbol_name(&atom.relation)) =>
-                        {
-                            Some(symbol_name(&atom.relation))
-                        }
-                        _ => None,
-                    })
-                    .collect(),
             };
             let mut pipeline = pipeline.clone();
             pipeline.passes[lower].arguments = facts.to_token_stream();

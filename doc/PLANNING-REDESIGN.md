@@ -231,9 +231,8 @@ parsers and runtime printers never read a file.
 
 This input **does not activate** `PlanOptions.evidence`, change a root, or
 conflict with authored order. Legacy P3.3e still owns its existing count/key
-root/L&E behavior. File key restatements do not become semantic
-`Sequence::TrustedKey` facts. CPU TPC-H's fixed SF1 ordering counts must not
-be reused as exact SF10 bounds.
+root/L&E behavior. File key restatements do not establish Sequence uniqueness.
+CPU TPC-H's fixed SF1 ordering counts must not be reused as exact SF10 bounds.
 
 The optional `cq-cost` package exports a versioned compiler-record projection:
 
@@ -1070,9 +1069,10 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   kernels after a winning Q06 checkpoint; broader default promotion requires
   paired end-to-end evidence and a same-source layout control.
   Restricted source renames (atom literals) also await a source-predicate
-  record, and undischarged `host_set` verification awaits a carrier-aware
-  verifier; both reject in the initial checker, while discharged premises
-  remain legal. No unsupported boundary silently falls back to decoded rows.
+  record and reject in the initial checker. Input rows are sets by the IO
+  boundary contract, including encoded carriers; no compiler certification
+  flag or query-time verification is required. Unsupported boundaries never
+  silently fall back to decoded rows.
   Aggregate continuations derive their value demand from the checked outer
   key/measure specification. That requirement is transported to Structures;
   ignored witness fields publish injective value codes, not decoded values
@@ -1261,10 +1261,11 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   **P7.1:** typed provider statistic/publication records and host scalar guard
   readiness contracts are implemented (`STR-BuildStats`, `BE-StatsRead`).
   Exact/estimated units and structured immutable build/layout/domain provenance
-  remain distinct. Authored evidence carries per-fact source; `planning_key`
-  cannot become the explicit `trusted_key` semantic premise. No automatic
-  statistics, filter activation policy, runtime population, device transfer or
-  committed-round publication is selected by this slice.
+  remain distinct. Authored evidence carries per-fact source and never supplies
+  a uniqueness premise. Input set semantics establishes only full-heading
+  uniqueness. No automatic statistics, filter activation policy, runtime
+  population, device transfer or committed-round publication is selected by
+  this slice.
   **P7.2 merged (2026-11-03, `514ef6af`; advice-only):** CPU run/hash builds
   publish cheap optional occurrence/key/group statistics (`RT-BuildStats`);
   run views borrow ordered keys for exact point/interval tests (`RT-RunFilter`).

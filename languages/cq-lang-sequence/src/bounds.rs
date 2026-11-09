@@ -2,19 +2,19 @@
 //!
 //! Numeric bounds depend on authored estimates, not certified cardinalities;
 //! they must not justify truncation or unchecked memory access. A probe whose
-//! keys cover a trusted key of its provider matches at most one provider row
+//! keys cover a derived key of its provider matches at most one provider row
 //! per stream row, preserving the stream bound and keys. If the keys cover a
-//! trusted key of the stream, the provider bound and keys are preserved.
+//! derived key of the stream, the provider bound and keys are preserved.
 //! Filters, scalar binds and projections preserve row bounds; projection
 //! preserves only surviving keys. Groups preserve the input row bound and
 //! introduce their grouping key. Unit has one row and the empty key.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::structures::physical::Operator;
-use crate::{EvidenceFact, Program};
+use crate::Program;
 use cq_syntax::symbol_name;
 
-/// Conditional size advice and separately trusted uniqueness premises.
+/// Conditional size advice and independently derived uniqueness facts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bound {
     /// Estimated upper bound, never a capacity or truncation certificate.
@@ -23,7 +23,7 @@ pub struct Bound {
     pub keys: Vec<BTreeSet<String>>,
 }
 
-/// Formal rule BE-PrefixBound: Record counts and keys through Unit, Rename, filters, scalar Bind, Project, Group, Semi/Anti and keyed Probe/Merge; generators and Union have no bound.
+/// Formal rule BE-PrefixBound: Record count estimates and full-heading input keys through Unit, Rename, filters, scalar Bind, Project, Group, Semi/Anti and keyed Probe/Merge; generators and Union have no bound.
 pub(crate) fn record(physical: &crate::structures::physical::Program, program: &Program) -> BTreeMap<String, Bound> {
     let mut bounds: BTreeMap<String, Bound> = BTreeMap::new();
     let get = |bounds: &BTreeMap<String, Bound>, name: &syn::Ident| {
@@ -40,27 +40,9 @@ pub(crate) fn record(physical: &crate::structures::physical::Program, program: &
             },
             Operator::Rename(rename) => {
                 let relation = symbol_name(&rename.relation);
-                let mapping: BTreeMap<_, _> = rename
-                    .mapping
-                    .iter()
-                    .map(|column| (symbol_name(&column.source), symbol_name(&column.target)))
-                    .collect();
                 Bound {
                     rows: program.evidence.count(&relation).map(|rows| rows as u128),
-                    keys: program
-                        .evidence
-                        .facts
-                        .iter()
-                        .filter_map(|fact| match fact {
-                            EvidenceFact::TrustedKey {
-                                subject, columns, ..
-                            } if symbol_name(subject) == relation => columns
-                                .iter()
-                                .map(|column| mapping.get(&symbol_name(column)).cloned())
-                                .collect::<Option<BTreeSet<_>>>(),
-                            _ => None,
-                        })
-                        .collect(),
+                    keys: vec![rename.mapping.iter().map(|column| symbol_name(&column.target)).collect()],
                 }
             }
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
@@ -166,27 +148,7 @@ pub fn check(physical: &crate::structures::physical::Program, program: &Program,
                         .count(&relation)
                         .is_some_and(|limit| limit as u128 <= rows)
                 }) && bound.keys.iter().all(|key| {
-                    program.evidence.facts.iter().any(|fact| {
-                        let EvidenceFact::TrustedKey {
-                            subject, columns, ..
-                        } = fact
-                        else {
-                            return false;
-                        };
-                        symbol_name(subject) == relation
-                            && columns
-                                .iter()
-                                .map(|column| {
-                                    rename
-                                        .mapping
-                                        .iter()
-                                        .find(|mapping| mapping.source == *column)
-                                        .map(|mapping| symbol_name(&mapping.target))
-                                })
-                                .collect::<Option<BTreeSet<_>>>()
-                                .as_ref()
-                                == Some(key)
-                    })
+                    *key == rename.mapping.iter().map(|column| symbol_name(&column.target)).collect()
                 })
             }
             Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {

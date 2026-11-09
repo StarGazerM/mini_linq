@@ -1,9 +1,8 @@
-structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r0 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
+structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; adaptive_membership = ::cq_storage::AdaptiveMembership<_, _> { reads [membership], build typed, shared }; } r0 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
  r1 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
  r1 host result(r2) = @hash_index as :: cq_storage :: HashIndex < '_ , _ , _ > [i];
  r3 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
  r3 host result(r4) = @adaptive_membership as :: cq_storage :: AdaptiveMembership < _ , 16777216 > [d , t] membership;
  r5 host scan = @host_scan as :: core :: iter :: Map < _ , _ > [];
  r5 host result(r6) = @adaptive_membership as :: cq_storage :: AdaptiveMembership < _ , 16777216 > [d , i , t] membership;
- r7 rows = @sort as ::cq_storage::dedup::Sort; r7 canon = rows;
  }

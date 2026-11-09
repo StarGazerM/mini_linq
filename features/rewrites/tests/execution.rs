@@ -68,9 +68,6 @@ fn three_way_smallest_executes_each_provider_as_minimum() {
             three_way_default(&l, &inputs[0], &inputs[1], &inputs[2]),
             expected
         );
-        for input in &mut inputs {
-            input.extend(input.clone());
-        }
         for run in [
             three_way_default as IntersectionRun,
             three_way_all,

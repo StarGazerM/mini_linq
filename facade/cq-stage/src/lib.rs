@@ -74,7 +74,7 @@
 //!
 //! Restricted context facts enter only through [`pass_with_context`] (the
 //! lower/select adapters). Checked continuations carry a separate
-//! `context { consumer = canonical, host_set R discharged };` envelope after
+//! `context { consumer = canonical };` envelope after
 //! arguments. Its facts must equal the source's recorded facts; ordinary passes
 //! cannot add facts. Printing an IR does not print this envelope, so factful
 //! re-entry requires an explicit exact envelope from the enclosing compiler.
@@ -107,8 +107,6 @@ mod kw {
     syn::custom_keyword!(context);
     syn::custom_keyword!(consumer);
     syn::custom_keyword!(canonical);
-    syn::custom_keyword!(host_set);
-    syn::custom_keyword!(discharged);
     syn::custom_keyword!(observe);
     syn::custom_keyword!(output_consumer);
     syn::custom_keyword!(head);
@@ -177,54 +175,31 @@ impl Language for syn::Expr {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Context {
     pub consumer_canonical: bool,
-    pub discharged_host_sets: BTreeSet<String>,
 }
 impl Context {
     pub fn is_empty(&self) -> bool {
-        !self.consumer_canonical && self.discharged_host_sets.is_empty()
+        !self.consumer_canonical
     }
 
     pub fn is_subset(&self, other: &Self) -> bool {
-        (!self.consumer_canonical || other.consumer_canonical)
-            && self
-                .discharged_host_sets
-                .is_subset(&other.discharged_host_sets)
+        !self.consumer_canonical || other.consumer_canonical
     }
 
     fn extend(&mut self, other: &Self) {
         self.consumer_canonical |= other.consumer_canonical;
-        self.discharged_host_sets
-            .extend(other.discharged_host_sets.iter().cloned());
     }
 }
 impl Parse for Context {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        use syn::ext::IdentExt;
-
         let mut context = Self::default();
         while !input.is_empty() {
-            if input.peek(kw::consumer) {
-                input.parse::<kw::consumer>()?;
-                input.parse::<Token![=]>()?;
-                input.parse::<kw::canonical>()?;
-                if context.consumer_canonical {
-                    return Err(input.error("CTX-Entry: duplicate consumer context fact"));
-                }
-                context.consumer_canonical = true;
-            } else {
-                input.parse::<kw::host_set>()?;
-                let host: syn::Ident = input.parse()?;
-                input.parse::<kw::discharged>()?;
-                if !context
-                    .discharged_host_sets
-                    .insert(host.unraw().to_string())
-                {
-                    return Err(syn::Error::new_spanned(
-                        host,
-                        "CTX-Entry: duplicate host context fact",
-                    ));
-                }
+            input.parse::<kw::consumer>()?;
+            input.parse::<Token![=]>()?;
+            input.parse::<kw::canonical>()?;
+            if context.consumer_canonical {
+                return Err(input.error("CTX-Entry: duplicate consumer context fact"));
             }
+            context.consumer_canonical = true;
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;
             }
@@ -234,19 +209,8 @@ impl Parse for Context {
 }
 impl ToTokens for Context {
     fn to_tokens(&self, output: &mut TokenStream) {
-        let mut comma = false;
         if self.consumer_canonical {
             output.extend(quote!(consumer = canonical));
-            comma = true;
-        }
-        for host in &self.discharged_host_sets {
-            if comma {
-                output.extend(quote!(,));
-            }
-            let host: syn::Ident = syn::parse_str(host)
-                .unwrap_or_else(|_| syn::Ident::new_raw(host, proc_macro2::Span::call_site()));
-            output.extend(quote!(host_set #host discharged));
-            comma = true;
         }
     }
 }

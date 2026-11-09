@@ -42,15 +42,13 @@
 //!
 //! Each rule hole records `consumer canonical`: its result belongs to exactly
 //! one checked admission owner for its head relation. Frozen-key holes have
-//! their own canonical key-set consumer. Storage certificates establish
-//! `host_set H discharged` for certified positive hosts: each relation's
-//! canonical layout, admitted IDB deltas, and their maintained layouts. Certificates may
-//! cover a subset of hosts; an uncertified host receives no discharged fact.
-//! Provider types are not whitelisted. Checked scan substitutions preserve the
-//! certificate for the renamed input.
-//! Round checks owners and host provenance directly from the supplied records;
-//! it never regenerates Fork's output to justify these facts. Opaque providers
-//! must still obey their recorded collection, membership and maintenance laws.
+//! their own canonical key-set consumer. Every CQ input is unconditionally a
+//! set of distinct complete rows. Raw IO deduplicates before this boundary;
+//! Datalog binding admission builds canonical storage before holes read it.
+//! Round checks admission owners, host origins and layout maintenance directly
+//! from the supplied records; it never regenerates Fork's output to justify
+//! these obligations. Opaque providers must still obey their recorded
+//! collection, membership and maintenance laws.
 //!
 //! Raw CQ entry remains fact-free; Fork records facts in the selected lower
 //! argument packet. `Hole.lower` records that invocation's ordinal, and Round
@@ -60,10 +58,9 @@
 //! The named CQ `plan` phase is recorded as `Hole.plan`; custom flat fork
 //! queues supply `plan = N`. Authored Datalog order requires that owner with
 //! empty planner arguments; incompatible advice is rejected, never skipped.
-//! Checked scan renaming updates both facts and the packet, and facts naming
-//! non-read inputs are rejected before erasure.
-//! Once recorded in Physical, they travel in an exact explicit
-//! `context { consumer = canonical, host_set H discharged, ... };` envelope.
+//! Checked scan renaming updates declared relational evidence while preserving
+//! consumer context. Once recorded in Physical, that context travels in an exact
+//! explicit `context { consumer = canonical };` envelope.
 //! Reentering a factful CQ IR requires that envelope: missing or extra facts
 //! are rejected, and matching pass arguments do not replace it. Per-hole
 //! rewrites and both pull and push terminals preserve this checked boundary.

@@ -140,7 +140,6 @@ impl<'a> Emitter<'a> {
         let mut context = Context::new(physical, structures, structures_analysis);
         context.blocked_runs = program.representation.blocks.runs.clone();
         context.blocked_routing = program.representation.blocks.routing.clone();
-        context.certify_host_sets(physical);
         let mut partial_groups = BTreeMap::new();
         for definition in &program.sequence.definitions {
             let mut nodes = Vec::new();

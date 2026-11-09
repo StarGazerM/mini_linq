@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use cq_storage::scan::{BlockRows, Family, OrdinalDecode, ScanColumn, ScanColumnBuilder};
+use cq_storage::scan::{BlockRows, Family, OrdinalDecode, ScanColumn, ScanColumnBuilder, ScanColumns, ScanTable};
 
 use crate::{Batch, Csv, CsvOptions, Dictionaries, Load, Result};
 
@@ -18,10 +18,15 @@ pub trait ColumnarRelation {
     fn finish(builders: Self::Builders, dictionaries: &mut Dictionaries) -> Self::Table;
 }
 
-/// Columnar file loading, independent of compiler representation selection.
+/// Columnar relation-set loading, independent of compiler representation selection.
+/// Complete encoded rows are deduplicated at publication, after dictionary remapping.
 pub struct ColumnarLoader<S>(std::marker::PhantomData<S>);
 
-impl<S: ColumnarRelation> ColumnarLoader<S> {
+impl<S, C> ColumnarLoader<S>
+where
+    S: ColumnarRelation<Table = ScanTable<C>>,
+    C: ScanColumns,
+{
     pub fn csv(
         path: impl AsRef<Path>,
         options: CsvOptions,
@@ -133,7 +138,7 @@ impl<S: ColumnarRelation> ColumnarLoader<S> {
 
     fn finish(builders: S::Builders, dictionaries: &mut Dictionaries) -> Result<S::Table> {
         let mut pending = Dictionaries::default();
-        let table = S::finish(builders, &mut pending);
+        let table = S::finish(builders, &mut pending).into_set();
         dictionaries.commit(pending)?;
         Ok(table)
     }

@@ -80,7 +80,7 @@ fn partition_scans(source: &Program) -> Program {
                 unreachable!("checked leading scan")
             };
             atom.relation = binding.clone();
-            target.holes[rule.hole].rename_host_fact(&scan.binding, &binding);
+            target.holes[rule.hole].rename_host_evidence(&scan.binding, &binding);
             target.execution.push(Execution {
                 hole: rule.hole,
                 occurrence: 0,

@@ -298,16 +298,20 @@ mod tests {
                     column(rows, |r| r.0), column(rows, |r| r.1),
                     column(rows, |r| r.2), column(rows, |r| r.3),
                     column(rows, |r| r.4), column(rows, |r| r.5),
-                )).bind_domains(&scan_domains()).unwrap(),
+                )).into_set().bind_domains(&scan_domains()).unwrap(),
             ),
             "blocks-bytes" | "blocks-bytes-par" => LineitemInput::Bytes(
                 cq_storage::scan::ScanTable::new((
                     column(rows, |r| r.0), column(rows, |r| r.1),
                     column(rows, |r| r.2), column(rows, |r| r.3),
                     column(rows, |r| r.4), column(rows, |r| r.5),
-                )).bind_domains(&scan_domains()).unwrap(),
+                )).into_set().bind_domains(&scan_domains()).unwrap(),
             ),
-            _ => LineitemInput::Rows(rows.to_vec()),
+            _ => {
+                let mut rows = rows.to_vec();
+                cq_load::canonicalize(&mut rows);
+                LineitemInput::Rows(rows)
+            }
         };
         Data { lineitem }
     }

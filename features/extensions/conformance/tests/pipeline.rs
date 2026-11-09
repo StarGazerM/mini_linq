@@ -55,7 +55,7 @@ fn direct_surface_packet_carries_arguments_through_stacked_union_negation() {
 
 #[test]
 fn aggregate_nested_query_uses_the_callers_canonical_printer() {
-    let Sale = [(1, 1, 10), (1, 1, 10), (1, 2, 10)];
+    let Sale = [(1, 1, 10, 0), (1, 1, 10, 1), (1, 2, 10, 2)];
     let groups = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_aggregate::aggregate];
@@ -64,9 +64,9 @@ fn aggregate_nested_query_uses_the_callers_canonical_printer() {
             print = cq_ext_test_passes::canonical(once);
         }
         // Count and sum consume the core's canonical index, even through an
-        // alternate terminal path with arguments; duplicate source rows vanish.
+        // alternate terminal path with arguments; projected duplicate witnesses vanish.
         aggregate! { by(d); n=count(); s=sum(a);
-            struct G; relation Sale(d:i32,id:i32,a:i32); rows(d,id,a) :- Sale(d,id,a);
+            struct G; relation Sale(d:i32,id:i32,a:i32,witness:i32); rows(d,id,a) :- Sale(d,id,a,witness);
         }
     };
     let rows: Rows = groups
@@ -101,7 +101,7 @@ fn recursive_seed_and_step_queries_use_the_callers_printer() {
 #[test]
 fn correlated_inner_and_outer_queries_use_the_callers_printer() {
     let A = [(1,), (2,)];
-    let S = [(1, 7), (1, 7)];
+    let S = [(1, 7, 0), (1, 7, 1)];
     let rows: Vec<_> = mini_linq::compile! {
         pipeline {
             surface = [cq_ext_correlated::correlated];
@@ -109,8 +109,8 @@ fn correlated_inner_and_outer_queries_use_the_callers_printer() {
             grade = mini_linq::passes::sequential;
             print = cq_ext_test_passes::repeated(twice);
         }
-        struct C; relation A(x:i32); relation S(x:i32,y:i32); relation answer(x:i32,v:i32);
-        answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y)};
+        struct C; relation A(x:i32); relation S(x:i32,y:i32,witness:i32); relation answer(x:i32,v:i32);
+        answer(*x,v) :- A(x), scalar!{v:i32=(-1); select(*y); S(x,y,witness)};
     }
     .collect();
     assert_eq!(rows.len(), 2);

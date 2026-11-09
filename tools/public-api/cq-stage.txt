@@ -395,9 +395,8 @@ cq_stage::Configuration::sequence	{"struct_field":{"resolved_path":{"args":{"ang
 cq_stage::Configuration::stage	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_stage::Invocation","path":"Invocation"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_stage::Configuration::structures	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_stage::Invocation","path":"Invocation"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_stage::Configuration::surface	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_stage::Invocation","path":"Invocation"}}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
-cq_stage::Context	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_stage::Context::consumer_canonical","cq_stage::Context::discharged_host_sets"],"has_stripped_fields":false}}}}
+cq_stage::Context	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_stage::Context::consumer_canonical"],"has_stripped_fields":false}}}}
 cq_stage::Context::consumer_canonical	{"struct_field":{"primitive":"bool"}}
-cq_stage::Context::discharged_host_sets	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}],"constraints":[]}},"id":"alloc::collections::btree::set::BTreeSet","path":"std::collections::BTreeSet"}}}
 cq_stage::Invocation	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_stage::Invocation::path","cq_stage::Invocation::arguments"],"has_stripped_fields":false}}}}
 cq_stage::Invocation::arguments	{"struct_field":{"resolved_path":{"args":null,"id":"proc_macro2::TokenStream","path":"proc_macro2::TokenStream"}}}
 cq_stage::Invocation::path	{"struct_field":{"resolved_path":{"args":null,"id":"syn::path::Path","path":"syn::Path"}}}

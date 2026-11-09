@@ -120,24 +120,22 @@ fn assert_numeric<F: Family>(
     expected: &[(i64, Date, Decimal)],
     summaries: bool,
 ) {
+    let mut expected = expected.to_vec();
+    cq_load::canonicalize(&mut expected);
     assert_eq!(table.len(), expected.len());
     assert_eq!(table.is_empty(), expected.is_empty());
     let columns = table.columns();
     assert_eq!(columns.0.summaries().is_some(), summaries);
     assert_eq!(columns.1.summaries().is_some(), summaries);
     assert_eq!(columns.2.summaries().is_some(), summaries);
-    assert_eq!(
-        decoded(&columns.0),
-        expected.iter().map(|row| row.0).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        decoded(&columns.1),
-        expected.iter().map(|row| row.1).collect::<Vec<_>>()
-    );
-    assert_eq!(
-        decoded(&columns.2),
-        expected.iter().map(|row| row.2).collect::<Vec<_>>()
-    );
+    let mut actual: Vec<_> = decoded(&columns.0)
+        .into_iter()
+        .zip(decoded(&columns.1))
+        .zip(decoded(&columns.2))
+        .map(|((id, day), price)| (id, day, price))
+        .collect();
+    actual.sort_unstable();
+    assert_eq!(actual, expected);
 }
 
 fn numeric_rows(count: usize) -> Vec<(i64, Date, Decimal)> {
@@ -172,7 +170,9 @@ fn csv_roundtrip_matches_row_loader_across_partial_blocks_and_batches() {
             ..CsvOptions::default()
         };
         let oracle = cq_load::read_csv::<NumericRows>(&file.0, options).unwrap();
-        assert_eq!(oracle, rows);
+        let mut expected = rows.clone();
+        cq_load::canonicalize(&mut expected);
+        assert_eq!(oracle, expected);
         for summaries in [false, true] {
             for block_rows in [1024, 2048] {
                 let block_rows = BlockRows::new(block_rows).unwrap();
@@ -186,6 +186,27 @@ fn csv_roundtrip_matches_row_loader_across_partial_blocks_and_batches() {
                 assert_numeric::<Bytes>(&bytes, &oracle, summaries);
                 assert_numeric::<Plain>(&plain, &oracle, summaries);
             }
+        }
+    }
+}
+
+#[test]
+fn columnar_loader_deduplicates_full_rows_across_batches() {
+    let file = Fixture::csv(
+        "2,1970-01-01,1.00\n1,1970-01-01,2.00\n2,1970-01-01,1.00\n1,1970-01-01,3.00\n",
+    );
+    let expected = [
+        (1, Date::from_days(0), Decimal::from_scaled(200).unwrap()),
+        (1, Date::from_days(0), Decimal::from_scaled(300).unwrap()),
+        (2, Date::from_days(0), Decimal::from_scaled(100).unwrap()),
+    ];
+    for batch_size in [1, 3, 64] {
+        for summaries in [false, true] {
+            let options = CsvOptions { batch_size, ..Default::default() };
+            let table = ColumnarLoader::<Numeric<Bytes>>::csv(
+                &file.0, options, BlockRows::new(1024).unwrap(), summaries,
+            ).unwrap();
+            assert_numeric::<Bytes>(&table, &expected, summaries);
         }
     }
 }
@@ -405,7 +426,9 @@ mod parquet_tests {
         for batch_size in [1, 257, 1024, 2053, 8192] {
             let options = ParquetOptions { batch_size };
             let oracle = cq_load::read_parquet::<NumericRows>(&file.0, options).unwrap();
-            assert_eq!(oracle, rows);
+            let mut expected = rows.clone();
+            cq_load::canonicalize(&mut expected);
+            assert_eq!(oracle, expected);
             for summaries in [false, true] {
                 let blocks = BlockRows::new(2048).unwrap();
                 let bytes =

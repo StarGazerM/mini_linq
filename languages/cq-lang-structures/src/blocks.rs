@@ -100,7 +100,6 @@ pub(crate) fn check(physical: &crate::physical::Program, program: &Program, fact
         let binding = contract.sources.get(&scan.source).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing blocked source binding"))?;
         let source = encoded.obligations.sources.get(&scan.source).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing encoded source"))?;
         require(source.occurrence == *occurrence, "source occurrence changed")?;
-        require(!physical.program.host_sets.iter().any(|fact| symbol_name(&fact.relation) == source.relation && fact.discharged.is_none()), "blocked source cannot use borrowed-row host_set certification")?;
         require(binding.block_rows > 0 && binding.block_rows <= u32::MAX as u64 && binding.block_rows % 1024 == 0, "invalid block geometry")?;
         let relation = physical.inputs().find(|r| symbol_name(&r.name) == source.relation).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked relation"))?;
         let definition = physical.program.definitions.iter().find(|d| symbol_name(&d.name) == *occurrence).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked occurrence"))?;

@@ -855,7 +855,7 @@ impl syn::parse::Parse for Arguments {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         let mut arguments = Self::default();
         while !input.is_empty() {
-            if input.peek(physical::kw::consumer) || input.peek(physical::kw::host_set) {
+            if input.peek(physical::kw::consumer) {
                 arguments.facts.parse_fact(input)?;
             } else {
                 let keyword: syn::Ident = input.parse()?;
@@ -872,7 +872,7 @@ impl syn::parse::Parse for Arguments {
                 if keyword != "positional" {
                     return Err(syn::Error::new_spanned(
                         keyword,
-                        "expected blocks(...), positional(host, ...), consumer = canonical, or host_set R discharged",
+                        "expected blocks(...), positional(host, ...), or consumer = canonical",
                     ));
                 }
                 if arguments.hosts.is_some() {

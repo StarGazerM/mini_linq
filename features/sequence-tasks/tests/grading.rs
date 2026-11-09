@@ -75,16 +75,32 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
     .unwrap()
 }
 
+// Project distinct host witnesses before testing canonicalization of repeated rows.
+fn witness_program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream) -> Fixture {
+    syn::parse2(quote::quote! {
+        physical {
+            relation R(a:i32,witness:i32);
+            raw = pipe rename R {a -> a,witness -> witness};
+            r = let canon project raw keep {a};
+            return r as answer(a);
+        }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } raw host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        sequence { #sequence }
+        graded tasks { #grades }
+    })
+    .unwrap()
+}
+
 #[test]
 fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
     let cases = [
         (
-            quote::quote! { input = rows r; result = store canon input; },
+            quote::quote! { input = map r rows raw; result = store canon input; },
             quote::quote! { input at host; result at host; },
         ),
         (
             quote::quote! {
-                input = store rows r;
+                input = store map r rows raw;
                 parts = store flatten tile 64 input;
                 joined = store parts;
                 result = store canon joined;
@@ -93,7 +109,7 @@ fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
         ),
         (
             quote::quote! {
-                input = store rows r;
+                input = store map r rows raw;
                 parts = store canon partition_k[a](64) input;
                 joined = store parts;
                 result = store flatten joined;
@@ -103,7 +119,7 @@ fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
     ];
     let mut checks = Vec::new();
     for (sequence, grades) in cases {
-        let program = program(sequence, grades);
+        let program = witness_program(sequence, grades);
         let facts = check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
         let expression = cq_sequence_tasks::translate_with(&program.physical, &program.structures, &program.program, &facts,
         cq_sequence_tasks::Config {
@@ -129,8 +145,8 @@ fn tasks_canon_shapes_use_parallel_sort_and_remove_cross_part_duplicates() {
     }
     run_partition_fixture(quote::quote! {
         fn main() {
-            let populated: Vec<(i32,)> =
-                (0..4099).map(|index| ((index * 13) % 7,)).collect();
+            let populated: Vec<(i32,i32)> =
+                (0..4099).map(|index| ((index * 13) % 7,index)).collect();
             for threads in [1, 4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for R in [&[][..], &populated[..1], &populated[..65], &populated[..]] {
@@ -241,7 +257,7 @@ fn tasks_answer_heads_use_parallel_sort_without_hash_or_clone_bounds() {
 
         fn main() {
             let populated: Vec<(i32,i32)> =
-                (0..4099).map(|index| (index % 7, index % 11)).collect();
+                (0..4099).map(|index| (index % 7, index)).collect();
             for threads in [1, 4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for R in [&[][..], &populated[..1], &populated[..]] {
@@ -263,9 +279,10 @@ fn tasks_wide_valuation_canon_compares_every_field() {
     let columns: Vec<_> = left.iter().chain(&right).collect();
     let physical = syn::parse2(quote::quote! {
         physical {
-            relation L(#(#left:i32),*);
+            relation L(#(#left:i32),*,witness:i32);
             relation R(a0:i32,#(#right:i32),*);
-            l = pipe rename L {#(#left -> #left),*};
+            raw = pipe rename L {#(#left -> #left),*,witness -> witness};
+            l = pipe project raw keep {#(#left),*};
             r = let rename R {a0 -> a0,#(#right -> #right),*};
             j = let canon probe first [a0] l,r;
             return j as answer(#(#columns),*);
@@ -278,7 +295,7 @@ fn tasks_wide_valuation_canon_compares_every_field() {
         #structures
         sequence {
             r = store rows r;
-            input = rows l;
+            input = map l rows raw;
             result = store canon flatten lookup r[a0] input;
         }
         graded tasks { r at host; input at host; result at host; }
@@ -295,9 +312,10 @@ fn tasks_wide_valuation_canon_compares_every_field() {
     assert!(!rendered.contains("dedup :: Sort > :: sort"), "{rendered}");
     run_partition_fixture(quote::quote! {
         fn main() {
-            let populated = vec![(1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32); 129];
+            let populated: Vec<_> = (0..129).map(|witness|
+                (1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32,witness)).collect();
             let R = [(1i32,0i32,0i32,0i32,0i32,0i32,0i32,0i32,2i32),
-                     (1,0,0,0,0,0,0,0,1), (1,0,0,0,0,0,0,0,2)];
+                     (1,0,0,0,0,0,0,0,1)];
             for threads in [1, 4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for L in [&[][..], &populated[..1], &populated[..]] {
@@ -366,7 +384,7 @@ fn checked_publication_owns_rows_once_and_aliases_without_copying() {
     );
     run_partition_fixture(quote::quote! {
         fn main() {
-            for R in [&[][..], &[(1i32,)][..], &[(2,), (1,), (2,), (3,)][..]] {
+            for R in [&[][..], &[(1i32,)][..], &[(2,), (1,), (3,)][..]] {
                 let mut actual: Vec<(i32,)> = (#tasks).map(|(a,)| (*a,)).collect();
                 actual.sort();
                 let mut expected = R.to_vec();
@@ -585,7 +603,7 @@ fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
         fn main() {
             let R: &[(i32,i32)] = &[(1,10),(1,11),(2,20),(3,-30)];
             let populated: Vec<(i32,i32)> =
-                (0..131).map(|index| (index % 4 + 1, index % 7)).collect();
+                (0..131).map(|index| (index % 4 + 1, index)).collect();
             for threads in [1,4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for L in [&[][..], &populated[..1], &populated[..64], &populated[..65], &populated[..]] {
@@ -610,7 +628,7 @@ fn pool_store_joins_task_local_rows_in_driver_order_without_deduplicating() {
     run_partition_fixture(source);
 }
 
-fn grouped_program(global: bool) -> Fixture {
+fn grouped_program(global: bool, duplicate_witnesses: bool) -> Fixture {
     let keys = if global {
         quote::quote!()
     } else {
@@ -621,10 +639,27 @@ fn grouped_program(global: bool) -> Fixture {
     } else {
         quote::quote!(k,)
     };
+    let (input, scan) = if duplicate_witnesses {
+        (
+            quote::quote! {
+                relation rows(k:i32, witness:i32, value:i64, occurrence:i32);
+                raw = pipe rename rows {k -> k, witness -> witness, value -> value, occurrence -> occurrence};
+                r = let canon project raw keep {k,witness,value};
+            },
+            quote::quote!(map r rows raw),
+        )
+    } else {
+        (
+            quote::quote! {
+                relation rows(k:i32, witness:i32, value:i64);
+                r = let canon rename rows {k -> k, witness -> witness, value -> value};
+            },
+            quote::quote!(rows r),
+        )
+    };
     let physical = syn::parse2(quote::quote! {
         physical {
-            relation rows(k:i32, witness:i32, value:i64);
-            r = let canon rename rows {k -> k, witness -> witness, value -> value};
+            #input
             grouped = pipe group r by [#keys] {
                 n: usize = count();
                 total: i64 = sum(value);
@@ -640,7 +675,7 @@ fn grouped_program(global: bool) -> Fixture {
         #physical
         #structures
         sequence {
-            r = store canon rows r;
+            r = store canon #scan;
             groups = group grouped r;
             output_rows = store groups;
         }
@@ -652,7 +687,7 @@ fn grouped_program(global: bool) -> Fixture {
 #[test]
 fn grouped_fold_requires_host_even_at_a_sequential_task_leaf() {
     for level in [quote::quote!(pool), quote::quote!(pool.task)] {
-        let mut program = grouped_program(false);
+        let mut program = grouped_program(false, false);
         program.program.graded = Some(
             syn::parse2(quote::quote! {
                 graded tasks { r at host; groups at #level; output_rows at host; }
@@ -666,8 +701,8 @@ fn grouped_fold_requires_host_even_at_a_sequential_task_leaf() {
 
 #[test]
 fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
-    let keyed = grouped_program(false);
-    let global = grouped_program(true);
+    let keyed = grouped_program(false, true);
+    let global = grouped_program(true, true);
     let keyed_facts = check_grading(&keyed.physical, &keyed.structures, &keyed.program, &machine()).unwrap();
     let global_facts = check_grading(&global.physical, &global.structures, &global.program, &machine()).unwrap();
     let keyed_tasks = translate(&keyed.physical, &keyed.structures, &keyed.program, &keyed_facts).unwrap();
@@ -677,7 +712,7 @@ fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
     assert!(!keyed_tasks.to_token_stream().to_string().contains("rayon"));
     let source = quote::quote! {
         fn main() {
-            let populated: &[(i32,i32,i64)] = &[(1,10,7),(1,10,7),(1,11,7),(2,20,-2)];
+            let populated: &[(i32,i32,i64,i32)] = &[(1,10,7,0),(1,10,7,1),(1,11,7,2),(2,20,-2,3)];
             for rows in [populated, &[][..]] {
                 let mut tasks: Vec<(i32,usize,i64,Option<i64>,Option<i64>)> =
                     (#keyed_tasks).into_iter().map(|(k,n,s,l,h)| (*k,n,s,l,h)).collect();
@@ -705,12 +740,12 @@ fn host_grouped_tasks_and_pull_execute_the_same_valuation_fold() {
 
 #[test]
 fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
-    let keyed = grouped_program(false);
-    let global = grouped_program(true);
+    let keyed = grouped_program(false, true);
+    let global = grouped_program(true, true);
     let translate_tiled = |mut program: Fixture| {
         program.program.sequence = syn::parse_quote! {
             sequence {
-                input = store rows r;
+                input = store map r rows raw;
                 parts = store flatten tile 64 input;
                 joined = store parts;
                 r = store canon joined;
@@ -741,12 +776,12 @@ fn joined_tiles_canonicalize_complete_valuations_before_grouping() {
     let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     let source = quote::quote! {
         fn main() {
-            // Repeated complete valuations span several 64-row tiles. Different
-            // witnesses with the same key and value must both enter the fold.
-            let populated: Vec<(i32,i32,i64)> = (0..131).map(|index| match index % 4 {
-                0 | 1 => (1,10,7),
-                2 => (1,11,7),
-                _ => (2,20,-2),
+            // Projected complete valuations span several 64-row tiles. Different
+            // logical witnesses with the same key and value must both enter the fold.
+            let populated: Vec<(i32,i32,i64,i32)> = (0..131).map(|index| match index % 4 {
+                0 | 1 => (1,10,7,index),
+                2 => (1,11,7,index),
+                _ => (2,20,-2,index),
             }).collect();
             for threads in [1,4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
@@ -803,10 +838,136 @@ fn run_partition_fixture(source: proc_macro2::TokenStream) {
     runtime.run(&source.to_string());
 }
 
+fn merge_input_fixture(sequence: proc_macro2::TokenStream) -> Fixture {
+    let physical = syn::parse_quote! {
+        physical {
+            relation L(a:i32) host [a] reads [ordered];
+            relation R(a:i32,b:i32) host [a] reads [ordered];
+            l = pipe rename L {a -> a};
+            r = pipe rename R {a -> a,b -> b};
+            joined = pipe merge [a] l,r;
+            return joined as answer(a,b);
+        }
+    };
+    let structures = cq_structure_selection::compile(&physical).unwrap();
+    let mut program: cq_lang_sequence::Program = syn::parse2(quote::quote! {
+        sequence { #sequence }
+    }).unwrap();
+    program.graded = Some(cq_lang_sequence::Graded {
+        machine: syn::parse_quote!(tasks),
+        grades: program.sequence.definitions.iter().map(|definition| cq_lang_sequence::Grade {
+            name: definition.name.clone(),
+            level: vec![syn::parse_quote!(host)],
+        }).collect(),
+    });
+    Fixture { physical, structures, program }
+}
+
+#[test]
+fn merge_rejects_partition_ancestry_even_after_flatten_and_aliases() {
+    for sequence in [
+        quote::quote! {
+            l = rows l; r = rows r;
+            partial = tile 2 l;
+            result = store flatten flatten lookup r [a] partial;
+        },
+        quote::quote! {
+            l = rows l; r = rows r;
+            partial = flatten tile 2 l;
+            alias = partial;
+            result = store flatten lookup r [a] alias;
+        },
+        quote::quote! {
+            l = rows l; r = rows r;
+            partial = flatten tile 2 l;
+            result = store flatten map joined partial;
+        },
+    ] {
+        let fixture = merge_input_fixture(sequence);
+        cq_lang_sequence::contract::check(&fixture.physical, &fixture.structures, &fixture.program).unwrap();
+        assert!(check_grading(&fixture.physical, &fixture.structures, &fixture.program, &machine()).is_err());
+    }
+    let complete = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        complete = store flatten tile 2 l;
+        result = store flatten lookup r [a] complete;
+    });
+    check_grading(&complete.physical, &complete.structures, &complete.program, &machine()).unwrap();
+}
+
+#[test]
+fn merge_partition_advice_tiles_the_completed_join() {
+    let fixture = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        result = store flatten lookup r [a] l;
+    });
+    let rewritten = cq_sequence_plan::rewrites::partition(
+        &fixture.physical, &fixture.structures, &fixture.program,
+        quote::quote!(result, 2),
+    ).unwrap();
+    let expected: cq_lang_sequence::Program = syn::parse_quote! {
+        sequence {
+            l = rows l; r = rows r;
+            result = store flatten tile 2 flatten lookup r [a] l;
+        }
+        graded tasks { l at host; r at host; result at host; }
+    };
+    assert_eq!(rewritten, expected);
+    check_grading(&fixture.physical, &fixture.structures, &rewritten, &machine()).unwrap();
+}
+
+#[test]
+fn unflattened_merge_segment_does_not_partition_its_source() {
+    let fixture = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        result = store map joined l;
+    });
+    let rewritten = cq_sequence_plan::rewrites::partition(
+        &fixture.physical, &fixture.structures, &fixture.program,
+        quote::quote!(result, 2),
+    ).unwrap();
+    assert_eq!(rewritten, fixture.program);
+    check_grading(&fixture.physical, &fixture.structures, &rewritten, &machine()).unwrap();
+}
+
+#[test]
+fn planned_grouped_host_merge_preserves_exact_multiplicity_across_tasks() {
+    let mut fixture = merge_input_fixture(quote::quote! {
+        l = rows l; r = rows r;
+        result = store flatten lookup r [a] l;
+    });
+    fixture.program.graded = None;
+    let (physical, structures, sequence, analysis) = cq_sequence_conformance::plan(
+        &fixture.physical, &fixture.structures, &fixture.program,
+        cq_sequence_conformance::Target::Tasks,
+    ).unwrap();
+    let expression = translate(&physical, &structures, &sequence, &analysis).unwrap();
+    run_partition_fixture(quote::quote! {
+        fn main() {
+            for count in [0_i32, 1, 129] {
+                let L: ::std::collections::BTreeMap<(i32,), Vec<()>> =
+                    (0..count).map(|key| ((key,), vec![()])).collect();
+                let R: ::std::collections::BTreeMap<(i32,), Vec<(i32,)>> =
+                    (0..count).map(|key| ((key,), vec![(7,), (9,)])).collect();
+                let expected: Vec<_> = (0..count)
+                    .flat_map(|key| [(key, 7), (key, 9)])
+                    .collect();
+                for threads in [1, 4] {
+                    let pool = ::rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                    let mut actual: Vec<_> = pool.install(|| (#expression)
+                        .map(|(a, b)| (*a, *b)).collect());
+                    actual.sort_unstable();
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    });
+}
+
 #[test]
 fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() {
-    let keyed = grouped_program(false);
-    let global = grouped_program(true);
+    let keyed = grouped_program(false, true);
+    let global = grouped_program(true, true);
     let translate_partitioned = |mut program: Fixture, global: bool| {
         let body = if global {
             quote::quote!(group grouped canon partition_k[k,witness,value](64) input)
@@ -815,7 +976,7 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
         };
         program.program.sequence = syn::parse_quote! {
             sequence {
-                input = store rows r;
+                input = store map r rows raw;
                 parts = store #body;
                 output_rows = store parts;
             }
@@ -849,12 +1010,12 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
     let global_pull = cq_sequence_pull::translate(&global.physical, &global.structures, &global.program, &global_facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
-            // Duplicates span several routing chunks; only two of the 64
+            // Projected duplicates span routing chunks; only two of the 64
             // logical key partitions can be occupied by the keyed fold.
-            let populated: Vec<(i32,i32,i64)> = (0..4099).map(|index| match index % 4 {
-                0 | 1 => (1,10,7),
-                2 => (1,11,7),
-                _ => (2,20,-2),
+            let populated: Vec<(i32,i32,i64,i32)> = (0..4099).map(|index| match index % 4 {
+                0 | 1 => (1,10,7,index),
+                2 => (1,11,7,index),
+                _ => (2,20,-2,index),
             }).collect();
             for threads in [1,24] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
@@ -889,8 +1050,7 @@ fn key_partitioned_groups_preserve_exact_valuations_and_empty_global_identity() 
 
 #[test]
 fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
-    let mut program = grouped_program(true);
-    program.program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
+    let mut program = grouped_program(true, false);
     program.program.sequence = syn::parse_quote! {
         sequence {
             input = store rows r;
@@ -940,10 +1100,12 @@ fn globally_unique_tiles_fold_partial_aggregates_with_one_empty_identity() {
 fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Fixture {
     let physical = syn::parse_quote! {
         physical {
-            relation L(a:i32,b:i32); relation R(a:i32,b:i32,c:i32);
+            relation L(a:i32,b:i32,witness:i32); relation R(a:i32,b:i32,c:i32,witness:i32);
             consumer canonical;
-            l = pipe rename L {a -> a,b -> b};
-            r = let rename R {a -> a,b -> b,c -> c};
+            raw_l = pipe rename L {a -> a,b -> b,witness -> left_witness};
+            l = pipe project raw_l keep {a,b};
+            raw_r = pipe rename R {a -> a,b -> b,c -> c,witness -> right_witness};
+            r = let project raw_r keep {a,b,c};
             joined = pipe probe first [a,b] l,r;
             return joined as answer(a,b,c);
         }
@@ -985,9 +1147,9 @@ fn routed_provider_program(routing: proc_macro2::TokenStream, named: bool) -> Fi
         #physical
         #structures
         sequence {
-            provider_input = store rows r;
+            provider_input = store map r rows raw_r;
             #provider
-            input = store rows l;
+            input = store map l rows raw_l;
             parts = store capacity 8192 flatten flatten lookup r [a,b] tile 64 input;
             result = store parts;
         }
@@ -1037,14 +1199,14 @@ fn routed_providers_keep_subset_and_reordered_keys_through_named_publication() {
     }
     run_partition_fixture(quote::quote! {
         fn main() {
-            let probes: Vec<(i32,i32)> = (0..131).map(|i| (i % 4,i % 7)).collect();
-            let values: Vec<(i32,i32,i32)> = (0..131).map(|i| (i % 3,i % 5,i % 7)).collect();
+            let probes: Vec<(i32,i32,i32)> = (0..131).map(|i| (i % 4,i % 7,i)).collect();
+            let values: Vec<(i32,i32,i32,i32)> = (0..131).map(|i| (i % 3,i % 5,i % 7,i)).collect();
             for threads in [1,24] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for L in [&probes[..], &[][..]] {
                     for R in [&values[..], &[][..]] {
-                        let expected: Vec<(i32,i32,i32)> = L.iter().flat_map(|&(a,b)| {
-                            R.iter().filter_map(move |&(ra,rb,c)| {
+                        let expected: Vec<(i32,i32,i32)> = L.iter().flat_map(|&(a,b,_)| {
+                            R.iter().filter_map(move |&(ra,rb,c,_)| {
                                 (ra == a && rb == b).then_some((a,b,c))
                             })
                         }).collect();
@@ -1309,8 +1471,8 @@ fn raw_full_key_host_membership_is_published_before_shared_task_reads() {
     let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
-            let populated = [(1, 10), (2, 20), (1, 10), (3, 30), (4, 40)];
-            let members = [(1, 10), (1, 10), (3, 30), (3, 99)];
+            let populated = [(1, 10), (2, 20), (3, 30), (4, 40)];
+            let members = [(1, 10), (3, 30), (3, 99)];
             for threads in [1, 4] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for L in [&[][..], &populated[..1], &populated[..]] {
@@ -1548,16 +1710,16 @@ fn adaptive_provider_guard_selects_identity_and_routed_builds_at_runtime() {
             parts
         }
         fn main() {
-            let probes = [(1,2),(3,4)];
-            let values = [(1,2,8),(3,4,9),(1,2,10),(3,4,11),(1,2,12),(3,4,13),(1,2,14)];
+            let probes = [(1,2,0),(3,4,1)];
+            let values = [(1,2,8,0),(3,4,9,1),(1,2,10,2),(3,4,11,3),(1,2,12,4),(3,4,13,5),(1,2,14,6)];
             for threads in [1,24] {
                 let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                 for length in [0,3,4,5,6,7] {
                     let L = probes.as_slice();
                     let R = &values[..length];
                     let actual: Vec<_> = pool.install(|| (#expression).map(|(a,b,c)| (*a,*b,*c)).collect());
-                    let expected: Vec<_> = L.iter().flat_map(|&(a,b)|
-                        R.iter().filter_map(move |&(ra,rb,c)| (a==ra && b==rb).then_some((a,b,c)))).collect();
+                    let expected: Vec<_> = L.iter().flat_map(|&(a,b,_)|
+                        R.iter().filter_map(move |&(ra,rb,c,_)| (a==ra && b==rb).then_some((a,b,c)))).collect();
                     assert_eq!(actual, expected);
                     let singleton = length < 4 || (threads == 1 && length < 6);
                     assert_eq!(PARTS.load(::std::sync::atomic::Ordering::Relaxed), if singleton { 1 } else { 64 });
@@ -1935,8 +2097,7 @@ fn singleton_provider_cover_replays_without_a_row_buffer_or_extra_clones() {
 fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
     let mut executions = Vec::new();
     for stored_parts in [false, true] {
-        let mut program = grouped_program(false);
-        program.program.evidence = syn::parse_quote!(evidence from authored("features/sequence-tasks/tests/grading.rs fixture") { trusted_key rows [witness]; });
+        let mut program = grouped_program(false, false);
         program.program.sequence = if stored_parts {
             syn::parse_quote!(sequence {
                 input = store tile 64 rows r;
@@ -1989,12 +2150,8 @@ fn keyed_partial_maps_merge_at_host_and_preserve_empty_input() {
             assert_eq!(sequential, expected);
         });
         program.program.evidence = Default::default();
-        assert!(
-            check_grading(&program.physical, &program.structures, &program.program, &machine())
-                .unwrap_err()
-                .to_string()
-                .contains("BE-GroupPartial")
-        );
+        // Input-set uniqueness does not depend on planning estimates.
+        check_grading(&program.physical, &program.structures, &program.program, &machine()).unwrap();
     }
     run_partition_fixture(quote::quote! {
         fn main() {
@@ -2303,9 +2460,9 @@ fn routed_provider_projects_the_stored_key_after_constant_elision() {
 
 #[test]
 fn nested_tiles_keep_canonicalization_at_the_innermost_rows() {
-    let program = program(
+    let program = witness_program(
         quote::quote! {
-            input = store rows r;
+            input = store map r rows raw;
             result = store canon tile 2 tile 4 input;
         },
         quote::quote!(input at host; result at pool;),
@@ -2321,7 +2478,7 @@ fn nested_tiles_keep_canonicalization_at_the_innermost_rows() {
     let pull = cq_sequence_pull::translate(&sequential.physical, &sequential.structures, &sequential.program, &sequential_facts).unwrap();
     run_partition_fixture(quote::quote! {
         fn main() {
-            for R in [&[][..], &[(1i32,)][..], &[(1,), (1,), (2,), (2,), (1,)][..]] {
+            for R in [&[][..], &[(1i32,0i32)][..], &[(1,0), (1,1), (2,2), (2,3), (1,4)][..]] {
                 let actual: Vec<_> = (#tasks).map(|(a,)| *a).collect();
                 let expected: Vec<_> = (#pull).map(|(a,)| *a).collect();
                 assert_eq!(actual, expected);
@@ -2412,7 +2569,7 @@ fn flattened_key_covers_restore_positional_reads() {
     );
     run_partition_fixture(quote::quote! {
         fn main() {
-            let R = &[(0i64,), (2,), (2,), (3,), (1,)][..];
+            let R = &[(0i64,), (2,), (3,), (1,)][..];
             let mut actual: Vec<_> = (#expression).map(|(a,)| *a).collect();
             actual.sort();
             assert_eq!(actual, [2, 3]);
@@ -2501,7 +2658,7 @@ fn borrowed_host_key_cover_uses_host_tiles_without_input_collection() {
     );
     run_partition_fixture(quote::quote! {
         fn main() {
-            let rows: Vec<_> = (0..4097i32).map(|i| (i % 131,)).collect();
+            let rows: Vec<_> = (0..4097i32).map(|i| (i,)).collect();
             for threads in [1, 24] {
                 rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
                     for length in [0, 1, 63, 64, 65, 4097] {
@@ -2576,7 +2733,7 @@ fn fused_fallback_providers_keep_their_prefix_local_constructor() {
         fn main() {
             for threads in [1,4] {
                 rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
-                    for R in [vec![], vec![(-2,), (0,), (1,), (2,), (2,)]] {
+                    for R in [vec![], vec![(-2,), (0,), (1,), (2,)]] {
                         let actual: Vec<_> = (#expression).collect();
                         let expected = if R.is_empty() { vec![(0,0)] } else { vec![(4,30)] };
                         assert_eq!(actual, expected);
@@ -2662,8 +2819,8 @@ fn expansion_counters_preserve_profile_handles_in_nested_tasks() {
 #[test]
 fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
     let physical = syn::parse_quote!(physical {
-        relation R(a:i64 [1], b:i64 [1]);
-        r = pipe rename R {a -> x,b -> y};
+        relation R(a:i64 [1], b:i64 [1], witness:i64 [1]);
+        r = pipe rename R {a -> x,b -> y,witness -> witness};
         p = pipe range select r if (x >= 3);
         q = pipe range select p if (y < 4);
         g = pipe guard q if (observe(x));
@@ -2672,7 +2829,7 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
         return out as answer(x,value);
     });
     let (physical, structures) = cq_structure_selection::compile_with(&physical, quote::quote!(
-        blocks(R { block_rows 1024; summary minmax; columns [a:bytes u64,b:plain u64]; })
+        blocks(R { block_rows 1024; summary minmax; columns [a:bytes u64,b:plain u64,witness:plain u64]; })
     )).unwrap();
     let lowered = cq_sequence_lowering::compile(&physical, &structures).unwrap();
     let representation = lowered.representation.clone();
@@ -2736,10 +2893,12 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
                 for count in [0usize,1,1024,1027,4099] {
                     let a:Vec<i64> = (0..count).map(|i| (i/2 % 19) as i64).collect();
                     let b:Vec<i64> = (0..count).map(|i| (i/2 % 7) as i64).collect();
+                    let witnesses:Vec<i64> = (0..count).map(|i| i as i64).collect();
                     let R = ScanTable::new((
                         ScanColumn::<i64,Bytes>::new(&a,BlockRows::new(1024).unwrap(),true),
                         ScanColumn::<i64,Plain>::new(&b,BlockRows::new(1024).unwrap(),true),
-                    )).bind_domains(&[domain,domain]).unwrap();
+                        ScanColumn::<i64,Plain>::new(&witnesses,BlockRows::new(1024).unwrap(),true),
+                    )).bind_domains(&[domain,domain,domain]).unwrap();
                     let survivors:Vec<_> = a.iter().copied().zip(b.iter().copied()).filter(|&(x,y)| x>=3 && y<4).collect();
                     let mut expected:Vec<_> = survivors.iter().map(|&(x,y)| (x,x*10+y)).collect();
                     expected.sort(); expected.dedup();
