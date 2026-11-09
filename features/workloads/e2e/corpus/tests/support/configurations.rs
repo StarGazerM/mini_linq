@@ -3,6 +3,9 @@
 // Registrations follow Pipeline::rejection on the current checked physical plan:
 // native leading merges need ordered hosts; push cannot consume retained merges.
 // configuration_consistency checks eligibility separately from pairwise coverage.
+// M6a exposes Hypergraph intersection merges after absorbing its semijoin.
+// Its push witnesses therefore use probes; the ordered BTreeMap pull witness
+// still exercises the retained merge, and classic.rs checks family pair coverage.
 macro_rules! configuration {
     (written_coarse_probe_keep_first_slice_default_eager_pull_unadvised, $case:ident) => {
         pub const CONFIG: [usize; 9] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -927,7 +930,7 @@ macro_rules! configurations {
 macro_rules! case_configurations {
     (intersection, $case:ident) => { configurations!($case;
         written_coarse_probe_keep_smallest_slice_default_eager_pull_unadvised,
-        hypergraph_merge_canon_smallest_slice_sorted_lazy_push_positional,
+        hypergraph_probe_canon_first_slice_default_eager_push_positional,
         hypergraph_merge_keep_first_btreemap_sorted_eager_pull_unadvised,
         elimination_coarse_probe_keep_first_hashmap_default_eager_push_unadvised,
         prefix_greedy_coarse_probe_canon_smallest_btreemap_default_lazy_pull_unadvised,
@@ -938,7 +941,7 @@ macro_rules! case_configurations {
         prefix_connected_coarse_probe_canon_first_slice_sorted_lazy_pull_unadvised,
         elimination_fine_probe_canon_first_slice_sorted_eager_pull_unadvised,
         written_fine_merge_keep_smallest_btreemap_default_lazy_pull_unadvised,
-        hypergraph_merge_keep_first_hashmap_default_lazy_push_unadvised,
+        hypergraph_probe_keep_first_hashmap_sorted_lazy_push_unadvised,
         prefix_greedy_fine_probe_canon_smallest_slice_sorted_eager_push_unadvised,
         elimination_fine_probe_keep_smallest_btreemap_default_eager_push_unadvised,
         written_coarse_probe_canon_smallest_btreemap_sorted_eager_push_unadvised,
