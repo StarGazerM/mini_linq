@@ -1262,12 +1262,7 @@ fn compare(source: &Structure, target: &Structure) -> Result<(), String> {
         return Err("Rust expressions differ in payload or bindings".into());
     }
     if source.split_views() || target.split_views() {
-        // Independent projected reads of a single occurrence are outside the
-        // ordinary one-row contract. Preserve their structural wiring modulo
-        // local semijoin identities, including which witness owns a predicate.
-        // There is no equivalence search; DAG nodes are interned topologically.
-        let mut intern = HashMap::new();
-        if wiring(source, &mut intern)? != wiring(target, &mut intern)? {
+        if !views::equivalent(source, target)? {
             return Err("projection correlations differ from source".into());
         }
     }
@@ -1378,6 +1373,7 @@ fn compare(source: &Structure, target: &Structure) -> Result<(), String> {
 }
 
 mod blocks;
+mod views;
 mod reductions;
 
 pub(super) fn check_reduction_rewrite(

@@ -172,12 +172,12 @@ relation or correlated arms over a prefix).
 \paragraph{Rewrite check (\code{cq_lang_ra::check_rewrite}).} A structural contract
 over renames identified by relation, mapping and constants (with their
 ordinal among equal renames in definition order) and blocks identified by
-their signature, never an equivalence decision:
+their signature, never a producer replay:
 (1)~both programs pass the contract; declarations, output heading and head are
 unchanged;
 (2)~the multiset of renames is equal and each keeps its column bindings;
-(3)~relational constraints and projection correlations are equal after
-union-find closure of equalities, and every source semijoin reduction survives
+(3)~relational constraints are equal after union-find closure of equalities;
+split-view correlations satisfy RA-SplitViews, and every source semijoin reduction survives
 with its column matches;
 (4)~the Rust payload multiset and each payload's free-variable input equality
 classes are equal; binding origins are identified by payload rather than
@@ -192,3 +192,23 @@ evaluation domains. Pipeline refinements additionally preserve the recorded
 VO join and predicate placement decisions; semantic equivalence alone does
 not grant a later pass planning authority. No rename may be added or
 removed (no query minimization).
+
+\paragraph{Split-view correspondence.}
+A projected read existentially hides columns of its own source-row witness;
+another read of the same occurrence does not share those hidden columns.
+Expand positive joins, selections and projections into conjunctions of
+occurrence-labelled row atoms and opaque predicates, with fresh hidden
+variables at each read and equalities for shared visible columns. Let $Q_P$
+be this formula with the output columns distinguished. A homomorphism fixes
+those columns and preserves each occurrence, positional column and predicate.
+\begin{mathpar}
+\Rule{RA-SplitViews}
+ {h:Q_S\to Q_T\quad g:Q_T\to Q_S\quad
+  h,g\text{ fix output columns}}
+ {\mathsf{splitViewsEquivalent}(S,T)}
+\end{mathpar}
+Mutual containment establishes equal answer sets, including every projected
+view's correlation to its source occurrence, independently of DAG node order.
+Hidden witnesses may coincide only through such containment, never merely
+because their reads name the same occurrence. Non-positive barriers retain
+the existing exact structural comparison.

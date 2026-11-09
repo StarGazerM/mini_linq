@@ -1,4 +1,5 @@
 rule	kind	path	marker	status
+RA-SplitViews	implementation	languages/cq-lang-ra/src/structural/views.rs	// Formal rule RA-SplitViews:	Mutual containment of occurrence-labelled positive view formulas fixes output columns; non-positive barriers retain exact wiring.
 H-Eval	abstract	-	-	Finite successful host boundary; host semantics and representation adequacy are premises.
 I1	implementation	languages/cq-lang-vo/src/order.rs	// Formal rule VO-Order-I1:	Each recorded step requires only incoming or previously supplied bindings; visible unsupplied columns do not satisfy readiness.
 I2	implementation	languages/cq-lang-vo/src/order.rs	// Formal rule VO-Order-I2:	No ready nonintroducing step crosses any introduction, including a let; ready filters may share a binding boundary.

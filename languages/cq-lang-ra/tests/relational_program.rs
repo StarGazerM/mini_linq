@@ -901,6 +901,34 @@ fn a_cut_of_a_joined_prefix_keeps_its_witness_scope() {
 }
 
 #[test]
+fn split_views_preserve_correlations_not_join_association() {
+    let source: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation S(c:i32);
+        r = rename R {a -> x,b -> y}; s = rename S {c -> z};
+        px = project r keep {x}; py = project r keep {y};
+        xy = natural_join px with py;
+        out = natural_join xy with s; output out as answer(x,y,z);
+    }};
+    let target: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation S(c:i32);
+        r = rename R {a -> x,b -> y}; s = rename S {c -> z};
+        px = project r keep {x}; py = project r keep {y};
+        yz = natural_join py with s;
+        out = natural_join px with yz; output out as answer(x,y,z);
+    }};
+    assert_eq!(syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(), target);
+    ra::check_rewrite(&source, &target).unwrap();
+    ra::check_rewrite(&target, &source).unwrap();
+    let correlated: ra::Program = syn::parse_quote! { relational {
+        relation R(a:i32,b:i32); relation S(c:i32);
+        r = rename R {a -> x,b -> y}; s = rename S {c -> z};
+        out = natural_join r with s; output out as answer(x,y,z);
+    }};
+    assert!(ra::check_rewrite(&source, &correlated).is_err());
+    assert!(ra::check_rewrite(&correlated, &source).is_err());
+}
+
+#[test]
 fn relational_constraints_use_equality_classes_across_total_rust() {
     let source: ra::Program = syn::parse_quote! { relational {
         relation R(a:i32,b:i32,c:i32); r = rename R {a -> x,b -> y,c -> z};
