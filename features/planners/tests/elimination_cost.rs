@@ -10,16 +10,17 @@ fn leaf_first_product_is_rejected_and_connected_plan_keeps_24_row_bound() {
         answer(k) :- R(b,a),S(c),T(b,c,k);
     };
     let normal = cq::normal::normalize(&source).unwrap();
-    let leaf_first: vo::Program = syn::parse2(quote! {
-        #normal valuation {
+    let leaf_first = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream| vo::Program::parse(input, &normal),
+        quote! { valuation {
             R@0(_,a); R@0(b,a); T@2(b,_,_);
             S@1(c); T@2(b,c,_); T@2(b,c,k);
         }
     })
     .unwrap();
-    let error = vo::contract::check(&leaf_first).unwrap_err().to_string();
+    let error = vo::contract::check(&normal, &leaf_first).unwrap_err().to_string();
     assert!(error.contains("I3"), "{error}");
-    assert!(cq_relational_lowering::compile(&leaf_first).is_err());
+    assert!(cq_relational_lowering::compile(&normal, &leaf_first).is_err());
     let fixed = compile(&source, Planner::EliminationFine).unwrap();
     check(&source, &fixed).unwrap();
     let database = Database::from([
@@ -33,7 +34,7 @@ fn leaf_first_product_is_rejected_and_connected_plan_keeps_24_row_bound() {
         Some(24)
     );
     assert_eq!(fixed.output, (0..24).map(|v| vec![v]).collect::<Rows>());
-    let valuation = compile_valuation(&source, Planner::EliminationFine).unwrap();
+    let (_, valuation) = compile_valuation(&source, Planner::EliminationFine).unwrap();
     let vo::Step::Atom(first, _) = &valuation.valuation.steps[0] else {
         panic!("expected shared binder")
     };

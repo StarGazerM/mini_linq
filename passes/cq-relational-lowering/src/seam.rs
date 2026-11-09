@@ -90,6 +90,7 @@ fn scopes<'a>(
 }
 
 pub(super) fn check(
+    cq: &cq::Program,
     source: &vo::Program,
     target: &ra::Program,
     table: &Steps,
@@ -104,9 +105,9 @@ pub(super) fn check(
     scopes(
         Vec::new(),
         &source.valuation.steps,
-        &source.cq.query.body,
+        &cq.query.body,
         BTreeSet::new(),
-        cq::hypergraph::Analysis::of(&source.cq),
+        cq::hypergraph::Analysis::of(cq),
         &mut all,
     );
     let mut expected = BTreeMap::new();
@@ -171,8 +172,7 @@ pub(super) fn check(
     }) {
         return fail(format!("`{name}` has no VO step in the side table"));
     }
-    let declarations: BTreeMap<_, _> = source
-        .cq
+    let declarations: BTreeMap<_, _> = cq
         .inputs()
         .map(|declaration| (symbol_name(&declaration.name), declaration))
         .collect();

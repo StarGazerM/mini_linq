@@ -241,11 +241,17 @@ The optional `cq-cost` package exports a versioned compiler-record projection:
 cargo run -p cq-cost -- export --language datalog --source program.dl \
   --compiler-hash sha256:HEX --out plans.json
 cargo run -p cq-cost -- export --language cq --source query.cq \
-  --compiler-hash sha256:HEX --vo checked.vo --out plans.json
+  --compiler-hash sha256:HEX --cq normal.cq --vo checked.vo --out plans.json
 ```
 
-The library accepts checked CQ/VO or Round plus every checked hole VO; the
-CLI can consume those records or invoke the production compiler once.
+The library accepts a separate normalized CQ and checked VO, or Round plus
+every checked hole's `(CQ, VO)` pair; the CLI can consume those records or
+invoke the production compiler once. For consumed records, each `--cq`
+supplies the actual normalized CQ context for the corresponding standalone
+`--vo`; `--source` remains the authored input. Repeat `--cq` and `--vo` in
+matching order for Datalog, following Round hole order. Their counts must
+match; CQ export requires exactly one pair. The CLI does not regenerate
+consumed CQ contexts from the authored source.
 Source, compiler/configuration and input digests, original occurrences,
 delta/seed/driver/permutation facts, bindings and complete IR are retained.
 The semantic program digest excludes the dataset attachment, avoiding a cycle

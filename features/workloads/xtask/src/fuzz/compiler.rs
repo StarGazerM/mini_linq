@@ -3,5 +3,5 @@
 pub fn written(source: &cq_lang_cq::Program) -> syn::Result<cq_lang_ra::Program> {
     let normal = cq_lang_cq::normal::normalize(source)?;
     let valuation = cq_order::compile_written(&normal)?;
-    cq_relational_lowering::compile(&valuation).map(|(program, _)| program)
+    cq_relational_lowering::compile(&normal, &valuation).map(|(program, _)| program)
 }

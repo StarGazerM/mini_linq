@@ -1,6 +1,7 @@
-//! Rule-derived VO fixtures are checked independently, then compared structurally
-//! with their producer. Inputs are original CQ, never the normalized CQ embedded
-//! in an expected VO. `pin_plans` must not regenerate `.vo.expected` files.
+//! Rule-derived CQ/VO fixture pairs are checked independently, then compared
+//! structurally with their producer. Producer inputs are original CQ, never the
+//! normalized CQ recorded beside expected VO. `pin_plans` must not regenerate
+//! `.vo.expected` files.
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
@@ -74,7 +75,7 @@ fn check_default(source: &cq::Program, expected: &vo::Program) -> syn::Result<()
     } else {
         cq_order::check(&normal, &ordered, &ordering)?;
     }
-    cq_reduce::check(&ordered, expected, &cq_reduce::Options {
+    cq_reduce::check(&normal, &ordered, expected, &cq_reduce::Options {
         semijoins: cq_reduce::Reductions::Masks,
     })
 }
@@ -127,10 +128,6 @@ fn step_diff(
 
 fn structural_diff(expected: &vo::Program, actual: &vo::Program, text: &str) -> String {
     let mut output = String::new();
-    if expected.cq != actual.cq {
-        writeln!(output, "CQ differs:\n  expected: {}\n  actual:   {}",
-            expected.cq.to_token_stream(), actual.cq.to_token_stream()).unwrap();
-    }
     if expected.valuation.evidence != actual.valuation.evidence {
         writeln!(output, "Evidence differs:\n  expected: {:?}\n  actual:   {:?}",
             expected.valuation.evidence, actual.valuation.evidence).unwrap();
@@ -155,15 +152,20 @@ fn rule_derived_expected_vos_match_their_source_and_route() {
     for path in files {
         let result = (|| -> syn::Result<()> {
             let text = std::fs::read_to_string(&path).unwrap();
-            let mut expected: vo::Program = syn::parse_str(&text)?;
+            let (expected_cq, expected) = syn::parse::Parser::parse_str(
+                |input: syn::parse::ParseStream| {
+                    let cq = input.parse()?;
+                    let vo = vo::Program::parse(input, &cq)?;
+                    Ok((cq, vo))
+                }, &text,
+            )?;
+            // The fixture records CQ input and expected VO as separate programs.
             // WF-VO includes VO-Order I1-I3, including nested branch scopes.
-            vo::contract::check(&expected)?;
-            // Authored declarations may omit column-class identities. Normalize
-            // only that embedded CQ for equality, never use it as producer input.
-            expected.cq = cq::normal::normalize(&expected.cq)?;
+            vo::contract::check(&expected_cq, &expected)?;
+            let expected_cq = cq::normal::normalize(&expected_cq)?;
             let stem = path.file_name().unwrap().to_str().unwrap()
                 .strip_suffix(".vo.expected").unwrap();
-            let actual = if path.parent().unwrap() == root.join("tpch_default") {
+            let (normal, actual) = if path.parent().unwrap() == root.join("tpch_default") {
                 let source = source_file(&path.with_file_name(format!("{stem}.cq")));
                 check_default(&source, &expected)?;
                 prefix_valuation(&source, &PlanOptions {
@@ -175,7 +177,8 @@ fn rule_derived_expected_vos_match_their_source_and_route() {
                 check_valuation(&source, &expected, planner)?;
                 compile_valuation(&source, planner)?
             };
-            vo::contract::check(&actual)?;
+            vo::contract::check(&normal, &actual)?;
+            assert_eq!(normal, expected_cq, "{}: normalized CQ differs", path.display());
             if actual != expected {
                 failures.push(format!("{}:\n{}", path.display(),
                     structural_diff(&expected, &actual, &text)));

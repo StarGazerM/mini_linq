@@ -36,12 +36,20 @@ fn compile_round(source: &str) -> round::Program {
     let storage = cq_datalog_storage::compile(&incremental).unwrap();
     cq_datalog_fork::compile(&storage).unwrap()
 }
-fn hole_plans(program: &round::Program) -> Vec<cq_lang_vo::Program> {
+fn hole_plans(program: &round::Program) -> Vec<(cq_lang_cq::Program, cq_lang_vo::Program)> {
     program.holes.iter().map(|hole| {
         let pipeline = hole.invocation_pipeline().unwrap();
         let options = syn::parse2(pipeline.passes[hole.plan.unwrap()].arguments.clone()).unwrap();
         cq_planning::prefix_valuation(&hole.cq, &options).unwrap()
     }).collect()
+}
+
+fn recorded_plan(hole: &export::Hole) -> (cq_lang_cq::Program, cq_lang_vo::Program) {
+    let normal = syn::parse_str(&hole.normalized_cq).unwrap();
+    let valuation = syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &normal), &hole.checked_vo,
+    ).unwrap();
+    (normal, valuation)
 }
 
 #[test]
@@ -60,9 +68,11 @@ fn checked_cq_roundtrip_is_deterministic_and_complete() {
     let guard = hole.candidate.steps.iter().find(|s| s.ir.contains("opaque")).unwrap();
     assert!(!guard.required.is_empty(), "macro environment must survive as supplied binding facts");
     assert!(!guard.atom);
-    let plan: cq_lang_vo::Program = syn::parse_str(&hole.checked_vo).unwrap();
-    cq_lang_vo::contract::check(&plan).unwrap();
+    let (normal, plan) = recorded_plan(hole);
+    cq_lang_vo::contract::check(&normal, &plan).unwrap();
     assert_eq!(plan.to_token_stream().to_string(), hole.checked_vo);
+    assert!(hole.checked_vo.starts_with("valuation"));
+    assert!(!hole.checked_vo.contains("struct Query"));
     record.check_against(&record.identity).unwrap();
 }
 
@@ -145,9 +155,9 @@ fn candidate_and_occurrence_mutants_are_not_partial_search_spaces() {
 #[test]
 fn unrelated_checked_vo_is_not_accepted_as_current_plan() {
     let record = cq();
-    let plan = syn::parse_str(&record.holes[0].checked_vo).unwrap();
+    let (normal, plan) = recorded_plan(&record.holes[0]);
     let other_source = CQ.replace("opaque!(x,z)", "other!(x,z)");
-    assert!(export::export_cq(&other_source, &plan, config()).is_err());
+    assert!(export::export_cq(&other_source, &normal, &plan, config()).is_err());
 }
 
 #[test]
@@ -245,6 +255,25 @@ fn export_command_publishes_one_checked_input() {
         .args(["check", "--plans"]).arg(&output).output().unwrap();
     assert!(checked.status.success(), "{}", String::from_utf8_lossy(&checked.stderr));
     assert_eq!(String::from_utf8(checked.stdout).unwrap().trim(), record.input_hash);
+    let normal = directory.join("normalized.cq");
+    let valuation = directory.join("checked.vo");
+    let consumed = directory.join("consumed.json");
+    std::fs::write(&normal, &record.holes[0].normalized_cq).unwrap();
+    std::fs::write(&valuation, &record.holes[0].checked_vo).unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_cq-cost"))
+        .args(["export", "--language", "cq", "--source"]).arg(&source)
+        .args(["--compiler-hash", &config().compiler_hash, "--out"]).arg(&consumed)
+        .arg("--cq").arg(&normal).arg("--vo").arg(&valuation)
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let consumed = export::parse_json(&std::fs::read_to_string(&consumed).unwrap()).unwrap();
+    assert_eq!(consumed.holes, record.holes);
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_cq-cost"))
+        .args(["export", "--language", "cq", "--source"]).arg(&source)
+        .args(["--compiler-hash", &config().compiler_hash, "--out"]).arg(&output)
+        .arg("--vo").arg(&valuation)
+        .output().unwrap();
+    assert!(!result.status.success(), "a standalone valuation requires its recorded CQ");
     let malformed = directory.join("invalid.json");
     std::fs::write(&malformed, "{}").unwrap();
     assert!(!std::process::Command::new(env!("CARGO_BIN_EXE_cq-cost"))
@@ -287,7 +316,7 @@ fn declared_dataset_identity_and_aliases_survive_authored_order() {
     assert_eq!(projected.bindings[0].input_relation, "R");
     assert_eq!(projected.bindings[0].columns[0].input_column, "x");
     assert_eq!(projected.bindings[0].columns[0].dataset_column, "a");
-    let plan: cq_lang_vo::Program = syn::parse_str(&record.holes[0].checked_vo).unwrap();
+    let (_, plan) = recorded_plan(&record.holes[0]);
     assert!(plan.valuation.evidence.is_none(), "declared evidence must not select legacy root planning");
     assert_eq!(export::parse_json(&record.canonical_json().unwrap()).unwrap(), record);
 
@@ -347,11 +376,11 @@ fn candidate_reference_counts_variables_not_fixed_literal_arguments() {
 #[test]
 fn consumed_targets_are_recorded_without_inventing_a_backend() {
     let record = cq();
-    let plan = syn::parse_str(&record.holes[0].checked_vo).unwrap();
+    let (normal, plan) = recorded_plan(&record.holes[0]);
     for target in [Target::CpuPar, Target::Gpu] {
         let mut configuration = config();
         configuration.target = target;
-        let exported = export::export_cq(CQ, &plan, configuration.clone()).unwrap();
+        let exported = export::export_cq(CQ, &normal, &plan, configuration.clone()).unwrap();
         exported.check().unwrap();
         assert_eq!(exported.configuration.target, target);
         assert!(exported.check_against(&record.identity).is_err());

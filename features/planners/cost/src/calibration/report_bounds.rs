@@ -49,7 +49,10 @@ pub(super) struct Catalog {
 }
 impl Catalog {
     pub fn new(hole: &crate::export::Hole, current: &CandidateRecord, evidence: &ev::DatasetEvidence) -> Result<Self> {
-        let valuation: cq_lang_vo::Program = syn::parse_str(&hole.checked_vo)?;
+        let normal = syn::parse_str(&hole.normalized_cq)?;
+        let valuation = syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &normal), &hole.checked_vo,
+        )?;
         let clauses = crate::cost::enumerate::recorded_clause_indices(hole, &valuation)?;
         let mut inputs = BTreeMap::new();
         for step in &current.plan.steps {
@@ -57,7 +60,7 @@ impl Catalog {
                 inputs.insert(step.clause, Bound::from_step(&crate::cost::bounds::input_rows(hole, read, evidence)?));
             }
         }
-        for (clause, item) in valuation.cq.query.body.iter().enumerate() {
+        for (clause, item) in normal.query.body.iter().enumerate() {
             if let cq_lang_cq::BodyItem::Negation(negative) = item {
                 let cap = crate::cost::bounds::negative_input_rows(hole, clause,
                     &cq_syntax::symbol_name(&negative.atom.relation), evidence)?;

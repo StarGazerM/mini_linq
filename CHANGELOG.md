@@ -24,6 +24,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   and realization receive separate Physical/Structures/Sequence programs.
   Provider-changing rewrites return all changed layers. CQ entry validation
   also checks restricted Physical facts inside realization carriers.
+- VO no longer embeds CQ (M3). Parsing and checking use `Annotation<&CQ>`;
+  ordering continuations carry CQ and VO separately. Reduction, relational
+  lowering, planning, cost export, Datalog planning, and calibration consume
+  the explicit normalized CQ. Printed VO loses only its former CQ prefix.
 - VO membership is derived from empty step introductions, not a `check`
   suffix (M2f). Connected ranking includes introduction priority; LE builds
   reads from occurrences without inherited phase metadata. Formal tie-breaks

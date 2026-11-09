@@ -6,8 +6,9 @@
 //! facade crate. External feature crates can use the same API.
 //!
 //! * `corpus` embeds 30 scenarios at CQ, valuation order (VO), relational algebra
-//!   (RA), index demands (IX), Physical, and Structures stages. The IX text
-//!   is joined to RA; Structures is parsed with an explicit Physical context.
+//!   (RA), index demands (IX), Physical, and Structures stages. VO text contains
+//!   only `valuation { ... }` and `Scenario::parse_vo(&cq)` takes its CQ context.
+//!   IX text is joined to RA; Structures is parsed with an explicit Physical context.
 //!   Parsing does not imply language contract validation.
 //!   No policy fixtures are included. `cases` retains the 25 independently authored
 //!   input/answer cases, including raw duplicate inputs. `Scenario::case` maps five
@@ -20,7 +21,8 @@
 //!   model custom `Eq`/`Ord`, bags, NULL, collation, effects, or evaluation counts.
 //! * `cq_semantics` enumerates active-domain valuations and tests the original
 //!   base relations. `semantics` independently interprets the RA DAG with nested
-//!   loops. `valuation_semantics` interprets the written VO schedule and reductions.
+//!   loops. `valuation_semantics::evaluate(&cq, &vo, &database)` interprets the
+//!   written VO schedule and reductions against an explicit CQ program.
 //!   They never call pass compilation, planner, heading-analysis, or key helpers.
 //!   Inputs must satisfy the language contracts, be finite, have the declared
 //!   widths, and provide every declared table. The supported fragment consists of

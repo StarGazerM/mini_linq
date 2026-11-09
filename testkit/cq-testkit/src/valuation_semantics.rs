@@ -13,30 +13,29 @@ use vo::{
 
 type Tables = BTreeMap<Occurrence, Relation>;
 
-/// Execute a contract-valid valuation program over finite integer tables.
-pub fn evaluate(program: &vo::Program, database: &Database) -> Rows {
+/// Execute a contract-valid valuation against its explicit CQ over finite integer tables.
+pub fn evaluate(cq: &cq::Program, program: &vo::Program, database: &Database) -> Rows {
     assert!(
-        program.cq.query.group.is_none(),
+        cq.query.group.is_none(),
         "grouped folds use compiled conformance targets"
     );
-    crate::cq_semantics::validate_database(&program.cq, database);
+    crate::cq_semantics::validate_database(cq, database);
     let mut tables = Tables::new();
-    collect(&program.cq.query.body, None, database, &mut tables);
+    collect(&cq.query.body, None, database, &mut tables);
     let unit = Relation {
         heading: BTreeSet::new(),
         rows: BTreeSet::from([Binding::new()]),
     };
     execute(
         &program.valuation.steps,
-        &program.cq.query.body,
+        &cq.query.body,
         &program.valuation.steps,
         unit,
         &mut tables,
         database,
     )
     .output(
-        &program
-            .cq
+        &cq
             .query
             .head
             .variables()

@@ -464,23 +464,22 @@ fn reference_steps(
     Ok(result)
 }
 
-fn hole(id: usize, source: &cq::Program, plan: &vo::Program, origin: Origin) -> Result<Hole> {
+fn hole(source: &cq::Program, normal: &cq::Program, id: usize, plan: &vo::Program, origin: Origin) -> Result<Hole> {
     cq::contract::check(source)?;
-    let analysis = vo::contract::check(plan)?;
-    // Normalization is an identity translation, not a second ordering pass.
-    let normal = cq::normal::normalize(source)?;
-    require(normal == plan.cq, "checked VO does not embed this complete normalized candidate")?;
-    let reference = reference_steps(&plan.cq.query.body, &BTreeSet::new(), None)?;
-    let reference_analysis = vo::order::analyze_reference(&plan.cq, &reference)?;
+    let analysis = vo::contract::check(normal, plan)?;
+    // Check the supplied normalization; do not replace the recorded CQ.
+    require(cq::normal::normalize(source)? == *normal, "checked VO source differs from this complete normalized candidate")?;
+    let reference = reference_steps(&normal.query.body, &BTreeSet::new(), None)?;
+    let reference_analysis = vo::order::analyze_reference(normal, &reference)?;
     let mut occurrences = Vec::new();
     map_occurrences(&source.query.body, &normal.query.body, &[], &[], &plan.valuation.steps, &mut occurrences)?;
     let checked_vo = text(plan);
     Ok(Hole {
-        id, origin, source_cq: text(source), normalized_cq: text(&plan.cq),
-        vo_hash: sha256(&checked_vo), checked_vo, captures_ir: text(&plan.cq.query.captures),
-        ordering_ir: plan.valuation.ordering.as_ref().map(text), evidence: evidence(plan.cq.declared_evidence.as_ref())?,
-        candidate: scope(&plan.cq.query.body, &plan.valuation.steps, &analysis)?, occurrences,
-        candidate_reference: scope(&plan.cq.query.body, &reference, &reference_analysis)?,
+        id, origin, source_cq: text(source), normalized_cq: text(normal),
+        vo_hash: sha256(&checked_vo), checked_vo, captures_ir: text(&normal.query.captures),
+        ordering_ir: plan.valuation.ordering.as_ref().map(text), evidence: evidence(normal.declared_evidence.as_ref())?,
+        candidate: scope(&normal.query.body, &plan.valuation.steps, &analysis)?, occurrences,
+        candidate_reference: scope(&normal.query.body, &reference, &reference_analysis)?,
     })
 }
 
@@ -492,8 +491,8 @@ fn seal(mut record: PlannerInput) -> Result<PlannerInput> {
     record.input_hash = sha256(serde_json::to_vec(&record)?);
     Ok(record)
 }
-/// Project a consumed checked VO. Does not select an order or a provider.
-pub fn export_cq(source: &str, plan: &vo::Program, configuration: Configuration) -> Result<PlannerInput> {
+/// Project a consumed checked CQ/VO pair. Does not select an order or a provider.
+pub fn export_cq(source: &str, normal: &cq::Program, plan: &vo::Program, configuration: Configuration) -> Result<PlannerInput> {
     let mut program: cq::Program = syn::parse_str(source)?;
     // Numeric attachments may themselves cite program_hash. Exclude only this
     // nonsemantic attachment, retaining legacy keys and authored ordering.
@@ -502,13 +501,13 @@ pub fn export_cq(source: &str, plan: &vo::Program, configuration: Configuration)
     program.declared_evidence = declared;
     seal(PlannerInput {
         schema: SCHEMA.into(), identity, configuration, source: source.into(), checked_ir: CheckedIr::Cq {},
-        holes: vec![hole(0, &program, plan, Origin::Cq {})?], layouts: Vec::new(), input_hash: String::new(),
+        holes: vec![hole(&program, normal, 0, plan, Origin::Cq {})?], layouts: Vec::new(), input_hash: String::new(),
     })
 }
 
-/// Project the complete checked Round and the VOs actually consumed for every
-/// hole. Missing key/seed/steady holes and unrelated VOs are errors.
-pub fn export_datalog(source: &str, program: &round::Program, plans: &[vo::Program], configuration: Configuration) -> Result<PlannerInput> {
+/// Project the complete checked Round and the normalized CQ/VO pairs consumed
+/// for every hole. Missing key/seed/steady holes and unrelated programs are errors.
+pub fn export_datalog(source: &str, program: &round::Program, plans: &[(cq::Program, vo::Program)], configuration: Configuration) -> Result<PlannerInput> {
     use round::storage::text::Text;
     round::contract::check(program)?;
     match configuration.target {
@@ -564,9 +563,9 @@ pub fn export_datalog(source: &str, program: &round::Program, plans: &[vo::Progr
         }
     }
     let mut holes = Vec::with_capacity(plans.len());
-    for (id, ((input, plan), origin)) in program.holes.iter().zip(plans).zip(origins).enumerate() {
+    for (id, ((input, (normal, plan)), origin)) in program.holes.iter().zip(plans).zip(origins).enumerate() {
         let origin = origin.ok_or_else(|| ExportError("unowned Round hole".into()))?;
-        let mut record = hole(id, &input.cq, plan, origin)?;
+        let mut record = hole(&input.cq, normal, id, plan, origin)?;
         if let Origin::Rule { variant, source_rule, original_delta, .. } = &record.origin {
             let variant_index = *variant;
             let variant = &program.storage.incremental.variants[variant_index];
@@ -615,11 +614,17 @@ impl PlannerInput {
     /// Recheck full IR and every projection, without rerunning any producer.
     pub fn check(&self) -> Result<()> {
         require(self.schema == SCHEMA, "unsupported planner-input version")?;
-        let plans = self.holes.iter().map(|hole| syn::parse_str::<vo::Program>(&hole.checked_vo)).collect::<syn::Result<Vec<_>>>()?;
+        let plans = self.holes.iter().map(|hole| {
+            let normal = syn::parse_str(&hole.normalized_cq)?;
+            let valuation = syn::parse::Parser::parse_str(
+                |input: syn::parse::ParseStream| vo::Program::parse(input, &normal), &hole.checked_vo,
+            )?;
+            Ok((normal, valuation))
+        }).collect::<syn::Result<Vec<_>>>()?;
         let expected = match &self.checked_ir {
             CheckedIr::Cq {} => {
                 require(plans.len() == 1, "CQ requires exactly one complete checked VO")?;
-                export_cq(&self.source, &plans[0], self.configuration.clone())?
+                export_cq(&self.source, &plans[0].0, &plans[0].1, self.configuration.clone())?
             }
             CheckedIr::Datalog { round } => {
                 let round: round::Program = syn::parse_str(round)?;
@@ -649,8 +654,8 @@ pub fn parse_json(input: &str) -> Result<PlannerInput> {
 pub fn compile_cq(source: &str, options: &cq_planning::PlanOptions, configuration: Configuration) -> Result<PlannerInput> {
     require(configuration.target == Target::Cpu, "compile_cq constructs only the CPU route; export a consumed backend-neutral VO for another target")?;
     let parsed: cq::Program = syn::parse_str(source)?;
-    let plan = cq_planning::prefix_valuation(&parsed, options)?;
-    export_cq(source, &plan, configuration)
+    let (normal, plan) = cq_planning::prefix_valuation(&parsed, options)?;
+    export_cq(source, &normal, &plan, configuration)
 }
 /// Compile the common CPU DL-Source route exactly once. Custom pass queues
 /// should supply their actual Round and VOs to `export_datalog` instead.

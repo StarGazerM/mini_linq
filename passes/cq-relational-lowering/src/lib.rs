@@ -45,21 +45,22 @@ use syn::Ident;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Steps(pub BTreeMap<String, Vec<usize>>);
 
-/// Immutable VO input paired with analysis produced only by its checker.
+/// Immutable CQ and VO inputs paired with analysis produced only by their checker.
 pub struct Checked<'a> {
+    cq: &'a valuation::cq::Program,
     source: &'a valuation::Program,
     analysis: valuation::Analysis,
 }
 
 impl<'a> Checked<'a> {
-    pub fn new(source: &'a valuation::Program) -> syn::Result<Self> {
-        Ok(Self { source, analysis: valuation::contract::check(source)? })
+    pub fn new(cq: &'a valuation::cq::Program, source: &'a valuation::Program) -> syn::Result<Self> {
+        Ok(Self { cq, source, analysis: valuation::contract::check(cq, source)? })
     }
 }
 
 /// Check the VO contract, then lower it.
-pub fn compile(source: &valuation::Program) -> syn::Result<(ra::Program, Steps)> {
-    Ok(lower(&Checked::new(source)?))
+pub fn compile(cq: &valuation::cq::Program, source: &valuation::Program) -> syn::Result<(ra::Program, Steps)> {
+    Ok(lower(&Checked::new(cq, source)?))
 }
 
 /// Lower a checked valuation plan into named RA and the seam
@@ -68,17 +69,18 @@ pub fn compile(source: &valuation::Program) -> syn::Result<(ra::Program, Steps)>
 /// restrictions or reductions.
 /// Formal rule RL-Guard: Append an opaque guard to the prefix, seeding Unit if absent.
 pub fn lower(checked: &Checked<'_>) -> (ra::Program, Steps) {
+    let cq = checked.cq;
     let source = checked.source;
     let analysis = &checked.analysis;
-    let has_blocks = valuation::cq::blocks::walk(&source.cq.query.body)
+    let has_blocks = valuation::cq::blocks::walk(&cq.query.body)
         .iter()
         .any(|item| matches!(item, valuation::cq::BodyItem::Block(_)));
 
     let mut state = State {
-        inputs: &source.cq.inputs().cloned().collect::<Vec<_>>(),
+        inputs: &cq.inputs().cloned().collect::<Vec<_>>(),
         atoms: &analysis.atoms,
         analysis,
-        body: &source.cq.query.body,
+        body: &cq.query.body,
         steps: &source.valuation.steps,
         context: BTreeSet::new(),
         scope: Vec::new(),
@@ -88,10 +90,9 @@ pub fn lower(checked: &Checked<'_>) -> (ra::Program, Steps) {
         scoped: has_blocks,
         placed_rust: BTreeSet::new(),
         read_clauses: BTreeSet::new(),
-        hypergraph: valuation::cq::hypergraph::Analysis::of(&source.cq),
+        hypergraph: valuation::cq::hypergraph::Analysis::of(cq),
         definitions: Vec::new(),
-        reserved: source
-            .cq
+        reserved: cq
             .declarations
             .iter()
             .map(|declaration| symbol_name(&declaration.name))
@@ -104,13 +105,13 @@ pub fn lower(checked: &Checked<'_>) -> (ra::Program, Steps) {
     };
     state.scope_restrictions();
     state.run_steps(&source.valuation.steps);
-    let output = state.finish(&source.cq.query);
+    let output = state.finish(&cq.query);
     let target = ra::Program {
         relational_token: Default::default(),
         relational_brace: Default::default(),
         plan: ra::Plan {
-            declarations: source.cq.declarations.clone(),
-            captures: source.cq.query.captures.clone(),
+            declarations: cq.declarations.clone(),
+            captures: cq.query.captures.clone(),
             definitions: state.definitions,
             output,
         },
@@ -127,10 +128,10 @@ mod structural;
 /// every rename and block union names its VO step, and the structural
 /// reference of the VO equals the RA program under the RA rewrite check.
 /// Formal rule CK-RelationalLowering: Check WF-VO, the seam table, rename facts, recorded restrictions, named reductions, block placement and the structural reference.
-pub fn check(source: &valuation::Program, target: &ra::Program, steps: &Steps) -> syn::Result<()> {
-    let analysis = valuation::contract::check(source)?;
-    check_reference(&source.cq, &source.valuation.steps, &analysis, target)?;
-    seam::check(source, target, steps)
+pub fn check(cq: &valuation::cq::Program, source: &valuation::Program, target: &ra::Program, steps: &Steps) -> syn::Result<()> {
+    let analysis = valuation::contract::check(cq, source)?;
+    check_reference(cq, &source.valuation.steps, &analysis, target)?;
+    seam::check(cq, source, target, steps)
 }
 
 /// Check the structural reference of `steps`, which need not be an

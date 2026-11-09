@@ -8,22 +8,22 @@ use cq_lang_vo::cq;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
-fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
-    let (target, steps) = cq_relational_lowering::compile(source)?;
-    cq_relational_lowering::check(source, &target, &steps)?;
+fn compile(cq: &cq::Program, source: &valuation::Program) -> syn::Result<ra::Program> {
+    let (target, steps) = cq_relational_lowering::compile(cq, source)?;
+    cq_relational_lowering::check(cq, source, &target, &steps)?;
     Ok(target)
 }
 
-fn check(source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
-    let (_, steps) = cq_relational_lowering::compile(source)?;
-    cq_relational_lowering::check(source, target, &steps)
+fn check(cq: &cq::Program, source: &valuation::Program, target: &ra::Program) -> syn::Result<()> {
+    let (_, steps) = cq_relational_lowering::compile(cq, source)?;
+    cq_relational_lowering::check(cq, source, target, &steps)
 }
 
 fn cq(tokens: TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 fn vo(source: &cq::Program, steps: TokenStream) -> valuation::Program {
-    syn::parse2(quote! { #source valuation { #steps } }).unwrap()
+    syn::parse::Parser::parse2(|input: syn::parse::ParseStream| valuation::Program::parse(input, source), quote! { valuation { #steps } }).unwrap()
 }
 fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source
@@ -71,7 +71,7 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
         r4 = natural_join r3 with r2;
         output r4 as answer(k,v);
     }};
-    check(&reduced, &source).unwrap();
+    check(&query, &reduced, &source).unwrap();
     let target = cq_ra_rewrites::simplify_reductions(&source).unwrap();
     let expected: ra::Program = syn::parse_quote! { relational {
         relation l(k:i32); relation r(k:i32,v:i32);
@@ -81,11 +81,11 @@ fn reduction_absorption_restores_native_inputs_and_removes_dead_support() {
         output r4 as answer(k,v);
     }};
     assert_eq!(target.to_token_stream().to_string(), expected.to_token_stream().to_string());
-    let (reference, _) = cq_relational_lowering::compile(&coarse(&query)).unwrap();
+    let (reference, _) = cq_relational_lowering::compile(&query, &coarse(&query)).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     // Absorption is an RA rewrite, not permission to omit a named VO reduction.
-    assert!(check(&reduced, &target).is_err());
+    assert!(check(&query, &reduced, &target).is_err());
     let repeated = cq_ra_rewrites::simplify_reductions(&target).unwrap();
     ra::check_rewrite(&target, &repeated).unwrap();
     for seed in 0..64 {
@@ -124,13 +124,13 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
             A@0(d,i); B@1(i,t); C@2(d,t); Stock@3(d,i,t);
         },
     );
-    let source = compile(&reduced).unwrap();
+    let source = compile(&query, &reduced).unwrap();
     let target = cq_ra_rewrites::simplify_reductions(&source).unwrap();
     // This is the final external-planner contract, not just the local
     // source-to-target absorption certificate.
-    let analysis = valuation::contract::check(&written).unwrap();
-    cq_relational_lowering::check_reference(&written.cq, &written.valuation.steps, &analysis, &target).unwrap();
-    let (reference, _) = cq_relational_lowering::compile(&written).unwrap();
+    let analysis = valuation::contract::check(&query, &written).unwrap();
+    cq_relational_lowering::check_reference(&query, &written.valuation.steps, &analysis, &target).unwrap();
+    let (reference, _) = cq_relational_lowering::compile(&query, &written).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     ra::check_rewrite(&source, &target).unwrap();
     let full_input = |plan: &ra::Program| {
@@ -204,7 +204,7 @@ fn ternary_guard_absorption_preserves_the_shared_restricted_witness() {
         .unwrap();
     first_support.right = older_stock;
     ra::contract::check(&split_witness).unwrap();
-    assert!(check(&written, &split_witness).is_err());
+    assert!(check(&query, &written, &split_witness).is_err());
     for seed in 0..64 {
         let database = databases::binary_database(&query, seed);
         assert_eq!(
@@ -252,7 +252,7 @@ fn reduction_absorption_retains_support_for_an_uncontained_consumer() {
     }};
     let target = cq_ra_rewrites::simplify_reductions(&source).unwrap();
     assert_eq!(target, source);
-    let (reference, _) = cq_relational_lowering::compile(&coarse(&query)).unwrap();
+    let (reference, _) = cq_relational_lowering::compile(&query, &coarse(&query)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     let mut bypassed = source.clone();
     bypassed.plan.definitions[4].operator = syn::parse_quote!(natural_join u with r);

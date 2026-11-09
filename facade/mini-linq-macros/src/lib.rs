@@ -204,8 +204,9 @@ pub fn observe_cq(input: TokenStream) -> TokenStream {
 /// Expose the same checked VO prefix used by the default CQ planner.
 #[proc_macro]
 pub fn prefix_valuation(input: TokenStream) -> TokenStream {
-    cq_stage::pass::<cq_lang_cq::Program, cq_lang_vo::Program>(input.into(), |source, args| {
-        cq_planning::prefix_valuation(source, &syn::parse2(args)?)
+    cq_stage::pass::<cq_lang_cq::Program, cq_stage::Valuation<cq_lang_cq::Program, cq_lang_vo::Program>>(input.into(), |source, args| {
+        let (cq, valuation) = cq_planning::prefix_valuation(source, &syn::parse2(args)?)?;
+        Ok(cq_stage::Valuation::new(cq, valuation))
     })
     .into()
 }
@@ -245,14 +246,14 @@ pub fn plan(input: TokenStream) -> TokenStream {
     cq_stage::pass_with_calibration::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args, enabled, planning| {
         let args: PlanOptions = syn::parse2(args)?;
         use cq_stage::calibration::{Seed, Stage};
-        let (target, valuation, steps) = cq_planning::compile_prefix_with_steps(source, &args)?;
-        let reads = cq_planning::first_reads(&valuation);
+        let (target, cq, valuation, steps) = cq_planning::compile_prefix_with_steps(source, &args)?;
+        let reads = cq_planning::first_reads(&cq, &valuation);
         if !enabled {
             *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
             return Ok((target, None));
         }
         let seed = Seed {
-            valuation: Stage::of(&valuation),
+            valuation: Stage::annotation(&valuation, vec![quote::ToTokens::to_token_stream(&cq).to_string()]),
             lowering: Stage::of(&target),
             steps: steps.0.clone(),
         };
@@ -274,7 +275,7 @@ mod smallest_resolution_tests {
             relation S(x:i32);
             answer(x) :- R(x), S(x);
         };
-        let (_, valuation, steps) = cq_planning::compile_prefix_with_steps(
+        let (_, cq, valuation, steps) = cq_planning::compile_prefix_with_steps(
             &source, &syn::parse_quote!(no_reduce, order(R, S)),
         ).unwrap();
         let mut pipeline: cq_stage::Pipeline = syn::parse_quote!(
@@ -282,7 +283,7 @@ mod smallest_resolution_tests {
         );
         let pending = pipeline.passes.iter().map(ToTokens::to_token_stream).map(|tokens| tokens.to_string()).collect::<Vec<_>>();
         pipeline.planning = Some(cq_stage::planning::Planning {
-            reads: cq_planning::first_reads(&valuation), steps: steps.0,
+            reads: cq_planning::first_reads(&cq, &valuation), steps: steps.0,
         });
         let pipeline: cq_stage::Pipeline = syn::parse2(pipeline.to_token_stream()).unwrap();
         assert_eq!(pipeline.passes.iter().map(ToTokens::to_token_stream).map(|tokens| tokens.to_string()).collect::<Vec<_>>(), pending);
@@ -876,12 +877,12 @@ mod tests {
         };
         let options: PlanOptions = syn::parse_quote!(no_reduce);
         let ordinary = cq_planning::compile_prefix(&source, &options).unwrap();
-        let (lowered, valuation, steps) =
+        let (lowered, cq, valuation, steps) =
             cq_planning::compile_prefix_with_steps(&source, &options).unwrap();
         assert_eq!(ordinary, lowered);
         let mut trace = Trace::default();
         trace.initialize(Seed {
-            valuation: Stage::of(&valuation),
+            valuation: Stage::annotation(&valuation, vec![cq.to_token_stream().to_string()]),
             lowering: Stage::of(&lowered),
             steps: steps.0,
         }).unwrap();

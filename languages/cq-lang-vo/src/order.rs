@@ -28,9 +28,9 @@ impl StepFacts {
 
 /// Establish coverage and binding facts before a producer repairs ordering.
 /// Unlike `contract::check`, this deliberately does not establish VO-Order.
-pub fn analyze(program: &Program) -> syn::Result<Analysis> {
-    crate::cq::normal::check(&program.cq)?;
-    crate::analyze(program)
+pub fn analyze(cq: &crate::cq::Program, program: &Program) -> syn::Result<Analysis> {
+    crate::cq::normal::check(cq)?;
+    crate::analyze(cq, program)
 }
 
 /// Establish binding facts for a CQ occurrence proof reference, not a recorded

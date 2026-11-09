@@ -1,9 +1,10 @@
 \section{VO: valuation plans}
 \label{sec:vo}\label{sec:nf-vo}
 
-\paragraph{Grammar.} VO extends a complete CQ$_{\rm NF}$ program with a schedule.
+\paragraph{Grammar.} VO is a valuation annotation over an externally supplied
+CQ$_{\rm NF}$ program $q$; it neither embeds nor prints that program.
 \begin{lstlisting}
-VO   ::= CQProgram valuation [Evidence] [OrderingInputs] { Step* }
+VO   ::= valuation [Evidence] [OrderingInputs] { Step* }
 Evidence ::= evidence from "provenance" { (count R = n; | key R [col, ...];)* }
 OrderingInputs ::= ordering(seed = Bool, delta = none | Index,
     driver = WrittenOrder | DeltaFirst, permutation = [Index, ...],
@@ -40,6 +41,12 @@ occurrence is redundant and forbidden.
 
 \paragraph{Contract.}
 The six judgments below define $\mathsf{Schedule}$, scope by scope.
+All judgments are relative to the separate source program $q$.
+Here $t$ denotes the pair $(q,v)$ of source and valuation annotation, not
+an embedded program; $t.cq$ below is notation for the external $q$.
+Parsing receives $q$ explicitly and reads valuation syntax only; occurrence
+paths are resolved by the checker against $q$.
+Every checker and consumer that reads CQ receives $q$ before $v$.
 Write $s_i$ for a scheduled step, $c_i$ for its source clause, and
 $\pi(c)$ for the occurrence path obtained from the enclosing branch and clause.
 $I_a,I_b,I_p,I_n,I_r,I_d,I_x$ are respectively the indices of atom reads,
@@ -225,10 +232,10 @@ Every step extends $P$ by its provided columns.
  o.delta=d\Longrightarrow d<n}
  {\mathsf{OrderingInputs}(t)\Downarrow\ok}
 
-\Rule{WF-VO}{\mathsf{WF}_{NF}(t.cq)\quad\mathsf{Schedule}(t,A)\\
- t.evidence\ne\epsilon\Rightarrow\mathsf{Evidence}(t.cq,t.evidence)\Downarrow\ok\\
- t.ordering\ne\epsilon\Rightarrow\mathsf{OrderingInputs}(t)\Downarrow\ok}
- {\mathsf{WF}_{VO}(t)\Downarrow A}
+\Rule{WF-VO}{t=(q,v)\quad\mathsf{WF}_{NF}(q)\quad\mathsf{Schedule}(t,A)\\
+ v.evidence\ne\epsilon\Rightarrow\mathsf{Evidence}(q,v.evidence)\Downarrow\ok\\
+ v.ordering\ne\epsilon\Rightarrow\mathsf{OrderingInputs}(v)\Downarrow\ok}
+ {\mathsf{WF}_{VO}(q,v)\Downarrow A}
 \end{mathpar}
 
 \paragraph{Meaning.} Compose the steps in schedule order under

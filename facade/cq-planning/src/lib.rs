@@ -216,8 +216,9 @@ fn normalized_advice(
 }
 
 /// Normalize, order and reduce CQ using the shared production composition.
+/// Returns the actual normalized CQ alongside its standalone valuation.
 /// An explicit order overrides Prefix(Connected), not the reduction policy.
-pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result<vo::Program> {
+pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result<(cq::Program, vo::Program)> {
     let normal = cq::normal::normalize(source)?;
     let remapped = normalized_advice(source, &normal, args)?;
     let args = remapped.as_ref().unwrap_or(args);
@@ -241,7 +242,7 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
     // Plan-Prefix: upstream ordering inputs are recorded unchanged; no choice above read them.
     plan.valuation.ordering = args.ordering.clone();
     for known in &args.known {
-        known.place(&mut plan)?;
+        known.place(&normal, &mut plan)?;
     }
     let options = cq_reduce::Options {
         semijoins: if args.no_reduce {
@@ -250,28 +251,28 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
             cq_reduce::Reductions::Masks
         },
     };
-    let mut reduced = cq_reduce::compile(&plan, &options)?;
-    cq_reduce::check(&plan, &reduced, &options)?;
-    advise_prefix(&mut reduced, args)?;
+    let mut reduced = cq_reduce::compile(&normal, &plan, &options)?;
+    cq_reduce::check(&normal, &plan, &reduced, &options)?;
+    advise_prefix(&normal, &mut reduced, args)?;
     for known in &args.known {
-        known.check(&reduced)?;
+        known.check(&normal, &reduced)?;
     }
-    Ok(reduced)
+    Ok((normal, reduced))
 }
 
 /// Formal rule R-Advice: Add admissible top-level reductions before the stream; skip only existing Masks reductions.
-fn advise_prefix(reduced: &mut vo::Program, args: &PlanOptions) -> syn::Result<()> {
+fn advise_prefix(source: &cq::Program, reduced: &mut vo::Program, args: &PlanOptions) -> syn::Result<()> {
     if args.reduce.is_empty() && args.skip.is_empty() {
         return Ok(());
     }
-    let analysis = vo::contract::check(reduced)?;
-    let graph = cq::hypergraph::Analysis::of(&reduced.cq);
+    let analysis = vo::contract::check(source, reduced)?;
+    let graph = cq::hypergraph::Analysis::of(source);
     let pair = |target: &cq_order::OrderAtom,
                 support: &cq_order::OrderAtom|
      -> syn::Result<(usize, usize)> {
         let (t, s) = (
-            target.positive_clause(&reduced.cq)?,
-            support.positive_clause(&reduced.cq)?,
+            target.positive_clause(source)?,
+            support.positive_clause(source)?,
         );
         if t == s || graph.shared(t, s).is_empty() {
             return Err(syn::Error::new_spanned(
@@ -309,36 +310,36 @@ fn advise_prefix(reduced: &mut vo::Program, args: &PlanOptions) -> syn::Result<(
         .position(|step| matches!(step, vo::Step::Atom(..) | vo::Step::Block(..)))
         .unwrap_or(reduced.valuation.steps.len());
     reduced.valuation.steps.splice(first..first, steps);
-    vo::contract::check(reduced)?;
+    vo::contract::check(source, reduced)?;
     Ok(())
 }
 
 /// CQ → RA′ through the same checked composition used by the facade.
 /// Formal rule Plan-Prefix: Normalize, order Prefix(Connected)/Coarse or explicit order, reduce by Masks unless disabled, apply advice, and elaborate.
 pub fn compile_prefix(source: &cq::Program, options: &PlanOptions) -> syn::Result<ra::Program> {
-    let reduced = prefix_valuation(source, options)?;
-    let (target, steps) = cq_relational_lowering::compile(&reduced)?;
-    cq_relational_lowering::check(&reduced, &target, &steps)?;
+    let (normal, reduced) = prefix_valuation(source, options)?;
+    let (target, steps) = cq_relational_lowering::compile(&normal, &reduced)?;
+    cq_relational_lowering::check(&normal, &reduced, &target, &steps)?;
     Ok(target)
 }
 
 pub use cq_relational_lowering::Steps;
 
-/// Optional diagnostics from the same selected VO and actual lowering run.
+/// Optional diagnostics: the normalized CQ, selected VO and actual lowering correspondence.
 pub fn compile_prefix_with_steps(
     source: &cq::Program,
     options: &PlanOptions,
-) -> syn::Result<(ra::Program, vo::Program, Steps)> {
-    let valuation = prefix_valuation(source, options)?;
-    let (target, steps) = cq_relational_lowering::compile(&valuation)?;
-    cq_relational_lowering::check(&valuation, &target, &steps)?;
-    Ok((target, valuation, steps))
+) -> syn::Result<(ra::Program, cq::Program, vo::Program, Steps)> {
+    let (normal, valuation) = prefix_valuation(source, options)?;
+    let (target, steps) = cq_relational_lowering::compile(&normal, &valuation)?;
+    cq_relational_lowering::check(&normal, &valuation, &target, &steps)?;
+    Ok((target, normal, valuation, steps))
 }
 
 /// Produce authored occurrence-to-first-read paths from the actual selected VO.
 /// Unique top-level relation aliases support unqualified advice; nested reads
 /// retain their full CQ occurrence paths. No future invocation is inspected.
-pub fn first_reads(valuation: &vo::Program) -> std::collections::BTreeMap<String, Vec<usize>> {
+pub fn first_reads(source: &cq::Program, valuation: &vo::Program) -> std::collections::BTreeMap<String, Vec<usize>> {
     use std::collections::BTreeMap;
     fn visit(reads: &[vo::Step], path: &mut Vec<usize>, result: &mut BTreeMap<String, Vec<usize>>) {
         for (index, step) in reads.iter().enumerate() {
@@ -362,7 +363,7 @@ pub fn first_reads(valuation: &vo::Program) -> std::collections::BTreeMap<String
     let mut result = BTreeMap::new();
     visit(&valuation.valuation.steps, &mut Vec::new(), &mut result);
     let mut aliases = BTreeMap::new();
-    for (clause, item) in valuation.cq.query.body.iter().enumerate() {
+    for (clause, item) in source.query.body.iter().enumerate() {
         if let cq::BodyItem::Positive { atom } = item {
             aliases.entry(cq::symbol_name(&atom.relation)).and_modify(|entry| *entry = None).or_insert(Some(clause));
         }
@@ -385,10 +386,10 @@ mod tests {
             relation r#R(x:i32);
             answer(x) :- r#R(x);
         };
-        let (_, valuation, _) = compile_prefix_with_steps(
+        let (_, normal, valuation, _) = compile_prefix_with_steps(
             &source, &syn::parse_quote!(no_reduce),
         ).unwrap();
-        let reads = first_reads(&valuation);
+        let reads = first_reads(&normal, &valuation);
         assert_eq!(reads["R"], reads["R@0"]);
         assert!(!reads.contains_key("r#R"));
         assert!(!reads.contains_key("r#R@0"));
@@ -403,10 +404,10 @@ mod tests {
             relation S(x:i32);
             answer(x) :- { R(x) } | { S(x) };
         };
-        let (_, valuation, _) = compile_prefix_with_steps(
+        let (_, normal, valuation, _) = compile_prefix_with_steps(
             &source, &syn::parse_quote!(no_reduce),
         ).unwrap();
-        let reads = first_reads(&valuation);
+        let reads = first_reads(&normal, &valuation);
         let (block_index, block) = valuation.valuation.steps.iter().enumerate().find_map(
             |(index, step)| match step {
                 vo::Step::Block(block, _) => Some((index, block)),
@@ -429,8 +430,8 @@ mod tests {
             answer(x,y) :- Seed(x), R(x,y);
         };
         let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
-        let (_, valuation, _) = compile_prefix_with_steps(&source, &options).unwrap();
-        let reads = first_reads(&valuation);
+        let (_, normal, valuation, _) = compile_prefix_with_steps(&source, &options).unwrap();
+        let reads = first_reads(&normal, &valuation);
         let first = valuation.valuation.steps.iter().position(
             |step| matches!(step, vo::Step::Atom(atom, _) if atom.clause() == 1),
         ).unwrap();
@@ -481,9 +482,8 @@ mod tests {
             answer(x,y) :- Seed({ wanted_tag },x), R(x,y);
         };
         let options: PlanOptions = syn::parse_quote!(no_reduce, order(Seed, R@1(x), R@1));
-        let plan = prefix_valuation(&source, &options).unwrap();
-        let occurrence = plan
-            .cq
+        let (normal, plan) = prefix_valuation(&source, &options).unwrap();
+        let occurrence = normal
             .query
             .body
             .iter()
@@ -654,7 +654,7 @@ mod tests {
         let options: PlanOptions = syn::parse_quote!(evidence from "test manifest" {
             count Orders = 1500000; key Orders [o_orderkey]; count Lineitem = 6001215;
         });
-        let plan = prefix_valuation(&source, &options).unwrap();
+        let (_, plan) = prefix_valuation(&source, &options).unwrap();
         assert_eq!(
             reads(&plan),
             ["Lineitem @ 3 (o , c , r)", "Orders @ 0 (o , d)"]
@@ -664,7 +664,7 @@ mod tests {
         let options: PlanOptions = syn::parse_quote!(evidence from "test manifest" {
             count Orders = 1500000; count Lineitem = 6001215;
         });
-        let plan = prefix_valuation(&source, &options).unwrap();
+        let (_, plan) = prefix_valuation(&source, &options).unwrap();
         assert_eq!(
             reads(&plan),
             ["Orders @ 0 (o , d)", "Lineitem @ 3 (o , c , r)"]
@@ -722,7 +722,7 @@ mod tests {
         let options: PlanOptions = syn::parse_quote!(no_reduce, evidence from "test" {
             count A = 10; key A [a]; count B = 20; key B [b]; count F = 1000;
         });
-        let plan = prefix_valuation(&source, &options).unwrap();
+        let (_, plan) = prefix_valuation(&source, &options).unwrap();
         // F streams; B (range filter) is looked up before A (point filter) expands.
         assert_eq!(
             reads(&plan),
@@ -750,7 +750,7 @@ mod tests {
         let options: PlanOptions = syn::parse_quote!(evidence from "test" {
             count P = 800000; key P [p, s]; count L = 6001215; count O = 1500000; key O [o];
         });
-        let plan = prefix_valuation(&source, &options).unwrap();
+        let (_, plan) = prefix_valuation(&source, &options).unwrap();
         assert_eq!(reads(&plan)[0], "P @ 0 (p , s , v)");
         compile_prefix(&source, &options).unwrap();
     }
@@ -764,7 +764,7 @@ mod tests {
             relation Old(x:i64);
             answer(x) :- R(x,y), S(y,z), !Old(x);
         };
-        let natural = prefix_valuation(&source, &PlanOptions::default()).unwrap();
+        let (_, natural) = prefix_valuation(&source, &PlanOptions::default()).unwrap();
         let position = |plan: &vo::Program| {
             plan.valuation
                 .steps
@@ -774,15 +774,15 @@ mod tests {
         };
         assert_eq!(position(&natural), 1);
         let options: PlanOptions = syn::parse_quote!(no_reduce, known(Old@2 at 2));
-        let pinned = prefix_valuation(&source, &options).unwrap();
+        let (normal, pinned) = prefix_valuation(&source, &options).unwrap();
         assert_eq!(position(&pinned), 1);
-        let recorded: vo::Program = syn::parse2(quote::quote!(#pinned)).unwrap();
+        let recorded = syn::parse::Parser::parse2(|input: ParseStream| vo::Program::parse(input, &normal), quote::quote!(#pinned)).unwrap();
         assert_eq!(recorded, pinned);
-        options.known[0].check(&recorded).unwrap();
+        options.known[0].check(&normal, &recorded).unwrap();
         let mut delayed = pinned.clone();
         let negation = delayed.valuation.steps.remove(position(&delayed));
         delayed.valuation.steps.push(negation);
-        assert!(options.known[0].check(&delayed).is_err());
+        assert!(options.known[0].check(&normal, &delayed).is_err());
         compile_prefix(&source, &options).unwrap();
         for bad in ["known(Old@2 at 3)", "known(R@0 at 1)", "known(Old@2 at 0)"] {
             let parsed = syn::parse_str::<PlanOptions>(bad);
@@ -799,18 +799,18 @@ mod tests {
                  answer(x) :- R(x), let y:i64 = *x + 1, S(y,z), !Old({variable});"
             )).unwrap();
             let late: PlanOptions = syn::parse_quote!(no_reduce, known(Old@3 at 2));
-            let plan = prefix_valuation(&source, &late).unwrap();
+            let (normal, plan) = prefix_valuation(&source, &late).unwrap();
             let position = plan.valuation.steps.iter()
                 .position(|step| matches!(step, vo::Step::Negation(..))).unwrap();
             assert_eq!(position, if variable == "y" { 2 } else { 3 });
             let early: PlanOptions = syn::parse_quote!(no_reduce, known(Old@3 at 1));
             if variable == "y" {
-                let early_plan = prefix_valuation(&source, &early).unwrap();
+                let (_, early_plan) = prefix_valuation(&source, &early).unwrap();
                 assert_eq!(early_plan, plan);
             } else {
                 let error = prefix_valuation(&source, &early).unwrap_err().to_string();
                 assert!(error.contains("KnownDependencies") && error.contains("binding"), "{error}");
-                assert!(early.known[0].check(&plan).is_err());
+                assert!(early.known[0].check(&normal, &plan).is_err());
             }
         }
     }
@@ -825,18 +825,18 @@ mod tests {
         };
         let facts = quote::quote!(ordering(seed = false, delta = 1, driver = DeltaFirst,
             permutation = [1, 0], shared_demand = [R(0)]));
-        let unordered = prefix_valuation(&source, &PlanOptions::default()).unwrap();
+        let (_, unordered) = prefix_valuation(&source, &PlanOptions::default()).unwrap();
         let options: PlanOptions = syn::parse2(quote::quote!(#facts)).unwrap();
-        let recorded = prefix_valuation(&source, &options).unwrap();
+        let (normal, recorded) = prefix_valuation(&source, &options).unwrap();
         let mut expected = unordered.clone();
         expected.valuation.ordering = Some(syn::parse2(facts.clone()).unwrap());
         assert_eq!(recorded, expected);
-        let printed: vo::Program = syn::parse2(quote::quote!(#recorded)).unwrap();
+        let printed = syn::parse::Parser::parse2(|input: ParseStream| vo::Program::parse(input, &normal), quote::quote!(#recorded)).unwrap();
         assert_eq!(printed, recorded);
         let explicit: PlanOptions =
             syn::parse2(quote::quote!(order(S@1, R@0), #facts, no_reduce)).unwrap();
         assert_eq!(
-            prefix_valuation(&source, &explicit).unwrap().valuation.ordering,
+            prefix_valuation(&source, &explicit).unwrap().1.valuation.ordering,
             expected.valuation.ordering,
         );
         assert!(syn::parse2::<PlanOptions>(quote::quote!(#facts, #facts)).is_err());

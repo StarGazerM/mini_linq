@@ -23,7 +23,9 @@ pub fn enumerate(input: &PlannerInput, hole: &Hole) -> export::Result<Vec<Candid
 pub(crate) fn enumerate_checked(input: &PlannerInput, hole: &Hole) -> export::Result<Vec<Candidate>> {
     let source: cq::Program = syn::parse_str(&hole.source_cq)?;
     let normal: cq::Program = syn::parse_str(&hole.normalized_cq)?;
-    let current: vo::Program = syn::parse_str(&hole.checked_vo)?;
+    let current = syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream| vo::Program::parse(input, &normal), &hole.checked_vo,
+    )?;
     let prefix = source_prefix(input, hole, &source)?;
     let fixed = fixed_columns(&normal.query.body);
     let mut specs = Vec::with_capacity(hole.candidate_reference.steps.len());
@@ -85,7 +87,7 @@ pub(crate) fn enumerate_checked(input: &PlannerInput, hole: &Hole) -> export::Re
     let mut candidates = Vec::new();
     problem.search(&mut State::new(problem.specs.len()), &mut candidates);
 
-    let (mut incumbent, physical) = incumbent(hole, &current, &problem)?;
+    let (mut incumbent, physical) = incumbent(&normal, hole, &current, &problem)?;
     let introductions = |steps: &[CostStep]| steps.iter().filter(|step| step.introduces)
         .map(|step| step.clause).collect::<Vec<_>>();
     let atoms = |steps: &[CostStep]| steps.iter().filter(|step| step.read.is_some())
@@ -298,7 +300,7 @@ impl Problem {
 
 /// Keep the actual checked phase schedule when coarse atom choices cannot
 /// represent it. Missing finite phase work is explicit, not a zero-cost rewrite.
-fn incumbent(hole: &Hole, plan: &vo::Program, problem: &Problem) -> export::Result<(Candidate, Vec<String>)> {
+fn incumbent(cq: &cq::Program, hole: &Hole, plan: &vo::Program, problem: &Problem) -> export::Result<(Candidate, Vec<String>)> {
     let mut reasons = BTreeSet::new();
     let mut steps = Vec::new();
     let clauses = recorded_clause_indices(hole, plan)?;
@@ -319,7 +321,7 @@ fn incumbent(hole: &Hole, plan: &vo::Program, problem: &Problem) -> export::Resu
                 reasons.insert(format!("checked incumbent clause {clause} has partial-read phases not finitely costed; preserve its physical reads"));
                 // Literals are fixed; a dropped variable is not a fixed column.
                 // Keep just the actual projected variable columns plus literals.
-                let source = match &plan.cq.query.body[clause] {
+                let source = match &cq.query.body[clause] {
                     cq::BodyItem::Positive { atom } => atom,
                     _ => return Err(ExportError("partial read is not an atom".into())),
                 };

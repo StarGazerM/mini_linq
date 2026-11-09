@@ -31,6 +31,7 @@ fn main() {
         answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), where y > 0;
     };
     let planned = boundaries(&directory, "planned", &source, true);
+    assert_eq!(planned.normal, source);
     let written = boundaries(&directory, "written", &source, false);
     // The GYO join tree: R under S under the root T.
     assert_eq!(
@@ -39,13 +40,9 @@ fn main() {
     );
     // The explicit predicate is relational. The reducer goes up from R through S
     // to T and down again, before the first atom step.
-    let expected_vo: valuation::Program = syn::parse_quote! {
-        pub struct Overview;
-        relation R(a:i32,b:i32,c:i32,d:i32);
-        relation S(a:i32,b:i32,c:i32);
-        relation T(a:i32,b:i32);
-        relation answer(a:i32,b:i32);
-        answer(x,y) :- R(x,k,tag,unused), S(k,tag,z), T(z,y), where y > 0;
+    let expected_vo = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| valuation::Program::parse(input, &planned.normal),
+        quote::quote! {
         valuation {
             reduce S@1 with R@0(_, k, tag, _);
             reduce T@2 with S@1(_, _, z);
@@ -56,7 +53,7 @@ fn main() {
             T@2(z, y);
             where y > 0;
         }
-    };
+    }).unwrap();
     assert_eq!(planned.valuation, expected_vo);
     let declarations = &source.declarations;
     let expected_ra: ra::Plan = syn::parse_quote! {

@@ -2,7 +2,7 @@
 //!
 //! Texts are byte-preserving copies, not outputs recomputed by a compiler.
 //! Parsed accessors only parse; callers can separately run language contracts.
-//! IX and Structures are suffix fragments paired with RA and Physical.
+//! VO, IX and Structures are fragments paired with explicit source programs.
 
 pub use crate::cases::{CASES, Case};
 
@@ -11,6 +11,7 @@ pub use crate::cases::{CASES, Case};
 pub struct Scenario {
     pub name: &'static str,
     pub cq: &'static str,
+    /// Valuation fragment parsed against an explicit CQ program.
     pub vo: &'static str,
     pub ra: &'static str,
     /// Index-demand suffix to append to `ra`.
@@ -25,8 +26,9 @@ impl Scenario {
         syn::parse_str(self.cq)
     }
 
-    pub fn parse_vo(&self) -> syn::Result<crate::vo::Program> {
-        syn::parse_str(self.vo)
+    pub fn parse_vo(&self, cq: &crate::cq::Program) -> syn::Result<crate::vo::Program> {
+        use syn::parse::Parser;
+        (|input: syn::parse::ParseStream<'_>| crate::vo::Program::parse(input, cq)).parse_str(self.vo)
     }
 
     pub fn parse_ra(&self) -> syn::Result<crate::ra::Program> {

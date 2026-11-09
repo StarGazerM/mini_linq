@@ -11,6 +11,9 @@ mod kw {
     syn::custom_keyword!(physical);
     syn::custom_keyword!(structures);
     syn::custom_keyword!(sequence);
+    syn::custom_keyword!(ordering);
+    syn::custom_keyword!(cq);
+    syn::custom_keyword!(vo);
 }
 
 /// An annotation parsed and checked against separately supplied upper programs.
@@ -33,6 +36,90 @@ pub trait Annotation<Base>: ToTokens {
     ) -> syn::Result<()>;
     fn output_consumer(&self) -> Option<&OutputConsumer> {
         None
+    }
+}
+
+/// CQ and its valuation annotation, carried as separately printed programs.
+pub struct Valuation<C, V> {
+    pub cq: C,
+    pub valuation: V,
+}
+
+impl<C, V> Valuation<C, V> {
+    pub fn new(cq: C, valuation: V) -> Self {
+        Self { cq, valuation }
+    }
+}
+
+impl<C: Language, V: for<'a> Annotation<&'a C>> Valuation<C, V> {
+    pub fn pass<Out: Language>(
+        input: TokenStream,
+        f: impl FnOnce(&C, &V, TokenStream) -> syn::Result<Out>,
+    ) -> TokenStream {
+        crate::pass::<Self, Out>(input, |source, args| {
+            f(&source.cq, &source.valuation, args)
+        })
+    }
+
+    pub fn rewrite(
+        input: TokenStream,
+        f: impl FnOnce(&C, &V, TokenStream) -> syn::Result<(C, V)>,
+    ) -> TokenStream {
+        crate::rewrite::<Self>(input, |source, args| {
+            let (cq, valuation) = f(&source.cq, &source.valuation, args)?;
+            Ok(Self::new(cq, valuation))
+        })
+    }
+}
+
+impl<C: Parse, V: for<'a> Annotation<&'a C>> Parse for Valuation<C, V> {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if !input.peek(kw::ordering) {
+            let cq = input.parse()?;
+            let valuation = V::parse(input, &cq)?;
+            return Ok(Self::new(cq, valuation));
+        }
+        input.parse::<kw::ordering>()?;
+        let body;
+        braced!(body in input);
+        body.parse::<kw::cq>()?;
+        let cq = program(&body)?;
+        body.parse::<kw::vo>()?;
+        let annotation;
+        braced!(annotation in body);
+        let valuation = V::parse(&annotation, &cq)?;
+        if !annotation.is_empty() {
+            return Err(annotation.error("unexpected tokens after VO annotation"));
+        }
+        if !body.is_empty() {
+            return Err(body.error("expected a CQ + VO ordering stack"));
+        }
+        Ok(Self::new(cq, valuation))
+    }
+}
+
+impl<C: ToTokens, V: ToTokens> ToTokens for Valuation<C, V> {
+    fn to_tokens(&self, output: &mut TokenStream) {
+        let Self { cq, valuation } = self;
+        output.extend(quote!(ordering { cq { #cq } vo { #valuation } }));
+    }
+}
+
+impl<C: Language, V: for<'a> Annotation<&'a C>> Language for Valuation<C, V> {
+    fn check(&self) -> syn::Result<()> {
+        self.cq.check()?;
+        self.valuation.check(&self.cq)
+    }
+    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
+        V::check_rewrite(&source.cq, &source.valuation, &target.cq, &target.valuation)
+    }
+    fn context(&self) -> Context { self.cq.context() }
+    fn program_tokens(&self) -> TokenStream { self.valuation.to_token_stream() }
+    fn calibration_stage(&self) -> crate::calibration::Stage {
+        crate::calibration::Stage::annotation(
+            &self.valuation,
+            vec![self.cq.to_token_stream().to_string()],
+        )
     }
 }
 

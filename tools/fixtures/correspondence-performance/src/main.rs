@@ -43,16 +43,16 @@ fn check(name: &str, source: &cq::Program, bounded: bool) {
     let written = cq_planners_plan::compile(source, Planner::WrittenCoarse).unwrap();
     let target = cq_planners_plan::compile(source, Planner::Hypergraph).unwrap();
     check_equivalence(&written, &target);
-    let vo = cq_planners_plan::compile_valuation(source, Planner::Hypergraph).unwrap();
+    let (normal, vo) = cq_planners_plan::compile_valuation(source, Planner::Hypergraph).unwrap();
     // Hypergraph now absorbs redundant reductions after elaboration. Check
     // elaboration against its own output, then validate the simplified target.
-    let (elaborated, steps) = cq_relational_lowering::compile(&vo).unwrap();
+    let (elaborated, steps) = cq_relational_lowering::compile(&normal, &vo).unwrap();
     cq_lang_ra::check_rewrite(&elaborated, &target).unwrap();
     let elapsed = started.elapsed();
     let iterations = 100;
     let elaborate_started = Instant::now();
     for _ in 0..iterations {
-        cq_relational_lowering::check(&vo, &elaborated, &steps).unwrap();
+        cq_relational_lowering::check(&normal, &vo, &elaborated, &steps).unwrap();
     }
     let elaborate = elaborate_started.elapsed().as_secs_f64() / f64::from(iterations);
     let rewrite_started = Instant::now();

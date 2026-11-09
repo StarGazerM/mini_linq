@@ -110,8 +110,8 @@ impl Scope {
 }
 
 // Formal rule Plan-Le: Emit ready ear lookups and postpone coarse expansions to demand, without bypassing ready connected expansions.
-pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
-    let analysis = vo::order::analyze(source)?;
+pub(super) fn compile(cq: &cq::Program, source: &vo::Program) -> syn::Result<vo::Program> {
+    let analysis = vo::order::analyze(cq, source)?;
     fn scope(
         body: &cq::CommaList<cq::BodyItem>,
         steps: &[vo::Step],
@@ -267,11 +267,11 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
         state.steps
     }
     let mut target = source.clone();
-    target.valuation.steps = scope(&source.cq.query.body, &source.valuation.steps, &analysis);
+    target.valuation.steps = scope(&cq.query.body, &source.valuation.steps, &analysis);
     // Drain retained checks; empty preliminary probes of later introducers
     // are omitted by the phase producer, not interpreted as root streams.
-    cq_order::drain_ready_checks(&mut target)?;
-    check(&source.cq, &target)?;
+    cq_order::drain_ready_checks(cq, &mut target)?;
+    check(cq, &target)?;
     Ok(target)
 }
 
@@ -279,9 +279,17 @@ pub(super) fn compile(source: &vo::Program) -> syn::Result<vo::Program> {
 mod tests {
     use super::*;
 
+    fn fixture(tokens: proc_macro2::TokenStream) -> (cq::Program, vo::Program) {
+        syn::parse::Parser::parse2(|input: syn::parse::ParseStream| {
+            let cq = input.parse()?;
+            let vo = vo::Program::parse(input, &cq)?;
+            Ok((cq, vo))
+        }, tokens).unwrap()
+    }
+
     #[test]
     fn disconnected_guard_demand_finishes_ready_connected_expansions_first() {
-        let source: vo::Program = syn::parse_quote! {
+        let (cq, source) = fixture(quote::quote! {
             struct MaximumRevenue;
             relation Revenue(supplier:i32,revenue:i32);
             relation Supplier(supplier:i32,phone:i32);
@@ -298,10 +306,10 @@ mod tests {
                 Maximum@3(maximum);
                 if revenue == maximum;
             }
-        };
-        vo::contract::check(&source).unwrap();
-        let target = compile(&source).unwrap();
-        let analysis = vo::contract::check(&target).unwrap();
+        });
+        vo::contract::check(&cq, &source).unwrap();
+        let target = compile(&cq, &source).unwrap();
+        let analysis = vo::contract::check(&cq, &target).unwrap();
         let introducing: Vec<_> = target.valuation.steps.iter()
             .zip(&analysis.introduces)
             .filter_map(|(step, introduced)| match step {
@@ -312,29 +320,29 @@ mod tests {
         assert_eq!(introducing, [0, 1, 2, 3]);
         assert!(target.valuation.steps.iter().all(|step|
             !matches!(step, vo::Step::Atom(atom, _) if atom.variables().next().is_none())));
-        check(&source.cq, &target).unwrap();
+        check(&cq, &target).unwrap();
     }
 
     #[test]
     fn ready_membership_expansion_precedes_an_introducing_let() {
-        let source: vo::Program = syn::parse_quote! {
+        let (cq, source) = fixture(quote::quote! {
             struct Q;
             relation R(x:i32); relation S(x:i32);
             relation answer(x:i32,y:i32);
             answer(x,y) :- R(x), let y:i32 = value(x), S(x);
             valuation { R@0(x); let y:i32 = value(x); S@2(x); }
-        };
-        let target = compile(&source).unwrap();
+        });
+        let target = compile(&cq, &source).unwrap();
         assert!(matches!(&target.valuation.steps[0], vo::Step::Atom(a, _) if a.clause() == 0));
         assert!(matches!(&target.valuation.steps[1], vo::Step::Atom(a, _) if a.clause() == 2));
         assert!(matches!(&target.valuation.steps[2], vo::Step::Atom(a, _) if a.clause() == 2));
         assert!(matches!(&target.valuation.steps[3], vo::Step::Let(..)));
-        check(&source.cq, &target).unwrap();
+        check(&cq, &target).unwrap();
     }
 
     #[test]
     fn reordered_rust_payloads_keep_dependencies_and_duplicate_occurrences() {
-        let source: vo::Program = syn::parse_quote! {
+        let (cq, source) = fixture(quote::quote! {
             struct Q;
             relation R(x:i32); relation S(y:i32);
             relation answer(x:i32,y:i32,z:i32,w:i32);
@@ -349,10 +357,10 @@ mod tests {
                 for w in values(z);
                 if keep(y);
             }
-        };
-        let target = compile(&source).unwrap();
-        check(&source.cq, &target).unwrap();
-        let analysis = vo::contract::check(&target).unwrap();
+        });
+        let target = compile(&cq, &source).unwrap();
+        check(&cq, &target).unwrap();
+        let analysis = vo::contract::check(&cq, &target).unwrap();
         let guards: Vec<_> = target
             .valuation
             .steps

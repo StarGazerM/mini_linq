@@ -23,28 +23,31 @@ fn source(attached: bool) -> cq::Program {
 fn recorded_dataset_input_does_not_select_a_root_or_conflict_with_order() {
     for options in ["", "order(S@1,R@0)"] {
         let args: PlanOptions = syn::parse_str(options).unwrap();
-        let before = prefix_valuation(&source(false), &args).unwrap();
-        let after = prefix_valuation(&source(true), &args).unwrap();
+        let (_, before) = prefix_valuation(&source(false), &args).unwrap();
+        let (normal, after) = prefix_valuation(&source(true), &args).unwrap();
         assert_eq!(before.valuation, after.valuation);
-        assert!(after.cq.declared_evidence.is_some());
+        assert!(normal.declared_evidence.is_some());
         assert!(after.valuation.evidence.is_none(), "legacy evidence planner must stay inactive");
-        let reparsed: cq_lang_vo::Program = syn::parse2(after.to_token_stream()).unwrap();
+        let reparsed = syn::parse::Parser::parse2(
+            |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &normal),
+            after.to_token_stream(),
+        ).unwrap();
         assert_eq!(after, reparsed);
-        cq_lang_vo::contract::check(&reparsed).unwrap();
+        cq_lang_vo::contract::check(&normal, &reparsed).unwrap();
     }
 }
 
 #[test]
-fn attachment_is_preserved_by_normalization_and_checked_source_correspondence() {
+fn attachment_is_preserved_in_the_separate_normalized_source() {
     let source = source(true);
     let normalized = cq::normal::normalize(&source).unwrap();
     assert_eq!(normalized.declared_evidence, source.declared_evidence);
-    let mut plan = prefix_valuation(&source, &PlanOptions::default()).unwrap();
-    plan.cq.declared_evidence = None;
-    assert!(cq_order::check(&normalized, &plan, &cq_order::Options {
+    let (recorded, plan) = prefix_valuation(&source, &PlanOptions::default()).unwrap();
+    assert_eq!(recorded, normalized);
+    cq_order::check(&recorded, &plan, &cq_order::Options {
         heuristic: cq_order::Heuristic::Prefix(cq_order::Ranking::Connected),
         split: cq_order::Split::Coarse,
-    }).is_err());
+    }).unwrap();
 }
 
 #[test]

@@ -14,3 +14,4 @@ cq-planners-plan = { version = "0.1.0", path = "../plan" }
 cq-stage.workspace = true
 cq-planning.workspace = true
 syn.workspace = true
+quote.workspace = true

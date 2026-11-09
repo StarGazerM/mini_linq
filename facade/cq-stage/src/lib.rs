@@ -92,7 +92,7 @@ pub mod calibration;
 pub mod planning;
 
 mod realization;
-pub use realization::{Annotation, Sequence, Structures};
+pub use realization::{Annotation, Sequence, Structures, Valuation};
 
 use std::collections::BTreeSet;
 

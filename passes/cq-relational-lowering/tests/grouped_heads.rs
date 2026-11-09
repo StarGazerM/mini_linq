@@ -4,29 +4,29 @@ use quote::ToTokens;
 use std::collections::BTreeSet;
 
 /// The lowering alone; the seam table is dropped.
-fn compile(source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
-    cq_relational_lowering::compile(source).map(|(target, _)| target)
+fn compile(cq: &cq::Program, source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
+    cq_relational_lowering::compile(cq, source).map(|(target, _)| target)
 }
 
 /// The seam check with the side table of the supplied VO's own lowering.
-fn check(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
-    let (_, steps) = cq_relational_lowering::compile(source)?;
-    cq_relational_lowering::check(source, target, &steps)
+fn check(cq: &cq::Program, source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let (_, steps) = cq_relational_lowering::compile(cq, source)?;
+    cq_relational_lowering::check(cq, source, target, &steps)
 }
 
 
-fn elaborate(source: &str) -> (cq_lang_vo::Program, ra::Program) {
+fn elaborate(source: &str) -> (cq::Program, cq_lang_vo::Program, ra::Program) {
     let source: cq::Program = syn::parse_str(source).unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
     let ordered = cq_order::compile(&normal, &Default::default()).unwrap();
-    let target = compile(&ordered).unwrap();
-    check(&ordered, &target).unwrap();
-    (ordered, target)
+    let target = compile(&normal, &ordered).unwrap();
+    check(&normal, &ordered, &target).unwrap();
+    (normal, ordered, target)
 }
 
 #[test]
 fn grouped_heads_elaborate_to_one_checked_group_over_complete_named_valuations() {
-    let (source, target) = elaborate(
+    let (cq, _, target) = elaborate(
         "struct P; relation R(k:i32,id:i32,v:i64,hidden:i32);
          relation answer(k:i32,n:usize,total:i64,lo:Option<i64>,hi:Option<i64>);
          answer(k,count(),sum(v),min(v),max(v)) :- R(k,id,v,_);",
@@ -52,7 +52,7 @@ fn grouped_heads_elaborate_to_one_checked_group_over_complete_named_valuations()
     );
     assert_eq!(group.aggregates.len(), 4);
     assert_eq!(target.plan.output.input, definition.result);
-    assert_eq!(target.plan.output.head, source.cq.query.head);
+    assert_eq!(target.plan.output.head, cq.query.head);
     assert_eq!(
         syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
         target
@@ -62,7 +62,7 @@ fn grouped_heads_elaborate_to_one_checked_group_over_complete_named_valuations()
 
 #[test]
 fn count_retains_nonargument_named_variables_and_excludes_only_anonymous_witnesses() {
-    let (_, target) = elaborate(
+    let (_, _, target) = elaborate(
         "struct P; relation R(id:i32,hidden:i32); relation answer(n:usize);
          answer(count()) :- R(id,_);",
     );
@@ -78,7 +78,7 @@ fn count_retains_nonargument_named_variables_and_excludes_only_anonymous_witness
 
 #[test]
 fn computed_aggregate_arguments_are_bound_before_the_group() {
-    let (_, target) = elaborate(
+    let (_, _, target) = elaborate(
         "struct P; relation R(id:i32,v:i64); relation answer(total:i64,lo:Option<i64>);
          answer(sum(first(v)),min(second(v))) :- R(id,v), if guard(v);",
     );
@@ -103,7 +103,7 @@ fn computed_aggregate_arguments_are_bound_before_the_group() {
 
 #[test]
 fn aggregate_kind_and_valuation_domain_changes_fail_correspondence() {
-    let (source, target) = elaborate(
+    let (cq, source, target) = elaborate(
         "struct P; relation R(id:i32,v:i64); relation answer(n:usize,total:i64);
          answer(count(),sum(v)) :- R(id,v);",
     );
@@ -113,7 +113,7 @@ fn aggregate_kind_and_valuation_domain_changes_fail_correspondence() {
         panic!("group")
     };
     group.aggregates[1].expression = Some(syn::parse_quote!(id));
-    assert!(check(&source, &changed).is_err());
+    assert!(check(&cq, &source, &changed).is_err());
 
     let mut changed = target.clone();
     let projection = changed
@@ -136,6 +136,6 @@ fn aggregate_kind_and_valuation_domain_changes_fail_correspondence() {
         .cloned()
         .collect();
     ra::contract::check(&changed).unwrap();
-    assert!(check(&source, &changed).is_err());
+    assert!(check(&cq, &source, &changed).is_err());
     assert!(ra::check_rewrite(&target, &changed).is_err());
 }

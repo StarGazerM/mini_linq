@@ -708,7 +708,7 @@ pub fn compile(source: &cq::Program, options: &Options) -> syn::Result<valuation
 /// Formal rule S-Written: Written retains introducing body order and drains ready checks; VO-Order, not the producer, refuses an I1/I3 violation.
 pub fn order(source: Normal<'_>, options: &Options) -> valuation::Program {
     let mut program = order_unrestricted(source, options);
-    restrict::restrict(&mut program);
+    restrict::restrict(source.0, &mut program);
     program
 }
 
@@ -724,7 +724,7 @@ pub fn compile_unrestricted(
 /// planner that reschedules prefix steps does so here, then calls [`restrict`].
 pub fn order_unrestricted(source: Normal<'_>, options: &Options) -> valuation::Program {
     let mut program = assemble(source, options);
-    drain(&mut program);
+    drain(source.0, &mut program);
     program
 }
 
@@ -733,7 +733,6 @@ fn assemble(source: Normal<'_>, options: &Options) -> valuation::Program {
     let source = source.0;
     let steps = compile_body(source, options, &BTreeSet::new(), &BTreeSet::new(), None);
     valuation::Program {
-        cq: source.clone(),
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
             evidence: None,
@@ -747,8 +746,8 @@ fn assemble(source: Normal<'_>, options: &Options) -> valuation::Program {
 
 /// Front: establish the WF-VO binding facts of `program` (`order::analyze`,
 /// which omits VO-Order), then drain (total).
-pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
-    let analysis = valuation::order::analyze(program)?;
+pub fn drain_ready_checks(cq: &cq::Program, program: &mut valuation::Program) -> syn::Result<()> {
+    let analysis = valuation::order::analyze(cq, program)?;
     drain_with(program, &analysis);
     Ok(())
 }
@@ -758,8 +757,8 @@ pub fn drain_ready_checks(program: &mut valuation::Program) -> syn::Result<()> {
 /// one built from resolved advice may not (an authored read before its Rust
 /// binder). Such a schedule is returned undrained: the pipeline's WF-VO
 /// check, which contains the same analysis, judges it.
-fn drain(program: &mut valuation::Program) {
-    if let Ok(analysis) = valuation::order::analyze(program) {
+fn drain(cq: &cq::Program, program: &mut valuation::Program) {
+    if let Ok(analysis) = valuation::order::analyze(cq, program) {
         drain_with(program, &analysis);
     }
 }
@@ -813,9 +812,9 @@ fn drain_with(program: &mut valuation::Program, analysis: &valuation::Analysis) 
 
 /// Front: check WF-VO of the unrestricted schedule, then record its
 /// occurrence restrictions (O-Restrict, total).
-pub fn restrict(program: &mut valuation::Program) -> syn::Result<()> {
-    valuation::contract::check(program)?;
-    restrict::restrict(program);
+pub fn restrict(cq: &cq::Program, program: &mut valuation::Program) -> syn::Result<()> {
+    valuation::contract::check(cq, program)?;
+    restrict::restrict(cq, program);
     Ok(())
 }
 
@@ -840,7 +839,7 @@ pub fn order_written(source: Normal<'_>) -> valuation::Program {
     }
     let mut program = order_unrestricted(source, &Options::default());
     correlate(&mut program.valuation.steps);
-    drain(&mut program);
+    drain(source.0, &mut program);
     program
 }
 
@@ -1105,8 +1104,8 @@ pub fn order_advised(source: Normal<'_>, advice: &Advice) -> valuation::Program 
         None,
     );
     program.valuation.steps = steps;
-    drain(&mut program);
-    restrict::restrict(&mut program);
+    drain(source.0, &mut program);
+    restrict::restrict(source.0, &mut program);
     program
 }
 
@@ -1119,7 +1118,7 @@ pub fn check_advice(
     relations: &[OrderAtom],
 ) -> syn::Result<()> {
     let advice = resolve(Normal::check(source)?, relations)?;
-    let analysis = valuation::contract::check(target)?;
+    let analysis = valuation::contract::check(source, target)?;
     let mut first_partial = BTreeMap::new();
     for (clause, columns) in &advice.reads {
         if let (BodyItem::Positive { atom }, Some(columns)) = (&source.query.body[*clause], columns) {
@@ -1356,25 +1355,16 @@ fn compile_body(
     result
 }
 
-/// Check normal form, unchanged CQ, split granularity and explicit order.
+/// Check normal form, split granularity and explicit order.
 /// Structural rankings are producer choices, not replayed checker obligations.
-/// Formal rule CK-Order: Validate unchanged CQ, split, coverage, VO-Order, and Written introducing order.
+/// Formal rule CK-Order: Validate CQ correspondence, split, coverage, VO-Order, and Written introducing order.
 pub fn check(
     source: &cq::Program,
     target: &valuation::Program,
     options: &Options,
 ) -> syn::Result<()> {
     cq::normal::check(source)?;
-    let analysis = valuation::contract::check(target)?;
-    if target.cq != *source {
-        return Err(syn::Error::new_spanned(
-            &target.cq.name,
-            format!(
-                "query `{}`: valuation must preserve source CQ `{}`",
-                target.cq.name, source.name
-            ),
-        ));
-    }
+    let analysis = valuation::contract::check(source, target)?;
     check_steps(
         source,
         &source.query.body,

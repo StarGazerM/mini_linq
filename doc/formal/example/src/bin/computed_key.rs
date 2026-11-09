@@ -17,12 +17,14 @@ fn main() {
     boundaries(&directory, "planned", &source, true);
     // The computed key `next` is bound once `k` is, before S is matched on it.
     let normal = &written.normal;
-    let expected_vo: valuation::Program = syn::parse_quote! {
-        #normal valuation {
+    let expected_vo = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| valuation::Program::parse(input, normal),
+        quote::quote! {
+        valuation {
             R@0(x,k); let next:i32 = *k+1; S@2(next,y); where y > 0;
             let __cq_4_1:i32 = *y+1;
         }
-    };
+    }).unwrap();
     assert_eq!(written.valuation, expected_vo);
     let r = [(1, 6), (2, 6), (3, 8)];
     let s = [(7, 10), (7, -2), (9, 4)];

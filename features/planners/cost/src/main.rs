@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use cq_cost::artifacts::publish;
 use std::path::Path;
 
-const USAGE: &str = "cq-cost export --language cq|datalog --source INPUT --compiler-hash sha256:HEX --out plans.json\n  [--target cpu|cpu-par|gpu]                           (default cpu)\n  [--plan-options 'order(...)']                         (CPU CQ compilation only)\n  [--vo CHECKED.vo]                                    (consumed backend-neutral CQ)\n  [--round CHECKED.round --vo HOLE0.vo --vo HOLE1.vo ...] (consumed target Datalog)\n\nWithout checked records, compile the common CPU route once using the production\nparsers/passes. Non-CPU targets require consumed records. CQ VO is backend-neutral;\nDatalog targets must agree with recorded device/batch/parallel execution facts.\nNo dataset is opened and no cost/advice is generated. Evidence is the source's\nseparate declared_evidence attachment, not plan evidence. The compiler hash is\nthe caller's build identity; retain input_hash and full Identity for later\ncheck_against. A self-hash is not authentication.";
+const USAGE: &str = "cq-cost export --language cq|datalog --source INPUT --compiler-hash sha256:HEX --out plans.json\n  [--target cpu|cpu-par|gpu]                            (default cpu)\n  [--plan-options 'order(...)']                        (CPU CQ compilation only)\n  [--cq NORMAL.cq --vo CHECKED.vo]                      (consumed backend-neutral CQ)\n  [--round CHECKED.round --cq HOLE0.cq --vo HOLE0.vo ...] (consumed target Datalog)\n\nEach consumed valuation requires its separately recorded normalized CQ, in the\nsame hole order. Without checked records, compile the common CPU route once\nusing the production parsers/passes. Non-CPU targets require consumed records.\nCQ VO is backend-neutral; Datalog targets must agree with recorded device,\nbatch and parallel execution facts. No dataset is opened and no cost/advice is\ngenerated. Evidence is the source's separate declared_evidence attachment, not\nplan evidence. The compiler hash is the caller's build identity; retain\ninput_hash and full Identity for later check_against. A self-hash is not\nauthentication.";
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -35,12 +35,14 @@ fn run() -> Result<()> {
     if command != "export" { return Err(format!("expected export, check or advise\n{USAGE}").into()); }
     let mut flags = BTreeMap::new();
     let mut vos = Vec::new();
+    let mut cqs = Vec::new();
     while let Some(flag) = args.next() {
-        if !matches!(flag.as_str(), "--language" | "--target" | "--source" | "--compiler-hash" | "--out" | "--plan-options" | "--round" | "--vo") {
+        if !matches!(flag.as_str(), "--language" | "--target" | "--source" | "--compiler-hash" | "--out" | "--plan-options" | "--round" | "--cq" | "--vo") {
             return Err(format!("unknown export option {flag}").into());
         }
         let value = args.next().ok_or_else(|| format!("missing value for {flag}"))?;
         if flag == "--vo" { vos.push(value); }
+        else if flag == "--cq" { cqs.push(value); }
         else if flags.insert(flag.clone(), value).is_some() { return Err(format!("duplicate {flag}").into()); }
     }
     let required = |flag: &str| -> Result<&str> {
@@ -57,8 +59,14 @@ fn run() -> Result<()> {
     let compiler_hash = required("--compiler-hash")?.to_owned();
     let out = required("--out")?;
     let options_text = flags.get("--plan-options").map(String::as_str).unwrap_or("");
-    let plans = vos.iter().map(|path| -> Result<cq_lang_vo::Program> {
-        Ok(syn::parse_str(&std::fs::read_to_string(path)?)?)
+    if cqs.len() != vos.len() { return Err("each --vo requires one separately recorded --cq".into()); }
+    let plans = cqs.iter().zip(&vos).map(|(cq, vo)| -> Result<_> {
+        let normal = syn::parse_str(&std::fs::read_to_string(cq)?)?;
+        let valuation = syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &normal),
+            &std::fs::read_to_string(vo)?,
+        )?;
+        Ok((normal, valuation))
     }).collect::<Result<Vec<_>>>()?;
     let consumed = !plans.is_empty() || flags.contains_key("--round");
     if consumed && flags.contains_key("--plan-options") {
@@ -74,7 +82,7 @@ fn run() -> Result<()> {
             if flags.contains_key("--round") { return Err("--round is Datalog-only".into()); }
             if consumed {
                 if plans.len() != 1 { return Err("CQ export requires exactly one --vo".into()); }
-                export::export_cq(&source, &plans[0], configuration)?
+                export::export_cq(&source, &plans[0].0, &plans[0].1, configuration)?
             } else {
                 let options = syn::parse_str(options_text)?;
                 export::compile_cq(&source, &options, configuration)?
@@ -193,14 +201,15 @@ fn review_valuations(input: &export::PlannerInput, costs: &cq_cost::cost::Advice
         let pipeline = hole.invocation_pipeline()?;
         let at = hole.plan.ok_or("review hole lacks planning invocation")?;
         let options = syn::parse2(pipeline.passes[at].arguments.clone())?;
-        let mut proposed = cq_planning::prefix_valuation(&hole.cq, &options)?;
-        cq_lang_vo::contract::check(&proposed)?;
+        let (normal, proposed) = cq_planning::prefix_valuation(&hole.cq, &options)?;
+        cq_lang_vo::contract::check(&normal, &proposed)?;
         let old = input.holes.iter().find(|hole| hole.id == choice.hole).ok_or("review lost incumbent")?;
-        let mut incumbent: cq_lang_vo::Program = syn::parse_str(&old.checked_vo)?;
-        // The checked numeric attachment stays in the input/evidence files;
-        // these display copies omit it, without changing any scheduled step.
-        incumbent.cq.declared_evidence = None;
-        proposed.cq.declared_evidence = None;
+        let old_cq = syn::parse_str(&old.normalized_cq)?;
+        let incumbent = syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &old_cq), &old.checked_vo,
+        )?;
+        // Numeric attachments remain in the separate CQ/input evidence records;
+        // valuation-only displays contain no attachment and preserve every step.
         result.push(serde_json::json!({
             "hole": choice.hole, "origin": choice.origin, "input_hash": input.input_hash,
             "numeric_attachment_omitted": true, "execution": "incumbent only; proposed VO is checked, not executed",

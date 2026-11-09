@@ -91,8 +91,8 @@ fn complete_small_candidate_sets_equal_independent_permutations() {
                 format!("{}@{}", read.input_relation, read.normalized_clause)
             }).collect::<Vec<_>>().join(",");
             let options = syn::parse_str(&format!("order({selectors})")).unwrap();
-            let realized = cq_planning::prefix_valuation(&normal, &options).unwrap();
-            cq_lang_vo::contract::check(&realized).unwrap();
+            let (normal, realized) = cq_planning::prefix_valuation(&normal, &options).unwrap();
+            cq_lang_vo::contract::check(&normal, &realized).unwrap();
         }
     }
 }

@@ -395,10 +395,11 @@ fn catalog_recipe(query: &str) -> Recipe {
     }
 }
 
+/// Return the normalized CQ context separately from its selected valuation.
 pub fn valuation(
     source: &cq_lang_cq::Program,
     arguments: &str,
-) -> syn::Result<cq_lang_vo::Program> {
+) -> syn::Result<(cq_lang_cq::Program, cq_lang_vo::Program)> {
     let options: cq_planning::PlanOptions = syn::parse_str(arguments)?;
     cq_planning::prefix_valuation(source, &options)
 }

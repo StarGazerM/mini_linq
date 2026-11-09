@@ -1291,7 +1291,7 @@ fn planned(hole: &cq_lang_datalog_round::Hole) -> cq_lang_vo::Program {
     let pipeline = hole.invocation_pipeline().unwrap();
     let options: cq_planning::PlanOptions =
         syn::parse2(pipeline.passes[hole.plan.unwrap()].arguments.clone()).unwrap();
-    cq_planning::prefix_valuation(&hole.cq, &options).unwrap()
+    cq_planning::prefix_valuation(&hole.cq, &options).unwrap().1
 }
 
 #[test]
@@ -1340,7 +1340,7 @@ fn upstream_ordering_facts_survive_both_driver_policies_and_cq_planning() {
                     .unwrap();
                 let vo = planned(hole);
                 assert_eq!(vo.valuation.ordering, Some(expected));
-                let plain = cq_planning::prefix_valuation(&hole.cq, &Default::default()).unwrap();
+                let (_, plain) = cq_planning::prefix_valuation(&hole.cq, &Default::default()).unwrap();
                 assert_eq!(plain.valuation.steps, vo.valuation.steps);
                 let changes: &[fn(&mut cq_lang_datalog_round::Planning)] = &[
                     |f| f.delta = Some(99),

@@ -18,17 +18,22 @@ fn main() {
     let planned = boundaries(&directory, "planned", &source, true);
     // Normalization binds g() before the atom, f(x) after it, and checks
     // the computed column by relational identity.
-    let expected_vo: valuation::Program = syn::parse_quote! {
+    let expected_normal: cq::Program = syn::parse_quote! {
         struct Placement;
         relation R(a:i32,b:i32,c:i32);
         answer(x) :- let __cq_0_2: i32 = g(), R(x, __cq_0_1, __cq_0_2), let __cq_0_1_:i32 = f(x), where __cq_0_1 == __cq_0_1_;
+    };
+    assert_eq!(planned.normal, expected_normal);
+    let expected_vo = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| valuation::Program::parse(input, &planned.normal),
+        quote::quote! {
         valuation {
             let __cq_0_2: i32 = g();
             R@1(x, __cq_0_1, __cq_0_2);
             let __cq_0_1_:i32 = f(x);
             __cq_0_1 = __cq_0_1_;
         }
-    };
+    }).unwrap();
     assert_eq!(planned.valuation, expected_vo);
     let ra = &planned.relational;
     let g = ra

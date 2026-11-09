@@ -66,21 +66,21 @@ fn transfer_keeps_early_membership_with_conjoined_reducer_restrictions() {
         answer(o,p,n) :- R(p,s), L(o,p,s), O(o,d),
             where d > 0, where d < 3, P(p), S(s,n);
     };
-    let valuation = cq_planners::compile_valuation(&source, Planner::Transfer).unwrap();
+    let (normal, valuation) = cq_planners::compile_valuation(&source, Planner::Transfer).unwrap();
     let first: Vec<_> = valuation.valuation.steps.iter().filter_map(|step| match step {
         cq_planners::vo::Step::Atom(atom, _) => Some(atom.relation.to_string()),
         _ => None,
     }).take(2).collect();
     assert_eq!(first, ["R", "P"]);
-    let (lowered, steps) = cq_relational_lowering::compile(&valuation).unwrap();
-    cq_relational_lowering::check(&valuation, &lowered, &steps).unwrap();
+    let (lowered, steps) = cq_relational_lowering::compile(&normal, &valuation).unwrap();
+    cq_relational_lowering::check(&normal, &valuation, &lowered, &steps).unwrap();
     let target = compile(&source, Planner::Transfer).unwrap();
     check(&source, &target).unwrap();
     for seed in 0..4 {
-        let database = cq_testkit::databases::binary_database(&valuation.cq, seed);
+        let database = cq_testkit::databases::binary_database(&normal, seed);
         assert_eq!(
             semantics::evaluate_ra(&target, &database).output,
-            cq_testkit::cq_semantics::evaluate_cq(&valuation.cq, &database),
+            cq_testkit::cq_semantics::evaluate_cq(&normal, &database),
             "database {seed}",
         );
     }

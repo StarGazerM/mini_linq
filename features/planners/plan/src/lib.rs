@@ -205,8 +205,8 @@ impl ToTokens for Planner {
     }
 }
 
-/// Normalize CQ and record its chosen schedule, split and tree reductions.
-pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<vo::Program> {
+/// Normalize CQ and return it alongside its chosen schedule, split and tree reductions.
+pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<(cq::Program, vo::Program)> {
     cq::contract::check(source)?;
     let normal = cq::normal::normalize(source)?;
     let ordering = planner.ordering();
@@ -215,8 +215,8 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
         // position; restrictions are recorded on its schedule.
         let unrestricted = cq_order::compile_unrestricted(&normal, &ordering)?;
         cq_order::check(&normal, &unrestricted, &ordering)?;
-        let mut scheduled = le::compile(&unrestricted)?;
-        cq_order::restrict(&mut scheduled)?;
+        let mut scheduled = le::compile(&normal, &unrestricted)?;
+        cq_order::restrict(&normal, &mut scheduled)?;
         scheduled
     } else {
         let ordered = cq_order::compile(&normal, &ordering)?;
@@ -224,13 +224,14 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
         ordered
     };
     let reductions = planner.reductions(&normal);
-    let reduced = cq_reduce::compile(&ordered, &reductions)?;
-    cq_reduce::check(&ordered, &reduced, &reductions)?;
-    if planner == Planner::Transfer {
-        transfer(&reduced)
+    let reduced = cq_reduce::compile(&normal, &ordered, &reductions)?;
+    cq_reduce::check(&normal, &ordered, &reduced, &reductions)?;
+    let valuation = if planner == Planner::Transfer {
+        transfer(&normal, &reduced)?
     } else {
-        Ok(reduced)
-    }
+        reduced
+    };
+    Ok((normal, valuation))
 }
 
 
@@ -243,10 +244,10 @@ pub fn compile_valuation(source: &cq::Program, planner: Planner) -> syn::Result<
 /// child's subtree. As in RPT, no transfer starts from a side without filters.
 /// Inner block scopes keep their Masks reductions.
 /// Formal rule Plan-Transfer: Masks forward pass, then the stream's forward edges, then the backward pass, all before the stream.
-fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
-    let analysis = vo::contract::check(reduced)?;
-    let graph = cq::hypergraph::Analysis::of(&reduced.cq);
-    let body = &reduced.cq.query.body;
+fn transfer(source: &cq::Program, reduced: &vo::Program) -> syn::Result<vo::Program> {
+    let analysis = vo::contract::check(source, reduced)?;
+    let graph = cq::hypergraph::Analysis::of(source);
+    let body = &source.query.body;
     let steps = &reduced.valuation.steps;
     // Scopes with opaque Rust keep Masks only. There, the structural RA
     // correspondence check rejects some sound transfer schedules (a backward
@@ -320,7 +321,7 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
         .position(|step| matches!(step, vo::Step::Atom(..) | vo::Step::Block(..)))
         .unwrap_or(target.valuation.steps.len());
     target.valuation.steps.splice(first..first, extra);
-    vo::contract::check(&target)?;
+    vo::contract::check(source, &target)?;
     Ok(target)
 }
 
@@ -330,9 +331,9 @@ fn transfer(reduced: &vo::Program) -> syn::Result<vo::Program> {
 /// Hypergraph and Transfer then apply the checked redundant-support absorption
 /// and LE the dead-expansion elimination of `cq-ra-rewrites`.
 pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Program> {
-    let valuation = compile_valuation(source, planner)?;
-    let (target, steps) = cq_relational_lowering::compile(&valuation)?;
-    cq_relational_lowering::check(&valuation, &target, &steps)?;
+    let (normal, valuation) = compile_valuation(source, planner)?;
+    let (target, steps) = cq_relational_lowering::compile(&normal, &valuation)?;
+    cq_relational_lowering::check(&normal, &valuation, &target, &steps)?;
     let target = match planner {
         Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&target)?,
         Planner::Le => cq_ra_rewrites::simplify_expansions(&target)?,
@@ -342,22 +343,22 @@ pub fn compile(source: &cq::Program, planner: Planner) -> syn::Result<ra::Progra
     Ok(target)
 }
 
-/// Preserve the actual selected VO and pre-rewrite lowering step correspondence.
+/// Preserve normalized CQ, the selected VO and pre-rewrite lowering correspondence.
 /// The executable target is checked and simplified exactly as in [`compile`].
 pub fn compile_with_steps(
     source: &cq::Program,
     planner: Planner,
-) -> syn::Result<(ra::Program, vo::Program, ra::Program, cq_relational_lowering::Steps)> {
-    let valuation = compile_valuation(source, planner)?;
-    let (lowered, steps) = cq_relational_lowering::compile(&valuation)?;
-    cq_relational_lowering::check(&valuation, &lowered, &steps)?;
+) -> syn::Result<(ra::Program, cq::Program, vo::Program, ra::Program, cq_relational_lowering::Steps)> {
+    let (normal, valuation) = compile_valuation(source, planner)?;
+    let (lowered, steps) = cq_relational_lowering::compile(&normal, &valuation)?;
+    cq_relational_lowering::check(&normal, &valuation, &lowered, &steps)?;
     let target = match planner {
         Planner::Hypergraph | Planner::Transfer => cq_ra_rewrites::simplify_reductions(&lowered)?,
         Planner::Le => cq_ra_rewrites::simplify_expansions(&lowered)?,
         _ => lowered.clone(),
     };
     check(source, &target)?;
-    Ok((target, valuation, lowered, steps))
+    Ok((target, normal, valuation, lowered, steps))
 }
 
 /// Independently check an authored valuation, including split and selected
@@ -391,7 +392,7 @@ pub fn check_valuation(
     if planner == Planner::Transfer {
         // Formal rule CK-Transfer: The transfer schedule equals the one recomputed from the erased plan.
         let reductions = planner.reductions(&normal);
-        let expected = transfer(&cq_reduce::compile(&erased, &reductions)?)?;
+        let expected = transfer(&normal, &cq_reduce::compile(&normal, &erased, &reductions)?)?;
         if expected != *target {
             return Err(syn::Error::new_spanned(
                 &target.valuation,
@@ -400,7 +401,7 @@ pub fn check_valuation(
         }
         return Ok(());
     }
-    cq_reduce::check(&erased, target, &planner.reductions(&normal))
+    cq_reduce::check(&normal, &erased, target, &planner.reductions(&normal))
 }
 
 /// Check CQ→RA′ refinement against the exact written normal-form schedule,
@@ -540,10 +541,10 @@ mod prefix_tests {
             quote!(order(S, R), no_reduce, reduce(R with S)),
         ] {
             let options = syn::parse2::<PlanOptions>(tokens).unwrap();
-            let valuation = prefix_valuation(&source, &options).unwrap();
+            let (normal, valuation) = prefix_valuation(&source, &options).unwrap();
             let target = compile_prefix(&source, &options).unwrap();
-            let (_, steps) = cq_relational_lowering::compile(&valuation).unwrap();
-            cq_relational_lowering::check(&valuation, &target, &steps).unwrap();
+            let (_, steps) = cq_relational_lowering::compile(&normal, &valuation).unwrap();
+            cq_relational_lowering::check(&normal, &valuation, &target, &steps).unwrap();
         }
         let invalid = syn::parse2(quote!(no_reduce, skip(R with S))).unwrap();
         assert!(compile_prefix(&source, &invalid).is_err());

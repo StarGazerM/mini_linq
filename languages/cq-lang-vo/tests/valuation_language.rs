@@ -1,9 +1,9 @@
 //! Complete valuation schedules over normal CQ programs.
 use cq_lang_vo as valuation;
-use quote::{ToTokens, quote};
+use quote::quote;
 
-fn plan(steps: proc_macro2::TokenStream) -> syn::Result<valuation::Program> {
-    syn::parse2(quote! {
+fn plan(steps: proc_macro2::TokenStream) -> syn::Result<(valuation::cq::Program, valuation::Program)> {
+    parse(quote! {
         struct Q;
         relation R(a: i32, b: i32);
         relation S(b: i32, c: i32);
@@ -15,21 +15,24 @@ fn plan(steps: proc_macro2::TokenStream) -> syn::Result<valuation::Program> {
 
 #[test]
 fn complete_coarse_and_fine_plans_check_and_round_trip() {
-    let coarse = plan(quote! {
+    let (cq, coarse) = plan(quote! {
         R@0(a, b); if { a > 0 }; S@1(b, c); T@2(a, c); let d: i32 = a + c;
     })
     .unwrap();
-    let analysis = valuation::contract::check(&coarse).unwrap();
+    let analysis = valuation::contract::check(&cq, &coarse).unwrap();
+    assert_eq!(quote::ToTokens::to_token_stream(&coarse).to_string(), quote!(valuation {
+        R@0(a, b); if { a > 0 }; S@1(b, c); T@2(a, c); let d: i32 = a + c;
+    }).to_string());
     assert_eq!(analysis.introduces[0], ["a", "b"]);
     assert_eq!(analysis.introduces[3], Vec::<String>::new());
-    let fine = plan(quote! {
+    let (cq, fine) = plan(quote! {
         R@0(_, b); R@0(a, b); if { a > 0 }; S@1(b, c); T@2(a, c);
         let d: i32 = a + c;
     })
     .unwrap();
-    let analysis = valuation::contract::check(&fine).unwrap();
+    let analysis = valuation::contract::check(&cq, &fine).unwrap();
     assert_eq!(
-        syn::parse2::<valuation::Program>(fine.to_token_stream()).unwrap(),
+        round_trip(&cq, &fine),
         fine
     );
     assert_eq!(analysis.bound_before[1], ["b"]);
@@ -45,26 +48,26 @@ fn contract_rejects_dropped_columns_missing_steps_and_early_rust() {
         quote! { R@0(a,b); S@1(b,c); T@2(a,c); if { a > 0 }; },
         quote! { R@0(a,b); S@1(b,c); S@2(a,c); if { a > 0 }; let d:i32 = a+c; },
     ] {
-        assert!(valuation::contract::check(&plan(steps).unwrap()).is_err());
+        assert!(plan(steps).and_then(|(cq, vo)| valuation::contract::check(&cq, &vo)).is_err());
     }
 }
 
 #[test]
 fn reductions_are_relational_and_never_consume_a_rust_guard() {
-    let reduced = plan(quote! {
+    let (cq, reduced) = plan(quote! {
         reduce R@0 with T@2(a, _); reduce T@2 with R@0(a, _);
         R@0(a,b); if { a > 0 }; S@1(b,c); T@2(a,c); let d:i32 = a+c;
     })
     .unwrap();
-    let analysis = valuation::contract::check(&reduced).unwrap();
+    let analysis = valuation::contract::check(&cq, &reduced).unwrap();
     assert!(analysis.introduces[..2].iter().all(Vec::is_empty));
     assert!(plan(quote! { reduce R@0 if { a > 0 }; }).is_err());
 }
 
 #[test]
 fn restrictions_place_predicates_on_their_occurrence_or_reject() {
-    let filtered = |steps: proc_macro2::TokenStream| -> syn::Result<valuation::Program> {
-        syn::parse2(quote! {
+    let filtered = |steps: proc_macro2::TokenStream| -> syn::Result<(valuation::cq::Program, valuation::Program)> {
+        parse(quote! {
             struct Q;
             relation R(a: i32, b: i32);
             relation S(b: i32, c: i32);
@@ -74,14 +77,14 @@ fn restrictions_place_predicates_on_their_occurrence_or_reject() {
     };
     // The written predicate and the implied domain of `b` restrict R; the
     // disjunction's own prefix step stays.
-    let restricted = filtered(quote! {
+    let (cq, restricted) = filtered(quote! {
         restrict R@0 where a < 5; restrict R@0 where (b = 1) or (b = 2);
         R@0(a, b); where (b = 1 and a > 0) or (b = 2); S@3(b, c);
     })
     .unwrap();
-    valuation::contract::check(&restricted).unwrap();
+    valuation::contract::check(&cq, &restricted).unwrap();
     assert_eq!(
-        syn::parse2::<valuation::Program>(restricted.to_token_stream()).unwrap(),
+        round_trip(&cq, &restricted),
         restricted
     );
     for steps in [
@@ -96,7 +99,7 @@ fn restrictions_place_predicates_on_their_occurrence_or_reject() {
         // Wrong relation at the clause.
         quote! { restrict S@0 where a < 5; R@0(a, b); where (b = 1 and a > 0) or (b = 2); S@3(b, c); },
     ] {
-        assert!(valuation::contract::check(&filtered(steps).unwrap()).is_err());
+        assert!(filtered(steps).and_then(|(cq, vo)| valuation::contract::check(&cq, &vo)).is_err());
     }
 }
 
@@ -104,7 +107,7 @@ fn restrictions_place_predicates_on_their_occurrence_or_reject() {
 fn contract_rejects_late_misaligned_and_foreign_reductions() {
     let rejects = |steps| {
         assert!(plan(steps)
-            .and_then(|m| valuation::contract::check(&m))
+            .and_then(|(cq, vo)| valuation::contract::check(&cq, &vo))
             .is_err());
     };
     rejects(
@@ -126,63 +129,63 @@ fn contract_rejects_late_misaligned_and_foreign_reductions() {
 
 #[test]
 fn generators_round_trip_and_require_their_free_variables() {
-    let source: valuation::Program = syn::parse2(quote! {
+    let (cq, source) = parse(quote! {
         struct Q; relation R(a: i32); relation answer(b: i32);
         answer(b) :- R(a), for b in 0..a, let c = b;
         valuation { R@0(a); for b in 0..a; let c = b; }
     })
     .unwrap();
-    valuation::contract::check(&source).unwrap();
+    valuation::contract::check(&cq, &source).unwrap();
     assert_eq!(
-        syn::parse2::<valuation::Program>(source.to_token_stream()).unwrap(),
+        round_trip(&cq, &source),
         source
     );
     for index in [0, 2] {
         let mut changed = source.clone();
         changed.valuation.steps.swap(1, index);
-        assert!(valuation::contract::check(&changed).is_err());
+        assert!(valuation::contract::check(&cq, &changed).is_err());
     }
     let mut changed = source.clone();
     changed.valuation.steps[1] = syn::parse2(quote!(let b = 0..a;)).unwrap();
-    assert!(valuation::contract::check(&changed).is_err());
+    assert!(valuation::contract::check(&cq, &changed).is_err());
     let mut changed = source.clone();
     changed
         .valuation
         .steps
         .insert(0, syn::parse2(quote!(reduce R@0 with R@1(a);)).unwrap());
-    assert!(valuation::contract::check(&changed).is_err());
+    assert!(valuation::contract::check(&cq, &changed).is_err());
 }
 
 #[test]
 fn negations_round_trip_bind_nothing_and_commute_with_rust() {
-    let source: valuation::Program = syn::parse_quote! {
+    let (cq, source) = parse(quote! {
         struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
         answer(x) :- R(x), if opaque(x), !K(x,_), let y = x;
         valuation { R@0(x); !K(x,_); if opaque(x); let y = x; }
-    };
-    let analysis = valuation::contract::check(&source).unwrap();
+    }).unwrap();
+    let analysis = valuation::contract::check(&cq, &source).unwrap();
     assert!(analysis.introduces[1].is_empty());
     assert_eq!(analysis.atoms.len(), 1);
     assert_eq!(
-        syn::parse2::<valuation::Program>(source.to_token_stream()).unwrap(),
+        round_trip(&cq, &source),
         source
     );
     let mut early = source.clone();
     early.valuation.steps.swap(0, 1);
-    assert!(valuation::contract::check(&early).is_err());
+    assert!(valuation::contract::check(&cq, &early).is_err());
     let mut late = source.clone();
     let negation = late.valuation.steps.remove(1);
     late.valuation.steps.push(negation);
-    assert!(valuation::contract::check(&late).unwrap_err().to_string().contains("VO-Order I2"));
+    assert!(valuation::contract::check(&cq, &late).unwrap_err().to_string().contains("VO-Order I2"));
     let mut missing = source.clone();
     missing.valuation.steps.remove(1);
-    assert!(valuation::contract::check(&missing).is_err());
+    assert!(valuation::contract::check(&cq, &missing).is_err());
     let mut duplicate = source.clone();
     duplicate
         .valuation
         .steps
         .insert(1, duplicate.valuation.steps[1].clone());
-    assert!(valuation::contract::check(&duplicate).is_err());
+    assert!(valuation::contract::check(&cq, &duplicate).is_err());
     for reduction in [
         quote!(reduce R@0 with K@2(x,_);),
         quote!(reduce K@2 with R@0(x);),
@@ -192,6 +195,39 @@ fn negations_round_trip_bind_nothing_and_commute_with_rust() {
             .valuation
             .steps
             .insert(0, syn::parse2(reduction).unwrap());
-        assert!(valuation::contract::check(&changed).is_err());
+        assert!(valuation::contract::check(&cq, &changed).is_err());
     }
+}
+
+fn parse(tokens: proc_macro2::TokenStream) -> syn::Result<(cq_lang_vo::cq::Program, cq_lang_vo::Program)> {
+    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+        let cq = input.parse()?;
+        let vo = cq_lang_vo::Program::parse(input, &cq)?;
+        Ok((cq, vo))
+    }, tokens)
+}
+
+fn round_trip(cq: &cq_lang_vo::cq::Program, vo: &cq_lang_vo::Program) -> cq_lang_vo::Program {
+    syn::parse::Parser::parse2(|input: syn::parse::ParseStream<'_>| {
+        cq_lang_vo::Program::parse(input, cq)
+    }, quote::ToTokens::to_token_stream(vo)).unwrap()
+}
+
+#[test]
+fn external_cq_controls_validation_and_rewrite_identity() {
+    let (cq, vo) = parse(quote! {
+        struct Q; relation R(a:i32);
+        answer(a) :- R(a);
+        valuation { R@0(a); }
+    }).unwrap();
+    let (other_cq, other_vo) = parse(quote! {
+        struct Other; relation S(a:i32);
+        answer(a) :- S(a);
+        valuation { S@0(a); }
+    }).unwrap();
+    valuation::contract::check(&cq, &vo).unwrap();
+    valuation::contract::check(&other_cq, &other_vo).unwrap();
+    assert!(valuation::contract::check(&other_cq, &vo).is_err());
+    assert!(valuation::check_rewrite(&cq, &vo, &other_cq, &other_vo).is_err());
+    valuation::check_rewrite(&cq, &vo, &cq, &vo).unwrap();
 }

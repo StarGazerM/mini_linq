@@ -13,9 +13,9 @@ use cq_lang_cq::BodyItem;
 use cq_lang_vo as valuation;
 
 /// Formal rule O-Restrict: Restrict every H-Local target occurrence by its predicate at the head of the scope, and omit the prefix steps of a written predicate whose every written instance restricts some occurrence.
-pub(crate) fn restrict(program: &mut valuation::Program) {
+pub(crate) fn restrict(cq: &cq::Program, program: &mut valuation::Program) {
     let steps = std::mem::take(&mut program.valuation.steps);
-    program.valuation.steps = scope(&program.cq.query.body, &BTreeSet::new(), steps, None);
+    program.valuation.steps = scope(&cq.query.body, &BTreeSet::new(), steps, None);
 }
 
 fn scope(

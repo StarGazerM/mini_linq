@@ -94,7 +94,10 @@ pub fn assess_bounds(report: &CalibrationReport, advice: &AdviceReport, plans: &
             _ => None,
         };
         let recorded = plans.holes.iter().find(|record| record.id == hole.hole).ok_or_else(|| invalid("review hole is absent"))?;
-        let valuation: cq_lang_vo::Program = syn::parse_str(&recorded.checked_vo)?;
+        let normal = syn::parse_str(&recorded.normalized_cq)?;
+        let valuation = syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &normal), &recorded.checked_vo,
+        )?;
         let clauses = crate::cost::enumerate::recorded_clause_indices(recorded, &valuation)?;
         let observations = by_hole.get(&format!("hole:{}", hole.hole)).map(Vec::as_slice).unwrap_or(&[]);
         let first_read = current.plan.steps.iter().position(|step| step.read.is_some());

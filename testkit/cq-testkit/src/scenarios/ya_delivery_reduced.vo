@@ -1,8 +1,3 @@
-struct YaDelivery;
-relation D(driver_id: i32, depot_id: i32);
-relation S(depot_id: i32, item_id: i32);
-relation N(job_id: i32, item_id: i32);
-answer(driver, job) :- D(driver, depot), S(depot, item), N(job, item);
 valuation {
     reduce S@1 with D@0(_, depot);
     reduce N@2 with S@1(_, item);

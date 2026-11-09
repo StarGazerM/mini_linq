@@ -1068,6 +1068,7 @@ dependencies = [
  "cq-planners-plan",
  "cq-planning",
  "cq-stage",
+ "quote",
  "syn 2.0.119",
 ]
 

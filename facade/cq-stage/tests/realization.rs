@@ -91,6 +91,50 @@ impl Language for Physical {
 }
 type Pair = Structures<Physical, Providers>;
 type Triple = Sequence<Physical, Providers, Schedule>;
+type Ordered = cq_stage::Valuation<Physical, Providers>;
+
+#[test]
+fn valuation_carrier_prints_only_annotation_when_observed() {
+    let output = Ordered::rewrite(quote!(pipeline { next }; input; ordered = input), |cq, vo, _| {
+        Ok((cq.clone(), vo.clone()))
+    });
+    assert_eq!(output.to_string(), quote!(next! { pipeline {};
+        ordering { cq { input } vo { ; ordered = input } }
+    }).to_string());
+    let terminal = Ordered::pass::<syn::Expr>(packet(output), |cq, vo, _| {
+        assert_eq!(cq.0, vo.source);
+        Ok(syn::parse_quote!(42))
+    });
+    assert_eq!(terminal.to_string(), "42");
+    let observed = Ordered::rewrite(
+        quote!(pipeline {} observe { inspect }; input; ordered = input),
+        |cq, vo, _| Ok((cq.clone(), vo.clone())),
+    );
+    assert_eq!(observed.to_string(), quote!(inspect! { ; ordered = input }).to_string());
+    let stack: Ordered = syn::parse_quote!(ordering { cq { input } vo { ; ordered = input } });
+    assert_eq!(stack.calibration_stage(), cq_stage::calibration::Stage::annotation(
+        &stack.valuation, vec!["input".into()],
+    ));
+}
+
+#[test]
+fn valuation_carrier_rejects_mismatched_bases_and_trailing_tokens() {
+    let output = Ordered::pass::<syn::Expr>(
+        quote!(pipeline {}; ordering { cq { other } vo { ; ordered = input } }),
+        |_, _, _| panic!("invalid source reached consumer"),
+    );
+    assert!(output.to_string().contains("compile_error"));
+    let output = Ordered::rewrite(quote!(pipeline { next }; input; ordered = input), |_, vo, _| {
+        Ok((syn::parse_quote!(other), vo.clone()))
+    });
+    assert!(output.to_string().contains("compile_error"));
+    for tokens in [
+        quote!(ordering { cq { input } vo { ; ordered = input extra } }),
+        quote!(ordering { cq { input } vo { ; ordered = input } extra }),
+    ] {
+        assert!(syn::parse2::<Ordered>(tokens).is_err());
+    }
+}
 
 fn packet(output: TokenStream) -> TokenStream {
     syn::parse2::<syn::Macro>(output).unwrap().tokens

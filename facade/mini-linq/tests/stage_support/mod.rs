@@ -227,29 +227,29 @@ pub fn compile_source(
     pass("vo:order", cq_order::check(&normal, &ordered, &route.order))?;
     stages.push(Stage {
         name: "vo:order".into(),
-        outcome: judge(&|db| cq_testkit::valuation_semantics::evaluate(&ordered, db)),
+        outcome: judge(&|db| cq_testkit::valuation_semantics::evaluate(&normal, &ordered, db)),
     });
     // Yannakakis reductions need an acyclic query: a cyclic one makes the route inapplicable.
-    let reduced = cq_reduce::compile(&ordered, &route.reduce).map_err(|error| PassError {
+    let reduced = cq_reduce::compile(&normal, &ordered, &route.reduce).map_err(|error| PassError {
         stage: "vo:reduce".into(),
         inapplicable: matches!(error, cq_reduce::Error::Cyclic(_)),
         message: error.to_string(),
     })?;
     pass(
         "vo:reduce",
-        cq_reduce::check(&ordered, &reduced, &route.reduce),
+        cq_reduce::check(&normal, &ordered, &reduced, &route.reduce),
     )?;
     stages.push(Stage {
         name: "vo:reduce".into(),
-        outcome: judge(&|db| cq_testkit::valuation_semantics::evaluate(&reduced, db)),
+        outcome: judge(&|db| cq_testkit::valuation_semantics::evaluate(&normal, &reduced, db)),
     });
     let (ra, steps) = pass(
         "ra:relational_lowering",
-        cq_relational_lowering::compile(&reduced),
+        cq_relational_lowering::compile(&normal, &reduced),
     )?;
     pass(
         "ra:relational_lowering",
-        cq_relational_lowering::check(&reduced, &ra, &steps),
+        cq_relational_lowering::check(&normal, &reduced, &ra, &steps),
     )?;
     stages.push(Stage {
         name: "ra:relational_lowering".into(),

@@ -292,10 +292,10 @@ pub fn check_evidence(
     target: &valuation::Program,
     options: &Options,
 ) -> syn::Result<()> {
-    let analysis = valuation::contract::check(target)?;
+    let analysis = valuation::contract::check(source, target)?;
     let Some(evidence) = &target.valuation.evidence else {
         return Err(syn::Error::new_spanned(
-            &target.cq.name,
+            &source.name,
             "evidence ordering must record its evidence",
         ));
     };

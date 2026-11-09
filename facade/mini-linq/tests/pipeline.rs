@@ -247,16 +247,17 @@ fn default_omits_unfiltered_reductions_and_opt_out_preserves_relational_plan() {
         },
     )
     .unwrap();
-    let (prior, _) = cq_relational_lowering::compile(&ordered).unwrap();
+    let (prior, _) = cq_relational_lowering::compile(&normal, &ordered).unwrap();
     let reduced = cq_reduce::compile(
+        &normal,
         &ordered,
         &cq_reduce::Options {
             semijoins: cq_reduce::Reductions::Hypergraph,
         },
     )
     .unwrap();
-    let (expected, steps) = cq_relational_lowering::compile(&reduced).unwrap();
-    cq_relational_lowering::check(&reduced, &expected, &steps).unwrap();
+    let (expected, steps) = cq_relational_lowering::compile(&normal, &reduced).unwrap();
+    cq_relational_lowering::check(&normal, &reduced, &expected, &steps).unwrap();
     let expected = cq_ra_rewrites::simplify_reductions(&expected).unwrap();
     let default: cq_lang_ra::Program = syn::parse_str(default).unwrap();
     let opted_out: cq_lang_ra::Program = syn::parse_str(opted_out).unwrap();
@@ -395,13 +396,13 @@ fn default_reduces_cyclic_block_scopes_and_preserves_answers() {
             let options = cq_reduce::Options {
                 semijoins: cq_reduce::Reductions::Masks,
             };
-            let reduced = cq_reduce::compile(&ordered, &options).unwrap();
-            cq_reduce::check(&ordered, &reduced, &options).unwrap();
+            let reduced = cq_reduce::compile(&normal, &ordered, &options).unwrap();
+            cq_reduce::check(&normal, &ordered, &reduced, &options).unwrap();
             assert!(has_reduction(&reduced.valuation.steps));
-            let (expected, steps) = cq_relational_lowering::compile(&reduced).unwrap();
-            cq_relational_lowering::check(&reduced, &expected, &steps).unwrap();
+            let (expected, steps) = cq_relational_lowering::compile(&normal, &reduced).unwrap();
+            cq_relational_lowering::check(&normal, &reduced, &expected, &steps).unwrap();
             assert_eq!(default, expected);
-            assert_eq!(opted_out, cq_relational_lowering::compile(&ordered).unwrap().0);
+            assert_eq!(opted_out, cq_relational_lowering::compile(&normal, &ordered).unwrap().0);
             cq_lang_ra::check_rewrite(&opted_out, &default).unwrap();
         }};
     }
@@ -762,10 +763,14 @@ fn facade_observes_every_default_boundary_without_executing_the_query() {
         };
     }
     let source: cq_lang_cq::Program = syn::parse_str(observe!(cq)).unwrap();
-    let vo: cq_lang_vo::Program = syn::parse_str(observe!(vo)).unwrap();
+    let (normal, expected_vo) = cq_planning::prefix_valuation(&source, &Default::default()).unwrap();
+    let vo = syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream<'_>| cq_lang_vo::Program::parse(input, &normal),
+        observe!(vo),
+    ).unwrap();
     assert_eq!(
         vo,
-        cq_planning::prefix_valuation(&source, &Default::default()).unwrap()
+        expected_vo
     );
     let ra: cq_lang_ra::Program = syn::parse_str(observe!(relational_plan)).unwrap();
     assert_eq!(

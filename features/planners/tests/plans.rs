@@ -20,10 +20,10 @@ fn every_planner_preserves_relational_negation() {
             ]);
             let expected = cq_semantics::evaluate_cq(&source, &database);
             for planner in Planner::ALL {
-                let valuation = compile_valuation(&source, planner).unwrap();
+                let (normal, valuation) = compile_valuation(&source, planner).unwrap();
                 let algebra = compile(&source, planner).unwrap();
                 assert_eq!(
-                    valuation_semantics::evaluate(&valuation, &database),
+                    valuation_semantics::evaluate(&normal, &valuation, &database),
                     expected,
                     "{planner:?}: {clause}"
                 );
@@ -75,7 +75,7 @@ fn every_planner_preserves_generator_mode_and_dependencies() {
         generator.for_token = None;
         assert!(check(&source, &changed).is_err(), "{planner:?}");
 
-        let valuation = compile_valuation(&source, planner).unwrap();
+        let (normal, valuation) = compile_valuation(&source, planner).unwrap();
         let mut changed = valuation.clone();
         let generator = changed
             .valuation
@@ -90,7 +90,7 @@ fn every_planner_preserves_generator_mode_and_dependencies() {
             .position(|step| matches!(step, vo::Step::Guard(..)))
             .unwrap();
         changed.valuation.steps.swap(generator, guard);
-        let error = vo::contract::check(&changed).unwrap_err().to_string();
+        let error = vo::contract::check(&normal, &changed).unwrap_err().to_string();
         assert!(error.contains("I2"), "{planner:?}: {error}");
 
         let mut changed = valuation;
@@ -135,7 +135,7 @@ fn block_corpus_through_every_recursive_planner_and_oracle() {
     for case in cq_testkit::blocks::CASES {
         let source = case.parse_cq().unwrap();
         for planner in Planner::ALL {
-            let vo = compile_valuation(&source, planner)
+            let (normal, vo) = compile_valuation(&source, planner)
                 .unwrap_or_else(|e| panic!("{} {planner:?}: {e}", case.name));
             let target = compile(&source, planner)
                 .unwrap_or_else(|e| panic!("{} {planner:?}: {e}", case.name));
@@ -143,14 +143,14 @@ fn block_corpus_through_every_recursive_planner_and_oracle() {
                 let database = if seed == 0 {
                     case.database()
                 } else {
-                    databases::binary_database(&vo.cq, seed)
+                    databases::binary_database(&normal, seed)
                 };
-                let expected = cq_semantics::evaluate_cq(&vo.cq, &database);
+                let expected = cq_semantics::evaluate_cq(&normal, &database);
                 if seed == 0 {
                     assert_eq!(expected, case.expected_rows(), "{}", case.name);
                 }
                 assert_eq!(
-                    valuation_semantics::evaluate(&vo, &database),
+                    valuation_semantics::evaluate(&normal, &vo, &database),
                     expected,
                     "VO {} {planner:?} seed {seed}",
                     case.name
@@ -243,8 +243,8 @@ fn retail_h07_block_reduces_country_keys_before_lineitem() {
         answer(o,sn,cn) :- Supplier(s,sn),Lineitem(o,s),Orders(o,c),Customer(c,cn),
             {Nation(sn,1),Nation(cn,2)} | {Nation(sn,2),Nation(cn,1)};
     };
-    let valuation = compile_valuation(&source, Planner::Hypergraph).unwrap();
-    assert!(!cq::hypergraph::Analysis::of(&valuation.cq).acyclic);
+    let (normal, valuation) = compile_valuation(&source, Planner::Hypergraph).unwrap();
+    assert!(!cq::hypergraph::Analysis::of(&normal).acyclic);
     let cuts: Vec<_> = valuation
         .valuation
         .steps
@@ -342,8 +342,8 @@ fn hypergraph_reduces_cyclic_block_branches_and_acyclic_descendants_independentl
             R(a,b), S(b,c), T(a,c), {U(a),V(a)} | {U(a)}
         } | {U(a)};
     };
-    let target = compile_valuation(&source, Planner::Hypergraph).unwrap();
-    assert!(cq::hypergraph::Analysis::of(&target.cq).acyclic);
+    let (normal, target) = compile_valuation(&source, Planner::Hypergraph).unwrap();
+    assert!(cq::hypergraph::Analysis::of(&normal).acyclic);
     assert!(
         !target
             .valuation
@@ -390,7 +390,7 @@ fn hypergraph_checker_requires_nested_filtered_reductions() {
         relation R(x:i32); relation S(x:i32,tag:i32);
         answer(x) :- { R(x), S(x,1) } | { R(x), S(x,2) };
     };
-    let mut target = compile_valuation(&source, Planner::Hypergraph).unwrap();
+    let (_, mut target) = compile_valuation(&source, Planner::Hypergraph).unwrap();
     check_valuation(&source, &target, Planner::Hypergraph).unwrap();
     let vo::Step::Block(block, _) = &mut target.valuation.steps[0] else {
         unreachable!()
@@ -412,7 +412,7 @@ fn transfer_reduces_forward_into_the_stream_then_backward_from_filtered_sides() 
         relation R(a:i32,b:i32); relation S(b:i32,c:i32); relation T(c:i32,d:i32);
         answer(a,c) :- R(a,b), where a > 0, S(b,c), T(c,7);
     };
-    let target = compile_valuation(&source, Planner::Transfer).unwrap();
+    let (_, target) = compile_valuation(&source, Planner::Transfer).unwrap();
     let reductions: Vec<String> = target
         .valuation
         .steps
@@ -464,14 +464,13 @@ fn every_scenario_through_every_planner() {
             let target = harness
                 .run(scenario.case())
                 .unwrap_or_else(|error| panic!("{}/{planner:?}: {error:?}", scenario.name));
-            let valuation = compile_valuation(&source, planner).unwrap();
+            let (normal, valuation) = compile_valuation(&source, planner).unwrap();
             check_valuation(&source, &valuation, planner).unwrap();
-            let normal = &valuation.cq;
             for seed in 0..4 {
-                let database = databases::binary_database(normal, seed);
-                let expected = cq_semantics::evaluate_cq(normal, &database);
+                let database = databases::binary_database(&normal, seed);
+                let expected = cq_semantics::evaluate_cq(&normal, &database);
                 assert_eq!(
-                    valuation_semantics::evaluate(&valuation, &database),
+                    valuation_semantics::evaluate(&normal, &valuation, &database),
                     expected,
                     "{} / {planner:?} / database {seed}",
                     scenario.name
@@ -531,7 +530,7 @@ fn le_omits_redundant_zero_checks_in_the_census_schedules() {
     ] {
         let source = SCENARIOS.iter().find(|scenario| scenario.name == name)
             .unwrap().parse_cq().unwrap();
-        let target = compile_valuation(&source, Planner::Le).unwrap();
+        let (normal, target) = compile_valuation(&source, Planner::Le).unwrap();
         let actual: Vec<_> = target.valuation.steps.iter()
             .filter(|step| matches!(step, vo::Step::Atom(..)))
             .cloned().collect();
@@ -552,7 +551,7 @@ fn le_omits_redundant_zero_checks_in_the_census_schedules() {
             let before = redundant.valuation.steps.iter()
                 .position(|step| matches!(step, vo::Step::Atom(..))).unwrap();
             redundant.valuation.steps.insert(before, vo::Step::Atom(probe, Default::default()));
-            assert!(vo::contract::check(&redundant).is_err(), "{name}");
+            assert!(vo::contract::check(&normal, &redundant).is_err(), "{name}");
             continue;
         }
         let mut late = target.clone();
@@ -572,11 +571,11 @@ fn le_root_guard_does_not_replace_the_written_outer_stream() {
         struct Q; relation R(x:i32); relation Gate(value:i32); relation S(y:i32);
         answer(x,y) :- R(x), Gate(7), S(y);
     };
-    let valuation = compile_valuation(&source, Planner::Le).unwrap();
+    let (normal, valuation) = compile_valuation(&source, Planner::Le).unwrap();
     check_valuation(&source, &valuation, Planner::Le).unwrap();
     assert!(matches!(&valuation.valuation.steps[0], vo::Step::Atom(atom, _)
         if atom.relation == "Gate" && atom.variables().next().is_none()));
-    let facts = vo::contract::check(&valuation).unwrap();
+    let facts = vo::contract::check(&normal, &valuation).unwrap();
     let introducers: Vec<_> = valuation.valuation.steps.iter().zip(&facts.introduces)
         .filter_map(|(step, introduced)| match step {
             vo::Step::Atom(atom, _) if !introduced.is_empty() => Some(atom.relation.to_string()),
@@ -591,7 +590,7 @@ fn le_root_guard_does_not_replace_the_written_outer_stream() {
             ("Gate".into(), rows.into_iter().collect()),
         ]);
         let expected = cq_semantics::evaluate_cq(&source, &database);
-        assert_eq!(valuation_semantics::evaluate(&valuation, &database), expected);
+        assert_eq!(valuation_semantics::evaluate(&normal, &valuation, &database), expected);
         assert_eq!(semantics::evaluate_ra(&algebra, &database).output, expected);
     }
 }
@@ -629,11 +628,11 @@ fn le_h05_plan_b_keeps_nation_as_an_existential_lookup() {
             where order_date in 8766..9131,
             Lineitem(order_key,supplier_key), Supplier(supplier_key,nation_key);
     };
-    let valuation = compile_valuation(&source, Planner::Le).unwrap();
+    let (normal, valuation) = compile_valuation(&source, Planner::Le).unwrap();
     let target = compile(&source, Planner::Le).unwrap();
     check_valuation(&source, &valuation, Planner::Le).unwrap();
-    let (elaborated, steps) = cq_relational_lowering::compile(&valuation).unwrap();
-    cq_relational_lowering::check(&valuation, &elaborated, &steps).unwrap();
+    let (elaborated, steps) = cq_relational_lowering::compile(&normal, &valuation).unwrap();
+    cq_relational_lowering::check(&normal, &valuation, &elaborated, &steps).unwrap();
     // LE may independently eliminate a recorded lookup. Its rewrite proof,
     // not the mechanical VO->RA transport obligation, certifies that removal.
     ra::check_rewrite(&elaborated, &target).unwrap();
@@ -667,8 +666,8 @@ fn le_checks_lookup_expansion_and_rust_dependencies_independently() {
         struct Q; relation R(a:i32); relation S(a:i32,b:i32); relation T(a:i32,c:i32);
         answer(a,b,c) :- R(a), S(a,b), T(a,c), if keep!(b,c);
     };
-    let target = compile_valuation(&source, Planner::Le).unwrap();
-    let analysis = vo::contract::check(&target).unwrap();
+    let (normal, target) = compile_valuation(&source, Planner::Le).unwrap();
+    let analysis = vo::contract::check(&normal, &target).unwrap();
     let phases: Vec<_> = target
         .valuation
         .steps
@@ -706,7 +705,7 @@ fn le_generators_keep_written_ownership_in_outer_and_recursive_scopes() {
             answer(x,y) :- #body;
         })
         .unwrap();
-        let target = compile_valuation(&source, Planner::Le).unwrap();
+        let (_, target) = compile_valuation(&source, Planner::Le).unwrap();
         check_valuation(&source, &target, Planner::Le).unwrap();
         check(&source, &compile(&source, Planner::Le).unwrap()).unwrap();
     }
@@ -720,7 +719,7 @@ fn le_generator_reordering_preserves_dependencies_and_binders() {
         relation answer(x:i32,y:i32,z:i32);
         answer(x,y,z) :- R(x), S(x,y), for z in values(x), T(z);
     };
-    let target = compile_valuation(&source, Planner::Le).unwrap();
+    let (normal, target) = compile_valuation(&source, Planner::Le).unwrap();
     check_valuation(&source, &target, Planner::Le).unwrap();
     let generator = target
         .valuation
@@ -750,7 +749,7 @@ fn le_generator_reordering_preserves_dependencies_and_binders() {
             .valuation
             .steps
             .insert(generator + usize::from(after), step);
-        cq_order::drain_ready_checks(&mut reordered).unwrap();
+        cq_order::drain_ready_checks(&normal, &mut reordered).unwrap();
         check_valuation(&source, &reordered, Planner::Le).unwrap();
     }
 
@@ -828,7 +827,7 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
         relation R(x:i32,y:i32); relation S(y:i32,z:i32); relation T(z:i32,w:i32);
         answer(x,w) :- R(x,y), S(y,z), T(z,w), where x > 1, if keep(x), let q:i32 = opaque(w);
     };
-    let valuation = compile_valuation(&source, Planner::Hypergraph).unwrap();
+    let (_, valuation) = compile_valuation(&source, Planner::Hypergraph).unwrap();
     assert_eq!(
         valuation
             .valuation
@@ -861,7 +860,7 @@ fn hypergraph_reduces_trees_and_keeps_rust_opaque() {
         .unwrap()
         .parse_cq()
         .unwrap();
-    let cyclic = compile_valuation(&cyclic, Planner::Hypergraph).unwrap();
+    let (_, cyclic) = compile_valuation(&cyclic, Planner::Hypergraph).unwrap();
     assert!(
         !cyclic
             .valuation
@@ -888,8 +887,8 @@ fn every_planner_places_rust_by_its_free_variables() {
         answer(x,w) :- R(x), if keep(x), S(w);
     };
     for planner in Planner::ALL {
-        let valuation = compile_valuation(&source, planner).unwrap();
-        let analysis = vo::contract::check(&valuation).unwrap();
+        let (normal, valuation) = compile_valuation(&source, planner).unwrap();
+        let analysis = vo::contract::check(&normal, &valuation).unwrap();
         let guard = valuation
             .valuation
             .steps
@@ -906,7 +905,7 @@ fn every_planner_places_rust_by_its_free_variables() {
         let step = delayed.valuation.steps.remove(guard);
         delayed.valuation.steps.push(step);
         assert_eq!(
-            vo::contract::check(&delayed).is_err(),
+            vo::contract::check(&normal, &delayed).is_err(),
             analysis.introduces[guard + 1..].iter().any(|names| !names.is_empty()),
             "{planner:?}",
         );
@@ -939,11 +938,11 @@ fn checks_admit_free_relational_rankings() {
         answer(x,z) :- R(x,y),S(y,z);
     };
     let normal = cq::normal::normalize(&simple).unwrap();
-    let alternative: vo::Program = syn::parse2(quote! {
-        #normal valuation { S@1(y,z); R@0(x,y); }
-    })
-    .unwrap();
-    let (target, _) = cq_relational_lowering::compile(&alternative).unwrap();
+    let alternative = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream| vo::Program::parse(input, &normal),
+        quote! { valuation { S@1(y,z); R@0(x,y); } },
+    ).unwrap();
+    let (target, _) = cq_relational_lowering::compile(&normal, &alternative).unwrap();
     check(&simple, &target).unwrap();
     for planner in [
         Planner::PrefixConnectedCoarse,

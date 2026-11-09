@@ -61,10 +61,10 @@ fn default_plan(options: cq_order::Options, semijoins: cq_reduce::Reductions) ->
     let normal = cq::normal::normalize(&source).unwrap();
     let ordered = cq_order::compile(&normal, &options).unwrap();
     cq_order::check(&normal, &ordered, &options).unwrap();
-    let reduced = cq_reduce::compile(&ordered, &cq_reduce::Options { semijoins }).unwrap();
-    cq_reduce::check(&ordered, &reduced, &cq_reduce::Options { semijoins }).unwrap();
-    let (plan, steps) = cq_relational_lowering::compile(&reduced).unwrap();
-    cq_relational_lowering::check(&reduced, &plan, &steps).unwrap();
+    let reduced = cq_reduce::compile(&normal, &ordered, &cq_reduce::Options { semijoins }).unwrap();
+    cq_reduce::check(&normal, &ordered, &reduced, &cq_reduce::Options { semijoins }).unwrap();
+    let (plan, steps) = cq_relational_lowering::compile(&normal, &reduced).unwrap();
+    cq_relational_lowering::check(&normal, &reduced, &plan, &steps).unwrap();
     plan
 }
 

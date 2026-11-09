@@ -29,8 +29,9 @@ fn ra_evaluator_reproduces_every_scenario_including_alternative_plans() {
 fn valuation_evaluator_reproduces_every_scenario_including_reductions() {
     for scenario in SCENARIOS {
         let case = scenario.case().unwrap();
+        let cq = scenario.parse_cq().unwrap();
         assert_eq!(
-            valuation_semantics::evaluate(&scenario.parse_vo().unwrap(), &case.database()),
+            valuation_semantics::evaluate(&cq, &scenario.parse_vo(&cq).unwrap(), &case.database()),
             case.expected_rows(),
             "{}",
             scenario.name,
@@ -61,8 +62,8 @@ fn authored_block_programs_check_at_every_stage_and_match_all_oracles() {
     for scenario in cq_testkit::blocks::SCENARIOS {
         let cq = scenario.parse_cq().unwrap();
         cq_testkit::cq::contract::check(&cq).unwrap();
-        let vo = scenario.parse_vo().unwrap();
-        cq_testkit::vo::contract::check(&vo).unwrap();
+        let vo = scenario.parse_vo(&cq).unwrap();
+        cq_testkit::vo::contract::check(&cq, &vo).unwrap();
         let ra = scenario.parse_ra().unwrap();
         cq_testkit::ra::contract::check(&ra).unwrap();
         let ix = scenario.parse_ix().unwrap();
@@ -78,7 +79,7 @@ fn authored_block_programs_check_at_every_stage_and_match_all_oracles() {
             case.expected_rows()
         );
         assert_eq!(
-            cq_testkit::valuation_semantics::evaluate(&vo, &database),
+            cq_testkit::valuation_semantics::evaluate(&cq, &vo, &database),
             case.expected_rows()
         );
         assert_eq!(
@@ -179,11 +180,15 @@ fn ra_occurrence_constants_use_source_names_and_drop_literal_headings() {
 #[test]
 fn vo_literals_filter_before_fine_projections_and_reductions() {
     use cq_testkit::{Database, Rows};
-    let program = syn::parse_quote! {
+    let cq = syn::parse_quote! {
         struct Q;
         relation R(tag:i32,payload:i32,code:i32);
         relation S(tag:i32,payload:i32);
         answer(x) :- R(5,x,-2), S(7,x), R(5,1,-2);
+    };
+    use syn::parse::Parser;
+    let program = (|input: syn::parse::ParseStream<'_>| cq_testkit::vo::Program::parse(input, &cq))
+        .parse2(quote::quote! {
         valuation {
             reduce R@0 with S@1(x);
             R@0(_);
@@ -191,7 +196,7 @@ fn vo_literals_filter_before_fine_projections_and_reductions() {
             S@1(x);
             R@2();
         }
-    };
+    }).unwrap();
     let database = Database::from([
         (
             "R".into(),
@@ -208,10 +213,10 @@ fn vo_literals_filter_before_fine_projections_and_reductions() {
         ),
     ]);
     assert_eq!(
-        valuation_semantics::evaluate(&program, &database),
+        valuation_semantics::evaluate(&cq, &program, &database),
         Rows::from([vec![2]])
     );
     let mut missing = database;
     missing.get_mut("R").unwrap().remove(&vec![5, 1, -2]);
-    assert!(valuation_semantics::evaluate(&program, &missing).is_empty());
+    assert!(valuation_semantics::evaluate(&cq, &program, &missing).is_empty());
 }

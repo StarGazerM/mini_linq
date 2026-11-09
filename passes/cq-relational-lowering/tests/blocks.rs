@@ -2,35 +2,35 @@ use cq_lang_vo::cq;
 use quote::ToTokens;
 
 /// The lowering alone; the seam table is dropped.
-fn compile(source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
-    cq_relational_lowering::compile(source).map(|(target, _)| target)
+fn compile(cq: &cq::Program, source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
+    cq_relational_lowering::compile(cq, source).map(|(target, _)| target)
 }
 
 /// The seam check with the side table of the supplied VO's own lowering.
-fn check(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
-    let (_, steps) = cq_relational_lowering::compile(source)?;
-    cq_relational_lowering::check(source, target, &steps)
+fn check(cq: &cq::Program, source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let (_, steps) = cq_relational_lowering::compile(cq, source)?;
+    cq_relational_lowering::check(cq, source, target, &steps)
 }
 
 /// Structural refinement of a VO the target was not lowered from (CK-RLStructure only).
-fn refines(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
-    let analysis = cq_lang_vo::contract::check(source)?;
-    cq_relational_lowering::check_reference(&source.cq, &source.valuation.steps, &analysis, target)
+fn refines(cq: &cq::Program, source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let analysis = cq_lang_vo::contract::check(cq, source)?;
+    cq_relational_lowering::check_reference(cq, &source.valuation.steps, &analysis, target)
 }
 
 
-fn plan(text: &str) -> (cq_lang_vo::Program, cq_lang_ra::Program) {
+fn plan(text: &str) -> (cq::Program, cq_lang_vo::Program, cq_lang_ra::Program) {
     let source: cq::Program = syn::parse_str(text).unwrap();
     let normal = cq::normal::normalize(&source).unwrap();
     let vo = cq_order::compile(&normal, &Default::default()).unwrap();
-    let ra = compile(&vo).unwrap();
-    check(&vo, &ra).unwrap();
-    (vo, ra)
+    let ra = compile(&normal, &vo).unwrap();
+    check(&normal, &vo, &ra).unwrap();
+    (normal, vo, ra)
 }
 
 #[test]
 fn nested_blocks_keep_paths_and_project_local_witnesses() {
-    let (vo, ra) = plan(
+    let (_, vo, ra) = plan(
         "struct Q; relation R(x:i32,y:i32); relation S(x:i32,y:i32); answer(x) :- { R(x,a), { S(x,b) } | { R(x,b) } } | { S(x,c) };",
     );
     let text = vo.to_token_stream().to_string();
@@ -42,7 +42,7 @@ fn nested_blocks_keep_paths_and_project_local_witnesses() {
 
 #[test]
 fn fallback_records_anti_and_rust_branch_tree() {
-    let (_, ra) = plan(
+    let (_, _, ra) = plan(
         "struct Q; relation R(x:i32); relation S(x:i32); answer(x) :- R(x), { if accept(x) } else { S(x), if other(x) }, if suffix(x);",
     );
     assert!(
@@ -102,9 +102,9 @@ fn every_ordering_preserves_pure_and_rust_block_interfaces() {
                     .unwrap_or_else(|e| panic!("{options:?}: {e}"));
                 cq_order::check(&normal, &ordered, &options)
                     .unwrap_or_else(|e| panic!("{options:?}: {e}"));
-                let ra = compile(&ordered).unwrap_or_else(|e| panic!("{options:?}: {e}"));
-                check(&ordered, &ra).unwrap_or_else(|e| panic!("supplied {options:?}: {e}"));
-                refines(&written, &ra).unwrap_or_else(|e| panic!("written {options:?}: {e}"));
+                let ra = compile(&normal, &ordered).unwrap_or_else(|e| panic!("{options:?}: {e}"));
+                check(&normal, &ordered, &ra).unwrap_or_else(|e| panic!("supplied {options:?}: {e}"));
+                refines(&normal, &written, &ra).unwrap_or_else(|e| panic!("written {options:?}: {e}"));
             }
         }
     }
@@ -112,7 +112,7 @@ fn every_ordering_preserves_pure_and_rust_block_interfaces() {
 
 #[test]
 fn source_target_contract_rejects_branch_and_negative_mutations() {
-    let (vo, ra) = plan(
+    let (cq, vo, ra) = plan(
         "struct Q; relation R(x:i32); relation S(x:i32); answer(x) :- { R(x) } else { S(x) };",
     );
     let mut changed = ra.clone();
@@ -126,7 +126,7 @@ fn source_target_contract_rejects_branch_and_negative_mutations() {
         })
         .unwrap();
     union.operands.pop();
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&cq, &vo, &changed).is_err());
     let mut changed = ra.clone();
     let union = changed
         .plan
@@ -140,7 +140,7 @@ fn source_target_contract_rejects_branch_and_negative_mutations() {
     let first = union.operands[0].clone();
     union.operands[0] = union.operands[1].clone();
     union.operands[1] = first;
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&cq, &vo, &changed).is_err());
     let mut changed = ra.clone();
     let anti = changed
         .plan
@@ -152,13 +152,12 @@ fn source_target_contract_rejects_branch_and_negative_mutations() {
         })
         .unwrap();
     anti.columns.push(syn::parse_quote!(x));
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&cq, &vo, &changed).is_err());
 }
 
 #[test]
 fn negative_operands_reject_an_added_selection_by_reference() {
-    let (vo, ra) =
-        plan("struct Q; relation R(x:i32); relation S(x:i32); answer(x) :- {R(x)} else {S(x)};");
+    let (cq, vo, ra) = plan("struct Q; relation R(x:i32); relation S(x:i32); answer(x) :- {R(x)} else {S(x)};");
     let mut changed = ra.clone();
     let position = changed
         .plan
@@ -175,12 +174,12 @@ fn negative_operands_reject_an_added_selection_by_reference() {
         syn::parse_quote!(modified_negative = select #original if (x = 1););
     changed.plan.definitions.insert(position, select);
     cq_lang_ra::contract::check(&changed).unwrap();
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&cq, &vo, &changed).is_err());
 }
 
 #[test]
 fn suffix_rust_cannot_move_into_just_one_arm() {
-    let (vo, ra) = plan(
+    let (cq, vo, ra) = plan(
         "struct Q; relation R(x:i32); relation S(x:i32); answer(x) :- {R(x)} | {S(x)}, if suffix(x);",
     );
     let mut changed = ra.clone();
@@ -215,7 +214,7 @@ fn suffix_rust_cannot_move_into_just_one_arm() {
         }
     }
     changed.plan.definitions.insert(union_position, guard);
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&cq, &vo, &changed).is_err());
 }
 
 #[test]
@@ -230,10 +229,10 @@ fn cq_rewrite_is_identity_but_vo_can_swap_independent_rust_with_a_rust_block() {
     let written = cq_order::compile(&source, &Default::default()).unwrap();
     let mut reordered = written.clone();
     reordered.valuation.steps.swap(1, 2);
-    cq_lang_vo::contract::check(&reordered).unwrap();
-    let target = compile(&reordered).unwrap();
-    check(&reordered, &target).unwrap();
-    refines(&written, &target).unwrap();
+    cq_lang_vo::contract::check(&source, &reordered).unwrap();
+    let target = compile(&source, &reordered).unwrap();
+    check(&source, &reordered, &target).unwrap();
+    refines(&source, &written, &target).unwrap();
 }
 
 #[test]
@@ -258,9 +257,9 @@ fn moved_rust_blocks_record_only_their_free_variable_scope() {
             let block = moved.valuation.steps.remove(block);
             moved.valuation.steps.insert(1, block);
         }
-        cq_lang_vo::contract::check(&moved).unwrap();
-        let target = compile(&moved).unwrap();
-        check(&moved, &target).unwrap();
+        cq_lang_vo::contract::check(&source, &moved).unwrap();
+        let target = compile(&source, &moved).unwrap();
+        check(&source, &moved, &target).unwrap();
         let environments: Vec<_> = target
             .plan
             .definitions
@@ -287,8 +286,7 @@ fn moved_rust_blocks_record_only_their_free_variable_scope() {
 
 #[test]
 fn identical_rust_payloads_still_have_distinct_sibling_paths() {
-    let (vo, ra) =
-        plan("struct Q; relation R(x:i32); answer(x) :- R(x), {if arm(x)} | {if arm(x)};");
+    let (cq, vo, ra) = plan("struct Q; relation R(x:i32); answer(x) :- R(x), {if arm(x)} | {if arm(x)};");
     let mut changed = ra.clone();
     let position = changed
         .plan
@@ -304,13 +302,13 @@ fn identical_rust_payloads_still_have_distinct_sibling_paths() {
     union.operands[1] = syn::parse_quote!(alias_first_arm);
     let alias = syn::parse_quote!(alias_first_arm = project #first keep {x};);
     changed.plan.definitions.insert(position, alias);
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&cq, &vo, &changed).is_err());
 }
 
 #[test]
 fn positive_distribution_can_reference_prefix_rust_but_negative_cuts_cannot() {
     for operator in ["|", "else"] {
-        let (vo, ra) = plan(&format!(
+        let (cq, vo, ra) = plan(&format!(
             "struct Q; relation R(x:i32); relation S(x:i32,y:i32); relation T(x:i32,y:i32); answer(x,y) :- R(x), if prefix(x), {{S(x,y)}} {operator} {{T(x,y)}};"
         ));
         let mut target = ra.clone();
@@ -336,7 +334,7 @@ fn positive_distribution_can_reference_prefix_rust_but_negative_cuts_cannot() {
         union.operands[0] = syn::parse_quote!(positive_cut);
         let cut = syn::parse_quote!(positive_cut = semijoin #first with #context;);
         target.plan.definitions.insert(position, cut);
-        check(&vo, &target).unwrap_or_else(|e| panic!("positive {operator}: {e}"));
+        check(&cq, &vo, &target).unwrap_or_else(|e| panic!("positive {operator}: {e}"));
         if operator == "else" {
             let mut negative = ra.clone();
             let original_position = negative
@@ -355,7 +353,7 @@ fn positive_distribution_can_reference_prefix_rust_but_negative_cuts_cannot() {
             let cut = syn::parse_quote!(negative_cut = semijoin #input with #context;);
             negative.plan.definitions.insert(original_position, cut);
             cq_lang_ra::contract::check(&negative).unwrap();
-            assert!(check(&vo, &negative).is_err());
+            assert!(check(&cq, &vo, &negative).is_err());
         }
     }
 }
@@ -369,7 +367,7 @@ fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
              {{ S(x), where x <= 2, {{ R(x), where x != 0 }} | {{ S(x), where x >= 2 }} }} \
              {choice} {{ S(x), where x <= 3 }}, where x <= 4;"
         );
-        let (vo, target) = plan(&text);
+        let (cq, _, target) = plan(&text);
         let selects: Vec<_> = target
             .plan
             .definitions
@@ -404,14 +402,14 @@ fn nested_and_sibling_scopes_keep_their_own_relational_predicates() {
                 target.to_token_stream()
             );
         }
-        let written = cq_order::compile_written(&vo.cq).unwrap();
-        let reference = compile(&written).unwrap();
-        check(&written, &reference).unwrap();
+        let written = cq_order::compile_written(&cq).unwrap();
+        let reference = compile(&cq, &written).unwrap();
+        check(&cq, &written, &reference).unwrap();
         for seed in 0..8 {
-            let database = cq_testkit::databases::binary_database(&vo.cq, seed);
+            let database = cq_testkit::databases::binary_database(&cq, seed);
             assert_eq!(
                 cq_testkit::semantics::evaluate_ra(&target, &database).output,
-                cq_testkit::cq_semantics::evaluate_cq(&vo.cq, &database)
+                cq_testkit::cq_semantics::evaluate_cq(&cq, &database)
             );
         }
     }
@@ -425,17 +423,17 @@ fn suffix_constraints_preserve_finite_branch_domains() {
             "if accept(x),",
             "let k:i32 = std::convert::identity(*x),",
         ] {
-            let (vo, target) = plan(&format!(
+            let (cq, _, target) = plan(&format!(
                 "struct Q; relation R(x:i32); relation S(x:i32); \
                  answer(x) :- R(x), where x >= 0, {rust_prefix} \
                  {{ where x == 1 }} {choice} {{ S(x) }}, where x <= 2;"
             ));
             if rust_prefix.is_empty() {
                 for seed in 0..8 {
-                    let database = cq_testkit::databases::binary_database(&vo.cq, seed);
+                    let database = cq_testkit::databases::binary_database(&cq, seed);
                     assert_eq!(
                         cq_testkit::semantics::evaluate_ra(&target, &database).output,
-                        cq_testkit::cq_semantics::evaluate_cq(&vo.cq, &database)
+                        cq_testkit::cq_semantics::evaluate_cq(&cq, &database)
                     );
                 }
             }
@@ -446,11 +444,11 @@ fn suffix_constraints_preserve_finite_branch_domains() {
 #[test]
 fn branch_generators_capture_written_environment_and_keep_kind() {
     for separator in ["|", "else"] {
-        let (vo, ra) = plan(&format!(
+        let (cq, vo, ra) = plan(&format!(
             "struct Q; relation R(a:i32); relation answer(b:i32); answer(b) :- R(a), {{ for b in 0..a }} {separator} {{ for b in 1..a }};"
         ));
         assert_eq!(
-            syn::parse2::<cq_lang_vo::Program>(vo.to_token_stream()).unwrap(),
+            parse_vo(&cq, vo.to_token_stream()),
             vo
         );
         assert_eq!(
@@ -484,21 +482,21 @@ fn branch_generators_capture_written_environment_and_keep_kind() {
                 unreachable!()
             };
             b.for_token = None;
-            assert!(check(&vo, &changed).is_err());
+            assert!(check(&cq, &vo, &changed).is_err());
             let mut changed = ra.clone();
             let cq_lang_ra::Operator::Bind(b) = &mut changed.plan.definitions[index].operator
             else {
                 unreachable!()
             };
             b.environment.as_mut().unwrap().variables.clear();
-            assert!(check(&vo, &changed).is_err());
+            assert!(check(&cq, &vo, &changed).is_err());
         }
     }
 }
 
 #[test]
 fn branch_literal_constants_are_local_filters_not_disjoint_interface_values() {
-    let (vo, target) = plan("struct Q; relation R(a:i32,b:i32); answer(x) :- {R(x,7)} | {R(x,8)};");
+    let (cq, vo, target) = plan("struct Q; relation R(a:i32,b:i32); answer(x) :- {R(x,7)} | {R(x,8)};");
     assert!(cq_lang_ra::disjoint_unions(&target).unwrap().is_empty());
     let mut changed = target.clone();
     let rename = changed
@@ -513,7 +511,7 @@ fn branch_literal_constants_are_local_filters_not_disjoint_interface_values() {
     assert_eq!(rename.mapping.len(), 1);
     rename.constants = Some(syn::parse_quote!(constants {b = 9}));
     cq_lang_ra::contract::check(&changed).unwrap();
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&cq, &vo, &changed).is_err());
 }
 
 #[test]
@@ -535,8 +533,8 @@ fn negation_in_hoisted_arms_has_its_free_prefix_domain_before_early_checks() {
                 },
             )
             .unwrap();
-            let ra = compile(&ordered).unwrap();
-            check(&ordered, &ra).unwrap();
+            let ra = compile(&normal, &ordered).unwrap();
+            check(&normal, &ordered, &ra).unwrap();
             let mut changed = ra.clone();
             let negative = changed
                 .plan
@@ -558,7 +556,7 @@ fn negation_in_hoisted_arms_has_its_free_prefix_domain_before_early_checks() {
                 .unwrap();
             anti.columns.clear();
             cq_lang_ra::contract::check(&changed).unwrap();
-            assert!(check(&ordered, &changed).is_err(), "{operator}/{split:?}");
+            assert!(check(&normal, &ordered, &changed).is_err(), "{operator}/{split:?}");
             for seed in 0..16 {
                 let database = databases::binary_database(&source, seed);
                 assert_eq!(
@@ -584,24 +582,24 @@ fn block_placement_round_trips_and_controls_both_elaboration_entry_points() {
             }
         }
     }
-    let (hoisted, target) = plan(
+    let (cq, hoisted, target) = plan(
         "struct Q; relation R(x:i32); relation S(x:i32,y:i32); relation T(x:i32,y:i32);
          answer(x,y) :- R(x), { S(x,y), { R(x) } | { R(x) } } else { T(x,y) };",
     );
     placements(&hoisted.valuation.steps, Placement::Hoisted);
-    let written = cq_order::compile_written(&hoisted.cq).unwrap();
+    let written = cq_order::compile_written(&cq).unwrap();
     placements(&written.valuation.steps, Placement::Correlated);
     for vo in [&hoisted, &written] {
-        let reparsed: cq_lang_vo::Program = syn::parse2(vo.to_token_stream()).unwrap();
+        let reparsed: cq_lang_vo::Program = parse_vo(&cq, vo.to_token_stream());
         assert_eq!(*vo, reparsed);
-        cq_lang_vo::contract::check(&reparsed).unwrap();
+        cq_lang_vo::contract::check(&cq, &reparsed).unwrap();
     }
-    let reference = compile(&written).unwrap();
-    check(&written, &reference).unwrap();
-    let correlated = compile(&written).unwrap();
-    check(&written, &correlated).unwrap();
-    assert!(check(&hoisted, &correlated).is_err());
-    assert!(check(&written, &target).is_err());
+    let reference = compile(&cq, &written).unwrap();
+    check(&cq, &written, &reference).unwrap();
+    let correlated = compile(&cq, &written).unwrap();
+    check(&cq, &written, &correlated).unwrap();
+    assert!(check(&cq, &hoisted, &correlated).is_err());
+    assert!(check(&cq, &written, &target).is_err());
     for (ra, correlated) in [(&target, false), (&reference, true), (&correlated, true)] {
         for definition in &ra.plan.definitions {
             if let cq_lang_ra::Operator::Union(union) = &definition.operator {
@@ -610,8 +608,8 @@ fn block_placement_round_trips_and_controls_both_elaboration_entry_points() {
         }
     }
     for seed in 0..16 {
-        let database = cq_testkit::databases::binary_database(&hoisted.cq, seed);
-        let expected = cq_testkit::cq_semantics::evaluate_cq(&hoisted.cq, &database);
+        let database = cq_testkit::databases::binary_database(&cq, seed);
+        let expected = cq_testkit::cq_semantics::evaluate_cq(&cq, &database);
         for ra in [&target, &reference, &correlated] {
             assert_eq!(
                 cq_testkit::semantics::evaluate_ra(ra, &database).output,
@@ -625,7 +623,7 @@ fn block_placement_round_trips_and_controls_both_elaboration_entry_points() {
 fn block_placement_is_required_and_checked_before_elaboration() {
     use cq_lang_vo::{Placement, Step};
     assert!(syn::parse_str::<Step>("block @0(x) {R@0.0.0(x);} | {R@0.1.0(x);};").is_err());
-    let (mut rust, _) = plan(
+    let (rust_cq, mut rust, _) = plan(
         "struct Q; relation R(x:i32); answer(x) :- R(x),
          { if accept(x) } | { if other(x) };",
     );
@@ -634,18 +632,18 @@ fn block_placement_is_required_and_checked_before_elaboration() {
     };
     assert_eq!(block.placement, Placement::Correlated);
     block.placement = Placement::Hoisted;
-    assert!(cq_lang_vo::contract::check(&rust).is_err());
+    assert!(cq_lang_vo::contract::check(&rust_cq, &rust).is_err());
 
-    let (pure, _) = plan(
+    let (pure_cq, _, _) = plan(
         "struct Q; relation R(x:i32); relation S(x:i32,y:i32);
          answer(x,y) :- R(x), {S(x,y)} | {S(x,y)};",
     );
-    let mut missing_prefix = cq_order::compile_written(&pure.cq).unwrap();
+    let mut missing_prefix = cq_order::compile_written(&pure_cq).unwrap();
     missing_prefix.valuation.steps.swap(0, 1);
-    assert!(cq_lang_vo::contract::check(&missing_prefix).is_err());
+    assert!(cq_lang_vo::contract::check(&pure_cq, &missing_prefix).is_err());
 
     let mut split = cq_order::compile(
-        &pure.cq,
+        &pure_cq,
         &cq_order::Options {
             heuristic: cq_order::Heuristic::Written,
             split: cq_order::Split::Fine,
@@ -659,7 +657,7 @@ fn block_placement_is_required_and_checked_before_elaboration() {
     let semi = *semi;
     repeated.placement = Placement::Correlated;
     split.valuation.steps.push(Step::Block(repeated, semi));
-    assert!(cq_lang_vo::contract::check(&split).is_err());
+    assert!(cq_lang_vo::contract::check(&pure_cq, &split).is_err());
 }
 
 #[test]
@@ -673,10 +671,10 @@ fn rust_expressions_and_blocks_cannot_delay_ready_filters_past_bindings() {
     let planned = cq_order::compile(&normal, &Default::default()).unwrap();
     let mut moved = planned.clone();
     moved.valuation.steps.swap(1, 2);
-    assert!(cq_lang_vo::contract::check(&moved).unwrap_err().to_string()
+    assert!(cq_lang_vo::contract::check(&normal, &moved).unwrap_err().to_string()
         .contains("VO-Order I2"));
-    let target = compile(&planned).unwrap();
-    check(&planned, &target).unwrap();
+    let target = compile(&normal, &planned).unwrap();
+    check(&normal, &planned, &target).unwrap();
 
     let source: cq::Program = syn::parse_str(
         "struct Q; relation R(x:i32); answer(y) :-
@@ -687,8 +685,15 @@ fn rust_expressions_and_blocks_cannot_delay_ready_filters_past_bindings() {
     let planned = cq_order::compile(&normal, &Default::default()).unwrap();
     let mut late = planned.clone();
     late.valuation.steps.swap(1, 2);
-    assert!(cq_lang_vo::contract::check(&late).unwrap_err().to_string()
+    assert!(cq_lang_vo::contract::check(&normal, &late).unwrap_err().to_string()
         .contains("VO-Order I2"));
-    let target = compile(&planned).unwrap();
-    check(&planned, &target).unwrap();
+    let target = compile(&normal, &planned).unwrap();
+    check(&normal, &planned, &target).unwrap();
+}
+
+fn parse_vo(cq: &cq::Program, tokens: proc_macro2::TokenStream) -> cq_lang_vo::Program {
+    syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| cq_lang_vo::Program::parse(input, cq),
+        tokens,
+    ).unwrap()
 }

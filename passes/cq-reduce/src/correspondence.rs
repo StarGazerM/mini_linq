@@ -4,33 +4,24 @@ use super::{Options, Reductions};
 use cq_lang_vo::{self as vo, Reduction, Step};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Check the source domain, unchanged query/steps, and reduction obligations.
+/// Check the source domain, unchanged steps, and reduction obligations.
 /// A full tree reducer obeys dependencies, but need not use breadth-first order.
 /// Formal rule CK-Reduce: Check erasure, filtered support versions, tree obligations and exact block cuts.
-pub fn check(source: &vo::Program, target: &vo::Program, options: &Options) -> syn::Result<()> {
-    let source_info = vo::contract::check(source)?;
-    vo::contract::check(target)?;
-    if target.cq != source.cq {
-        return Err(syn::Error::new_spanned(
-            &target.cq.name,
-            format!(
-                "query `{}`: reductions must preserve source CQ `{}`",
-                target.cq.name, source.cq.name
-            ),
-        ));
-    }
+pub fn check(cq: &vo::cq::Program, source: &vo::Program, target: &vo::Program, options: &Options) -> syn::Result<()> {
+    let source_info = vo::contract::check(cq, source)?;
+    vo::contract::check(cq, target)?;
     check_steps(
-        &source.cq.query.body,
+        &cq.query.body,
         &source.valuation.steps,
         &target.valuation.steps,
         &source_info,
         &super::scope_graph(
-            &source.cq.query.body,
+            &cq.query.body,
             &source.valuation.steps,
             &BTreeSet::new(),
         ),
         options,
-        &source.cq.name,
+        &cq.name,
     )
 }
 

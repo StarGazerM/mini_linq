@@ -73,20 +73,20 @@ impl Known {
     /// Front: resolve the request against the plan (O-KnownResolve), then
     /// move the negation and drain (total).
     /// Formal rule O-KnownAt: Move the resolved negation to the requested boundary, then drain it to its earliest ready boundary under I2; WF-VO and the boundary are checked after reduction.
-    pub fn place(&self, program: &mut valuation::Program) -> syn::Result<()> {
-        let (current, at) = self.resolve(program)?;
+    pub fn place(&self, cq: &cq::Program, program: &mut valuation::Program) -> syn::Result<()> {
+        let (current, at) = self.resolve(cq, program)?;
         let step = program.valuation.steps.remove(current);
         program.valuation.steps.insert(at, step);
-        super::drain(program);
+        super::drain(cq, program);
         Ok(())
     }
 
     /// The negation's step and its requested position in the plan without
     /// it: after read k and the bindings and filters that follow it.
     /// Formal rule O-KnownResolve: The selector names a top-level negation of a plan with WF-VO binding facts, read k exists, and the negation's logical variables are bound at the requested boundary.
-    fn resolve(&self, program: &valuation::Program) -> syn::Result<(usize, usize)> {
-        let analysis = valuation::order::analyze(program)?;
-        let negation = self.negation(&program.cq)?;
+    fn resolve(&self, cq: &cq::Program, program: &valuation::Program) -> syn::Result<(usize, usize)> {
+        let analysis = valuation::order::analyze(cq, program)?;
+        let negation = self.negation(cq)?;
         let steps = &program.valuation.steps;
         let current = steps
             .iter()
@@ -117,7 +117,7 @@ impl Known {
                 .map(|(bound, introduced)| bound.iter().chain(introduced).collect())
                 .unwrap_or_default(),
         };
-        let logical = cq::blocks::bound(&program.cq.query.body);
+        let logical = cq::blocks::bound(&cq.query.body);
         if let Some(variable) = negation.atom.variables().find(|variable| {
             let name = symbol_name(variable);
             logical.contains_key(&name) && !bound.contains(&name)
@@ -126,7 +126,7 @@ impl Known {
                 &self.relation,
                 format!(
                     "query `{}`: known placement precedes the binding of `{variable}`",
-                    program.cq.name,
+                    cq.name,
                 ),
             ));
         }
@@ -134,9 +134,9 @@ impl Known {
     }
 
     /// Check VO-Order and that drainage did not exceed the requested read boundary.
-    pub fn check(&self, program: &valuation::Program) -> syn::Result<()> {
-        valuation::contract::check(program)?;
-        let negation = self.negation(&program.cq)?;
+    pub fn check(&self, cq: &cq::Program, program: &valuation::Program) -> syn::Result<()> {
+        valuation::contract::check(cq, program)?;
+        let negation = self.negation(cq)?;
         let steps = &program.valuation.steps;
         let at = self.position(steps)?;
         let placed = steps.iter()

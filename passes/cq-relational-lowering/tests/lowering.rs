@@ -8,34 +8,37 @@ use cq_lang_vo::cq;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 
-fn compile(source: &valuation::Program) -> syn::Result<ra::Program> {
-    let (target, steps) = cq_relational_lowering::compile(source)?;
-    cq_relational_lowering::check(source, &target, &steps)?;
+fn compile(cq: &cq::Program, source: &valuation::Program) -> syn::Result<ra::Program> {
+    let (target, steps) = cq_relational_lowering::compile(cq, source)?;
+    cq_relational_lowering::check(cq, source, &target, &steps)?;
     Ok(target)
 }
 
 /// The lowering alone; the seam table is dropped.
-fn lowered(source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
-    cq_relational_lowering::compile(source).map(|(target, _)| target)
+fn lowered(cq: &cq::Program, source: &cq_lang_vo::Program) -> syn::Result<cq_lang_ra::Program> {
+    cq_relational_lowering::compile(cq, source).map(|(target, _)| target)
 }
 
 /// The seam check with the side table of the supplied VO's own lowering.
-fn check(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
-    let (_, steps) = cq_relational_lowering::compile(source)?;
-    cq_relational_lowering::check(source, target, &steps)
+fn check(cq: &cq::Program, source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let (_, steps) = cq_relational_lowering::compile(cq, source)?;
+    cq_relational_lowering::check(cq, source, target, &steps)
 }
 
 /// Structural refinement of a VO the target was not lowered from (CK-RLStructure only).
-fn refines(source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
-    let analysis = cq_lang_vo::contract::check(source)?;
-    cq_relational_lowering::check_reference(&source.cq, &source.valuation.steps, &analysis, target)
+fn refines(cq: &cq::Program, source: &cq_lang_vo::Program, target: &cq_lang_ra::Program) -> syn::Result<()> {
+    let analysis = cq_lang_vo::contract::check(cq, source)?;
+    cq_relational_lowering::check_reference(cq, &source.valuation.steps, &analysis, target)
 }
 
 fn cq(tokens: TokenStream) -> cq::Program {
     syn::parse2(tokens).unwrap()
 }
 fn vo(source: &cq::Program, steps: TokenStream) -> valuation::Program {
-    syn::parse2(quote! { #source valuation { #steps } }).unwrap()
+    syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream<'_>| valuation::Program::parse(input, source),
+        quote! { valuation { #steps } },
+    ).unwrap()
 }
 fn coarse(source: &cq::Program) -> valuation::Program {
     let steps = source
@@ -59,8 +62,8 @@ fn coarse(source: &cq::Program) -> valuation::Program {
             _ => unreachable!("normal form"),
         });
     let mut program = vo(source, quote!(#(#steps)*));
-    cq_order::drain_ready_checks(&mut program).unwrap();
-    valuation::contract::check(&program).unwrap();
+    cq_order::drain_ready_checks(source, &mut program).unwrap();
+    valuation::contract::check(source, &program).unwrap();
     program
 }
 /// The Written/Coarse order with its recorded O-Restrict restrictions.
@@ -69,13 +72,14 @@ fn restricted(source: &cq::Program) -> valuation::Program {
 }
 
 // The VO contract admits equivalent equality nodes constructed through either IR variant.
-fn equality_forms(source: &valuation::Program) -> Vec<valuation::Program> {
+fn equality_forms(cq: &cq::Program, source: &valuation::Program) -> Vec<(cq::Program, valuation::Program)> {
     let mut forms = Vec::new();
     for source_constraints in [false, true] {
         for step_constraints in [false, true] {
+            let mut source_cq = cq.clone();
             let mut form = source.clone();
             if source_constraints {
-                for item in &mut form.cq.query.body {
+                for item in &mut source_cq.query.body {
                     if let cq::BodyItem::Equality(equality) = item {
                         *item = cq::BodyItem::Constraint(cq::Constraint::from_equality(equality));
                     }
@@ -91,7 +95,7 @@ fn equality_forms(source: &valuation::Program) -> Vec<valuation::Program> {
                     }
                 }
             }
-            forms.push(form);
+            forms.push((source_cq, form));
         }
     }
     forms
@@ -115,7 +119,7 @@ fn generated_results_do_not_shadow_declared_relations() {
         struct Collision; relation r0(x: i32); relation r1(x: i32); relation r2(x: i32);
         r2(x) :- r0(x);
     });
-    let target = compile(&coarse(&source)).unwrap();
+    let target = compile(&source, &coarse(&source)).unwrap();
     assert_plan(
         &target,
         quote! {
@@ -126,7 +130,8 @@ fn generated_results_do_not_shadow_declared_relations() {
 
 #[test]
 fn coarse_plans_elaborate_relation_at_a_time() {
-    let target = compile(&coarse(&chain())).unwrap();
+    let source = chain();
+    let target = compile(&source, &coarse(&source)).unwrap();
     assert_plan(
         &target,
         quote! {
@@ -145,7 +150,7 @@ fn literals_are_relational_reads_and_repeats_are_relational_equalities() {
         answer(x, y) :- R(x, 5), S(x, x), if { *x > 0 }, let y: i32 = *x + 1;
     });
     let normal = cq::normal::normalize(&source).unwrap();
-    let target = compile(&coarse(&normal)).unwrap();
+    let target = compile(&normal, &coarse(&normal)).unwrap();
     let selections: Vec<_> = target
         .plan
         .definitions
@@ -211,7 +216,7 @@ fn a_computed_head_is_a_final_bind_with_variable_output() {
         relation answer(value: i32); answer(*a + *c) :- R(a, b), S(b, c);
     });
     let normal = cq::normal::normalize(&source).unwrap();
-    let target = compile(&coarse(&normal)).unwrap();
+    let target = compile(&normal, &coarse(&normal)).unwrap();
     assert_eq!(target.plan.output.head.variables().count(), 1);
     let final_bind = target
         .plan
@@ -225,7 +230,7 @@ fn a_computed_head_is_a_final_bind_with_variable_output() {
 #[test]
 fn normalized_cross_atom_equalities_become_shared_join_headings() {
     let normal = cq::normal::normalize(&chain()).unwrap();
-    let target = compile(&coarse(&normal)).unwrap();
+    let target = compile(&normal, &coarse(&normal)).unwrap();
     let analysis = ra::contract::check(&target).unwrap();
     for definition in &target.plan.definitions {
         if let ra::Operator::NaturalJoin(join) = &definition.operator {
@@ -259,7 +264,7 @@ fn protected_and_blocked_equalities_never_hide_a_cartesian_join() {
             split: cq_order::Split::Coarse,
         };
         let ordered = cq_order::compile(&normal, &options).unwrap();
-        let target = compile(&ordered).unwrap();
+        let target = compile(&normal, &ordered).unwrap();
         let analysis = ra::contract::check(&target).unwrap();
         for definition in &target.plan.definitions {
             if let ra::Operator::NaturalJoin(join) = &definition.operator {
@@ -287,7 +292,7 @@ fn fine_plans_keep_existential_projection_and_semijoin_meaning() {
         quote! { T@2(a, c); R@0(a, _); R@0(a, b); S@1(b, c); },
     ];
     for steps in plans {
-        let target = compile(&vo(&source, steps)).unwrap();
+        let target = compile(&source, &vo(&source, steps)).unwrap();
         for seed in 0..64 {
             let database = databases::binary_database(&source, seed);
             assert_eq!(
@@ -303,8 +308,7 @@ fn fine_plans_keep_existential_projection_and_semijoin_meaning() {
 #[test]
 fn semijoin_reductions_restrict_clause_relations() {
     let source = chain();
-    let target = compile(&vo(
-        &source,
+    let target = compile(&source, &vo(&source,
         quote! {
             reduce R@1 with L@0(a); reduce S@2 with R@1(_, b);
             reduce R@1 with S@2(b, _); reduce L@0 with R@1(a, _);
@@ -342,7 +346,7 @@ fn reduced_prefix_guards_keep_independent_support_witnesses() {
             #(#steps)*
         },
     );
-    let target = compile(&reduced).unwrap();
+    let target = compile(&source, &reduced).unwrap();
     assert_plan(
         &target,
         quote! {
@@ -381,8 +385,8 @@ fn seed_997_reductions_match_equality_classes_before_rust() {
             #(#steps)*
         },
     );
-    let target = compile(&reduced).unwrap();
-    let reference = lowered(&written).unwrap();
+    let target = compile(&normal, &reduced).unwrap();
+    let reference = lowered(&normal, &written).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
     let first_rust = target
         .plan
@@ -411,7 +415,7 @@ fn seed_997_reductions_match_equality_classes_before_rust() {
             select.condition.equalities[j].right =
                 ra::EqualityValue::Variable(equality.left.clone());
             ra::contract::check(&changed).unwrap();
-            assert!(check(&reduced, &changed).is_err());
+            assert!(check(&normal, &reduced, &changed).is_err());
             mutations += 1;
         }
     }
@@ -440,11 +444,11 @@ fn reductions_match_every_protected_column_in_an_equality_class() {
             .count(),
         2
     );
-    let target = compile(&plan).unwrap();
-    for form in equality_forms(&plan) {
-        assert_eq!(compile(&form).unwrap(), target);
+    let target = compile(&source, &plan).unwrap();
+    for (form_cq, form) in equality_forms(&source, &plan) {
+        assert_eq!(compile(&form_cq, &form).unwrap(), target);
     }
-    let reference = lowered(&coarse(&source)).unwrap();
+    let reference = lowered(&source, &coarse(&source)).unwrap();
     ra::check_rewrite(&reference, &target).unwrap();
 }
 
@@ -460,7 +464,7 @@ fn independent_relations_commute_across_rust() {
         j = natural_join r with s; g = guard j if (10 / *x > 0);
         output g as answer(x,w);
     }};
-    refines(&coarse(&source), &target).unwrap();
+    refines(&source, &coarse(&source), &target).unwrap();
     let later_source = cq(quote! {
         struct Q; relation R(a: i32); relation S(b: i32);
         answer(x, w) :- R(x), S(w), if 10 / *x > 0;
@@ -472,7 +476,7 @@ fn independent_relations_commute_across_rust() {
         output j as answer(x,w);
     }};
     ra::contract::check(&late).unwrap();
-    refines(&coarse(&later_source), &late).unwrap();
+    refines(&later_source, &coarse(&later_source), &late).unwrap();
 }
 
 #[test]
@@ -486,8 +490,8 @@ fn rust_reordering_is_accepted_but_payload_mutations_are_rejected() {
         output g as answer(x,y);
     }};
     ra::contract::check(&target).unwrap();
-    refines(&coarse(&source), &target).unwrap();
-    let mut changed = compile(&coarse(&source)).unwrap();
+    refines(&source, &coarse(&source), &target).unwrap();
+    let mut changed = compile(&source, &coarse(&source)).unwrap();
     let node = changed
         .plan
         .definitions
@@ -498,7 +502,7 @@ fn rust_reordering_is_accepted_but_payload_mutations_are_rejected() {
         unreachable!()
     };
     guard.condition = syn::parse_quote!(*x != 1);
-    assert!(check(&coarse(&source), &changed).is_err());
+    assert!(check(&source, &coarse(&source), &changed).is_err());
 }
 
 #[test]
@@ -507,7 +511,7 @@ fn elaboration_retains_the_recorded_rust_placement() {
         struct Q; relation R(a:i32); relation S(b:i32);
         answer(x,y) :- R(x), S(w), if { *x != 0 && *w > 1 }, let y:i32 = 10 / *x;
     });
-    let target = compile(&coarse(&source)).unwrap();
+    let target = compile(&source, &coarse(&source)).unwrap();
     let chain: Vec<_> = target
         .plan
         .definitions
@@ -534,7 +538,7 @@ fn projection_cannot_discard_a_join_correlation() {
         o = project j keep {x,z}; output o as answer(x,z);
     }};
     ra::contract::check(&broken).unwrap();
-    assert!(check(&coarse(&source), &broken).is_err());
+    assert!(check(&source, &coarse(&source), &broken).is_err());
 }
 
 #[test]
@@ -548,7 +552,7 @@ fn relational_equality_commutes_with_total_rust() {
         output s as answer(x);
     }};
     ra::contract::check(&broken).unwrap();
-    refines(&coarse(&source), &broken).unwrap();
+    refines(&source, &coarse(&source), &broken).unwrap();
 }
 
 #[test]
@@ -556,42 +560,43 @@ fn differing_literal_spellings_are_not_assumed_unequal() {
     let source = cq(quote! {
         struct Q; relation R(a:i32); answer(x) :- R(x), where x == 1, where x == 0x1;
     });
-    let target = compile(&restricted(&source)).unwrap();
+    let target = compile(&source, &restricted(&source)).unwrap();
     let mut changed = target.clone();
     let ra::Operator::Select(select) = &mut changed.plan.definitions[1].operator else {
         panic!()
     };
     select.condition.equalities[1].right = ra::EqualityValue::Literal(syn::parse_quote!(2));
-    assert!(check(&restricted(&source), &changed).is_err());
+    assert!(check(&source, &restricted(&source), &changed).is_err());
 }
 
 #[test]
 fn shared_scenarios_and_mutated_output_correspondence() {
     for case in scenarios::SCENARIOS {
-        let source: valuation::Program = syn::parse_str(case.vo).unwrap();
-        let target = compile(&source).unwrap();
+        let normal = case.parse_cq().unwrap();
+        let source = case.parse_vo(&normal).unwrap();
+        let target = compile(&normal, &source).unwrap();
         assert_eq!(
             target,
             syn::parse_str::<ra::Program>(case.ra).unwrap(),
             "{}",
             case.name
         );
-        check(&source, &target).unwrap();
+        check(&normal, &source, &target).unwrap();
         for seed in 0..4 {
-            let database = databases::binary_database(&source.cq, seed);
+            let database = databases::binary_database(&normal, seed);
             assert_eq!(
                 oracle::evaluate_ra(&target, &database).output,
-                cq_oracle::evaluate_cq(&source.cq, &database),
+                cq_oracle::evaluate_cq(&normal, &database),
                 "{}",
                 case.name
             );
         }
         let mut changed = target.clone();
         changed.plan.output.head.relation = syn::parse_quote!(other);
-        assert!(check(&source, &changed).is_err());
+        assert!(check(&normal, &source, &changed).is_err());
         let mut changed = target;
         changed.plan.declarations[0].columns[0].ty = syn::parse_quote!(u32);
-        assert!(check(&source, &changed).is_err());
+        assert!(check(&normal, &source, &changed).is_err());
     }
 }
 
@@ -605,9 +610,9 @@ fn written_reference_filters_literal_columns_before_dependent_expressions() {
     });
     let normal = cq::normal::normalize(&surface).unwrap();
     let source = coarse(&normal);
-    let written = lowered(&source).unwrap();
-    check(&source, &written).unwrap();
-    for target in [written, compile(&source).unwrap()] {
+    let written = lowered(&normal, &source).unwrap();
+    check(&normal, &source, &written).unwrap();
+    for target in [written, compile(&normal, &source).unwrap()] {
         let bind = target
             .plan
             .definitions
@@ -634,12 +639,12 @@ fn correspondence_accepts_independent_relational_placement() {
     });
     let written = coarse(&source);
     let hoisted = vo(&source, quote! { S@2(w); R@0(x); if 10 / *x > 1; });
-    valuation::contract::check(&hoisted).unwrap();
-    let later = lowered(&written).unwrap();
+    valuation::contract::check(&source, &hoisted).unwrap();
+    let later = lowered(&source, &written).unwrap();
     // Total Rust has no written relational predecessor obligations.
-    check(&written, &later).unwrap();
-    refines(&hoisted, &later).unwrap();
-    refines(&written, &compile(&hoisted).unwrap()).unwrap();
+    check(&source, &written, &later).unwrap();
+    refines(&source, &hoisted, &later).unwrap();
+    refines(&source, &written, &compile(&source, &hoisted).unwrap()).unwrap();
 }
 
 #[test]
@@ -650,9 +655,9 @@ fn leibniz_equality_class_can_use_either_generator_binding() {
         struct Q; relation R(key:Key, marker:i32); relation S(key:Key);
         answer(y) :- R(x,z), S(x), let y:bool = x.flag;
     });
-    let source = cq::normal::normalize(&surface).unwrap();
-    let source = coarse(&source);
-    let target = compile(&source).unwrap();
+    let normal = cq::normal::normalize(&surface).unwrap();
+    let source = coarse(&normal);
+    let target = compile(&normal, &source).unwrap();
     let first = &target.plan.definitions[0];
     let ra::Operator::Rename(rename) = &first.operator else {
         panic!()
@@ -667,7 +672,7 @@ fn leibniz_equality_class_can_use_either_generator_binding() {
         p = project b keep {y}; output p as answer(y);
     }};
     ra::contract::check(&replacement).unwrap();
-    refines(&source, &replacement).unwrap();
+    refines(&normal, &source, &replacement).unwrap();
 }
 
 #[test]
@@ -683,7 +688,7 @@ fn projection_before_rust_can_discard_variables_outside_its_free_variables() {
         output out as answer(y);
     }};
     ra::contract::check(&target).unwrap();
-    refines(&coarse(&source), &target).unwrap();
+    refines(&source, &coarse(&source), &target).unwrap();
 }
 
 #[test]
@@ -695,7 +700,7 @@ fn named_vo_reductions_cannot_be_erased_by_the_final_join() {
             reduce R@1 with L@0(a); L@0(a); R@1(a,b); S@2(b,c);
         },
     );
-    let mut target = compile(&reduced).unwrap();
+    let mut target = compile(&source, &reduced).unwrap();
     let analysis = ra::contract::check(&target).unwrap();
     let definition = target
         .plan
@@ -712,7 +717,7 @@ fn named_vo_reductions_cannot_be_erased_by_the_final_join() {
     ra::contract::check(&target).unwrap();
     // All atoms still reach the complete final join. That does not supply the
     // named reducer requested by this VO schedule.
-    assert!(check(&reduced, &target).is_err());
+    assert!(check(&source, &reduced, &target).is_err());
 }
 
 #[test]
@@ -725,7 +730,7 @@ fn redundant_partial_columns_can_change() {
         &source,
         quote! { R@2(a,_); L@0(a); if opaque(a); R@2(a,b); S@3(b,c); },
     );
-    let target = compile(&valuation).unwrap();
+    let target = compile(&source, &valuation).unwrap();
     let mut changed = target;
     let projection = changed
         .plan
@@ -740,7 +745,7 @@ fn redundant_partial_columns_can_change() {
     ra::contract::check(&changed).unwrap();
     // The later full R witness supplies both columns. The earlier projection
     // only restricts a domain, and opaque total Rust does not observe it.
-    check(&valuation, &changed).unwrap();
+    check(&source, &valuation, &changed).unwrap();
 }
 
 #[test]
@@ -750,7 +755,7 @@ fn relational_conjuncts_keep_their_independent_selection_domains() {
         answer(x,y,z) :- R(x,y,z), where x < y && y < z;
     });
     let vo = coarse(&source);
-    let target = compile(&vo).unwrap();
+    let target = compile(&source, &vo).unwrap();
     let conditions: Vec<_> = target
         .plan
         .definitions
@@ -765,7 +770,7 @@ fn relational_conjuncts_keep_their_independent_selection_domains() {
     assert_eq!(conditions[1].constraints.len(), 1);
     assert_eq!(conditions[0].constraints[0], syn::parse_quote!(x < y));
     assert_eq!(conditions[1].constraints[0], syn::parse_quote!(y < z));
-    check(&vo, &target).unwrap();
+    check(&source, &vo, &target).unwrap();
 }
 
 #[test]
@@ -779,7 +784,7 @@ fn literal_points_precede_membership_filters_without_type_classification() {
                     && instruction == "DELIVER IN PERSON";
         });
         let vo = restricted(&source);
-        let target = compile(&vo).unwrap();
+        let target = compile(&source, &vo).unwrap();
         let selections: Vec<_> = target
             .plan
             .definitions
@@ -804,7 +809,7 @@ fn literal_points_precede_membership_filters_without_type_classification() {
             selections[1].condition.constraints[0],
             cq::Constraint::In { .. }
         ));
-        check(&vo, &target).unwrap();
+        check(&source, &vo, &target).unwrap();
     }
 }
 
@@ -815,7 +820,7 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
         answer(x,y) :- R(x), S(y), where (x == 1 && y >= 2) || (x == 3 && y <= 4);
     });
     let vo = restricted(&source);
-    let target = compile(&vo).unwrap();
+    let target = compile(&source, &vo).unwrap();
     let selections: Vec<_> = target
         .plan
         .definitions
@@ -856,7 +861,7 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
         panic!()
     };
     selection.condition.constraints[0] = syn::parse_quote!(x > 99);
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&source, &vo, &changed).is_err());
     let mut changed = target;
     let last = changed
         .plan
@@ -870,7 +875,7 @@ fn derived_domains_filter_binders_but_preserve_the_exact_disjunction() {
     };
     let input = &selection.input;
     last.operator = syn::parse_quote!(project #input keep {x,y});
-    assert!(check(&vo, &changed).is_err());
+    assert!(check(&source, &vo, &changed).is_err());
 }
 
 #[test]
@@ -880,7 +885,7 @@ fn opaque_method_and_function_guards_keep_their_earliest_prefix() {
             "struct Q; relation R(a:i32); relation P(k:i32,n:i64); answer(x,name) :- R(x), P(x,name), {guard};"
         )).unwrap();
         let vo = coarse(&source);
-        let target = compile(&vo).unwrap();
+        let target = compile(&source, &vo).unwrap();
         let guard = target
             .plan
             .definitions
@@ -914,7 +919,7 @@ fn opaque_method_and_function_guards_keep_their_earliest_prefix() {
         struct Q; relation R(a:i32); relation S(b:i32);
         answer(x,y) :- R(x), S(y), if 10 / *x > 1;
     });
-    let target = compile(&coarse(&source)).unwrap();
+    let target = compile(&source, &coarse(&source)).unwrap();
     let guard = target
         .plan
         .definitions
@@ -942,7 +947,7 @@ fn opaque_method_and_function_guards_keep_their_earliest_prefix() {
     step.operator = syn::parse_quote!(select #input if (x > 1));
     ra::contract::check(&forged).unwrap();
     assert!(
-        check(&coarse(&source), &forged).is_err(),
+        check(&source, &coarse(&source), &forged).is_err(),
         "a target cannot replace an opaque Rust guard with a relational predicate"
     );
 }
@@ -971,7 +976,7 @@ fn opaque_multi_atom_guard_runs_once_its_free_variables_are_available() {
     assert!(
         matches!(&planned.valuation.steps[3], valuation::Step::Atom(atom, _) if atom.relation == "T")
     );
-    let target = compile(&planned).unwrap();
+    let target = compile(&source, &planned).unwrap();
     let select = target
         .plan
         .definitions
@@ -986,12 +991,13 @@ fn opaque_multi_atom_guard_runs_once_its_free_variables_are_available() {
 
 #[test]
 fn generator_elaboration_round_trips_and_certifies_set_valued_binding() {
-    let source = coarse(&cq(quote! {
+    let normal = cq(quote! {
         struct Q; relation R(a: i32); relation answer(b: i32);
         answer(b) :- R(a), for b in 0..a, let c = b;
-    }));
-    let target = compile(&source).unwrap();
-    lowered(&source).unwrap();
+    });
+    let source = coarse(&normal);
+    let target = compile(&normal, &source).unwrap();
+    lowered(&normal, &source).unwrap();
     assert_eq!(
         syn::parse2::<ra::Program>(target.to_token_stream()).unwrap(),
         target
@@ -1007,13 +1013,13 @@ fn generator_elaboration_round_trips_and_certifies_set_valued_binding() {
         unreachable!()
     };
     binding.for_token = None;
-    assert!(check(&source, &changed).is_err());
+    assert!(check(&normal, &source, &changed).is_err());
     let mut changed = target.clone();
     let ra::Operator::Bind(binding) = &mut changed.plan.definitions[generator].operator else {
         unreachable!()
     };
     binding.expression = syn::parse_quote!(0..100);
-    assert!(check(&source, &changed).is_err());
+    assert!(check(&normal, &source, &changed).is_err());
 }
 
 #[test]
@@ -1030,7 +1036,7 @@ fn literal_occurrences_drop_exact_source_positions_and_reject_changed_values() {
         let normal = cq::normal::normalize(&source).unwrap();
         assert_eq!(normal, source);
         let planned = coarse(&normal);
-        let target = compile(&planned).unwrap();
+        let target = compile(&normal, &planned).unwrap();
         let rename = target
             .plan
             .definitions
@@ -1066,14 +1072,14 @@ fn literal_occurrences_drop_exact_source_positions_and_reject_changed_values() {
         rename.constants.as_mut().unwrap().equalities[0].right =
             ra::EqualityValue::Literal(syn::parse_quote!(99));
         ra::contract::check(&changed).unwrap();
-        assert!(check(&planned, &changed).is_err());
+        assert!(check(&normal, &planned, &changed).is_err());
     }
     let source = cq(quote! {
         struct Q; relation R(a:i32,b:bool,c:StringCode); relation answer(value:i32);
         answer(1) :- R(-7,true,"fixed");
     });
     let normal = cq::normal::normalize(&source).unwrap();
-    let target = compile(&coarse(&normal)).unwrap();
+    let target = compile(&normal, &coarse(&normal)).unwrap();
     let rows = ra::contract::check(&target).unwrap();
     let occurrence = target
         .plan
@@ -1090,7 +1096,7 @@ fn negation_elaborates_direct_host_keys_without_redundant_projection() {
         struct Negative; relation R(a:i32,b:i32); relation K(a:i32,b:i32);
         answer(x,y) :- R(x,y), !K(x,y);
     });
-    let target = compile(&coarse(&source)).unwrap();
+    let target = compile(&source, &coarse(&source)).unwrap();
     assert_plan(
         &target,
         quote! {
@@ -1112,8 +1118,8 @@ fn negative_constants_repeats_and_wildcards_match_reference_semantics() {
         ))
         .unwrap();
         let written = coarse(&source);
-        let target = compile(&written).unwrap();
-        let reference = lowered(&written).unwrap();
+        let target = compile(&source, &written).unwrap();
+        let reference = lowered(&source, &written).unwrap();
         let anti = target
             .plan
             .definitions
@@ -1162,7 +1168,7 @@ fn negative_constants_repeats_and_wildcards_match_reference_semantics() {
         };
         let input = &anti.left;
         step.operator = syn::parse_quote!(project #input keep {x});
-        assert!(check(&written, &changed).is_err(), "{args}");
+        assert!(check(&source, &written, &changed).is_err(), "{args}");
     }
 }
 
@@ -1188,10 +1194,10 @@ fn raw_negation_names_match_reference_semantics() {
                     },
                 )
                 .unwrap();
-                let target = compile(&written).unwrap();
+                let target = compile(&normal, &written).unwrap();
                 let reference_vo = cq_order::compile_written(&normal).unwrap();
-                let reference = lowered(&reference_vo).unwrap();
-                check(&reference_vo, &reference).unwrap();
+                let reference = lowered(&normal, &reference_vo).unwrap();
+                check(&normal, &reference_vo, &reference).unwrap();
                 for seed in 0..32 {
                     let database = databases::binary_database(&source, seed);
                     let expected = cq_oracle::evaluate_cq(&source, &database);
@@ -1217,7 +1223,7 @@ fn parameter_negation_selects_a_capture_without_binding_it() {
         struct Negative; relation R(a:i32); relation K(a:i32,b:i32);
         answer(x) :- R(x), !K(x, cutoff);
     });
-    let target = compile(&coarse(&source)).unwrap();
+    let target = compile(&source, &coarse(&source)).unwrap();
     let selection = target
         .plan
         .definitions
@@ -1239,7 +1245,7 @@ fn all_wildcard_negation_can_seed_an_empty_heading() {
         struct Empty; relation K(a:i32,b:i32); relation Seed(x:i32);
         answer(x) :- !K(_,_), Seed(x);
     });
-    let target = compile(&coarse(&source)).unwrap();
+    let target = compile(&source, &coarse(&source)).unwrap();
     for rows in [std::collections::BTreeSet::new(), [vec![1, 2]].into()] {
         let database: oracle::Database =
             [("K".into(), rows), ("Seed".into(), [vec![1]].into())].into();
@@ -1257,7 +1263,7 @@ fn native_anti_obligations_reject_changed_keys_inputs_filters_and_polarity() {
         answer(x) :- R(x), !K(x,1);
     });
     let written = coarse(&source);
-    let target = compile(&written).unwrap();
+    let target = compile(&source, &written).unwrap();
     for mutation in 0..5 {
         let mut changed = target.clone();
         match mutation {
@@ -1336,7 +1342,7 @@ fn native_anti_obligations_reject_changed_keys_inputs_filters_and_polarity() {
                 .retain(|definition| live.contains(&definition.result.to_string()));
         }
         ra::contract::check(&changed).unwrap();
-        assert!(check(&written, &changed).is_err(), "mutation {mutation}");
+        assert!(check(&source, &written, &changed).is_err(), "mutation {mutation}");
     }
 }
 
@@ -1353,8 +1359,8 @@ fn native_anti_proof_allows_positive_join_and_total_rust_reordering() {
             S@1(y); R@0(x); !K(x); if opaque(x);
         },
     );
-    let target = compile(&reordered).unwrap();
-    refines(&written, &target).unwrap();
+    let target = compile(&source, &reordered).unwrap();
+    refines(&source, &written, &target).unwrap();
     let mut delayed = target.clone();
     let guard_position = delayed
         .plan
@@ -1382,5 +1388,5 @@ fn native_anti_proof_allows_positive_join_and_total_rust_reordering() {
     delayed.plan.definitions[guard_position].operator =
         syn::parse_quote!(anti [#keys] #earlier, #right);
     ra::contract::check(&delayed).unwrap();
-    refines(&written, &delayed).unwrap();
+    refines(&source, &written, &delayed).unwrap();
 }

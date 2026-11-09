@@ -1,5 +1,5 @@
 #![cfg(feature = "planner-calibration")]
-use cq_cost::calibration::lineage::{checked_sequence, checked_structures, nodes};
+use cq_cost::calibration::lineage::{checked_sequence, checked_structures, checked_valuation, nodes};
 use cq_stage::calibration::{Seed, Stage, Trace};
 use quote::ToTokens;
 
@@ -10,11 +10,19 @@ fn actual_checked_boundaries_preserve_local_origins() {
         answer(x) :- R(x,y), where x >= 1, S(y), if accept(x);
     };
     let options: cq_planning::PlanOptions = syn::parse_quote!(no_reduce);
-    let (lowered, valuation, steps) =
+    let (lowered, normal, valuation, steps) =
         cq_planning::compile_prefix_with_steps(&source, &options).unwrap();
+    let valuation_stage = Stage::annotation(&valuation, vec![normal.to_token_stream().to_string()]);
+    let checked = checked_valuation(&valuation_stage).unwrap();
+    assert_eq!(checked.cq, normal);
+    assert_eq!(checked.valuation, valuation);
+    assert!(nodes(&Stage::of(&valuation)).is_err());
+    let mut unrelated = valuation_stage.clone();
+    unrelated.bases[0] = "struct Wrong; relation Missing(x:i32); answer(x) :- Missing(x);".into();
+    assert!(nodes(&unrelated).is_err());
     let mut trace = Trace::default();
     trace.initialize(Seed {
-        valuation: Stage::of(&valuation),
+        valuation: valuation_stage,
         lowering: Stage::of(&lowered),
         steps: steps.0,
     }).unwrap();
@@ -68,12 +76,12 @@ fn every_optional_planner_records_its_actual_pre_rewrite_lowering() {
         answer(x) :- R(x,y), S(y,z), T(z), where z >= 1;
     };
     for planner in Planner::ALL {
-        let (target, valuation, lowering, steps) = compile_with_steps(&source, planner).unwrap();
+        let (target, normal, valuation, lowering, steps) = compile_with_steps(&source, planner).unwrap();
         assert_eq!(target, compile(&source, planner).unwrap(), "{planner:?}");
-        cq_relational_lowering::check(&valuation, &lowering, &steps).unwrap();
+        cq_relational_lowering::check(&normal, &valuation, &lowering, &steps).unwrap();
         let mut trace = Trace::default();
         trace.initialize(Seed {
-            valuation: Stage::of(&valuation),
+            valuation: Stage::annotation(&valuation, vec![normal.to_token_stream().to_string()]),
             lowering: Stage::of(&lowering),
             steps: steps.0,
         }).unwrap();

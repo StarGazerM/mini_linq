@@ -72,9 +72,10 @@ closure, including nested closures, rather than inserting `Arc` handles.
 
 ## Programs and storage
 
-Every IR is a complete program that parses, prints, and checks independently.
-VO contains CQ, IX contains RA′, and Structures contains Physical. RA′ and
-Physical stand alone over `cq-syntax`; neither carries its producer's IR.
+Programs parse, print, and check independently; annotations parse and check
+against separately supplied base programs. VO annotates CQ's occurrences,
+Structures annotates Physical, and Sequence annotates their realization.
+IX contains RA′. RA′ and Physical stand alone over `cq-syntax`.
 
 IX correspondence checks each keyed RA read against a recorded requirement,
 rejects unused descriptors, and verifies `iN` naming in first-use order without
@@ -204,6 +205,13 @@ Only a terminal Rust printer can end the queue. Failures become
 `compile_error!`. Pass arguments record choices in target IR; subsequent passes
 receive complete programs.
 
+VO continuations carry `ordering { cq { ... } vo { valuation ... } }`.
+`cq_stage::Valuation::<C, V>::pass` receives `(cq, vo, args)` and its
+`rewrite` returns `(C, V)`. The VO printer emits only the valuation annotation;
+its `Annotation<&CQ>` contract checks the explicitly supplied normalized CQ.
+Planning returns that normalized CQ alongside VO rather than reconstructing it
+at a consumer.
+
 Physical continuations carry the Physical program. After selection they carry
 `realization { physical { ... } structures { ... } }`; after Sequence lowering
 they also carry `sequence { ... }`. Each member is independently printed.
@@ -212,7 +220,7 @@ closure returning `(P, S)`, or `cq_stage::Sequence::<P, S, Q>::rewrite` with a
 `(physical, structures, sequence, args)` closure returning `(P, S, Q)`.
 Their `pass::<Out>` methods give consumers the same separate arguments.
 Language-changing passes construct target carriers with `Structures::new` or
-`Sequence::new`. Flat CQ/VO/RA/IX/Physical and Datalog APIs are unchanged.
+`Sequence::new`. Flat CQ/RA/IX/Physical and Datalog APIs are unchanged.
 ST-Realization checks each annotation's references and obligations against the
 actual separate base programs, not token-prefix equality. Authored entry parses
 Physical first, then Structures against Physical, then (when present) Sequence

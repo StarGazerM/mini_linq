@@ -170,9 +170,12 @@ fn rebind(input: &PlannerInput, original: &round::Program, attachment: DeclaredE
     }
     let mut valuations = Vec::with_capacity(input.holes.len());
     for (record, hole) in input.holes.iter().zip(&program.holes) {
-        let mut valuation: cq_lang_vo::Program = syn::parse_str(&record.checked_vo)?;
-        valuation.cq.declared_evidence = hole.cq.declared_evidence.clone();
-        valuations.push(valuation);
+        let mut normal: cq_lang_cq::Program = syn::parse_str(&record.normalized_cq)?;
+        normal.declared_evidence = hole.cq.declared_evidence.clone();
+        let valuation = syn::parse::Parser::parse_str(
+            |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &normal), &record.checked_vo,
+        )?;
+        valuations.push((normal, valuation));
     }
     let source = program.storage.incremental.strata.source.to_token_stream().to_string();
     crate::export::export_datalog(&source, &program, &valuations, input.configuration.clone())

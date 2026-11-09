@@ -1,8 +1,3 @@
-struct YaComposite;
-relation R(first: i32, second: i32, value: i32);
-relation S(first: i32, second: i32, third: i32);
-relation T(first: i32, second: i32, value: i32);
-answer(u, v) :- R(a, b, u), S(a, b, c), T(b, c, v);
 valuation {
     reduce S@1 with R@0(a, b, _);
     reduce T@2 with S@1(_, b, c);

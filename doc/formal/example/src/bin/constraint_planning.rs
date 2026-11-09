@@ -83,9 +83,9 @@ fn main() {
     };
     let directory = directory("logical-constraint-planning");
     let checked = boundaries(&directory, "written", &source, false);
-    let analysis = cq_lang_vo::contract::check(&checked.valuation).unwrap();
+    let analysis = cq_lang_vo::contract::check(&checked.normal, &checked.valuation).unwrap();
     cq_relational_lowering::check_reference(
-        &checked.valuation.cq, &checked.valuation.valuation.steps, &analysis, &authored,
+        &checked.normal, &checked.valuation.valuation.steps, &analysis, &authored,
     ).unwrap();
     boundaries(&directory, "planned", &source, true);
     write(&directory, "authored-04-relational.tokens", &authored);

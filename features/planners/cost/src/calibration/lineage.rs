@@ -18,6 +18,23 @@ pub fn checked<L: Language>(stage: &Stage) -> syn::Result<L> {
     Ok(value)
 }
 
+/// Reparse a recorded valuation against its separately recorded normalized CQ.
+pub fn checked_valuation(stage: &Stage) -> syn::Result<cq_stage::Valuation<cq_lang_cq::Program, cq_lang_vo::Program>> {
+    let [cq] = stage.bases.as_slice() else {
+        return Err(syn::Error::new(Span::call_site(), "ST-Calibration: VO requires one CQ base"));
+    };
+    if !stage.is::<cq_lang_vo::Program>() {
+        return Err(syn::Error::new(Span::call_site(), "ST-Calibration: expected a VO annotation"));
+    }
+    let cq = syn::parse_str(cq)?;
+    let valuation = (|input: syn::parse::ParseStream<'_>| {
+        cq_lang_vo::Program::parse(input, &cq)
+    }).parse_str(&stage.program)?;
+    let stack = cq_stage::Valuation::new(cq, valuation);
+    stack.check()?;
+    Ok(stack)
+}
+
 /// Reparse an independently recorded Structures annotation against its Physical base.
 pub fn checked_structures(stage: &Stage) -> syn::Result<cq_stage::Structures<cq_lang_physical::Program, cq_lang_structures::Program>> {
     let [physical] = stage.bases.as_slice() else {
@@ -59,7 +76,7 @@ pub fn checked_sequence(stage: &Stage) -> syn::Result<cq_stage::Sequence<cq_lang
 /// Sequence stage. Annotation stages retain source definitions in separate bases.
 pub fn nodes(stage: &Stage) -> syn::Result<Vec<Node>> {
     if stage.is::<cq_lang_vo::Program>() {
-        Ok(vo(&checked(stage)?))
+        Ok(vo(&checked_valuation(stage)?.valuation))
     } else if stage.is::<cq_lang_ra::Program>() {
         Ok(ra(&checked(stage)?))
     } else if stage.is::<cq_lang_ix::Program>() {

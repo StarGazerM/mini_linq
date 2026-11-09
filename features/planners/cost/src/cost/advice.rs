@@ -218,8 +218,8 @@ fn compile_datalog_advice_checked(input: &PlannerInput, plans: &[RulePlan]) -> R
         let pipeline = hole.invocation_pipeline()?;
         let at = hole.plan.ok_or_else(|| error("advised hole lacks its planning invocation"))?;
         let options: cq_planning::PlanOptions = syn::parse2(pipeline.passes[at].arguments.clone())?;
-        let plan = cq_planning::prefix_valuation(&hole.cq, &options)?;
-        cq_lang_vo::contract::check(&plan)?;
+        let (normal, plan) = cq_planning::prefix_valuation(&hole.cq, &options)?;
+        cq_lang_vo::contract::check(&normal, &plan)?;
     }
     Ok(planned)
 }
@@ -297,8 +297,8 @@ pub(crate) fn validate_and_render(input: &PlannerInput, report: &AdviceReport) -
                 let source: round::cq::Program = syn::parse_str(&input.source)?;
                 let selectors = choice.candidates[choice.selected].plan.order.iter().map(|&position| selector(&source.query, position)).collect::<Result<Vec<_>>>()?;
                 let options = cq_planning::PlanOptions { order: Some(selectors), ..Default::default() };
-                let planned = cq_planning::prefix_valuation(&source, &options)?;
-                cq_lang_vo::contract::check(&planned)?;
+                let (normal, planned) = cq_planning::prefix_valuation(&source, &options)?;
+                cq_lang_vo::contract::check(&normal, &planned)?;
                 let selected = choice.candidates[choice.selected].plan.order.iter().map(|&position| {
                     let round::cq::BodyItem::Positive { atom } = &source.query.body[position] else { unreachable!("checked selector") };
                     let relation = &atom.relation; let position = syn::Index::from(position);

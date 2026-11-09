@@ -161,22 +161,31 @@ fn checked_trace(text: &'static str, hole: &crate::export::Hole, context: &round
     aliases: &[(&'static str, &'static str)]) -> Result<CheckedTrace> {
     let trace = Trace::parse_descriptor(text)?;
     let seed = trace.seed.as_ref().ok_or_else(|| invalid("physical trace lacks its VO producer"))?;
-    let mut valuation = checked::<cq_lang_vo::Program>(&seed.valuation)?;
+    let recorded = lineage::checked_valuation(&seed.valuation)?;
+    let mut actual_cq = recorded.cq;
+    let valuation = recorded.valuation;
     let lower = checked::<cq_lang_ra::Program>(&seed.lowering)?;
     let steps = cq_relational_lowering::Steps(seed.steps.clone());
-    cq_relational_lowering::check(&valuation, &lower, &steps)?;
-    let mut expected: cq_lang_vo::Program = syn::parse_str(&hole.checked_vo)?;
+    cq_relational_lowering::check(&actual_cq, &valuation, &lower, &steps)?;
+    let mut expected_cq: cq_lang_cq::Program = syn::parse_str(&hole.normalized_cq)?;
+    let mut expected = syn::parse::Parser::parse_str(
+        |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &expected_cq), &hole.checked_vo,
+    )?;
     let clauses = crate::cost::enumerate::recorded_clause_indices(hole, &expected)?;
-    valuation.cq.declared_evidence = None;
-    expected.cq.declared_evidence = None;
-    let semantic_vo_hash = hash_bytes(expected.to_token_stream().to_string().as_bytes());
+    actual_cq.declared_evidence = None;
+    expected_cq.declared_evidence = None;
+    let semantic_vo_hash = hash_bytes(quote::quote!(#expected_cq #expected).to_string().as_bytes());
     let hosts = context.relations.iter().flat_map(|relation|
         [&relation.next_canonical, &relation.next].into_iter().chain(relation.delta_host.iter()))
         .chain(context.layouts.iter().chain(&context.delta_layouts).map(|layout| &layout.host))
         .map(ToString::to_string).collect::<BTreeSet<_>>();
     require(aliases.iter().all(|(source, _)| hosts.contains(*source)), "trace alias is not a recorded compiler-owned host")?;
-    expected = syn::parse2(cq_datalog_print::substitute_host_parameters(expected.to_token_stream(), aliases)?)?;
-    require(valuation == expected, "executed VO differs from the supplied checked variant")?;
+    expected_cq = syn::parse2(cq_datalog_print::substitute_host_parameters(expected_cq.to_token_stream(), aliases)?)?;
+    expected = syn::parse::Parser::parse2(
+        |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &expected_cq),
+        cq_datalog_print::substitute_host_parameters(expected.to_token_stream(), aliases)?,
+    )?;
+    require(actual_cq == expected_cq && valuation == expected, "executed CQ/VO differs from the supplied checked variant")?;
     let mut physical = None;
     let mut structures = None;
     if let Some(stage) = trace.stages.last() {

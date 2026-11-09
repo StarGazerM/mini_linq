@@ -3,9 +3,9 @@
 //!
 //! The chain is the compiler's: `cq::normal::normalize` (CQ → NF),
 //! `cq_order::compile` (NF → VO, clauses as written, one subatom per atom),
-//! optionally `cq_reduce::compile` (VO → VO, retaining opaque guards and
+//! optionally `cq_reduce::compile` ((CQ, VO) → VO, retaining opaque guards and
 //! inserting the Yannakakis reducer when the query is acyclic),
-//! `cq_relational_lowering::compile` (VO → RA), `cq_index_policy::compile` (RA → IX).
+//! `cq_relational_lowering::compile` ((CQ, VO) → RA), `cq_index_policy::compile` (RA → IX).
 use cq_lang_cq as cq;
 use cq_lang_ix as index_requirements;
 use cq_lang_ra as ra;
@@ -54,17 +54,16 @@ pub fn boundaries(
             cq_reduce::Reductions::None
         };
         let options = cq_reduce::Options { semijoins };
-        let reduced = cq_reduce::compile(&ordered, &options).unwrap();
-        cq_reduce::check(&ordered, &reduced, &options).unwrap();
+        let reduced = cq_reduce::compile(&normal, &ordered, &options).unwrap();
+        cq_reduce::check(&normal, &ordered, &reduced, &options).unwrap();
         reduced
     } else {
         ordered
     };
-    valuation::contract::check(&valuation).unwrap();
-    assert_eq!(valuation.cq, normal);
-    let (relational, lowering_steps) = cq_relational_lowering::compile(&valuation).unwrap();
+    valuation::contract::check(&normal, &valuation).unwrap();
+    let (relational, lowering_steps) = cq_relational_lowering::compile(&normal, &valuation).unwrap();
     ra::contract::check(&relational).unwrap();
-    cq_relational_lowering::check(&valuation, &relational, &lowering_steps).unwrap();
+    cq_relational_lowering::check(&normal, &valuation, &relational, &lowering_steps).unwrap();
     let indexes = cq_index_policy::compile(&relational).unwrap();
     index_requirements::contract::check(&indexes).unwrap();
     cq_index_policy::check(&relational, &indexes).unwrap();

@@ -20,7 +20,7 @@ fn pipeline(query: TokenStream) -> (cq_lang_structures::physical::Program, cq_la
     let cq: cq_lang_cq::Program = syn::parse2(query).unwrap();
     let normal = cq_lang_cq::normal::normalize(&cq).unwrap();
     let vo = cq_order::compile(&normal, &Default::default()).unwrap();
-    let (ra, _) = cq_relational_lowering::compile(&vo).unwrap();
+    let (ra, _) = cq_relational_lowering::compile(&normal, &vo).unwrap();
     let ix = cq_index_policy::compile(&ra).unwrap();
     let physical = cq_physical_lowering::compile(&ix).unwrap();
     let structures = cq_structure_selection::compile(&physical).unwrap();

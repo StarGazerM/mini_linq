@@ -28,9 +28,10 @@ pass paths, each with argument tokens read only by that pass.
  \mathsf{checkedRun}(\pi_b,s)=t}
  {\mathsf{observe}(b,r,c,s)\longrightarrow r!\{\mathsf{quote}(t)\}}
 
-\Rule{ST-Realization}{K=(p,s[,q])\quad
- \mathsf{checkStructures}(p,s)\\
- q\in K\Rightarrow\mathsf{checkSequence}(p,s,q)}
+\Rule{ST-Realization}{K=(c,v)\ \lor\ K=(p,s[,q])\\
+ K=(c,v)\Rightarrow\mathsf{checkVO}(c,v)\\
+ K=(p,s[,q])\Rightarrow
+  (\mathsf{checkStructures}(p,s)\land(q\in K\Rightarrow\mathsf{checkSequence}(p,s,q)))}
  {\mathsf{admitStack}(K)}
 
 \Rule{DR-Explain}{b\le h\quad
@@ -44,6 +45,9 @@ pass. Failures emit one Rust expression block containing one
 and use the first diagnostic's span. The rejection does not invoke a printer
 or leak adjacent diagnostic macros into expression syntax. On success, rustc
 checks types, ownership and trait obligations of the generated code.
+The VO continuation carries $(c,v)$: CQ and its valuation annotation are
+separate programs. VO consumers receive $(c,v,args)$ and rewrites return both.
+The selected printed VO contains only its valuation, never the CQ prefix.
 From Physical onward a continuation carries the realization stack:
 $p$, $(p,s)$, or $(p,s,q)$. Each member is a separately printed program.
 ST-Realization checks that annotation references resolve in the separately

@@ -223,8 +223,8 @@ pub struct Analysis {
 
 pub mod contract {
     /// Formal rule WF-VO: Check NF and the local valuation schedule with coverage and reduction premises.
-    pub fn check(program: &super::Program) -> syn::Result<super::Analysis> {
-        let analysis = super::order::analyze(program)?;
+    pub fn check(cq: &super::cq::Program, program: &super::Program) -> syn::Result<super::Analysis> {
+        let analysis = super::order::analyze(cq, program)?;
         super::order::check(program, &analysis)?;
         Ok(analysis)
     }
@@ -240,14 +240,14 @@ fn error<T>(
     ))
 }
 
-fn analyze(program: &Program) -> syn::Result<Analysis> {
+fn analyze(cq: &cq::Program, program: &Program) -> syn::Result<Analysis> {
     if let Some(ordering) = &program.valuation.ordering {
         ordering.check()?;
     }
     if let Some(evidence) = &program.valuation.evidence {
-        evidence.check(&program.cq)?;
+        evidence.check(cq)?;
     }
-    analyze_reference(&program.cq, &program.valuation.steps)
+    analyze_reference(cq, &program.valuation.steps)
 }
 
 fn analyze_reference(cq: &cq::Program, steps: &[Step]) -> syn::Result<Analysis> {
@@ -880,18 +880,28 @@ fn same_branch_steps(block: &blocks::Block, steps: &[Step], clause: usize) -> bo
     })
 }
 
-/// A query and the complete schedule of its valuations.
-#[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
+/// A complete valuation annotation over a separately supplied CQ program.
+#[derive(Clone, Debug, PartialEq, Eq, syn_derive::ToTokens)]
 pub struct Program {
-    pub cq: cq::Program,
     pub valuation: Valuation,
+}
+
+impl Program {
+    pub fn parse(input: syn::parse::ParseStream<'_>, _cq: &cq::Program) -> syn::Result<Self> {
+        Ok(Self { valuation: input.parse()? })
+    }
 }
 
 pub use cq_syntax as syntax;
 
-pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
-    contract::check(source)?;
-    contract::check(target)?;
+pub fn check_rewrite(
+    source_cq: &cq::Program,
+    source: &Program,
+    target_cq: &cq::Program,
+    target: &Program,
+) -> syn::Result<()> {
+    contract::check(source_cq, source)?;
+    contract::check(target_cq, target)?;
     fn erase(steps: &[Step]) -> Vec<Step> {
         steps
             .iter()
@@ -922,7 +932,7 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
             })
             .collect()
     }
-    if source.cq != target.cq
+    if source_cq != target_cq
         || source.valuation.ordering != target.valuation.ordering
         || erase(&source.valuation.steps) != erase(&target.valuation.steps)
         || reductions(&source.valuation.steps)
@@ -936,11 +946,22 @@ pub fn check_rewrite(source: &Program, target: &Program) -> syn::Result<()> {
     }
     Ok(())
 }
-impl cq_stage::Language for Program {
-    fn check(&self) -> syn::Result<()> {
-        contract::check(self).map(|_| ())
+
+impl cq_stage::Annotation<&cq::Program> for Program {
+    fn parse(input: syn::parse::ParseStream<'_>, base: &cq::Program) -> syn::Result<Self> {
+        Self::parse(input, base)
     }
-    fn check_rewrite(source: &Self, target: &Self) -> syn::Result<()> {
-        check_rewrite(source, target)
+
+    fn check(&self, base: &cq::Program) -> syn::Result<()> {
+        contract::check(base, self).map(|_| ())
+    }
+
+    fn check_rewrite(
+        source_base: &cq::Program,
+        source: &Self,
+        target_base: &cq::Program,
+        target: &Self,
+    ) -> syn::Result<()> {
+        check_rewrite(source_base, source, target_base, target)
     }
 }

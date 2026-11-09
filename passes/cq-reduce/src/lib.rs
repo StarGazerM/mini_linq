@@ -289,23 +289,24 @@ impl std::error::Error for Error {}
 /// Formal rule R-Guard: Retain every unchanged Rust guard in its recorded placement.
 /// Formal rule R-Tree: Insert the relational tree schedule before the first atom.
 pub fn compile(
+    cq: &valuation::cq::Program,
     source: &valuation::Program,
     options: &Options,
 ) -> Result<valuation::Program, Error> {
-    let analysis = valuation::contract::check(source)?;
+    let analysis = valuation::contract::check(cq, source)?;
     let graph = scope_graph(
-        &source.cq.query.body,
+        &cq.query.body,
         &source.valuation.steps,
         &BTreeSet::new(),
     );
     if options.semijoins == Reductions::Tree && graph.join_tree.is_none() {
         return Err(Error::Cyclic(syn::Error::new_spanned(
-            &source.cq.query.body,
+            &cq.query.body,
             "Yannakakis reduction requires an acyclic query",
         )));
     }
     let steps = compile_steps(
-        &source.cq.query.body,
+        &cq.query.body,
         &source.valuation.steps,
         &analysis,
         &graph,
@@ -313,7 +314,6 @@ pub fn compile(
         options,
     )?;
     let program = valuation::Program {
-        cq: source.cq.clone(),
         valuation: valuation::Valuation {
             valuation_token: source.valuation.valuation_token,
             evidence: source.valuation.evidence.clone(),
@@ -322,7 +322,7 @@ pub fn compile(
             steps,
         },
     };
-    valuation::contract::check(&program)?;
+    valuation::contract::check(cq, &program)?;
     Ok(program)
 }
 
