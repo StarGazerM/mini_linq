@@ -53,7 +53,7 @@ fn main() {
         let source: cq::Program = syn::parse_str(&case.written_cq()).unwrap();
         let normal = cq::normal::normalize(&source).unwrap();
         let written = cq_order::compile_written(&normal).unwrap();
-        let (reference, _) = cq_relational_lowering::compile(&written).unwrap();
+        let (reference, _) = cq_relational_lowering::compile(&normal, &written).unwrap();
         let invocation = format!(
             "mini_linq::passes::index_demands! {{ pipeline {{ mini_linq::passes::lower, mini_linq::passes::select, mini_linq::passes::sequence, mini_linq::passes::sequential, mini_linq::passes::translate_pull }}; {} }}",
             reference.to_token_stream()
