@@ -592,10 +592,13 @@ fn compile_stage(
     } else {
         cq_gpu_sequence::machine()
     };
+    // Catalog selection returns a matched (Physical, Structures) pair; keep the
+    // source pair too, since nullable host selection below starts from it.
+    let source_physical = physical;
     let (physical, mut structures) = checked(
         "catalog selection",
         &selected,
-        cq_sequence_plan::select_from_catalog(&physical, &selected, &catalog),
+        cq_sequence_plan::select_from_catalog(&source_physical, &selected, &catalog),
     )?;
     let facts = checked(
         "Structures check",
@@ -614,7 +617,7 @@ fn compile_stage(
         let (_, host_structures) = checked(
             "nullable host provider selection",
             &selected,
-            cq_sequence_plan::select_from_catalog(&physical, &selected, &cq_sequence_pull::catalog()),
+            cq_sequence_plan::select_from_catalog(&source_physical, &selected, &cq_sequence_pull::catalog()),
         )?;
         for index in 0..structures.structures.entries.len() {
             let entry = &structures.structures.entries[index];
