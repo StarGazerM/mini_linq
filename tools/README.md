@@ -59,7 +59,7 @@ and runs `python3 tools/check_ir_scope.py --owner <cq-lang-crate> [--allow
 crate it may delete or rename but not add or change grammar. An order-only
 change adds nothing below VO. Seam data a checker needs is a side table the
 lowering returns, never an IR field.
-Benchmark datasets outside the repository (read-only, exact paths only, never searched): TPC-H under the GPU manifest paths, DOOP xalan `/data/doop-bench/doop-data/xalan`, prepared field_flow `/data/doop-bench/doop-vs-srdatalog-20261026/fresh-corpus/prepared`.
+Benchmark datasets outside the repository (read-only, exact paths only, never searched): TPC-H GPU fixtures `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10` (manifests/dictionaries by exact filename), DOOP xalan `/data/doop-bench/doop-data/xalan`, prepared field_flow `/data/doop-bench/doop-vs-srdatalog-20261026/fresh-corpus/prepared`.
 
 **Development style (2026-11-07).** (1) One IR per branch, small: a step is
 mergeable in hours, not days; split otherwise. (2) Rules before code: the
