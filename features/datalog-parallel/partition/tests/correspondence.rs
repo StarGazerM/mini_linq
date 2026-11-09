@@ -52,7 +52,8 @@ fn rejected(change: impl FnOnce(&mut Program)) {
 
 #[test]
 fn partition_preserves_and_erases_declared_dataset_view_bindings() {
-    let json = include_str!("../../../../languages/cq-syntax/tests/fixtures/planner-recursive-evidence.json");
+    // Local fixture mirrors languages/cq-syntax/tests/fixtures for external consumers.
+    let json = include_str!("fixtures/planner-recursive-evidence.json");
     let source = lower(quote! {
         struct Closure;
         relation Edge(x:i32,y:i32) = (edges);

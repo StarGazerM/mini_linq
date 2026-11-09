@@ -292,7 +292,8 @@ fn export_command_publishes_one_checked_input() {
 
 #[test]
 fn declared_dataset_identity_and_aliases_survive_authored_order() {
-    let json = include_str!("../../../../languages/cq-syntax/tests/fixtures/planner-evidence.json");
+    // Local fixture mirrors languages/cq-syntax/tests/fixtures for external consumers.
+    let json = include_str!("fixtures/planner-evidence.json");
     let document = cq_syntax::evidence::parse_json(json).unwrap();
     let attachment = quote::quote! {
         declared_evidence #json { R = "R" full [x = "a", y = "b"]; }

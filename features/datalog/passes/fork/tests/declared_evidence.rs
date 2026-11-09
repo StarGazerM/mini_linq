@@ -2,8 +2,9 @@ use cq_lang_datalog_round::{self as round, incremental::strata::source, storage}
 use cq_syntax::declared_evidence::EvidenceView;
 use quote::{ToTokens, quote};
 
-const INPUT: &str = include_str!("../../../../../languages/cq-syntax/tests/fixtures/planner-evidence.json");
-const RECURSIVE: &str = include_str!("../../../../../languages/cq-syntax/tests/fixtures/planner-recursive-evidence.json");
+// Local fixtures mirror languages/cq-syntax/tests/fixtures for external consumers.
+const INPUT: &str = include_str!("fixtures/planner-evidence.json");
+const RECURSIVE: &str = include_str!("fixtures/planner-recursive-evidence.json");
 
 fn source(evidence: Option<&str>) -> source::Program {
     let attachment = evidence.map(|json| quote!(

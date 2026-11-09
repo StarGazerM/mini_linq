@@ -250,6 +250,8 @@ closure from the owning workspace lock rather than accidental core dependencies.
 Escapes are checked using canonical filesystem paths, including symlinked
 temporary directories. Positive, sibling-closure, and in-tree-only negative
 fixtures always run.
+Consumer tests own byte-identical mirrors of any core test fixtures they use in
+their own `tests/fixtures/`; they must not include fixtures through core-tree paths.
 
 The public API gate compares reviewed rustdoc-derived signatures.
 

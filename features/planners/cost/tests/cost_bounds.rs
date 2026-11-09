@@ -13,7 +13,8 @@ use num_bigint::BigInt;
 use num_rational::BigRational;
 use serde_json::{Value, json};
 
-const FIXTURE: &str = include_str!("../../../../languages/cq-syntax/tests/fixtures/planner-evidence.json");
+// Local fixture mirrors languages/cq-syntax/tests/fixtures for external consumers.
+const FIXTURE: &str = include_str!("fixtures/planner-evidence.json");
 const HASH: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 fn rat(n: impl ToString) -> Rational { Rational { numerator: n.to_string(), denominator: "1".into() } }
 fn number(n: u64) -> BigRational { BigRational::from_integer(BigInt::from(n)) }
