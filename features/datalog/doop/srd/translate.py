@@ -116,6 +116,11 @@ def generate(repo: Path, field_flow: bool, output: Path, plans: bool = False) ->
     lines += ["        })", "    }", "}", "#[derive(Clone, Debug, Default)]", "pub struct SrdFacts {", "    pub constants: SrdConstants,"]
     lines += [f"    pub {ident(r.name)}: Vec<{tuple_type(r.arity)}>," for r in inputs]
     lines += ["}", "impl SrdFacts {", "    pub fn load(dir: &std::path::Path) -> crate::Result<Self> {",
+              '        let path = std::env::var_os("DOOP_SET_MANIFEST").map(std::path::PathBuf::from);',
+              '        Self::load_with_manifest(dir, path.as_deref())',
+              '    }',
+              '    pub fn load_with_manifest(dir: &std::path::Path, path: Option<&std::path::Path>) -> crate::Result<Self> {',
+              '        let manifest = crate::manifest::Manifest::load(dir, path);',
               '        #[cfg(not(feature = "planner-calibration"))]',
               '        let meta = serde_json::from_reader(std::fs::File::open(dir.join("meta.json"))?)?;',
               '        #[cfg(feature = "planner-calibration")]',
@@ -128,8 +133,7 @@ def generate(repo: Path, field_flow: bool, output: Path, plans: bool = False) ->
               '        };',
               "        let constants = SrdConstants::load(&meta)?;", "        Ok(Self {", "            constants,"]
     for r in inputs:
-        values = "".join(f"row[{i}], " for i in range(r.arity))
-        lines.append(f'            {ident(r.name)}: crate::load_rows::<{r.arity}, _>(&dir.join("{r.input_file}"), |row| ({values}))?,')
+        lines.append(f'            {ident(r.name)}: crate::load_rows::<{r.arity}, _>(&dir.join("{r.input_file}"), &manifest)?,')
     lines += ["        })", "    }", "}", "#[derive(Debug, Default, PartialEq, Eq)]", "pub struct SrdResults {"]
     lines += [f"    pub {ident(r.name)}: Vec<{tuple_type(r.arity)}>," for r in outputs]
     lines += ["}", "impl SrdResults {", "    pub fn counts(&self) -> std::collections::BTreeMap<String, usize> {", "        std::collections::BTreeMap::from(["]

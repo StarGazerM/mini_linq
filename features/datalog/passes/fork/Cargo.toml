@@ -17,6 +17,7 @@ quote.workspace = true
 syn.workspace = true
 
 [dev-dependencies]
+cq-evidence.workspace = true
 cq-datalog-storage.workspace = true
 cq-datalog-stratify.workspace = true
 cq-datalog-incremental.workspace = true

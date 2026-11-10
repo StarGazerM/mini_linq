@@ -6,6 +6,7 @@ pub mod ascent_engine;
 pub mod harness;
 pub mod interner;
 mod loader;
+mod manifest;
 pub mod mini_engine;
 
 pub use interner::IStr;
@@ -51,46 +52,53 @@ pub struct Facts {
 
 impl Facts {
     pub fn load(directory: &Path) -> io::Result<Self> {
-        let methods = loader::load(&directory.join("Method.facts"))?;
+        let manifest = std::env::var_os("DOOP_SET_MANIFEST").map(std::path::PathBuf::from);
+        Self::load_with_manifest(directory, manifest.as_deref())
+    }
+
+    /// Load with an explicit certificate path, or discover doop-set-manifest.json.
+    /// Invalid or absent certificates retain full-row deduplication.
+    pub fn load_with_manifest(directory: &Path, path: Option<&Path>) -> io::Result<Self> {
+        let manifest = manifest::Manifest::load(directory, path);
+        macro_rules! load {
+            ($name:literal) => { loader::load(&directory.join($name), &manifest) };
+        }
+        let methods = load!("Method.facts")?;
         let method_descriptor = loader::method_descriptors(&methods);
         Ok(Self {
-            directsuperclass: loader::load(&directory.join("DirectSuperclass.facts"))?,
-            directsuperinterface: loader::load(&directory.join("DirectSuperinterface.facts"))?,
-            mainclass: loader::load(&directory.join("MainClass.facts"))?,
-            formalparam: loader::load(&directory.join("FormalParam.facts"))?,
-            componenttype: loader::load(&directory.join("ComponentType.facts"))?,
-            assignreturnvalue: loader::load(&directory.join("AssignReturnValue.facts"))?,
-            actualparam: loader::load(&directory.join("ActualParam.facts"))?,
-            method_modifier: loader::load(&directory.join("Method-Modifier.facts"))?,
-            var_type: loader::load(&directory.join("Var-Type.facts"))?,
-            _classtype: loader::load(&directory.join("ClassType.facts"))?,
-            _arraytype: loader::load(&directory.join("ArrayType.facts"))?,
-            _interfacetype: loader::load(&directory.join("InterfaceType.facts"))?,
-            _var_declaringmethod: loader::load(&directory.join("Var-DeclaringMethod.facts"))?,
-            _applicationclass: loader::load(&directory.join("ApplicationClass.facts"))?,
-            _thisvar: loader::load(&directory.join("ThisVar.facts"))?,
-            _normalheap: loader::load(&directory.join("NormalHeap.facts"))?,
-            _stringconstant: loader::load(&directory.join("StringConstant.facts"))?,
-            _assignheapallocation: loader::load(&directory.join("AssignHeapAllocation.facts"))?,
-            _assignlocal: loader::load(&directory.join("AssignLocal.facts"))?,
-            _assigncast: loader::load(&directory.join("AssignCast.facts"))?,
-            _field: loader::load(&directory.join("Field.facts"))?,
-            _staticmethodinvocation: loader::load(&directory.join("StaticMethodInvocation.facts"))?,
-            _specialmethodinvocation: loader::load(
-                &directory.join("SpecialMethodInvocation.facts"),
-            )?,
-            _virtualmethodinvocation: loader::load(
-                &directory.join("VirtualMethodInvocation.facts"),
-            )?,
+            directsuperclass: load!("DirectSuperclass.facts")?,
+            directsuperinterface: load!("DirectSuperinterface.facts")?,
+            mainclass: load!("MainClass.facts")?,
+            formalparam: load!("FormalParam.facts")?,
+            componenttype: load!("ComponentType.facts")?,
+            assignreturnvalue: load!("AssignReturnValue.facts")?,
+            actualparam: load!("ActualParam.facts")?,
+            method_modifier: load!("Method-Modifier.facts")?,
+            var_type: load!("Var-Type.facts")?,
+            _classtype: load!("ClassType.facts")?,
+            _arraytype: load!("ArrayType.facts")?,
+            _interfacetype: load!("InterfaceType.facts")?,
+            _var_declaringmethod: load!("Var-DeclaringMethod.facts")?,
+            _applicationclass: load!("ApplicationClass.facts")?,
+            _thisvar: load!("ThisVar.facts")?,
+            _normalheap: load!("NormalHeap.facts")?,
+            _stringconstant: load!("StringConstant.facts")?,
+            _assignheapallocation: load!("AssignHeapAllocation.facts")?,
+            _assignlocal: load!("AssignLocal.facts")?,
+            _assigncast: load!("AssignCast.facts")?,
+            _field: load!("Field.facts")?,
+            _staticmethodinvocation: load!("StaticMethodInvocation.facts")?,
+            _specialmethodinvocation: load!("SpecialMethodInvocation.facts")?,
+            _virtualmethodinvocation: load!("VirtualMethodInvocation.facts")?,
             _method: methods,
             method_descriptor,
-            _storeinstancefield: loader::load(&directory.join("StoreInstanceField.facts"))?,
-            _loadinstancefield: loader::load(&directory.join("LoadInstanceField.facts"))?,
-            _storestaticfield: loader::load(&directory.join("StoreStaticField.facts"))?,
-            _loadstaticfield: loader::load(&directory.join("LoadStaticField.facts"))?,
-            _storearrayindex: loader::load(&directory.join("StoreArrayIndex.facts"))?,
-            _loadarrayindex: loader::load(&directory.join("LoadArrayIndex.facts"))?,
-            _return: loader::load(&directory.join("Return.facts"))?,
+            _storeinstancefield: load!("StoreInstanceField.facts")?,
+            _loadinstancefield: load!("LoadInstanceField.facts")?,
+            _storestaticfield: load!("StoreStaticField.facts")?,
+            _loadstaticfield: load!("LoadStaticField.facts")?,
+            _storearrayindex: load!("StoreArrayIndex.facts")?,
+            _loadarrayindex: load!("LoadArrayIndex.facts")?,
+            _return: load!("Return.facts")?,
         })
     }
 }

@@ -355,7 +355,7 @@ fn attached_sidecar_and_index_survive_the_selected_lazy_choice_arm() {
     let provider = declaration.instance();
     selected.structures.providers.declare(&declaration);
     selected.structures.entries.push(syn::parse_quote!(
-        l join_filter = #provider build b [x] covering j marker ::cq_load::ColumnAt<0> policy always;
+        l join_filter = #provider build b [x] covering j marker First policy always;
     ));
     structures::record_join_filter_policies(&physical, &mut selected).unwrap();
     let facts = structures::contract::check(&physical, &selected).unwrap();
@@ -383,6 +383,15 @@ fn attached_sidecar_and_index_survive_the_selected_lazy_choice_arm() {
     let left = &arms[0];
     let right = &arms[1];
     let source = quote! {
+        #[derive(Clone, Copy, Default)]
+        struct First;
+        impl<'a, const N: usize> cq_storage::Column<&'a [(i64, i64); N]> for First {
+            type Key = i64;
+            fn key(self, host: &'a [(i64, i64); N], id: cq_storage::RowId) -> i64 {
+                host[id.offset()].0
+            }
+        }
+        impl<const N: usize> cq_storage::ColumnSlot<&[(i64, i64); N], 0> for First {}
         fn main() {
             let L = [(1i64,10i64), (2,20), (8,80)];
             let R = [(1i64,2i64), (1,3), (2,4), (8,0)];
@@ -409,9 +418,7 @@ fn attached_sidecar_and_index_survive_the_selected_lazy_choice_arm() {
         cq_testkit::rustc::linked_dependency::<cq_storage::sharded::FullKey>(
             "cq_storage", "cq_storage::sharded::FullKey",
         ),
-        cq_testkit::rustc::linked_dependency::<cq_load::ColumnAt<0>>(
-            "cq_load", "cq_load::ColumnAt<0>",
-        ),
+        // This fixture exercises sidecar lifetime, not IO column access.
     ]).run(&source.to_string());
 }
 

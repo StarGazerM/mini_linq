@@ -311,6 +311,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-evidence"
+version = "0.1.0"
+dependencies = [
+ "num-bigint",
+ "num-rational",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "cq-gpu-datalog"
 version = "0.1.0"
 dependencies = [
@@ -517,6 +529,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
+ "sha2",
  "syn 2.0.119",
 ]
 
@@ -526,6 +539,15 @@ version = "0.1.0"
 dependencies = [
  "cq-lang-ix",
  "cq-lang-ra",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-io-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
  "quote",
  "syn 2.0.119",
 ]
@@ -560,6 +582,7 @@ name = "cq-lang-datalog-round"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-support",
+ "cq-evidence",
  "cq-lang-cq",
  "cq-lang-datalog-storage",
  "cq-stage",
@@ -574,6 +597,7 @@ name = "cq-lang-datalog-source"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-support",
+ "cq-evidence",
  "cq-lang-cq",
  "cq-stage",
  "cq-syntax",
@@ -690,8 +714,9 @@ name = "cq-load"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "cq-evidence",
+ "cq-io-macros",
  "cq-storage",
- "cq-syntax",
  "csv",
  "hashbrown 0.15.5",
  "serde",
@@ -939,14 +964,10 @@ dependencies = [
 name = "cq-syntax"
 version = "0.1.0"
 dependencies = [
- "num-bigint",
- "num-rational",
- "num-traits",
+ "cq-evidence",
  "proc-macro2",
  "quote",
- "serde",
  "serde_json",
- "sha2",
  "syn 2.0.119",
  "syn_derive",
 ]
@@ -1183,6 +1204,9 @@ dependencies = [
  "bench-check",
  "cq-storage",
  "libc",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1248,6 +1272,7 @@ dependencies = [
  "gpu-compress-host",
  "gpu-device-columns",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1456,6 +1481,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mini-linq"
 version = "0.1.0"
 dependencies = [
+ "cq-load",
  "cq-planning",
  "mini-linq-macros",
 ]
@@ -1894,7 +1920,9 @@ name = "srd-doop-shared"
 version = "0.1.0"
 dependencies = [
  "bench-check",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

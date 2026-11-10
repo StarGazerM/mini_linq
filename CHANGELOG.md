@@ -13,6 +13,22 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- IO is a standalone library: `cq-load` retains its crate name under `io/cq-load`,
+  and loader/schema macros move to `io/cq-io-macros` without compiler macro
+  reexports. Shared evidence data moves to neutral `runtime/cq-evidence`
+  without old evidence aliases; evidence-file acquisition and Cargo tracking
+  move from compiler syntax to `cq_load::stats_manifest::load_build_input`.
+  Bidirectional dependency checks separate IO
+  from top-level compiler languages, passes, and facades, including dev/build
+  and target-specific edges. Only the user-facing `mini-linq` facade may depend
+  on IO, reexporting the separate library as `mini_linq::cq_load`. Public API and
+  external-package gates retain IO coverage independently of compiler ownership.
+- Dataset preparation can verify stored keys once and bind them to SHA-256
+  content hashes. CPU/GPU TPC-H and DOOP loaders omit complete-row deduplication
+  only when the actual loaded projection includes a matching verified key.
+  Unprepared, changed, projected-away-key and host-built inputs retain set
+  canonicalization. Manifest-path overrides allow read-only dataset adoption;
+  no query annotation or compiler uniqueness fact is introduced.
 - Physical checking, lowering and canonical rewrites share one operator-based
   uniqueness analysis. Every input relation is a set by the IO contract;
   collected loaders canonicalize complete rows before query execution.

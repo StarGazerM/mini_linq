@@ -286,6 +286,8 @@ impl StringInterner {
 /// source cells directly into column-local state; its [`String`] source type is
 /// used only by callers supplying already-owned in-memory fixture rows.
 pub trait InternedField: Sized {
+    /// Injective native source domain, including final code remapping.
+    const KEY_ENCODING: Option<crate::set_manifest::KeyEncoding> = None;
     type Source: Load;
     type State: Default;
 
@@ -296,6 +298,7 @@ pub trait InternedField: Sized {
 }
 
 impl<T: Load> InternedField for T {
+    const KEY_ENCODING: Option<crate::set_manifest::KeyEncoding> = <T as Load>::KEY_ENCODING;
     type Source = T;
     type State = ();
 
@@ -310,6 +313,8 @@ impl<T: Load> InternedField for T {
 }
 
 impl InternedField for StringCode {
+    const KEY_ENCODING: Option<crate::set_manifest::KeyEncoding> =
+        Some(crate::set_manifest::KeyEncoding::String);
     type Source = String;
     type State = StringInterner;
 
@@ -371,6 +376,8 @@ impl<F: cq_storage::scan::Family> crate::ColumnarField<F> for StringCode {
 /// A generated relation with column-local state used only during loading.
 /// File readers borrow source text; returned relation rows own final codes.
 pub trait InternedRelation {
+    /// Equality-preserving fields retained by decoding and finalization.
+    const KEY_COLUMNS: &'static [(&'static str, Option<crate::set_manifest::KeyEncoding>)] = &[];
     type Row;
     type Source: Relation;
     type State;

@@ -265,7 +265,7 @@ This documentation worker did not rerun them.
   `run_boundaries_are_not_duplicate_identity` cover complete-stream and
   complete-row identity, opaque field ordering, and repeated rows inside
   equal-prefix runs.
-- `runtime/cq-load/tests/prefix_order.rs`:
+- `io/cq-load/tests/prefix_order.rs`:
   `load_check_visits_each_adjacent_pair_once_without_reordering`,
   `unsorted_prefixes_reject_at_the_first_descending_pair`,
   `equal_prefixes_never_imply_unique_rows`, and

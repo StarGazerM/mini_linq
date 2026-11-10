@@ -1,6 +1,6 @@
 use crate::typed::{self, Source};
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Customer(customerkey: i64, name: cq_load::StringCode);
 }
 

@@ -240,6 +240,39 @@ by this timing-check cutover. Loader benchmarks must continue measuring real
 fresh loads; never hide `Dataset::clone` or remove loading from an upload-inclusive
 metric and call it a cache speedup.
 
+**DOOP verified input manifests.** After raw DOOP or external SRDatalog
+preparation, certify decoded full-row keys without rewriting the input files:
+
+```sh
+python3 features/datalog/doop/prepare_manifest.py INPUT_DIR --format raw \
+  --manifest /tmp/doop-set-manifest.json
+# For SRDatalog integer CSV inputs, use --format prepared.
+DOOP_SET_MANIFEST=/tmp/doop-set-manifest.json target/release/doop-mini INPUT_DIR
+```
+
+Preparation records only keys actually checked duplicate-free, using signed
+32-bit equality for integer fields. `--key FILE:0,1` additionally checks a
+zero-based column key; full-row keys are always checked. Duplicate-bearing
+files receive no successful certificate for that key and remain usable.
+Without `--manifest`, preparation writes `INPUT_DIR/doop-set-manifest.json`.
+Use an external manifest path for read-only datasets.
+
+Raw `Facts` and prepared `SrdFacts` discover that filename by default;
+`DOOP_SET_MANIFEST` overrides it, and embedders may call
+`load_with_manifest(directory, Some(path))` explicitly. Version-1 manifests
+contain a `relations` map keyed by filename, decoder `types`, and
+`verified_keys` entries with `columns`, `set: "verified"`, and `sha256`.
+Loaders hash the same bytes they decode and skip sorting/deduplication only
+for a matching certificate whose key survives the loaded heading. Missing,
+malformed, uncertified or stale manifests retain full-row deduplication.
+Full-row uniqueness never certifies a smaller projection. Host-built inputs,
+derived method descriptors and normal Datalog set admission are unchanged;
+no certificate becomes a compiler key or annotation.
+
+Preparation coverage: `python3 -m unittest discover -s features/datalog/doop
+-p test_prepare_manifest.py`. Loader coverage is in `doop-shared` and
+`srd-doop-shared` (both its default and `default-query` configurations).
+
 Measured checkpoint (2026-11-03, shared-data worktree): real SF1 default H03
 validated 11,620 rows in 2.096 ms for the first full sample, then 0.605/0.677 ms
 for two 1,000-tuple samples. H13 validated 150,000 rows in 26.472 ms, then

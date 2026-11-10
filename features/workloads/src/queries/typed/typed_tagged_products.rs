@@ -3,7 +3,7 @@ use crate::typed::{self, Source};
 // Tag owns the `tag` domain. Selected tags are encoded through that same
 // domain, so the join compares codes of one dictionary; a selected tag absent
 // from Tag maps to the non-member code and joins nothing.
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Tag(tag: cq_load::StringCode, productkey: i64);
     relation Product(productkey: i64, name: cq_load::StringCode, price: cq_load::Decimal, released: cq_load::Date);
 }

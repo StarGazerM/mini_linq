@@ -33,7 +33,9 @@ members = [
     "passes/cq-physical-realization",
     "passes/cq-sequence-pull",
     "runtime/cq-storage",
-    "runtime/cq-load",
+    "io/cq-load",
+    "io/cq-io-macros",
+    "runtime/cq-evidence",
     "testkit/cq-testkit",
     "facade/cq-stage",
     "facade/cq-planning",
@@ -156,6 +158,8 @@ default-members = [
     "passes/cq-physical-realization",
     "passes/cq-sequence-pull",
     "runtime/cq-storage",
+    "io/cq-io-macros",
+    "runtime/cq-evidence",
     "testkit/cq-testkit",
     "facade/cq-stage",
     "facade/cq-planning",
@@ -271,7 +275,9 @@ cq-syntax = { path = "languages/cq-syntax", version = "0.1.0" }
 cq-lang-ix = { path = "languages/cq-lang-ix", version = "0.1.0", default-features = false }
 cq-lang-vo = { path = "languages/cq-lang-vo", version = "0.1.0", default-features = false }
 cq-storage = { path = "runtime/cq-storage", version = "0.1.0" }
-cq-load = { path = "runtime/cq-load", version = "0.1.0" }
+cq-load = { path = "io/cq-load", version = "0.1.0" }
+cq-io-macros = { path = "io/cq-io-macros", version = "0.1.0" }
+cq-evidence = { path = "runtime/cq-evidence", version = "0.1.0" }
 cq-order = { path = "passes/cq-order", version = "0.1.0", default-features = false }
 cq-relational-lowering = { path = "passes/cq-relational-lowering", version = "0.1.0", default-features = false }
 cq-ra-rewrites = { path = "passes/cq-ra-rewrites", version = "0.1.0", default-features = false }

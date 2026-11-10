@@ -9,7 +9,8 @@ use cq_cost::{calibration, export};
 use cq_load::stats::{ColumnSpec, DistinctMode, RelationSpec};
 use cq_load::stats_manifest::{DatasetRequest, MetadataInput, RelationInput, REQUEST_SCHEMA};
 use cq_load::stats_source::{SourceFormat, SourceOptions};
-use cq_syntax::{declared_evidence::{DeclaredEvidence, RelationBinding, ColumnBinding, EvidenceView}, evidence as ev};
+use cq_syntax::declared_evidence::{DeclaredEvidence, RelationBinding, ColumnBinding, EvidenceView};
+use cq_evidence as ev;
 use quote::ToTokens;
 
 const BUILD: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";

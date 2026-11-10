@@ -80,9 +80,9 @@ pub fn check_iteration_scope(program: &crate::Program) -> syn::Result<()> {
         let facts = &evidence.document.relations[&binding.source];
         let iterated = !component.steps.is_empty();
         let expected = if iterated {
-            cq_syntax::evidence::RelationScope::RecursiveFinal
+            cq_evidence::RelationScope::RecursiveFinal
         } else {
-            cq_syntax::evidence::RelationScope::Frozen
+            cq_evidence::RelationScope::Frozen
         };
         if facts.scope != expected {
             return Err(syn::Error::new_spanned(binding, "evidence iteration scope disagrees with its checked Round component"));

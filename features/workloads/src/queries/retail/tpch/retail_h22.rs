@@ -23,7 +23,7 @@ pub struct Data {
     pub dictionaries: cq_load::Dictionaries,
 }
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Customer(c_custkey: i64, c_phone: StringCode);
     relation Orders(o_orderkey: i64, o_custkey: i64);
 }

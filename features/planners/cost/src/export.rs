@@ -102,7 +102,7 @@ pub struct PlannerInput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Evidence {
-    /// Checked independently with cq_syntax::evidence, never legacy PlanOptions.
+    /// Checked independently with cq_evidence, never legacy PlanOptions.
     pub canonical_json: String,
     /// The complete declared_evidence attachment, including explicit aliases.
     pub attachment_ir: String,

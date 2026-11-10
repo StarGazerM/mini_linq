@@ -190,7 +190,7 @@ def check_decode_sites():
         registered[key] = entry
 
     scopes = (
-        "experiments/gpu", "runtime/cq-load", "runtime/cq-storage",
+        "experiments/gpu", "io/cq-load", "runtime/cq-storage",
         "passes/cq-print", "passes/cq-sequence-pull", "features/datalog",
     )
     sources = {ROOT / entry["path"] for entry in entries}

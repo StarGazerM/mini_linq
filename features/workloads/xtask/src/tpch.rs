@@ -5,6 +5,7 @@ mod compile;
 pub(crate) mod profile;
 use comparison::normalize_set;
 mod data;
+pub(crate) use data::certify_existing;
 
 use crate::Result;
 use cq_testkit::duckdb::Connection;

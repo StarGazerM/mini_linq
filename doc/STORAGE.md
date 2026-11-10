@@ -2,7 +2,7 @@
 
 Status: design begun 2026-10-28, with implemented slices and historical evidence
 distinguished below. Audit baseline: `7e187597` (2026-11-02). It governs
-`runtime/cq-load`, `runtime/cq-storage`,
+`io/cq-load`, `runtime/cq-storage`,
 `experiments/gpu/{compress,device-columns,datalog-runtime,sequence}` and the
 compiler passes that plan over them. Contract text: `doc/PLANNING-REDESIGN.md`
 contract 8. Numerical observations retain their dated result sources; otherwise
@@ -1353,14 +1353,44 @@ one typed `Build` call. Input uniqueness is not
 assumed: constructing the membership set handles duplicate witnesses.
 
 The loader-side `interned_relation_loaders!` opt-in uses ordinary Rust
-field declarations; plain `relation_loaders!` expansion is unchanged.
-Loading needs no compiler type inspection; the only query-side fact is the
-authored column domain below.
+field declarations. Both loader macros also propagate field traits describing
+injective native decoding; they do not inspect Rust type spelling or add query
+facts. The only query-side fact is the authored column domain below.
 `InternedField` trait dispatch preserves ordinary `Load` fields unchanged
 and maps `StringCode` fields from input-only `String` values.
 `InternedRelation` prepares the dictionaries and encodes the rows;
 `parquet_interned` is the load boundary. Representation facts come from
 authored declarations/provenance, not guessed Rust type spellings.
+
+CPU TPC-H preparation verifies a candidate primary key against the exported
+Parquet rows, or the complete exported heading when primary-key columns are
+absent. One grouped pass checks duplicate and null key values; a failed key
+does not trigger another candidate scan. It writes `TABLE.parquet.set.json`
+using schema `mini-linq.parquet-set.v1`, with a `files` array containing `file`,
+whole-file `sha256` (lowercase hex), `set: "verified"`, and `verified_keys`
+(arrays of column names). Uncertified files record `set: "uncertified"` and
+empty `verified_keys`. Raw rows are never removed during preparation.
+Existing prepared exports acquire certificates without being rewritten.
+
+For manifest-only adoption of immutable datasets, use
+`cargo xtask tpch-manifest --output /writable/manifest.json /dataset/orders.parquet /dataset/lineitem.parquet`.
+This reads only explicitly supplied inputs and writes only the requested JSON
+manifest, not adjacent files or input data. Input filenames must be distinct
+within a manifest. No dbgen, workload query execution or Parquet export is performed.
+
+Collected plain and interned Parquet loaders automatically read the adjacent
+certificate. `CQ_LOAD_MANIFEST=/absolute/path/manifest.json` overrides that
+path for every file (one manifest can contain multiple file entries).
+`Loader::parquet_with_manifest` and `parquet_interned_with_manifest` provide
+per-call overrides without changing process environment. A missing override
+does not fall back to an adjacent manifest. A loader skips full-row
+sorting/deduplication only when the same opened immutable Parquet file matches
+the recorded hash and the decoded projection retains every column of a
+verified key with injective native decoding. Full-row uniqueness alone does
+not certify a narrower projection. Missing, malformed, stale or mismatching
+certificates, unsupported/custom decoders, and host-built inputs keep ordinary
+canonicalization. Certificates are trusted preparation artifacts, not signed
+proofs or compiler/planner annotations; do not fabricate them for raw inputs.
 
 Strings are always interned: string equality and order in a query are code
 equality and order within one column domain, and no compiler pass has a
@@ -1433,7 +1463,7 @@ No build, test, or performance result is claimed for this migration here.
    predicates run at input, rule 2), so no such site exists today; this rule
    governs the first one.
 8. **Interning is input preparation, not query work.** It lives only in the
-   loader (`runtime/cq-load/src/intern.rs`, opt-in `interned_relation_loaders!`);
+   loader (`io/cq-load/src/intern.rs`, opt-in `interned_relation_loaders!`);
    no compiler pass interns, and `run()` sees only codes. It is excluded from
    query timing and from acceptance. Its cost bound is one linear pass over
    the column's bytes (bytes ÷ bandwidth, plus hashing), plus a sort of the

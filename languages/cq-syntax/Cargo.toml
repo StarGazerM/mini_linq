@@ -6,13 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cq-evidence.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 syn_derive.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-num-bigint = "0.4"
-num-rational = "0.4"
-num-traits = "0.2"

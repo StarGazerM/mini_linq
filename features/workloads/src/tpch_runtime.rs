@@ -396,7 +396,7 @@ macro_rules! retail_kernel {
         )*];
         pub struct Data { $(pub $table: Vec<($first_ty, $($ty,)*)>,)* $($extra: Option<ZoneData>,)? }
         pub type Answer = ($($out_ty,)+);
-        ::mini_linq::relation_loaders! {
+        ::cq_load::relation_loaders! {
             $(relation $relation($first: $first_ty $(, $column: $ty)*);)*
         }
         pub fn load(root: &std::path::Path, config: &str) -> Result<Data, Box<dyn std::error::Error>> {

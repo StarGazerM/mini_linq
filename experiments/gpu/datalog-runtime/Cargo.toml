@@ -7,7 +7,7 @@ edition = "2021"
 radix-counters = []
 
 [dependencies]
-cq-load = { path = "../../../runtime/cq-load" }
+cq-load = { path = "../../../io/cq-load" }
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true

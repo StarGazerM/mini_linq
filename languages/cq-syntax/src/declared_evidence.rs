@@ -2,11 +2,12 @@
 //!
 //! `declared_evidence "<JSON>" { R = "logical_R" full [a = "logical_a"]; }`
 //! keeps the checked document and explicit column correspondence in the IR.
-//! File acquisition is an explicit build-adapter operation, not parser I/O.
-use crate::{RelationDecl, evidence, symbol_name};
+//! File acquisition belongs to the IO library; this module consumes resident evidence.
+use crate::{RelationDecl, symbol_name};
+use cq_evidence as evidence;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use std::{collections::BTreeSet, path::Path, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 use syn::{Ident, LitStr, Token, parse::{Parse, ParseStream}};
 
 pub mod kw {
@@ -104,25 +105,6 @@ impl DeclaredEvidence {
             syn::Error::new(proc_macro2::Span::call_site(), error.to_string())
         })?;
         Ok(Self { document: Arc::new(document), bindings })
-    }
-
-    /// Build-script input. The same file is registered as a Cargo dependency;
-    /// consumers pass this recorded value to the compiler, not a runtime path.
-    pub fn load_build_input(path: &Path, bindings: Vec<RelationBinding>) -> syn::Result<Self> {
-        let path = path.canonicalize().map_err(|error| {
-            syn::Error::new(proc_macro2::Span::call_site(), format!("evidence {}: {error}", path.display()))
-        })?;
-        let path_text = path.to_str().ok_or_else(|| {
-            syn::Error::new(proc_macro2::Span::call_site(), "evidence path must be UTF-8")
-        })?;
-        if path_text.contains('\n') || path_text.contains('\r') {
-            return Err(syn::Error::new(proc_macro2::Span::call_site(), "evidence path contains a line break"));
-        }
-        println!("cargo:rerun-if-changed={path_text}");
-        let json = std::fs::read_to_string(&path).map_err(|error| {
-            syn::Error::new(proc_macro2::Span::call_site(), format!("evidence {path_text}: {error}"))
-        })?;
-        Self::from_json(&json, bindings)
     }
 
     /// Validate names and complete target-column coverage. Rust types remain

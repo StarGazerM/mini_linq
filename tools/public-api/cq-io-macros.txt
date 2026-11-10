@@ -1,0 +1,3 @@
+cq_io_macros::columnar_relation_loaders	{"proc_macro":{"helpers":[],"kind":"bang"}}
+cq_io_macros::interned_relation_loaders	{"proc_macro":{"helpers":[],"kind":"bang"}}
+cq_io_macros::relation_loaders	{"proc_macro":{"helpers":[],"kind":"bang"}}

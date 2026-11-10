@@ -9,6 +9,10 @@ use std::{
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
+#[path = "../../shared/src/manifest.rs"]
+mod manifest;
+use manifest::{CertifiedReader, Manifest};
+
 #[cfg(not(feature = "default-query"))]
 mod generated;
 #[cfg(feature = "default-query")]
@@ -92,10 +96,38 @@ impl SrdResults {
     }
 }
 
-fn load_rows<const N: usize, T: Ord>(path: &Path, make: impl Fn([i32; N]) -> T) -> Result<Vec<T>> {
+/// Only complete integer tuples implement this private decoder conversion.
+trait IntegerRow<const N: usize>: Ord {
+    fn from_row(row: [i32; N]) -> Self;
+}
+
+macro_rules! integer_row {
+    ($n:literal; $($index:tt => $name:ident),+) => {
+        impl IntegerRow<$n> for ($(integer_row!(@type $name),)+) {
+            fn from_row(row: [i32; $n]) -> Self { ($(row[$index],)+) }
+        }
+    };
+    (@type $name:ident) => { i32 };
+}
+integer_row!(1; 0 => a);
+integer_row!(2; 0 => a, 1 => b);
+integer_row!(3; 0 => a, 1 => b, 2 => c);
+integer_row!(4; 0 => a, 1 => b, 2 => c, 3 => d);
+
+fn load_rows<const N: usize, T: IntegerRow<N>>(path: &Path, manifest: &Manifest) -> Result<Vec<T>> {
     let mut rows = Vec::new();
-    for (line_no, line) in BufReader::new(File::open(path)?).lines().enumerate() {
-        let line = line?;
+    let projection: [usize; N] = std::array::from_fn(|i| i);
+    let hash = manifest.expected_hash(path, &["i32"; N], &projection);
+    let mut reader = BufReader::new(CertifiedReader::new(File::open(path)?, hash));
+    let mut line = String::new();
+    let mut line_no = 0;
+    while {
+        line.clear();
+        reader.read_line(&mut line)? != 0
+    } {
+        line_no += 1;
+        let line = line.strip_suffix('\n').unwrap_or(&line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
         if line.is_empty() {
             continue;
         }
@@ -103,23 +135,25 @@ fn load_rows<const N: usize, T: Ord>(path: &Path, make: impl Fn([i32; N]) -> T) 
         let mut columns = line.split('\t');
         for value in &mut row {
             let column = columns.next().ok_or_else(|| {
-                format!("{}:{}: expected {N} columns", path.display(), line_no + 1)
+                format!("{}:{line_no}: expected {N} columns", path.display())
             })?;
             *value = column.parse().map_err(|error| {
                 format!(
                     "{}:{}: invalid i32 {column:?}: {error}",
                     path.display(),
-                    line_no + 1
+                    line_no
                 )
             })?;
         }
         if columns.next().is_some() {
-            return Err(format!("{}:{}: expected {N} columns", path.display(), line_no + 1).into());
+            return Err(format!("{}:{line_no}: expected {N} columns", path.display()).into());
         }
-        rows.push(make(row));
+        rows.push(T::from_row(row));
     }
-    rows.sort_unstable();
-    rows.dedup();
+    if !reader.into_inner().verified() {
+        rows.sort_unstable();
+        rows.dedup();
+    }
     Ok(rows)
 }
 
@@ -147,9 +181,45 @@ mod witness_tests {
     fn prepared_input_loading_preserves_full_row_support() {
         let path = std::env::temp_dir().join(format!("srd-set-input-{}.csv", std::process::id()));
         std::fs::write(&path, "2\t7\n1\t9\n2\t7\n1\t8\n").unwrap();
-        let rows = load_rows(&path, |[left, right]| (left, right)).unwrap();
+        let rows = load_rows::<2, (i32, i32)>(&path, &Manifest::default()).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(rows, [(1, 8), (1, 9), (2, 7)]);
+    }
+
+    #[test]
+    fn prepared_manifest_override_and_stale_hash_fallback() {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!("srd-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let schema: serde_json::Value = serde_json::from_str(include_str!("generated.schema.json")).unwrap();
+        for input in schema["inputs"].as_object().unwrap().values() {
+            std::fs::write(root.join(input["file"].as_str().unwrap()), b"").unwrap();
+        }
+        let meta: std::collections::BTreeMap<_, _> = schema["metadata_keys"].as_array().unwrap()
+            .iter().map(|key| (key.as_str().unwrap(), 0)).collect();
+        std::fs::write(root.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+        let bytes = b"2\t7\r\n\r\n1\t9\r\n";
+        std::fs::write(root.join("DirectSuperclass.csv"), bytes).unwrap();
+        let manifest_path = root.join("override.json");
+        let manifest = serde_json::json!({
+            "version": 1, "relations": {"DirectSuperclass.csv": {
+                "types": ["i32", "i32"],
+                "verified_keys": [{"columns": [0], "set": "verified",
+                    "sha256": format!("{:x}", Sha256::digest(bytes))}]
+            }}
+        });
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert_eq!(SrdFacts::load_with_manifest(&root, None).unwrap().r_directsuperclass,
+            [(1, 9), (2, 7)]);
+        assert_eq!(SrdFacts::load_with_manifest(&root, Some(&manifest_path)).unwrap().r_directsuperclass,
+            [(2, 7), (1, 9)]);
+        std::fs::write(root.join("DirectSuperclass.csv"), b"2\t7\n1\t9\n+2\t7\n").unwrap();
+        assert_eq!(SrdFacts::load_with_manifest(&root, Some(&manifest_path)).unwrap().r_directsuperclass,
+            [(1, 9), (2, 7)]);
+        std::fs::write(&manifest_path, b"{}").unwrap();
+        assert_eq!(SrdFacts::load_with_manifest(&root, Some(&manifest_path)).unwrap().r_directsuperclass,
+            [(1, 9), (2, 7)]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

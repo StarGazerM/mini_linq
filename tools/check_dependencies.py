@@ -68,9 +68,10 @@ LANGUAGES = inventory("languages")
 FAMILIES = inventory("passes")
 RUNTIME = inventory("runtime")
 FACADES = inventory("facade")
+IO = inventory("io")
 TESTKIT = inventory("testkit")
 CORE = LANGUAGES | FAMILIES | RUNTIME | FACADES
-PATHS = CORE | TESTKIT
+PATHS = CORE | IO | TESTKIT
 # The crate declares the languages its pass transforms, not an arbitrary allowlist.
 EDGES = {}
 for name, path in FAMILIES.items():
@@ -168,14 +169,42 @@ def check_feature_sources():
                 raise ValueError(f"{source.relative_to(ROOT)} uses private core item {crate}::{symbol}")
     print("PASS: core has no feature references or hidden public APIs; no consumer uses private core items", flush=True)
 
+
+def check_io_boundaries(packages):
+    """Cargo metadata includes normal, dev, build and target-specific edges."""
+    compiler_roots = {ROOT / folder for folder in ("languages", "passes", "facade")}
+    io_root = ROOT / "io"
+    facade = ROOT / "facade/mini-linq"
+    for package in packages.values():
+        owner = Path(package["manifest_path"]).resolve().parent
+        compiler = any(owner.is_relative_to(root) for root in compiler_roots)
+        loader = owner.is_relative_to(io_root)
+        if not compiler and not loader:
+            continue
+        for dependency in package["dependencies"]:
+            target = dependency["name"]
+            paths = []
+            if dependency.get("path"):
+                paths.append(Path(dependency["path"]).resolve())
+            if target in packages:
+                paths.append(Path(packages[target]["manifest_path"]).resolve().parent)
+            if compiler and owner != facade and any(path.is_relative_to(io_root) for path in paths):
+                raise ValueError(f"compiler depends on IO: {package['name']} -> {target}")
+            if loader and any(path.is_relative_to(root) for path in paths for root in compiler_roots):
+                raise ValueError(f"IO depends on compiler: {package['name']} -> {target}")
+
+
 def check(data, announce=True):
     packages = {p["name"]: p for p in data["packages"]}
+    check_io_boundaries(packages)
     for name, path in PATHS.items():
         package = packages[name]
         internal = {d["name"] for d in production(package) if "path" in d or d["name"] in packages}
         if name in LANGUAGES:
             base = {"cq-lang-vo": "cq-lang-cq", "cq-lang-ix": "cq-lang-ra", "cq-lang-structures": "cq-lang-physical", "cq-lang-sequence": "cq-lang-structures"}.get(name)
             allowed = ({"cq-syntax", "cq-stage", base} - {None, name})
+            if name == "cq-syntax":
+                allowed.add("cq-evidence")
             if package["features"]:
                 raise ValueError(f"language features are forbidden: {name}")
         elif name in FAMILIES:
@@ -195,11 +224,13 @@ def check(data, announce=True):
             if package["features"]:
                 raise ValueError(f"pass features are forbidden: {name}")
         elif name in RUNTIME:
-            allowed = ({"cq-syntax"} - {name}) | ({"cq-storage"} if name == "cq-load" else set())
+            allowed = set()
+        elif name in IO:
+            allowed = (set(IO) | set(RUNTIME)) - {name}
         elif name in TESTKIT:
             allowed = set(LANGUAGES) | set(RUNTIME)
         else:
-            allowed = set(CORE)
+            allowed = set(CORE) | (set(IO) if path == Path("facade/mini-linq") else set())
         for dep in package["dependencies"]:
             target = dep["name"]
             if target in FEATURE_NAMES or (dep.get("path") and Path(dep["path"]).resolve().is_relative_to(ROOT / "features")):
@@ -211,6 +242,8 @@ def check(data, announce=True):
             if "path" not in dep and target not in packages: continue
             expected = Path(packages[target]["manifest_path"]).parent if target in packages else None
             permitted = allowed | (set(TESTKIT) if name in CORE and dep["kind"] == "dev" else set())
+            if name in RUNTIME and dep["kind"] == "dev":
+                permitted |= set(IO)
             if target not in permitted or "path" not in dep or Path(dep["path"]).resolve() != expected:
                 raise ValueError(f"forbidden {dep['kind'] or 'normal'} dependency: {name} -> {target}")
         for target in package["targets"]:
@@ -220,7 +253,7 @@ def check(data, announce=True):
     for name in FACADES:
         if packages[name]["features"]:
             raise ValueError(f"facade Cargo features are forbidden: {name}")
-    if announce: print("PASS: folder-derived language, pass, runtime, facade and testkit boundaries", flush=True)
+    if announce: print("PASS: folder-derived language, pass, runtime, IO, facade and testkit boundaries", flush=True)
     return packages
 
 
@@ -236,6 +269,14 @@ def negative_dependency_checks(data):
         mutations += [(owner, language, kind, remote)
                       for language in LANGUAGES if language not in {"cq-syntax", owner}
                       for kind in (None, "build") for remote in (False, True)]
+    mutations += [(owner, target, kind, remote)
+                  for owner in LANGUAGES | FAMILIES | FACADES
+                  if PATHS[owner] != Path("facade/mini-linq")
+                  for target in IO
+                  for kind in (None, "dev", "build") for remote in (False, True)]
+    mutations += [(owner, target, kind, remote)
+                  for owner in IO for target in LANGUAGES | FAMILIES | FACADES
+                  for kind in (None, "dev", "build") for remote in (False, True)]
     if FEATURE_NAMES:
         feature = sorted(FEATURE_NAMES)[0]
         mutations += [(owner, feature, kind, True)
@@ -333,9 +374,11 @@ def copy_component(destination, name, selected, tested):
 
 def isolate(packages, only=()):
     logdir = ROOT / "target/component-logs"; logdir.mkdir(parents=True, exist_ok=True)
-    for name in CORE | TESTKIT:
+    for name in CORE | IO | TESTKIT:
         if only and name not in only: continue
-        selected = closure(packages, name) | {"cq-syntax"}
+        selected = closure(packages, name)
+        if name not in IO:
+            selected |= closure(packages, "cq-syntax")
         with tempfile.TemporaryDirectory(prefix=f"mini-linq-{name}-") as temporary:
             destination = Path(temporary)
             write_workspace(destination, selected)

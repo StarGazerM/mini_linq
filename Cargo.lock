@@ -319,6 +319,7 @@ dependencies = [
  "cq-datalog-print",
  "cq-datalog-storage",
  "cq-datalog-stratify",
+ "cq-evidence",
  "cq-index-policy",
  "cq-lang-cq",
  "cq-lang-datalog-round",
@@ -366,6 +367,7 @@ dependencies = [
  "cq-datalog-stratify",
  "cq-datalog-test-passes",
  "cq-datalog-testkit",
+ "cq-evidence",
  "cq-lang-datalog-incremental",
  "cq-lang-datalog-round",
  "cq-lang-datalog-source",
@@ -407,6 +409,7 @@ dependencies = [
  "cq-datalog-storage",
  "cq-datalog-stratify",
  "cq-datalog-support",
+ "cq-evidence",
  "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
  "cq-lang-vo",
@@ -700,6 +703,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-evidence"
+version = "0.1.0"
+dependencies = [
+ "num-bigint",
+ "num-rational",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "cq-ext-aggregate"
 version = "0.1.0"
 dependencies = [
@@ -798,6 +813,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-io-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-join-filters"
 version = "0.1.0"
 dependencies = [
@@ -846,6 +870,7 @@ name = "cq-lang-datalog-round"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-support",
+ "cq-evidence",
  "cq-lang-cq",
  "cq-lang-datalog-storage",
  "cq-stage",
@@ -860,6 +885,7 @@ name = "cq-lang-datalog-source"
 version = "0.0.0"
 dependencies = [
  "cq-datalog-support",
+ "cq-evidence",
  "cq-lang-cq",
  "cq-stage",
  "cq-syntax",
@@ -989,8 +1015,9 @@ dependencies = [
  "ahash",
  "arrow-array",
  "arrow-schema",
+ "cq-evidence",
+ "cq-io-macros",
  "cq-storage",
- "cq-syntax",
  "csv",
  "hashbrown 0.15.5",
  "parquet",
@@ -1284,7 +1311,6 @@ dependencies = [
  "cq-lang-cq",
  "cq-lang-sequence",
  "cq-lang-structures",
- "cq-load",
  "cq-order",
  "cq-physical-lowering",
  "cq-physical-realization",
@@ -1398,14 +1424,10 @@ dependencies = [
 name = "cq-syntax"
 version = "0.1.0"
 dependencies = [
- "num-bigint",
- "num-rational",
- "num-traits",
+ "cq-evidence",
  "proc-macro2",
  "quote",
- "serde",
  "serde_json",
- "sha2",
  "syn 2.0.119",
  "syn_derive",
 ]
@@ -1533,6 +1555,7 @@ dependencies = [
  "bench-check",
  "cq-lang-cq",
  "cq-lang-ra",
+ "cq-load",
  "cq-order",
  "cq-relational-lowering",
  "cq-testkit",
@@ -1790,6 +1813,9 @@ dependencies = [
  "bench-check",
  "cq-storage",
  "libc",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2634,8 +2660,8 @@ version = "0.1.0"
 dependencies = [
  "bench-check",
  "cq-cost",
+ "cq-evidence",
  "cq-load",
- "cq-syntax",
  "serde_json",
  "srd-doop-shared",
 ]
@@ -2671,7 +2697,9 @@ version = "0.1.0"
 dependencies = [
  "bench-check",
  "cq-storage",
+ "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

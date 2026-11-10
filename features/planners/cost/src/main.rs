@@ -125,7 +125,7 @@ fn advise(mut args: impl Iterator<Item = String>) -> Result<()> {
     if flags.get("--expected-input-hash").is_some_and(|hash| hash != &input.input_hash) {
         return Err("planner input differs from --expected-input-hash".into());
     }
-    let evidence = cq_syntax::evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
+    let evidence = cq_evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
     let output = Path::new(required("--out")?);
     let advice = Path::new(required("--advice")?);
     let identity = |path: &Path| -> Result<std::path::PathBuf> {
@@ -165,7 +165,7 @@ fn review(mut args: impl Iterator<Item = String>) -> Result<()> {
         flags.get(flag).map(String::as_str).ok_or_else(|| format!("missing {flag}").into())
     };
     let plans = export::parse_json(&std::fs::read_to_string(required("--plans")?)?)?;
-    let evidence = cq_syntax::evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
+    let evidence = cq_evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
     let cost_bytes = std::fs::read(required("--costs")?)?;
     let report_bytes = std::fs::read(required("--report")?)?;
     let costs: cq_cost::cost::AdviceReport = serde_json::from_slice(&cost_bytes)?;

@@ -3,8 +3,9 @@ use std::fmt;
 use std::str::FromStr;
 
 macro_rules! primitives {
-    ($($ty:ty => $array:ident),* $(,)?) => {$ (
+    ($encoding:expr; $($ty:ty => $array:ident),* $(,)?) => {$ (
         impl Load for $ty {
+            const KEY_ENCODING: Option<crate::set_manifest::KeyEncoding> = $encoding;
             // DECODE ?: primitive text parsing constructs host values for generic Load callers with unknown consumers.
             fn load(field: &str) -> Result<Self, String> {
                 field.parse().map_err(|error: <$ty as FromStr>::Err| error.to_string())
@@ -39,16 +40,18 @@ macro_rules! primitives {
     )* };
 }
 
-primitives! {
-    bool => BooleanArray,
+primitives! { Some(crate::set_manifest::KeyEncoding::Boolean); bool => BooleanArray }
+primitives! { Some(crate::set_manifest::KeyEncoding::Integer);
     i8 => Int8Array, i16 => Int16Array, i32 => Int32Array, i64 => Int64Array,
     u8 => UInt8Array, u16 => UInt16Array, u32 => UInt32Array, u64 => UInt64Array,
-    f64 => Float64Array,
 }
+primitives! { None; f64 => Float64Array }
 
 macro_rules! owned_strings {
     ($($ty:ty),* $(,)?) => {$ (
         impl Load for $ty {
+            const KEY_ENCODING: Option<crate::set_manifest::KeyEncoding> =
+                Some(crate::set_manifest::KeyEncoding::String);
             // DECODE ?: owned-string loading materializes source text for arbitrary Load consumers.
             fn load(field: &str) -> Result<Self, String> {
                 Ok(field.into())
@@ -132,6 +135,8 @@ impl<const SCALE: u32> cq_storage::scan::OrdinalDecode for Decimal<SCALE> {
 }
 
 impl<const SCALE: u32> Load for Decimal<SCALE> {
+    const KEY_ENCODING: Option<crate::set_manifest::KeyEncoding> =
+        Some(crate::set_manifest::KeyEncoding::Decimal);
     // DECODE ?: Decimal::load parses a logical decimal for generic source, test, and user callers.
     fn load(field: &str) -> Result<Self, String> {
         if SCALE > 18 {
@@ -304,6 +309,8 @@ impl cq_storage::scan::OrdinalDecode for Date {
 }
 
 impl Load for Date {
+    const KEY_ENCODING: Option<crate::set_manifest::KeyEncoding> =
+        Some(crate::set_manifest::KeyEncoding::Date);
     // DECODE ?: Date::load reconstructs a logical Gregorian date for generic Load consumers.
     fn load(field: &str) -> Result<Self, String> {
         let bytes = field.as_bytes();

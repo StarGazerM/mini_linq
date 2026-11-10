@@ -21,7 +21,7 @@ pub struct Data {
     pub lineitem: Vec<Lineitem>,
 }
 
-mini_linq::relation_loaders! {
+cq_load::relation_loaders! {
     relation Lineitem(l_orderkey: i64, l_linenumber: i64,
         l_extendedprice: Decimal, l_discount: Decimal, l_quantity: Decimal,
         l_shipdate: Date);

@@ -107,6 +107,118 @@ class ClosedCoreDependencies(unittest.TestCase):
                         "path": str(check_dependencies.ROOT / "experiments/cpu")})
 
 
+
+class IoDependencies(unittest.TestCase):
+    def packages(self, owner, target, kind=None, optional=False, rename=None, target_cfg=None,
+                 local=True):
+        dependency = {"name": "target", "kind": kind, "optional": optional,
+                      "rename": rename, "target": target_cfg}
+        if local:
+            dependency["path"] = str(check_dependencies.ROOT / target)
+        return {
+            "owner": {"name": "owner",
+                      "manifest_path": str(check_dependencies.ROOT / owner / "Cargo.toml"),
+                      "dependencies": [dependency], "features": {}, "targets": []},
+            "target": {"name": "target",
+                       "manifest_path": str(check_dependencies.ROOT / target / "Cargo.toml"),
+                       "dependencies": [], "features": {}, "targets": []},
+        }
+
+    def test_both_directions_reject_every_cargo_edge_form(self):
+        for compiler in ("languages/new-language", "passes/new-pass", "facade/new-facade",
+                         "facade/mini-linq-macros", "languages/nested/new-language"):
+            for loader in ("io/cq-load", "io/cq-io-macros", "io/future/nested-loader"):
+                for owner, target in ((compiler, loader), (loader, compiler)):
+                    for kind in (None, "dev", "build"):
+                        for optional in (False, True):
+                            for rename in (None, "innocent_alias"):
+                                for target_cfg in (None, "cfg(unix)"):
+                                    for local in (False, True):
+                                        with self.subTest(owner=owner, target=target, kind=kind,
+                                                          optional=optional, rename=rename,
+                                                          target_cfg=target_cfg, local=local), \
+                                                self.assertRaisesRegex(ValueError, "compiler depends on IO|IO depends on compiler"):
+                                            check_dependencies.check_io_boundaries(self.packages(
+                                                owner, target, kind, optional, rename, target_cfg, local))
+
+    def test_mini_linq_exception_is_one_way_and_exact(self):
+        for kind in (None, "dev", "build"):
+            check_dependencies.check_io_boundaries(
+                self.packages("facade/mini-linq", "io/cq-load", kind))
+            for facade in ("facade/mini-linq", "facade/mini-linq/nested", "facade/mini-linq-other"):
+                with self.subTest(facade=facade, kind=kind), \
+                        self.assertRaisesRegex(ValueError, "IO depends on compiler"):
+                    check_dependencies.check_io_boundaries(self.packages("io/cq-load", facade, kind))
+            for facade in ("facade/mini-linq/nested", "facade/mini-linq-other"):
+                with self.subTest(facade=facade, kind=kind), \
+                        self.assertRaisesRegex(ValueError, "compiler depends on IO"):
+                    check_dependencies.check_io_boundaries(self.packages(facade, "io/cq-load", kind))
+
+    def test_dependency_paths_cannot_hide_behind_unknown_package_names(self):
+        for owner, target in (("passes/new-pass", "io/new-loader"),
+                              ("io/new-loader", "languages/new-language")):
+            packages = self.packages(owner, target, "dev")
+            del packages["target"]
+            with self.subTest(owner=owner), self.assertRaises(ValueError):
+                check_dependencies.check_io_boundaries(packages)
+
+    def test_neutral_runtime_and_feature_local_compiler_folders_are_permitted(self):
+        for owner, target in (
+            ("io/cq-load", "runtime/cq-evidence"),
+            ("languages/cq-syntax", "runtime/cq-evidence"),
+            ("io/cq-load", "runtime/cq-storage"),
+            ("io/cq-load", "io/cq-io-macros"),
+            ("features/datalog/languages/source", "io/cq-load"),
+            ("features/datalog/passes/print", "io/cq-load"),
+            ("features/datalog/facade/query", "io/cq-load"),
+        ):
+            with self.subTest(owner=owner, target=target):
+                check_dependencies.check_io_boundaries(self.packages(owner, target))
+
+    def test_main_checker_enforces_boundary_before_dev_allowances(self):
+        packages = self.packages("facade/mini-linq-macros", "io/cq-load", "dev")
+        with patch.object(check_dependencies, "PATHS", {}), \
+                self.assertRaisesRegex(ValueError, "compiler depends on IO"):
+            check_dependencies.check({"packages": list(packages.values())}, announce=False)
+
+    def test_main_checker_accepts_user_facade_io_dependency(self):
+        for kind in (None, "dev", "build"):
+            packages = self.packages("facade/mini-linq", "io/cq-load", kind)
+            with self.subTest(kind=kind), \
+                    patch.object(check_dependencies, "PATHS", {"owner": Path("facade/mini-linq")}), \
+                    patch.object(check_dependencies, "FACADES", {"owner": Path("facade/mini-linq")}), \
+                    patch.object(check_dependencies, "IO", {"target": Path("io/cq-load")}):
+                check_dependencies.check({"packages": list(packages.values())}, announce=False)
+
+    def test_main_checker_accepts_io_and_neutral_runtime_dependencies(self):
+        for target in ("io/cq-io-macros", "runtime/cq-evidence", "runtime/cq-storage"):
+            for kind in (None, "dev", "build"):
+                packages = self.packages("io/cq-load", target, kind)
+                io_paths = {"owner": Path("io/cq-load")}
+                runtimes = {}
+                (io_paths if target.startswith("io/") else runtimes)["target"] = Path(target)
+                with self.subTest(target=target, kind=kind), \
+                        patch.object(check_dependencies, "PATHS", {"owner": Path("io/cq-load")}), \
+                        patch.object(check_dependencies, "FACADES", {}), \
+                        patch.object(check_dependencies, "IO", io_paths), \
+                        patch.object(check_dependencies, "RUNTIME", runtimes):
+                    check_dependencies.check({"packages": list(packages.values())}, announce=False)
+
+    def test_runtime_io_is_only_a_development_dependency(self):
+        for kind in (None, "dev", "build"):
+            packages = self.packages("runtime/cq-storage", "io/cq-load", kind)
+            with self.subTest(kind=kind), \
+                    patch.object(check_dependencies, "PATHS", {"owner": Path("runtime/cq-storage")}), \
+                    patch.object(check_dependencies, "FACADES", {}), \
+                    patch.object(check_dependencies, "RUNTIME", {"owner": Path("runtime/cq-storage")}), \
+                    patch.object(check_dependencies, "IO", {"target": Path("io/cq-load")}):
+                if kind == "dev":
+                    check_dependencies.check({"packages": list(packages.values())}, announce=False)
+                else:
+                    with self.assertRaises(ValueError):
+                        check_dependencies.check({"packages": list(packages.values())}, announce=False)
+
+
 class SequenceDependencies(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

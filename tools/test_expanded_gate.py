@@ -209,7 +209,7 @@ fn kernel() {
     def test_runtime_graph_excludes_unreachable_gpu_packages(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            names = ["query", "cq-storage", "cq-load", "cq-gpu-runtime"]
+            names = ["query", "cq-storage", "cq-load", "cq-evidence", "cq-gpu-runtime"]
             packages = []
             for name in names:
                 path = root / name
@@ -219,9 +219,10 @@ fn kernel() {
                                  "manifest_path": str(path / "Cargo.toml")})
             nodes = [{"id": name, "features": [], "dependencies": ["cq-storage", "cq-load"] if name == "query" else []}
                      for name in names]
+            nodes[2]["dependencies"].append("cq-evidence")
             meta = {"packages": packages, "resolve": {"root": "query", "nodes": nodes}}
             runtimes, _ = gate.runtime_sources(meta)
-            self.assertEqual(set(runtimes), {"cq-storage", "cq-load"})
+            self.assertEqual(set(runtimes), {"cq-storage", "cq-load", "cq-evidence"})
             nodes[0]["dependencies"].append("cq-gpu-runtime")
             self.assertIn("cq-gpu-runtime", gate.runtime_sources(meta)[0])
             packages[-1]["targets"] = [{"kind": ["proc-macro"]}]

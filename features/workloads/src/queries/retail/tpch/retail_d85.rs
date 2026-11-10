@@ -51,7 +51,7 @@ pub struct Data {
     hypergraph: Option<ZoneData>,
 }
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Lineitem(l_orderkey: i64, l_partkey: i64, l_suppkey: i64);
     relation PartSupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64);
     relation Part(p_partkey: i64);

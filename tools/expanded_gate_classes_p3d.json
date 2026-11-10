@@ -1260,553 +1260,553 @@
    "class": "p3c-intern-loader",
    "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d19",
    "class": "p3c-intern-loader",
    "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d19",
    "class": "p3c-intern-loader",
    "hunk_sha256": "04dc43b38a2a71158af529234d57981f2761277c4dcafec384bbc4b2cec4e5f6",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (1 columns: p_partkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d19",
    "class": "p3c-intern-loader",
    "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d19",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d19",
    "class": "p3c-intern-loader",
    "hunk_sha256": "24add7caf180018ba8b8b8780f3a5d32574c22db169ed62ba140ae023868a5e0",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (1 columns: s_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d27",
    "class": "p3c-intern-loader",
    "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d27",
    "class": "p3c-intern-loader",
    "hunk_sha256": "4a0231dd8c6b0376227a158ef9b72d0b45dcf5e68813d51953df5edf9a2930f1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d27",
    "class": "p3c-intern-loader",
    "hunk_sha256": "17c4c7a69de8da4ad0e0ede68fddf9471346743877377935f05e6631fc9fd64d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_brand): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d27",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d27",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d85",
    "class": "p3c-intern-loader",
    "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d85",
    "class": "p3c-intern-loader",
    "hunk_sha256": "6b45e68aa91cadeb6b8c590b7e08add588fb5bd4346e99f43de0fc018b22a6d9",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPartSupp (3 columns: ps_partkey, ps_suppkey, ps_availqty): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d85",
    "class": "p3c-intern-loader",
    "hunk_sha256": "04dc43b38a2a71158af529234d57981f2761277c4dcafec384bbc4b2cec4e5f6",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (1 columns: p_partkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d85",
    "class": "p3c-intern-loader",
    "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d85",
    "class": "p3c-intern-loader",
    "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d85",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_d85",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h01",
    "class": "p3c-intern-loader",
    "hunk_sha256": "c26d0141f2ec5c39605c3188858d94cc7ed6fde345c718242dfaef9d99ac17e5",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (7 columns: l_orderkey, l_linenumber, l_returnflag, l_linestatus, l_quantity, l_extendedprice, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h02",
    "class": "p3c-intern-loader",
    "hunk_sha256": "55c0924dfee1dab5534b5c4981551456b4977909fbd38618fb893549faa89c71",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (4 columns: p_partkey, p_mfgr, p_size, p_type): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h02",
    "class": "p3c-intern-loader",
    "hunk_sha256": "f71622ca49ca086ec94bd1b81aeac28096d7cb59917f0410661e9a4b837de469",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPartsupp (3 columns: ps_partkey, ps_suppkey, ps_supplycost): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h02",
    "class": "p3c-intern-loader",
    "hunk_sha256": "8d683893d5ec6fe0aed91a09a2519ea7dbfaf313f5e760c6579ad2501feccd12",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (7 columns: s_suppkey, s_nationkey, s_acctbal, s_name, s_address, s_phone, s_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h02",
    "class": "p3c-intern-loader",
    "hunk_sha256": "68741a76f2189ebf38c32ae4cfc35f04fc13cf4fb045f190304fee2f3f7011b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (3 columns: n_nationkey, n_regionkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h02",
    "class": "p3c-intern-loader",
    "hunk_sha256": "17cff27330de5cac317026c0832df00f9826119d50a2fa6383fa4786ecdb5d5e",
    "reason": "InternedRelation loader glue for __MiniLinqLoadRegion (2 columns: r_regionkey, r_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h03",
    "class": "p3c-intern-loader",
    "hunk_sha256": "4fba573710f394a25af4b2c9923acd357f11ad0f97acf044cfd05d601fb100bd",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_mktsegment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h03",
    "class": "p3c-intern-loader",
    "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h03",
    "class": "p3c-intern-loader",
    "hunk_sha256": "6897406392b36973b9c86ae11d1dc9963612fd534005f821124b1908de142b30",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (2 columns: l_orderkey, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h05",
    "class": "p3c-intern-loader",
    "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h05",
    "class": "p3c-intern-loader",
    "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h05",
    "class": "p3c-intern-loader",
    "hunk_sha256": "d8b39cfd9fb47c20b5d9a00262ed59d3cb904e2c76a42a4ca91a756542696365",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (2 columns: l_orderkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h05",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h05",
    "class": "p3c-intern-loader",
    "hunk_sha256": "ba96814ad77b8f248d0f6c405116be090d9fc168c131d4c89bc7f71ae843f8ea",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_regionkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h05",
    "class": "p3c-intern-loader",
    "hunk_sha256": "17cff27330de5cac317026c0832df00f9826119d50a2fa6383fa4786ecdb5d5e",
    "reason": "InternedRelation loader glue for __MiniLinqLoadRegion (2 columns: r_regionkey, r_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07",
    "class": "p3c-intern-loader",
    "hunk_sha256": "1a21299d590e5fd15fb70a81b3babbc6e0c2950987032b5e60162b0926310909",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_suppkey, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07",
    "class": "p3c-intern-loader",
    "hunk_sha256": "64c4f1fe1a73187fc5e6636e18bbb373e91358582c3f0c2ed3e84ff23a2041a6",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_custkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07",
    "class": "p3c-intern-loader",
    "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07_block",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07_block",
    "class": "p3c-intern-loader",
    "hunk_sha256": "1a21299d590e5fd15fb70a81b3babbc6e0c2950987032b5e60162b0926310909",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_suppkey, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07_block",
    "class": "p3c-intern-loader",
    "hunk_sha256": "64c4f1fe1a73187fc5e6636e18bbb373e91358582c3f0c2ed3e84ff23a2041a6",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_custkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07_block",
    "class": "p3c-intern-loader",
    "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h07_block",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h08",
    "class": "p3c-intern-loader",
    "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h08",
    "class": "p3c-intern-loader",
    "hunk_sha256": "0705dd62a21b1f8b5aaca96403e78109b5bbf07d97349ae9361cd90ae358ae4a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_type): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h08",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h08",
    "class": "p3c-intern-loader",
    "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h08",
    "class": "p3c-intern-loader",
    "hunk_sha256": "580189df982054a8cefafd5fdd40b6c292126bb92d760764ae56620713b202e3",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h08",
    "class": "p3c-intern-loader",
    "hunk_sha256": "ba96814ad77b8f248d0f6c405116be090d9fc168c131d4c89bc7f71ae843f8ea",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_regionkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h08",
    "class": "p3c-intern-loader",
    "hunk_sha256": "17cff27330de5cac317026c0832df00f9826119d50a2fa6383fa4786ecdb5d5e",
    "reason": "InternedRelation loader glue for __MiniLinqLoadRegion (2 columns: r_regionkey, r_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h09",
    "class": "p3c-intern-loader",
    "hunk_sha256": "14ddf7dc15623b9e5e34c7b371592630fa79c7937f8308d6832c53cac4f215a2",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_partkey, l_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h09",
    "class": "p3c-intern-loader",
    "hunk_sha256": "bc29554cbe08dc23b084391c40c84ceb17131def8d1b944eded3f24c44d8d0f2",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPartSupp (2 columns: ps_partkey, ps_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h09",
    "class": "p3c-intern-loader",
    "hunk_sha256": "50a66f8d7ebca8dbbed5c9fae8e97cb59af86927f18998de6d9a7491013d7e8b",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h09",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h09",
    "class": "p3c-intern-loader",
    "hunk_sha256": "d94ba589884e8172626e731639ac9769d563f57b09ec6a9d7ae966582243c513",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (1 columns: o_orderkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h09",
    "class": "p3c-intern-loader",
    "hunk_sha256": "9a637291e413fbda3ba1086fd7eb5bb2dde71123b939082f1ec4b688a5e7da8c",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (1 columns: n_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h10",
    "class": "p3c-intern-loader",
    "hunk_sha256": "3408521339b8085d7799cf435d3ad994e59674b77673681be0763f01f3d998d1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (7 columns: c_custkey, c_name, c_acctbal, c_nationkey, c_address, c_phone, c_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h10",
    "class": "p3c-intern-loader",
    "hunk_sha256": "a24f22a34b55aa7d872a13c79dffcdd506f0a6afc73a51b15cab819137a2728a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_orderdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h10",
    "class": "p3c-intern-loader",
    "hunk_sha256": "1467ab2539eddb1d3737de30c19ecbdd902de3e191d0e4b42de49758d579ab9c",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (5 columns: l_orderkey, l_linenumber, l_extendedprice, l_discount, l_returnflag): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h10",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h11",
    "class": "p3c-intern-loader",
    "hunk_sha256": "d9a68b4d8f2b7821bfe709c7fc960a1dffdf513af494ddd9bafc7e5163319b68",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPartsupp (4 columns: ps_partkey, ps_suppkey, ps_availqty, ps_supplycost): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h11",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b6fb60cca2cf7461a94b752158b2ce608da342a1c45fe6035412fbb7a66fa1b1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_nationkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h11",
    "class": "p3c-intern-loader",
    "hunk_sha256": "b45014c5a1cce6fd2395d4c35a0048b2eb5bfc5883caf683e69c90c8d5d6e06d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadNation (2 columns: n_nationkey, n_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h12",
    "class": "p3c-intern-loader",
    "hunk_sha256": "4bad46be2a3a790884aabb9b6121e67759f71af84ed8d6999dc91db9d59f28fb",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (2 columns: o_orderkey, o_orderpriority): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h12",
    "class": "p3c-intern-loader",
    "hunk_sha256": "7c036f424260b48ba2d5271eb225440663e77a0933ff82d75df176bbd5dcaf46",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (6 columns: l_orderkey, l_linenumber, l_shipmode, l_commitdate, l_receiptdate, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h13",
    "class": "p3c-intern-loader",
    "hunk_sha256": "ba58810fe3058b4116df2672a1f0c787840608d9d0bb2824655c095fd6b86121",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (1 columns: c_custkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h13",
    "class": "p3c-intern-loader",
    "hunk_sha256": "8d261afe0e7778dd3d8c71b782a122cebd19c4dc8c464ef9b22a58b90d4519b8",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (3 columns: o_orderkey, o_custkey, o_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h14",
    "class": "p3c-intern-loader",
    "hunk_sha256": "3980c67d6388a67eb5d59f77f34686f97a9742c5ab639850ef1df9fec7f49de1",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (6 columns: l_orderkey, l_linenumber, l_partkey, l_extendedprice, l_discount, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h14",
    "class": "p3c-intern-loader",
    "hunk_sha256": "0705dd62a21b1f8b5aaca96403e78109b5bbf07d97349ae9361cd90ae358ae4a",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (2 columns: p_partkey, p_type): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h15",
    "class": "p3c-intern-loader",
    "hunk_sha256": "d94dc49a7c31b7d99613cd806a67e1fc1fa8611741d2bce9032ab99538b69e5d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (4 columns: s_suppkey, s_name, s_address, s_phone): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h15",
    "class": "p3c-intern-loader",
    "hunk_sha256": "76fae8c0d7cce8339209f66a29c20ce56904d8e399e6aaf4b530d8c5c3cc1ddf",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (6 columns: l_orderkey, l_linenumber, l_suppkey, l_extendedprice, l_discount, l_shipdate): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h16",
    "class": "p3c-intern-loader",
    "hunk_sha256": "e2847b4fba1b8798778dfa75b41d5d26c50b952f1fef1b2b996a6a540047636d",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (4 columns: p_partkey, p_brand, p_type, p_size): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h16",
    "class": "p3c-intern-loader",
    "hunk_sha256": "bc29554cbe08dc23b084391c40c84ceb17131def8d1b944eded3f24c44d8d0f2",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPartsupp (2 columns: ps_partkey, ps_suppkey): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h16",
    "class": "p3c-intern-loader",
    "hunk_sha256": "6844fec8c36a4ab63534d3215ee9fd7accd3121e3534dc34308f517c779f8dcf",
    "reason": "InternedRelation loader glue for __MiniLinqLoadSupplier (2 columns: s_suppkey, s_comment): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h18",
    "class": "p3c-intern-loader",
    "hunk_sha256": "166f7725b5a78e2aecc3d3510ae3c596a9d5c192db4ce10adc5fd031835d956c",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (3 columns: l_orderkey, l_linenumber, l_quantity): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h18",
    "class": "p3c-intern-loader",
    "hunk_sha256": "cb84d52930b8595f0d3771a7eaa8a65fb411e5950e35b78c693b49e754566305",
    "reason": "InternedRelation loader glue for __MiniLinqLoadOrders (4 columns: o_orderkey, o_custkey, o_orderdate, o_totalprice): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h18",
    "class": "p3c-intern-loader",
    "hunk_sha256": "aa07648d33f26841c4562a9e2f31f85b5f974aafe5125955eeb0beda669ba5f3",
    "reason": "InternedRelation loader glue for __MiniLinqLoadCustomer (2 columns: c_custkey, c_name): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h19",
    "class": "p3c-intern-loader",
    "hunk_sha256": "dbad50118acb7dfbf611dd995e0d9257d635eaad8eb5b2d23799a73beac1b9b4",
    "reason": "InternedRelation loader glue for __MiniLinqLoadLineitem (8 columns: l_orderkey, l_linenumber, l_partkey, l_quantity, l_extendedprice, l_discount, l_shipmode, l_shipinstruct): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h19",
    "class": "p3c-intern-loader",
    "hunk_sha256": "55dbc9c558b981e5b8662cc48f775a1c10555e8024ad9856cfb41dc8d102a0f9",
    "reason": "InternedRelation loader glue for __MiniLinqLoadPart (4 columns: p_partkey, p_brand, p_container, p_size): old prepare/dictionaries.get/intern body replaced by the P3c template (State tuple, state(), intern via InternedField::encode + Self::finish, decode via InternedField::column, finish via InternedField::finish + remap); removed/added lines are exactly the old/new template instances for this marker and column names, all inside the impl; no query-body change",
-   "source": "facade/mini-linq-macros/src/load.rs:80-136; runtime/cq-load/src/intern.rs:232-288"
+   "source": "io/cq-io-macros/src/load.rs:80-136; io/cq-load/src/intern.rs:232-288"
   },
   {
    "target": "retail_h20",

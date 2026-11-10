@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use cq_syntax::evidence::{
+use cq_evidence::{
     Claim, ColumnEvidence, Fact, KeySetEvidence, Provenance, RelationEvidence,
     RelationScope, RelationSemantics, Scalar, ScalarDomain, Source, Unit,
 };
@@ -32,7 +32,7 @@ mod canonical;
 pub use canonical::CanonicalAccumulator;
 
 /// The canonical content digest is independent of source formatting/batch size.
-pub use cq_syntax::evidence::HASH_MODE;
+pub use cq_evidence::HASH_MODE;
 pub const DATE_ENCODING: &str = "days_since_unix_epoch";
 const HLL_SEED: &[u8] = b"cq-load-hll-sha256-seed-0-v1";
 

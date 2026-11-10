@@ -113,6 +113,12 @@ pub struct SrdFacts {
 }
 impl SrdFacts {
     pub fn load(dir: &std::path::Path) -> crate::Result<Self> {
+        let path = std::env::var_os("DOOP_SET_MANIFEST").map(std::path::PathBuf::from);
+        Self::load_with_manifest(dir, path.as_deref())
+    }
+
+    pub fn load_with_manifest(dir: &std::path::Path, path: Option<&std::path::Path>) -> crate::Result<Self> {
+        let manifest = crate::manifest::Manifest::load(dir, path);
         #[cfg(not(feature = "planner-calibration"))]
         let meta = serde_json::from_reader(std::fs::File::open(dir.join("meta.json"))?)?;
         #[cfg(feature = "planner-calibration")]
@@ -126,130 +132,43 @@ impl SrdFacts {
         let constants = SrdConstants::load(&meta)?;
         Ok(Self {
             constants,
-            r_classtype: crate::load_rows::<1, _>(&dir.join("ClassType.csv"), |row| (row[0],))?,
-            r_arraytype: crate::load_rows::<1, _>(&dir.join("ArrayType.csv"), |row| (row[0],))?,
-            r_interfacetype: crate::load_rows::<1, _>(&dir.join("InterfaceType.csv"), |row| {
-                (row[0],)
-            })?,
-            r_applicationclass: crate::load_rows::<1, _>(
-                &dir.join("ApplicationClass.csv"),
-                |row| (row[0],),
-            )?,
-            r_directsuperclass: crate::load_rows::<2, _>(
-                &dir.join("DirectSuperclass.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_directsuperinterface: crate::load_rows::<2, _>(
-                &dir.join("DirectSuperinterface.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_method_simplename: crate::load_rows::<2, _>(
-                &dir.join("Method_SimpleName.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_method_descriptor: crate::load_rows::<2, _>(
-                &dir.join("Method_Descriptor.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_method_declaringtype: crate::load_rows::<2, _>(
-                &dir.join("Method_DeclaringType.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_method_modifier: crate::load_rows::<2, _>(&dir.join("Method_Modifier.csv"), |row| {
-                (row[0], row[1])
-            })?,
-            r_mainclass: crate::load_rows::<1, _>(&dir.join("MainClass.csv"), |row| (row[0],))?,
-            r_virtualmethodinvocation_base: crate::load_rows::<2, _>(
-                &dir.join("VirtualMethodInvocation_Base.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_specialmethodinvocation_base: crate::load_rows::<2, _>(
-                &dir.join("SpecialMethodInvocation_Base.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_componenttype: crate::load_rows::<2, _>(&dir.join("ComponentType.csv"), |row| {
-                (row[0], row[1])
-            })?,
-            r_assigncast: crate::load_rows::<4, _>(&dir.join("AssignCast.csv"), |row| {
-                (row[0], row[1], row[2], row[3])
-            })?,
-            r_heapallocation_type: crate::load_rows::<2, _>(
-                &dir.join("HeapAllocation_Type.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_thisvar: crate::load_rows::<2, _>(&dir.join("ThisVar.csv"), |row| (row[0], row[1]))?,
-            r_virtualmethodinvocation_simplename: crate::load_rows::<2, _>(
-                &dir.join("VirtualMethodInvocation_SimpleName.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_virtualmethodinvocation_descriptor: crate::load_rows::<2, _>(
-                &dir.join("VirtualMethodInvocation_Descriptor.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_assignheapallocation: crate::load_rows::<3, _>(
-                &dir.join("AssignHeapAllocation.csv"),
-                |row| (row[0], row[1], row[2]),
-            )?,
-            r_instruction_method: crate::load_rows::<2, _>(
-                &dir.join("Instruction_Method.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_methodinvocation_method: crate::load_rows::<2, _>(
-                &dir.join("MethodInvocation_Method.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_isstaticmethodinvocation_insn: crate::load_rows::<1, _>(
-                &dir.join("isStaticMethodInvocation_Insn.csv"),
-                |row| (row[0],),
-            )?,
-            r_storestaticfield: crate::load_rows::<3, _>(
-                &dir.join("StoreStaticField.csv"),
-                |row| (row[0], row[1], row[2]),
-            )?,
-            r_field_declaringtype: crate::load_rows::<2, _>(
-                &dir.join("Field_DeclaringType.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_loadstaticfield: crate::load_rows::<3, _>(&dir.join("LoadStaticField.csv"), |row| {
-                (row[0], row[1], row[2])
-            })?,
-            r_staticmethodinvocation: crate::load_rows::<3, _>(
-                &dir.join("StaticMethodInvocation.csv"),
-                |row| (row[0], row[1], row[2]),
-            )?,
-            r_formalparam: crate::load_rows::<3, _>(&dir.join("FormalParam.csv"), |row| {
-                (row[0], row[1], row[2])
-            })?,
-            r_actualparam: crate::load_rows::<3, _>(&dir.join("ActualParam.csv"), |row| {
-                (row[0], row[1], row[2])
-            })?,
-            r_returnvar: crate::load_rows::<2, _>(&dir.join("ReturnVar.csv"), |row| {
-                (row[0], row[1])
-            })?,
-            r_assignreturnvalue: crate::load_rows::<2, _>(
-                &dir.join("AssignReturnValue.csv"),
-                |row| (row[0], row[1]),
-            )?,
-            r_assignlocal: crate::load_rows::<3, _>(&dir.join("AssignLocal.csv"), |row| {
-                (row[0], row[1], row[2])
-            })?,
-            r_loadinstancefield: crate::load_rows::<4, _>(
-                &dir.join("LoadInstanceField.csv"),
-                |row| (row[0], row[1], row[2], row[3]),
-            )?,
-            r_loadarrayindex: crate::load_rows::<3, _>(&dir.join("LoadArrayIndex.csv"), |row| {
-                (row[0], row[1], row[2])
-            })?,
-            r_var_type: crate::load_rows::<2, _>(&dir.join("Var_Type.csv"), |row| {
-                (row[0], row[1])
-            })?,
-            r_storeinstancefield: crate::load_rows::<4, _>(
-                &dir.join("StoreInstanceField.csv"),
-                |row| (row[0], row[1], row[2], row[3]),
-            )?,
-            r_storearrayindex: crate::load_rows::<3, _>(&dir.join("StoreArrayIndex.csv"), |row| {
-                (row[0], row[1], row[2])
-            })?,
+            r_classtype: crate::load_rows::<1, _>(&dir.join("ClassType.csv"), &manifest)?,
+            r_arraytype: crate::load_rows::<1, _>(&dir.join("ArrayType.csv"), &manifest)?,
+            r_interfacetype: crate::load_rows::<1, _>(&dir.join("InterfaceType.csv"), &manifest)?,
+            r_applicationclass: crate::load_rows::<1, _>(&dir.join("ApplicationClass.csv"), &manifest)?,
+            r_directsuperclass: crate::load_rows::<2, _>(&dir.join("DirectSuperclass.csv"), &manifest)?,
+            r_directsuperinterface: crate::load_rows::<2, _>(&dir.join("DirectSuperinterface.csv"), &manifest)?,
+            r_method_simplename: crate::load_rows::<2, _>(&dir.join("Method_SimpleName.csv"), &manifest)?,
+            r_method_descriptor: crate::load_rows::<2, _>(&dir.join("Method_Descriptor.csv"), &manifest)?,
+            r_method_declaringtype: crate::load_rows::<2, _>(&dir.join("Method_DeclaringType.csv"), &manifest)?,
+            r_method_modifier: crate::load_rows::<2, _>(&dir.join("Method_Modifier.csv"), &manifest)?,
+            r_mainclass: crate::load_rows::<1, _>(&dir.join("MainClass.csv"), &manifest)?,
+            r_virtualmethodinvocation_base: crate::load_rows::<2, _>(&dir.join("VirtualMethodInvocation_Base.csv"), &manifest)?,
+            r_specialmethodinvocation_base: crate::load_rows::<2, _>(&dir.join("SpecialMethodInvocation_Base.csv"), &manifest)?,
+            r_componenttype: crate::load_rows::<2, _>(&dir.join("ComponentType.csv"), &manifest)?,
+            r_assigncast: crate::load_rows::<4, _>(&dir.join("AssignCast.csv"), &manifest)?,
+            r_heapallocation_type: crate::load_rows::<2, _>(&dir.join("HeapAllocation_Type.csv"), &manifest)?,
+            r_thisvar: crate::load_rows::<2, _>(&dir.join("ThisVar.csv"), &manifest)?,
+            r_virtualmethodinvocation_simplename: crate::load_rows::<2, _>(&dir.join("VirtualMethodInvocation_SimpleName.csv"), &manifest)?,
+            r_virtualmethodinvocation_descriptor: crate::load_rows::<2, _>(&dir.join("VirtualMethodInvocation_Descriptor.csv"), &manifest)?,
+            r_assignheapallocation: crate::load_rows::<3, _>(&dir.join("AssignHeapAllocation.csv"), &manifest)?,
+            r_instruction_method: crate::load_rows::<2, _>(&dir.join("Instruction_Method.csv"), &manifest)?,
+            r_methodinvocation_method: crate::load_rows::<2, _>(&dir.join("MethodInvocation_Method.csv"), &manifest)?,
+            r_isstaticmethodinvocation_insn: crate::load_rows::<1, _>(&dir.join("isStaticMethodInvocation_Insn.csv"), &manifest)?,
+            r_storestaticfield: crate::load_rows::<3, _>(&dir.join("StoreStaticField.csv"), &manifest)?,
+            r_field_declaringtype: crate::load_rows::<2, _>(&dir.join("Field_DeclaringType.csv"), &manifest)?,
+            r_loadstaticfield: crate::load_rows::<3, _>(&dir.join("LoadStaticField.csv"), &manifest)?,
+            r_staticmethodinvocation: crate::load_rows::<3, _>(&dir.join("StaticMethodInvocation.csv"), &manifest)?,
+            r_formalparam: crate::load_rows::<3, _>(&dir.join("FormalParam.csv"), &manifest)?,
+            r_actualparam: crate::load_rows::<3, _>(&dir.join("ActualParam.csv"), &manifest)?,
+            r_returnvar: crate::load_rows::<2, _>(&dir.join("ReturnVar.csv"), &manifest)?,
+            r_assignreturnvalue: crate::load_rows::<2, _>(&dir.join("AssignReturnValue.csv"), &manifest)?,
+            r_assignlocal: crate::load_rows::<3, _>(&dir.join("AssignLocal.csv"), &manifest)?,
+            r_loadinstancefield: crate::load_rows::<4, _>(&dir.join("LoadInstanceField.csv"), &manifest)?,
+            r_loadarrayindex: crate::load_rows::<3, _>(&dir.join("LoadArrayIndex.csv"), &manifest)?,
+            r_var_type: crate::load_rows::<2, _>(&dir.join("Var_Type.csv"), &manifest)?,
+            r_storeinstancefield: crate::load_rows::<4, _>(&dir.join("StoreInstanceField.csv"), &manifest)?,
+            r_storearrayindex: crate::load_rows::<3, _>(&dir.join("StoreArrayIndex.csv"), &manifest)?,
         })
     }
 }

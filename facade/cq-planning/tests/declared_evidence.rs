@@ -2,7 +2,7 @@ use cq_lang_cq as cq;
 use cq_planning::{PlanOptions, prefix_valuation};
 use quote::{ToTokens, quote};
 
-const EVIDENCE: &str = include_str!("../../../languages/cq-syntax/tests/fixtures/planner-evidence.json");
+const EVIDENCE: &str = include_str!("../../../runtime/cq-evidence/tests/fixtures/planner-evidence.json");
 
 fn source(attached: bool) -> cq::Program {
     let attachment = if attached {

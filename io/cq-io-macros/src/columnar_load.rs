@@ -1,49 +1,11 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Token, ext::IdentExt, parse::Parse, punctuated::Punctuated};
+use syn::{Token, ext::IdentExt, parse::Parse};
+
+use crate::schema::{Declaration, check_declarations};
 
 mod kw {
     syn::custom_keyword!(columnar);
-}
-
-struct Field {
-    name: syn::Ident,
-    ty: syn::Type,
-    family: syn::Ident,
-}
-
-impl Parse for Field {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let name = input.parse()?;
-        input.parse::<Token![:]>()?;
-        let ty = input.parse()?;
-        input.parse::<Token![@]>()?;
-        let family: syn::Ident = input.parse()?;
-        if family != "bytes" && family != "plain" {
-            return Err(syn::Error::new_spanned(
-                family,
-                "expected an explicit scan family: `bytes` or `plain`",
-            ));
-        }
-        Ok(Self { name, ty, family })
-    }
-}
-
-struct Declaration {
-    name: syn::Ident,
-    fields: Punctuated<Field, Token![,]>,
-}
-
-impl Parse for Declaration {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        input.parse::<cq_lang_cq::kw::relation>()?;
-        let name = input.parse()?;
-        let fields;
-        syn::parenthesized!(fields in input);
-        let fields = fields.parse_terminated(Field::parse, Token![,])?;
-        input.parse::<Token![;]>()?;
-        Ok(Self { name, fields })
-    }
 }
 
 struct Declarations {
@@ -88,26 +50,14 @@ pub(crate) fn expand(input: TokenStream, interned: bool) -> TokenStream {
 }
 
 fn generate(declarations: Declarations) -> syn::Result<proc_macro2::TokenStream> {
-    // Reuse declaration validation without extending the query language with
-    // loader-only representation annotations.
-    let schemas: Vec<cq_lang_cq::RelationDecl> = declarations
-        .relations
-        .iter()
-        .map(|declaration| {
-            let name = &declaration.name;
-            let names = declaration.fields.iter().map(|field| &field.name);
-            let types = declaration.fields.iter().map(|field| &field.ty);
-            syn::parse2(quote!(relation #name(#(#names: #types),*);))
-        })
-        .collect::<syn::Result<_>>()?;
-    cq_lang_cq::check_input_declarations(&schemas)?;
+    check_declarations(&declarations.relations, true)?;
 
     let mut output = proc_macro2::TokenStream::new();
     let mut selectors = Vec::new();
     for declaration in declarations.relations {
         let relation = &declaration.name;
         let name = relation.unraw().to_string();
-        if declaration.fields.len() > 12 {
+        if declaration.columns.len() > 12 {
             return Err(syn::Error::new_spanned(
                 relation,
                 "scan tables support at most 12 columns",
@@ -116,17 +66,17 @@ fn generate(declarations: Declarations) -> syn::Result<proc_macro2::TokenStream>
         let marker = format_ident!("__MiniLinqColumnarLoad{}", name);
         let loader = format_ident!("{}Loader", name);
         selectors.push(quote!((#relation) => { #loader };));
-        let types: Vec<_> = declaration.fields.iter().map(|field| &field.ty).collect();
+        let types: Vec<_> = declaration.columns.iter().map(|field| &field.ty).collect();
         let names: Vec<_> = declaration
-            .fields
+            .columns
             .iter()
             .map(|field| field.name.unraw().to_string())
             .collect();
         let families: Vec<_> = declaration
-            .fields
+            .columns
             .iter()
             .map(|field| {
-                if field.family == "bytes" {
+                if field.family.as_ref().is_some_and(|family| family == "bytes") {
                     quote!(::cq_storage::scan::Bytes)
                 } else {
                     quote!(::cq_storage::scan::Plain)
@@ -206,13 +156,16 @@ mod tests {
     fn columnar_schemas_require_known_explicit_families() {
         for source in [
             "",
-            "relation R(x: i64);",
+            "struct Query; relation R(x: i64); relation answer(x: i64); answer(x) :- R(x);",
+            "relation R(x: i64 @ plain); answer(x) :- R(x);",
+            "columnar; struct Query; relation R(x: i64 @ plain);",
             "relation R(x: i64 @ packed);",
             "relation R(x: i64 @ unknown);",
         ] {
             assert!(syn::parse_str::<Declarations>(source).is_err(), "{source}");
         }
         for source in [
+            "relation R(x: i64);",
             "relation R();",
             "relation R(x: i64 @ bytes, x: i32 @ plain);",
             "relation R(x: i64 @ bytes); relation R(x: i64 @ plain);",

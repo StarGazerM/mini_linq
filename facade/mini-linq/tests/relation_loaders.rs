@@ -37,7 +37,39 @@ mod authored {
 }
 
 mod loaders {
-    crate::authored::with_query!(mini_linq::relation_loaders);
+    cq_load::relation_loaders! {
+        relation Reading(id: i64, label: String, amount: i32);
+    }
+}
+
+#[test]
+fn loader_key_contracts_follow_field_traits_not_type_spelling() {
+    use cq_load::{Relation, set_manifest::KeyEncoding};
+    assert_eq!(
+        <loaders::__MiniLinqLoadReading<i64, String, i32> as Relation>::KEY_COLUMNS,
+        &[
+            ("id", Some(KeyEncoding::Integer)),
+            ("label", Some(KeyEncoding::String)),
+            ("amount", Some(KeyEncoding::Integer)),
+        ]
+    );
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    struct Collapsed;
+    impl cq_load::Load for Collapsed {
+        fn load(_: &str) -> Result<Self, String> { Ok(Self) }
+    }
+    assert_eq!(
+        <loaders::__MiniLinqLoadReading<Collapsed, String, i32> as Relation>::KEY_COLUMNS[0],
+        ("id", None)
+    );
+    type Code = cq_load::StringCode;
+    cq_load::interned_relation_loaders! {
+        relation Encoded(id: i64, label: Code);
+    }
+    assert_eq!(
+        <__MiniLinqLoadEncoded<i64, Code> as cq_load::InternedRelation>::KEY_COLUMNS,
+        &[("id", Some(KeyEncoding::Integer)), ("label", Some(KeyEncoding::String))]
+    );
 }
 
 #[test]
@@ -110,7 +142,7 @@ impl cq_load::Load for OwnedUserType {
 
 mod payload {
     use super::OwnedUserType;
-    ::mini_linq::relation_loaders! {
+    ::cq_load::relation_loaders! {
         relation Sample(key: i64, reading: f64, annotation: OwnedUserType);
     }
 }
@@ -140,7 +172,7 @@ mod interned {
     // trait implementations, not inspect authored Rust type names.
     type Text = cq_load::StringCode;
 
-    ::mini_linq::interned_relation_loaders! {
+    ::cq_load::interned_relation_loaders! {
         relation Encoded(id: i64, label: Text, other: Text, annotation: OwnedUserType);
     }
 
@@ -226,7 +258,7 @@ mod names {
         }
     }
 
-    ::mini_linq::relation_loaders! {
+    ::cq_load::relation_loaders! {
         relation String(value: String);
         relation R(value: R);
         relation RLoader(id: i64);
@@ -266,7 +298,9 @@ mod names {
 
 mod dispatch {
     use super::{CsvOptions, File};
-    crate::authored::with_query!(::mini_linq::relation_loaders);
+    ::cq_load::relation_loaders! {
+        relation Reading(id: i64, label: String, amount: i32);
+    }
 
     #[test]
     #[allow(non_snake_case)]
@@ -315,13 +349,13 @@ mod columnar {
 
     type Integer = i64;
 
-    ::mini_linq::columnar_relation_loaders! {
+    ::cq_load::columnar_relation_loaders! {
         relation Reading(id: Integer @ bytes, amount: i32 @ plain);
         relation r#type(r#match: i64 @ plain);
     }
 
     mod ordinary {
-        ::mini_linq::relation_loaders! {
+        ::cq_load::relation_loaders! {
             relation Reading(id: i64, amount: i32);
         }
     }
@@ -428,13 +462,13 @@ mod columnar_interned {
 
     type Code = cq_load::StringCode;
 
-    ::mini_linq::interned_relation_loaders! {
+    ::cq_load::interned_relation_loaders! {
         columnar;
         relation Encoded(id: i64 @ plain, label: Code @ bytes, other: Code @ plain);
     }
 
     mod ordinary {
-        ::mini_linq::interned_relation_loaders! {
+        ::cq_load::interned_relation_loaders! {
             relation Encoded(id: i64, label: cq_load::StringCode, other: cq_load::StringCode);
         }
     }

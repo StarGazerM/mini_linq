@@ -11,6 +11,7 @@ planner-calibration = ["dep:cq-storage", "cq-storage/planner-calibration", "dep:
 
 [dependencies]
 cq-syntax.workspace = true
+cq-evidence.workspace = true
 cq-lang-cq.workspace = true
 cq-lang-vo.workspace = true
 cq-planning.workspace = true

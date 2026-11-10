@@ -1,6 +1,6 @@
 use crate::typed::{self, Source};
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Price(price: cq_load::Decimal, label: cq_load::StringCode);
     relation Product(price: cq_load::Decimal, productkey: i64, name: cq_load::StringCode, released: cq_load::Date);
 }

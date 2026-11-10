@@ -75,6 +75,16 @@ fn run() -> Result<()> {
         }
         "explain" => explain::run(arguments, &repository_root()),
         "bench" => bench::run(arguments),
+        "tpch-manifest" => {
+            #[cfg(feature = "oracle")]
+            {
+                tpch::certify_existing(arguments)
+            }
+            #[cfg(not(feature = "oracle"))]
+            {
+                rerun_with_oracle("tpch-manifest", &arguments)
+            }
+        }
         "compile-tpch" => {
             #[cfg(feature = "oracle")]
             {
@@ -561,6 +571,7 @@ MiniLinq workload tasks
   cargo xtask bench [--scale N] [--seed N]
   cargo xtask bench --tpch --sf 0.1|1|10 [--runs N] [--cap-seconds N] [--query NAME] [--config NAME[,NAME...] | --reduction-comparison | --index-comparison]
   cargo xtask compile-tpch
+  cargo xtask tpch-manifest --output FILE.json INPUT.parquet...
   cargo xtask profile --tpch --sf 0.1|1|10 [--query NAME] [--config NAME] [--output DIR]
 
 SCENARIO is coverage, empty-input, no-match, or all.

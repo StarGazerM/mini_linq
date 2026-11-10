@@ -15,8 +15,9 @@ parquet = ["dep:arrow-array", "dep:arrow-schema", "dep:parquet"]
 planner-calibration = ["cq-storage/planner-calibration"]
 
 [dependencies]
-cq-storage = { path = "../cq-storage", version = "0.1.0" }
-cq-syntax.workspace = true
+cq-storage = { path = "../../runtime/cq-storage", version = "0.1.0" }
+cq-evidence.workspace = true
+cq-io-macros.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -28,7 +29,7 @@ arrow-schema = { version = "58.4", default-features = false, optional = true }
 parquet = { version = "58.4", default-features = false, features = ["arrow", "snap"], optional = true }
 
 [dev-dependencies]
-cq-storage = { path = "../cq-storage", features = ["counters"] }
+cq-storage = { path = "../../runtime/cq-storage", features = ["counters"] }
 
 [[example]]
 name = "zone_tpch"

@@ -10,7 +10,6 @@
 //!
 use syn::{Ident, Index, Token, Type, token};
 
-pub mod evidence;
 pub mod declared_evidence;
 
 pub mod kw {

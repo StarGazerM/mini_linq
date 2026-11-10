@@ -2,7 +2,7 @@
 //! Runtime guards and compiler-default selection are deliberately outside this stage.
 use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
-use cq_syntax::evidence::Rational;
+use cq_evidence::Rational;
 use crate::export::{ClauseKind, Version};
 
 pub mod bounds;
@@ -177,7 +177,7 @@ pub struct AdviceReport {
     pub evidence_hash: String,
     pub dataset_hash: String,
     pub target: String,
-    pub target_constants: cq_syntax::evidence::TargetEvidence,
+    pub target_constants: cq_evidence::TargetEvidence,
     pub holes: Vec<HoleAdvice>,
     pub index_union: BTreeMap<usize, BTreeSet<IndexDemand>>,
     pub whole_run: Option<LinearCost>,
@@ -287,7 +287,7 @@ fn review_margin(
 /// every reused demand are recorded; neither a printer nor runtime re-optimizes.
 pub fn analyze(
     input: &crate::export::PlannerInput,
-    evidence: &cq_syntax::evidence::DatasetEvidence,
+    evidence: &cq_evidence::DatasetEvidence,
     target: &str,
 ) -> crate::export::Result<AdviceReport> {
     input.check()?;

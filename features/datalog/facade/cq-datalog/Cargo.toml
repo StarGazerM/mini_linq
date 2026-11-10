@@ -35,6 +35,7 @@ proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
 cq-syntax.workspace = true
+cq-evidence.workspace = true
 serde_json.workspace = true
 cq-datalog-test-passes = { path = "../../test-passes" }
 cq-datalog-testkit = { path = "../../testkit" }

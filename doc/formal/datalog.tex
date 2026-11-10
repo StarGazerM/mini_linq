@@ -30,6 +30,27 @@ panic domains. Observers and their evaluation counts are outside this relational
 meaning. A different model requires a dialect meaning and a checked translation;
 no pass may silently change $M$.
 
+\paragraph{Hash-bound DOOP input certificates.}
+Preparation checks keys in the loader's decoded domain (including signed
+32-bit integer normalization), not merely distinct text lines. A certificate
+records the decoder column types, file name, verified column set $K$, and
+SHA-256 of the exact bytes examined. Loading hashes the same byte stream it
+decodes; an unrelated file read cannot discharge the premise.
+\begin{mathpar}
+\Rule{LD-DoopVerifiedKey}
+ {B=\mathsf{decode}_T(b)\quad
+  m=(f,T,K,\mathsf{verified},\mathsf{SHA256}(b))\quad
+  \mathsf{unique}(\pi_K(B))\text{ checked by preparation}\quad K\subseteq P}
+ {\mathsf{load}_{P}(f,m)=\pi_P(B)\quad\mathsf{unique}(\pi_P(B))}
+\end{mathpar}
+The raw and prepared-integer DOOP loaders consume complete headings.
+Uncertified, malformed, decoder-mismatched or hash-mismatched manifests
+fall back to full-row sorting and deduplication. Full-heading uniqueness
+does not certify a strict projection. Derived method descriptors and
+host-built inputs retain their existing set admission. The optional manifest
+path overrides discovery without modifying the dataset. Certificates are
+IO-only and introduce no compiler facts, keys or annotations.
+
 \subsection{DL-Surface}
 \paragraph{Grammar.} Raw tokens containing source syntax and supported sugar.
 \paragraph{Contract.} Surface passes check their own expansion; the generic

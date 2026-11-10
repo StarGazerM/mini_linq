@@ -3,7 +3,7 @@
 //! coefficient-wise minimum of crossing certificates.
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_syntax::evidence::{self as ev, Claim, CountFact, DatasetEvidence, Fact,
+use cq_evidence::{self as ev, Claim, CountFact, DatasetEvidence, Fact,
     Premise, Rational, RelationEvidence, RelationScope, Source};
 use num_bigint::BigInt;
 use num_rational::BigRational as Q;

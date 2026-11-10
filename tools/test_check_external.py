@@ -204,12 +204,14 @@ class PackagedIsolationTests(unittest.TestCase):
         paths = [
             "languages/cq-lang-ra/Cargo.toml",
             "passes/cq-order/Cargo.toml",
+            "io/cq-load/Cargo.toml",
+            "io/cq-io-macros/Cargo.toml",
             "features/datalog/languages/dl-source/Cargo.toml",
             "features/datalog/passes/schedule/Cargo.toml",
             "features/datalog/facade/macros/Cargo.toml",
         ]
         packages = [{"manifest_path": str(gate.ROOT / path)} for path in paths]
-        self.assertEqual(gate.core_packages(packages), packages[:2])
+        self.assertEqual(gate.core_packages(packages), packages[:4])
 
     def test_packaging_workspace_drops_every_uncopied_local_dependency(self):
         packages = [{"manifest_path": str(gate.ROOT / "runtime/cq-storage/Cargo.toml")}]
@@ -227,7 +229,7 @@ class PackagedIsolationTests(unittest.TestCase):
 
     def test_existing_positive_and_negative_fixture_topologies_are_preserved(self):
         names = {}
-        for folder in ("languages", "passes", "runtime", "facade", "testkit"):
+        for folder in ("languages", "passes", "runtime", "io", "facade", "testkit"):
             for manifest in (gate.ROOT / folder).glob("*/Cargo.toml"):
                 name = gate.tomllib.loads(manifest.read_text())["package"]["name"]
                 names[name] = "0.1.0"

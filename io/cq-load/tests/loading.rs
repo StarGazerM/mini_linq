@@ -32,6 +32,13 @@ struct Typed;
 impl Relation for Typed {
     type Row = (i64, String, Date, Decimal, bool);
     const COLUMNS: &'static [&'static str] = &["id", "name", "day", "price", "active"];
+    const KEY_COLUMNS: &'static [(&'static str, Option<cq_load::set_manifest::KeyEncoding>)] = &[
+        ("id", <i64 as Load>::KEY_ENCODING),
+        ("name", <String as Load>::KEY_ENCODING),
+        ("day", <Date as Load>::KEY_ENCODING),
+        ("price", <Decimal as Load>::KEY_ENCODING),
+        ("active", <bool as Load>::KEY_ENCODING),
+    ];
     // DECODE P: Typed reconstructs rows solely for CSV/Parquet loading diagnostics and answer assertions.
     fn decode(batch: &Batch<'_>) -> Result<Vec<Self::Row>> {
         // DECODE P: the Typed diagnostic exposes decoded ids to its expected-row oracle.
@@ -59,6 +66,8 @@ struct Ids;
 impl Relation for Ids {
     type Row = (i64,);
     const COLUMNS: &'static [&'static str] = &["id"];
+    const KEY_COLUMNS: &'static [(&'static str, Option<cq_load::set_manifest::KeyEncoding>)] =
+        &[("id", <i64 as Load>::KEY_ENCODING)];
     // DECODE P: Ids reconstructs singleton rows for batch-size and loader-error diagnostics only.
     fn decode(batch: &Batch<'_>) -> Result<Vec<Self::Row>> {
         Ok(batch
@@ -446,12 +455,146 @@ mod parquet_tests {
         file
     }
 
+    fn certificate(file: &FileFixture, keys: &[&[&str]]) -> FileFixture {
+        let manifest = FileFixture::path("json");
+        write_certificate(&manifest, file, keys);
+        manifest
+    }
+
+    fn write_certificate(manifest: &FileFixture, file: &FileFixture, keys: &[&[&str]]) {
+        use cq_load::set_manifest::{self, CertifiedFile, Manifest};
+        let value = Manifest {
+            schema: set_manifest::SCHEMA.into(),
+            files: vec![CertifiedFile {
+                file: file.0.file_name().unwrap().to_str().unwrap().into(),
+                sha256: set_manifest::file_sha256(&file.0).unwrap(),
+                set: "verified".into(),
+                verified_keys: keys.iter().map(|key| key.iter().map(|name| (*name).into()).collect()).collect(),
+            }],
+        };
+        std::fs::write(&manifest.0, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn certified_key_preserves_order_and_uncertified_loads_canonicalize() {
+        let file = write(
+            vec![Field::new("id", DataType::Int64, false)],
+            vec![Arc::new(Int64Array::from(vec![3, 1, 2]))],
+        );
+        let manifest = certificate(&file, &[&["id"]]);
+        let options = ParquetOptions { batch_size: 1 };
+        let load = || Loader::<Ids>::parquet_with_manifest(&file.0, options, &manifest.0).unwrap();
+        assert_eq!(load(), [(3,), (1,), (2,)]);
+
+        let original = std::fs::read(&manifest.0).unwrap();
+        let mut unverified: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        unverified["files"][0]["set"] = serde_json::json!("unverified");
+        std::fs::write(&manifest.0, serde_json::to_vec(&unverified).unwrap()).unwrap();
+        assert_eq!(load(), [(1,), (2,), (3,)]);
+        unverified["files"][0].as_object_mut().unwrap().remove("set");
+        std::fs::write(&manifest.0, serde_json::to_vec(&unverified).unwrap()).unwrap();
+        assert_eq!(load(), [(1,), (2,), (3,)]);
+        let mut stale: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        stale["files"][0]["sha256"] = serde_json::json!("0".repeat(64));
+        std::fs::write(&manifest.0, serde_json::to_vec(&stale).unwrap()).unwrap();
+        assert_eq!(load(), [(1,), (2,), (3,)]);
+        std::fs::write(&manifest.0, b"malformed").unwrap();
+        assert_eq!(load(), [(1,), (2,), (3,)]);
+        std::fs::remove_file(&manifest.0).unwrap();
+        assert_eq!(load(), [(1,), (2,), (3,)]);
+
+        let adjacent = FileFixture(cq_load::set_manifest::adjacent_path(&file.0));
+        std::fs::write(&adjacent.0, original).unwrap();
+        // Explicit missing override must not fall back to a valid adjacent file.
+        assert_eq!(load(), [(1,), (2,), (3,)]);
+        assert_eq!(
+            Loader::<Ids>::parquet_with_manifest(&file.0, options, &adjacent.0).unwrap(),
+            [(3,), (1,), (2,)]
+        );
+        let replacement = write(
+            vec![Field::new("id", DataType::Int64, false)],
+            vec![Arc::new(Int64Array::from(vec![2, 1, 2]))],
+        );
+        std::fs::copy(&replacement.0, &file.0).unwrap();
+        assert_eq!(
+            Loader::<Ids>::parquet_with_manifest(&file.0, options, &adjacent.0).unwrap(),
+            [(1,), (2,)]
+        );
+    }
+
+    #[test]
+    fn full_heading_and_omitted_keys_do_not_certify_duplicate_projection() {
+        let file = write(
+            vec![Field::new("id", DataType::Int64, false), Field::new("serial", DataType::Int64, false)],
+            vec![Arc::new(Int64Array::from(vec![2, 1, 2])), Arc::new(Int64Array::from(vec![10, 11, 12]))],
+        );
+        let manifest = certificate(&file, &[&["id", "serial"]]);
+        let load = || Loader::<Ids>::parquet_with_manifest(&file.0, ParquetOptions { batch_size: 1 }, &manifest.0).unwrap();
+        assert_eq!(load(), [(1,), (2,)]);
+        write_certificate(&manifest, &file, &[&["serial"]]);
+        assert_eq!(load(), [(1,), (2,)]);
+        // Empty or unknown keys never establish set semantics.
+        write_certificate(&manifest, &file, &[&[], &["absent"]]);
+        assert_eq!(load(), [(1,), (2,)]);
+    }
+
+    #[test]
+    fn key_certificate_survives_projection_that_retains_key() {
+        let file = write(
+            vec![Field::new("id", DataType::Int64, false), Field::new("payload", DataType::Int64, false)],
+            vec![Arc::new(Int64Array::from(vec![3, 1, 2])), Arc::new(Int64Array::from(vec![7, 7, 7]))],
+        );
+        let manifest = certificate(&file, &[&["id"]]);
+        assert_eq!(
+            Loader::<Ids>::parquet_with_manifest(&file.0, ParquetOptions::default(), &manifest.0).unwrap(),
+            [(3,), (1,), (2,)]
+        );
+    }
+
+    #[test]
+    fn empty_certified_relation_remains_empty() {
+        let file = write(
+            vec![Field::new("id", DataType::Int64, false)],
+            vec![Arc::new(Int64Array::from(Vec::<i64>::new()))],
+        );
+        let manifest = certificate(&file, &[&["id"]]);
+        assert!(Loader::<Ids>::parquet_with_manifest(
+            &file.0, ParquetOptions::default(), &manifest.0,
+        ).unwrap().is_empty());
+    }
+
+    #[test]
+    fn certificates_do_not_authorize_lossy_or_custom_decoders() {
+        let file = write(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["02", "01", "1"]))],
+        );
+        let manifest = certificate(&file, &[&["id"]]);
+        assert_eq!(
+            Loader::<Ids>::parquet_with_manifest(&file.0, ParquetOptions::default(), &manifest.0).unwrap(),
+            [(1,), (2,)]
+        );
+        struct Collapsed;
+        impl Relation for Collapsed {
+            type Row = (i64,);
+            const COLUMNS: &'static [&'static str] = &["id"];
+            fn decode(batch: &Batch<'_>) -> Result<Vec<Self::Row>> {
+                Ok(vec![(0,); batch.len()])
+            }
+        }
+        assert_eq!(
+            Loader::<Collapsed>::parquet_with_manifest(&file.0, ParquetOptions::default(), &manifest.0).unwrap(),
+            [(0,)]
+        );
+    }
+
     struct InternedTyped;
 
     impl InternedRelation for InternedTyped {
         type Row = (i64, StringCode, Date, Decimal, bool);
         type Source = Typed;
         type State = cq_load::StringInterner;
+        const KEY_COLUMNS: &'static [(&'static str, Option<cq_load::set_manifest::KeyEncoding>)] = Typed::KEY_COLUMNS;
 
         fn state() -> Self::State {
             Self::State::default()
@@ -494,6 +637,39 @@ mod parquet_tests {
                 row.1.remap(&state);
             }
         }
+    }
+
+    #[test]
+    fn interned_certificates_preserve_sets_and_host_inputs_still_dedup() {
+        let file = write(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("name", DataType::Utf8, false),
+                Field::new("day", DataType::Date32, false),
+                Field::new("price", DataType::Decimal128(18, 2), false),
+                Field::new("active", DataType::Boolean, false),
+            ],
+            vec![
+                Arc::new(Int64Array::from(vec![2, 1])),
+                Arc::new(StringArray::from(vec!["z", "a"])),
+                Arc::new(Date32Array::from(vec![0, 0])),
+                Arc::new(Decimal128Array::from(vec![100, 100]).with_precision_and_scale(18, 2).unwrap()),
+                Arc::new(BooleanArray::from(vec![true, true])),
+            ],
+        );
+        let manifest = certificate(&file, &[&["name"]]);
+        let mut dictionaries = Dictionaries::default();
+        let rows = Loader::<InternedTyped>::parquet_interned_with_manifest(
+            &file.0, ParquetOptions { batch_size: 1 }, &mut dictionaries, &manifest.0,
+        ).unwrap();
+        assert_eq!(rows.iter().map(|row| (row.0, row.1)).collect::<Vec<_>>(), [(2, StringCode(1)), (1, StringCode(0))]);
+        assert_eq!(dictionaries.read("name", rows[0].1), "z");
+        let plain = Loader::<Typed>::parquet_with_manifest(&file.0, ParquetOptions::default(), &manifest.0).unwrap();
+        let mut duplicates = plain.clone();
+        duplicates.extend(plain);
+        let canonical = Loader::<InternedTyped>::intern(duplicates, &mut Dictionaries::default());
+        assert_eq!(canonical.len(), 2);
+        assert_eq!(canonical[0].0, 1);
     }
     #[test]
     fn late_null_discards_partial_interning_state() {
@@ -615,7 +791,9 @@ mod parquet_tests {
             &mut dictionaries,
         )
         .unwrap_err();
-        assert_eq!(error.column, "other");
+        // Parquet may contain unused source columns; the first missing requested
+        // column still rejects the load before publishing any dictionary.
+        assert_eq!(error.column, "id");
         assert!(dictionaries.get("name").is_none());
         assert_eq!(
             ::cq_storage::domain::exact(dictionaries.domain("retained"), "value"),

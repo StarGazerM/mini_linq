@@ -1,4 +1,4 @@
-use crate::{Batch, BatchData, DEFAULT_BATCH_SIZE, Date, Error, Relation, Result, column_mapping};
+use crate::{Batch, BatchData, DEFAULT_BATCH_SIZE, Date, Error, Relation, Result};
 use arrow_array::{Array, LargeStringArray, StringArray, StringViewArray};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 use std::fs::File;
@@ -49,6 +49,7 @@ pub(crate) struct ParquetReader<'a> {
     columns: &'a [&'a str],
     next_row: u64,
     finished: bool,
+    certified_set: bool,
 }
 
 impl<S: Relation> Parquet<S> {
@@ -68,6 +69,22 @@ impl<S> Parquet<S> {
             schema: PhantomData,
         })
     }
+    pub(crate) fn open_certified(
+        path: &Path,
+        options: ParquetOptions,
+        columns: &'static [&'static str],
+        manifest: &Path,
+        key_columns: &[(&str, Option<crate::set_manifest::KeyEncoding>)],
+    ) -> Result<Self> {
+        Ok(Self {
+            reader: ParquetReader::open_with_manifest(path, options, columns, Some(manifest), key_columns)?,
+            schema: PhantomData,
+        })
+    }
+
+    pub(crate) fn certified_set(&self) -> bool {
+        self.reader.certified_set
+    }
 
     pub(crate) fn next_with<T>(
         &mut self,
@@ -83,6 +100,16 @@ impl<'a> ParquetReader<'a> {
         options: ParquetOptions,
         columns: &'a [&'a str],
     ) -> Result<Self> {
+        Self::open_with_manifest(file, options, columns, None, &[])
+    }
+
+    fn open_with_manifest(
+        file: &Path,
+        options: ParquetOptions,
+        columns: &'a [&'a str],
+        manifest: Option<&Path>,
+        key_columns: &[(&str, Option<crate::set_manifest::KeyEncoding>)],
+    ) -> Result<Self> {
         if options.batch_size == 0 {
             return Err(Error::new(
                 file,
@@ -92,9 +119,11 @@ impl<'a> ParquetReader<'a> {
                 "batch size must be positive",
             ));
         }
-        let input = File::open(file)
+        let mut input = File::open(file)
             .map_err(|error| Error::new(file, 0, "<file>", "", error.to_string()))?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(input)
+        let reader_input = input.try_clone()
+            .map_err(|error| Error::new(file, 0, "<file>", "", error.to_string()))?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_input)
             .map_err(|error| Error::new(file, 0, "<schema>", "<unreadable>", error.to_string()))?;
         let names = builder
             .schema()
@@ -102,7 +131,19 @@ impl<'a> ParquetReader<'a> {
             .iter()
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>();
-        let mapping = column_mapping(file, &names, columns)?;
+        for (index, name) in names.iter().enumerate() {
+            if names[..index].contains(name) {
+                return Err(Error::new(file, 1, *name, *name, "duplicate source column"));
+            }
+        }
+        let mapping = columns.iter().map(|column| {
+            names.iter().position(|name| name == column)
+                .ok_or_else(|| Error::new(file, 1, *column, "<missing>", "missing source column"))
+        }).collect::<Result<Vec<_>>>()?;
+        // Hash the same opened file used by the reader, never a second pathname.
+        let certified_set = manifest.is_some_and(|manifest| {
+            crate::set_manifest::certified(manifest, file, &mut input, builder.schema(), key_columns)
+        });
         let reader = builder
             .with_batch_size(options.batch_size)
             .build()
@@ -114,6 +155,7 @@ impl<'a> ParquetReader<'a> {
             columns,
             next_row: 1,
             finished: false,
+            certified_set,
         })
     }
 }
@@ -177,12 +219,28 @@ pub fn read_parquet<S: Relation>(
 where
     S::Row: Ord,
 {
-    // DECODE ?: this fold drives Parquet::next reconstruction before the generic caller's downstream use is known.
-    let mut rows = Parquet::<S>::open(path, options)?.try_fold(Vec::new(), |mut rows, batch| {
+    let path = path.as_ref();
+    read_parquet_with_manifest::<S>(path, options, &crate::set_manifest::manifest_path(path))
+}
+
+/// Load with an explicit certificate path instead of adjacent/environment lookup.
+/// Missing, malformed and mismatching certificates retain canonicalization.
+pub fn read_parquet_with_manifest<S: Relation>(
+    path: impl AsRef<Path>,
+    options: ParquetOptions,
+    manifest: &Path,
+) -> Result<Vec<S::Row>>
+where
+    S::Row: Ord,
+{
+    let mut source = Parquet::<S>::open_certified(path.as_ref(), options, S::COLUMNS, manifest, S::KEY_COLUMNS)?;
+    let certified_set = source.certified_set();
+    // DECODE ?: this fold reconstructs rows for the caller's tuple-vector host.
+    let mut rows = source.try_fold(Vec::new(), |mut rows, batch| {
         rows.extend(batch?);
         Ok::<_, Error>(rows)
     })?;
-    crate::canonicalize(&mut rows);
+    crate::loader::canonicalize_unless_certified(&mut rows, certified_set);
     Ok(rows)
 }
 

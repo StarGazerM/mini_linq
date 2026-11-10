@@ -30,7 +30,7 @@ pub const CONFIGS: &[&str] = &[
     "le_runs",
 ];
 
-::mini_linq::interned_relation_loaders! {
+::cq_load::interned_relation_loaders! {
     relation Lineitem(
         l_partkey: i64, l_orderkey: i64, l_linenumber: i64,
         l_quantity: Decimal, l_extendedprice: Decimal, l_discount: Decimal,

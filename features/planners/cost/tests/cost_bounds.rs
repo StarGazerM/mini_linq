@@ -8,12 +8,12 @@ use cq_cost::cost::{bounds::{self, BoundModel}, Candidate, Comparison, CostStep,
 use cq_cost::export::{self, CheckedIr, ClauseKind, Configuration, DatasetIdentity,
     Evidence, EvidenceBinding, EvidenceColumn, EvidenceView, Hole, Identity,
     Layout, Origin, PlannerInput, Scope, Target, Version};
-use cq_syntax::evidence::{self as ev, Claim, DatasetEvidence, Rational, Source};
+use cq_evidence::{self as ev, Claim, DatasetEvidence, Rational, Source};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use serde_json::{Value, json};
 
-// Local fixture mirrors languages/cq-syntax/tests/fixtures for external consumers.
+// Local fixture mirrors runtime/cq-evidence/tests/fixtures for external consumers.
 const FIXTURE: &str = include_str!("fixtures/planner-evidence.json");
 const HASH: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 fn rat(n: impl ToString) -> Rational { Rational { numerator: n.to_string(), denominator: "1".into() } }

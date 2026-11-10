@@ -29,14 +29,14 @@ pub const CONFIGS: &[&str] = &[
     "blocks-bytes-par",
 ];
 
-::mini_linq::relation_loaders! {
+::cq_load::relation_loaders! {
     relation Lineitem(
         l_orderkey: i64, l_linenumber: i64, l_quantity: Decimal,
         l_extendedprice: Decimal, l_discount: Decimal, l_shipdate: Date
     );
 }
 
-::mini_linq::columnar_relation_loaders! {
+::cq_load::columnar_relation_loaders! {
     relation PlainLineitem(
         l_orderkey: i64 @ plain, l_linenumber: i64 @ plain,
         l_quantity: Decimal @ plain, l_extendedprice: Decimal @ plain,

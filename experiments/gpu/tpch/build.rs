@@ -1407,6 +1407,35 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 ));
                 Ok(())
             }
+            #[test]
+            fn verified_keys_cover_only_matching_projections_and_bytes() -> crate::manifest::Result<()> {
+                let mut manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let hash = manifest.read_column_checked("unique_rows", "id", true)?.1.unwrap();
+                manifest.relations.get_mut("unique_rows").unwrap().verified_keys = vec![
+                    serde_json::from_value(serde_json::json!({
+                        "set": "verified", "rows": 4, "types": {"id": "i32"},
+                        "columns": {"id": hash}
+                    }))?
+                ];
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                assert_eq!(loader.bind::<(i32, i32)>("unique_rows", &["id", "payload"])?.to_host()?,
+                    vec![(1, 1), (2, 2), (3, 3), (4, 1)]);
+                assert_eq!(loader.bind::<(i32,)>("unique_rows", &["payload"])?.to_host()?,
+                    vec![(1,), (2,), (3,)]);
+                drop(loader);
+                // A certificate copied onto another column cannot authorize duplicate rows.
+                manifest.relations.get_mut("unique_rows").unwrap().verified_keys = vec![
+                    serde_json::from_value(serde_json::json!({
+                        "set": "verified", "rows": 4, "types": {"payload": "i32"},
+                        "columns": {"payload": hash}
+                    }))?
+                ];
+                let mut loader = crate::loader::Loader::new(&manifest, pool);
+                assert_eq!(loader.bind::<(i32,)>("unique_rows", &["payload"])?.to_host()?,
+                    vec![(1,), (2,), (3,)]);
+                Ok(())
+            }
         }
         #[cfg(test)]
         #[allow(non_snake_case, dead_code)]

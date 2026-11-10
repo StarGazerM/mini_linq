@@ -1,12 +1,31 @@
 //! One-pass dataset statistics with explicit loader and semantic hash identity.
 //! Data files use the documented typed row stream; metadata uses raw bytes.
 use crate::{Date, Error, Load, Result, stats::{DistinctMode, RelationAccumulator, RelationSpec}, stats_source::{self, SourceOptions}};
-use cq_syntax::evidence::{self, DatasetEvidence, DatasetIdentity, FileRole, InputManifest, ManifestFile, ManifestRelation, Observations, Provenance, RelationSemantics, SetCertification, Source};
+use cq_evidence::{self as evidence, DatasetEvidence, DatasetIdentity, FileRole, InputManifest, ManifestFile, ManifestRelation, Observations, Provenance, RelationSemantics, SetCertification, Source};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, BTreeSet}, fs::File, io::Read, path::{Path, Component}};
 
 pub const REQUEST_SCHEMA: &str = "mini-linq.stats-input.v1";
+
+/// Read checked evidence for a build script and register its canonical Cargo
+/// dependency. Compiler-specific relation correspondence is supplied separately
+/// by the caller after loading this neutral document.
+pub fn load_build_input(path: &Path) -> Result<DatasetEvidence> {
+    let path = path.canonicalize()
+        .map_err(|error| Error::new(path, 0, "<evidence>", "", error.to_string()))?;
+    let path_text = path.to_str().ok_or_else(|| {
+        Error::new(&path, 0, "<evidence>", "", "evidence path must be UTF-8")
+    })?;
+    if path_text.contains('\n') || path_text.contains('\r') {
+        return Err(Error::new(&path, 0, "<evidence>", "", "evidence path contains a line break"));
+    }
+    println!("cargo:rerun-if-changed={path_text}");
+    let json = std::fs::read_to_string(&path)
+        .map_err(|error| Error::new(&path, 0, "<evidence>", "", error.to_string()))?;
+    evidence::parse_json(&json)
+        .map_err(|error| Error::new(&path, 0, "<evidence>", "", error.to_string()))
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

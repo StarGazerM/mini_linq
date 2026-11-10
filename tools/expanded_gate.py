@@ -38,7 +38,7 @@ and a description. Built-in class kinds cannot be overridden. Every rule still
 requires its exact hash, reason and source citation. Unexplained hunks always fail.
 
 Each key hashes normalized expansion, linked runtime sources (cq-storage,
-cq-load, cq-sequence-tasks, and reachable GPU runtime packages), rustc -vV, expansion
+cq-load, cq-evidence, cq-sequence-tasks, and reachable GPU runtime packages), rustc -vV, expansion
 flags/environment, resolved dependency versions/features, and data/oracle
 manifests. Runtime sources exclude target/.git/__pycache__, doc directories,
 Markdown files (case-insensitively), and CHANGELOG variants.
@@ -338,7 +338,7 @@ def runtime_sources(metadata):
         name = p["name"]
         path = Path(p["manifest_path"]).parent
         dependencies.append([name, p["version"], p["source"], sorted(graph[identifier]["features"])])
-        if name in {"cq-storage", "cq-load", "cq-sequence-tasks", "bench-check"} or (name.startswith("cq-gpu") and "runtime" in name) or "gpu" in path.parts:
+        if name in {"cq-storage", "cq-load", "cq-evidence", "cq-sequence-tasks", "bench-check"} or (name.startswith("cq-gpu") and "runtime" in name) or "gpu" in path.parts:
             runtimes[name] = crate_digest(path)
     return dict(sorted(runtimes.items())), sorted(dependencies, key=lambda x: canonical(x))
 

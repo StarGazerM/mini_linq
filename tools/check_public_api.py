@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare reviewed core API snapshots with rustdoc JSON (pinned toolchain).
+"""Compare reviewed compiler/runtime/IO APIs with rustdoc JSON (pinned toolchain).
 
 Run --update only while reviewing an intentional API change. CI/default mode
 never overwrites snapshots. IDs, spans, documentation and bodies are excluded;
@@ -119,7 +119,7 @@ def snapshot(data):
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--update",action="store_true");args=parser.parse_args()
     data=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version=1","--locked"],cwd=ROOT))
-    core_directories = {ROOT / folder for folder in ("languages", "passes", "runtime", "facade", "testkit")}
+    core_directories = {ROOT / folder for folder in ("languages", "passes", "runtime", "io", "facade", "testkit")}
     packages=sorted(p["name"] for p in data["packages"]
                     if Path(p["manifest_path"]).parent.parent in core_directories)
     env=os.environ.copy();env["RUSTC_BOOTSTRAP"]="1"

@@ -28,6 +28,7 @@ use gpu_device_columns::{
     Table,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, error::Error, fs, path::Path, sync::Arc};
 
 pub type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
@@ -40,15 +41,23 @@ pub struct Source {
     texts: BTreeMap<String, Vec<String>>,
     declared_bytes: usize,
     manifest: Value,
+    verified_keys: BTreeMap<String, Vec<Vec<String>>>,
 }
 
 impl Source {
     /// Read `manifest.json` and its little-endian column files.
     pub fn load_manifest(dir: &Path) -> Result<Self> {
-        let manifest: Value = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
+        let path = std::env::var_os("TPCH_GPU_MANIFEST")
+            .map(std::path::PathBuf::from).unwrap_or_else(|| dir.join("manifest.json"));
+        Self::load_with_manifest(dir, &path)
+    }
+
+    pub fn load_with_manifest(dir: &Path, path: &Path) -> Result<Self> {
+        let manifest: Value = serde_json::from_slice(&fs::read(path)?)?;
         let mut columns = BTreeMap::new();
         let mut texts_by_column = BTreeMap::new();
         let mut declared_bytes = 0;
+        let mut verified_keys = BTreeMap::new();
         for (relation, meta) in manifest["relations"]
             .as_object()
             .ok_or("relations missing")?
@@ -57,6 +66,7 @@ impl Source {
             if rows >= u32::MAX as usize {
                 return Err(format!("{relation}: row count exceeds the u32 row-ID domain").into());
             }
+            let mut hashes = BTreeMap::new();
             for column in meta["columns"].as_array().ok_or("columns missing")? {
                 let name = column["name"].as_str().ok_or("column name missing")?;
                 let bytes =
@@ -75,6 +85,13 @@ impl Source {
                         "{relation}.{name}: byte length does not match its declared type"
                     )
                     .into());
+                }
+                if column["encoding"] == "plain"
+                    && meta["verified_keys"].as_array().is_some_and(|keys| keys.iter().any(|key| {
+                        key["set"] == "verified" && key["columns"].get(name).is_some()
+                    }))
+                {
+                    hashes.insert(name.to_owned(), format!("{:x}", Sha256::digest(&bytes)));
                 }
                 let values: Vec<i64> = bytes
                     .chunks_exact(width)
@@ -104,12 +121,27 @@ impl Source {
                 }
                 columns.insert(qualified, values);
             }
+            let keys = meta["verified_keys"].as_array().into_iter().flatten()
+                .filter_map(|key| {
+                    let columns = key["columns"].as_object()?;
+                    let valid = key["set"] == "verified" && key["rows"] == meta["rows"]
+                        && !columns.is_empty() && columns.iter().all(|(name, expected)| {
+                            hashes.get(name).map(String::as_str) == expected.as_str()
+                                && meta["columns"].as_array().unwrap().iter().any(|column| {
+                                    column["name"] == name.as_str() && column["encoding"] == "plain"
+                                        && key["types"][name] == column["type"]
+                                })
+                        });
+                    valid.then(|| columns.keys().cloned().collect())
+                }).collect();
+            verified_keys.insert(relation.clone(), keys);
         }
         Ok(Self {
             columns,
             texts: texts_by_column,
             declared_bytes,
             manifest,
+            verified_keys,
         })
     }
     pub fn col(&self, name: &str) -> Result<&[i64]> {
@@ -228,7 +260,13 @@ impl Catalog {
                 .map(|(column, _)| source.col(&format!("{table}.{column}")))
                 .collect::<Result<Vec<_>>>()?;
             let source_rows = projected.first().map_or(0, |column| column.len());
-            let selected = gpu_compress_host::unique_rows(&projected, source_rows)?;
+            // Formal rule IO-GpuCatalogKey: injective domain encoding preserves a hash-verified source key.
+            let certified = source.verified_keys.get(table).is_some_and(|keys| keys.iter().any(|key| {
+                key.iter().all(|name| columns.iter().any(|(column, _)| column == name))
+            }));
+            let selected = if certified { None } else {
+                gpu_compress_host::unique_rows(&projected, source_rows)?
+            };
             let rows = selected.as_ref().map_or(source_rows, Vec::len);
             let mut stored = Vec::with_capacity(columns.len());
             for ((column, kind), values) in columns.iter().zip(projected) {

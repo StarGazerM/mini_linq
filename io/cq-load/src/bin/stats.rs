@@ -1,6 +1,6 @@
 //! Explicit offline statistics collection; no workload or planner execution.
 use cq_load::stats_manifest::DatasetRequest;
-use cq_syntax::evidence;
+use cq_evidence as evidence;
 use std::{collections::BTreeMap, io::Write, path::{Path, PathBuf}};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;

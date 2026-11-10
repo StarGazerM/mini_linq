@@ -1,6 +1,5 @@
-mini_linq::columnar_relation_loaders	{"use":{"id":"mini_linq_macros::columnar_relation_loaders","is_glob":false,"name":"columnar_relation_loaders","source":"mini_linq_macros::columnar_relation_loaders"}}
 mini_linq::compile	{"use":{"id":"mini_linq_macros::compile","is_glob":false,"name":"compile","source":"mini_linq_macros::compile"}}
-mini_linq::interned_relation_loaders	{"use":{"id":"mini_linq_macros::interned_relation_loaders","is_glob":false,"name":"interned_relation_loaders","source":"mini_linq_macros::interned_relation_loaders"}}
+mini_linq::cq_load	{"use":{"id":"cq_load","is_glob":false,"name":"cq_load","source":"cq_load"}}
 mini_linq::mini_linq	{"use":{"id":"mini_linq_macros::mini_linq","is_glob":false,"name":"mini_linq","source":"mini_linq_macros::mini_linq"}}
 mini_linq::passes::index_demands	{"use":{"id":"mini_linq_macros::index_demands","is_glob":false,"name":"index_demands","source":"mini_linq_macros::index_demands"}}
 mini_linq::passes::lower	{"use":{"id":"mini_linq_macros::lower","is_glob":false,"name":"lower","source":"mini_linq_macros::lower"}}
@@ -15,5 +14,4 @@ mini_linq::passes::sequential	{"use":{"id":"mini_linq_macros::sequential","is_gl
 mini_linq::passes::stage	{"use":{"id":"mini_linq_macros::stage","is_glob":false,"name":"stage","source":"mini_linq_macros::stage"}}
 mini_linq::passes::translate_pull	{"use":{"id":"mini_linq_macros::translate_pull","is_glob":false,"name":"translate_pull","source":"mini_linq_macros::translate_pull"}}
 mini_linq::planning	{"use":{"id":"cq_planning","is_glob":false,"name":"planning","source":"cq_planning"}}
-mini_linq::relation_loaders	{"use":{"id":"mini_linq_macros::relation_loaders","is_glob":false,"name":"relation_loaders","source":"mini_linq_macros::relation_loaders"}}
 mini_linq::workload_query	{"use":{"id":"mini_linq_macros::workload_query","is_glob":false,"name":"workload_query","source":"mini_linq_macros::workload_query"}}

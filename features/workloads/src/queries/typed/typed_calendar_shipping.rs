@@ -1,6 +1,6 @@
 use crate::typed::{self, Source};
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Calendar(shipdate: cq_load::Date, label: cq_load::StringCode);
 }
 

@@ -151,6 +151,25 @@ with the recipe cleared; the report retains the original recipe separately.
  {\mathsf{unique}(Q)\quad
   \mathsf{loadProjection}(Q)\text{ reuses unchanged cached base columns}}
 
+\Rule{IO-GpuVerifiedKey}{K\subseteq P\quad
+ \mathsf{prepareVerifiedUnique}(T[K])\quad
+ \forall c\in K.\ \mathsf{SHA256}(\mathsf{loadedBytes}(c))=h_c}
+ {\mathsf{loadProjection}(T,P)\text{ may omit canonicalization}}
+
+The preparation manifest records the checked key and its column-byte hashes.
+The loader hashes the same bytes it decodes; a missing certificate, changed
+hash, or projection omitting a key column retains complete-row deduplication.
+These are IO checks, never compiler facts. Only injectively decoded integer
+key columns are admitted; dictionary codes alone do not certify decoded text.
+
+\Rule{IO-GpuPrepareKey}{|\mathsf{distinct}(T[K])|=|T|\quad
+ h_c=\mathsf{SHA256}(\mathsf{storedBytes}(c))\ (c\in K)}
+ {\mathsf{manifest}(T).\mathsf{verifiedKeys}\ni(K,(h_c)_{c\in K})}
+
+\Rule{IO-GpuCatalogKey}{\mathsf{IOVerifiedKey}(T,K)\quad K\subseteq P\quad
+ \mathsf{injective}(\mathsf{domainEncoding})}
+ {\mathsf{compress}(T[P])\text{ may omit canonicalization}}
+
 \Rule{DR-HostSet}{v=\mathsf{collectTypedProjection}(T,P)}
  {\mathsf{hostInput}(T,P)=\mathsf{sortDedup}(v)}
 

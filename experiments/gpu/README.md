@@ -1360,7 +1360,7 @@ from those declarations and record each query's `required_columns` in the manife
 | part | p_partkey, p_brand, p_type, p_name |
 | partsupp | ps_partkey, ps_suppkey, ps_availqty |
 
-`manifest.json` schema version 2 contains `sf`, `byte_order: "little"`,
+`manifest.json` schema version 3 (version 2 remains readable) contains `sf`, `byte_order: "little"`,
 `binary_bytes`, `constants` (the original H05 date bounds and ASIA ID),
 `relations`, and `queries`. Each relation has `rows` and a `columns` array;
 each column has `name`, physical `type` (`i32`/`i64`), `logical_type`,
@@ -1374,6 +1374,30 @@ database row order. Encodings:
   `dictionary_entries` records cardinality. Dictionaries are per column.
 * `scaled_integer`: i64 decimal values with `scale: 2`; divide by 100 to decode.
   Thus the D72 `l_quantity > 20.00` guard compares encoded values to 2000.
+
+Version 3 adds per-relation `verified_keys`: each entry has `set: "verified"`,
+`rows`, `types` keyed by column name, and `columns` mapping each key column to
+the SHA-256 of its stored bytes. Preparation sorts the actual key tuples once;
+declared TPC-H constraints are only candidate keys, never trusted evidence.
+Both native and Source/Catalog loaders hash the bytes they decode and omit
+projection deduplication only when all key columns are loaded with matching
+hashes, widths and row count. A projection such as H03 Lineitem, which omits
+`l_linenumber`, still deduplicates. Dictionary keys and host-built relations do
+not use this shortcut. No query/compiler annotation is created.
+
+To prepare manifests without modifying shared datasets (requires NumPy):
+
+```sh
+python3 experiments/gpu/compare/export_tpch.py --root /data/tpch-gpu --sf 1 10 \
+  --manifest-only /data/design-notes/dataset-manifests
+TPCH_GPU_MANIFEST=/data/design-notes/dataset-manifests/sf1.json <SF1-loader-command>
+```
+
+`Manifest::load_with_manifest(root, path)` and
+`Source::load_with_manifest(root, path)` provide explicit overrides. Relative
+column paths always resolve against the dataset root, not the override's
+directory. The dataset owner may adopt the generated `sfN.json` as that scale's
+`manifest.json` after review; ordinary export also publishes verified keys.
 
 Every `queries.<query>` entry records source path, exact SQL,
 `required_columns` grouped by table (the complete per-query input inventory),

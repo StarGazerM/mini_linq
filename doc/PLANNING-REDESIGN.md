@@ -198,7 +198,7 @@ semantics: it chooses among checked candidates.
 
 ### Declared dataset input and external planner records
 
-`cq_syntax::evidence` owns the versioned JSON document and its strict checker
+`cq_evidence` owns the versioned JSON document and its strict checker
 (`doc/planner-evidence.schema.json`). Numbers retain source, claim kind,
 provenance, units and dataset hash. HLL observations are not deterministic
 bounds; absent facts remain unknown. Dataset identity hashes the canonical
@@ -225,9 +225,11 @@ acyclic IDB to be iterated by a later union of SCCs; Round then checks its
 actual component. Components with steady work require `recursive_final` and
 the exact zero-based component index in `recursive.stratum`; seed-only
 components require `frozen`. The file cannot invent an iteration scope.
-`DeclaredEvidence::load_build_input` reads an explicitly named JSON file and
-registers its canonical path with Cargo's `rerun-if-changed`; ordinary IR
-parsers and runtime printers never read a file.
+`cq_load::stats_manifest::load_build_input` reads an explicitly named JSON file
+and registers its canonical path with Cargo's `rerun-if-changed`. The caller
+supplies the returned neutral document to `DeclaredEvidence` with its explicit
+compiler bindings; compiler syntax, IR parsers and runtime printers never read
+an evidence file.
 
 This input **does not activate** `PlanOptions.evidence`, change a root, or
 conflict with authored order. Legacy P3.3e still owns its existing count/key

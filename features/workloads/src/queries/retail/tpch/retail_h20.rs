@@ -45,7 +45,7 @@ pub struct Data {
     pub dictionaries: cq_load::Dictionaries,
 }
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Part(p_partkey: i64, p_name: StringCode);
     relation Partsupp(ps_partkey: i64, ps_suppkey: i64, ps_availqty: i64);
     relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_partkey: i64,

@@ -2,7 +2,7 @@ use cq_lang_datalog_round::{self as round, incremental::strata::source, storage}
 use cq_syntax::declared_evidence::EvidenceView;
 use quote::{ToTokens, quote};
 
-// Local fixtures mirror languages/cq-syntax/tests/fixtures for external consumers.
+// Local fixtures mirror runtime/cq-evidence/tests/fixtures for external consumers.
 const INPUT: &str = include_str!("fixtures/planner-evidence.json");
 const RECURSIVE: &str = include_str!("fixtures/planner-recursive-evidence.json");
 
@@ -128,7 +128,7 @@ fn evidence_iteration_scope_is_owned_by_the_actual_round_component() {
     document["premises"] = serde_json::json!([]);
     document["observations"]["rounds"] = serde_json::json!([]);
     document["dataset"]["manifest"]["schema"]["R"]["set_certification"] = serde_json::json!("full_tuple_deduplicated");
-    let manifest: cq_syntax::evidence::InputManifest = serde_json::from_value(document["dataset"]["manifest"].clone()).unwrap();
+    let manifest: cq_evidence::InputManifest = serde_json::from_value(document["dataset"]["manifest"].clone()).unwrap();
     let hash = manifest.dataset_hash().unwrap();
     document["dataset"]["hash"] = serde_json::json!(hash);
     document["dataset"]["schema_hash"] = serde_json::json!(manifest.schema_hash().unwrap());

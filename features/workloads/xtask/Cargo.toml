@@ -15,6 +15,7 @@ counters = ["cq-workloads/counters"]
 bench-check = { path = "../../../testkit/bench-check" }
 cq-workloads = { path = ".." }
 cq-testkit.workspace = true
+cq-load.workspace = true
 cq-lang-cq.workspace = true
 cq-lang-ra.workspace = true
 quote.workspace = true

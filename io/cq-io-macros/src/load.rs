@@ -1,24 +1,8 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ext::IdentExt, parse::Parse};
+use syn::ext::IdentExt;
 
-struct Declarations(Vec<cq_lang_cq::RelationDecl>);
-
-impl Parse for Declarations {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        if input.peek(cq_lang_cq::kw::relation) {
-            let mut declarations = Vec::new();
-            while !input.is_empty() {
-                declarations.push(input.parse()?);
-            }
-            cq_lang_cq::syntax::intern_logical_types(&mut declarations)?;
-            Ok(Self(declarations))
-        } else {
-            let program: cq_lang_cq::Program = input.parse()?;
-            Ok(Self(program.inputs().cloned().collect()))
-        }
-    }
-}
+use crate::schema::{Declarations, check_declarations};
 
 pub(crate) fn expand(input: TokenStream, interned: bool) -> TokenStream {
     syn::parse(input)
@@ -31,7 +15,7 @@ fn generate(
     Declarations(declarations): Declarations,
     interned: bool,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    cq_lang_cq::check_input_declarations(&declarations)?;
+    check_declarations(&declarations, false)?;
     let mut output = proc_macro2::TokenStream::new();
     let mut selectors = Vec::new();
     for declaration in declarations {
@@ -83,6 +67,8 @@ fn generate(
                     type Row = (#(#parameters,)*);
                     type Source = #marker #source_types;
                     type State = (#(<#parameters as ::cq_load::InternedField>::State,)*);
+                    const KEY_COLUMNS: &'static [(&'static str, Option<::cq_load::set_manifest::KeyEncoding>)] =
+                        &[#((#names, <#parameters as ::cq_load::InternedField>::KEY_ENCODING),)*];
 
                     fn state() -> Self::State {
                         (#(<#parameters as ::cq_load::InternedField>::State::default(),)*)
@@ -159,6 +145,8 @@ fn generate(
             impl #generic_bounds ::cq_load::Relation for #marker #generic_parameters {
                 type Row = (#(#parameters,)*);
                 const COLUMNS: &'static [&'static str] = &[#(#names,)*];
+                const KEY_COLUMNS: &'static [(&'static str, Option<::cq_load::set_manifest::KeyEncoding>)] =
+                    &[#((#names, <#parameters as ::cq_load::Load>::KEY_ENCODING),)*];
                 fn decode(batch: &::cq_load::Batch<'_>) -> ::cq_load::Result<::std::vec::Vec<Self::Row>> {
                     #(let #fields = batch.column::<#parameters>(#indices)?.into_iter();)*
                     Ok(#decode)
@@ -189,6 +177,7 @@ mod tests {
             "relation R();",
             "relation R(a: i32, a: i64);",
             "relation R(a: i32); relation R(a: i32);",
+            "relation R(a: i32 @ plain);",
         ] {
             for interned in [false, true] {
                 let declarations = syn::parse_str::<Declarations>(source).unwrap();
@@ -219,5 +208,35 @@ mod tests {
             quote::quote!(#plain).to_string(),
             quote::quote!(#interned).to_string()
         );
+    }
+
+    #[test]
+    fn verified_key_metadata_uses_field_traits_and_authored_column_order() {
+        let source = "relation R(r#type: UserAlias, value: crate::Custom);";
+        let output = generate(syn::parse_str(source).unwrap(), true).unwrap();
+        let file: syn::File = syn::parse2(output).unwrap();
+        for (relation_trait, field_trait) in [
+            ("Relation", quote::quote!(::cq_load::Load)),
+            ("InternedRelation", quote::quote!(::cq_load::InternedField)),
+        ] {
+            let implementation = file.items.iter().find_map(|item| match item {
+                syn::Item::Impl(implementation)
+                    if implementation.trait_.as_ref().is_some_and(|(_, path, _)|
+                        path.segments.last().is_some_and(|segment|
+                            segment.ident == relation_trait)) => Some(implementation),
+                _ => None,
+            }).unwrap();
+            let metadata = implementation.items.iter().find_map(|item| match item {
+                syn::ImplItem::Const(item) if item.ident == "KEY_COLUMNS" => Some(&item.expr),
+                _ => None,
+            }).unwrap();
+            assert_eq!(
+                quote::quote!(#metadata).to_string(),
+                quote::quote!(&[
+                    ("type", <Column0 as #field_trait>::KEY_ENCODING),
+                    ("value", <Column1 as #field_trait>::KEY_ENCODING),
+                ]).to_string(),
+            );
+        }
     }
 }

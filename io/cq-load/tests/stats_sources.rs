@@ -319,9 +319,8 @@ mod parquet_tests {
     fn empty_parquet_validates_schema_without_visiting_rows() {
         let file = parquet(vec![]);
         visit(&file.0, Pair::COLUMNS, &options(2), |_| panic!("empty parquet")).unwrap();
-        for columns in [&["id"][..], &["id", "other"][..]] {
-            assert!(visit(&file.0, columns, &options(2), |_| panic!("invalid schema")).is_err());
-        }
+        visit(&file.0, &["id"], &options(2), |_| panic!("empty projection")).unwrap();
+        assert!(visit(&file.0, &["id", "other"], &options(2), |_| panic!("invalid schema")).is_err());
         let invalid = Fixture::text("");
         assert!(visit(&invalid.0, Pair::COLUMNS, &options(2), |_| panic!("invalid parquet")).is_err());
     }

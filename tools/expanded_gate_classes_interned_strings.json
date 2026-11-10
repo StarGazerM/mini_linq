@@ -885,14 +885,14 @@
    "class": "interned-typed",
    "hunk_sha256": "83b76c3cf31b0fec54a75301dc98d029287eaec332a7eeb939254655b21ff221",
    "reason": "reviewed: generated interning loader and publication decode",
-   "source": "features/workloads/src/typed.rs;runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/typed.rs;io/cq-load/src/intern.rs"
   },
   {
    "target": "typed_line_filter",
    "class": "interned-typed",
    "hunk_sha256": "028dcc19f02e4bd2bd564993b6a4871b53420984ce2f1ef864aff1a0a82239b8",
    "reason": "reviewed: generated interning loader and publication decode",
-   "source": "features/workloads/src/typed.rs;runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/typed.rs;io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h19",

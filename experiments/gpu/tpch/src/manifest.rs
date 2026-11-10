@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -24,9 +25,19 @@ pub struct Column {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct VerifiedKey {
+    pub set: String,
+    pub columns: BTreeMap<String, String>,
+    pub types: BTreeMap<String, String>,
+    pub rows: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Relation {
     pub rows: usize,
     pub columns: Vec<Column>,
+    #[serde(default)]
+    pub verified_keys: Vec<VerifiedKey>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -181,10 +192,17 @@ impl HostValue for String {
 
 impl Manifest {
     pub fn load(root: &Path) -> Result<Self> {
-        let mut manifest: Self = serde_json::from_slice(&fs::read(root.join("manifest.json"))?)?;
+        let path = std::env::var_os("TPCH_GPU_MANIFEST")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("manifest.json"));
+        Self::load_with_manifest(root, &path)
+    }
+
+    pub fn load_with_manifest(root: &Path, path: &Path) -> Result<Self> {
+        let mut manifest: Self = serde_json::from_slice(&fs::read(path)?)?;
         manifest.root = root.to_owned();
-        if manifest.schema_version != 2 || manifest.byte_order != "little" {
-            return Err("requires schema_version 2 and little-endian columns".into());
+        if !matches!(manifest.schema_version, 2 | 3) || manifest.byte_order != "little" {
+            return Err("requires schema_version 2 or 3 and little-endian columns".into());
         }
         for (table, relation) in &manifest.relations {
             for column in &relation.columns {
@@ -257,6 +275,22 @@ impl Manifest {
     }
 
     fn read_stored_column(&self, table: &str, name: &str) -> Result<Vec<i64>> {
+        self.read_stored_column_checked(table, name, false).map(|(values, _)| values)
+    }
+
+    pub fn read_column_checked(
+        &self, table: &str, name: &str, check_key: bool,
+    ) -> Result<(Vec<i64>, Option<String>)> {
+        let column = self.column(table, name)?;
+        if column.encoding == "dictionary" {
+            return self.read_column(table, name).map(|values| (values, None));
+        }
+        self.read_stored_column_checked(table, name, check_key)
+    }
+
+    fn read_stored_column_checked(
+        &self, table: &str, name: &str, check_key: bool,
+    ) -> Result<(Vec<i64>, Option<String>)> {
         let column = self.column(table, name)?;
         let bytes = fs::read(self.root.join(&column.file))?;
         let width = match column.ty.as_str() {
@@ -268,6 +302,7 @@ impl Manifest {
         if bytes.len() != rows.checked_mul(width).ok_or("column size overflow")? {
             return Err(format!("{table}.{name}: byte count does not match manifest").into());
         }
+        let hash = check_key.then(|| format!("{:x}", Sha256::digest(&bytes)));
         let values: Vec<_> = bytes
             .chunks_exact(width)
             .map(|bytes| {
@@ -278,7 +313,7 @@ impl Manifest {
                 }
             })
             .collect();
-        Ok(values)
+        Ok((values, hash))
     }
 
     pub fn read_column(&self, table: &str, name: &str) -> Result<Vec<i64>> {
@@ -320,5 +355,36 @@ mod dictionary_domain_tests {
             cq_load::StringCode::from_code(u32::MAX).into_code(),
             u32::MAX
         );
+    }
+
+    #[test]
+    fn override_hashes_the_exact_decoded_bytes_and_keeps_legacy_inputs() -> super::Result<()> {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!("tpch-key-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&root)?;
+        let bytes: Vec<_> = [3_i32, 1, 2].into_iter().flat_map(i32::to_le_bytes).collect();
+        std::fs::write(root.join("key.bin"), &bytes)?;
+        let path = root.join("override.json");
+        let expected = format!("{:x}", Sha256::digest(&bytes));
+        std::fs::write(&path, serde_json::to_vec(&serde_json::json!({
+            "schema_version": 3, "sf": 1, "byte_order": "little",
+            "relations": {"r": {"rows": 3, "columns": [{
+                "name": "id", "type": "i32", "logical_type": "Integer",
+                "encoding": "plain", "file": "key.bin"
+            }], "verified_keys": [{"set": "verified", "rows": 3,
+                "types": {"id": "i32"}, "columns": {"id": expected}}]}}
+        }))?)?;
+        let manifest = super::Manifest::load_with_manifest(&root, &path)?;
+        let (values, hash) = manifest.read_column_checked("r", "id", true)?;
+        assert_eq!(values, vec![3, 1, 2]);
+        assert_eq!(hash.as_deref(), Some(expected.as_str()));
+        let changed: Vec<_> = [3_i32, 3, 2].into_iter().flat_map(i32::to_le_bytes).collect();
+        std::fs::write(root.join("key.bin"), changed)?;
+        assert_ne!(manifest.read_column_checked("r", "id", true)?.1, hash);
+        assert_eq!(manifest.read_column_checked("r", "id", false)?.1, None);
+        let legacy: super::Relation = serde_json::from_str(r#"{"rows":0,"columns":[]}"#)?;
+        assert!(legacy.verified_keys.is_empty());
+        std::fs::remove_dir_all(root)?;
+        Ok(())
     }
 }

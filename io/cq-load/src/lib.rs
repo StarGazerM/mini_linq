@@ -9,6 +9,23 @@
 //! Parquet reader additionally owns compressed page/row-group buffers; the row
 //! batch limit does not bound an individual field or compressed page's bytes.
 //!
+//! [`relation_loaders!`] accepts one or more IO relation schemas with ordered
+//! column names and Rust types, independently of any query program:
+//!
+//! ```
+//! cq_load::relation_loaders! {
+//!     relation Reading(id: i64, label: String);
+//! }
+//! assert_eq!(
+//!     <__MiniLinqLoadReading<i64, String> as cq_load::Relation>::COLUMNS,
+//!     &["id", "label"],
+//! );
+//! ```
+//!
+//! Full CQ programs and compiler annotations are not accepted. Use
+//! [`columnar_relation_loaders!`] with an explicit `@ bytes` or `@ plain` family
+//! on every field to generate scan-table loaders.
+//!
 //! [`CsvOptions`] selects a delimiter, header handling, and batch size. Headers
 //! match declaration names and may reorder columns; missing, duplicate, and
 //! unknown names are errors. Headerless files use declaration order. Set
@@ -16,8 +33,9 @@
 //! Quoting, embedded separators, escaped quotes, CRLF and multiline fields use
 //! standard CSV rules. Strings are preserved exactly; numbers are not trimmed.
 //! Empty strings are values, not nulls. Parquet nulls are rejected because a
-//! nonoptional relation field cannot represent them. Parquet columns match names
-//! just as CSV headers do. Errors include the path, physical CSV record-start
+//! nonoptional relation field cannot represent them. Parquet columns match
+//! declaration names and may project a wider source heading. Missing or
+//! duplicate names are errors. Errors include the path, physical CSV record-start
 //! line (logical one-based row for Parquet), declaration column name and value.
 //!
 //! Implement [`Load::load`] to support an owned user type. Its default Parquet
@@ -47,16 +65,17 @@
 //!
 //! [`Loader::intern`] and, with `parquet`, `Loader::parquet_interned` prepare
 //! sorted per-column [`Dictionaries`] and return rows with [`StringCode`] fields.
-//! Opt in with `mini_linq::interned_relation_loaders!`, which accepts the same
-//! declarations as the unchanged plain `relation_loaders!` macro. It selects
+//! Opt in with [`interned_relation_loaders!`], which accepts the same IO
+//! declarations as the plain [`relation_loaders!`] macro. It selects
 //! source conversion through [`InternedField`]: codes borrow input strings into
 //! column-local state; ordinary [`Load`] types remain unchanged. Each source cell
 //! is hashed once, and only distinct dictionary entries allocate owned strings.
 //! Finalization sorts distinct entries and remaps integer IDs in the loaded rows.
 //! No source text is hashed or searched again during that remapping.
-//! All collected CSV/Parquet/interned relations sort and deduplicate full rows
-//! once at load time. Grouped loaders deduplicate each complete key/payload
-//! pair. Bounded decoder batches remain raw streams, not compiler input sets.
+//! Collected CSV/Parquet/interned relations establish full-row sets. Parquet
+//! loaders may skip sorting/deduplication with a matching trusted preparation
+//! certificate (`set_manifest`); other loads canonicalize once. Grouped loaders
+//! deduplicate each key/payload pair. Decoder batches remain raw streams.
 //!
 //! Codes preserve exact lexicographic string order within one column only.
 //! Column names must be unique across the retained dictionaries; joining codes
@@ -86,6 +105,7 @@ mod csv_source;
 mod intern;
 mod loader;
 mod scalar;
+pub mod set_manifest;
 pub mod stats;
 pub mod stats_manifest;
 pub mod stats_source;
@@ -96,6 +116,9 @@ mod zone_docs;
 mod parquet_source;
 
 pub use columnar::{ColumnarField, ColumnarLoader, ColumnarRelation};
+pub use cq_io_macros::{
+    columnar_relation_loaders, interned_relation_loaders, relation_loaders,
+};
 pub use cq_storage::dedup::{PrefixOrderError, PrefixOrdered, verify_prefix_order};
 pub use csv_source::{Csv, CsvOptions, read_csv};
 pub use intern::{
@@ -107,7 +130,7 @@ pub use scalar::{Date, Decimal};
 pub use zone::{ColumnAt, MinMax, NoBounds, ZoneField, ZoneMetadata, ZoneRows, ZoneSchema, column};
 
 #[cfg(feature = "parquet")]
-pub use parquet_source::{ColumnError, Parquet, ParquetOptions, read_parquet};
+pub use parquet_source::{ColumnError, Parquet, ParquetOptions, read_parquet, read_parquet_with_manifest};
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -163,6 +186,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Parse one owned column value; optional Arrow decoding works column at a time.
 pub trait Load: Sized {
+    /// Source domain on which successful decoding is injective. Custom/lossy
+    /// implementations must retain `None`; textual fallback is not certified.
+    const KEY_ENCODING: Option<set_manifest::KeyEncoding> = None;
     // DECODE ?: Load is a generic source-to-logical conversion contract with no consumer boundary evidence.
     fn load(field: &str) -> std::result::Result<Self, String>;
 
@@ -202,6 +228,9 @@ pub trait Load: Sized {
 pub trait Relation {
     type Row;
     const COLUMNS: &'static [&'static str];
+    /// Equality-preserving fields retained by this row decoder. Handwritten
+    /// decoders default to no certificate support.
+    const KEY_COLUMNS: &'static [(&'static str, Option<set_manifest::KeyEncoding>)] = &[];
     // DECODE ?: Relation requires owned logical rows but does not record whether callers publish or continue querying.
     fn decode(batch: &Batch<'_>) -> Result<Vec<Self::Row>>;
 }

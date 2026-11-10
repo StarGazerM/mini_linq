@@ -23,7 +23,7 @@ cq-physical-lowering = { version = "0.1.0", path = "../../passes/cq-physical-low
 cq-testkit = { version = "0.1.0", path = "../../testkit/cq-testkit" }
 cq-rewrite-test-driver = { version = "0.1.0", path = "test-driver" }
 cq-storage = { version = "0.1.0", path = "../../runtime/cq-storage", features = ["counters"] }
-cq-load = { version = "0.1.0", path = "../../runtime/cq-load" }
+cq-load = { version = "0.1.0", path = "../../io/cq-load" }
 # Core passes of the generated rewrite-stage driver (tests/rewrite_stages.rs).
 cq-lang-cq = { version = "0.1.0", path = "../../languages/cq-lang-cq" }
 cq-lang-ix = { version = "0.1.0", path = "../../languages/cq-lang-ix" }

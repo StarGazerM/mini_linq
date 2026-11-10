@@ -15,7 +15,7 @@ Authority: `STORAGE.md` §1 (preserved operations), §§10–12, and `PLANNING-R
 
 A site is a conversion implementation or a conversion-emitting/calling block. A marker may cover adjacent alternatives of the same boundary (for example borrowed/owned answer formatting, nullable/nonnullable codecs, or a macro's generated scalar family); it is not a count of dynamic decodes. Both a primitive and its concrete caller can be listed. A P marker explicitly mentioning a test/oracle is diagnostic exposure, not a claim that intermediate engine materialization is lawful. Several diagnostic fixtures instead remain ? because they feed independent CPU references.
 
-The inventory covers `experiments/gpu/**`, `runtime/cq-load`, `runtime/cq-storage`, `passes/cq-print`, Sequence/pull printers, and DOOP symbol resolution under `features/datalog`. It includes unnamed FOR base-plus-offset reconstruction, scaled/date wrappers, dictionary resolution, ordinal inversion and logical tuple downloads. It excludes transport-only raw buffer/code downloads, integer endian parsing, unpacking residual bits while retaining their code domain, and code-preserving casts/wrappers. It also excludes SQL/CSV input parsing without a preceding encoded representation.
+The inventory covers `experiments/gpu/**`, `io/cq-load`, `runtime/cq-storage`, `passes/cq-print`, Sequence/pull printers, and DOOP symbol resolution under `features/datalog`. It includes unnamed FOR base-plus-offset reconstruction, scaled/date wrappers, dictionary resolution, ordinal inversion and logical tuple downloads. It excludes transport-only raw buffer/code downloads, integer endian parsing, unpacking residual bits while retaining their code domain, and code-preserving casts/wrappers. It also excludes SQL/CSV input parsing without a preceding encoded representation.
 
 `DECODE-SITES.tsv` is the authoritative four-column registry: path, exact marker, class, reason. `formal/check.py` requires a one-to-one correspondence between registry rows and flagged comments, validates classes and V plan steps, and prints counts. It checks **marker coverage, not semantic completeness or correctness of classifications**. The file:line entries below identify comment lines in this audit snapshot; exact marker text survives unrelated line movement.
 
@@ -180,9 +180,9 @@ Every V marker is listed below, sorted by those tiers and then path; ties are no
 
 | Priority tier | File:line | Class | Reason / plan step | Owner / required recorded fact |
 |---|---|---|---|---|
-| 1 | `runtime/cq-load/src/csv_source.rs:160` | V | Row-mode CSV decoding precedes hash/btree grouping; columnar scans bypass this decoder. | P4 / Index |
-| 1 | `runtime/cq-load/src/loader.rs:44` | V | CSV row decoding precedes hash grouping; P4 owns retained index keys. | P4 / Index |
-| 1 | `runtime/cq-load/src/loader.rs:57` | V | CSV row decoding precedes ordered grouping; P4 owns retained index keys. | P4 / Index |
+| 1 | `io/cq-load/src/csv_source.rs:160` | V | Row-mode CSV decoding precedes hash/btree grouping; columnar scans bypass this decoder. | P4 / Index |
+| 1 | `io/cq-load/src/loader.rs:44` | V | CSV row decoding precedes hash grouping; P4 owns retained index keys. | P4 / Index |
+| 1 | `io/cq-load/src/loader.rs:57` | V | CSV row decoding precedes ordered grouping; P4 owns retained index keys. | P4 / Index |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:584` | V | packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion. | P6 / Carrier+Read |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:661` | V | canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields. | P6 / Carrier+Read |
 | 2 | `experiments/gpu/sequence-runtime/src/canon.rs:682` | V | output adapter materializes full i64 columns before their consumers; P6 keep packed values resident. | P6 / Carrier+Read |
@@ -650,123 +650,123 @@ The table distinguishes current authored Rust reads from relational-only uses. M
 | `features/datalog/doop/shared/src/loader.rs:98` | R | method_descriptors reads parameter text in opaque format! before interning the computed descriptor. |
 | `features/datalog/doop/shared/src/loader.rs:131` | P | exact_columns_and_empty_strings exposes the parsed name for a diagnostic answer assertion. |
 | `features/datalog/doop/shared/src/loader.rs:133` | P | exact_columns_and_empty_strings exposes the empty symbol for a diagnostic answer assertion. |
-| `runtime/cq-load/src/csv_source.rs:160` | V | Row-mode CSV decoding precedes hash/btree grouping; P4 must retain encoded index keys. Columnar scans bypass this decoder. |
-| `runtime/cq-load/src/csv_source.rs:146` | ? | read_csv collects the logical batch decoder for arbitrary callers without a recorded final-use boundary. |
-| `runtime/cq-load/src/csv_source.rs:148` | ? | try_fold drives Csv::next reconstruction; caller-specific relational and diagnostic uses are classified at their sites. |
-| `runtime/cq-load/src/lib.rs:125` | ? | Load is a generic source-to-logical conversion contract with no consumer boundary evidence. |
-| `runtime/cq-load/src/lib.rs:129` | ? | default Arrow loading delegates logical reconstruction to a caller-defined Load implementation. |
-| `runtime/cq-load/src/lib.rs:139` | ? | Relation requires owned logical rows but does not record whether callers publish or continue querying. |
-| `runtime/cq-load/src/lib.rs:171` | ? | Batch::column materializes logical values for arbitrary Relation decoders; consumer facts are absent. |
-| `runtime/cq-load/src/lib.rs:187` | ? | CSV field parsing invokes arbitrary T::load without a recorded downstream read boundary. |
-| `runtime/cq-load/src/lib.rs:201` | ? | Arrow column reconstruction invokes arbitrary T::load_arrow before its consumer is known. |
-| `runtime/cq-load/src/loader.rs:31` | ? | read_csv reconstructs the entire host relation; this generic convenience API records no final consumer. |
-| `runtime/cq-load/src/loader.rs:44` | V | CSV row decoding precedes hash grouping; P4 owns retained index keys. |
-| `runtime/cq-load/src/loader.rs:57` | V | CSV row decoding precedes ordered grouping; P4 owns retained index keys. |
-| `runtime/cq-load/src/loader.rs:73` | ? | read_parquet reconstructs a tuple-vector host but this generic loader records no publication or Rust-read boundary. |
-| `runtime/cq-load/src/parquet_source.rs:129` | ? | read_parquet collects logical rows for arbitrary hosts without a caller publication or opaque-read fact. |
-| `runtime/cq-load/src/parquet_source.rs:134` | ? | this fold drives Parquet::next reconstruction before the generic caller's downstream use is known. |
-| `runtime/cq-load/src/parquet_source.rs:150` | ? | string_values invokes caller parsing over Arrow strings without a recorded logical consumer. |
-| `runtime/cq-load/src/parquet_source.rs:163` | ? | this Arrow string entry is converted by an arbitrary parser; publication or Rust-read evidence is absent. |
-| `runtime/cq-load/src/parquet_source.rs:177` | ? | nonstring Arrow fallback delegates reconstruction with the same unknown consumer as string_values. |
-| `runtime/cq-load/src/parquet_source.rs:181` | ? | parse_arrow is a generic logical reconstruction adapter, not an established publication boundary. |
-| `runtime/cq-load/src/parquet_source.rs:186` | ? | parse_arrow forwards to string_values without adding caller-use evidence. |
-| `runtime/cq-load/src/parquet_source.rs:190` | ? | parse_arrow_nonstring reconstructs logical values for arbitrary Load implementations. |
-| `runtime/cq-load/src/parquet_source.rs:200` | ? | primitive Arrow text is parsed into caller T before its runtime use is known. |
-| `runtime/cq-load/src/parquet_source.rs:224` | ? | Arrow epoch days become Date for fallback rendering, with no opaque-read or answer fact. |
-| `runtime/cq-load/src/parquet_source.rs:227` | ? | the rendered Date is parsed into arbitrary T whose subsequent consumer is unrecorded. |
-| `runtime/cq-load/src/parquet_source.rs:246` | ? | Decimal128 coefficient and scale become logical decimal text for generic fallback loading. |
-| `runtime/cq-load/src/parquet_source.rs:248` | ? | decimal text is reconstructed as caller T with no recorded final consumer. |
-| `runtime/cq-load/src/parquet_source.rs:265` | ? | decimal_text reconstructs scaled decimal text for both fallback loading and error diagnostics. |
-| `runtime/cq-load/src/scalar.rs:8` | ? | primitive text parsing constructs host values for generic Load callers with unknown consumers. |
-| `runtime/cq-load/src/scalar.rs:14` | ? | primitive Arrow loading is a generic boundary; identity arrays already contain logical values. |
-| `runtime/cq-load/src/scalar.rs:19` | ? | primitive Arrow fallback parses logical values without downstream caller evidence. |
-| `runtime/cq-load/src/scalar.rs:37` | ? | owned-string loading materializes source text for arbitrary Load consumers. |
-| `runtime/cq-load/src/scalar.rs:43` | ? | owned-string Arrow loading reconstructs values through string_values for unrecorded consumers. |
-| `runtime/cq-load/src/scalar.rs:61` | ? | Decimal::from_scaled constructs a logical fixed-point value; this generic constructor has mixed callers. |
-| `runtime/cq-load/src/scalar.rs:74` | ? | Decimal::rescale reconstructs a host Decimal from Arrow coefficient/scale without consumer facts. |
-| `runtime/cq-load/src/scalar.rs:94` | ? | rescale wraps the adjusted coefficient as Decimal for its generic Arrow loader caller. |
-| `runtime/cq-load/src/scalar.rs:100` | ? | Decimal::load parses a logical decimal for generic source, test, and user callers. |
-| `runtime/cq-load/src/scalar.rs:142` | ? | decimal text parsing constructs Decimal from its coefficient before downstream use is known. |
-| `runtime/cq-load/src/scalar.rs:147` | ? | Decimal Arrow loading reconstructs a whole logical column without a recorded read boundary. |
-| `runtime/cq-load/src/scalar.rs:161` | ? | each Arrow decimal coefficient is rescaled into a host value for an unknown consumer. |
-| `runtime/cq-load/src/scalar.rs:164` | P | failed decimal rescaling exposes the source value as diagnostic error text only. |
-| `runtime/cq-load/src/scalar.rs:171` | ? | non-Decimal128 Arrow fallback reconstructs Decimal through generic text parsing. |
-| `runtime/cq-load/src/scalar.rs:180` | ? | Decimal FromStr forwards logical parsing for callers whose runtime use is not recorded. |
-| `runtime/cq-load/src/scalar.rs:215` | ? | Date::from_days constructs a logical date from epoch days with no caller-use contract. |
-| `runtime/cq-load/src/scalar.rs:226` | ? | Date::load reconstructs a logical Gregorian date for generic Load consumers. |
-| `runtime/cq-load/src/scalar.rs:260` | ? | parsed Gregorian components become Date before its downstream purpose is known. |
-| `runtime/cq-load/src/scalar.rs:265` | ? | Date Arrow loading reconstructs dates for arbitrary batch consumers. |
-| `runtime/cq-load/src/scalar.rs:268` | ? | Date32 epoch-day values become Date wrappers without opaque-read or publication facts. |
-| `runtime/cq-load/src/scalar.rs:271` | ? | Date Arrow fallback reconstructs logical dates via the generic parser. |
-| `runtime/cq-load/src/scalar.rs:280` | ? | Date FromStr delegates reconstruction with no evidence about subsequent operations. |
-| `runtime/cq-load/tests/loading.rs:35` | P | Typed reconstructs rows solely for CSV/Parquet loading diagnostics and answer assertions. |
-| `runtime/cq-load/tests/loading.rs:37` | P | the Typed diagnostic exposes decoded ids to its expected-row oracle. |
-| `runtime/cq-load/tests/loading.rs:39` | P | the Typed diagnostic exposes decoded names to its expected-row oracle. |
-| `runtime/cq-load/tests/loading.rs:41` | P | the Typed diagnostic exposes decoded dates to its expected-row oracle. |
-| `runtime/cq-load/tests/loading.rs:43` | P | the Typed diagnostic exposes decoded prices to its expected-row oracle. |
-| `runtime/cq-load/tests/loading.rs:45` | P | the Typed diagnostic exposes decoded booleans to its expected-row oracle. |
-| `runtime/cq-load/tests/loading.rs:62` | P | Ids reconstructs singleton rows for batch-size and loader-error diagnostics only. |
-| `runtime/cq-load/tests/loading.rs:65` | P | the Ids fixture exposes each decoded integer to its diagnostic row assertions. |
-| `runtime/cq-load/tests/loading.rs:77` | P | the integer-range diagnostic publishes the reconstructed minimum to its assertion. |
-| `runtime/cq-load/tests/loading.rs:79` | P | the integer-range diagnostic publishes the reconstructed maximum to its assertion. |
-| `runtime/cq-load/tests/loading.rs:81` | P | the integer-overflow diagnostic exposes only the failed reconstruction result. |
-| `runtime/cq-load/tests/loading.rs:83` | P | the integer-whitespace diagnostic exposes only the parsing rejection. |
-| `runtime/cq-load/tests/loading.rs:88` | P | the true-token diagnostic publishes the reconstructed boolean to assert!. |
-| `runtime/cq-load/tests/loading.rs:90` | P | the false-token diagnostic publishes the reconstructed boolean to assert!. |
-| `runtime/cq-load/tests/loading.rs:92` | P | the uppercase-boolean diagnostic exposes the rejected reconstruction result. |
-| `runtime/cq-load/tests/loading.rs:94` | P | the NaN diagnostic publishes the reconstructed float to its classification assertion. |
-| `runtime/cq-load/tests/loading.rs:96` | P | the negative-infinity diagnostic publishes the reconstructed float to assert_eq!. |
-| `runtime/cq-load/tests/loading.rs:98` | P | the fractional-float diagnostic publishes the reconstructed value to assert_eq!. |
-| `runtime/cq-load/tests/loading.rs:100` | P | the empty-string diagnostic publishes the reconstructed String to assert_eq!. |
-| `runtime/cq-load/tests/loading.rs:102` | P | the boxed-string diagnostic exposes reconstructed text to assert_eq!. |
-| `runtime/cq-load/tests/loading.rs:104` | P | the Arc-string diagnostic exposes reconstructed text to assert_eq!. |
-| `runtime/cq-load/tests/loading.rs:106` | P | the Rc-string diagnostic exposes reconstructed text to assert_eq!. |
-| `runtime/cq-load/tests/loading.rs:111` | P | this test-only Id loader reconstructs values for extension diagnostics. |
-| `runtime/cq-load/tests/loading.rs:116` | P | the Id diagnostic reconstructs its stripped numeric payload for the expected-value oracle. |
-| `runtime/cq-load/tests/loading.rs:121` | P | the prefixed-Id diagnostic publishes the reconstructed extension value. |
-| `runtime/cq-load/tests/loading.rs:123` | P | the missing-prefix diagnostic exposes the rejected Id reconstruction. |
-| `runtime/cq-load/tests/loading.rs:129` | P | the cents diagnostic exposes the decoded decimal coefficient for an exactness assertion. |
-| `runtime/cq-load/tests/loading.rs:132` | P | the trailing-zero diagnostic exposes a reconstructed decimal through display comparison. |
-| `runtime/cq-load/tests/loading.rs:136` | P | the negative-cent diagnostic exposes the reconstructed decimal coefficient. |
-| `runtime/cq-load/tests/loading.rs:138` | P | the scale-zero diagnostic exposes the reconstructed decimal's display text. |
-| `runtime/cq-load/tests/loading.rs:141` | P | the scale-eighteen diagnostic exposes its reconstructed least-significant coefficient. |
-| `runtime/cq-load/tests/loading.rs:151` | P | decimal-boundary diagnostics reconstruct extrema only for exact coefficient and display assertions. |
-| `runtime/cq-load/tests/loading.rs:168` | P | malformed-decimal diagnostics expose reconstruction failures without relational processing. |
-| `runtime/cq-load/tests/loading.rs:171` | P | the unsupported-text-scale diagnostic exposes the rejected decimal parse. |
-| `runtime/cq-load/tests/loading.rs:173` | P | the unsupported-coefficient-scale diagnostic exposes the rejected Decimal construction. |
-| `runtime/cq-load/tests/loading.rs:179` | P | the epoch-date diagnostic publishes the reconstructed date's zero day count. |
-| `runtime/cq-load/tests/loading.rs:181` | P | the pre-epoch diagnostic publishes the reconstructed negative day count. |
-| `runtime/cq-load/tests/loading.rs:183` | P | the leap-day diagnostic publishes the reconstructed epoch offset. |
-| `runtime/cq-load/tests/loading.rs:194` | P | Gregorian-date diagnostics expose reconstructed dates only through round-trip display assertions. |
-| `runtime/cq-load/tests/loading.rs:209` | P | invalid-calendar diagnostics expose rejected date reconstruction results. |
-| `runtime/cq-load/tests/loading.rs:214` | P | the epoch sweep constructs Date from days solely for its diagnostic text round trip. |
-| `runtime/cq-load/tests/loading.rs:215` | P | the epoch sweep parses the rendered date solely for its diagnostic day-count assertion. |
-| `runtime/cq-load/tests/loading.rs:229` | P | the reordered-CSV diagnostic publishes reconstructed rows solely to its expected-answer assertions. |
-| `runtime/cq-load/tests/loading.rs:246` | P | the CSV answer oracle reconstructs its expected date literal for comparison. |
-| `runtime/cq-load/tests/loading.rs:248` | P | the CSV answer oracle reconstructs its expected Decimal literal for comparison. |
-| `runtime/cq-load/tests/loading.rs:262` | P | consuming the CSV iterator reconstructs rows solely for batch-boundary and sequence diagnostics. |
-| `runtime/cq-load/tests/loading.rs:289` | P | the empty-source diagnostic invokes reconstruction only to expose an empty answer. |
-| `runtime/cq-load/tests/loading.rs:310` | P | the quoted-newline diagnostic publishes the first reconstructed batch's string to assert_eq!. |
-| `runtime/cq-load/tests/loading.rs:312` | P | the invalid-date batch diagnostic exposes the second reconstruction's contextual error. |
-| `runtime/cq-load/tests/loading.rs:345` | P | the row-width diagnostic invokes CSV loading only to expose its rejection. |
-| `runtime/cq-load/tests/loading.rs:357` | P | the missing-field diagnostic invokes CSV loading only to expose its source-column error. |
-| `runtime/cq-load/tests/loading.rs:374` | P | the reordered-missing-field diagnostic exposes only the failed row-loading result. |
-| `runtime/cq-load/tests/loading.rs:456` | P | consuming native Parquet batches exposes reconstructed rows solely to the CSV-equivalence diagnostic. |
-| `runtime/cq-load/tests/loading.rs:462` | P | the CSV side of the Parquet-equivalence diagnostic publishes expected logical rows. |
-| `runtime/cq-load/tests/loading.rs:475` | P | the nullable-Parquet diagnostic publishes the valid first batch to its row assertion. |
-| `runtime/cq-load/tests/loading.rs:477` | P | the nullable-Parquet diagnostic exposes the failing second batch's null error. |
-| `runtime/cq-load/tests/loading.rs:492` | P | Prices reconstructs diagnostic rows solely to test contextual decimal errors. |
-| `runtime/cq-load/tests/loading.rs:495` | P | the Prices diagnostic exposes Decimal reconstruction failures to its error oracle. |
-| `runtime/cq-load/tests/loading.rs:514` | P | the precision/overflow diagnostic invokes Parquet reconstruction only to publish contextual errors. |
-| `runtime/cq-load/tests/loading.rs:527` | P | the test-only Label loader constructs host values for extension-adapter diagnostics. |
-| `runtime/cq-load/tests/loading.rs:533` | P | the integer-to-Label diagnostic exposes reconstructed labels to its expected answer array. |
-| `runtime/cq-load/tests/loading.rs:538` | P | the string-to-Label diagnostic exposes reconstructed labels to its expected answer array. |
-| `runtime/cq-load/tests/loading.rs:542` | P | the narrow-integer Arrow diagnostic exposes the failed reconstruction's source value. |
-| `runtime/cq-load/tests/loading.rs:557` | P | this deliberately invalid test loader constructs a value only for loader-contract diagnostics. |
-| `runtime/cq-load/tests/loading.rs:561` | P | this deliberately empty test decoder exposes a length-contract violation, not query data. |
-| `runtime/cq-load/tests/loading.rs:572` | P | InvalidSchema invokes reconstruction only to expose a diagnostic column-length error. |
-| `runtime/cq-load/tests/loading.rs:575` | P | the InvalidSchema column conversion exposes the malformed decoder result to its error oracle. |
-| `runtime/cq-load/tests/loading.rs:586` | P | the invalid-length diagnostic invokes Parquet reconstruction solely to expose its contract error. |
+| `io/cq-load/src/csv_source.rs:160` | V | Row-mode CSV decoding precedes hash/btree grouping; P4 must retain encoded index keys. Columnar scans bypass this decoder. |
+| `io/cq-load/src/csv_source.rs:146` | ? | read_csv collects the logical batch decoder for arbitrary callers without a recorded final-use boundary. |
+| `io/cq-load/src/csv_source.rs:148` | ? | try_fold drives Csv::next reconstruction; caller-specific relational and diagnostic uses are classified at their sites. |
+| `io/cq-load/src/lib.rs:125` | ? | Load is a generic source-to-logical conversion contract with no consumer boundary evidence. |
+| `io/cq-load/src/lib.rs:129` | ? | default Arrow loading delegates logical reconstruction to a caller-defined Load implementation. |
+| `io/cq-load/src/lib.rs:139` | ? | Relation requires owned logical rows but does not record whether callers publish or continue querying. |
+| `io/cq-load/src/lib.rs:171` | ? | Batch::column materializes logical values for arbitrary Relation decoders; consumer facts are absent. |
+| `io/cq-load/src/lib.rs:187` | ? | CSV field parsing invokes arbitrary T::load without a recorded downstream read boundary. |
+| `io/cq-load/src/lib.rs:201` | ? | Arrow column reconstruction invokes arbitrary T::load_arrow before its consumer is known. |
+| `io/cq-load/src/loader.rs:31` | ? | read_csv reconstructs the entire host relation; this generic convenience API records no final consumer. |
+| `io/cq-load/src/loader.rs:44` | V | CSV row decoding precedes hash grouping; P4 owns retained index keys. |
+| `io/cq-load/src/loader.rs:57` | V | CSV row decoding precedes ordered grouping; P4 owns retained index keys. |
+| `io/cq-load/src/loader.rs:73` | ? | read_parquet reconstructs a tuple-vector host but this generic loader records no publication or Rust-read boundary. |
+| `io/cq-load/src/parquet_source.rs:129` | ? | read_parquet collects logical rows for arbitrary hosts without a caller publication or opaque-read fact. |
+| `io/cq-load/src/parquet_source.rs:134` | ? | this fold drives Parquet::next reconstruction before the generic caller's downstream use is known. |
+| `io/cq-load/src/parquet_source.rs:150` | ? | string_values invokes caller parsing over Arrow strings without a recorded logical consumer. |
+| `io/cq-load/src/parquet_source.rs:163` | ? | this Arrow string entry is converted by an arbitrary parser; publication or Rust-read evidence is absent. |
+| `io/cq-load/src/parquet_source.rs:177` | ? | nonstring Arrow fallback delegates reconstruction with the same unknown consumer as string_values. |
+| `io/cq-load/src/parquet_source.rs:181` | ? | parse_arrow is a generic logical reconstruction adapter, not an established publication boundary. |
+| `io/cq-load/src/parquet_source.rs:186` | ? | parse_arrow forwards to string_values without adding caller-use evidence. |
+| `io/cq-load/src/parquet_source.rs:190` | ? | parse_arrow_nonstring reconstructs logical values for arbitrary Load implementations. |
+| `io/cq-load/src/parquet_source.rs:200` | ? | primitive Arrow text is parsed into caller T before its runtime use is known. |
+| `io/cq-load/src/parquet_source.rs:224` | ? | Arrow epoch days become Date for fallback rendering, with no opaque-read or answer fact. |
+| `io/cq-load/src/parquet_source.rs:227` | ? | the rendered Date is parsed into arbitrary T whose subsequent consumer is unrecorded. |
+| `io/cq-load/src/parquet_source.rs:246` | ? | Decimal128 coefficient and scale become logical decimal text for generic fallback loading. |
+| `io/cq-load/src/parquet_source.rs:248` | ? | decimal text is reconstructed as caller T with no recorded final consumer. |
+| `io/cq-load/src/parquet_source.rs:265` | ? | decimal_text reconstructs scaled decimal text for both fallback loading and error diagnostics. |
+| `io/cq-load/src/scalar.rs:8` | ? | primitive text parsing constructs host values for generic Load callers with unknown consumers. |
+| `io/cq-load/src/scalar.rs:14` | ? | primitive Arrow loading is a generic boundary; identity arrays already contain logical values. |
+| `io/cq-load/src/scalar.rs:19` | ? | primitive Arrow fallback parses logical values without downstream caller evidence. |
+| `io/cq-load/src/scalar.rs:37` | ? | owned-string loading materializes source text for arbitrary Load consumers. |
+| `io/cq-load/src/scalar.rs:43` | ? | owned-string Arrow loading reconstructs values through string_values for unrecorded consumers. |
+| `io/cq-load/src/scalar.rs:61` | ? | Decimal::from_scaled constructs a logical fixed-point value; this generic constructor has mixed callers. |
+| `io/cq-load/src/scalar.rs:74` | ? | Decimal::rescale reconstructs a host Decimal from Arrow coefficient/scale without consumer facts. |
+| `io/cq-load/src/scalar.rs:94` | ? | rescale wraps the adjusted coefficient as Decimal for its generic Arrow loader caller. |
+| `io/cq-load/src/scalar.rs:100` | ? | Decimal::load parses a logical decimal for generic source, test, and user callers. |
+| `io/cq-load/src/scalar.rs:142` | ? | decimal text parsing constructs Decimal from its coefficient before downstream use is known. |
+| `io/cq-load/src/scalar.rs:147` | ? | Decimal Arrow loading reconstructs a whole logical column without a recorded read boundary. |
+| `io/cq-load/src/scalar.rs:161` | ? | each Arrow decimal coefficient is rescaled into a host value for an unknown consumer. |
+| `io/cq-load/src/scalar.rs:164` | P | failed decimal rescaling exposes the source value as diagnostic error text only. |
+| `io/cq-load/src/scalar.rs:171` | ? | non-Decimal128 Arrow fallback reconstructs Decimal through generic text parsing. |
+| `io/cq-load/src/scalar.rs:180` | ? | Decimal FromStr forwards logical parsing for callers whose runtime use is not recorded. |
+| `io/cq-load/src/scalar.rs:215` | ? | Date::from_days constructs a logical date from epoch days with no caller-use contract. |
+| `io/cq-load/src/scalar.rs:226` | ? | Date::load reconstructs a logical Gregorian date for generic Load consumers. |
+| `io/cq-load/src/scalar.rs:260` | ? | parsed Gregorian components become Date before its downstream purpose is known. |
+| `io/cq-load/src/scalar.rs:265` | ? | Date Arrow loading reconstructs dates for arbitrary batch consumers. |
+| `io/cq-load/src/scalar.rs:268` | ? | Date32 epoch-day values become Date wrappers without opaque-read or publication facts. |
+| `io/cq-load/src/scalar.rs:271` | ? | Date Arrow fallback reconstructs logical dates via the generic parser. |
+| `io/cq-load/src/scalar.rs:280` | ? | Date FromStr delegates reconstruction with no evidence about subsequent operations. |
+| `io/cq-load/tests/loading.rs:35` | P | Typed reconstructs rows solely for CSV/Parquet loading diagnostics and answer assertions. |
+| `io/cq-load/tests/loading.rs:37` | P | the Typed diagnostic exposes decoded ids to its expected-row oracle. |
+| `io/cq-load/tests/loading.rs:39` | P | the Typed diagnostic exposes decoded names to its expected-row oracle. |
+| `io/cq-load/tests/loading.rs:41` | P | the Typed diagnostic exposes decoded dates to its expected-row oracle. |
+| `io/cq-load/tests/loading.rs:43` | P | the Typed diagnostic exposes decoded prices to its expected-row oracle. |
+| `io/cq-load/tests/loading.rs:45` | P | the Typed diagnostic exposes decoded booleans to its expected-row oracle. |
+| `io/cq-load/tests/loading.rs:62` | P | Ids reconstructs singleton rows for batch-size and loader-error diagnostics only. |
+| `io/cq-load/tests/loading.rs:65` | P | the Ids fixture exposes each decoded integer to its diagnostic row assertions. |
+| `io/cq-load/tests/loading.rs:77` | P | the integer-range diagnostic publishes the reconstructed minimum to its assertion. |
+| `io/cq-load/tests/loading.rs:79` | P | the integer-range diagnostic publishes the reconstructed maximum to its assertion. |
+| `io/cq-load/tests/loading.rs:81` | P | the integer-overflow diagnostic exposes only the failed reconstruction result. |
+| `io/cq-load/tests/loading.rs:83` | P | the integer-whitespace diagnostic exposes only the parsing rejection. |
+| `io/cq-load/tests/loading.rs:88` | P | the true-token diagnostic publishes the reconstructed boolean to assert!. |
+| `io/cq-load/tests/loading.rs:90` | P | the false-token diagnostic publishes the reconstructed boolean to assert!. |
+| `io/cq-load/tests/loading.rs:92` | P | the uppercase-boolean diagnostic exposes the rejected reconstruction result. |
+| `io/cq-load/tests/loading.rs:94` | P | the NaN diagnostic publishes the reconstructed float to its classification assertion. |
+| `io/cq-load/tests/loading.rs:96` | P | the negative-infinity diagnostic publishes the reconstructed float to assert_eq!. |
+| `io/cq-load/tests/loading.rs:98` | P | the fractional-float diagnostic publishes the reconstructed value to assert_eq!. |
+| `io/cq-load/tests/loading.rs:100` | P | the empty-string diagnostic publishes the reconstructed String to assert_eq!. |
+| `io/cq-load/tests/loading.rs:102` | P | the boxed-string diagnostic exposes reconstructed text to assert_eq!. |
+| `io/cq-load/tests/loading.rs:104` | P | the Arc-string diagnostic exposes reconstructed text to assert_eq!. |
+| `io/cq-load/tests/loading.rs:106` | P | the Rc-string diagnostic exposes reconstructed text to assert_eq!. |
+| `io/cq-load/tests/loading.rs:111` | P | this test-only Id loader reconstructs values for extension diagnostics. |
+| `io/cq-load/tests/loading.rs:116` | P | the Id diagnostic reconstructs its stripped numeric payload for the expected-value oracle. |
+| `io/cq-load/tests/loading.rs:121` | P | the prefixed-Id diagnostic publishes the reconstructed extension value. |
+| `io/cq-load/tests/loading.rs:123` | P | the missing-prefix diagnostic exposes the rejected Id reconstruction. |
+| `io/cq-load/tests/loading.rs:129` | P | the cents diagnostic exposes the decoded decimal coefficient for an exactness assertion. |
+| `io/cq-load/tests/loading.rs:132` | P | the trailing-zero diagnostic exposes a reconstructed decimal through display comparison. |
+| `io/cq-load/tests/loading.rs:136` | P | the negative-cent diagnostic exposes the reconstructed decimal coefficient. |
+| `io/cq-load/tests/loading.rs:138` | P | the scale-zero diagnostic exposes the reconstructed decimal's display text. |
+| `io/cq-load/tests/loading.rs:141` | P | the scale-eighteen diagnostic exposes its reconstructed least-significant coefficient. |
+| `io/cq-load/tests/loading.rs:151` | P | decimal-boundary diagnostics reconstruct extrema only for exact coefficient and display assertions. |
+| `io/cq-load/tests/loading.rs:168` | P | malformed-decimal diagnostics expose reconstruction failures without relational processing. |
+| `io/cq-load/tests/loading.rs:171` | P | the unsupported-text-scale diagnostic exposes the rejected decimal parse. |
+| `io/cq-load/tests/loading.rs:173` | P | the unsupported-coefficient-scale diagnostic exposes the rejected Decimal construction. |
+| `io/cq-load/tests/loading.rs:179` | P | the epoch-date diagnostic publishes the reconstructed date's zero day count. |
+| `io/cq-load/tests/loading.rs:181` | P | the pre-epoch diagnostic publishes the reconstructed negative day count. |
+| `io/cq-load/tests/loading.rs:183` | P | the leap-day diagnostic publishes the reconstructed epoch offset. |
+| `io/cq-load/tests/loading.rs:194` | P | Gregorian-date diagnostics expose reconstructed dates only through round-trip display assertions. |
+| `io/cq-load/tests/loading.rs:209` | P | invalid-calendar diagnostics expose rejected date reconstruction results. |
+| `io/cq-load/tests/loading.rs:214` | P | the epoch sweep constructs Date from days solely for its diagnostic text round trip. |
+| `io/cq-load/tests/loading.rs:215` | P | the epoch sweep parses the rendered date solely for its diagnostic day-count assertion. |
+| `io/cq-load/tests/loading.rs:229` | P | the reordered-CSV diagnostic publishes reconstructed rows solely to its expected-answer assertions. |
+| `io/cq-load/tests/loading.rs:246` | P | the CSV answer oracle reconstructs its expected date literal for comparison. |
+| `io/cq-load/tests/loading.rs:248` | P | the CSV answer oracle reconstructs its expected Decimal literal for comparison. |
+| `io/cq-load/tests/loading.rs:262` | P | consuming the CSV iterator reconstructs rows solely for batch-boundary and sequence diagnostics. |
+| `io/cq-load/tests/loading.rs:289` | P | the empty-source diagnostic invokes reconstruction only to expose an empty answer. |
+| `io/cq-load/tests/loading.rs:310` | P | the quoted-newline diagnostic publishes the first reconstructed batch's string to assert_eq!. |
+| `io/cq-load/tests/loading.rs:312` | P | the invalid-date batch diagnostic exposes the second reconstruction's contextual error. |
+| `io/cq-load/tests/loading.rs:345` | P | the row-width diagnostic invokes CSV loading only to expose its rejection. |
+| `io/cq-load/tests/loading.rs:357` | P | the missing-field diagnostic invokes CSV loading only to expose its source-column error. |
+| `io/cq-load/tests/loading.rs:374` | P | the reordered-missing-field diagnostic exposes only the failed row-loading result. |
+| `io/cq-load/tests/loading.rs:456` | P | consuming native Parquet batches exposes reconstructed rows solely to the CSV-equivalence diagnostic. |
+| `io/cq-load/tests/loading.rs:462` | P | the CSV side of the Parquet-equivalence diagnostic publishes expected logical rows. |
+| `io/cq-load/tests/loading.rs:475` | P | the nullable-Parquet diagnostic publishes the valid first batch to its row assertion. |
+| `io/cq-load/tests/loading.rs:477` | P | the nullable-Parquet diagnostic exposes the failing second batch's null error. |
+| `io/cq-load/tests/loading.rs:492` | P | Prices reconstructs diagnostic rows solely to test contextual decimal errors. |
+| `io/cq-load/tests/loading.rs:495` | P | the Prices diagnostic exposes Decimal reconstruction failures to its error oracle. |
+| `io/cq-load/tests/loading.rs:514` | P | the precision/overflow diagnostic invokes Parquet reconstruction only to publish contextual errors. |
+| `io/cq-load/tests/loading.rs:527` | P | the test-only Label loader constructs host values for extension-adapter diagnostics. |
+| `io/cq-load/tests/loading.rs:533` | P | the integer-to-Label diagnostic exposes reconstructed labels to its expected answer array. |
+| `io/cq-load/tests/loading.rs:538` | P | the string-to-Label diagnostic exposes reconstructed labels to its expected answer array. |
+| `io/cq-load/tests/loading.rs:542` | P | the narrow-integer Arrow diagnostic exposes the failed reconstruction's source value. |
+| `io/cq-load/tests/loading.rs:557` | P | this deliberately invalid test loader constructs a value only for loader-contract diagnostics. |
+| `io/cq-load/tests/loading.rs:561` | P | this deliberately empty test decoder exposes a length-contract violation, not query data. |
+| `io/cq-load/tests/loading.rs:572` | P | InvalidSchema invokes reconstruction only to expose a diagnostic column-length error. |
+| `io/cq-load/tests/loading.rs:575` | P | the InvalidSchema column conversion exposes the malformed decoder result to its error oracle. |
+| `io/cq-load/tests/loading.rs:586` | P | the invalid-length diagnostic invokes Parquet reconstruction solely to expose its contract error. |
 | `runtime/cq-storage/src/sequence.rs:46` | ? | SequenceCodec exposes a generic logical boundary without caller Rust-read or publication facts. |
 | `runtime/cq-storage/src/sequence.rs:58` | ? | Identity implements the generic decode boundary as a no-op; caller purpose is not recorded. |
 | `runtime/cq-storage/src/sequence.rs:90` | ? | Dense resolves a dictionary ordinal to T; mixed generic callers supply no boundary evidence. |

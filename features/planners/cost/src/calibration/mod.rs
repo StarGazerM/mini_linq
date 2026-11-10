@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use cq_lang_datalog_round as round;
 use cq_load::stats_manifest::DatasetRequest;
-use cq_syntax::evidence as ev;
+use cq_evidence as ev;
 use cq_syntax::declared_evidence::{ColumnBinding, DeclaredEvidence, EvidenceView, RelationBinding};
 use quote::ToTokens;
 use serde::{Deserialize, Serialize};

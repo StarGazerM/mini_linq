@@ -33,7 +33,7 @@ pub struct Data {
     pub dictionaries: Dictionaries,
 }
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Supplier(s_suppkey: i64, s_name: StringCode, s_address: StringCode, s_phone: StringCode);
     relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_suppkey: i64,
         l_extendedprice: Decimal, l_discount: Decimal, l_shipdate: Date);

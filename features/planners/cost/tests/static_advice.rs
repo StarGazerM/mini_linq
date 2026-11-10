@@ -1,6 +1,6 @@
 use cq_cost::{cost::{self, Decision, advice::{AdviceList, compile_datalog_advice}}, export::{self, Configuration, Target}};
 use cq_load::{stats::{ColumnSpec, DistinctMode, RelationSpec}, stats_manifest::{DatasetRequest, RelationInput, REQUEST_SCHEMA}, stats_source::SourceOptions};
-use cq_syntax::evidence::{self as ev, Claim, DatasetEvidence, Fact, Provenance, Rational, RelationSemantics, ScalarDomain, Source, TargetEvidence, Unit};
+use cq_evidence::{self as ev, Claim, DatasetEvidence, Fact, Provenance, Rational, RelationSemantics, ScalarDomain, Source, TargetEvidence, Unit};
 use quote::{ToTokens, quote};
 use std::{path::PathBuf, sync::atomic::{AtomicUsize, Ordering}};
 

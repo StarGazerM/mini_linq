@@ -16,6 +16,15 @@ pub fn canonicalize<T: Ord>(rows: &mut Vec<T>) {
     rows.dedup();
 }
 
+/// Formal rule IO-CpuLoadKey: only a hash-matching verified key retained by
+/// equality-preserving decoded columns discharges load-time canonicalization.
+#[cfg(feature = "parquet")]
+pub(crate) fn canonicalize_unless_certified<T: Ord>(rows: &mut Vec<T>, certified: bool) {
+    if !certified {
+        canonicalize(rows);
+    }
+}
+
 /// Split a declared row at a leading column prefix, without cloning fields.
 ///
 /// The declaration macro implements every prefix from zero through the arity.
@@ -93,6 +102,19 @@ impl<S: Relation> Loader<S> {
         // DECODE ?: read_parquet reconstructs a tuple-vector host but this generic loader records no publication or Rust-read boundary.
         crate::read_parquet::<S>(path, options)
     }
+
+    /// Select a preparation manifest explicitly; absent/invalid evidence dedups.
+    #[cfg(feature = "parquet")]
+    pub fn parquet_with_manifest(
+        path: impl AsRef<Path>,
+        options: crate::ParquetOptions,
+        manifest: &Path,
+    ) -> Result<Vec<S::Row>>
+    where
+        S::Row: Ord,
+    {
+        crate::read_parquet_with_manifest::<S>(path, options, manifest)
+    }
 }
 
 impl<S: crate::InternedRelation> Loader<S> {
@@ -129,14 +151,33 @@ impl<S: crate::InternedRelation> Loader<S> {
     where
         S::Row: Ord,
     {
-        let mut source = crate::Parquet::<S::Source>::open(path, options)?;
+        let path = path.as_ref();
+        Self::parquet_interned_with_manifest(path, options, dictionaries, &crate::set_manifest::manifest_path(path))
+    }
+
+    /// Intern with a caller-selected certificate; dictionaries retain the same
+    /// transactional publication and exact sorted-code semantics.
+    #[cfg(feature = "parquet")]
+    pub fn parquet_interned_with_manifest(
+        path: impl AsRef<Path>,
+        options: crate::ParquetOptions,
+        dictionaries: &mut crate::Dictionaries,
+        manifest: &Path,
+    ) -> Result<Vec<S::Row>>
+    where
+        S::Row: Ord,
+    {
+        let mut source = crate::Parquet::<S::Source>::open_certified(
+            path.as_ref(), options, S::Source::COLUMNS, manifest, S::KEY_COLUMNS,
+        )?;
+        let certified_set = source.certified_set();
         let mut state = S::state();
         let mut rows = Vec::new();
         while let Some(batch) = source.next_with(|batch| S::decode(batch, &mut state)) {
             rows.extend(batch?);
         }
         S::finish(&mut rows, state, dictionaries);
-        canonicalize(&mut rows);
+        canonicalize_unless_certified(&mut rows, certified_set);
         Ok(rows)
     }
 }

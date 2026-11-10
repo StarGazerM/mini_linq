@@ -24,6 +24,18 @@ struct CachedProjection {
     storage: Table,
 }
 
+struct LoadedColumn<'a> {
+    name: &'a str,
+    values: Vec<i64>,
+    hash: Option<String>,
+}
+
+impl AsRef<[i64]> for LoadedColumn<'_> {
+    fn as_ref(&self) -> &[i64] {
+        &self.values
+    }
+}
+
 impl<'a> Loader<'a> {
     pub fn new(manifest: &'a Manifest, pool: Arc<Pool>) -> Self {
         Self {
@@ -64,23 +76,39 @@ impl<'a> Loader<'a> {
                 projection.storage.capacity == relation.rows
                     && projection.names.iter().all(|name| names.contains(&name.as_str()))
             });
-            let values = if proven_set {
+            let mut keys = relation.verified_keys.iter().filter(|key| {
+                key.set == "verified" && !key.columns.is_empty() && key.rows == relation.rows
+                    && key.columns.keys().all(|name| {
+                        names.contains(&name.as_str())
+                            && self.manifest.column(table, name).is_ok_and(|column| {
+                                column.encoding == "plain"
+                                    && key.types.get(name) == Some(&column.ty)
+                            })
+                    })
+            });
+            let loaded = if proven_set {
                 Vec::new()
             } else {
-                names
-                    .iter()
-                    .enumerate()
+                names.iter().enumerate()
                     .filter(|(index, name)| !names[..*index].contains(name))
-                    .map(|(_, name)| self.manifest.read_column(table, name))
+                    .map(|(_, name)| {
+                        self.manifest.read_column_checked(
+                            table, name, keys.clone().any(|key| key.columns.contains_key(*name)),
+                        ).map(|(values, hash)| LoadedColumn { name, values, hash })
+                    })
                     .collect::<Result<Vec<_>>>()?
             };
-            let selected = if proven_set {
+            // Formal rule IO-GpuVerifiedKey: hash the decoded bytes of every included verified key column.
+            let certified = keys.any(|key| key.columns.iter().all(|(name, expected)| {
+                loaded.iter().any(|column| column.name == name && column.hash.as_ref() == Some(expected))
+            }));
+            let selected = if proven_set || certified {
                 None
             } else {
-                gpu_compress_host::unique_rows(&values, relation.rows)?
+                gpu_compress_host::unique_rows(&loaded, relation.rows)?
             };
             let rows = selected.as_ref().map_or(relation.rows, Vec::len);
-            let mut values = values.into_iter();
+            let mut values = loaded.into_iter().map(|column| column.values);
             let mut scratch = Vec::new();
             let mut columns: Vec<Arc<EncodedColumn>> = Vec::with_capacity(names.len());
             for (index, &name) in names.iter().enumerate() {

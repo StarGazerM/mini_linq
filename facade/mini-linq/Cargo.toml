@@ -8,10 +8,10 @@ license.workspace = true
 [dependencies]
 mini-linq-macros = { path = "../mini-linq-macros", version = "0.1.0" }
 cq-planning.workspace = true
+cq-load.workspace = true
 
 [dev-dependencies]
 cq-testkit.workspace = true
-cq-load.workspace = true
 cq-storage = { workspace = true, features = ["counters"] }
 syn = { workspace = true, features = ["visit-mut"] }
 

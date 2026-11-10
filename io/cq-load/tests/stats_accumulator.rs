@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cq_load::stats::{ColumnSpec, DATE_ENCODING, DistinctMode, HASH_MODE, RelationAccumulator, RelationSpec};
 use cq_load::stats_source::{SourceFormat, SourceOptions, visit};
-use cq_syntax::evidence::{
+use cq_evidence::{
     Admission, Claim, DatasetEvidence, DatasetIdentity, FileRole, InputManifest,
     ManifestFile, ManifestRelation, Provenance, RelationEvidence, RelationScope,
     RelationSemantics, RunIdentity, SCHEMA, Scalar, ScalarDomain, SetCertification,
@@ -101,7 +101,7 @@ fn finish_checked(spec: &RelationSpec, accumulator: RelationAccumulator, source:
         premises: Vec::new(), relative: Vec::new(), targets: BTreeMap::new(), observations: Default::default(),
     };
     document.check().unwrap();
-    assert_eq!(cq_syntax::evidence::parse_json(&document.canonical_json().unwrap()).unwrap(), document);
+    assert_eq!(cq_evidence::parse_json(&document.canonical_json().unwrap()).unwrap(), document);
     relation
 }
 

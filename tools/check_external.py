@@ -242,8 +242,8 @@ def copy_feature_closure(feature, directory, names):
 
 
 def core_packages(packages):
-    """Folder names inside consumers do not confer closed-core identity."""
-    roots = {ROOT / folder for folder in ("languages", "passes", "runtime", "facade", "testkit")}
+    """Package public compiler, runtime and IO crates, not nested consumers."""
+    roots = {ROOT / folder for folder in ("languages", "passes", "runtime", "io", "facade", "testkit")}
     return [package for package in packages
             if Path(package["manifest_path"]).parent.parent in roots]
 

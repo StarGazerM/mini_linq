@@ -1,7 +1,7 @@
 use cq_syntax::declared_evidence::{DeclaredEvidence, EvidenceView};
 use quote::ToTokens;
 
-const DOCUMENT: &str = include_str!("fixtures/planner-evidence.json");
+const DOCUMENT: &str = include_str!("../../../runtime/cq-evidence/tests/fixtures/planner-evidence.json");
 
 #[test]
 fn canonical_attachment_roundtrip_and_projection_preserve_sources() {
@@ -31,11 +31,3 @@ fn projection_does_not_guess_a_missing_column_or_upgrade_a_subset() {
         .unwrap().is_none());
 }
 
-#[test]
-fn build_input_loads_the_named_document_and_rejects_missing_files() {
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/planner-evidence.json");
-    let loaded = DeclaredEvidence::load_build_input(&fixture, Vec::new()).unwrap();
-    assert_eq!(loaded.document.as_ref(), &cq_syntax::evidence::parse_json(DOCUMENT).unwrap());
-    assert!(DeclaredEvidence::load_build_input(&fixture.join("missing"), Vec::new()).is_err());
-}

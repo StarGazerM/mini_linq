@@ -1,5 +1,5 @@
 use cq_load::{stats::{ColumnSpec, DistinctMode, RelationSpec}, stats_manifest::{DatasetRequest, MetadataInput, RelationInput, REQUEST_SCHEMA}, stats_source::SourceOptions};
-use cq_syntax::evidence::{self, Claim, FileRole, RelationSemantics, ScalarDomain, Source};
+use cq_evidence::{self as evidence, Claim, FileRole, RelationSemantics, ScalarDomain, Source};
 use std::{path::PathBuf, sync::atomic::{AtomicUsize, Ordering}};
 
 struct Fixture(PathBuf);
@@ -26,6 +26,16 @@ fn request() -> DatasetRequest {
         }],
         metadata: vec![MetadataInput { path: "meta.json".into(), role: FileRole::Metadata }],
     }
+}
+
+#[test]
+fn build_input_loads_the_named_document_and_rejects_missing_files() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../runtime/cq-evidence/tests/fixtures/planner-evidence.json");
+    let document = include_str!("../../../runtime/cq-evidence/tests/fixtures/planner-evidence.json");
+    let loaded = cq_load::stats_manifest::load_build_input(&fixture).unwrap();
+    assert_eq!(loaded, evidence::parse_json(document).unwrap());
+    assert!(cq_load::stats_manifest::load_build_input(&fixture.join("missing")).is_err());
 }
 
 #[test]

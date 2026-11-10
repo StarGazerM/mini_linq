@@ -140,7 +140,7 @@ pub fn execute(
 fn calibrate(options: Options, engine: &str, threads: usize, run: impl FnOnce(SrdFacts) -> SrdResults) -> Result<()> {
     let config = options.calibration.as_ref().expect("selected calibration route");
     let plans = cq_cost::export::parse_json(&std::fs::read_to_string(&config.plans)?)?;
-    let evidence = cq_syntax::evidence::parse_json(&std::fs::read_to_string(&config.evidence)?)?;
+    let evidence = cq_evidence::parse_json(&std::fs::read_to_string(&config.evidence)?)?;
     let request = cq_load::stats_manifest::DatasetRequest::parse_json(&std::fs::read_to_string(&config.request)?)?;
     let expected = match engine {
         "mini" => cq_cost::export::Target::Cpu,

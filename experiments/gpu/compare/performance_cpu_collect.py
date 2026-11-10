@@ -151,7 +151,7 @@ def invoke(args, log, env=ENV, timeout=None):
 def build():
     dependencies = {
         'bench-check': 'testkit/bench-check',
-        'mini-linq': 'facade/mini-linq', 'cq-load': 'runtime/cq-load',
+        'mini-linq': 'facade/mini-linq', 'cq-load': 'io/cq-load',
         'cq-storage': 'runtime/cq-storage', 'cq-planners': 'features/planners',
         'cq-rewrites': 'features/rewrites', 'cq-join-filters': 'features/join-filters',
         'cq-ext-aggregate': 'features/extensions/cq-ext-aggregate',

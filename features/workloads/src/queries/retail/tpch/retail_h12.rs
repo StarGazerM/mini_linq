@@ -38,7 +38,7 @@ pub struct Data {
     pub dictionaries: cq_load::Dictionaries,
 }
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Orders(o_orderkey: i64, o_orderpriority: StringCode);
     relation Lineitem(l_orderkey: i64, l_linenumber: i64, l_shipmode: StringCode,
         l_commitdate: Date, l_receiptdate: Date, l_shipdate: Date);

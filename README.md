@@ -31,7 +31,8 @@ stopping, retention, and Rust environments. Rust `||` keeps its guard rules.
 |---|---|
 | `languages/` | Complete programs, parsers, printers, local contracts, and shared `cq-syntax` |
 | `passes/` | Transformations and independent correspondence checks; Rust printers |
-| `runtime/` | Borrowed access traits, storage, loaders, and distinct-state implementations |
+| `runtime/` | Borrowed access traits, storage, distinct-state implementations, and compiler-neutral `cq-evidence` data |
+| `io/` | Standalone `cq-load` runtime and `cq-io-macros` loader/schema macros |
 | `facade/` | `cq-stage` pass protocol and `mini-linq` macro entry points |
 | `testkit/` | Public corpus, semantic oracles, mutation and refinement helpers |
 | `tests/` | Optional homework acceptance tests for the root course package (`hw4` feature) |
@@ -43,6 +44,19 @@ stopping, retention, and Rust environments. Rust `||` keeps its guard rules.
 Grammars and extension APIs live in crate `//!` documentation. See
 [the design](doc/DESIGN.md) and [the formal specification](doc/formal/README.md).
 `passes/cq-reduce/tests/ya_schedule.rs` supplies the reduction pass's teaching acceptance tests.
+
+IO ownership is independent of compiler ownership: `io/*` cannot depend on
+top-level `languages/`, `passes/`, or `facade/` crates, and those compiler roots
+cannot depend on IO. The sole user-facing exception is `facade/mini-linq`,
+which reexports the separate library as `mini_linq::cq_load` and uses it in
+integration tests. Compiler macro crates, languages, and passes remain IO-free.
+Normal, dev, build, optional, renamed, and target-specific edges
+all obey this boundary. Use `cq_load::relation_loaders!`,
+`cq_load::interned_relation_loaders!`, and `cq_load::columnar_relation_loaders!`;
+`cq-load` reexports these from `cq-io-macros`; the compiler's old macro reexports
+are removed.
+Shared evidence data lives in
+`runtime/cq-evidence`, consumed independently by IO and compiler code.
 
 The development layout has three Cargo workspaces (consolidated from 28).
 The root workspace shares one lockfile and Cargo target directory across portable

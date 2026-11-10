@@ -9,7 +9,7 @@ default-run = "mac-query-expansion"
 [dependencies]
 cq-mac = { path = "../cq-mac" }
 cq-storage = { path = "../../../runtime/cq-storage" }
-cq-load = { path = "../../../runtime/cq-load" }
+cq-load = { path = "../../../io/cq-load" }
 mini-linq = { path = "../../../facade/mini-linq" }
 serde_json = "1"
 

@@ -93,35 +93,35 @@
    "class": "g",
    "hunk_sha256": "1a53fc72b509552d5261fef0f5be87b46675c0f14d4ad0af492dd46f6dbb63b8",
    "reason": "Hunk 4 (@@ -265,31 +348,73 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Interned loader and dictionary ownership conversion Only loader/interning operations are classified here; CONFIGS validation change remains unexplained.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h03.rs:20-58; features/workloads/src/queries/retail/tpch/retail_h03.rs:72-84; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h03.rs:20-58; features/workloads/src/queries/retail/tpch/retail_h03.rs:72-84; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
    "target": "retail_h03"
   },
   {
    "class": "g",
    "hunk_sha256": "63e423b1dad2fa9aa05f5def31afb1d30c48ad3c91d3e6bbb7f958f99bf7fbc4",
    "reason": "Hunk 7 (@@ -427,43 +615,88 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Interned loader and dictionary ownership conversion Only loader/interning operations are classified here; CONFIGS validation change remains unexplained.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h05.rs:34-88; features/workloads/src/queries/retail/tpch/retail_h05.rs:106-122; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h05.rs:34-88; features/workloads/src/queries/retail/tpch/retail_h05.rs:106-122; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
    "target": "retail_h05"
   },
   {
    "class": "g",
    "hunk_sha256": "fd1dd44b145b7b3760590cde4c7e2c4decdd0aa9b7588f883ec27e0548be1da6",
    "reason": "Hunk 6 (@@ -375,39 +528,83 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Interned loader/data conversion with dictionary ownership; adds explicit CONFIGS validation at load entry and removes discarded config wrapper. Only loader/interning operations are classified here; CONFIGS validation change remains unexplained.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h07.rs:31-80; features/workloads/src/queries/retail/tpch/retail_h07.rs:97-115; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h07.rs:31-80; features/workloads/src/queries/retail/tpch/retail_h07.rs:97-115; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
    "target": "retail_h07"
   },
   {
    "class": "g",
    "hunk_sha256": "d57db50bab7ff194f21f547b9fd900cf3d70afae081622c9eb6a9cf5228429ca",
    "reason": "Hunk 8 (@@ -494,47 +728,93 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Interned loader/data conversion with dictionary ownership; adds explicit CONFIGS validation at load entry and removes discarded config wrapper. Only loader/interning operations are classified here; CONFIGS validation change remains unexplained.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h08.rs:37-98; features/workloads/src/queries/retail/tpch/retail_h08.rs:117-138; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h08.rs:37-98; features/workloads/src/queries/retail/tpch/retail_h08.rs:117-138; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
    "target": "retail_h08"
   },
   {
    "class": "g",
    "hunk_sha256": "5fa3396490ed10bc187573fa2c9f0fbbfd600da3e41b792a78fe0464fec5e895",
    "reason": "Hunk 7 (@@ -380,43 +559,81 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Interned loader conversion and once-per-dictionary-entry contains(green) code-set publication Only loader/interning operations are classified here; CONFIGS validation change remains unexplained.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h09.rs:34-91; features/workloads/src/queries/retail/tpch/retail_h09.rs:109-124; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h09.rs:34-91; features/workloads/src/queries/retail/tpch/retail_h09.rs:109-124; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144",
    "target": "retail_h09"
   },
   {
@@ -142,7 +142,7 @@
    "class": "g",
    "hunk_sha256": "032b320bbeaecd12abf817e0b22966e321408bdcda95a0f993ac9835ca92407f",
    "reason": "Occurrence 4, @@ -305,54 +392,168 @@: Generated InternedRelation implementation(s) add per-field Source types, prepare each declared column dictionary, retrieve dictionaries, consume each source row through InternedField::intern, and collect typed rows for s_suppkey, s_comment. Nonstring Load fields pass through unchanged; StringCode fields load strings then encode. Typed loader aliases follow the new authored relation types. The loader allocates Data dictionaries, invokes parquet_interned with the shared mutable dictionary registry and publishes that registry with the loaded relations. The loader additionally materializes the authored unary predicate code sets once per dictionary value, rather than running these string predicates for every queried row. Part brand/kind and Supplier comment become StringCode; excluded_brand is dictionary translated, AllowedKinds and BadComments are load-time predicate code sets, and BadSupplier is derived by joining supplier comment codes. These new inputs explain shifted result/provider identifiers, not the unauthorized configuration cutover.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h16.rs:21-64; features/workloads/src/queries/retail/tpch/retail_h16.rs:74-99; facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:154-205",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h16.rs:21-64; features/workloads/src/queries/retail/tpch/retail_h16.rs:74-99; io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:154-205",
    "target": "retail_h16"
   },
   {
@@ -296,7 +296,7 @@
    "class": "g",
    "hunk_sha256": "5731da56c12ad0d73fbc2b429dd0a700e32ae1a41ccce77879fa0acfd7fa283c",
    "reason": "Occurrence 4, @@ -199,27 +236,76 @@: Generated InternedRelation implementation(s) add per-field Source types, prepare each declared column dictionary, retrieve dictionaries, consume each source row through InternedField::intern, and collect typed rows for o_orderkey, o_custkey, c_phone. Nonstring Load fields pass through unchanged; StringCode fields load strings then encode. Typed loader aliases follow the new authored relation types. The loader allocates Data dictionaries, invokes parquet_interned with the shared mutable dictionary registry and publishes that registry with the loaded relations. The loader additionally materializes the authored unary predicate code sets once per dictionary value, rather than running these string predicates for every queried row. Customer phone becomes StringCode; the seven prefix tests run at load time in qualifying_phones, and QualifyingPhones(phone) replaces per-row Rust starts_with/any. The inserted relation shifts provider numbers; customer identifiers remain i64.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h22.rs:18-42; features/workloads/src/queries/retail/tpch/retail_h22.rs:50-61; facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:154-205",
+   "source": "features/workloads/src/queries/retail/tpch/retail_h22.rs:18-42; features/workloads/src/queries/retail/tpch/retail_h22.rs:50-61; io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:154-205",
    "target": "retail_h22"
   },
   {
@@ -5236,14 +5236,14 @@
    "class": "e",
    "hunk_sha256": "7c6c67c6aee4d04458b1ad0e49bf732b84007d4faebf5fdb70b43070c9cdaf9c",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 7df647531cd7a274668a15d0b18c3aae19d979d7d637e99a4c17c3b8732a3e67. Hunk 68 (@@ -3401,65 +4310,98 @@). Type-opaque dispatch portion: BuildTarget/build_provider, inferred sharded inner provider, AutoDense where requested, NoJoinFilter/test_position and capability-selected Keys/filter eligibility replace concrete spellings. Typed Date/non-string encode_predicate bridges are e, not interning. Local accounting: Region equality now uses the translated dictionary code and carries region_name as real payload instead of synthesizing a String constant; provider becomes payload index, built through type-opaque dispatch (AutoDense for sorted-run configuration).",
-   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; runtime/cq-load/src/scalar.rs:210-212"
+   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; io/cq-load/src/scalar.rs:210-212"
   },
   {
    "target": "retail_h02",
    "class": "g",
    "hunk_sha256": "7c6c67c6aee4d04458b1ad0e49bf732b84007d4faebf5fdb70b43070c9cdaf9c",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 7df647531cd7a274668a15d0b18c3aae19d979d7d637e99a4c17c3b8732a3e67. Hunk 68 (@@ -3401,65 +4310,98 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Region equality now uses the translated dictionary code and carries region_name as real payload instead of synthesizing a String constant; provider becomes payload index, built through type-opaque dispatch (AutoDense for sorted-run configuration).",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h02.rs:37-104; features/workloads/src/queries/retail/tpch/retail_h02.rs:111-175; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h02.rs:37-104; features/workloads/src/queries/retail/tpch/retail_h02.rs:111-175; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h02",
@@ -5264,14 +5264,14 @@
    "class": "e",
    "hunk_sha256": "a81dfda3d01b4c7037ec29ef96d1caaba13381ca19327aea42d7bb117d796e6c",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: a93f6aa4ca4f12e7a62ab283e727c6814274dd43e4cf0cbd75d14a926e9ebe64. Hunk 47 (@@ -2631,21 +3403,31 @@). Type-opaque dispatch portion: BuildTarget/build_provider, inferred sharded inner provider, AutoDense where requested, NoJoinFilter/test_position and capability-selected Keys/filter eligibility replace concrete spellings. Typed Date/non-string encode_predicate bridges are e, not interning. Local accounting: Region equality now uses the translated dictionary code and carries region_name as real payload instead of synthesizing a String constant; provider becomes payload index, built through type-opaque dispatch (AutoDense for sorted-run configuration).",
-   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; runtime/cq-load/src/scalar.rs:210-212"
+   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; io/cq-load/src/scalar.rs:210-212"
   },
   {
    "target": "retail_h02",
    "class": "g",
    "hunk_sha256": "a81dfda3d01b4c7037ec29ef96d1caaba13381ca19327aea42d7bb117d796e6c",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: a93f6aa4ca4f12e7a62ab283e727c6814274dd43e4cf0cbd75d14a926e9ebe64. Hunk 47 (@@ -2631,21 +3403,31 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Region equality now uses the translated dictionary code and carries region_name as real payload instead of synthesizing a String constant; provider becomes payload index, built through type-opaque dispatch (AutoDense for sorted-run configuration).",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h02.rs:37-104; features/workloads/src/queries/retail/tpch/retail_h02.rs:111-175; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h02.rs:37-104; features/workloads/src/queries/retail/tpch/retail_h02.rs:111-175; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h02",
@@ -5285,14 +5285,14 @@
    "class": "e",
    "hunk_sha256": "f2b91e1f2f774056464a958ff7f1d83c86bf3c5e73ad7e2c2d72b51a0efa5331",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 2aced008ff78980848fa48d8569ebd14f6fdb7fa4c444aba73d56278acdbdab9. Hunk 75 (@@ -3826,67 +4851,98 @@). Type-opaque dispatch portion: BuildTarget/build_provider, inferred sharded inner provider, AutoDense where requested, NoJoinFilter/test_position and capability-selected Keys/filter eligibility replace concrete spellings. Typed Date/non-string encode_predicate bridges are e, not interning. Local accounting: Region equality now uses the translated dictionary code and carries region_name as real payload instead of synthesizing a String constant; provider becomes payload index, built through type-opaque dispatch (AutoDense for sorted-run configuration).",
-   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; runtime/cq-load/src/scalar.rs:210-212"
+   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; io/cq-load/src/scalar.rs:210-212"
   },
   {
    "target": "retail_h02",
    "class": "g",
    "hunk_sha256": "f2b91e1f2f774056464a958ff7f1d83c86bf3c5e73ad7e2c2d72b51a0efa5331",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 2aced008ff78980848fa48d8569ebd14f6fdb7fa4c444aba73d56278acdbdab9. Hunk 75 (@@ -3826,67 +4851,98 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Region equality now uses the translated dictionary code and carries region_name as real payload instead of synthesizing a String constant; provider becomes payload index, built through type-opaque dispatch (AutoDense for sorted-run configuration).",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h02.rs:37-104; features/workloads/src/queries/retail/tpch/retail_h02.rs:111-175; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h02.rs:37-104; features/workloads/src/queries/retail/tpch/retail_h02.rs:111-175; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h02",
@@ -5313,7 +5313,7 @@
    "class": "g",
    "hunk_sha256": "7bde5e4d0948680842d9bacddc6dbfba653640d7817c3d666e28778f69a07abe",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 19821fbcd20a8ea38790182e64123bf3b2a17961769f6a1af2c05d4fbdd80133. Hunk 35 (@@ -1785,7 +2055,7 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Interned columns/loaders/literal/publication conversion or returnflag code propagation: named returnflag where predicate retains code in source/index payload, valuation, route and dedup tuples; generated IDs follow added select.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h10",
@@ -5327,7 +5327,7 @@
    "class": "g",
    "hunk_sha256": "fc0388f187622b7166accd77e3162e26ce992f58633f3d2c1a0454c07d8dfb97",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 0e19414efec6952c1dd043742ab25f1b0f6c88de0bf47ba1099a6f0d30fb4af5. Hunk 29 (@@ -1657,7 +1916,7 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Interned columns/loaders/literal/publication conversion or returnflag code propagation: named returnflag where predicate retains code in source/index payload, valuation, route and dedup tuples; generated IDs follow added select.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h10",
@@ -5355,14 +5355,14 @@
    "class": "e",
    "hunk_sha256": "ae142ccdd743329393916b59611ba895233ef11fd26354a0d54943d31b20f7e3",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 2f2ca392a679ada38aeb86674b0d53b2d81e7cac49ce5a8b1a7227edc07bbed2. Hunk 43 (@@ -2296,81 +2323,56 @@). Type-opaque dispatch portion: BuildTarget/build_provider, inferred sharded inner provider, AutoDense where requested, NoJoinFilter/test_position and capability-selected Keys/filter eligibility replace concrete spellings. Typed Date/non-string encode_predicate bridges are e, not interning. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['le']; working ['transfer']. Named module inventory is unchanged.",
-   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; runtime/cq-load/src/scalar.rs:210-212"
+   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; io/cq-load/src/scalar.rs:210-212"
   },
   {
    "target": "retail_h10",
    "class": "g",
    "hunk_sha256": "ae142ccdd743329393916b59611ba895233ef11fd26354a0d54943d31b20f7e3",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 2f2ca392a679ada38aeb86674b0d53b2d81e7cac49ce5a8b1a7227edc07bbed2. Hunk 43 (@@ -2296,81 +2323,56 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['le']; working ['transfer']. Named module inventory is unchanged.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h10",
@@ -5390,14 +5390,14 @@
    "class": "e",
    "hunk_sha256": "6163357e6dfc95dea1e46962669db09f27317acf24e78e705d4be7b6e668e292",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 033a0aab13f661697b8120bef03811f5559e0595aea741066208e7a67f923711. Hunk 53 (@@ -2579,14 +2591,14 @@). Type-opaque dispatch portion: BuildTarget/build_provider, inferred sharded inner provider, AutoDense where requested, NoJoinFilter/test_position and capability-selected Keys/filter eligibility replace concrete spellings. Typed Date/non-string encode_predicate bridges are e, not interning. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['le_runs']; working ['le']. Named module inventory is unchanged.",
-   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; runtime/cq-load/src/scalar.rs:210-212"
+   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; io/cq-load/src/scalar.rs:210-212"
   },
   {
    "target": "retail_h10",
    "class": "g",
    "hunk_sha256": "6163357e6dfc95dea1e46962669db09f27317acf24e78e705d4be7b6e668e292",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 033a0aab13f661697b8120bef03811f5559e0595aea741066208e7a67f923711. Hunk 53 (@@ -2579,14 +2591,14 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['le_runs']; working ['le']. Named module inventory is unchanged.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h10",
@@ -5425,14 +5425,14 @@
    "class": "e",
    "hunk_sha256": "c203c6dfc252bf7fb5c085efad125f4e7f0d2079ae7b65342c27d40af862a55f",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: cc6931f4e537009a36fe32994df83fdd6d673717b0550809ee87e0bc81d7a017. Hunk 61 (@@ -2860,119 +2886,151 @@). Type-opaque dispatch portion: BuildTarget/build_provider, inferred sharded inner provider, AutoDense where requested, NoJoinFilter/test_position and capability-selected Keys/filter eligibility replace concrete spellings. Typed Date/non-string encode_predicate bridges are e, not interning. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['advised']; working ['le_runs']. Named module inventory is unchanged.",
-   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; runtime/cq-load/src/scalar.rs:210-212"
+   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; io/cq-load/src/scalar.rs:210-212"
   },
   {
    "target": "retail_h10",
    "class": "g",
    "hunk_sha256": "c203c6dfc252bf7fb5c085efad125f4e7f0d2079ae7b65342c27d40af862a55f",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: cc6931f4e537009a36fe32994df83fdd6d673717b0550809ee87e0bc81d7a017. Hunk 61 (@@ -2860,119 +2886,151 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['advised']; working ['le_runs']. Named module inventory is unchanged.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h10",
@@ -5460,14 +5460,14 @@
    "class": "e",
    "hunk_sha256": "ced3ce025e28398ef9c8aaa00f0d08366057d3a19cb2f52dd258e30d31406f83",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 64314b1ac8078a019e8857919a62dab061f5f61fc371d3c9e612c132372c5ffb. Hunk 64 (@@ -3029,8 +3089,279 @@). Type-opaque dispatch portion: BuildTarget/build_provider, inferred sharded inner provider, AutoDense where requested, NoJoinFilter/test_position and capability-selected Keys/filter eligibility replace concrete spellings. Typed Date/non-string encode_predicate bridges are e, not interning. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['advised']; working ['le_runs', 'advised']. Named module inventory is unchanged.",
-   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; runtime/cq-load/src/scalar.rs:210-212"
+   "source": "passes/cq-print/src/lib.rs:688-775,807-829,851-898; runtime/cq-storage/src/dispatch.rs:15-105; passes/cq-print/src/positional.rs:14-56; passes/cq-print/src/positional.rs:205-218; runtime/cq-storage/src/lib.rs:245-281; io/cq-load/src/scalar.rs:210-212"
   },
   {
    "target": "retail_h10",
    "class": "g",
    "hunk_sha256": "ced3ce025e28398ef9c8aaa00f0d08366057d3a19cb2f52dd258e30d31406f83",
    "reason": "Retains reviewed prior-fragment classification through the bounded default-group-hasher change. Prior exact hunks: 64314b1ac8078a019e8857919a62dab061f5f61fc371d3c9e612c132372c5ffb. Hunk 64 (@@ -3029,8 +3089,279 @@). Load-time interning portion: code columns/loader dictionaries, code-set/literal input, code comparisons and retained code payload/valuation, final dictionary publication; execution evidence remains required. Local accounting: Repeated standalone configuration bodies cause cross-module diff alignment (module sets/order unchanged): compare transfer, le, le_runs and advised by name. Within matching bodies returned dictionary predicate adds real returnflag payload/valuation/dedup field, IDs shift, publication decodes strings; arithmetic is authored Rust and owned values clone across lookups, free-variable placement moves lets/joins, provider builds dispatch (le_runs retains AutoDense SortedRun and retained first-witness cursors). Apparent HashIndex/SortedRun replacement in raw hunk crosses configuration boundary, not dispatch equivalence claim. Exact hunk module spans: baseline ['advised']; working ['le_runs', 'advised']. Named module inventory is unchanged.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; runtime/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; facade/mini-linq-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h10.rs:37-91; features/workloads/src/queries/retail/tpch/retail_h10.rs:98-138; io/cq-load/src/intern.rs:5-32,49-69,82-151,173-208; io/cq-io-macros/src/load.rs:63-96; passes/cq-print/src/positional.rs:205-218; languages/cq-lang-structures/src/filtered.rs:137-144"
   },
   {
    "target": "retail_h11",
@@ -5635,7 +5635,7 @@
    "class": "g",
    "hunk_sha256": "fd90d1fea3209f77ae5dbcdcc89231642ebca2786989f3e77ac7d052378627eb",
    "reason": "Reviewed exact H13 hunk 0: sorted StringCode input/dictionary preparation replaces HEAD String input/predicate; qualifying comments now form DenseMembership at load, reused by opaque code-only filtering. Dictionary string predicates still execute only at load, and order/customer projection retains SQL pair identity.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h13",
@@ -5649,14 +5649,14 @@
    "class": "g",
    "hunk_sha256": "5a618a471b57fb8a9ac889f33950f7095a082705a86e65905e1c78dcc7586bca",
    "reason": "Reviewed exact H13 hunk 1: sorted StringCode input/dictionary preparation replaces HEAD String input/predicate; qualifying comments now form DenseMembership at load, reused by opaque code-only filtering. Dictionary string predicates still execute only at load, and order/customer projection retains SQL pair identity.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h13",
    "class": "g",
    "hunk_sha256": "13021bd4e04a46f18ea66da0a640589b9af52a435ba11df91f2ad5526a4eaebd",
    "reason": "Reviewed exact H13 hunk 4: sorted StringCode input/dictionary preparation replaces HEAD String input/predicate; qualifying comments now form DenseMembership at load, reused by opaque code-only filtering. Dictionary string predicates still execute only at load, and order/customer projection retains SQL pair identity.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h13",
@@ -5677,7 +5677,7 @@
    "class": "g",
    "hunk_sha256": "f500eee3c7c8b5e15fef77635fa106d006b208496ecd3523436d7559922a47f1",
    "reason": "Reviewed exact H13 hunk 5: sorted StringCode input/dictionary preparation replaces HEAD String input/predicate; qualifying comments now form DenseMembership at load, reused by opaque code-only filtering. Dictionary string predicates still execute only at load, and order/customer projection retains SQL pair identity.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h13",
@@ -5691,7 +5691,7 @@
    "class": "g",
    "hunk_sha256": "f31a1924c7af2e40506f7f9c44e5e289f33a60071129b368f3839c76ba05554a",
    "reason": "Reviewed exact H13 hunk 6: sorted StringCode input/dictionary preparation replaces HEAD String input/predicate; qualifying comments now form DenseMembership at load, reused by opaque code-only filtering. Dictionary string predicates still execute only at load, and order/customer projection retains SQL pair identity.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h13",
@@ -5719,7 +5719,7 @@
    "class": "g",
    "hunk_sha256": "3885fa19f410cc3faa09ddd5abfbb8cc086cdaaba4b5b05f14109f554367766c",
    "reason": "Reviewed exact H13 hunk 8: sorted StringCode input/dictionary preparation replaces HEAD String input/predicate; qualifying comments now form DenseMembership at load, reused by opaque code-only filtering. Dictionary string predicates still execute only at load, and order/customer projection retains SQL pair identity.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h13",
@@ -5754,7 +5754,7 @@
    "class": "g",
    "hunk_sha256": "1b3e144b37fa65d5be614586c100438823b56f1ee863f02d0270d01e8085c290",
    "reason": "Reviewed exact H13 hunk 14: sorted StringCode input/dictionary preparation replaces HEAD String input/predicate; qualifying comments now form DenseMembership at load, reused by opaque code-only filtering. Dictionary string predicates still execute only at load, and order/customer projection retains SQL pair identity.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; runtime/cq-load/src/intern.rs"
+   "source": "features/workloads/src/queries/retail/tpch/retail_h13.rs:22-84; io/cq-load/src/intern.rs"
   },
   {
    "target": "retail_h13",
@@ -5886,7 +5886,7 @@
    "class": "g",
    "hunk_sha256": "00ac9f7a41c13994d6e9b430cdd333429766ad62512257d9e8ad19572511809b",
    "reason": "Retained reviewed fragments in refreshed @@ -2560,10 +3260,371 @@. Prior exact-fragment hashes: 7df372b9c8fd53ff5fa6963466c18e0033c80f1caf78924ec263a8a75302a783. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -5970,7 +5970,7 @@
    "class": "g",
    "hunk_sha256": "1176a8111f23c6872a65ad939e6839588e5db80072d34ebdc06e6a898026e9e7",
    "reason": "Hunk 1/50 @@ -103,15 +103,22 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6082,7 +6082,7 @@
    "class": "g",
    "hunk_sha256": "2ecab477e8d86454a9995033863b967e6fd4d54474b0540f3191db9eb2992044",
    "reason": "Hunk 4/50 @@ -262,6 +359,30 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6110,7 +6110,7 @@
    "class": "g",
    "hunk_sha256": "3b4f77742229ff9ada5300d3cb6e38ed9e481968eda59cee8b200e585461e0b0",
    "reason": "Retained reviewed fragments in refreshed @@ -458,199 +680,299 @@. Prior exact-fragment hashes: 8d90a481c710f6a39ae189d4e4863c330b0f90e13ebd10b6172d5f3339f8eb66, ee9137163298e6bbf0359735c62da0098ea6a5ed7dbd32fb01b138104f0323ca. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6208,7 +6208,7 @@
    "class": "g",
    "hunk_sha256": "5c9515ddbe4d3628eb9004c51b352b36167b4fc55487a8979ac239bdce1e9a36",
    "reason": "Retained reviewed fragments in refreshed @@ -1763,117 +2200,137 @@. Prior exact-fragment hashes: f9821547f985d3e063da1bee9a148ea490345eb6d99db30733423104b45efc30, 64c0cdb7b7e7f8cb37faf07939f40bae6371890826795663dc6343071b7dc222. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6320,7 +6320,7 @@
    "class": "g",
    "hunk_sha256": "76585185b3eadb1e90aa95db8fb80c0d0769b580e9689afa80e94dab46eea596",
    "reason": "Hunk 46/50 @@ -2586,28 +3545,24 @@ (advised -> advised): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6334,7 +6334,7 @@
    "class": "g",
    "hunk_sha256": "7aebf51d0798f7b14238e42a5a271d36bedcc4dc347f34bc55c6050a29ec4898",
    "reason": "Hunk 5/50 @@ -315,6 +436,40 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6390,7 +6390,7 @@
    "class": "g",
    "hunk_sha256": "8714d6869f2b0679660b824e1e74d40cf5b2f7cf0cc73f734c75b343499d8bc9",
    "reason": "Retained reviewed fragments in refreshed @@ -2665,107 +3736,137 @@. Prior exact-fragment hashes: 7dee04be4c641bc264ed0d778eaa6196ebefb94012fd68c417eeb96d63d02806, 21888c8244280ff0f21def23ad6e9135c1720b7232c6289e93a656cc0086f722. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6432,7 +6432,7 @@
    "class": "g",
    "hunk_sha256": "893ea87f129069f033ad255d99958fe7336b19ccf89acfb554b24240a31a4d5e",
    "reason": "InternedRelation preparation and per-field conversion, parquet_interned loaders, shared Dictionaries storage and StringCode loader specialization account for the load changes. Numeric fields retain their InternedField identity mapping. The before-restoration added CONFIGS assertion is absent from this refreshed hunk; it is not approved here.",
-   "source": "features/workloads/src/queries/retail/tpch/retail_d19.rs:47-93; facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219",
+   "source": "features/workloads/src/queries/retail/tpch/retail_d19.rs:47-93; io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219",
    "target": "retail_d19"
   },
   {
@@ -6474,7 +6474,7 @@
    "class": "g",
    "hunk_sha256": "909c2b445b972577f5f6eeafb71a8b074ade1365c4d0723f4e32138827720663",
    "reason": "Retained reviewed fragments in refreshed @@ -2373,176 +3002,247 @@. Prior exact-fragment hashes: ca1a09473b8ed20a5fa27fe953ffed0e10a85a8ad355efe9aa03ebab95d583ae, 9593ea2eee7cde8d4e503142ffd1af9a28fc8f1d51276ec0338eb23ddbca6ad2. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6495,14 +6495,14 @@
    "class": "g",
    "hunk_sha256": "9ef49e98d7615e0ce0a6cd026eb4cfe3d6f5076176f6f53087bd434811c41fb8",
    "reason": "Hunk 3/50 @@ -235,6 +287,51 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "a4420e008d422da92a0aa55e9233da84f50ea1db9b3838b0415e04435d41fe7e",
    "reason": "Hunk 6/50 @@ -366,9 +521,43 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6530,7 +6530,7 @@
    "class": "g",
    "hunk_sha256": "acf54dca79e84a780764967c09ff95f147476a2f450be06409a6d41672c0e31b",
    "reason": "Hunk 13/50 @@ -697,219 +1005,45 @@ (par -> par): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6572,7 +6572,7 @@
    "class": "g",
    "hunk_sha256": "ae348e6e10898b82c49c945e265fb20ee6e95d04316a946d6b0517342040fac0",
    "reason": "Retained reviewed fragments in refreshed @@ -2155,175 +2712,247 @@. Prior exact-fragment hashes: 62a8ed48a79b135d2b50321cef0364fcd6bdd67b2a2e4f0b08d3cb1df6b22f92, 9593ea2eee7cde8d4e503142ffd1af9a28fc8f1d51276ec0338eb23ddbca6ad2. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6593,7 +6593,7 @@
    "class": "g",
    "hunk_sha256": "b777b419c04491ed25d591961b619177ca3bfbd3814550f7b887084b41d65c34",
    "reason": "Hunk 2/50 @@ -170,6 +177,51 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6621,7 +6621,7 @@
    "class": "g",
    "hunk_sha256": "cdd4120669222a772b5d586a0440d510ed08323025fb29597b3f4c7acf452333",
    "reason": "Retained reviewed fragments in refreshed @@ -1918,199 +2375,299 @@. Prior exact-fragment hashes: 3eb9cabf8b348f962d31b5b203a3e0e0eb4853333d1eab96ed0007e7f8370a2d, bc01f3f668ff2e81592f80db37b92f455f0e4a4d990a641f1ff6ef12f3d0dd9b. Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
@@ -6698,56 +6698,56 @@
    "class": "g",
    "hunk_sha256": "ee3659cc7ac628644baaa2cbe679b38dd9b250959568659e01d4185b2d123369",
    "reason": "Hunk 12/50 @@ -680,8 +986,10 @@ (par -> par): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "ee3659cc7ac628644baaa2cbe679b38dd9b250959568659e01d4185b2d123369",
    "reason": "Hunk 25/50 @@ -1667,8 +2048,10 @@ (no_reduce -> no_reduce): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "ee3659cc7ac628644baaa2cbe679b38dd9b250959568659e01d4185b2d123369",
    "reason": "Hunk 33/50 @@ -1903,8 +2326,10 @@ (transfer -> transfer): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "ee3659cc7ac628644baaa2cbe679b38dd9b250959568659e01d4185b2d123369",
    "reason": "Hunk 37/50 @@ -2140,8 +2645,10 @@ (le -> le): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "ee3659cc7ac628644baaa2cbe679b38dd9b250959568659e01d4185b2d123369",
    "reason": "Hunk 41/50 @@ -2358,8 +2917,10 @@ (le_runs -> le_runs): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "ee3659cc7ac628644baaa2cbe679b38dd9b250959568659e01d4185b2d123369",
    "reason": "Hunk 45/50 @@ -2577,8 +3534,10 @@ (advised -> advised): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "ee3659cc7ac628644baaa2cbe679b38dd9b250959568659e01d4185b2d123369",
    "reason": "Hunk 8/50 @@ -443,8 +667,10 @@ (default -> default): Nation n_name uses StringCode and UNITED STATES becomes a closed atom restriction. Customer-key -> nation and order-key -> customer remain payload indexes; Part(part_key), Supplier(supplier_key), and the filtered nation-key projection are complete-key membership candidates. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d19.rs:30-158",
    "target": "retail_d19"
   },
   {
    "class": "g",
    "hunk_sha256": "055bb0ef573c6988db8fa1b7c1fe62d4c70f3e4355241710aa104008e635ae84",
    "reason": "Hunk 5/36 @@ -320,6 +439,40 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -6775,7 +6775,7 @@
    "class": "g",
    "hunk_sha256": "0c0ccd0d3716a72437f6f3567f38620a20d14a4d5e12bbe5794998d4662a5b20",
    "reason": "Hunk 28/36 @@ -1443,71 +1841,84 @@ (no_reduce -> no_reduce): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -6831,7 +6831,7 @@
    "class": "g",
    "hunk_sha256": "190c4cce752cdfb71a3fc67fb23fb3ed100e03d9b4f9feb90e6615582491ad98",
    "reason": "Hunk 36/36 @@ -2393,9 +3041,300 @@ (tuned -> tuned): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -6880,7 +6880,7 @@
    "class": "g",
    "hunk_sha256": "1e71504db86588f50a6a2afc67e8b3570c38817d6601f84c475fc62aff8b2863",
    "reason": "Hunk 32/36 @@ -2189,9 +2200,571 @@ (advised -> transfer): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -6908,7 +6908,7 @@
    "class": "g",
    "hunk_sha256": "222d79e2b4bea943f73d3e31ceec26f1e3d7fbc066fe3b0a3472c1b3f0b059f2",
    "reason": "Hunk 21/36 @@ -1095,51 +1494,21 @@ (par -> par): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -6929,7 +6929,7 @@
    "class": "g",
    "hunk_sha256": "32edc124cdb3f4bb24c0b96296edf13c8ba271cccff5e17eaf8a9957efc4606e",
    "reason": "Hunk 4/36 @@ -271,9 +356,43 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -6985,7 +6985,7 @@
    "class": "g",
    "hunk_sha256": "4fb1a42b21e38278ac6cb7fecf70e81b3b5f1995545db5ff87b8ddd09fed43e7",
    "reason": "Hunk 34/36 @@ -2218,67 +2794,108 @@ (tuned -> tuned): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -7034,7 +7034,7 @@
    "class": "g",
    "hunk_sha256": "59880d9c8e4c6557c4f35f43cacece677b2529998b38dbdc2bebf55b31410617",
    "reason": "Hunk 31/36 @@ -2007,179 +1958,239 @@ (advised -> transfer): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -7111,7 +7111,7 @@
    "class": "g",
    "hunk_sha256": "5d0c329ff214f0b1fd723421679641706ff0ad2db5269442fac35070bf0beb4d",
    "reason": "Hunk 26/36 @@ -1368,22 +1721,39 @@ (no_reduce -> no_reduce): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -7125,7 +7125,7 @@
    "class": "g",
    "hunk_sha256": "61df877ea3f03e2ca6cd4e0a39e9af5ae399cb6c64288e7f0df405b662e712c3",
    "reason": "Hunk 22/36 @@ -1155,51 +1524,21 @@ (par -> par): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -7223,7 +7223,7 @@
    "class": "g",
    "hunk_sha256": "83a94f0a114f1d39c41be2aa4e848571bc1ec47978635567177d64da98961246",
    "reason": "Hunk 20/36 @@ -1040,49 +1396,92 @@ (par -> par): Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload. This portion adds/uses dictionary literal lookup and replaces relational_string_eq/string-view operands with relational_eq on codes; captures/renumbering and physical placement are h/f, not evidence of decoding. For the zone wrapper, n_name metadata becomes MinMax<StringCode> and dictionary ownership stays in Data.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
@@ -7272,14 +7272,14 @@
    "class": "g",
    "hunk_sha256": "9b480a13d7b030492849ecaa10c2e4a870f2b3382d7be86424265088dbc1b732",
    "reason": "Hunk 3/36 @@ -220,6 +271,40 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {
    "class": "g",
    "hunk_sha256": "9d34a7641d745e0359f00130655b6691bab274961104579f2fe75956ac3c8939",
    "reason": "Hunk 1/36 @@ -101,14 +101,20 @@ (loaders -> loaders): Load/schema migration: authored string columns become StringCode, Data gains Dictionaries, and relation loader aliases use the declared coded schema. Generated InternedRelation prepares every source column, then interns the moved source fields; parquet_interned shares the dictionaries. Nontext columns preserve their source types through InternedField. Part p_brand and Nation n_name use StringCode; Brand#12/UNITED STATES become closed atom restrictions. Part-key and nation-key projections become complete-key membership; the date-selected order-key membership changes representation under c; supplier-key -> nation retains its payload.",
-   "source": "facade/mini-linq-macros/src/load.rs:63-94; runtime/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
+   "source": "io/cq-io-macros/src/load.rs:63-94; io/cq-load/src/intern.rs:104-138,155-219; features/workloads/src/queries/retail/tpch/retail_d27.rs:27-145",
    "target": "retail_d27"
   },
   {

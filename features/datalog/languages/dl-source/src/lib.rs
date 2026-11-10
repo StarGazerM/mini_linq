@@ -453,7 +453,7 @@ pub mod contract {
                 let position = graph.index(&binding.relation)?;
                 let declaration = &program.declarations[position];
                 let facts = &evidence.document.relations[&binding.source];
-                use cq_syntax::evidence::RelationScope;
+                use cq_evidence::RelationScope;
                 // Source can rule out EDB/IDB and intrinsic-recursion mistakes,
                 // but cannot yet know which acyclic IDBs a later union of SCCs
                 // will iterate. Round checks that recorded component boundary.

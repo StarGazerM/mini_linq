@@ -1,6 +1,6 @@
 use crate::typed::{self, Source};
 
-mini_linq::interned_relation_loaders! {
+cq_load::interned_relation_loaders! {
     relation Lineitem(orderkey: i64, linenumber: i32, price: cq_load::Decimal, shipdate: cq_load::Date, comment: cq_load::StringCode);
 }
 

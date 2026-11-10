@@ -5,7 +5,7 @@ edition.workspace = true
 workspace = ".."
 
 [dependencies]
-cq-load = { path = "../../../runtime/cq-load" }
+cq-load = { path = "../../../io/cq-load" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cuda-core.workspace = true
 cuda-device.workspace = true

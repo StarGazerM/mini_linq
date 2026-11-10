@@ -1,5 +1,5 @@
 //! Tiny authored fixtures exercise document checking, not workload measurements.
-use cq_syntax::evidence::{DatasetEvidence, InputManifest, parse_bytes, parse_json};
+use cq_evidence::{DatasetEvidence, InputManifest, parse_bytes, parse_json};
 use serde_json::{Value, json};
 
 const FIXTURE: &str = include_str!("fixtures/planner-evidence.json");
@@ -111,7 +111,7 @@ fn semantic_hash_mode_is_mandatory_even_when_the_manifest_digest_matches() {
 #[test]
 fn unit_scalar_domains_reject_unknown_fields_before_semantic_checking() {
     for kind in ["signed_integer", "utf8"] {
-        assert!(serde_json::from_value::<cq_syntax::evidence::ScalarDomain>(
+        assert!(serde_json::from_value::<cq_evidence::ScalarDomain>(
             json!({"kind": kind, "unexpected": true})
         ).is_err());
     }
@@ -456,7 +456,7 @@ fn shared_recursive_fixture_and_machine_schema_are_versioned() {
     let evidence = parse_json(include_str!("fixtures/planner-recursive-evidence.json")).unwrap();
     assert_eq!(evidence.relations["R"].recursive.as_ref().unwrap().rounds.value, Some(2));
     let schema: Value = serde_json::from_str(include_str!("../../../doc/planner-evidence.schema.json")).unwrap();
-    assert_eq!(schema["properties"]["schema"]["const"], cq_syntax::evidence::SCHEMA);
+    assert_eq!(schema["properties"]["schema"]["const"], cq_evidence::SCHEMA);
     assert_eq!(schema["additionalProperties"], false);
     assert!(schema["$defs"]["CountFact"]["allOf"].is_array());
 }

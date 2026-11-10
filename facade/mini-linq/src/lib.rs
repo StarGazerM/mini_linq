@@ -72,15 +72,14 @@
 //! The complete IR records hoisting or per-row fusion, canon/witness decisions,
 //! negative references and Rust source paths with inherited Before facts.
 //!
-//! [`relation_loaders!`] generates plain typed source readers.
-//! [`interned_relation_loaders!`] explicitly opts the same declarations into
-//! load-time string interning through `cq_load::InternedField`, adding encoded
-//! loader methods without changing query syntax or the plain macro expansion.
+//! Source loading is provided separately by `cq_load::relation_loaders!` and
+//! `cq_load::interned_relation_loaders!`. These accept IO relation schemas, not
+//! complete query programs, and do not depend on the compiler.
 //!
-pub use mini_linq_macros::{
-    columnar_relation_loaders, compile, interned_relation_loaders, mini_linq, relation_loaders,
-    workload_query,
-};
+pub use mini_linq_macros::{compile, mini_linq, workload_query};
+
+/// Independent IO library, re-exported for user-facing access.
+pub use cq_load;
 
 /// Shared checked default planning composition and its authored options.
 pub use cq_planning as planning;

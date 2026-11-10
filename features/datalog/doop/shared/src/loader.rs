@@ -1,4 +1,5 @@
 use crate::interner::{IStr, res, sym};
+use crate::manifest::{CertifiedReader, Manifest};
 use std::{
     fs::File,
     io::{self, BufRead, BufReader},
@@ -6,16 +7,19 @@ use std::{
 };
 
 trait Column: Sized {
+    const TYPE: &'static str;
     fn parse(value: &str) -> io::Result<Self>;
 }
 
 impl Column for IStr {
+    const TYPE: &'static str = "string";
     fn parse(value: &str) -> io::Result<Self> {
         Ok(sym(value))
     }
 }
 
 impl Column for i32 {
+    const TYPE: &'static str = "i32";
     fn parse(value: &str) -> io::Result<Self> {
         value
             .parse()
@@ -24,12 +28,14 @@ impl Column for i32 {
 }
 
 pub(crate) trait Row: Sized {
+    const TYPES: &'static [&'static str];
     fn parse(line: &str) -> io::Result<Self>;
 }
 
 macro_rules! tuple_row {
     ($($column:ident),+) => {
         impl<$($column: Column),+> Row for ($($column,)+) {
+            const TYPES: &'static [&'static str] = &[$($column::TYPE),+];
             fn parse(line: &str) -> io::Result<Self> {
                 let mut fields = line.split('\t');
                 let row = ($($column::parse(fields.next().ok_or_else(||
@@ -50,14 +56,16 @@ tuple_row!(A, B, C, D, E);
 tuple_row!(A, B, C, D, E, F);
 tuple_row!(A, B, C, D, E, F, G);
 
-pub(crate) fn load<T: Row + Ord>(path: &Path) -> io::Result<Vec<T>> {
+pub(crate) fn load<T: Row + Ord>(path: &Path, manifest: &Manifest) -> io::Result<Vec<T>> {
     // The upstream harness treats omitted input relations as empty.
     let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error),
     };
-    let mut reader = BufReader::new(file);
+    let projection = [0, 1, 2, 3, 4, 5, 6];
+    let hash = manifest.expected_hash(path, T::TYPES, &projection[..T::TYPES.len()]);
+    let mut reader = BufReader::new(CertifiedReader::new(file, hash));
     let mut line = String::new();
     let mut rows = Vec::new();
     let mut number = 0;
@@ -73,9 +81,10 @@ pub(crate) fn load<T: Row + Ord>(path: &Path) -> io::Result<Vec<T>> {
         })?);
         line.clear();
     }
-    // IO owns the full-row set boundary; query execution never certifies files.
-    rows.sort_unstable();
-    rows.dedup();
+    if !reader.into_inner().verified() {
+        rows.sort_unstable();
+        rows.dedup();
+    }
     Ok(rows)
 }
 
@@ -117,9 +126,56 @@ mod tests {
     fn file_loading_deduplicates_complete_rows_not_leading_keys() {
         let path = std::env::temp_dir().join(format!("doop-set-input-{}.facts", std::process::id()));
         std::fs::write(&path, "2\t7\n1\t9\n2\t7\n1\t8\n").unwrap();
-        let rows = load::<(i32, i32)>(&path).unwrap();
+        let rows = load::<(i32, i32)>(&path, &Manifest::default()).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(rows, [(1, 8), (1, 9), (2, 7)]);
+    }
+
+    #[test]
+    fn manifest_override_skips_only_hash_bound_verified_sets() {
+        use sha2::{Digest, Sha256};
+        let root = std::env::temp_dir().join(format!("doop-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("FormalParam.facts");
+        let manifest_path = root.join("override.json");
+        let bytes = b"2\tx\ty\r\n1\tx\ty\r\n";
+        std::fs::write(&path, bytes).unwrap();
+        let certificate = serde_json::json!({
+            "version": 1, "relations": {"FormalParam.facts": {
+                "types": ["i32", "string", "string"],
+                "verified_keys": [{"columns": [0, 1, 2], "set": "verified",
+                    "sha256": format!("{:x}", Sha256::digest(bytes))}]
+            }}
+        });
+        let save = |value: &serde_json::Value| {
+            std::fs::write(&manifest_path, serde_json::to_vec(value).unwrap()).unwrap();
+        };
+        let load = |manifest: Option<&Path>| {
+            crate::Facts::load_with_manifest(&root, manifest).unwrap().formalparam
+                .into_iter().map(|row| row.0).collect::<Vec<_>>()
+        };
+        save(&certificate);
+        assert_eq!(load(None), [1, 2]);
+        assert_eq!(load(Some(&manifest_path)), [2, 1]);
+        std::fs::copy(&manifest_path, root.join(crate::manifest::DEFAULT_MANIFEST)).unwrap();
+        assert_eq!(load(None), [2, 1]);
+        assert_eq!(load(Some(&root.join("missing.json"))), [1, 2]);
+        for change in ["unverified", "wrong-decoder", "wrong-version"] {
+            let mut invalid = certificate.clone();
+            match change {
+                "unverified" => invalid["relations"]["FormalParam.facts"]["verified_keys"][0]["set"] = "assumed".into(),
+                "wrong-decoder" => invalid["relations"]["FormalParam.facts"]["types"][0] = "string".into(),
+                _ => invalid["version"] = 2.into(),
+            }
+            save(&invalid);
+            assert_eq!(load(Some(&manifest_path)), [1, 2]);
+        }
+        save(&certificate);
+        std::fs::write(&path, b"2\tx\ty\n1\tx\ty\n2\tx\ty\n").unwrap();
+        assert_eq!(load(Some(&manifest_path)), [1, 2]);
+        std::fs::write(&manifest_path, b"not json").unwrap();
+        assert_eq!(load(Some(&manifest_path)), [1, 2]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
