@@ -1443,9 +1443,10 @@ processes in rotated order with the GPU tenant idle (about 1% utilization):
 | SF1 | 10 | 907 → 599 | 0.661 [0.642, 0.678] | 0.083 | 0.67 | 0.53 |
 | SF10 | 8 | 5486 → 622 | 0.113 [0.093, 0.131] | 0.085 | 0.107 | 0.068 |
 
-Resident query total showed no significant change. These paired results
-supersede the single-sample timing interpretation above; the duplicate-source
-cache-lifetime correction does not change h06's already-distinct load path.
+These paired process/load results supersede the single-sample interpretation
+above; the duplicate-source cache-lifetime correction does not change h06's
+already-distinct load path. The initial resident-query conclusion is revised
+by the controlled follow-up below.
 
 Five-ms NVML sampling found the **same query-loop process residency** on both
 binaries: 591,396,864 B (SF1), 1,887,436,800 B (SF10). Slice L's transient peaks
@@ -1470,6 +1471,55 @@ Evidence: `experiments/gpu/compare/p6c-load-2026-11-10.json`. Exact collision
 checks remain potentially quadratic for adversarial hash runs. This cutover
 adds three audited V sites for device set admission and three I sites for
 selected re-encoding; it does not claim code-domain execution at those sites.
+
+#### Resident placement sensitivity (follow-up)
+
+Main's later eight-round SF10 comparisons, both GPU-only and CPU-exclusive
+without foreign GPU applications, found resident total **1.037 vs 1.015 ms**:
+load/main **1.022 [1.019, 1.024]**. Tiles+load/tiles was about 1.027
+(0.843 vs 0.821 ms); SF1 showed no effect, 0.999 [0.964, 1.033].
+Thus the earlier “no significant resident-query change” claim does not hold
+for SF10, despite the large cold-load improvement.
+
+One nsys capture per successful variant localized this difference inside the
+resident partial kernel. All use grid 852, block 256, 3072 dynamic shared bytes
+and 38 registers, with no same-process kernel/copy/memset overlap during the
+partial launches. Extracted cubins contain the same **680 SASS instructions and
+encoded control words**. Runtime CUDA parameter capture also confirms identical
+four-column ABI fields: length 59,986,052, null count pointer, FOR codec, and
+256-byte-aligned headers/payloads. This rules out different code, logical counts,
+or basic misalignment, but does not establish a specific TLB/cache mechanism.
+
+Distances below are signed shipdate-address minus extendedprice-address,
+separately for their headers and payloads. Medians exclude the warmup and use
+five partial-kernel launches; these profiles are not paired performance CIs.
+
+| Variant | Partial median ms | Header distance B | Payload distance B |
+|---|---:|---:|---:|
+| main | 0.983881 | 313,058,048 | 313,058,048 |
+| load (`9eb82b5d`) | 1.006057 | 1,105,164,288 | 1,105,164,288 |
+| isolated native-upload allocator | 0.997255 | 133,096,448 | 179,960,832 |
+| reusable maximum-size upload slot | unavailable: OOM before query | unavailable | unavailable |
+
+The isolated allocator changed only raw-upload allocation ownership, sharing
+the existing context/stream and leaving resident columns in the main pool;
+its complete resident CUDA module is byte-identical to load's. It reduced
+post-load pool reservation from 1,439,665,920 to 557,219,328 B, but did not
+bring the kernel within 0.5% of main's profile median.
+The more targeted reusable-slot experiment attempted to prevent the final
+native-i32 upload from changing allocation geometry. Both its view capture
+and nsys run failed with driver OOM while a foreign vLLM tenant was active;
+the trace contains zero resident partial launches. No time or view distance
+is inferred for that failed run.
+
+The GPU-only paired experiment produced no accepted rounds: its foreign-app
+guard aborted after the untimed warmup. Both allocator experiments were
+reverted, retaining `e2b00891` runtime behavior. The supported conclusion is
+**placement sensitivity**, not a demonstrated universally preferable layout:
+the same resident SASS has different times at different addresses, and main's
+placement is arbitrary too. Main's paired 26-query baseline is the decision
+basis for whether the effect is systematic. The evidence JSON records the
+profiles, addresses, code hashes, failed runs and measurement limits.
 
 ## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
 

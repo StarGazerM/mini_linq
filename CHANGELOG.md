@@ -22,7 +22,9 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   Duplicate projections now release newly loaded full-source cache entries
   before pool trimming, retaining only selected columns and earlier cache
   entries. Paired h06 process wall ratios are 0.661× (SF1) and 0.113× (SF10),
-  with no significant resident-query change.
+  but later controlled SF10 runs expose an address-sensitive resident-query
+  regression of about 2.2%; allocation experiments and their limits are
+  recorded in STORAGE §12.7.
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`
