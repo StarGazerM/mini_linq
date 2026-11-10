@@ -494,14 +494,15 @@ work is lower on H09 and D72.
 
 ## Left work
 
-0. **Known regression, CPU H02 `par` 1.53× (2026-11-10).** Deduplication is
-   now decided only by the rule (one uniqueness analysis; inputs are sets by
-   IO contract), so Sequence considers partial-group schedules for every group.
-   For H02 par it picks per-tile partial groups plus a serial merge over
-   group-key routing (35 → 56 ms). Preferring routing on ties fixes H02 but
-   regresses H13 (+41%) and H15 (+122%); choosing correctly needs the M7 cost
-   model to value parallel upstream work. Evidence:
-   `design-notes/canon-unique-timing.md`, `design-notes/canon-h02-tie-report.md`.
+0. **CPU H20 `par`: large single-threaded partial-group merge (2026-11-10).**
+   H02 `par`'s 1.53× regression from the canon merge is fixed by
+   `PL-GroupPartial` (partial groups only where Physical records no canon on
+   the group's input; H02 back to group-key routing, 0.54× of the regressed
+   time). H20 `par` keeps the partial schedule: its group needs no canon, has
+   about 1.7 rows per key (909,455 rows, 543,210 keys), and the merge runs on
+   one thread. Sequence plans record no row or key counts, so the choice needs
+   the M7 cost model or a parallel merge. Evidence:
+   `design-notes/par-regression-report.md`.
 
 1. **D72.** Its decisive choice is data-dependent: `ps_availqty > 0` keeps
    every PartSupp row. The current `advised` recipe in
