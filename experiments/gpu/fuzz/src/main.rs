@@ -125,7 +125,7 @@ fn run(root: &Path, lane: &str, seed: u64, source: String) -> bool {
         .unwrap();
     }
     for name in ["cuda-device", "cuda-core", "cuda-host"] {
-        writeln!(manifest, "{name} = {{ git = \"https://github.com/StarGazerM/cuda-oxide.git\", rev = \"299eda41b287642ef3323144d8fef8f16fe4fbe1\" }}").unwrap();
+        writeln!(manifest, "{name} = {{ git = \"https://github.com/StarGazerM/cuda-oxide.git\", rev = \"57eacecc081fe1809a815ae4ca32643884dce15b\" }}").unwrap();
     }
     manifest.push_str("\n[profile.release.build-override]\nopt-level = 3\n");
     std::fs::write(directory.join("Cargo.toml"), manifest).unwrap();

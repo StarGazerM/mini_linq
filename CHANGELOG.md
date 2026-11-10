@@ -13,6 +13,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU workspace pins cuda-oxide `57eacecc0` / RCCL `a776d01c`: the device
+  pipeline's scalarization, slot promotion and verification passes no longer do
+  quadratic work. `cq-gpu-sequence-runtime` (530 device functions): device
+  pipeline about 52 s -> 16 s, crate about 55 s -> 22 s. Under the previous pin
+  the new backend emitted byte-identical PTX for the five runtime device crates.
+  Under the new pins all 26 GPU TPC-H queries validate at SF1 (no query more
+  than 1.6% slower than under the old pin, geometric mean ratio 0.9975, one
+  unpaired run each) and DOOP Cassandra is exact
+  on all 26 outputs.
 - IO is a standalone library: `cq-load` retains its crate name under `io/cq-load`,
   and loader/schema macros move to `io/cq-io-macros` without compiler macro
   reexports. Shared evidence data moves to neutral `runtime/cq-evidence`
