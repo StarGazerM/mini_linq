@@ -1,0 +1,1036 @@
+{
+  "date": "2026-11-10",
+  "base_commit": "ef6ca71a",
+  "branch": "codex/p6c-load",
+  "scope": "P6 C slice L, manifest loader only; H05 tpch_domains catalog unchanged",
+  "measurement_status": "Warm-page-cache single-run sanity checks with foreign vLLM tenants; not uncontaminated paired performance evidence.",
+  "hardware": "NVIDIA RTX 6000 Ada, sm_89",
+  "foreign_tenants_observed": [
+    {
+      "pid": 2929069,
+      "MiB": 43368
+    },
+    {
+      "pid": 2973783,
+      "MiB": 30070
+    }
+  ],
+  "binary_sha256": {
+    "main-h06": "bdec71891c3ab37286b2c0eddc71c8ea7a05d2ad6a54f74412c9aaf6effeac03",
+    "branch_full_suite": "8abe9b810581ed09c3afc74984d08e9c331dd2624bb023a5b7d4aa0b5622df4e"
+  },
+  "h06_measurements": [
+    {
+      "variant": "main",
+      "sf": 1,
+      "read_ms": 319.999707,
+      "verify_ms": 15.437154999999999,
+      "upload_encode_ms": 61.77606,
+      "process_s": 1.4123202940099873,
+      "nvml_peak_bytes": 591396864,
+      "live_after_load": null,
+      "reserved_after_load": null,
+      "pool_peak_live": null,
+      "pool_peak_reserved": null,
+      "validated": true,
+      "warmup_full": "full",
+      "first_full": "full",
+      "query_loop_nvml_bytes": 591396864
+    },
+    {
+      "variant": "main",
+      "sf": 10,
+      "read_ms": 3231.784943,
+      "verify_ms": 371.537264,
+      "upload_encode_ms": 418.86972299999996,
+      "process_s": 4.863757797982544,
+      "nvml_peak_bytes": 1887436800,
+      "live_after_load": null,
+      "reserved_after_load": null,
+      "pool_peak_live": null,
+      "pool_peak_reserved": null,
+      "validated": true,
+      "warmup_full": "full",
+      "first_full": "full",
+      "query_loop_nvml_bytes": 1887436800
+    },
+    {
+      "variant": "load",
+      "sf": 1,
+      "read_ms": 29.793003999999996,
+      "verify_ms": 20.669052999999998,
+      "upload_encode_ms": 85.57255700000002,
+      "process_s": 1.1970391880022362,
+      "nvml_peak_bytes": 786432000,
+      "live_after_load": 51023360,
+      "reserved_after_load": 144029184,
+      "pool_peak_live": 171047936,
+      "pool_peak_reserved": 336068096,
+      "validated": true,
+      "warmup_full": "full",
+      "first_full": "full",
+      "query_loop_nvml_bytes": 591396864
+    },
+    {
+      "variant": "load",
+      "sf": 10,
+      "read_ms": 284.74367,
+      "verify_ms": 80.21162799999999,
+      "upload_encode_ms": 97.68621300000002,
+      "process_s": 1.0598930189735256,
+      "nvml_peak_bytes": 3854565376,
+      "live_after_load": 509958400,
+      "reserved_after_load": 1439665920,
+      "pool_peak_live": 1709680896,
+      "pool_peak_reserved": 3359220480,
+      "validated": true,
+      "warmup_full": "full",
+      "first_full": "full",
+      "query_loop_nvml_bytes": 1887436800
+    }
+  ],
+  "memory_sampling": {
+    "method": "NVML per-process bytes every 5ms; GPU flock held for each process independently. Plateau follows load peak and precedes teardown. Branch pool counters are exact allocation counters; baseline pool was not instrumented.",
+    "runs": [
+      {
+        "binary": "/dev/shm/p6c/main-h06",
+        "scale": "sf1",
+        "output": "/dev/shm/p6c/load-main-plateau-sf1.json",
+        "returncode": 0,
+        "process_peak_device_bytes": 591396864,
+        "sampling_interval_ms": 5,
+        "samples": 245,
+        "run_s": 1.4123202940099873,
+        "lock_wait_s": 4.3780310079455376e-06,
+        "stderr": "",
+        "segments": [
+          {
+            "start_s": 0.0009559820173308253,
+            "end_s": 0.07067315600579605,
+            "bytes": 0,
+            "samples": 11
+          },
+          {
+            "start_s": 0.07775776798371226,
+            "end_s": 0.2641859980067238,
+            "bytes": 12582912,
+            "samples": 26
+          },
+          {
+            "start_s": 0.26944705401547253,
+            "end_s": 0.26944705401547253,
+            "bytes": 14680064,
+            "samples": 1
+          },
+          {
+            "start_s": 0.27460084401536733,
+            "end_s": 0.27460084401536733,
+            "bytes": 23068672,
+            "samples": 1
+          },
+          {
+            "start_s": 0.27975281100953,
+            "end_s": 0.28489699302008376,
+            "bytes": 25165824,
+            "samples": 2
+          },
+          {
+            "start_s": 0.29003936098888516,
+            "end_s": 0.3003260319819674,
+            "bytes": 27262976,
+            "samples": 3
+          },
+          {
+            "start_s": 0.3054714960162528,
+            "end_s": 0.31090966099873185,
+            "bytes": 96468992,
+            "samples": 2
+          },
+          {
+            "start_s": 0.316049084009137,
+            "end_s": 0.6676872759708203,
+            "bytes": 446693376,
+            "samples": 69
+          },
+          {
+            "start_s": 0.6728691500029527,
+            "end_s": 0.6780522260232829,
+            "bytes": 494927872,
+            "samples": 2
+          },
+          {
+            "start_s": 0.6832339799730107,
+            "end_s": 1.204658747999929,
+            "bytes": 591396864,
+            "samples": 100
+          },
+          {
+            "start_s": 1.2098411329789087,
+            "end_s": 1.2098411329789087,
+            "bytes": 543162368,
+            "samples": 1
+          },
+          {
+            "start_s": 1.215876362985,
+            "end_s": 1.215876362985,
+            "bytes": 442499072,
+            "samples": 1
+          },
+          {
+            "start_s": 1.2235105090076104,
+            "end_s": 1.2235105090076104,
+            "bytes": 373293056,
+            "samples": 1
+          },
+          {
+            "start_s": 1.228692181990482,
+            "end_s": 1.228692181990482,
+            "bytes": 371195904,
+            "samples": 1
+          },
+          {
+            "start_s": 1.2379217260167934,
+            "end_s": 1.3076198140042834,
+            "bytes": 367001600,
+            "samples": 10
+          },
+          {
+            "start_s": 1.3161406890139915,
+            "end_s": 1.4072021120227873,
+            "bytes": 0,
+            "samples": 14
+          }
+        ]
+      },
+      {
+        "binary": "/dev/shm/p6c/main-h06",
+        "scale": "sf10",
+        "output": "/dev/shm/p6c/load-main-plateau-sf10.json",
+        "returncode": 0,
+        "process_peak_device_bytes": 1887436800,
+        "sampling_interval_ms": 5,
+        "samples": 909,
+        "run_s": 4.863757797982544,
+        "lock_wait_s": 4.658999387174845e-06,
+        "stderr": "",
+        "segments": [
+          {
+            "start_s": 0.0010061900247819722,
+            "end_s": 0.06465593300526962,
+            "bytes": 0,
+            "samples": 10
+          },
+          {
+            "start_s": 0.06992108700796962,
+            "end_s": 0.2619082059827633,
+            "bytes": 12582912,
+            "samples": 28
+          },
+          {
+            "start_s": 0.2670792290009558,
+            "end_s": 0.2670792290009558,
+            "bytes": 14680064,
+            "samples": 1
+          },
+          {
+            "start_s": 0.27227350702742115,
+            "end_s": 0.27227350702742115,
+            "bytes": 20971520,
+            "samples": 1
+          },
+          {
+            "start_s": 0.2774316460127011,
+            "end_s": 0.2825775310047902,
+            "bytes": 25165824,
+            "samples": 2
+          },
+          {
+            "start_s": 0.28774239303311333,
+            "end_s": 0.2993916760315187,
+            "bytes": 27262976,
+            "samples": 3
+          },
+          {
+            "start_s": 0.3045371600310318,
+            "end_s": 0.3165153529844247,
+            "bytes": 96468992,
+            "samples": 3
+          },
+          {
+            "start_s": 0.3216850539902225,
+            "end_s": 3.935367803031113,
+            "bytes": 446693376,
+            "samples": 693
+          },
+          {
+            "start_s": 3.9411593960248865,
+            "end_s": 4.0446709070238285,
+            "bytes": 926941184,
+            "samples": 21
+          },
+          {
+            "start_s": 4.049819317995571,
+            "end_s": 4.634383505035657,
+            "bytes": 1887436800,
+            "samples": 114
+          },
+          {
+            "start_s": 4.639523870020639,
+            "end_s": 4.639523870020639,
+            "bytes": 444596224,
+            "samples": 1
+          },
+          {
+            "start_s": 4.644676377996802,
+            "end_s": 4.644676377996802,
+            "bytes": 442499072,
+            "samples": 1
+          },
+          {
+            "start_s": 4.652926103037316,
+            "end_s": 4.658065085008275,
+            "bytes": 373293056,
+            "samples": 2
+          },
+          {
+            "start_s": 4.663254573999438,
+            "end_s": 4.668403866002336,
+            "bytes": 371195904,
+            "samples": 2
+          },
+          {
+            "start_s": 4.675969810981769,
+            "end_s": 4.749773458985146,
+            "bytes": 367001600,
+            "samples": 11
+          },
+          {
+            "start_s": 4.755798640020657,
+            "end_s": 4.858626321016345,
+            "bytes": 0,
+            "samples": 16
+          }
+        ]
+      },
+      {
+        "binary": "/data/mini_linq-wt/p6c-load/experiments/gpu/target/release/cq-gpu-tpch",
+        "scale": "sf1",
+        "output": "/dev/shm/p6c/load-trimmed-sf1.json",
+        "returncode": 0,
+        "process_peak_device_bytes": 786432000,
+        "sampling_interval_ms": 5,
+        "samples": 191,
+        "run_s": 1.1970391880022362,
+        "lock_wait_s": 3.917957656085491e-06,
+        "stderr": "",
+        "segments": [
+          {
+            "start_s": 0.0007774099940434098,
+            "end_s": 0.07412609999300912,
+            "bytes": 0,
+            "samples": 11
+          },
+          {
+            "start_s": 0.08221681998111308,
+            "end_s": 0.27068208099808544,
+            "bytes": 12582912,
+            "samples": 27
+          },
+          {
+            "start_s": 0.27586168999550864,
+            "end_s": 0.27586168999550864,
+            "bytes": 14680064,
+            "samples": 1
+          },
+          {
+            "start_s": 0.28100903797894716,
+            "end_s": 0.28100903797894716,
+            "bytes": 23068672,
+            "samples": 1
+          },
+          {
+            "start_s": 0.28615263797109947,
+            "end_s": 0.2912952760234475,
+            "bytes": 25165824,
+            "samples": 2
+          },
+          {
+            "start_s": 0.29643611097708344,
+            "end_s": 0.3038596630212851,
+            "bytes": 27262976,
+            "samples": 2
+          },
+          {
+            "start_s": 0.3090045049902983,
+            "end_s": 0.3145604860037565,
+            "bytes": 96468992,
+            "samples": 2
+          },
+          {
+            "start_s": 0.31989737699041143,
+            "end_s": 0.345638983999379,
+            "bytes": 446693376,
+            "samples": 6
+          },
+          {
+            "start_s": 0.3508709240122698,
+            "end_s": 0.3508709240122698,
+            "bytes": 494927872,
+            "samples": 1
+          },
+          {
+            "start_s": 0.3560842080041766,
+            "end_s": 0.4633238469832577,
+            "bytes": 591396864,
+            "samples": 21
+          },
+          {
+            "start_s": 0.4685893710120581,
+            "end_s": 0.4685893710120581,
+            "bytes": 786432000,
+            "samples": 1
+          },
+          {
+            "start_s": 0.4737823560135439,
+            "end_s": 0.4737823560135439,
+            "bytes": 784334848,
+            "samples": 1
+          },
+          {
+            "start_s": 0.47898568102391437,
+            "end_s": 0.8921566050266847,
+            "bytes": 591396864,
+            "samples": 80
+          },
+          {
+            "start_s": 0.9005686009768397,
+            "end_s": 0.9005686009768397,
+            "bytes": 446693376,
+            "samples": 1
+          },
+          {
+            "start_s": 0.9066257419763133,
+            "end_s": 0.9138061470002867,
+            "bytes": 442499072,
+            "samples": 2
+          },
+          {
+            "start_s": 0.924117885006126,
+            "end_s": 0.9344497710117139,
+            "bytes": 373293056,
+            "samples": 2
+          },
+          {
+            "start_s": 0.9400581829831935,
+            "end_s": 0.946335956978146,
+            "bytes": 371195904,
+            "samples": 2
+          },
+          {
+            "start_s": 0.9595821399707347,
+            "end_s": 1.0442791149835102,
+            "bytes": 367001600,
+            "samples": 9
+          },
+          {
+            "start_s": 1.049873228999786,
+            "end_s": 1.191865470027551,
+            "bytes": 0,
+            "samples": 19
+          }
+        ]
+      },
+      {
+        "binary": "/data/mini_linq-wt/p6c-load/experiments/gpu/target/release/cq-gpu-tpch",
+        "scale": "sf10",
+        "output": "/dev/shm/p6c/load-trimmed-sf10.json",
+        "returncode": 0,
+        "process_peak_device_bytes": 3854565376,
+        "sampling_interval_ms": 5,
+        "samples": 171,
+        "run_s": 1.0598930189735256,
+        "lock_wait_s": 3.676977939903736e-06,
+        "stderr": "",
+        "segments": [
+          {
+            "start_s": 0.0008084089495241642,
+            "end_s": 0.057543612958397716,
+            "bytes": 0,
+            "samples": 9
+          },
+          {
+            "start_s": 0.06535530800465494,
+            "end_s": 0.23956778895808384,
+            "bytes": 12582912,
+            "samples": 24
+          },
+          {
+            "start_s": 0.24472761095967144,
+            "end_s": 0.24472761095967144,
+            "bytes": 18874368,
+            "samples": 1
+          },
+          {
+            "start_s": 0.24991004494950175,
+            "end_s": 0.2550923899980262,
+            "bytes": 25165824,
+            "samples": 2
+          },
+          {
+            "start_s": 0.26027346297632903,
+            "end_s": 0.27073260297765955,
+            "bytes": 27262976,
+            "samples": 3
+          },
+          {
+            "start_s": 0.27603122097207233,
+            "end_s": 0.2839999069692567,
+            "bytes": 96468992,
+            "samples": 2
+          },
+          {
+            "start_s": 0.2892115080030635,
+            "end_s": 0.3129472999717109,
+            "bytes": 446693376,
+            "samples": 5
+          },
+          {
+            "start_s": 0.318951349996496,
+            "end_s": 0.3810273619601503,
+            "bytes": 926941184,
+            "samples": 11
+          },
+          {
+            "start_s": 0.38639302796218544,
+            "end_s": 0.6929263320052996,
+            "bytes": 1887436800,
+            "samples": 58
+          },
+          {
+            "start_s": 0.6982503379695117,
+            "end_s": 0.6982503379695117,
+            "bytes": 3808428032,
+            "samples": 1
+          },
+          {
+            "start_s": 0.7035003929631785,
+            "end_s": 0.7035003929631785,
+            "bytes": 3821010944,
+            "samples": 1
+          },
+          {
+            "start_s": 0.7087461089831777,
+            "end_s": 0.7610404589795507,
+            "bytes": 3854565376,
+            "samples": 11
+          },
+          {
+            "start_s": 0.7662663969676942,
+            "end_s": 0.8181035610032268,
+            "bytes": 1887436800,
+            "samples": 11
+          },
+          {
+            "start_s": 0.8232604769873433,
+            "end_s": 0.8232604769873433,
+            "bytes": 446693376,
+            "samples": 1
+          },
+          {
+            "start_s": 0.830238313996233,
+            "end_s": 0.830238313996233,
+            "bytes": 442499072,
+            "samples": 1
+          },
+          {
+            "start_s": 0.8388499729917385,
+            "end_s": 0.8452095440006815,
+            "bytes": 373293056,
+            "samples": 2
+          },
+          {
+            "start_s": 0.8503777110017836,
+            "end_s": 0.8503777110017836,
+            "bytes": 371195904,
+            "samples": 1
+          },
+          {
+            "start_s": 0.8617742789792828,
+            "end_s": 0.9454262429499067,
+            "bytes": 367001600,
+            "samples": 12
+          },
+          {
+            "start_s": 0.9536915979697369,
+            "end_s": 1.0547652489622124,
+            "bytes": 0,
+            "samples": 15
+          }
+        ]
+      }
+    ]
+  },
+  "verification": {
+    "gpu_device_columns": {
+      "passed": 35,
+      "failed": 0
+    },
+    "cq_gpu_tpch": {
+      "passed": 52,
+      "failed": 0,
+      "ignored": 1,
+      "ignored_reason": "existing SF10 sequential-memory test requires idle GPU"
+    },
+    "formal": {
+      "rules": 520,
+      "conformance_records": 474,
+      "decode_counts": {
+        "R": 12,
+        "P": 266,
+        "V": 75,
+        "I": 20,
+        "?": 126
+      }
+    },
+    "sf1_suite": [
+      {
+        "query": "h01",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h02",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h06",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h11",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h13",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h15",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h18",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h20",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h10",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h12",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h19",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h03",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h04",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h04_not_exists",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h05",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h07",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h07_block",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h08",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h09",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h16",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h22",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "h21_positive",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "d19",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "d27",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "d72_inner",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      },
+      {
+        "query": "d85",
+        "status": "ran",
+        "validated": true,
+        "warmup_check": "full",
+        "first_sample_check": "full"
+      }
+    ],
+    "h06_sf10": "Full warmup and first measured answer match; all five checks cover the single answer row. Existing benchmark exact=false field denotes full_then_sampled policy, not a mismatch.",
+    "hostfor_cache": {
+      "miss": {
+        "status": "ran",
+        "validated": true,
+        "base_columns": {
+          "cache": "/dev/shm/p6c/load-hostfor-cache-final",
+          "cache_hits": 0,
+          "cache_write_ms": 19.094294,
+          "catalog_ms": 0.0,
+          "codec": "hostfor",
+          "columns": 6,
+          "device_bytes_after_load": 51023360,
+          "pack_ms": 41.52501,
+          "peak_device_bytes": 171047936,
+          "peak_reserved_device_bytes": 245437696,
+          "raw_reads": 6,
+          "read_ms": 449.800379,
+          "reserved_device_bytes_after_load": 56233216,
+          "resident_bytes": 51020400,
+          "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed; unprojected = full source columns (cacheable); source_bytes = native stored bytes read (catalog: i64 input bytes); read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; catalog_ms = whole tpch_domains Catalog build",
+          "source_bytes": 264053460,
+          "unprojected": 6,
+          "upload_encode_ms": 14.487993000000001,
+          "verify_ms": 22.890359999999998
+        }
+      },
+      "hit": {
+        "status": "ran",
+        "validated": true,
+        "base_columns": {
+          "cache": "/dev/shm/p6c/load-hostfor-cache-final",
+          "cache_hits": 6,
+          "cache_write_ms": 0.000731,
+          "catalog_ms": 0.0,
+          "codec": "hostfor",
+          "columns": 6,
+          "device_bytes_after_load": 51023360,
+          "pack_ms": 0.0,
+          "peak_device_bytes": 171047936,
+          "peak_reserved_device_bytes": 245437696,
+          "raw_reads": 0,
+          "read_ms": 24.026087999999998,
+          "reserved_device_bytes_after_load": 56233216,
+          "resident_bytes": 51020400,
+          "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed; unprojected = full source columns (cacheable); source_bytes = native stored bytes read (catalog: i64 input bytes); read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; catalog_ms = whole tpch_domains Catalog build",
+          "source_bytes": 0,
+          "unprojected": 6,
+          "upload_encode_ms": 13.975571,
+          "verify_ms": 50.113523
+        }
+      }
+    }
+  },
+  "cpu_profile": {
+    "command": "perf record -F 199 --call-graph dwarf -- cq-gpu-tpch --query h06 --scale sf10 --mode advised",
+    "path": "/dev/shm/p6c/load-perf.data",
+    "samples": 226,
+    "loader_stack_samples": 75,
+    "loader_file_read_samples": 54,
+    "file_read_share_of_loader_samples": 0.72,
+    "host_unique_rows_samples": 0,
+    "host_bounds_fold_samples": 0,
+    "whole_process_note": "CUDA context initialization and teardown remain significant outside the loader."
+  },
+  "plan_review": {
+    "compiler_ir_changes": false,
+    "h06_generated_scan": "unchanged grid-stride eager decode + predicates/guards/bind + checked fold",
+    "plans_equal_excluding_generation_seconds": true,
+    "reference_plan_artifact": "/data/mini_linq/experiments/gpu/target/release/build/cq-gpu-tpch-6133e28ae20ab725/out/plans.json",
+    "candidate_plan_artifact": "/data/mini_linq-wt/p6c-load/experiments/gpu/target/release/build/cq-gpu-tpch-d9f1ef04081efb98/out/plans.json",
+    "generated_comparison_note": "Normalized reference expansion differs only in pre-existing H05 loader/catalog wrappers and fixture paths; this slice changes no generator or query plans."
+  },
+  "risks": [
+    "Adversarial same-hash distinct tuples can require quadratic device comparisons.",
+    "Transient exact-sort peak exceeds main; query-loop NVML plateau is equal after trim.",
+    "Partly live pool chunks cannot be returned by release_unused; selected projections may retain ordinary allocator fragmentation.",
+    "Three new V admission decode sites and three I selected re-encode sites are explicitly registered; no code-domain claim at those sites."
+  ],
+  "commands_seconds": [
+    {
+      "command": "initial native_unique build (kernel symbol collision; corrected)",
+      "active_s": 72.65,
+      "wait_s": null
+    },
+    {
+      "command": "initial formal check",
+      "active_s": null,
+      "lock_and_active_s": 49.9
+    },
+    {
+      "command": "device-columns test build",
+      "active_s": 5.57,
+      "wait_s": 43.28
+    },
+    {
+      "command": "initial device-columns oxide test",
+      "active_s": 14.08,
+      "wait_s": 0.01
+    },
+    {
+      "command": "initial full cq-gpu-tpch build --bin --tests",
+      "active_s": 160.7,
+      "wait_s": 0.0
+    },
+    {
+      "command": "main SF1 warmup",
+      "active_s": 6.57,
+      "wait_s": 0.01
+    },
+    {
+      "command": "main SF1 initial sanity sample",
+      "active_s": 1.94,
+      "wait_s": 0.01
+    },
+    {
+      "command": "main SF10 warmup",
+      "active_s": 22.94,
+      "wait_s": 0.0
+    },
+    {
+      "command": "main SF10 initial sanity sample",
+      "active_s": 6.45,
+      "wait_s": 0.0
+    },
+    {
+      "command": "initial cq-gpu-tpch oxide test",
+      "active_s": 69.14,
+      "wait_s": 11.18
+    },
+    {
+      "command": "initial full advised SF1 suite",
+      "active_s": 36.7,
+      "wait_s": 0.0
+    },
+    {
+      "command": "all-native SF10 prototype (OOM; superseded by streaming)",
+      "active_s": 0.92,
+      "wait_s": 24.46
+    },
+    {
+      "command": "initial HostFor miss",
+      "active_s": 1.54,
+      "wait_s": 0.01
+    },
+    {
+      "command": "streamed device-columns oxide test",
+      "active_s": 56.91,
+      "wait_s": 0.0
+    },
+    {
+      "command": "formal registry check (missing P6 marker; corrected)",
+      "active_s": 26.79,
+      "wait_s": 0.0
+    },
+    {
+      "command": "initial NVML main SF1 sample",
+      "active_s": null,
+      "lock_and_active_s": 31.86075162299676
+    },
+    {
+      "command": "NVML main SF10 cancelled while waiting for GPU lock",
+      "active_s": 0,
+      "wait_s": 100.0
+    },
+    {
+      "command": "NVML main SF10 preliminary sample",
+      "active_s": 5.625852280005347,
+      "wait_s": 111.96312738099368
+    },
+    {
+      "command": "streamed full cq-gpu-tpch build --bin --tests",
+      "active_s": 149.07,
+      "wait_s": 28.56
+    },
+    {
+      "command": "final formal registry check",
+      "active_s": 3.43,
+      "wait_s": 21.06
+    },
+    {
+      "command": "streamed SF10 before trim",
+      "active_s": 0.5946216129814275,
+      "wait_s": 24.192128580994904
+    },
+    {
+      "command": "pre-verification trim build",
+      "active_s": 50.15,
+      "wait_s": 0.0
+    },
+    {
+      "command": "NVML main SF1 preliminary sample",
+      "active_s": 2.560890575987287,
+      "wait_s": 76.04781372298021
+    },
+    {
+      "command": "SF10 pre-verification trim sample",
+      "active_s": 1.4748654799768701,
+      "wait_s": 24.71463517000666
+    },
+    {
+      "command": "final end-of-load trim build",
+      "active_s": 47.5,
+      "wait_s": 23.67
+    },
+    {
+      "command": "final cq-gpu-tpch oxide test",
+      "active_s": 48.28,
+      "wait_s": 4.81
+    },
+    {
+      "command": "final advised SF1 suite",
+      "active_s": 31.17,
+      "wait_s": 43.69
+    },
+    {
+      "command": "SF10 perf record",
+      "active_s": 2.48,
+      "wait_s": 64.07
+    },
+    {
+      "command": "final HostFor miss",
+      "active_s": 1.54,
+      "wait_s": 55.54
+    },
+    {
+      "command": "final HostFor hit",
+      "active_s": 1.15,
+      "wait_s": 0.0
+    },
+    {
+      "command": "main final SF1",
+      "active_s": 1.4123202940099873,
+      "wait_s": 4.3780310079455376e-06
+    },
+    {
+      "command": "main final SF10",
+      "active_s": 4.863757797982544,
+      "wait_s": 4.658999387174845e-06
+    },
+    {
+      "command": "branch final SF1",
+      "active_s": 1.1970391880022362,
+      "wait_s": 3.917957656085491e-06
+    },
+    {
+      "command": "branch final SF10",
+      "active_s": 1.0598930189735256,
+      "wait_s": 3.676977939903736e-06
+    }
+  ],
+  "timing_totals": {
+    "known_active_s": 836.4592402479191,
+    "known_wait_s": 657.2777214869413,
+    "unsplit_s": 81.76075162299676,
+    "note": "Times include failed/superseded development checks. Unknown splits are retained, not estimated. Concurrent command durations must not be interpreted as elapsed session wall time."
+  }
+}

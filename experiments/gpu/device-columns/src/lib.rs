@@ -10,6 +10,8 @@ mod host;
 mod host_pack;
 mod kernels;
 mod memory;
+pub mod native;
+pub mod unique;
 pub mod scan;
 use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
@@ -46,6 +48,8 @@ pub fn prepare_kernels(pool: &Pool) -> Result<()> {
 pub fn release_cached_kernels() {
     MODULE.with(|cache| cache.borrow_mut().take());
     scan::release_cached_kernels();
+    native::release_cached_kernels();
+    unique::release_cached_kernels();
 }
 fn config(items: usize) -> LaunchConfig1D {
     LaunchConfig1D::new(items.div_ceil(256).clamp(1, 568) as u32, 256, 0)
@@ -186,6 +190,48 @@ pub struct EncodedColumn {
     bounds: Bounds,
 }
 impl EncodedColumn {
+    /// Load native device lanes, optionally selecting `positions` in output
+    /// order. Bounds, Delta selection, widening and packing run on the device;
+    /// only exact bounds, codec and compact extent are downloaded.
+    /// `HostFor` is deliberately unsupported; use the host packing constructor.
+    ///
+    /// # Safety
+    /// `source` must describe `source_rows` initialized, correctly aligned
+    /// I32/U32/I64 elements accessible on `pool.stream()`. Every position must
+    /// be less than `source_rows`. Source and positions must remain immutable
+    /// and alive until the submitted work completes on that stream.
+    pub unsafe fn from_native(
+        pool: Arc<Pool>,
+        source: native::NativeView,
+        source_rows: usize,
+        positions: Option<&Buffer<u32>>,
+        layout: BaseLayout,
+    ) -> Result<Self> {
+        unsafe { native::load(pool, source, source_rows, positions, layout) }
+    }
+
+    /// Gather encoded rows directly into a new resident column, in `positions`
+    /// order (including repeats). No full decoded intermediate is allocated.
+    /// Bounds describe exactly the selected values; Delta uses the existing
+    /// device detection policy on the selected order.
+    ///
+    /// Source, positions and output must share this exact pool and stream.
+    /// Positions outside the source's logical length are rejected on device.
+    /// Source allocations remain live through submission, and their pool's
+    /// stream-ordered frees follow all consuming launches.
+    ///
+    /// `HostFor` selects device `For` here: the original source may already
+    /// have been host-packed, but gathering never downloads values to repack.
+    // DECODE I: selected-column construction gathers reconstructed rows into a new resident representation.
+    pub fn from_selected(
+        pool: Arc<Pool>,
+        source: &Self,
+        positions: &Buffer<u32>,
+        layout: BaseLayout,
+    ) -> Result<Self> {
+        native::selected(pool, source, positions, layout)
+    }
+
     /// Loader-only path: raw values cross once, then the GPU encodes. Reading
     /// the compact extent is allowed here, outside the query compute path.
     pub fn from_host<L: Lane>(pool: Arc<Pool>, values: &[L], codec: Codec) -> Result<Self> {
@@ -499,11 +545,8 @@ impl EncodedColumn {
         let vectors = capacity.div_ceil(1024);
         // Only the live prefix is written and all kernel readers are count-gated.
         let headers = unsafe { Buffer::uninitialized(pool.clone(), vectors)? };
-        let totals = unsafe { Buffer::uninitialized(pool.clone(), vectors.div_ceil(256).max(1))? };
         let module = module(&pool)?;
         let header_launch = module.prepare_headers(config(vectors * 32))?;
-        let offset_launch =
-            module.prepare_offsets(LaunchConfig1D::new(totals.len().min(568) as u32, 256, 2048))?;
         unsafe {
             module.headers(
                 pool.stream(),
@@ -515,6 +558,23 @@ impl EncodedColumn {
                 codec as u32,
                 headers.ptr(),
             )?;
+        }
+        let extent = Self::make_offsets(&headers, capacity, count)?;
+        Ok((headers, extent))
+    }
+
+    fn make_offsets(
+        headers: &Buffer<VectorHeader>,
+        capacity: usize,
+        count: *const u64,
+    ) -> Result<Buffer<u64>> {
+        let pool = headers.pool();
+        let vectors = headers.len();
+        let totals = unsafe { Buffer::uninitialized(pool.clone(), vectors.div_ceil(256).max(1))? };
+        let module = module(pool)?;
+        let offset_launch =
+            module.prepare_offsets(LaunchConfig1D::new(totals.len().min(568) as u32, 256, 2048))?;
+        unsafe {
             module.offsets(
                 pool.stream(),
                 &offset_launch,
@@ -571,8 +631,7 @@ impl EncodedColumn {
                 )?;
             }
         }
-        let extent = levels.pop().unwrap();
-        Ok((headers, extent))
+        Ok(levels.pop().unwrap())
     }
     fn pack(
         headers: &Buffer<VectorHeader>,

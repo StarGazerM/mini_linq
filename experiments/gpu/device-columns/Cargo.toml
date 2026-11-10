@@ -11,3 +11,4 @@ cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
 rccl-memory.workspace = true
+rccl-cub.workspace = true
