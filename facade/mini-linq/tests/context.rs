@@ -7,18 +7,23 @@ fn canonical_consumer_owns_the_lowered_return_boundary() {
     let visits = std::cell::Cell::new(0);
     let answer: HashSet<_> = mini_linq::compile! {
         pipeline { lower = mini_linq::passes::lower(consumer = canonical); }
-        struct Q; relation rows(x:i32); answer(*x % 2) :- rows(x);
+        struct Q; relation rows(x:i32); relation answer(x:i32);
+        answer(*x % 2) :- rows(x);
     }
     .inspect(|_| visits.set(visits.get() + 1))
     .collect();
     assert_eq!(answer, HashSet::from([(0,), (1,)]));
     assert_eq!(visits.get(), 3);
 
-    let ordinary: Vec<_> = mini_linq::mini_linq! {
-        struct Q; relation rows(x:i32); answer(*x % 2) :- rows(x);
+    // The ordinary route deduplicates itself: two answers from three rows.
+    // An answer is a set; its order is not a contract.
+    let mut ordinary: Vec<_> = mini_linq::mini_linq! {
+        struct Q; relation rows(x:i32); relation answer(x:i32);
+        answer(*x % 2) :- rows(x);
     }
     .collect();
-    assert_eq!(ordinary, [(1,), (0,)]);
+    ordinary.sort();
+    assert_eq!(ordinary, [(0,), (1,)]);
 }
 
 #[test]
