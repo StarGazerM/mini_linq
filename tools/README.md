@@ -63,7 +63,7 @@ Benchmark datasets outside the repository (read-only, exact paths only, never se
 
 Lock scope (enforced by review): a measurement driver takes the CPU-exclusive timing lock around ONE sample at a time and releases it between samples; a GPU campaign holds only the GPU lock and releases it between kernels. Holding any exclusive lock across a whole campaign blocks every build on the machine.
 
-**100-second rule (2026-11-10).** Every command an agent or Main runs has a hard limit of 100 seconds (`timeout 100 CMD` inside the flock wrapper). Work that does not fit is made smaller, never given a longer limit: build one package per command and re-invoke until finished (cargo keeps completed crates); test one package or one test binary per command; run script gates step by step or target by target; time one sample of one query per command; profile or census one small case, not a full set. A required check that cannot fit is reported with its measured duration, not run.
+**100-second rule (2026-11-10).** Fast feedback over complete runs: every command has a hard limit of 100 seconds (`timeout 100 CMD` inside the flock wrapper). Choose the smallest command that answers the current question (one package, one test binary, one query, one sample); after at most 100 s read the output, find the reason and act. A failure, a slow phase or a wrong plan nearly always shows within that time; waiting for a full run before analysing blocks development. Do not re-run whole suites in slices during development: run the tests that cover the change. Full gates run once per merge batch, by Main.
 
 **Development style (2026-11-07).** (1) One IR per branch, small: a step is
 mergeable in hours, not days; split otherwise. (2) Rules before code: the
