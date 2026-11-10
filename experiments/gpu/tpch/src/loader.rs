@@ -428,6 +428,7 @@ impl<'a> Loader<'a> {
             .collect();
         // Keep only one native upload alive at a time. Full encoded columns
         // are the immutable source snapshot for both verification and reuse.
+        let mut inserted = Vec::with_capacity(distinct.len());
         for &name in &distinct {
             if resident.columns.contains_key(name) {
                 continue;
@@ -516,6 +517,7 @@ impl<'a> Loader<'a> {
             });
             self.report_memory();
             resident.columns.insert(name.to_owned(), Arc::new(column));
+            inserted.push(name);
             // `raw` is dropped here, before the next file allocates a device
             // buffer; no complete native relation ever exists on the device.
         }
@@ -567,6 +569,15 @@ impl<'a> Loader<'a> {
                 columns.push(Arc::new(column));
             } else {
                 columns.push(source.clone());
+            }
+        }
+        if selected.is_some() {
+            // A compacted projection owns only its selected columns. Retain
+            // earlier full-column cache entries, but release this build's
+            // temporary sources before trimming their now-unused chunks.
+            for name in inserted {
+                resident.columns.remove(name);
+                resident.hashes.remove(name);
             }
         }
         let views: Vec<ColumnView> = columns
@@ -635,13 +646,17 @@ mod tests {
         assert_eq!(projected.columns[0].to_host()?, vec![3, 1, 2]);
         assert_eq!(projected.columns[1].to_host()?, vec![7, -9, 8]);
         assert!(Arc::ptr_eq(&projected.columns[0], &projected.columns[2]));
-        assert_eq!(resident.columns.len(), 2);
-        assert_eq!(resident.columns["a"].capacity(), 4);
+        assert!(resident.columns.is_empty());
+        assert!(resident.hashes.is_empty());
         let key = loader.build("r", &["id"], &mut resident)?;
         resident.projections.push(CachedProjection { names: vec!["id".into()], storage: key });
         let superset = loader.build("r", &["id", "a", "b"], &mut resident)?;
         assert_eq!(superset.capacity, 4);
         assert_eq!(superset.columns[1].to_host()?, vec![3, 1, 3, 2]);
+        let previous = resident.columns["a"].clone();
+        let subset = loader.build("r", &["a"], &mut resident)?;
+        assert_eq!(subset.capacity, 3);
+        assert!(Arc::ptr_eq(&previous, &resident.columns["a"]));
         drop(loader);
         fs::write(root.join("dictionary.txt"), "zero\none\ntwo\n")?;
         let column = &mut manifest.relations.get_mut("r").unwrap().columns[0];
@@ -652,6 +667,55 @@ mod tests {
         assert!(loader.build("r", &["a"], &mut CachedTable::default()).err()
             .is_some_and(|error| error.to_string().contains("out-of-range dictionary code")));
         drop(loader);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_projection_releases_full_sources_before_pool_trim() -> Result<()> {
+        const ROWS: usize = 1 << 20;
+        let root = std::env::temp_dir().join(format!("cq-duplicate-load-trim-{}", std::process::id()));
+        fs::create_dir_all(&root)?;
+        let values: Vec<u8> = (0..ROWS)
+            .flat_map(|row| if row % 2 == 0 { i64::MIN } else { i64::MAX }.to_le_bytes())
+            .collect();
+        fs::write(root.join("values.bin"), values)?;
+        let mut manifest: Manifest = serde_json::from_value(json!({
+            "schema_version": 1, "sf": 1, "byte_order": "little",
+            "relations": {"r": {
+                "rows": ROWS,
+                "columns": [{
+                    "name": "value", "type": "i64", "logical_type": "integer",
+                    "encoding": "plain", "file": "values.bin"
+                }],
+                "verified_keys": [{
+                    "set": "verified", "rows": ROWS, "types": {"value": "i64"},
+                    "columns": {"value": "not-the-loaded-bytes"}
+                }]
+            }}
+        }))?;
+        manifest.root = root.clone();
+        let pool = Pool::new(0, 1 << 20, 1 << 29)?;
+        let mut loader = Loader::new(&manifest, pool.clone());
+        let selected = loader.bind::<(i64,)>("r", &["value"])?;
+        assert_eq!(selected.to_host()?, vec![(i64::MIN,), (i64::MAX,)]);
+        let cached = &loader.tables["r"];
+        assert!(cached.columns.is_empty(), "full source columns must not remain cached");
+        assert!(cached.hashes.is_empty(), "hashes must share their source's cache lifetime");
+        assert_eq!(cached.projections.len(), 1);
+        assert_eq!(cached.projections[0].storage.capacity, 2);
+        assert!(Arc::ptr_eq(
+            &cached.projections[0].storage.columns[0], &selected.storage().columns[0],
+        ));
+        // Every original vector spans MIN..MAX, hence has an 8192-byte
+        // payload. Small selected output/metadata fit the initial pool chunk;
+        // keeping even one full source would prevent this reservation bound.
+        let source_payload_bytes = ROWS * 8;
+        let stats = pool.memory_stats();
+        assert!(stats.current_bytes < source_payload_bytes, "{stats:?}");
+        assert!(stats.reserved_bytes < source_payload_bytes, "{stats:?}");
+        let alias = loader.bind::<(i64,)>("r", &["value"])?;
+        assert!(Arc::ptr_eq(&selected.storage().columns[0], &alias.storage().columns[0]));
         fs::remove_dir_all(root)?;
         Ok(())
     }

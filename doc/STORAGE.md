@@ -1384,6 +1384,10 @@ Each column is encoded immediately and its raw device buffer freed before the
 next column is read: raw columns never coexist. The default path no longer
 widens columns, computes extrema, verifies sets, or gathers rows on the host.
 Device reductions provide exact bounds and dictionary-code validation.
+The end-of-read completion boundary is retained for transfer-error propagation
+and phase accounting. Per-slot events already protect staging reuse; deleting
+that synchronization alone would not overlap the next column's read, since
+bounds/extent readback and encode completion still precede the next raw upload.
 
 Projected verification hashes logical values directly from the encoded columns,
 radix-sorts 32-bit hashes with CUB, checks complete tuples within equal-hash runs,
@@ -1403,13 +1407,21 @@ Load reports separate file I/O (`read_ms`), exact device verification including
 completion (`verify_ms`), and staging/H2D/device encoding
 (`upload_encode_ms`, excluding overlapped file I/O). `source_bytes` counts
 native stored bytes actually read, rather than widened upload bytes.
-`peak_device_bytes` reports the pool's peak live allocation bytes;
+`peak_device_bytes` reports the pool's lifetime live-allocation high-water mark,
+not a resettable per-load peak;
 `peak_reserved_device_bytes` reports the largest observed pool reservation.
 These exclude CUDA context/module memory and CUB's external control buffers.
 Final view/count buffers are allocated before sort scratch, so tiny published
-descriptors cannot pin dead sort chunks. After selected re-encoding, positions
-are dropped and the pool returns wholly unused chunks. `device_bytes_after_load`
+descriptors cannot pin dead sort chunks. After selected re-encoding, newly
+loaded full source columns and their hashes are removed from the base cache
+when the projection contained duplicates; older base-cache entries remain.
+Only the selected projection is newly cached. Sources and positions are dropped
+before the pool returns wholly unused chunks. `device_bytes_after_load`
 and `reserved_device_bytes_after_load` expose the resulting live/reserved bytes.
+The duplicate-cache regression loads 1,048,576 alternating i64 extrema and
+retains exactly two rows: full-source cache entries/hashes are absent, while
+post-trim live and reserved bytes are both below the original 8-MiB payload.
+A separate reuse assertion preserves pre-existing full-column cache entries.
 `CQ_GPU_VRAM_EXCEEDED` covers both a configured pool limit and driver OOM;
 TPC-H creates unlimited pools, so its driver OOM is not a startup-memory budget.
 
@@ -1422,6 +1434,18 @@ tenant present (not controlled performance evidence; Main owns paired timing):
 | SF1 | slice L | 29.79 | 20.67 | 85.57 | 1.197 |
 | SF10 | main | 3231.78 | 371.54 | 418.87 | 4.864 |
 | SF10 | slice L | 284.74 | 80.21 | 97.69 | 1.060 |
+
+Main's paired measurements compare main against `9eb82b5d`, using fresh
+processes in rotated order with the GPU tenant idle (about 1% utilization):
+
+| Scale | Rounds | Process wall ms, main → slice L | Wall ratio [95% CI] | Read ratio | Verify ratio | Upload/encode ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| SF1 | 10 | 907 → 599 | 0.661 [0.642, 0.678] | 0.083 | 0.67 | 0.53 |
+| SF10 | 8 | 5486 → 622 | 0.113 [0.093, 0.131] | 0.085 | 0.107 | 0.068 |
+
+Resident query total showed no significant change. These paired results
+supersede the single-sample timing interpretation above; the duplicate-source
+cache-lifetime correction does not change h06's already-distinct load path.
 
 Five-ms NVML sampling found the **same query-loop process residency** on both
 binaries: 591,396,864 B (SF1), 1,887,436,800 B (SF10). Slice L's transient peaks
@@ -1437,8 +1461,10 @@ context initialization/teardown still dominates other parts of the process.
 All 26 advised SF1 queries passed full warmup/first-sample comparisons;
 h06 SF10 passed, as did HostFor cache miss/hit (six hits, zero raw reads).
 The benchmark retains its existing `full_then_sampled` report policy.
-Device-columns tests passed 35/35; TPC-H tests passed 52 with one existing
-idle-GPU-only test ignored. Formal registry checks passed.
+After the duplicate-cache correction, device-columns tests passed 35/35 and
+TPC-H tests passed 53 with one existing idle-GPU-only test ignored; the advised
+SF1 suite again passed all 26 full warmup/first-sample comparisons.
+Formal registry checks passed for the unchanged decode-site inventory.
 
 Evidence: `experiments/gpu/compare/p6c-load-2026-11-10.json`. Exact collision
 checks remain potentially quadratic for adversarial hash runs. This cutover
