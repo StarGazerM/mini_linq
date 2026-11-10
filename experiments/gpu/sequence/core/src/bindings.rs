@@ -1,7 +1,8 @@
 //! Catalog-backed GPU provider realization; printers only consume these facts.
 use cq_lang_sequence::gpu::bindings::{
-    Bindings, DirectoryPolicy, Materialization, NativeLookup, ProviderAbi, ProviderLayout,
-    RadixParams, RadixRead, RadixRealization, RadixRelationRead, RadixWordCapture,
+    Bindings, DirectoryPolicy, KeyRecipe, Materialization, NativeLookup, PayloadRepresentation,
+    ProviderAbi, ProviderLayout, RadixParams, RadixRead, RadixRealization, RadixRelationRead,
+    RadixWordCapture, SourceBuild, SourceOwnership, SourceRowMap,
 };
 use cq_lang_sequence::{Analysis, Program};
 use cq_lang_structures::provider::NativeAbi;
@@ -123,6 +124,14 @@ fn radix_realization(
         .radix
         .as_ref()
         .ok_or_else(|| error("GPU-RadixProvider: radix instance lacks its advice"))?;
+    let fields = structure_analysis.layouts[name].clone();
+    let positions = |columns: &[String]| -> syn::Result<Vec<usize>> {
+        columns.iter().map(|column| fields.iter().position(|field| field == column)
+            .ok_or_else(|| error("GPU-RadixProvider: source field is missing"))).collect()
+    };
+    let key_fields = positions(keys)?;
+    let payload_fields = positions(payload)?;
+    let row_map = SourceRowMap { source: name.to_owned() };
     Ok(RadixRealization {
         key_types: keys
             .iter()
@@ -141,6 +150,15 @@ fn radix_realization(
             block_threads: crate::BLOCK_THREADS,
         },
         reads: radix_reads(physical, structure_analysis, analysis, name, keys),
+        source_build: SourceBuild {
+            source: name.to_owned(), fields,
+            ownership: SourceOwnership::RetainedDescriptors,
+            row_map: row_map.clone(),
+        },
+        key_recipe: KeyRecipe::DirectSourceOrder { fields: key_fields },
+        payload_representation: PayloadRepresentation::RetainedSources {
+            fields: payload_fields, row_map,
+        },
     })
 }
 
@@ -167,6 +185,28 @@ fn check_radix(
     };
     let keys = &layout.keys;
     if keys.is_empty() {
+        return false;
+    }
+    let source = &radix.source_build;
+    if source.source != name
+        || source.fields != structure_analysis.layouts[name]
+        || source.ownership != SourceOwnership::RetainedDescriptors
+        || source.row_map.source != name
+    {
+        return false;
+    }
+    let fields_match = |fields: &[usize], columns: &[String]| {
+        fields.len() == columns.len()
+            && fields.iter().zip(columns)
+                .all(|(field, column)| source.fields.get(*field) == Some(column))
+    };
+    let KeyRecipe::DirectSourceOrder { fields: key_fields } = &radix.key_recipe;
+    if !fields_match(key_fields, keys) {
+        return false;
+    }
+    let PayloadRepresentation::RetainedSources { fields, row_map } =
+        &radix.payload_representation;
+    if !fields_match(fields, &layout.payload) || *row_map != source.row_map {
         return false;
     }
     let typed = |columns: &[String], types: &[syn::Type]| {
@@ -869,4 +909,213 @@ pub(crate) fn host_structures(
         .collect();
     host.structures.declare(&declarations)?;
     Ok(host)
+}
+
+#[cfg(test)]
+mod tests {
+    include!("../../tests/support/stack.rs");
+    use super::*;
+    use quote::{quote, ToTokens};
+    use syn::visit_mut::VisitMut;
+
+    fn triangle(smallest: bool) -> Stack {
+        let choice = if smallest { quote!(smallest) } else { quote!(first) };
+        // A non-Smallest payload probe must read every built level of `r`.
+        let r_layout = if smallest {
+            quote!(RadixLayout<(i64,i64),(i64,i64),u128,u32,::gpu_datalog_runtime::SourceColumns<(i64,i64)>> [b][c])
+        } else {
+            quote!(RadixLayout<(i64,),(i64,i64),u64,u32,::gpu_datalog_runtime::SourceColumns<(i64,i64)>> [b])
+        };
+        let r_word = if smallest { quote!(u128) } else { quote!(u64) };
+        syn::parse_quote! {
+            physical {
+                relation E(src:i64,dst:i64) = (edges);
+                l = pipe rename E {src -> a,dst -> b};
+                r = let rename E {src -> b,dst -> c};
+                s = let rename E {src -> a,dst -> c};
+                candidate = pipe probe #choice [b] l,r;
+                checked = let canon probe first [a,c] candidate,s;
+                return checked as answer(a,b,c);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns };
+                    range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range };
+                    radix_layout = ::gpu_datalog_runtime::RadixLayout<_, _, _, _, _> { reads [exact, range, membership, candidates], build typed, abi radix };
+                    radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred };
+                }
+                l host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                s host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+                r = @radix_layout radix { word #r_word; offset u32; ratio 4; radix_bits 16; merge_tile 1024 } as ::gpu_datalog_runtime::#r_layout;
+                s = @radix_layout radix { word u128; offset u32; ratio 4; radix_bits 16; merge_tile 1024 } as ::gpu_datalog_runtime::RadixLayout<(i64,i64),(i64,i64),u128,u32,::gpu_datalog_runtime::SourceColumns<(i64,i64)>> [a][c];
+                r rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+                s rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
+                checked rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                checked canon = rows;
+            }
+            sequence {
+                Edges = store rows l;
+                ByB = store rows r;
+                ByA = store rows s;
+                result = store canon flatten map checked flatten lookup s [a,c]
+                    flatten lookup r [b] tile 1024 items 4 Edges;
+                output count;
+            }
+            graded gpu { Edges at host; ByB at host; ByA at host; result at device; }
+        }
+    }
+
+    #[test]
+    fn source_recipes_reject_missing_fields_and_stale_records_independently() {
+        let Stack { physical, structures, program } = triangle(true);
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        check(&physical, &structures, &program, &structure_analysis, &analysis, &analysis.gpu_bindings).unwrap();
+        let mutations: &[fn(&mut RadixRealization)] = &[
+            |record| record.source_build.source = "s".into(),
+            |record| { record.source_build.fields.pop(); },
+            |record| record.source_build.fields.swap(0, 1),
+            |record| record.source_build.row_map.source = "s".into(),
+            |record| {
+                let KeyRecipe::DirectSourceOrder { fields } = &mut record.key_recipe;
+                fields.swap(0, 1);
+            },
+            |record| {
+                let KeyRecipe::DirectSourceOrder { fields } = &mut record.key_recipe;
+                fields.pop();
+            },
+            |record| {
+                let PayloadRepresentation::RetainedSources { fields, .. } = &mut record.payload_representation;
+                fields.swap(0, 1);
+            },
+            |record| {
+                let PayloadRepresentation::RetainedSources { fields, .. } = &mut record.payload_representation;
+                fields.clear();
+            },
+            |record| {
+                let PayloadRepresentation::RetainedSources { row_map, .. } = &mut record.payload_representation;
+                row_map.source = "s".into();
+            },
+        ];
+        for mutate in mutations {
+            let mut stale = analysis.gpu_bindings.clone();
+            mutate(stale.providers.get_mut("r").unwrap()[0].radix.as_mut().unwrap());
+            assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &stale).is_err());
+        }
+    }
+
+    #[test]
+    fn retained_recipes_require_owned_source_provenance_and_selection() {
+        use cq_lang_sequence::gpu::realization::{SourceAccess, SourceOrigin};
+        let Stack { physical, structures, program } = triangle(true);
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let valid = &analysis.gpu_bindings.realization;
+        let realized = |records| crate::realize::check(&physical, &structures, &program, &structure_analysis, &analysis, records);
+        realized(valid).unwrap();
+        let mut missing = valid.clone();
+        missing.sources.remove("r");
+        assert!(realized(&missing).is_err());
+        let mut scan = valid.clone();
+        scan.sources.get_mut("r").unwrap().access = SourceAccess::Scan;
+        assert!(realized(&scan).is_err());
+        let mut selection = valid.clone();
+        selection.sources.get_mut("r").unwrap().access = SourceAccess::Provider {
+            selection: Some(cq_lang_sequence::gpu::realization::Interval {
+                column: "absent".into(), bounds: Vec::new(),
+            }),
+        };
+        assert!(realized(&selection).is_err());
+        let mut coverage = valid.clone();
+        coverage.sources.get_mut("r").unwrap().columns.remove("c");
+        assert!(realized(&coverage).is_err());
+        let mut provenance = valid.clone();
+        provenance.sources.get_mut("r").unwrap().origin = SourceOrigin::Resident { host: "missing".into() };
+        assert!(realized(&provenance).is_err());
+        let mut identity = valid.clone();
+        identity.sources.get_mut("r").unwrap().columns.insert("c".into(), "src".into());
+        assert!(realized(&identity).is_err());
+    }
+
+    #[derive(Default)]
+    struct Builds {
+        radix: usize,
+        owned_columns: usize,
+    }
+    impl VisitMut for Builds {
+        fn visit_expr_call_mut(&mut self, call: &mut syn::ExprCall) {
+            if let syn::Expr::Path(function) = call.func.as_ref() {
+                let segments = &function.path.segments;
+                let last = segments.last().unwrap();
+                if last.ident == "radix_layout" {
+                    let syn::PathArguments::AngleBracketed(arguments) = &last.arguments else { panic!("missing scalar schema") };
+                    assert_eq!(arguments.args.len(), 4, "no native item-column generic");
+                    self.radix += 1;
+                }
+                if last.ident == "new" && segments.iter().any(|segment| segment.ident == "ColumnDescriptor") {
+                    assert!(matches!(&call.args[0], syn::Expr::MethodCall(method) if method.method == "clone"));
+                    self.owned_columns += 1;
+                }
+            }
+            syn::visit_mut::visit_expr_call_mut(self, call);
+        }
+    }
+
+    #[test]
+    fn source_builds_and_all_radix_read_forms_consume_recorded_representation() {
+        for smallest in [false, true] {
+            let Stack { physical, structures, program } = triangle(smallest);
+            let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+            let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+            let rows = crate::rows::Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+            let setup = &rows.setup;
+            let build = &rows.build;
+            let mut block: syn::Block = syn::parse2(quote!({ #setup #build })).unwrap();
+            let mut calls = Builds::default();
+            calls.visit_block_mut(&mut block);
+            assert_eq!(calls.radix, 2);
+            // One owned descriptor per key and value source field of r and s.
+            assert_eq!(calls.owned_columns, if smallest { 8 } else { 7 });
+            for name in ["r", "s"] {
+                let record = analysis.gpu_bindings.providers[name][0].radix.as_ref().unwrap();
+                let source = &record.source_build;
+                assert_eq!(source.source, name);
+                assert_eq!(source.ownership, SourceOwnership::RetainedDescriptors);
+                let key_fields = if name == "r" && !smallest { 1 } else { 2 };
+                assert!(matches!(&record.key_recipe, KeyRecipe::DirectSourceOrder { fields } if fields.len() == key_fields));
+                let kernel = rows.radix_provider(name).unwrap();
+                let value: syn::Expr = syn::parse2(kernel.item(1, quote!(run), quote!(occurrence))).unwrap();
+                let syn::Expr::Call(call) = value else { panic!("retained read must call explicit source helper") };
+                let syn::Expr::Path(function) = call.func.as_ref() else { panic!("source helper must be explicit") };
+                let expected: syn::Path = syn::parse_quote!(::gpu_datalog_runtime::radix_run::source_items::device::item);
+                assert_eq!(function.path, expected);
+                assert_eq!(call.args.len(), 4);
+            }
+            let reads = &analysis.gpu_bindings.providers["r"][0].radix.as_ref().unwrap().reads;
+            assert!(reads.iter().any(|(_, read)| if smallest {
+                matches!(read, RadixRead::Candidates { .. })
+            } else {
+                matches!(read, RadixRead::Group)
+            }));
+            assert!(analysis.gpu_bindings.providers["s"][0].radix.as_ref().unwrap().reads
+                .iter().any(|(_, read)| matches!(read, RadixRead::Group)));
+            // Translation exercises both the candidate and ordinary payload consumers.
+            let _ = crate::emit::translate(&physical, &structures, &program, &analysis).unwrap().to_token_stream();
+        }
+    }
+
+    #[test]
+    fn group_payload_retains_nonkey_source_fields() {
+        let Stack { physical, structures, program } = triangle(false);
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let layout = &analysis.gpu_bindings.providers["r"][0];
+        assert_eq!(layout.keys, ["b"]);
+        assert_eq!(layout.payload, ["b", "c"]);
+        let radix = layout.radix.as_ref().unwrap();
+        assert!(radix.reads.iter().any(|(_, read)| matches!(read, RadixRead::Group)));
+        assert!(matches!(&radix.payload_representation,
+            PayloadRepresentation::RetainedSources { fields, .. } if fields == &[0, 1]));
+        crate::emit::translate(&physical, &structures, &program, &analysis).unwrap();
+    }
 }

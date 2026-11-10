@@ -179,12 +179,17 @@ pub struct EncodedColumn {
     headers: Option<Buffer<VectorHeader>>,
     data: ColumnData,
     extent: Option<Buffer<u64>>,
-    _count_owner: Option<Arc<dyn std::any::Any>>,
+    _count_owner: Option<Arc<dyn std::any::Any + Send + Sync>>,
     capacity: usize,
     count: *const u64,
     codec: Codec,
     bounds: Bounds,
 }
+// SAFETY: all allocations and erased count owners are Send + Sync. `count`
+// is a device address, never dereferenced by the host; stream readiness and
+// immutable live-prefix obligations remain with every unsafe device reader.
+unsafe impl Send for EncodedColumn {}
+unsafe impl Sync for EncodedColumn {}
 impl EncodedColumn {
     /// Loader-only path: raw values cross once, then the GPU encodes. Reading
     /// the compact extent is allowed here, outside the query compute path.
@@ -304,7 +309,7 @@ impl EncodedColumn {
     /// or launching kernels. The count field is a device u64 at `count_offset`
     /// bytes within `count`; its owner is retained for the column's lifetime.
     /// Bounds must enclose logical values. Count is clamped to buffer capacity.
-    pub fn from_plain_buffer<T: DeviceCopy + 'static>(
+    pub fn from_plain_buffer<T: DeviceCopy + Send + Sync + 'static>(
         input: Buffer<i64>,
         count: Arc<Buffer<T>>,
         count_offset: usize,
@@ -342,7 +347,7 @@ impl EncodedColumn {
     /// be initialized; unused capacity need not be. Count must remain unchanged.
     /// Its allocation owner is retained independently of any parent relation.
     /// Bounds must enclose all logical values; no sampled bound is sufficient.
-    pub unsafe fn from_device<T: DeviceCopy + 'static, L: Lane>(
+    pub unsafe fn from_device<T: DeviceCopy + Send + Sync + 'static, L: Lane>(
         pool: Arc<Pool>,
         input: *const L,
         capacity: usize,
@@ -395,7 +400,7 @@ impl EncodedColumn {
     /// `order` must hold `rows` indices into `source`'s live rows, ready on
     /// pool.stream. `bounds` must enclose every gathered value.
     // DECODE I: gather wrapper reconstructs then FOR-reencodes a permutation; avoidable reorganization, P4 keep index runs plain.
-    pub unsafe fn from_gather<T: DeviceCopy + 'static, L: Lane>(
+    pub unsafe fn from_gather<T: DeviceCopy + Send + Sync + 'static, L: Lane>(
         pool: Arc<Pool>,
         source: ColumnView,
         order: *const u32,
@@ -427,7 +432,7 @@ impl EncodedColumn {
     /// an initialized source row, and `bounds` must enclose every gathered value,
     /// which must fit the declared lane type.
     // DECODE I: source gather recomputes frames after value reconstruction; avoidable reorganization, P4 prefer plain indexes.
-    pub unsafe fn from_gather_source<T: DeviceCopy + 'static, L: Lane>(
+    pub unsafe fn from_gather_source<T: DeviceCopy + Send + Sync + 'static, L: Lane>(
         pool: Arc<Pool>,
         source: SourceView,
         order: *const u32,

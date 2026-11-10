@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_lang_sequence::gpu::bindings::{
-    DirectoryPolicy, ProviderAbi, ProviderLayout, UploadAdapter, UploadBounds, UploadCodec,
+    DirectoryPolicy, KeyRecipe, PayloadRepresentation, ProviderAbi, ProviderLayout,
+    UploadAdapter, UploadBounds, UploadCodec,
 };
 use cq_lang_sequence::gpu::realization::{
     BaseBounds, BoundSource, DescriptorBounds, HostEvaluation, Interval, IntervalBound, Phase,
@@ -53,8 +54,25 @@ struct Provider {
 #[derive(Clone)]
 pub struct RadixKernel {
     pub items: Ident,
-    /// One item lane per payload column, in payload order.
-    pub lanes: Vec<Type>,
+    pub representation: PayloadRepresentation,
+}
+
+impl RadixKernel {
+    /// Dispatch only on checked representation facts, never Rust type syntax.
+    pub fn item(&self, column: usize, run: TokenStream, occurrence: TokenStream) -> TokenStream {
+        let items = &self.items;
+        let column = column as u32;
+        match &self.representation {
+            PayloadRepresentation::RetainedSources { .. } => {
+                // DECODE V: P6 relational payload consumers reconstruct retained
+                // source fields late; this is not an authorized publication read.
+                quote! {
+                    ::gpu_datalog_runtime::radix_run::source_items::device::item(
+                        #items, #run, #column, #occurrence)
+                }
+            }
+        }
+    }
 }
 
 trait DirectoryPrint {
@@ -864,8 +882,9 @@ impl Rows {
                 }
                 let layout = &provider_layouts[name][0];
                 if let Some(radix) = &layout.radix {
-                    // Formal rule GPU-RadixSourceBuild: the recorded K/V lanes,
-                    // W/O and params; the provider spelling is rustc-checked.
+                    // The checked recipes select source fields; Rustc checks the
+                    // authored provider type against the explicit retained ABI.
+                    let source_build = &radix.source_build;
                     let descriptor = |column: &String| -> syn::Result<TokenStream> {
                         let source = realization.columns.get(column).ok_or_else(|| {
                             syn::Error::new_spanned(
@@ -879,19 +898,19 @@ impl Rows {
                             #host.storage().columns[#index].clone(), #host_length)? }),
                         )
                     };
-                    let keys = layout
-                        .keys
-                        .iter()
-                        .map(descriptor)
+                    let KeyRecipe::DirectSourceOrder { fields: key_fields } = &radix.key_recipe;
+                    let PayloadRepresentation::RetainedSources { fields: payload_fields, .. } =
+                        &radix.payload_representation;
+                    let keys = key_fields.iter()
+                        .map(|&field| descriptor(&source_build.fields[field]))
                         .collect::<syn::Result<Vec<_>>>()?;
-                    let values = layout
-                        .payload
-                        .iter()
-                        .map(descriptor)
+                    let values = payload_fields.iter()
+                        .map(|&field| descriptor(&source_build.fields[field]))
                         .collect::<syn::Result<Vec<_>>>()?;
                     let ty = &layout.provider.ty;
                     let key_types = &radix.key_types;
                     let lanes = &radix.lanes;
+                    let item_columns = quote!(::gpu_datalog_runtime::SourceColumns<(#(#lanes,)*)>);
                     let word = &radix.word;
                     let offset = &radix.offset;
                     let ratio = radix.params.ratio;
@@ -902,9 +921,10 @@ impl Rows {
                     let view = format_ident!("__cq_sequence_provider_view_{}", name);
                     let items = format_ident!("__cq_sequence_provider_items_{}", name);
                     build.extend(quote! {
-                        let #owner: #ty = ::cq_gpu_sequence_runtime::radix_layout::<
-                            (#(#key_types,)*), (#(#lanes,)*), #word, #offset,
-                            (#(::gpu_datalog_runtime::Buffer<#lanes>,)*)
+                        let #owner: ::gpu_datalog_runtime::RadixLayout<
+                            (#(#key_types,)*), (#(#lanes,)*), #word, #offset, #item_columns
+                        > = ::cq_gpu_sequence_runtime::radix_layout::<
+                            (#(#key_types,)*), (#(#lanes,)*), #word, #offset
                         >(
                             &__cq_pool,
                             ::gpu_datalog_runtime::RadixRunParams {
@@ -916,6 +936,7 @@ impl Rows {
                             (#selection).as_ref(),
                             __cq_auxiliary.selection,
                         )?;
+                        let #owner: #ty = #owner;
                     });
                     // GPU-Smallest ChoiceCarrier::PositionTag: a side's key
                     // slots and candidate ordinals fit the tag's low bits.
@@ -996,7 +1017,7 @@ impl Rows {
                             keys: layout.keys.clone(),
                             radix: Some(RadixKernel {
                                 items,
-                                lanes: lanes.clone(),
+                                representation: radix.payload_representation.clone(),
                             }),
                         },
                     );

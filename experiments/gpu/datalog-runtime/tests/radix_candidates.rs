@@ -3,15 +3,19 @@
 //! GPU-Smallest, executed by test kernels that mirror the emitted reads
 //! (encode once, per-run item intervals, exact distinct counts, first-minimum
 //! choice, membership in every other side). Fixed seeds throughout.
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use cq_storage::RadixRun;
-use gpu_datalog_runtime::{radix_run::RadixRunParams, DeviceRadixRun, Packing, RadixLayout};
-use gpu_device_columns::{Buffer, Codec, ColumnView, Pool, SourceView};
+use gpu_datalog_runtime::{
+    radix_run::RadixRunParams, DeviceItemColumns, DeviceRadixRun, OwnedSource, Packing,
+    RadixLayout, SourceColumns,
+};
+use gpu_device_columns::{Buffer, Codec, ColumnView, Pool, SourceView, VectorHeader};
 
 type Result<T = (), E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 type Lookup = RadixLayout<(i64,), (i64, u32), u64, u32, (Buffer<i64>, Buffer<u32>)>;
 type Side = RadixLayout<(i64, i64), (i64,), u128, u32, Buffer<i64>>;
+type SourceLookup = RadixLayout<(i64,), (i64, u32), u64, u32, SourceColumns<(i64, u32)>>;
 
 /// Full-domain signed values: extremes, both signs and wide magnitudes.
 const DOMAIN: [i64; 12] = [
@@ -59,14 +63,15 @@ fn params(ratio: usize, radix_bits: u32) -> RadixRunParams {
 }
 
 /// A native Plain column of i64 bit patterns: the resident source ABI.
-fn plain(buffer: &Buffer<u64>, rows: usize) -> SourceView {
-    SourceView::from(ColumnView {
+fn plain(buffer: Arc<Buffer<u64>>, rows: usize) -> Result<OwnedSource> {
+    let view = SourceView::from(ColumnView {
         headers: std::ptr::null(),
         data: buffer.ptr(),
         len: rows as u64,
         count: std::ptr::null(),
         codec: Codec::Plain as u32,
-    })
+    });
+    unsafe { OwnedSource::new(buffer.pool().clone(), view, rows, buffer) }
 }
 
 fn bits(values: &[i64]) -> Vec<u64> {
@@ -76,7 +81,7 @@ fn bits(values: &[i64]) -> Vec<u64> {
 #[cuda_host::cuda_module]
 mod reads {
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
-    use gpu_datalog_runtime::radix_run::{device, RadixItemsView, RadixLayoutView};
+    use gpu_datalog_runtime::radix_run::{device, source_items, RadixItemsView, RadixLayoutView};
 
     /// The emitted ordinary lookup: encode the bound key once, then read
     /// every run's local item interval in run order.
@@ -86,6 +91,7 @@ mod reads {
     pub fn radix_test_lookup(
         view: RadixLayoutView<u64, u32>,
         items: RadixItemsView,
+        retained: u32,
         probes: *const i64,
         count: u32,
         bases: *const u64,
@@ -111,8 +117,13 @@ mod reads {
                     while position < end {
                         if length < capacity {
                             let index = (base + length) as usize;
-                            *serials.add(index) = device::item::<i64>(items, run, 0, position);
-                            *tags.add(index) = device::item::<u32>(items, run, 1, position);
+                            if retained != 0 {
+                                *serials.add(index) = source_items::device::item(items, run, 0, position);
+                                *tags.add(index) = source_items::device::item(items, run, 1, position) as u32;
+                            } else {
+                                *serials.add(index) = device::item::<i64>(items, run, 0, position);
+                                *tags.add(index) = device::item::<u32>(items, run, 1, position);
+                            }
                         }
                         length += 1;
                         position += 1;
@@ -519,9 +530,9 @@ fn smallest_counters_cover_ties_empty_and_absent_sides() -> Result {
 
 /// Duplicate-heavy occurrence lookups through the emitted encoded probe and
 /// run-local intervals equal the CPU RadixRun's stable groups.
-fn check_lookup(
+fn check_lookup<C: DeviceItemColumns>(
     pool: &std::sync::Arc<Pool>,
-    layout: &Lookup,
+    layout: &RadixLayout<(i64,), (i64, u32), u64, u32, C>,
     cpu: &RadixRun<i64, (i64, u32)>,
 ) -> Result {
     let mut probes: Vec<i64> = DOMAIN.to_vec();
@@ -540,6 +551,7 @@ fn check_lookup(
         &module.prepare_radix_test_lookup(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
         layout.view(),
         layout.items_view(),
+        u32::from(!C::native_column(0)),
         Buffer::from_host(pool.clone(), &probes)?.ptr(),
         probes.len() as u32,
         Buffer::from_host(pool.clone(), &bases)?.ptr(),
@@ -619,14 +631,14 @@ fn source_build_selects_and_groups_resident_columns() -> Result {
     let keys: Vec<i64> = (0..rows).map(|_| DOMAIN[random.below(4) * 3]).collect();
     let serials: Vec<i64> = (0..rows).map(|_| random.value()).collect();
     let tags: Vec<i64> = (0..rows as i64).collect();
-    let key_column = Buffer::from_host(pool.clone(), &bits(&keys))?;
-    let serial_column = Buffer::from_host(pool.clone(), &bits(&serials))?;
-    let tag_column = Buffer::from_host(pool.clone(), &bits(&tags))?;
-    let sources = [plain(&key_column, rows)];
-    let values = [plain(&serial_column, rows), plain(&tag_column, rows)];
+    let key_column = Arc::new(Buffer::from_host(pool.clone(), &bits(&keys))?);
+    let serial_column = Arc::new(Buffer::from_host(pool.clone(), &bits(&serials))?);
+    let tag_column = Arc::new(Buffer::from_host(pool.clone(), &bits(&tags))?);
+    let sources = [plain(key_column, rows)?];
+    let values = [plain(serial_column, rows)?, plain(tag_column, rows)?];
     // Whole sources.
     let layout = unsafe {
-        Lookup::from_sources(
+        SourceLookup::from_sources(
             pool.clone(),
             params(4, 4),
             &sources,
@@ -644,7 +656,7 @@ fn source_build_selects_and_groups_resident_columns() -> Result {
     let selected: Vec<u32> = (0..rows as u32).filter(|row| row % 7 != 3).rev().collect();
     let positions = Buffer::from_host(pool.clone(), &selected)?;
     let layout = unsafe {
-        Lookup::from_sources(
+        SourceLookup::from_sources(
             pool.clone(),
             params(4, 0),
             &sources,
@@ -661,7 +673,7 @@ fn source_build_selects_and_groups_resident_columns() -> Result {
     check_lookup(&pool, &layout, &cpu)?;
     // Zero rows publish an empty layout; schema arity is checked.
     let empty = unsafe {
-        Lookup::from_sources(
+        SourceLookup::from_sources(
             pool.clone(),
             params(4, 4),
             &sources,
@@ -672,7 +684,7 @@ fn source_build_selects_and_groups_resident_columns() -> Result {
     };
     assert_eq!(empty.run_count(), 0);
     assert!(unsafe {
-        Lookup::from_sources(
+        SourceLookup::from_sources(
             pool.clone(),
             params(4, 4),
             &sources,
@@ -682,5 +694,253 @@ fn source_build_selects_and_groups_resident_columns() -> Result {
         )
     }
     .is_err());
+    Ok(())
+}
+
+type ForStorage = (Buffer<VectorHeader>, Buffer<u64>);
+
+/// Independent host FOR fixture: frame and bit width vary per vector, and the
+/// expected values never pass through the device decoder.
+fn for_source(pool: &Arc<Pool>, values: &[i64]) -> Result<(OwnedSource, std::sync::Weak<ForStorage>)> {
+    let mut headers = Vec::new();
+    let mut words = Vec::new();
+    for vector in values.chunks(1024) {
+        let base = *vector.iter().min().unwrap();
+        let largest = (*vector.iter().max().unwrap() as i128 - base as i128) as u64;
+        let width = 64 - largest.leading_zeros();
+        let offset = words.len();
+        words.resize(offset + (width as usize * 16).max(1), 0_u64);
+        for (row, &value) in vector.iter().enumerate() {
+            let residual = (value as i128 - base as i128) as u64;
+            let lane = row / 64;
+            let within = row % 64;
+            let tile = within / 8;
+            let reversed = ((tile & 1) << 2) | (tile & 2) | ((tile & 4) >> 2);
+            let position = (within % 8) * 128 + reversed * 16 + lane;
+            let bit = (position / 16) * width as usize;
+            let word = offset + (bit / 64) * 16 + position % 16;
+            let shift = bit % 64;
+            if width != 0 {
+                words[word] |= residual << shift;
+                if shift + width as usize > 64 {
+                    words[word + 16] |= residual >> (64 - shift);
+                }
+            }
+        }
+        headers.push(VectorHeader {
+            offset: offset as u64, base, width, codec: Codec::For as u32,
+            rows: vector.len() as u32, padding: 0,
+        });
+    }
+    let storage = Arc::new((
+        Buffer::from_host(pool.clone(), &headers)?,
+        Buffer::from_host(pool.clone(), &words)?,
+    ));
+    let weak = Arc::downgrade(&storage);
+    let view = SourceView::from(ColumnView {
+        headers: storage.0.ptr(), data: storage.1.ptr(), len: values.len() as u64,
+        count: std::ptr::null(), codec: Codec::For as u32,
+    });
+    let source = unsafe { OwnedSource::new(pool.clone(), view, values.len(), storage)? };
+    Ok((source, weak))
+}
+
+fn framed_payload(row: usize, table: usize) -> i64 {
+    match row / 1024 {
+        0 => -(1_i64 << 50) + table as i64, // width-zero vector
+        1 => (1_i64 << 40) + ((row * 7 + table) % 31) as i64,
+        2 => if row % 2 == 0 { i64::MIN + table as i64 } else { i64::MAX - table as i64 },
+        _ => -17 + table as i64,
+    }
+}
+
+#[test]
+fn retained_for_payload_frames_selection_and_snapshot_ownership() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let rows = 3073;
+    let keys = (0..rows).map(|row| DOMAIN[row % DOMAIN.len()]).collect::<Vec<_>>();
+    let serials = (0..rows).map(|row| framed_payload(row, 0)).collect::<Vec<_>>();
+    let tags = (0..rows).map(|row| row as i64).collect::<Vec<_>>();
+    let key_storage = Arc::new(Buffer::from_host(pool.clone(), &bits(&keys))?);
+    let key_weak = Arc::downgrade(&key_storage);
+    let sources = [plain(key_storage, rows)?];
+    let (serial_source, serial_weak) = for_source(&pool, &serials)?;
+    let (tag_source, tag_weak) = for_source(&pool, &tags)?;
+    let values = [serial_source, tag_source];
+    let mut selected = (0..rows as u32).filter(|row| row % 5 != 2).rev().collect::<Vec<_>>();
+    selected.extend_from_slice(&[1024, 2048, 1024, 0, 3072, 2048]);
+    let positions = Buffer::from_host(pool.clone(), &selected)?;
+    let layout = unsafe {
+        SourceLookup::from_sources(pool.clone(), params(4, 4), &sources, &values,
+            positions.ptr(), selected.len())?
+    };
+    assert!(layout.item_column::<i64>(0).is_err());
+    assert!(layout.item_column::<u32>(1).is_err());
+    drop((sources, values, positions));
+    assert!(key_weak.upgrade().is_none(), "packed keys do not retain unused source storage");
+    assert!(serial_weak.upgrade().is_some());
+    assert!(tag_weak.upgrade().is_some());
+    let cpu = RadixRun::from_pairs(selected.iter().map(|&row| {
+        let row = row as usize;
+        (keys[row], (serials[row], tags[row] as u32))
+    }));
+    check_lookup(&pool, &layout, &cpu)?;
+    let snapshot = layout.snapshot().clone();
+    drop(layout);
+    assert!(serial_weak.upgrade().is_some());
+    drop(snapshot);
+    assert!(key_weak.upgrade().is_none());
+    assert!(serial_weak.upgrade().is_none());
+    assert!(tag_weak.upgrade().is_none());
+    Ok(())
+}
+
+#[test]
+fn retained_for_merge_preserves_source_identity_stability_and_old_snapshots() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = SourceLookup::derive_packing()?;
+    let mut run = DeviceRadixRun::<u64, u32, SourceColumns<(i64, u32)>>::new(pool.clone(), params(2, 4))?;
+    let mut cpu = RadixRun::<i64, (i64, u32)>::with_ratio([], 2);
+    let mut first = None;
+    let mut first_cpu = None;
+    let mut owners = Vec::new();
+    for table in 0..4 {
+        let rows = 3073;
+        let keys = (0..rows).map(|row| DOMAIN[(row + table) % DOMAIN.len()]).collect::<Vec<_>>();
+        let serials = (0..rows).map(|row| framed_payload(row, table)).collect::<Vec<_>>();
+        let tags = (0..rows).map(|row| (table * rows + row) as i64).collect::<Vec<_>>();
+        let key_sources = [plain(Arc::new(Buffer::from_host(pool.clone(), &bits(&keys))?), rows)?];
+        let (serial_source, serial_weak) = for_source(&pool, &serials)?;
+        let (tag_source, tag_weak) = for_source(&pool, &tags)?;
+        owners.push((serial_weak, tag_weak));
+        let values = [serial_source, tag_source];
+        let mut selected = (0..rows as u32).rev().collect::<Vec<_>>();
+        selected.extend_from_slice(&[1024, 0, 2048, 1024]);
+        let positions = Buffer::from_host(pool.clone(), &selected)?;
+        let words = selected.iter().map(|&row| packing.pack(&[keys[row as usize] as i128]))
+            .collect::<gpu_datalog_runtime::Result<Vec<u64>>>()?;
+        unsafe {
+            run.publish_sources(&Buffer::from_host(pool.clone(), &words)?, &key_sources,
+                &values, positions.ptr(), selected.len())?;
+        }
+        let batch = selected.iter().map(|&row| {
+            let row = row as usize;
+            (keys[row], (serials[row], tags[row] as u32))
+        }).collect::<Vec<_>>();
+        cpu.merge(batch.iter().copied());
+        if table == 0 {
+            first = Some(SourceLookup::publish(&run, packing.clone())?);
+            first_cpu = Some(RadixRun::from_pairs(batch));
+        }
+    }
+    assert_eq!(run.run_count(), 1, "equal-sized deltas force stable merges");
+    // DECODE P: this test explicitly publishes logical diagnostic columns to the host.
+    let diagnostic = run.to_host()?;
+    let expected = cpu.items();
+    assert_eq!(diagnostic[0].items[0], expected.iter().map(|item| item.0).collect::<Vec<_>>());
+    assert_eq!(diagnostic[0].items[1], expected.iter().map(|item| item.1 as i64).collect::<Vec<_>>());
+    let merged = SourceLookup::publish(&run, packing)?;
+    drop(run);
+    check_lookup(&pool, &merged, &cpu)?;
+    check_lookup(&pool, first.as_ref().unwrap(), first_cpu.as_ref().unwrap())?;
+    drop(merged);
+    assert!(owners[0].0.upgrade().is_some(), "old snapshot still owns its original table");
+    assert!(owners[1..].iter().all(|(a, b)| a.upgrade().is_none() && b.upgrade().is_none()));
+    drop(first);
+    assert!(owners.iter().all(|(a, b)| a.upgrade().is_none() && b.upgrade().is_none()));
+    Ok(())
+}
+
+#[test]
+fn retained_sources_check_pool_capacity_empty_and_keyless_contracts() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let (source, weak) = for_source(&pool, &[17, 19, 17])?;
+    assert!(unsafe {
+        OwnedSource::new(pool.clone(), source.view(), 4, Arc::new(()))
+    }.is_err());
+    let foreign = Pool::new(0, 0, 0)?;
+    assert!(unsafe {
+        Keyless::from_sources(foreign, params(2, 0), &[], std::slice::from_ref(&source),
+            std::ptr::null(), 3)
+    }.is_err());
+    assert!(unsafe {
+        Keyless::from_sources(pool.clone(), params(2, 0), &[], std::slice::from_ref(&source),
+            std::ptr::null(), 4)
+    }.is_err());
+    type Keyless = RadixLayout<(), (i64,), u64, u32, SourceColumns<(i64,)>>;
+    let layout = unsafe {
+        Keyless::from_sources(pool.clone(), params(2, 0), &[], std::slice::from_ref(&source),
+            std::ptr::null(), 3)?
+    };
+    assert_eq!(layout.len(), 3);
+    let empty = unsafe {
+        Keyless::from_sources(pool.clone(), params(2, 0), &[], std::slice::from_ref(&source),
+            std::ptr::null(), 0)?
+    };
+    assert!(empty.is_empty());
+    type Payloadless = RadixLayout<(i64,), (), u64, u32, SourceColumns<()>>;
+    let payloadless = unsafe {
+        Payloadless::from_sources(pool, params(2, 0), std::slice::from_ref(&source), &[],
+            std::ptr::null(), 3)?
+    };
+    assert_eq!(payloadless.len(), 3);
+    drop((source, layout));
+    assert!(weak.upgrade().is_none(), "empty and payloadless layouts retain no unused sources");
+    drop((empty, payloadless));
+    Ok(())
+}
+
+#[test]
+fn retained_row_and_packed_projections_build_on_shared_lane() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let lane = pool.lane()?;
+    let rows = 1051;
+    let keys = (0..rows).map(|row| DOMAIN[row % DOMAIN.len()]).collect::<Vec<_>>();
+    let serials = (0..rows).map(|row| framed_payload(row, 3)).collect::<Vec<_>>();
+    let row_words = keys.iter().zip(&serials).flat_map(|(&key, &serial)| [key as u64, serial as u64])
+        .collect::<Vec<_>>();
+    let row_storage = Arc::new(Buffer::from_host(pool.clone(), &row_words)?);
+    let row_weak = Arc::downgrade(&row_storage);
+    let mut key_view = SourceView::from(ColumnView {
+        headers: std::ptr::null(), data: row_storage.ptr(), len: rows as u64,
+        count: std::ptr::null(), codec: Codec::Plain as u32,
+    });
+    key_view.stride = 2;
+    let mut serial_view = key_view;
+    serial_view.column.data = row_storage.ptr().wrapping_add(1);
+    let key = unsafe { OwnedSource::new(pool.clone(), key_view, rows, row_storage.clone())? };
+    let serial = unsafe { OwnedSource::new(pool.clone(), serial_view, rows, row_storage)? };
+    // A twelve-bit source field crosses the 64-bit boundary of two-word rows.
+    let packed_words = (0..rows as u64).flat_map(|tag| [tag << 60, tag >> 4]).collect::<Vec<_>>();
+    let packed_storage = Arc::new(Buffer::from_host(pool.clone(), &packed_words)?);
+    let packed_weak = Arc::downgrade(&packed_storage);
+    let tag_view = SourceView {
+        column: ColumnView {
+            headers: std::ptr::null(), data: packed_storage.ptr(), len: rows as u64,
+            count: std::ptr::null(), codec: Codec::Plain as u32,
+        },
+        stride: 2, packed: 1, shift: 60, mask: 4095, base: 0,
+    };
+    let tag = unsafe { OwnedSource::new(pool.clone(), tag_view, rows, packed_storage)? };
+    let mut selected = (0..rows as u32).rev().collect::<Vec<_>>();
+    selected.extend_from_slice(&[0, 1024, 0]);
+    let positions = Buffer::from_host(pool.clone(), &selected)?;
+    let fork = pool.context().new_event(None)?;
+    fork.record(pool.stream())?;
+    lane.stream().wait(&fork)?;
+    let layout = unsafe {
+        SourceLookup::from_sources(lane.clone(), params(2, 3), &[key], &[serial, tag],
+            positions.ptr(), selected.len())?
+    };
+    let cpu = RadixRun::from_pairs(selected.iter().map(|&row| {
+        let row = row as usize;
+        (keys[row], (serials[row], row as u32))
+    }));
+    check_lookup(&lane, &layout, &cpu)?;
+    assert!(row_weak.upgrade().is_some());
+    assert!(packed_weak.upgrade().is_some());
+    drop(layout);
+    assert!(row_weak.upgrade().is_none());
+    assert!(packed_weak.upgrade().is_none());
     Ok(())
 }

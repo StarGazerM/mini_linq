@@ -1621,6 +1621,28 @@ pub(crate) fn check(
             return Err(error("only resident sources fold interval selections"));
         }
     }
+    // Source-built radix recipes refer to the source realization rather than
+    // duplicating its origin or interval. The checks above prove that chain's
+    // provenance and selection; require the exact owner and field coverage here.
+    for (name, layouts) in &analysis.gpu_bindings.providers {
+        for layout in layouts.iter().filter(|layout| layout.abi == ProviderAbi::Radix) {
+            let build = layout.radix.as_ref()
+                .map(|radix| &radix.source_build)
+                .ok_or_else(|| error("radix provider lacks its owned source build"))?;
+            let source = records.sources.get(&build.source)
+                .ok_or_else(|| error("radix provider lacks its source owner"))?;
+            if build.source != *name
+                || build.row_map.source != *name
+                || !matches!(source.access, SourceAccess::Provider { .. })
+                || matches!(source.origin, SourceOrigin::RadixRelation { .. })
+                || build.fields.iter().any(|field| !source.columns.contains_key(field))
+                || step_builds(&records.steps, analysis, name)
+                || layouts.len() != 1
+            {
+                return Err(error("radix source coverage, selection or owner differs from its recipe"));
+            }
+        }
+    }
     let definitions: Vec<_> = program
         .sequence
         .definitions
@@ -2033,6 +2055,12 @@ impl CheckState {
             && !source_builds(&records.sources, result);
         match provider {
             Some(provider) if required => {
+                if provider.layouts.iter().any(|&index| {
+                    facts.analysis.gpu_bindings.providers[result]
+                        .get(index).is_none_or(|layout| layout.abi != ProviderAbi::Range)
+                }) {
+                    return Err(error("publication providers require the recorded Range build capability"));
+                }
                 if facts
                     .first_reader(result)
                     .is_some_and(|reader| Some(reader) < facts.position(publication))
