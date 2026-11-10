@@ -1426,6 +1426,75 @@ bytes before they certify a set. Same-length rewrites with preserved mtimes
 are detected for key columns only; other packed columns trust (path, length,
 mtime) and remain an opt-in derived artifact. No default changes.
 
+### 12.7 GPU-first manifest cold load (P6 C, slice L)
+
+The manifest projection loader reads stored i32/i64 bytes directly into two
+reusable 8-MiB pinned buffers and overlaps file reads with asynchronous H2D.
+Each column is encoded immediately and its raw device buffer freed before the
+next column is read: raw columns never coexist. The default path no longer
+widens columns, computes extrema, verifies sets, or gathers rows on the host.
+Device reductions provide exact bounds and dictionary-code validation.
+
+Projected verification hashes logical values directly from the encoded columns,
+radix-sorts 32-bit hashes with CUB, checks complete tuples within equal-hash runs,
+and compacts first-occurrence device positions. Hash collisions never prove
+equality. Only duplicate projections are gathered/re-encoded from their encoded
+sources, without materializing raw columns. An already-distinct input returns no
+selection; a proven distinct subset still proves its supersets
+(DR-ProjectionReuse). Declared verified keys retain their stored-byte SHA path
+(IO-GpuVerifiedKey). The resident FOR layout and generated queries are unchanged.
+`hostfor` remains the explicit host-packing measurement option for full source
+columns; duplicate projections are gathered on the device in the same FOR
+layout. Its persistent cache retains source identity and key rehash semantics;
+even a non-key projection can now be verified directly from packed cache hits.
+The separate H05 `tpch_domains` catalog path is outside this cutover.
+
+Load reports separate file I/O (`read_ms`), exact device verification including
+completion (`verify_ms`), and staging/H2D/device encoding
+(`upload_encode_ms`, excluding overlapped file I/O). `source_bytes` counts
+native stored bytes actually read, rather than widened upload bytes.
+`peak_device_bytes` reports the pool's peak live allocation bytes;
+`peak_reserved_device_bytes` reports the largest observed pool reservation.
+These exclude CUDA context/module memory and CUB's external control buffers.
+Final view/count buffers are allocated before sort scratch, so tiny published
+descriptors cannot pin dead sort chunks. After selected re-encoding, positions
+are dropped and the pool returns wholly unused chunks. `device_bytes_after_load`
+and `reserved_device_bytes_after_load` expose the resulting live/reserved bytes.
+`CQ_GPU_VRAM_EXCEEDED` covers both a configured pool limit and driver OOM;
+TPC-H creates unlimited pools, so its driver OOM is not a startup-memory budget.
+
+Single warm-page-cache h06 sanity samples, RTX 6000 Ada, with a foreign vLLM
+tenant present (not controlled performance evidence; Main owns paired timing):
+
+| Scale | Binary | Read ms | Verify ms | Upload/encode ms | Process s |
+|---|---|---:|---:|---:|---:|
+| SF1 | main | 320.00 | 15.44 | 61.78 | 1.412 |
+| SF1 | slice L | 29.79 | 20.67 | 85.57 | 1.197 |
+| SF10 | main | 3231.78 | 371.54 | 418.87 | 4.864 |
+| SF10 | slice L | 284.74 | 80.21 | 97.69 | 1.060 |
+
+Five-ms NVML sampling found the **same query-loop process residency** on both
+binaries: 591,396,864 B (SF1), 1,887,436,800 B (SF10). Slice L's transient peaks
+were 786,432,000 / 3,854,565,376 B; sort scratch increases the load peak but does
+not consume steady-state query headroom. After trim, its pool live/reserved
+bytes were 51,023,360 / 144,029,184 (SF1) and
+509,958,400 / 1,439,665,920 (SF10). Baseline pool counters were not instrumented.
+
+SF10 `perf record -F 199 --call-graph dwarf` captured 226 CPU samples: 54 of
+75 samples whose stack included `Loader::build` were file reads (72%).
+No loader stack sampled host `unique_rows`, widening or bounds folding; CUDA
+context initialization/teardown still dominates other parts of the process.
+All 26 advised SF1 queries passed full warmup/first-sample comparisons;
+h06 SF10 passed, as did HostFor cache miss/hit (six hits, zero raw reads).
+The benchmark retains its existing `full_then_sampled` report policy.
+Device-columns tests passed 35/35; TPC-H tests passed 52 with one existing
+idle-GPU-only test ignored. Formal registry checks passed.
+
+Evidence: `experiments/gpu/compare/p6c-load-2026-11-10.json`. Exact collision
+checks remain potentially quadratic for adversarial hash runs. This cutover
+adds three audited V sites for device set admission and three I sites for
+selected re-encoding; it does not claim code-domain execution at those sites.
+
 ## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
 
 1. **Strings are interned at input on every target.** No query column has

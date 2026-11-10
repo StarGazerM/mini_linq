@@ -27,6 +27,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   affected queries also pass SF1/SF10 with FOR, Plain64, Delta and native base
   layouts. Core tests: 80; device-column tests: 20. Timing is deferred to the
   clean paired campaign because a foreign GPU tenant was active.
+- GPU TPC-H manifest cold loads use reusable pinned native-width staging;
+  exact projected-set verification, row selection, bounds and encoding run
+  on the device, streaming one raw column at a time and trimming dedup scratch
+  before queries. Verified-key SHA checks, projection reuse and explicit
+  HostFor/cache measurements retain their semantics. Reports expose load phases
+  and peak/after-load memory (STORAGE §12.7).
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`
