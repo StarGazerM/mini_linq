@@ -1,6 +1,6 @@
 //! Machine-selected collective and provider decomposition. Keyed groups route
 //! their keys; global groups route complete valuations before per-part Canon,
-//! or use contiguous tiles when BE-GroupPartial checks global uniqueness.
+//! or consider contiguous partial groups when Physical records no input canon.
 use crate::rewrites::KeyPartition;
 use cq_lang_sequence::structures::{self, physical};
 use crate::{Advice, Planned};
@@ -198,7 +198,7 @@ pub(crate) fn apply(
         else {
             continue;
         };
-        if group_name(&definition.term).is_some() && partial_groups {
+        if partial_groups && partial_group(&planned.physical, &definition.term) {
             keys.clear();
         } else if keys.is_empty() {
             continue;
@@ -647,10 +647,24 @@ fn group_name(term: &Term) -> Option<&Ident> {
     }
 }
 
-pub(crate) fn has_partial_groups(program: &Program) -> bool {
-    program.sequence.definitions.iter().any(|definition| {
-        group_name(&definition.term).is_some()
+// Formal rule PL-GroupPartial: Only consider contiguous partial aggregation when
+// Physical records no canon on this group's input; do not repeat uniqueness.
+fn partial_group(physical: &physical::Program, term: &Term) -> bool {
+    group_name(term).is_some_and(|name| {
+        physical.program.definitions.iter()
+            .find(|definition| definition.name == *name)
+            .is_some_and(|definition| match &definition.operator {
+                Operator::Group(group) => physical.program.definitions.iter()
+                    .find(|input| input.name == group.input)
+                    .is_some_and(|input| input.canon.is_none()),
+                _ => false,
+            })
     })
+}
+
+pub(crate) fn has_partial_groups(physical: &physical::Program, program: &Program) -> bool {
+    program.sequence.definitions.iter()
+        .any(|definition| partial_group(physical, &definition.term))
 }
 
 pub(crate) fn contains_partition(term: &Term) -> bool {

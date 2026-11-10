@@ -188,6 +188,61 @@ fn replay(physical: &Physical, structures: &Structures, source: &Program, planne
     assert_eq!(replayed, planned.program);
 }
 
+// Recorded q0 Physical/Structures/Sequence inputs from the retail corpus.
+// The fixture catalog admits the recorded providers at the three task levels;
+// it contains no provider-selection or workload-query implementation.
+fn retail_group_schedule(source: &str) -> cq_sequence_plan::Planned {
+    use syn::parse::Parser;
+    let (physical, structures, source) = (|input: syn::parse::ParseStream<'_>| {
+        let physical: Physical = input.parse()?;
+        let structures = Structures::parse(input, &physical)?;
+        let source: Program = input.parse()?;
+        Ok((physical, structures, source))
+    }).parse_str(source).unwrap();
+    let levels = vec![
+        vec!["host".into()],
+        vec!["host".into(), "pool".into()],
+        vec!["host".into(), "pool".into(), "task".into()],
+    ];
+    let mut available = Catalog {
+        codecs: vec![CodecToken {
+            codec: None, codec_id: None, ordered: true, levels: levels.clone(),
+        }],
+        ..Catalog::default()
+    };
+    for declaration in &structures.structures.providers.declarations {
+        available.register(declaration.clone(), levels.clone());
+    }
+    if let Some(sharded) = available.declarations.iter()
+        .find(|declaration| declaration.token == "sharded")
+    {
+        for inner in &available.declarations {
+            if inner.facts.shared && inner.token != sharded.token {
+                if let Ok(provider) = sharded.compose(inner.instance()) {
+                    available.providers.push(cq_lang_sequence::CatalogEntry {
+                        provider, levels: levels.clone(),
+                    });
+                }
+            }
+        }
+    }
+    decompose(&physical, &structures, &source, &machine(Some(64)), &available).unwrap()
+}
+
+#[test]
+fn retail_group_schedules_follow_physical_canon_boundaries() {
+    for (input, expected) in [
+        (include_str!("fixtures/retail_h02.structures"), include_str!("fixtures/retail_h02.sequence")),
+        (include_str!("fixtures/retail_h13.structures"), include_str!("fixtures/retail_h13.sequence")),
+        (include_str!("fixtures/retail_h15.structures"), include_str!("fixtures/retail_h15.sequence")),
+        (include_str!("fixtures/retail_h20.structures"), include_str!("fixtures/retail_h20.sequence")),
+    ] {
+        let planned = retail_group_schedule(input);
+        let expected: Program = syn::parse_str(expected).unwrap();
+        assert_eq!(planned.program.to_token_stream().to_string(), expected.to_token_stream().to_string());
+    }
+}
+
 #[test]
 fn grouped_tpch_plan_prints_fixed_partition_and_replays() {
     let (mut physical, mut structures, source) = grouped(false);
@@ -274,7 +329,7 @@ fn known_small_collectives_pay_setup_and_large_collectives_amortize_it() {
 }
 
 #[test]
-fn grouped_named_canon_routes_before_partial_grouping_and_replays() {
+fn grouped_named_canon_retains_routed_canonicalization_and_replays() {
     for global in [false, true] {
         let (mut physical, mut structures, source) = named_grouped(global);
         let machine = machine(Some(8));
@@ -292,20 +347,21 @@ fn grouped_named_canon_routes_before_partial_grouping_and_replays() {
             .iter()
             .find(|d| d.name == "distinct")
             .unwrap();
-        // Global uniqueness comes from the retained full-valuation Canon,
-        // routed before the contiguous partial fold. No key advice removes it.
-        assert_eq!(
-            distinct.term,
-            syn::parse_quote!(store flatten canon partition_k
-                [extendedprice, linenumber, linestatus, orderkey, quantity, returnflag]
-                (8) __cq_key_input_distinct)
-        );
+        // Canon stays inside routed parts, before their groups.
+        assert_eq!(distinct.term, syn::parse_quote!(input));
         let alias = planned.program.sequence.definitions.iter()
             .find(|d| d.name == "alias").unwrap();
-        assert_eq!(alias.term, syn::parse_quote!(tile 8 distinct));
+        assert_eq!(alias.term, syn::parse_quote!(distinct));
         let result = planned.program.sequence.definitions.iter()
             .find(|d| d.name == "result").unwrap();
-        assert_eq!(result.term, syn::parse_quote!(store group totals alias));
+        assert_eq!(result.term, if global {
+            syn::parse_quote!(store group totals canon partition_k
+                [extendedprice, linenumber, linestatus, orderkey, quantity, returnflag]
+                (8) __cq_key_input_result)
+        } else {
+            syn::parse_quote!(store flatten group totals canon partition_k
+                [returnflag, linestatus] (8) __cq_key_input_result)
+        });
         replay(&physical, &structures, &source, &planned);
     }
 }
@@ -1516,6 +1572,9 @@ fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
     let machine = machine(Some(8));
     for groups in [1usize, 4096] {
         let (mut physical, mut structures, mut source) = grouped(false);
+        physical.program.definitions[0].canon = None;
+        structures.structures.entries.retain(|entry|
+            !matches!(entry.structure, structures::Structure::Dedup { .. }));
         source.sequence.definitions.last_mut().unwrap().term =
             syn::parse_quote!(store group totals input);
         source.evidence = syn::parse2(quote!(evidence from authored("passes/cq-sequence-plan/tests/key_partition.rs fixture") {
@@ -1557,6 +1616,9 @@ fn keyed_group_cost_compares_partial_map_merge_with_key_routing() {
 #[test]
 fn unknown_partial_map_merge_is_symbolic_not_free() {
     let (mut physical, mut structures, mut source) = grouped(false);
+    physical.program.definitions[0].canon = None;
+    structures.structures.entries.retain(|entry|
+        !matches!(entry.structure, structures::Structure::Dedup { .. }));
     source.sequence.definitions.last_mut().unwrap().term =
         syn::parse_quote!(store group totals input);
     let planned = decompose(&physical, &structures, &source, &machine(Some(8)), &catalog()).unwrap();

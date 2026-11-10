@@ -688,6 +688,10 @@ Let $t_0=t$, $t_i=r_i(t_{i-1})$, and let $A(t)$ record authored choices.
   \mathsf{needs}(p)\subseteq\mathsf{facts}(k).\mathsf{reads}\ \land\
   \mathsf{reads}(p)\subseteq\mathsf{levels}(k)}
 
+\Rule{PL-GroupPartial}{g=\operatorname{group}(r,\ldots)\in D_{\mathrm{Physical}}
+ \quad \neg\mathsf{canon}_{\mathrm{Physical}}(r)}
+ {\mathsf{considerContiguousPartial}(g)}
+
 \Rule{PL-Cost}{C=(c_1,\ldots,c_k)\text{ admissible, preserving }A(t)\quad
  \mathsf{groupMode}(c)=\mathsf{Analysis}(c).\mathsf{partialGroups}\quad
  \kappa(c)=(W(c),I(c),S(c),B(c),\#\mathsf{stores}(c),\#\mathsf{dispatches}(c))}
@@ -740,11 +744,16 @@ An inversion is a Lookup evaluated after an upstream Expand in the same
 pipeline; retained references begin new pipelines.
 Bounds and coefficient dominance establish comparisons; unresolved
 comparisons, like equal costs, retain the earlier candidate.
-For a keyed group, both contiguous partial-map folding and group-key routing
-remain candidates, subject to their existing checked uniqueness premises.
-The former is enumerated first, then the native schedule and routed
-alternatives; cardinality uncertainty uses the same stable incomparability
-rule, not a query-specific estimate.
+Contiguous partial folding is considered only under PL-GroupPartial: Physical
+records no canon on the group's input. Otherwise the automatic group candidate
+retains key routing, so canonicalization can execute inside key-disjoint parts
+instead of publishing a global canonical stream before task-local groups.
+This consumes Physical's recorded boundary, without repeating uniqueness
+analysis or changing its canonicalization decision. Explicit authored partial
+schedules remain governed by BE-GroupPartial, not by this candidate policy.
+Eligible partial candidates are enumerated first, then the native schedule
+and routed alternatives; cardinality uncertainty uses the same stable
+incomparability rule, not a query-specific estimate.
 Partial folding owns one accumulator map per machine scheduler partition,
 not per logical tile. Its fold span uses that scheduler width. Host merge
 adds serial dependency span for up to $P\,|G|$ partial aggregate states,

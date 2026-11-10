@@ -24,7 +24,11 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   remain authored independently. Sequence evidence is unchanged: its
   Count/Bounds source-binding migration is separate, and its other facts do
   not duplicate the current file model.
-
+- Sequence considers contiguous partial groups only when Physical records no
+  canon on the group's input (`PL-GroupPartial`). Canon-dependent groups keep
+  group-key routing and canonicalize inside the routed parts, restoring H02
+  parallel grouping without changing uniqueness analysis, input-set semantics,
+  or the faster H01/H13/H15/H18 partial schedules.
 - GPU workspace pins cuda-oxide `57eacecc0` / RCCL `a776d01c`: the device
   pipeline's scalarization, slot promotion and verification passes no longer do
   quadratic work. `cq-gpu-sequence-runtime` (530 device functions): device

@@ -1,0 +1,14 @@
+sequence
+{
+    r0 = tile 64 rows r0;
+    r1 = rows r1;
+    r2 = flatten lookup r1 [customer_key] r0;
+    r3 = map r3 r2;
+    r4 = store group r4 r3;
+    __sequence_output = store flatten tile 64 r4;
+    output count;
+} graded tasks
+{
+    r0 at host.pool.task; r1 at host; r2 at host.pool.task;
+    r3 at host.pool.task; r4 at host.pool; __sequence_output at host.pool;
+}

@@ -318,7 +318,7 @@ fn decompose_in(
         });
         let facts = checker.check_shared(&prepared.physical, &prepared.structures, &prepared.program)?;
         let partition_choices = key_partition::choices(&prepared.physical, &prepared.structures, &prepared.program, &facts, policies)?;
-        let partial_groups = key_partition::has_partial_groups(&prepared.program);
+        let partial_groups = key_partition::has_partial_groups(&prepared.physical, &prepared.program);
         for &(width, items) in &schedules {
             let mut best: Option<(Cost, Planned)> = None;
             for segmented in [true, false] {
