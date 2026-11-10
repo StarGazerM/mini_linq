@@ -494,6 +494,15 @@ work is lower on H09 and D72.
 
 ## Left work
 
+0. **Known regression, CPU H02 `par` 1.53× (2026-11-10).** Deduplication is
+   now decided only by the rule (one uniqueness analysis; inputs are sets by
+   IO contract), so Sequence considers partial-group schedules for every group.
+   For H02 par it picks per-tile partial groups plus a serial merge over
+   group-key routing (35 → 56 ms). Preferring routing on ties fixes H02 but
+   regresses H13 (+41%) and H15 (+122%); choosing correctly needs the M7 cost
+   model to value parallel upstream work. Evidence:
+   `design-notes/canon-unique-timing.md`, `design-notes/canon-h02-tie-report.md`.
+
 1. **D72.** Its decisive choice is data-dependent: `ps_availqty > 0` keeps
    every PartSupp row. The current `advised` recipe in
    `features/workloads/src/queries/retail/tpch/retail_d72_inner.rs` is
