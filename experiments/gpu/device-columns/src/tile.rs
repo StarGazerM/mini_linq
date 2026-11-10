@@ -237,6 +237,7 @@ pub unsafe fn window_lanes<P: PayloadRead>(frame: Frame, lane: usize, alive: u8,
         if alive & (1 << k) != 0 {
             let physical = lane + k * BLOCK_THREADS;
             let code = if window.kind == LOGICAL {
+                // DECODE V: P6 Delta/native predicate inverse reconstructs logical values instead of comparing codes.
                 ordinal(unsafe { fallback(frame, physical, payload) })
             } else {
                 let code = unsafe { unpack(frame.data, frame.width, physical, payload) };

@@ -1028,6 +1028,8 @@ Rename/Select/Point/Range/Guard/Bind/Project spine ending in a keyless grid
 fold. An independent realization checker validates the record without
 replaying selection. Admission is automatic, with no advice knob; all other
 shapes retain their ordinary expansion.
+Tile bound captures retain GPU-Capture's source-domain gate: an empty source
+passes an unused zero argument without evaluating the captured expression.
 
 One 256-thread block handles a vector, grid-striding over vectors. Each
 thread visits four physical transposed positions, shared across columns,
@@ -1066,8 +1068,9 @@ All 26 queries passed complete warmup and first-measured answer comparisons at
 SF1. h06, h11 and h15 additionally passed SF1/SF10 with each of `for`, `plain64`,
 `delta` and `native`. Later benchmark invocations use the existing sampled
 policy, so this is full-first exactness, not an all-samples-full JSON flag.
-The 80 Sequence-core and 20 device-column tests passed, including all widths,
-extreme intervals, partial transposed tails and exact payload-load counters.
+The 81 Sequence-core and 20 device-column tests passed, including empty-source
+capture gating, all widths, extreme intervals, partial transposed tails and
+exact payload-load counters.
 No timing effect is claimed: a foreign VLLM tenant was active before sampling;
 the clean paired timing campaign is separate.
 
