@@ -135,6 +135,42 @@ mod representation_tests {
             (usize::MAX as i128).min(i64::MAX as i128)
         );
     }
+
+    #[test]
+    fn radix_controls_reuse_alternating_stage_sizes() -> crate::Result<()> {
+        let pool = crate::Pool::new(0, 0, 0)?;
+        let program = rccl_cub::cuda::Program::load(pool.context())?;
+        let launch = program.on(pool.stream())?;
+        let controls = |rows, wide| -> crate::Result<(u64, u64, u64)> {
+            let mut addresses = (0, 0, 0);
+            crate::with_radix_workspace(&pool, &launch, rows, wide, |scratch| {
+                let (bins, lookback, counters) = scratch.__parts_mut();
+                addresses = (bins.cu_deviceptr(), lookback.cu_deviceptr(), counters.cu_deviceptr());
+                Ok(())
+            })?;
+            Ok(addresses)
+        };
+        let small = controls(10_000, true)?;
+        let large = controls(20_000, true)?;
+        let range = controls(10_000, false)?;
+        assert_ne!(small, large);
+        assert_ne!(small, range);
+        assert_eq!(small, controls(10_000, true)?);
+        assert_eq!(large, controls(20_000, true)?);
+        assert_eq!(range, controls(10_000, false)?);
+        for rows in 30_000..30_000 + 2 * crate::RADIX_WORKSPACE_CACHE_LIMIT {
+            controls(rows, true)?;
+            // A hot stage survives misses, but cold recursive sizes do not
+            // accumulate for the lifetime of a stratum.
+            assert_eq!(small, controls(10_000, true)?);
+            assert!(crate::RADIX_WORKSPACES.with(|cache| {
+                cache.borrow().len() <= crate::RADIX_WORKSPACE_CACHE_LIMIT
+            }));
+        }
+        crate::release_cached_scratch(&pool);
+        assert!(crate::RADIX_WORKSPACES.with(|cache| cache.borrow().is_empty()));
+        Ok(())
+    }
 }
 
 pub struct GroupedOutput {
@@ -363,14 +399,6 @@ pub unsafe fn fold(
     let flags = temporary::<u32>(stream, rows)?;
     let mut count = temporary::<u64>(stream, 1)?;
     if rows != 0 {
-        let mut scratch = if keys == 0 {
-            None
-        } else {
-            Some(rccl_cub::device_radix_sort_pairs_buffer_workspace::<
-                u64,
-                u32,
-            >(&launch, rows)?)
-        };
         if live.is_none() {
             let shape = module.prepare_identity(element.config(1))?;
             let blocks = element.grid(shape.function(), rows)?;
@@ -405,12 +433,15 @@ pub unsafe fn fold(
                 (&mut alternate_keys, &mut alternate_order),
             )
             .ok_or("group radix extents differ")?;
-            rccl_cub::device_radix_sort_pairs_buffer(
-                &launch,
-                &mut pairs,
-                0..64,
-                scratch.as_mut().unwrap(),
-            )?;
+            crate::with_radix_workspace(&pool, &launch, rows, true, |scratch| {
+                rccl_cub::device_radix_sort_pairs_buffer(
+                    &launch,
+                    &mut pairs,
+                    0..64,
+                    scratch,
+                )?;
+                Ok(())
+            })?;
             let swapped = !pairs.current_is_first();
             drop(pairs);
             if swapped {

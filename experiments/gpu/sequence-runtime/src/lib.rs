@@ -249,7 +249,7 @@ impl Drop for QueryScope {
         for release in cleanup.into_iter().flatten() {
             release();
         }
-        RANGE_RADIX_WORKSPACE.with(|cache| cache.borrow_mut().take());
+        RADIX_WORKSPACES.with(|cache| cache.borrow_mut().clear());
         TEMP_U32.with(|cache| cache.borrow_mut().take());
         TEMP_U64.with(|cache| cache.borrow_mut().take());
         canon::release_query_cache();
@@ -940,29 +940,20 @@ impl RangeProvider {
 thread_local! {
     static BUILD_MODULE: RefCell<Option<(Arc<CudaContext>, kernels::build::LoadedModule)>> =
         const { RefCell::new(None) };
-    static RANGE_RADIX_WORKSPACE: RefCell<Option<RangeRadixWorkspace>> =
-        const { RefCell::new(None) };
+    static RADIX_WORKSPACES: RefCell<Vec<RadixWorkspace>> =
+        const { RefCell::new(Vec::new()) };
 }
 
-/// Release this thread's idle range-sort device scratch.
+/// Release this thread's idle range-sort and grouped-sort device scratch.
 ///
 /// Call after dropping stratum-local providers, before [`Pool::release_unused`].
 /// Published results and checked-out providers retain their own allocations.
 /// Frees follow prior uses on the matching pool's stream; this does not wait
 /// for completion. Native CUDA scratch is not included in pool memory stats.
 pub fn release_cached_scratch(pool: &Arc<Pool>) {
-    let scratch = RANGE_RADIX_WORKSPACE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache
-            .as_ref()
-            .is_some_and(|scratch| Arc::ptr_eq(&scratch.pool, pool))
-        {
-            cache.take()
-        } else {
-            None
-        }
+    RADIX_WORKSPACES.with(|cache| {
+        cache.borrow_mut().retain(|scratch| !Arc::ptr_eq(&scratch.pool, pool));
     });
-    drop(scratch);
 }
 
 /// Keep only the most recently used context's named build module on this thread.
@@ -979,12 +970,13 @@ pub(crate) fn build_module(pool: &Pool) -> Result<kernels::build::LoadedModule> 
     })
 }
 
-struct RangeRadixWorkspace {
+struct RadixWorkspace {
     rows: usize,
+    wide_keys: bool,
     workspace: rccl_cub::DeviceRadixSortBufferWorkspace,
     pool: Arc<Pool>,
 }
-impl Drop for RangeRadixWorkspace {
+impl Drop for RadixWorkspace {
     fn drop(&mut self) {
         // Match CanonScratch: consuming these controls is not exposed by RCCL.
         // Empty replacements allocate nothing; real frees stay stream ordered.
@@ -1002,36 +994,52 @@ impl Drop for RangeRadixWorkspace {
     }
 }
 
-fn with_range_radix_workspace(
+// Bound native scratch across changing recursive relation cardinalities, while
+// retaining the working set of range/group stages in a query. This limits the
+// number of owners, not the size or initialization policy of any workspace.
+const RADIX_WORKSPACE_CACHE_LIMIT: usize = 8;
+
+/// Retain a bounded LRU of exact-size controls for the active pool. RCCL clears
+/// controls before each sort; sharing is safe only on this pool's stream.
+/// Published results never borrow this scratch.
+fn with_radix_workspace(
     pool: &Arc<Pool>,
     launch: &rccl_cub::cuda::Launch<'_, '_>,
     rows: usize,
+    wide_keys: bool,
     sort: impl FnOnce(&mut rccl_cub::DeviceRadixSortBufferWorkspace) -> Result<()>,
 ) -> Result<()> {
-    RANGE_RADIX_WORKSPACE.with(|cache| {
+    RADIX_WORKSPACES.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache
-            .as_ref()
-            .is_none_or(|scratch| !Arc::ptr_eq(&scratch.pool, pool) || scratch.rows != rows)
-        {
-            // Keep only the latest exact-row workspace, not one allocation
-            // for every relation size encountered on this thread. Free before
-            // allocating its replacement to avoid overlapping their lifetimes.
-            drop(cache.take());
-            pool.context().bind_to_thread()?;
-            *cache = Some(RangeRadixWorkspace {
-                rows,
-                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(
-                    launch, rows,
-                )?,
-                pool: pool.clone(),
-            });
-        }
-        let scratch = cache.as_mut().unwrap();
-        // RCCL clears the entire lookback allocation each pass, so retain exact
-        // row-sized controls rather than clearing the largest provider's scratch.
-        // The retained pool fixes the stream, so successive uses remain ordered.
-        sort(&mut scratch.workspace)
+        cache.retain(|scratch| Arc::ptr_eq(&scratch.pool, pool));
+        let index = match cache.iter().position(|scratch| {
+            scratch.rows == rows && scratch.wide_keys == wide_keys
+        }) {
+            Some(index) => {
+                let scratch = cache.remove(index);
+                cache.push(scratch);
+                cache.len() - 1
+            }
+            None => {
+                if cache.len() == RADIX_WORKSPACE_CACHE_LIMIT {
+                    drop(cache.remove(0));
+                }
+                pool.context().bind_to_thread()?;
+                let workspace = if wide_keys {
+                    rccl_cub::device_radix_sort_pairs_buffer_workspace::<u64, u32>(launch, rows)?
+                } else {
+                    rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(launch, rows)?
+                };
+                cache.push(RadixWorkspace {
+                    rows,
+                    wide_keys,
+                    workspace,
+                    pool: pool.clone(),
+                });
+                cache.len() - 1
+            }
+        };
+        sort(&mut cache[index].workspace)
     })
 }
 
@@ -1364,7 +1372,7 @@ impl<'pool> RangeBuilder<'pool> {
                     (&mut alternate_keys, &mut alternate_order),
                 )
                 .ok_or("radix double buffer extents differ")?;
-                with_range_radix_workspace(pool, &launch, rows, |workspace| {
+                with_radix_workspace(pool, &launch, rows, false, |workspace| {
                     rccl_cub::device_radix_sort_pairs_buffer(
                         &launch,
                         &mut pairs,
