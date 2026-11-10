@@ -20,3 +20,30 @@ cq-relational-lowering.workspace = true
 cq-testkit.workspace = true
 quote.workspace = true
 syn.workspace = true
+
+[[test]]
+name = "refinement_00"
+
+[[test]]
+name = "refinement_01"
+
+[[test]]
+name = "refinement_02"
+
+[[test]]
+name = "refinement_03"
+
+[[test]]
+name = "refinement_04"
+
+[[test]]
+name = "refinement_05"
+
+[[test]]
+name = "refinement_06"
+
+[[test]]
+name = "refinement_07"
+
+[[test]]
+name = "refinement_coverage"

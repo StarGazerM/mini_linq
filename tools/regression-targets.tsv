@@ -35,7 +35,15 @@ architecture	scenario	external-sibling-closure	tools/test_check_external.py
 cq-planners	manifest-target-test	plans	Cargo.toml
 cq-planners	manifest-target-test	protocol	Cargo.toml
 cq-planners	manifest-target-test	elimination_cost	Cargo.toml
-cq-planners-test-driver	manifest-target-test	refinement	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_00	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_01	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_02	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_03	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_04	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_05	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_06	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_07	Cargo.toml
+cq-planners-test-driver	manifest-target-test	refinement_coverage	Cargo.toml
 cq-rewrites	manifest-test	rewrites	Cargo.toml
 cq-ext-support	manifest-test	interfaces	Cargo.toml
 cq-ext-aggregate	manifest-test	correspondence	Cargo.toml
@@ -105,7 +113,17 @@ cq-xtask	oracle	fuzz-quick	Cargo.toml	fuzz
 cq-xtask	oracle	fuzz-full	Cargo.toml	fuzz
 cq-workload-e2e	scenario	typed	features/workloads/check_typed.py
 cq-workload-corpus	manifest-target-test	classic	Cargo.toml
-cq-workload-corpus	manifest-target-test	retail	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_d19_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_d27_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_d72_inner_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_d85_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_h03_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_h05_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_h07_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_h08_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_h09_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_h21_positive_matrix	Cargo.toml
+cq-workload-corpus	manifest-target-test	retail_coverage	Cargo.toml
 cq-workload-corpus	manifest-target-test	configuration_consistency	Cargo.toml
 cq-workload-e2e	manifest-target-test	provider_candidates	Cargo.toml
 cq-workload-corpus	manifest-target-test	compile_fail	Cargo.toml

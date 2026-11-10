@@ -21,3 +21,36 @@ cq-testkit.workspace = true
 cq-sequence-tasks.workspace = true
 rayon = "1"
 inventory = "0.3"
+
+[[test]]
+name = "retail_d19_matrix"
+
+[[test]]
+name = "retail_d27_matrix"
+
+[[test]]
+name = "retail_d72_inner_matrix"
+
+[[test]]
+name = "retail_d85_matrix"
+
+[[test]]
+name = "retail_h03_matrix"
+
+[[test]]
+name = "retail_h05_matrix"
+
+[[test]]
+name = "retail_h07_matrix"
+
+[[test]]
+name = "retail_h08_matrix"
+
+[[test]]
+name = "retail_h09_matrix"
+
+[[test]]
+name = "retail_h21_positive_matrix"
+
+[[test]]
+name = "retail_coverage"

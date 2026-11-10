@@ -69,6 +69,17 @@ Lock scope (enforced by review): a measurement driver takes the CPU-exclusive ti
 
 A test, test binary or gate step that cannot finish (build, link and run) in 100 s is too large: split it into several units that each do, by package, by test binary, by query or by case. A gate is then a list of such units, each run as its own command; no unit needs a longer limit.
 
+The former `cq-planners-test-driver/refinement` binary is eight targets,
+`refinement_00` through `refinement_07`: seed ordinal `i` belongs to `i % 8`,
+with all 11 planners and its reference retained. `refinement_coverage` checks
+the exact 200-seed multiset and model feature coverage without query expansion.
+The former `cq-workload-corpus/retail` binary is ten `retail_<query>_matrix`
+targets (d19, d27, d72_inner, d85, h03, h05, h07, h08, h09, h21_positive).
+`retail_coverage` checks their source-level query union, catalog, and all matrix
+axis pairs using metadata only. The explicit regression inventory includes each
+new target; run each target separately rather than rebuilding the old combined
+binaries. Shared support and the existing query/configuration bodies are reused.
+
 Review before run. Before running a test, read it: say which part changed (CPU compiler, CPU runtime, GPU, IO, tests only), what the test checks, and why the change could affect it. Run only tests that the reading says can be affected; a test that reading already settles (for example one that compares sets when only order changed) is not run. A build that would compile crates the change did not touch is a sign the wrong test or the wrong target directory was chosen.
 
 **Development style (2026-11-07).** (1) One IR per branch, small: a step is

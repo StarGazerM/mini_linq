@@ -32,10 +32,18 @@ fn executable(case: &Case, name: &str, invocation: &str) -> String {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let directory = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let mut consumers = String::new();
-    let mut registry = String::from("const EXECUTABLES: &[ExecutableCase] = &[\n");
+    let mut consumers = std::array::from_fn::<_, 8, _>(|_| String::new());
+    let mut registries = std::array::from_fn::<_, 8, _>(|_| {
+        String::from("const EXECUTABLES: &[ExecutableCase] = &[\n")
+    });
+    let mut seeds = [Vec::new(), Vec::new(), Vec::new(), Vec::new(),
+        Vec::new(), Vec::new(), Vec::new(), Vec::new()];
     for ordinal in 0..200 {
         let seed = ordinal * 2;
+        let shard = ordinal as usize % consumers.len();
+        seeds[shard].push(seed);
+        let consumers = &mut consumers[shard];
+        let registry = &mut registries[shard];
         let case = cq_testkit::fuzz::generate(seed);
         assert!(case.requires_rust_oracle());
         // The independent model printer preserves parentheses, uniform owned
@@ -79,7 +87,16 @@ fn main() {
         )
         .unwrap();
     }
-    registry.push_str("];\n");
-    consumers.push_str(&registry);
-    std::fs::write(directory.join("refinement.rs"), consumers).unwrap();
+    for (shard, (mut consumers, mut registry)) in
+        consumers.into_iter().zip(registries).enumerate()
+    {
+        registry.push_str("];\n");
+        consumers.push_str(&registry);
+        std::fs::write(directory.join(format!("refinement_{shard:02}.rs")), consumers).unwrap();
+    }
+    let metadata = seeds.iter().map(|seeds| format!("&{seeds:?}")).collect::<Vec<_>>().join(",");
+    std::fs::write(
+        directory.join("refinement_seeds.rs"),
+        format!("const SHARD_SEEDS: &[&[u64]] = &[{metadata}];\n"),
+    ).unwrap();
 }
