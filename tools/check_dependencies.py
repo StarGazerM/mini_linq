@@ -217,6 +217,9 @@ def check(data, announce=True):
                 # Catalog realization uses checked core selection/lowering,
                 # never the optional feature frontends for those operations.
                 "cq-sequence-plan": {"cq-structure-selection", "cq-sequence-lowering"},
+                # Ordering reads counts and keys from the neutral evidence
+                # document that the source's DeclaredEvidence carries.
+                "cq-order": {"cq-evidence"},
             }.get(name, set())
             allowed = required | {"cq-syntax"} | adapters
             if internal & (set(LANGUAGES) - {"cq-syntax"}) != required | (adapters & set(LANGUAGES)):
