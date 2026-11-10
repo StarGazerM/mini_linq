@@ -235,8 +235,10 @@ dependencies = [
 name = "cq-order"
 version = "0.1.0"
 dependencies = [
+ "cq-evidence",
  "cq-lang-cq",
  "cq-lang-vo",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",

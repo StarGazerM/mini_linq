@@ -287,51 +287,6 @@ fn checked<T>(
     })
 }
 
-/// Manifest row counts and the declared TPC-H primary keys of each base
-/// relation. Keys are assertions about the dbgen input, not cardinality
-/// estimates; a projected loader carries a key only when every key column is
-/// present.
-fn relation_facts(
-    kernel: &source::Kernel,
-    manifest: &Manifest,
-) -> Vec<(syn::Ident, usize, Option<Vec<syn::Ident>>)> {
-    kernel
-        .relations
-        .iter()
-        .map(|relation| {
-            let table = relation.table.to_string();
-            let key: &[&str] = match table.as_str() {
-                "lineitem" => &["l_orderkey", "l_linenumber"],
-                "orders" => &["o_orderkey"],
-                "part" => &["p_partkey"],
-                "partsupp" => &["ps_partkey", "ps_suppkey"],
-                "supplier" => &["s_suppkey"],
-                "customer" => &["c_custkey"],
-                "nation" => &["n_nationkey"],
-                "region" => &["r_regionkey"],
-                _ => &[],
-            };
-            let columns = (!key.is_empty())
-                .then(|| {
-                    key.iter()
-                        .map(|key| {
-                            relation
-                                .columns
-                                .iter()
-                                .find(|(name, _)| name == key)
-                                .map(|(name, _)| name.clone())
-                        })
-                        .collect::<Option<Vec<_>>>()
-                })
-                .flatten();
-            (
-                relation.name.clone(),
-                manifest.relations[&table].rows,
-                columns,
-            )
-        })
-        .collect()
-}
 
 fn compile_stage(
     kernel: &source::Kernel,
@@ -415,7 +370,29 @@ fn compile_stage(
             error: error.to_string(),
             term: cpu_source.to_string(),
         })?;
-    let cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
+    let mut cq: cq_lang_cq::Program = checked("CQ parse", &encoded, syn::parse2(encoded.clone()))?;
+    if pipeline.recipe.automatic && !pipeline.complete {
+        let path = manifest.root.join("manifest.json");
+        println!("cargo:rerun-if-changed={}", path.display());
+        // Stage files explicitly bind base relations to tables and columns.
+        // Published intermediates are not base-table evidence subjects.
+        let bindings = kernel.relations.iter().map(|relation| {
+            use cq_syntax::declared_evidence::{ColumnBinding, EvidenceView, RelationBinding};
+            RelationBinding {
+                relation: relation.name.clone(),
+                source: relation.table.to_string(),
+                view: EvidenceView::Full,
+                columns: relation.columns.iter().map(|(column, _)| ColumnBinding {
+                    column: column.clone(), source: column.to_string(),
+                }).collect(),
+            }
+        }).collect();
+        cq.declared_evidence = checked(
+            "TPC-H declared evidence",
+            &cq,
+            cq_workload_authored::tpch_evidence::load_with_bindings(&path, &cq.declarations, bindings),
+        )?;
+    }
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
     let captures = &normal.query.captures;
     let setup_bindings = kernel
@@ -481,39 +458,9 @@ fn compile_stage(
             })
         })
         .collect();
-    // The automatic route plans from recorded evidence (O-EvidenceLe); an
-    // authored recipe keeps its own plan arguments.
-    let plan = if pipeline.recipe.automatic && !pipeline.complete {
-        let evidence = cq_lang_vo::Evidence {
-            provenance: syn::LitStr::new(
-                &format!(
-                    "{} row counts; TPC-H primary keys",
-                    manifest.root.join("manifest.json").display()
-                ),
-                proc_macro2::Span::call_site(),
-            ),
-            facts: relation_facts(kernel, manifest)
-                .into_iter()
-                .flat_map(|(relation, rows, key)| {
-                    std::iter::once(cq_lang_vo::evidence::Fact::Count {
-                        relation: relation.clone(),
-                        rows: rows as u64,
-                    })
-                    .chain(key.map(|columns| cq_lang_vo::evidence::Fact::Key { relation, columns }))
-                })
-                .collect(),
-        }
-        .to_token_stream()
-        .to_string();
-        if pipeline.plan.trim().is_empty() {
-            evidence
-        } else {
-            format!("{}, {evidence}", pipeline.plan)
-        }
-    } else {
-        pipeline.plan.clone()
-    };
-    let (normal, reduced) = checked("CQ plan advice", &normal, advice::valuation(&cq, &plan))?;
+    // Automatic routes carry checked manifest evidence on CQ; authored recipes
+    // retain their plan arguments and bypass evidence selection as before.
+    let (normal, reduced) = checked("CQ plan advice", &normal, advice::valuation(&cq, &pipeline.plan))?;
     let (ra, steps) = checked(
         "CQ relational lowering",
         &reduced,

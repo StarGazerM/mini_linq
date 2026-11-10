@@ -13,7 +13,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Orders (o_orderkey : i64 [0] , o_orderdate : Date [1]) ; relation Lineitem (l_orderkey : i64 [0] , l_commitdate : Date [1] , l_receiptdate : Date [1]) ; answer (order_key) : - Orders (order_key , order_date) , where order_date >= (start) , where order_date < (end) , Lineitem (order_key , commit_date , receipt_date) , where commit_date < receipt_date ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Orders = 1500000 ; key Orders [o_orderkey] ; count Lineitem = 6001215 ; } {
+valuation {
     // O-Restrict: c1 targets Orders@0 (H-Local, written predicate order)
     restrict Orders @ 0 where order_date >= @ (start) ;
     // O-Restrict: c2 targets Orders@0

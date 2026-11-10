@@ -10,6 +10,7 @@ proc-macro = true
 
 [dependencies]
 cq-stage.workspace = true
+cq-syntax.workspace = true
 cq-lang-structures.workspace = true
 syn.workspace = true
 cq-lang-sequence.workspace = true

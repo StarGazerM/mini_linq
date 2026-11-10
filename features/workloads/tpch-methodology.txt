@@ -30,8 +30,9 @@ counting nor profiling variants. Each worker's metadata-only describe command
 must advertise default and par; a build or missing-route failure fails the gate.
 The xtask enables its existing oracle feature for shared benchmark plumbing,
 but does not invoke DuckDB, dbgen, projection export, data loaders, or queries.
-No SF1 dataset (or any scale-factor data) is required. Unlike bench --runs 0,
-this is compilation coverage, not an exact-answer or runtime gate.
+CPU compilation requires no dataset: default/par use the checked-in neutral
+authored/tpch-sf1-evidence.json document. Unlike bench --runs 0, this is
+compilation coverage, not an exact-answer or runtime gate.
 The command accepts no options, so --query/--config cannot accidentally narrow
 the catalog coverage. New CASES entries are included automatically.
 Keep this release-build matrix in Main's explicit batch, outside the default
@@ -73,8 +74,8 @@ query operations and remain inside every route's query timer. H04 NOT EXISTS
 likewise deduplicates its projected LateLineitem during query setup. Dictionary
 predicate relations contain one row per selected dictionary code; zone layouts
 retain their canonical loaded rows. Hand-built fixtures must canonicalize
-their input relations too. VO count/key evidence remains planning information,
-not an input-set proof or a license to infer a narrower semantic key.
+their input relations too. Checked neutral row/key evidence remains planning
+information, not an input-set proof or a license to infer a narrower semantic key.
 
 For SF 1 and SF 10, every executable/configuration is checked against authored
 DuckDB SQL on SF 0.1 before any query measurements. At SF 0.1 the timed workers
@@ -91,11 +92,24 @@ Every timed run must reproduce its warm answer. Two separate untimed counting ex
 
 Configurations
 Every retail query compiles the same authored clauses in these configurations:
-- default: the written/coarse CQ planner with Masks reductions and default
+- default: the evidence/coarse CQ planner with Masks reductions and default
   recorded Physical decisions; this is already a reduced baseline;
 - no-reduce: the written planner with implicit semijoin reduction disabled;
 - par: the same authored query with Sequence Tasks decomposition, grading and
   translation, retaining stage-local evidence;
+  Default/par attach checked DatasetEvidence through the workload adapter in
+  authored/src/tpch_evidence.rs. CPU counts/keys come from checked-in
+  authored/tpch-sf1-evidence.json, including standalone generated workers.
+  This neutral document was generated once from the SF1 dataset manifest and
+  records that manifest's SHA-256 and original path in provenance; no external
+  dataset is opened during CPU compilation. Its optional origin-comparison test
+  checks row counts and hash when that path exists, otherwise prints a skip message.
+  authored/tpch-evidence.json records explicit compiler/table/column mappings
+  and authored TPC-H keys (Source::Declared), not measured key certificates.
+  GPU automatic planning uses the same adapter with its per-scale manifest and
+  explicit stage-file bindings. Scalar domains are deliberately uncertified;
+  the adapter does not scan rows, measure statistics, or certify input sets.
+  Other CPU routes and Sequence count/bounds advice are unchanged.
 - radix and radix_retained: the same-plan provider comparisons described below;
 - transfer: the CQ planner's exact forward/backward semijoin schedule, rooted
   at the written outer stream, over its Masks reductions. This configuration

@@ -23,6 +23,7 @@ csv = "1"
 sha2 = "0.10"
 
 [build-dependencies]
+cq-workload-authored = { path = "../../../features/workloads/authored" }
 sha2 = "0.10"
 cq-stage = { path = "../../../facade/cq-stage" }
 cq-syntax = { path = "../../../languages/cq-syntax" }

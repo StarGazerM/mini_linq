@@ -1030,6 +1030,7 @@ dependencies = [
 name = "cq-order"
 version = "0.1.0"
 dependencies = [
+ "cq-evidence",
  "cq-lang-cq",
  "cq-lang-vo",
  "cq-syntax",
@@ -1082,6 +1083,7 @@ dependencies = [
  "cq-stage",
  "cq-storage",
  "cq-testkit",
+ "cq-workload-authored",
  "mini-linq",
  "proc-macro2",
  "quote",
@@ -1456,10 +1458,14 @@ dependencies = [
 name = "cq-workload-authored"
 version = "0.1.0"
 dependencies = [
+ "cq-evidence",
  "cq-ext-support",
  "cq-lang-cq",
  "cq-syntax",
  "proc-macro2",
+ "serde",
+ "serde_json",
+ "sha2",
  "syn 2.0.119",
 ]
 
@@ -1506,6 +1512,7 @@ dependencies = [
  "cq-sequence-conformance",
  "cq-sequence-lowering",
  "cq-stage",
+ "cq-syntax",
  "cq-workload-authored",
  "proc-macro2",
  "quote",
@@ -1545,6 +1552,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rayon",
+ "serde_json",
  "syn 2.0.119",
 ]
 

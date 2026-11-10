@@ -18,10 +18,6 @@ pub struct PlanOptions {
     pub reduce: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
     /// `(target, support)` atom selectors whose Masks reduction is dropped.
     pub skip: Vec<(cq_order::OrderAtom, cq_order::OrderAtom)>,
-    /// Recorded counts and keys with provenance; the planner streams a
-    /// key-functional root and emits Lookup/Expand phases (O-EvidenceLe).
-    /// Exclusive with an explicit `order`, which is itself the plan.
-    pub evidence: Option<vo::Evidence>,
     /// `known(Rel@i at k)`: request a ready boundary after positive read k;
     /// I2 drains the negation earlier when ready (transported by Datalog Fork).
     pub known: Vec<cq_order::Known>,
@@ -35,13 +31,8 @@ impl Parse for PlanOptions {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut options = Self::default();
         while !input.is_empty() {
-            let ordering = input.peek(vo::ordering::kw::ordering) && options.ordering.is_none();
-            if ordering || input.peek(vo::evidence::kw::evidence) && options.evidence.is_none() {
-                if ordering {
-                    options.ordering = Some(input.parse()?);
-                } else {
-                    options.evidence = Some(input.parse()?);
-                }
+            if input.peek(vo::ordering::kw::ordering) && options.ordering.is_none() {
+                options.ordering = Some(input.parse()?);
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                     if input.is_empty() {
@@ -106,7 +97,7 @@ impl Parse for PlanOptions {
             } else {
                 return Err(syn::Error::new_spanned(
                     option,
-                    "expected order(Relation, ...), no_reduce, reduce/skip(Target with Support), known(Relation@clause at level), ordering(seed = .., delta = .., driver = .., permutation = [..], shared_demand = ..), or evidence from \"provenance\" { count R = n; key R [columns]; }",
+                    "expected order(Relation, ...), no_reduce, reduce/skip(Target with Support), known(Relation@clause at level), or ordering(seed = .., delta = .., driver = .., permutation = [..], shared_demand = ..)",
                 ));
             }
             if !input.is_empty() {
@@ -115,10 +106,6 @@ impl Parse for PlanOptions {
                     return Err(input.error("trailing comma after plan options"));
                 }
             }
-        }
-        if options.order.is_some() && options.evidence.is_some() {
-            return Err(input
-                .error("evidence and order are exclusive: an explicit order is itself the plan"));
         }
         Ok(options)
     }
@@ -209,7 +196,6 @@ fn normalized_advice(
         no_reduce: args.no_reduce,
         reduce: pairs(&args.reduce)?,
         skip: pairs(&args.skip)?,
-        evidence: args.evidence.clone(),
         ordering: args.ordering.clone(),
         known,
     }))
@@ -230,8 +216,8 @@ pub fn prefix_valuation(source: &cq::Program, args: &PlanOptions) -> syn::Result
         let plan = cq_order::compile_explicit(&normal, relations)?;
         cq_order::check_advice(&normal, &plan, relations)?;
         plan
-    } else if let Some(evidence) = &args.evidence {
-        let plan = cq_order::evidence::compile(&normal, evidence, &ordering)?;
+    } else if normal.declared_evidence.is_some() {
+        let plan = cq_order::evidence::compile(&normal, &ordering)?;
         cq_order::evidence::check_evidence(&normal, &plan, &ordering)?;
         plan
     } else {
@@ -315,7 +301,7 @@ fn advise_prefix(source: &cq::Program, reduced: &mut vo::Program, args: &PlanOpt
 }
 
 /// CQ → RA′ through the same checked composition used by the facade.
-/// Formal rule Plan-Prefix: Normalize, order Prefix(Connected)/Coarse or explicit order, reduce by Masks unless disabled, apply advice, and elaborate.
+/// Formal rule Plan-Prefix: Normalize, use explicit order or checked source-document statistics or Prefix(Connected)/Coarse, reduce by Masks unless disabled, apply advice, and elaborate.
 pub fn compile_prefix(source: &cq::Program, options: &PlanOptions) -> syn::Result<ra::Program> {
     let (normal, reduced) = prefix_valuation(source, options)?;
     let (target, steps) = cq_relational_lowering::compile(&normal, &reduced)?;
@@ -631,128 +617,15 @@ mod tests {
         }
     }
 
-    fn reads(plan: &vo::Program) -> Vec<String> {
-        plan.valuation
-            .steps
-            .iter()
-            .filter_map(|step| match step {
-                vo::Step::Atom(atom, _) => Some(quote::ToTokens::to_token_stream(atom).to_string()),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
-    fn evidence_streams_the_key_functional_root() {
-        let source: cq::Program = syn::parse_quote! {
-            struct Q;
-            relation Orders(o_orderkey:i64,o_orderdate:i32);
-            relation Lineitem(l_orderkey:i64,l_commitdate:i32,l_receiptdate:i32);
-            answer(o) :- Orders(o,d), where d >= 10 && d < 20,
-                Lineitem(o,c,r), where c < r;
-        };
-        let options: PlanOptions = syn::parse_quote!(evidence from "test manifest" {
-            count Orders = 1500000; key Orders [o_orderkey]; count Lineitem = 6001215;
-        });
-        let (_, plan) = prefix_valuation(&source, &options).unwrap();
-        assert_eq!(
-            reads(&plan),
-            ["Lineitem @ 3 (o , c , r)", "Orders @ 0 (o , d)"]
-        );
-        assert!(plan.valuation.evidence.is_some());
-        // Without a key on Orders no root is functional: the default order stays.
-        let options: PlanOptions = syn::parse_quote!(evidence from "test manifest" {
-            count Orders = 1500000; count Lineitem = 6001215;
-        });
-        let (_, plan) = prefix_valuation(&source, &options).unwrap();
-        assert_eq!(
-            reads(&plan),
-            ["Orders @ 0 (o , d)", "Lineitem @ 3 (o , c , r)"]
-        );
-        // The checker rejects a recorded root that is not the largest functional root.
-        let normal = cq::normal::normalize(&source).unwrap();
-        let mut written = cq_order::compile(
-            &normal,
-            &Options {
-                heuristic: Heuristic::Prefix(Ranking::Connected),
-                split: Split::Coarse,
-            },
-        )
-        .unwrap();
-        written.valuation.evidence = Some(syn::parse_quote!(evidence from "test manifest" {
-            count Orders = 1500000; key Orders [o_orderkey]; count Lineitem = 6001215;
-        }));
-        assert!(
-            cq_order::evidence::check_evidence(
-                &normal,
-                &written,
-                &Options {
-                    heuristic: Heuristic::Prefix(Ranking::Connected),
-                    split: Split::Coarse,
-                },
-            )
-            .is_err()
-        );
-        // Evidence must name its provenance and declared columns.
-        for bad in [
-            quote::quote!(evidence from "" { count Orders = 1; }),
-            quote::quote!(evidence from "m" { key Orders [missing]; }),
-            quote::quote!(evidence from "m" { count Orders = 1; count Orders = 2; }),
+    fn inline_statistics_are_not_plan_options() {
+        for text in [
+            "evidence from \"old\" { count R = 1; }",
+            "evidence from \"old\" { key R [a]; }",
+            "order(R), evidence from \"old\" { count R = 1; }",
         ] {
-            let options: PlanOptions = syn::parse2(bad).unwrap();
-            assert!(prefix_valuation(&source, &options).is_err());
+            assert!(syn::parse_str::<PlanOptions>(text).is_err());
         }
-        assert!(
-            syn::parse_str::<PlanOptions>(
-                "order(Lineitem, Orders), evidence from \"m\" { count Orders = 1; }"
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn evidence_looks_up_filtered_keyed_occurrences_before_expansion() {
-        let source: cq::Program = syn::parse_quote! {
-            struct Q;
-            relation A(a:i64,x:i64);
-            relation B(b:i64,y:i64);
-            relation F(a:i64,b:i64,v:i64);
-            answer(v,x,y) :- A(a,x), where x == 1, B(b,y), where y < 5, F(a,b,v);
-        };
-        let options: PlanOptions = syn::parse_quote!(no_reduce, evidence from "test" {
-            count A = 10; key A [a]; count B = 20; key B [b]; count F = 1000;
-        });
-        let (_, plan) = prefix_valuation(&source, &options).unwrap();
-        // F streams; B (range filter) is looked up before A (point filter) expands.
-        assert_eq!(
-            reads(&plan),
-            [
-                "F @ 4 (a , b , v)",
-                "B @ 2 (b , _)",
-                "A @ 0 (a , x)",
-                "B @ 2 (b , y)"
-            ]
-        );
-        compile_prefix(&source, &options).unwrap();
-    }
-
-    #[test]
-    fn evidence_keeps_the_written_root_against_a_root_with_a_filtered_neighbour() {
-        // L outnumbers the filtered written root P, but reduction semi-joins L
-        // by O, filtered as strongly as P: L does not dominate P.
-        let source: cq::Program = syn::parse_quote! {
-            struct Q;
-            relation P(p:i64,s:i64,v:i64);
-            relation L(o:i64,p:i64,s:i64);
-            relation O(o:i64,d:i32);
-            answer(o,p) :- P(p,s,v), where v > 0, L(o,p,s), O(o,d), where d >= 10 && d < 20;
-        };
-        let options: PlanOptions = syn::parse_quote!(evidence from "test" {
-            count P = 800000; key P [p, s]; count L = 6001215; count O = 1500000; key O [o];
-        });
-        let (_, plan) = prefix_valuation(&source, &options).unwrap();
-        assert_eq!(reads(&plan)[0], "P @ 0 (p , s , v)");
-        compile_prefix(&source, &options).unwrap();
     }
 
     #[test]

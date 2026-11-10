@@ -735,7 +735,6 @@ fn assemble(source: Normal<'_>, options: &Options) -> valuation::Program {
     valuation::Program {
         valuation: valuation::Valuation {
             valuation_token: Default::default(),
-            evidence: None,
             // Ordering inputs are plan options, recorded by the composition (Plan-Prefix).
             ordering: None,
             brace: Default::default(),

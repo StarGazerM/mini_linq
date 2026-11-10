@@ -323,6 +323,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-ext-support"
+version = "0.1.0"
+dependencies = [
+ "cq-lang-cq",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-gpu-datalog"
 version = "0.1.0"
 dependencies = [
@@ -516,6 +528,7 @@ dependencies = [
  "cq-structure-selection",
  "cq-syntax",
  "cq-testkit",
+ "cq-workload-authored",
  "csv",
  "cuda-core",
  "cuda-device",
@@ -728,8 +741,10 @@ dependencies = [
 name = "cq-order"
 version = "0.1.0"
 dependencies = [
+ "cq-evidence",
  "cq-lang-cq",
  "cq-lang-vo",
+ "cq-syntax",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -987,6 +1002,21 @@ dependencies = [
  "hashbrown 0.15.5",
  "quote",
  "rayon",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "cq-workload-authored"
+version = "0.1.0"
+dependencies = [
+ "cq-evidence",
+ "cq-ext-support",
+ "cq-lang-cq",
+ "cq-syntax",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+ "sha2",
  "syn 2.0.119",
 ]
 

@@ -46,6 +46,7 @@ pub(super) fn build_in(
         "cq-load",
         "cq-storage",
         "cq-planners",
+        "cq-workload-passes",
         "cq-rewrites",
         "cq-join-filters",
         "cq-ext-aggregate",

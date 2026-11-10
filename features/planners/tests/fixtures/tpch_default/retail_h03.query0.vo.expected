@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Customer (c_custkey : i64 [0] , c_mktsegment : cq_load :: StringCode [1] in [0] (dictionaries . domain ("c_mktsegment"))) ; relation Orders (o_orderkey : i64 [0] , o_custkey : i64 [0] , o_orderdate : Date [2]) ; relation Lineitem (l_orderkey : i64 [0] , l_shipdate : Date [2]) ; relation answer (order_key : i64 [0] , customer_key : i64 [0]) ; answer (order_key , customer_key) : - Lineitem (order_key , ship_date) , where ship_date > (cutoff) , Orders (order_key , customer_key , order_date) , where order_date < (cutoff) , Customer (customer_key , __cq_4_1) , where __cq_4_1 == (__cq_c_0) capture { domain __cq_c_0 : cq_load :: StringCode in [0] (dictionaries . domain ("c_mktsegment")) = exact ("BUILDING") ; } ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Customer = 150000 ; key Customer [c_custkey] ; count Orders = 1500000 ; key Orders [o_orderkey] ; count Lineitem = 6001215 ; } {
+valuation {
     // O-Restrict/H-Local: restriction of clause 1 on Lineitem@0 heads the scope (H-Local order)
     restrict Lineitem @ 0 where ship_date > @ (cutoff) ;
     // O-Restrict/H-Local: restriction of clause 3 on Orders@2 heads the scope (H-Local order)

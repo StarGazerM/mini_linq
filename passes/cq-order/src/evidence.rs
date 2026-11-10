@@ -1,5 +1,5 @@
-//! Default ordering from recorded evidence (P3.3): a key-functional root and
-//! Lookup/Expand phases.
+//! Default ordering from a checked dataset document: a key-functional root
+//! and Lookup/Expand phases. CQ carries the sole explicit fact correspondence.
 //!
 //! An occurrence read is *keyed* when one recorded key of its relation is
 //! bound (literal or bound variable) at that read: it matches at most one
@@ -28,12 +28,13 @@
 //! not emitted.
 //!
 //! Evidence chooses, it does not justify: the produced VO is checked by WF-VO
-//! and CK-Le like authored step advice. Scopes without a count for every
+//! and CK-Le like authored step advice. Scopes without an equality count for every
 //! top-level occurrence, with top-level blocks, or without a dominating
-//! functional root keep the ordinary default order. The evidence is recorded in the VO in
-//! every case, so the checker validates the recorded choice against the
-//! recorded facts without rerunning this producer.
+//! functional root keep the ordinary default order. Facts remain in the source's
+//! checked `DeclaredEvidence`; VO neither duplicates them nor accepts inline facts.
 use std::collections::{BTreeMap, BTreeSet};
+use cq_evidence::{Claim, Source};
+use cq_syntax::declared_evidence::EvidenceView;
 
 use super::{
     Advice, BodyItem, Clause, Normal, Options, check, clauses, cq, le, order_advised, ready, rust,
@@ -53,7 +54,8 @@ type Read = (usize, Option<Vec<syn::Ident>>);
 impl<'a> Scope<'a> {
     /// Evidence applies to a block-free scope with at least two top-level
     /// occurrences, each with a recorded count.
-    fn of(source: &'a cq::Program, evidence: &valuation::Evidence) -> Option<Self> {
+    fn of(source: &'a cq::Program) -> Option<Self> {
+        let evidence = source.declared_evidence.as_ref()?;
         let body = &source.query.body;
         if body.iter().any(|item| matches!(item, BodyItem::Block(_))) {
             return None;
@@ -67,13 +69,30 @@ impl<'a> Scope<'a> {
         for (clause, item) in body.iter().enumerate() {
             if let BodyItem::Positive { atom } = item {
                 let name = symbol_name(&atom.relation);
-                counts.insert(clause, evidence.count(&name)?);
+                let binding = evidence.bindings.iter()
+                    .find(|binding| symbol_name(&binding.relation) == name)?;
+                if binding.view != EvidenceView::Full {
+                    return None;
+                }
+                let relation = evidence.document.relations.get(&binding.source)?;
+                let rows = relation.rows.as_ref()?;
+                if rows.claim != Claim::Equal
+                    || !matches!(rows.source, Source::Exact | Source::Declared | Source::Calibrated)
+                {
+                    return None;
+                }
+                counts.insert(clause, rows.value?);
+                let declaration = declarations.get(&name)?;
                 keys.insert(
                     clause,
-                    declarations
-                        .get(&name)
-                        .map(|declaration| evidence.keys(declaration))
-                        .unwrap_or_default(),
+                    relation.keys.iter().filter_map(|key| {
+                        key.columns.iter().map(|column| {
+                            let binding = binding.columns.iter()
+                                .find(|binding| binding.source == *column)?;
+                            declaration.columns.iter()
+                                .position(|declared| declared.name == binding.column)
+                        }).collect::<Option<Vec<_>>>()
+                    }).collect(),
                 );
             }
         }
@@ -224,26 +243,22 @@ impl<'a> Scope<'a> {
     }
 }
 
-/// Front: check WF-NF and WF-Evidence (user-authored input), then [`order`]
-/// (total).
+/// Front: check WF-NF and the source's dataset correspondence, then [`order`] (total).
 pub fn compile(
     source: &cq::Program,
-    evidence: &valuation::Evidence,
     options: &Options,
 ) -> syn::Result<valuation::Program> {
     let normal = Normal::check(source)?;
-    evidence.check(source)?;
-    Ok(order(normal, evidence, options))
+    Ok(order(normal, options))
 }
 
-/// Formal rule O-EvidenceLe: With a recorded count for every top-level occurrence, stream the largest-count key-functional root that dominates the written root (no smaller count, no stronger filter, no neighbour besides the written root filtered as strongly), expand keyed reads by filter rank and look up other ready filtered keyed reads first; otherwise keep the default order. Record the evidence.
+/// Formal rule O-EvidenceLe: Read equality row counts and surviving key declarations through checked file-document bindings; stream the largest-count dominating functional root with unchanged filter/written ties, otherwise keep the default.
 pub fn order(
     source: Normal<'_>,
-    evidence: &valuation::Evidence,
     options: &Options,
 ) -> valuation::Program {
     let default = super::order(source, options);
-    let scope = Scope::of(source.program(), evidence);
+    let scope = Scope::of(source.program());
     let reads = scope.as_ref().and_then(|scope| {
         let (&root, _) = scope
             .dominating()
@@ -251,7 +266,7 @@ pub fn order(
             .min_by_key(|&(&clause, &rows)| (std::cmp::Reverse(rows), clause))?;
         scope.plan(root)
     });
-    let mut program = match reads {
+    match reads {
         Some(reads) => {
             let written: Vec<_> = default
                 .valuation
@@ -279,27 +294,19 @@ pub fn order(
                 order_advised(source, &advice)
             }
         }
+        // Formal rule O-EvidenceFallback: Keep the default order when checked document counts/keys are unavailable or keyed planning adds no change; never synthesize statistics.
         None => default,
-    };
-    // Formal rule O-EvidenceFallback: Keep evidence on the default plan when keyed planning is unavailable or adds no change.
-    program.valuation.evidence = Some(evidence.clone());
-    program
+    }
 }
 
-/// Formal rule CK-EvidenceLe: Given recorded evidence, a scope with a functional root dominating its written root must stream such a root of maximal recorded count, read every other occurrence first through a recorded key, look up only filtered occurrences, and pass WF-VO with CK-Le phases; other scopes pass the default ordering check.
+/// Formal rule CK-EvidenceLe: Check the recorded root against the source's checked document counts/keys, keyed first reads, filtered lookups, WF-VO and CK-Le; unavailable statistics select CK-Order.
 pub fn check_evidence(
     source: &cq::Program,
     target: &valuation::Program,
     options: &Options,
 ) -> syn::Result<()> {
     let analysis = valuation::contract::check(source, target)?;
-    let Some(evidence) = &target.valuation.evidence else {
-        return Err(syn::Error::new_spanned(
-            &source.name,
-            "evidence ordering must record its evidence",
-        ));
-    };
-    let roots = Scope::of(source, evidence).map(|scope| (scope.dominating(), scope));
+    let roots = Scope::of(source).map(|scope| (scope.dominating(), scope));
     let Some((roots, scope)) = roots.filter(|(roots, _)| !roots.is_empty()) else {
         return check(source, target, options);
     };

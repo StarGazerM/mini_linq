@@ -1,0 +1,1157 @@
+{
+  "dataset": {
+    "date": "2026-11-10",
+    "formulation": "TPC-H dbgen base-table projections; manifest row counts and authored primary-key declarations",
+    "hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+    "manifest": {
+      "dictionaries": {},
+      "files": {
+        "manifest.json": {
+          "content_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "encoding_hash": "sha256:6ee4b7ff91beb1be8f7a482ea53017150a2b45ed915d942b291dd1f705768b13",
+          "missing_as_empty": false,
+          "role": "metadata"
+        },
+        "tpch-evidence.json": {
+          "content_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+          "encoding_hash": "sha256:6ee4b7ff91beb1be8f7a482ea53017150a2b45ed915d942b291dd1f705768b13",
+          "missing_as_empty": false,
+          "role": "metadata"
+        }
+      },
+      "formulation": "TPC-H dbgen base-table projections; manifest row counts and authored primary-key declarations",
+      "loader_options": {
+        "hash_mode": "typed-row-stream-v1",
+        "identity_scope": "imported metadata only; no decoded-row scan"
+      },
+      "schema": {
+        "customer": {
+          "columns": {
+            "c_acctbal": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "c_address": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "c_comment": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "c_custkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "c_mktsegment": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "c_name": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "c_nationkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "c_phone": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        },
+        "lineitem": {
+          "columns": {
+            "l_commitdate": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_discount": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_extendedprice": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_linenumber": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_linestatus": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_orderkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_partkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_quantity": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_receiptdate": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_returnflag": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_shipdate": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_shipinstruct": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_shipmode": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "l_suppkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        },
+        "nation": {
+          "columns": {
+            "n_name": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "n_nationkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "n_regionkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        },
+        "orders": {
+          "columns": {
+            "o_comment": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "o_custkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "o_orderdate": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "o_orderkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "o_orderpriority": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "o_orderstatus": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "o_totalprice": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        },
+        "part": {
+          "columns": {
+            "p_brand": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "p_container": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "p_mfgr": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "p_name": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "p_partkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "p_size": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "p_type": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        },
+        "partsupp": {
+          "columns": {
+            "ps_availqty": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "ps_partkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "ps_suppkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "ps_supplycost": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        },
+        "region": {
+          "columns": {
+            "r_name": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "r_regionkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        },
+        "supplier": {
+          "columns": {
+            "s_acctbal": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "s_address": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "s_comment": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "s_name": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "s_nationkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "s_phone": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            },
+            "s_suppkey": {
+              "kind": "unordered",
+              "limitation": "ordering-only source correspondence; scalar domain not certified"
+            }
+          },
+          "null_handling": "non-null dbgen input columns",
+          "semantics": "bag",
+          "set_certification": null
+        }
+      }
+    },
+    "name": "TPC-H manifest ordering evidence",
+    "schema_hash": "sha256:6b4eee1781d4a5eec8b8c2ca71f0cd512925f6f5627e2f27c21774c013f735ea"
+  },
+  "observations": {
+    "rounds": [],
+    "steps": []
+  },
+  "premises": [],
+  "relations": {
+    "customer": {
+      "columns": {
+        "c_acctbal": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "c_address": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "c_comment": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "c_custkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "c_mktsegment": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "c_name": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "c_nationkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "c_phone": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "c_custkey"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "customer.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 150000
+      },
+      "scope": "input",
+      "semantics": "bag"
+    },
+    "lineitem": {
+      "columns": {
+        "l_commitdate": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_discount": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_extendedprice": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_linenumber": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_linestatus": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_orderkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_partkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_quantity": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_receiptdate": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_returnflag": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_shipdate": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_shipinstruct": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_shipmode": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "l_suppkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "l_orderkey",
+            "l_linenumber"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "lineitem.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 6001215
+      },
+      "scope": "input",
+      "semantics": "bag"
+    },
+    "nation": {
+      "columns": {
+        "n_name": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "n_nationkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "n_regionkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "n_nationkey"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "nation.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 25
+      },
+      "scope": "input",
+      "semantics": "bag"
+    },
+    "orders": {
+      "columns": {
+        "o_comment": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "o_custkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "o_orderdate": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "o_orderkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "o_orderpriority": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "o_orderstatus": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "o_totalprice": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "o_orderkey"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "orders.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 1500000
+      },
+      "scope": "input",
+      "semantics": "bag"
+    },
+    "part": {
+      "columns": {
+        "p_brand": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "p_container": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "p_mfgr": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "p_name": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "p_partkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "p_size": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "p_type": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "p_partkey"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "part.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 200000
+      },
+      "scope": "input",
+      "semantics": "bag"
+    },
+    "partsupp": {
+      "columns": {
+        "ps_availqty": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "ps_partkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "ps_suppkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "ps_supplycost": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "ps_partkey",
+            "ps_suppkey"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "partsupp.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 800000
+      },
+      "scope": "input",
+      "semantics": "bag"
+    },
+    "region": {
+      "columns": {
+        "r_name": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "r_regionkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "r_regionkey"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "region.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 5
+      },
+      "scope": "input",
+      "semantics": "bag"
+    },
+    "supplier": {
+      "columns": {
+        "s_acctbal": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "s_address": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "s_comment": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "s_name": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "s_nationkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "s_phone": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        },
+        "s_suppkey": {
+          "distinct": null,
+          "domain": {
+            "kind": "unordered",
+            "limitation": "ordering-only source correspondence; scalar domain not certified"
+          },
+          "max": null,
+          "max_degree": null,
+          "min": null
+        }
+      },
+      "key_sets": [],
+      "keys": [
+        {
+          "columns": [
+            "s_suppkey"
+          ],
+          "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+          "provenance": {
+            "artifact_hash": "sha256:ca4b93e3d83bb33d555409bf7f8abeca84684b13cfe6471a4193f8d2171c5564",
+            "locator": "tpch-evidence.json#tables",
+            "method": "Authored TPC-H primary keys; not measured uniqueness certificates",
+            "producer": "TPC-H workload declarations",
+            "run": null
+          },
+          "source": "declared"
+        }
+      ],
+      "recursive": null,
+      "rows": {
+        "claim": "equal",
+        "dataset_hash": "sha256:19660386c0fb92d56ca229aceda22b19f0f7ba455b5355f8676d4c1d3632cc76",
+        "id": "supplier.rows",
+        "lower": null,
+        "provenance": {
+          "artifact_hash": "sha256:228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+          "locator": "/data/tpch-gpu/sf1/manifest.json",
+          "method": "Import recorded base-table row count; no new measurement",
+          "producer": "TPC-H manifest adapter",
+          "run": null
+        },
+        "source": "exact",
+        "unit": "rows",
+        "upper": null,
+        "value": 10000
+      },
+      "scope": "input",
+      "semantics": "bag"
+    }
+  },
+  "relative": [],
+  "schema": "mini-linq.planner-evidence.v1",
+  "targets": {}
+}

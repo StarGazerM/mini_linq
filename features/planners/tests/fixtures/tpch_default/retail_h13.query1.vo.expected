@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Zeros ; relation Customer (c_custkey : i64 [0]) ; relation CountedCustomers (customer_key : i64 [0] , order_count : usize [1]) ; relation answer (customer_key : i64 [0]) ; answer (customer_key) : - Customer (customer_key) , ! CountedCustomers (customer_key , _) ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Customer = 150000 ; key Customer [c_custkey] ; } {
+valuation {
     // S-Connected: no connected ready atom (I3 vacuous)
     Customer @ 0 (customer_key) ;
     // I2/a_i=0: ready filter, placed at first ready boundary

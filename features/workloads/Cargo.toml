@@ -33,6 +33,7 @@ cq-lang-structures.workspace = true
 
 
 [dev-dependencies]
+serde_json.workspace = true
 cq-lang-sequence.workspace = true
 cq-sequence-lowering.workspace = true
 cq-sequence-pull.workspace = true

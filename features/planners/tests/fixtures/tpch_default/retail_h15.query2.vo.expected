@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Supplier (s_suppkey : i64 [0] , s_name : StringCode [1] , s_address : StringCode [1] , s_phone : StringCode [1]) ; relation Revenue (supplier_key : i64 [0] , revenue : i64 [0]) ; relation Maximum (maximum : Option < i64 > [2]) ; relation answer (supplier_key : i64 [0] , name : StringCode [1] , address : StringCode [1] , phone : StringCode [1] , revenue : i64 [0]) ; answer (supplier_key , name , address , phone , revenue) : - Revenue (supplier_key , revenue) , Supplier (supplier_key , name , address , phone) , Maximum (maximum) , if Some (* revenue) == * maximum ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Supplier = 10000 ; key Supplier [s_suppkey] ; } {
+valuation {
     // S-Connected: no connected ready atom (I3 vacuous); tie with ['@1', '@2'] broken by written position (I4 last)
     Revenue @ 0 (supplier_key , revenue) ;
     // S-Connected: connected (shares ['supplier_key'])

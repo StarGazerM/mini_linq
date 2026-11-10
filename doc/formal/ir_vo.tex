@@ -4,8 +4,7 @@
 \paragraph{Grammar.} VO is a valuation annotation over an externally supplied
 CQ$_{\rm NF}$ program $q$; it neither embeds nor prints that program.
 \begin{lstlisting}
-VO   ::= valuation [Evidence] [OrderingInputs] { Step* }
-Evidence ::= evidence from "provenance" { (count R = n; | key R [col, ...];)* }
+VO   ::= valuation [OrderingInputs] { Step* }
 OrderingInputs ::= ordering(seed = Bool, delta = none | Index,
     driver = WrittenOrder | DeltaFirst, permutation = [Index, ...],
     shared_demand = none | [Relation(ColumnIndex, ...), ...])
@@ -220,12 +219,6 @@ Every step extends $P$ by its provided columns.
  \text{no non-restriction step precedes it in its scope}}
  {\mathsf{Restriction}(t,i,P)\Downarrow\ok}
 
-\Rule{WF-Evidence}{\mathcal{E}.provenance\ne\epsilon\quad
- \forall f\in\mathcal{E}.\ \mathsf{relation}(f)\in\mathsf{inputs}(t.cq)\\
- \le 1\ \mathsf{count}\text{ per relation}\quad
- \text{keys nonempty, distinct, of declared columns}}
- {\mathsf{Evidence}(t.cq,\mathcal{E})\Downarrow\ok}
-
 \Rule{VO-OrderingInputs}{o=t.ordering\quad n=|o.permutation|\quad
  o.permutation:\{0,\ldots,n-1\}\to\{0,\ldots,n-1\}\text{ bijective}\\
  o.seed\Longleftrightarrow o.delta=\mathsf{none}\quad
@@ -254,9 +247,10 @@ subatom per atom; Fine: at most one new variable per subatom), semijoin
 reductions, occurrence restrictions (where each relational predicate runs),
 and block placement (hoisted
 derived relation or per-row arms).
-Recorded evidence (row
-counts and asserted keys with their provenance) is the input of the evidence
-ordering O-EvidenceLe; it never changes the meaning of a schedule.
+The externally supplied CQ input's checked \code{declared_evidence} document
+and explicit relation/column correspondence are the sole row-count/key input
+of O-EvidenceLe. VO has no second evidence grammar or copy of these facts;
+they never change the meaning of a schedule.
 
 \paragraph{Rewrite check.} Unchanged CQ; the non-reduction step erasures are equal
 recursively; existing reductions are kept and added reductions satisfy the

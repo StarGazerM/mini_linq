@@ -2,6 +2,48 @@
 //! inner instances of composite tokens, by `sorted_index`, preserving every
 //! written curried level and all other representation decisions.
 
+/// Attach the workload's checked SF1 document before the ordinary public
+/// pipeline runs. Query bodies remain opaque to this boundary adapter.
+#[proc_macro]
+pub fn tpch_evidence_query(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    use quote::quote;
+    use syn::parse::{Parse, ParseStream};
+    struct Request {
+        pipeline: proc_macro2::TokenStream,
+        visibility: syn::Visibility,
+        name: syn::Ident,
+        declarations: Vec<cq_syntax::RelationDecl>,
+        body: proc_macro2::TokenStream,
+    }
+    impl Parse for Request {
+        fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+            let pipeline;
+            syn::braced!(pipeline in input);
+            let pipeline = pipeline.parse()?;
+            let visibility = input.parse()?;
+            input.parse::<syn::Token![struct]>()?;
+            let name = input.parse()?;
+            input.parse::<syn::Token![;]>()?;
+            let declarations = cq_syntax::parse_declarations(input)?;
+            Ok(Self { pipeline, visibility, name, declarations, body: input.parse()? })
+        }
+    }
+    let result = (|| -> syn::Result<proc_macro2::TokenStream> {
+        let Request { pipeline, visibility, name, declarations, body } = syn::parse(input)?;
+        let evidence = cq_workload_authored::tpch_evidence::load_sf1(&declarations)?;
+        Ok(quote!({
+            ::mini_linq::compile! {
+                pipeline { #pipeline }
+                #visibility struct #name;
+                #evidence
+                #(#declarations)*
+                #body
+            }
+        }))
+    })();
+    result.unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
 /// The workload-owned sorted bucket index token (Rc-backed, host only). It
 /// enumerates distinct keys, so replaced entries keep their `keys` support.
 fn sorted_index() -> cq_lang_structures::Declaration {

@@ -213,8 +213,8 @@ declared_evidence "<checked evidence JSON>" {
 }
 ```
 
-In CQ this follows the optional `ordering(...)` and precedes declarations;
-in Datalog it follows P3.3e key evidence and precedes `output`. Explicit
+In CQ this follows the struct name and precedes declarations;
+in Datalog it follows its separate key evidence and precedes `output`. Explicit
 relation/column mappings survive normalization, Fork's layout/delta/scan
 projection and parallel scan rebinding. `full`, `delta`, and `subset` record
 the view, not an equality between its statistics and the full dataset.
@@ -231,10 +231,21 @@ supplies the returned neutral document to `DeclaredEvidence` with its explicit
 compiler bindings; compiler syntax, IR parsers and runtime printers never read
 an evidence file.
 
-This input **does not activate** `PlanOptions.evidence`, change a root, or
-conflict with authored order. Legacy P3.3e still owns its existing count/key
-root/L&E behavior. File key restatements do not establish Sequence uniqueness.
-CPU TPC-H's fixed SF1 ordering counts must not be reused as exact SF10 bounds.
+This checked document is the **only VO count/key input**. Without an explicit
+order, Plan-Prefix reads equality row counts for full input bindings and
+surviving key declarations through the recorded correspondence, applying the
+existing O-EvidenceLe root/L&E rule and its unchanged filter/written ties.
+Missing counts or keys select the defined default; no statistic is guessed
+from syntax. An explicit order bypasses statistical selection. VO no longer
+has inline `count`/`key` annotations or a `PlanOptions.evidence` field.
+File key restatements do not establish Sequence uniqueness.
+CPU TPC-H default/par load the checked-in neutral SF1 document by a crate-relative
+path, without a dataset dependency; provenance records its source manifest path
+and SHA-256. The SF1 ordering input must not be reused as exact SF10 bounds.
+GPU imports its selected scale's manifest under `TPCH_GPU_DATA_ROOT`.
+Sequence's independent evidence grammar is
+unchanged in this step: moving its Count/Bounds needs its own source-binding
+seam, while Selectivity/ForeignKey/Sorted have no equivalent document fields.
 
 The optional `cq-cost` package exports a versioned compiler-record projection:
 

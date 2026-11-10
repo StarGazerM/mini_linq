@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Quantities ; relation Lineitem (l_orderkey : i64 [0] , l_linenumber : i64 [0] , l_quantity : Decimal [1]) ; relation answer (order_key : i64 [0] , sum_quantity : i64 [0]) ; answer (order_key , __cq_2_1) : - Lineitem (order_key , line_number , quantity) , let quantity_units : i64 = quantity . scaled () group [line_number , order_key , quantity , quantity_units] by [order_key] { __cq_2_1 : i64 = sum (quantity_units) ; } ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Lineitem = 6001215 ; key Lineitem [l_orderkey , l_linenumber] ; } {
+valuation {
     // S-Connected: no connected ready atom (I3 vacuous)
     Lineitem @ 0 (order_key , line_number , quantity) ;
     // rank (a,0,..): ready introducing nonatom precedes introducing atoms

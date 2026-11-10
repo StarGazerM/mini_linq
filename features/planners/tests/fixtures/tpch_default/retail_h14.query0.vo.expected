@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Lineitem (l_orderkey : i64 [0] , l_linenumber : i64 [0] , l_partkey : i64 [0] , l_extendedprice : Decimal [1] , l_discount : Decimal [1] , l_shipdate : Date [2]) ; relation Part (p_partkey : i64 [0] , p_type : StringCode [3]) ; relation answer (promo_revenue : i64 [0] , total_revenue : i64 [0]) ; answer (__cq_6_0 , __cq_6_1) : - Lineitem (order_key , line_number , part_key , price , discount , ship_date) , where ship_date >= (start) , where ship_date < (end) , Part (part_key , part_type) , let revenue_units : i64 = price . scaled () * (100 - discount . scaled ()) , let promo_units : i64 = if promo . contains (part_type) { * revenue_units } else { 0 } group [discount , line_number , order_key , part_key , part_type , price , promo_units , revenue_units , ship_date] by [] { __cq_6_0 : i64 = sum (promo_units) ; __cq_6_1 : i64 = sum (revenue_units) ; } ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Lineitem = 6001215 ; key Lineitem [l_orderkey , l_linenumber] ; count Part = 200000 ; key Part [p_partkey] ; } {
+valuation {
     // O-Restrict/H-Local: restriction of clause 1 on Lineitem@0 heads the scope (H-Local order)
     restrict Lineitem @ 0 where ship_date >= @ (start) ;
     // O-Restrict/H-Local: restriction of clause 2 on Lineitem@0 heads the scope (H-Local order)

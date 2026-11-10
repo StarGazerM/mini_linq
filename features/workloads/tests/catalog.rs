@@ -530,38 +530,24 @@ fn tpch_benchmark_inventory_covers_retail_and_matches_full_query_coverage() {
     );
 }
 
-/// R-TpchEvidence premises (P3.3e). The `default`/`par` driver in
-/// `tpch_runtime.rs` records `count Name = n;` for canonical base relation
-/// names. Every kernel binds such a name to its dbgen table (`Lineitem` to
-/// `data.lineitem`, ...) and to nothing else, and the planner compares counts
-/// only, so the recorded SF1 counts must order the tables as every other
-/// scale does (SF 0.1 counts: DuckDB v1.5.5 `CALL dbgen(sf=0.1)`).
+/// R-TpchEvidence premises: the checked document imports SF1 counts and uses
+/// file-authored compiler/table mappings. Every kernel must bind those inputs
+/// to the declared dbgen table, and counts retain their scale-free ordering
+/// (SF 0.1 counts: DuckDB v1.5.5 `CALL dbgen(sf=0.1)`).
 #[test]
 fn tpch_evidence_names_bind_their_tables_and_count_order_is_scale_free() {
     use cq_workloads::tpch;
     use std::collections::BTreeMap;
 
-    let runtime =
-        fs::read_to_string(repository_root().join("workloads/src/tpch_runtime.rs")).unwrap();
-    let mut recorded = BTreeMap::new();
-    for fact in runtime.split("count ").skip(1) {
-        let Some((name, rest)) = fact.split_once(" = ") else {
-            continue;
-        };
-        let Some((rows, _)) = rest.split_once(';') else {
-            continue;
-        };
-        if let (true, Ok(rows)) = (
-            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric()),
-            rows.parse::<u64>(),
-        ) {
-            let previous = recorded.insert(name.to_owned(), rows);
-            assert!(previous.is_none_or(|previous| previous == rows), "{name} counts disagree");
-        }
-    }
-    let tables: BTreeMap<String, u64> = recorded
-        .iter()
-        .map(|(name, &rows)| (name.to_ascii_lowercase(), rows))
+    let mappings: serde_json::Value =
+        serde_json::from_str(include_str!("../authored/tpch-evidence.json")).unwrap();
+    let recorded: BTreeMap<String, String> =
+        serde_json::from_value(mappings["bindings"].clone()).unwrap();
+    let declarations = vec![syn::parse_quote!(relation Orders(o_orderkey: i64);)];
+    let declared = cq_workload_authored::tpch_evidence::load_sf1(&declarations)
+        .unwrap().unwrap();
+    let tables: BTreeMap<String, u64> = declared.document.relations.iter()
+        .map(|(name, relation)| (name.clone(), relation.rows.as_ref().unwrap().value.unwrap()))
         .collect();
     assert_eq!(
         tables.keys().map(String::as_str).collect::<Vec<_>>(),
@@ -595,8 +581,7 @@ fn tpch_evidence_names_bind_their_tables_and_count_order_is_scale_free() {
             let end = start + source[start..].find("\n}").expect("loader block closes");
             source.replace_range(start..end, "");
         }
-        for (name, _) in &recorded {
-            let table = name.to_ascii_lowercase();
+        for (name, table) in &recorded {
             let declared = source.contains(&format!("relation {name}("))
                 || source.contains(&format!("relation {name} =>"));
             if !declared {

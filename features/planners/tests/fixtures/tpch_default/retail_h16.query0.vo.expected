@@ -9,7 +9,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct BadSuppliers ; relation Supplier (s_suppkey : i64 [0] , s_comment : StringCode [1]) ; relation BadComments (comment : StringCode [1]) ; relation answer (suppkey : i64 [0]) ; answer (suppkey) : - Supplier (suppkey , comment) , BadComments (comment) ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Supplier = 10000 ; key Supplier [s_suppkey] ; } {
+valuation {
     // S-Connected: no connected ready atom (I3 vacuous); tie with ['@1'] broken by written position (I4 last)
     Supplier @ 0 (suppkey , comment) ;
     // I2/a_i=0: ready filter, placed at first ready boundary

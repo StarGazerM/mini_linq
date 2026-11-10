@@ -9,7 +9,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Part (p_partkey : i64 [0] , p_brand : StringCode [1] in [0] (data . dictionaries . domain ("p_brand")) , p_type : StringCode [1] , p_size : i32 [2]) ; relation Partsupp (ps_partkey : i64 [0] , ps_suppkey : i64 [0]) ; relation AllowedKinds (kind : StringCode [1]) ; relation BadSupplier (suppkey : i64 [0]) ; relation answer (part_key : i64 [0] , suppkey : i64 [0]) ; answer (part_key , suppkey) : - Part (part_key , brand , kind , size) , AllowedKinds (kind) , where brand != (__cq_c_0) , if [49 , 14 , 23 , 45 , 19 , 3 , 36 , 9] . contains (size) , Partsupp (part_key , suppkey) , ! BadSupplier (suppkey) capture { domain __cq_c_0 : StringCode in [0] (data . dictionaries . domain ("p_brand")) = exact ("Brand#45") ; } ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Part = 200000 ; key Part [p_partkey] ; count Partsupp = 800000 ; key Partsupp [ps_partkey , ps_suppkey] ; } {
+valuation {
     // O-Restrict/H-Local: restriction of clause 2 on Part@0 heads the scope (H-Local order)
     restrict Part @ 0 where brand != @ (__cq_c_0) ;
     // S-Connected: no connected ready atom (I3 vacuous); tie with ['@1', '@4'] broken by written position (I4 last)

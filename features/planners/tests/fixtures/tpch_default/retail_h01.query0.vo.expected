@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Lineitem (l_orderkey : i64 [0] , l_linenumber : i64 [0] , l_returnflag : StringCode [1] , l_linestatus : StringCode [1] , l_quantity : Decimal [2] , l_extendedprice : Decimal [2] , l_shipdate : Date [3]) ; relation answer (returnflag : StringCode [1] , linestatus : StringCode [1] , sum_quantity : i64 [0] , sum_price : i64 [0] , count_order : usize [4]) ; answer (returnflag , linestatus , __cq_4_2 , __cq_4_3 , __cq_4_4) : - Lineitem (order_key , line_number , returnflag , linestatus , quantity , price , shipdate) , where shipdate <= (cutoff) , let quantity_units : i64 = quantity . scaled () , let price_units : i64 = price . scaled () group [line_number , linestatus , order_key , price , price_units , quantity , quantity_units , returnflag , shipdate] by [returnflag , linestatus] { __cq_4_2 : i64 = sum (quantity_units) ; __cq_4_3 : i64 = sum (price_units) ; __cq_4_4 : usize = count () ; } ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Lineitem = 6001215 ; key Lineitem [l_orderkey , l_linenumber] ; } {
+valuation {
     // O-Restrict/H-Local: restriction of clause 1 on Lineitem@0 heads the scope (H-Local order)
     restrict Lineitem @ 0 where shipdate <= @ (cutoff) ;
     // S-Connected: no connected ready atom (I3 vacuous)

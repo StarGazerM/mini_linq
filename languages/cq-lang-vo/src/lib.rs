@@ -35,8 +35,6 @@ use syn::{Ident, Token, token};
 pub use cq_syntax::{CommaList, Occurrence, symbol_name};
 pub mod blocks;
 pub use blocks::Placement;
-pub mod evidence;
-pub use evidence::Evidence;
 pub mod restrict;
 pub use restrict::Restrict;
 pub mod order;
@@ -53,8 +51,6 @@ pub mod kw {
 #[derive(Clone, Debug, PartialEq, Eq, syn_derive::Parse, syn_derive::ToTokens)]
 pub struct Valuation {
     pub valuation_token: kw::valuation,
-    #[parse(evidence::parse_optional)]
-    pub evidence: Option<Evidence>,
     #[parse(ordering::parse_optional)]
     pub ordering: Option<ordering::OrderingFacts>,
     #[syn(braced)]
@@ -243,9 +239,6 @@ fn error<T>(
 fn analyze(cq: &cq::Program, program: &Program) -> syn::Result<Analysis> {
     if let Some(ordering) = &program.valuation.ordering {
         ordering.check()?;
-    }
-    if let Some(evidence) = &program.valuation.evidence {
-        evidence.check(cq)?;
     }
     analyze_reference(cq, &program.valuation.steps)
 }

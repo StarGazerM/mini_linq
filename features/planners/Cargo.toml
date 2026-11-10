@@ -16,6 +16,7 @@ cq-planning.workspace = true
 cq-reduce.workspace = true
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 cq-testkit.workspace = true
+cq-workload-authored = { path = "../workloads/authored" }
 cq-stage.workspace = true
 cq-relational-lowering.workspace = true
 mini-linq.workspace = true

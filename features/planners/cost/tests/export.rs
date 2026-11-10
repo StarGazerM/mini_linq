@@ -317,8 +317,9 @@ fn declared_dataset_identity_and_aliases_survive_authored_order() {
     assert_eq!(projected.bindings[0].input_relation, "R");
     assert_eq!(projected.bindings[0].columns[0].input_column, "x");
     assert_eq!(projected.bindings[0].columns[0].dataset_column, "a");
-    let (_, plan) = recorded_plan(&record.holes[0]);
-    assert!(plan.valuation.evidence.is_none(), "declared evidence must not select legacy root planning");
+    let (normal, plan) = recorded_plan(&record.holes[0]);
+    assert!(normal.declared_evidence.is_some());
+    assert_eq!(plan.valuation.steps, recorded_plan(&unattached.holes[0]).1.valuation.steps);
     assert_eq!(export::parse_json(&record.canonical_json().unwrap()).unwrap(), record);
 
     let mut wrong = record.clone();

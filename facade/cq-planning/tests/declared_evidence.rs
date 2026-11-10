@@ -20,14 +20,13 @@ fn source(attached: bool) -> cq::Program {
 }
 
 #[test]
-fn recorded_dataset_input_does_not_select_a_root_or_conflict_with_order() {
+fn incomplete_statistics_keep_default_and_explicit_orders() {
     for options in ["", "order(S@1,R@0)"] {
         let args: PlanOptions = syn::parse_str(options).unwrap();
         let (_, before) = prefix_valuation(&source(false), &args).unwrap();
         let (normal, after) = prefix_valuation(&source(true), &args).unwrap();
         assert_eq!(before.valuation, after.valuation);
         assert!(normal.declared_evidence.is_some());
-        assert!(after.valuation.evidence.is_none(), "legacy evidence planner must stay inactive");
         let reparsed = syn::parse::Parser::parse2(
             |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &normal),
             after.to_token_stream(),

@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Query ; relation Lineitem (l_orderkey : i64 [0] , l_linenumber : i64 [0] , l_extendedprice : Decimal [1] , l_discount : Decimal [1] , l_quantity : Decimal [1] , l_shipdate : Date [2]) ; relation answer (revenue : i64 [0]) ; answer (__cq_6_0) : - Lineitem (order_key , line_number , price , discount , quantity , shipdate) , where shipdate >= (start) , where shipdate < (end) , if discount . scaled () >= 5 && discount . scaled () <= 7 , if quantity . scaled () < 2400 , let revenue_units : i64 = price . scaled () * discount . scaled () group [discount , line_number , order_key , price , quantity , revenue_units , shipdate] by [] { __cq_6_0 : i64 = sum (revenue_units) ; } ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Lineitem = 6001215 ; key Lineitem [l_orderkey , l_linenumber] ; } {
+valuation {
     // O-Restrict/H-Local: restriction of clause 1 on Lineitem@0 heads the scope (H-Local order)
     restrict Lineitem @ 0 where shipdate >= @ (start) ;
     // O-Restrict/H-Local: restriction of clause 2 on Lineitem@0 heads the scope (H-Local order)

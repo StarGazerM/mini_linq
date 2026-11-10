@@ -103,7 +103,7 @@ LIBRARY = (
     "surface_self_join surface_wildcards union_project union_two typed_line_filter"
 ).split()
 TPCH_DEPS = (
-    "mini-linq cq-load cq-storage cq-planners cq-rewrites cq-join-filters "
+    "mini-linq cq-load cq-storage cq-planners cq-workload-passes cq-rewrites cq-join-filters "
     "cq-ext-aggregate cq-ext-correlated cq-sequence-tasks cq-sequence-tasks-macros"
 ).split()
 FLAGS = ["rustc", "--offline", "--", "-Zunpretty=expanded"]

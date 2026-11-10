@@ -10,7 +10,7 @@
 // Restrictions: O-Restrict/H-Local + E-Domain at the scope head; Masks: R-Masks over H-SpanningCore rooted at
 // the outer stream, children first (CK-Masks ChildrenFirst; sibling order by subtree rank then written clause).
 struct Matches ; relation Partsupp (ps_partkey : i64 [0] , ps_suppkey : i64 [0] , ps_availqty : i64 [0] , ps_supplycost : Decimal [1]) ; relation Supplier (s_suppkey : i64 [0] , s_nationkey : i32 [2]) ; relation Nation (n_nationkey : i32 [2] , n_name : StringCode [3] in [0] (data . dictionaries . domain ("n_name"))) ; relation answer (part_key : i64 [0] , supplier_key : i64 [0] , quantity : i64 [0] , cost_units : i64 [0]) ; answer (__cq_5_0 , __cq_5_1 , __cq_5_2 , __cq_5_3) : - Partsupp (part_key , supplier_key , quantity , cost) , Supplier (supplier_key , nation_key) , Nation (nation_key , nation_name) , where nation_name == (__cq_c_0) , let cost_units : i64 = cost . scaled () , let __cq_5_0 : i64 = * part_key , let __cq_5_1 : i64 = * supplier_key , let __cq_5_2 : i64 = * quantity , let __cq_5_3 : i64 = * cost_units capture { domain __cq_c_0 : StringCode in [0] (data . dictionaries . domain ("n_name")) = exact ("GERMANY") ; } ;
-valuation evidence from "TPC-H dbgen SF1 row counts (DuckDB tpch dbgen(sf=1), equal to the GPU SF1 manifest); TPC-H primary keys" { count Partsupp = 800000 ; key Partsupp [ps_partkey , ps_suppkey] ; count Supplier = 10000 ; key Supplier [s_suppkey] ; count Nation = 25 ; key Nation [n_nationkey] ; } {
+valuation {
     // O-Restrict/H-Local: restriction of clause 3 on Nation@2 heads the scope (H-Local order)
     restrict Nation @ 2 where nation_name = @ (__cq_c_0) ;
     // R-Masks: Nation@2 is child of Supplier@1 in H-SpanningCore tree (GYO join tree) rooted at outer Partsupp@0;

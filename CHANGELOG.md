@@ -13,6 +13,18 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- VO ordering consumes counts and keys only through the source's checked
+  dataset document and explicit bindings. Removed the duplicate inline VO
+  evidence grammar/type and `PlanOptions.evidence`; missing facts retain the
+  existing default, and explicit orders remain authoritative. TPC-H CPU
+  default/par load a checked-in neutral SF1 document; GPU automatic callers
+  import their configured dataset manifest and file key catalog rather than
+  a Rust count/key table. CPU compilation needs no installed dataset.
+  Expected-VO steps
+  remain authored independently. Sequence evidence is unchanged: its
+  Count/Bounds source-binding migration is separate, and its other facts do
+  not duplicate the current file model.
+
 - GPU workspace pins cuda-oxide `57eacecc0` / RCCL `a776d01c`: the device
   pipeline's scalarization, slot promotion and verification passes no longer do
   quadratic work. `cq-gpu-sequence-runtime` (530 device functions): device

@@ -221,7 +221,7 @@ without changing projected subatoms or introducing choices.
 
 \emph{Totality.} Ordering is a total function of a WF-NF query and resolved
 advice; it never checks its output. User-authored inputs are resolved at the
-front (O-AdviceResolve, O-KnownResolve, WF-Evidence), and the pipeline checks
+front (O-AdviceResolve, O-KnownResolve and checked declared-evidence correspondence), and the pipeline checks
 the produced schedule once (CK-Order, CK-StepAdvice or CK-EvidenceLe, each
 including WF-VO and VO-Order). The ready set is never empty while clauses
 remain. In a seeded scope, the written-earliest pending clause $c$ is ready:
@@ -351,14 +351,14 @@ the scope analysis does not number contributes nothing, so the rank is total.
 % Resolution checks the selector reference set; CK-StepAdvice, not the
 % planning walk, diagnoses dependency, subatom, and occurrence-phase errors.
 
-\Rule{O-EvidenceLe}{n=N(q)\quad \mathcal{E}\text{ recorded counts and keys}\quad
+\Rule{O-EvidenceLe}{n=N(q)\quad \mathcal{E}=n.\mathit{declared\_evidence}\\
  \forall i\in\mathsf{occ}(n).\ \mathsf{count}_{\mathcal{E}}(i)\text{ defined}\\
  F=\{r\mid \mathsf{functional}_{\mathcal{E}}(n,r)\wedge\mathsf{dom}_{\mathcal{E}}(n,r)\}\ne\varnothing\quad
  r=\arg\max_{r\in F}(\mathsf{count}_{\mathcal{E}}(r),-r)\\
  t=\mathsf{orderAdvice}(n,\mathsf{keyedReads}_{\mathcal{E}}(n,r))}
- {\mathsf{order}^{\mathcal{E}}(q)=t[\mathit{evidence}:=\mathcal{E}]}
+ {\mathsf{order}^{\mathcal{E}}(q)=t}
 
-\Rule{O-EvidenceFallback}{d=O_{\chi}(n)\quad
+\Rule{O-EvidenceFallback}{d=O_{\chi}(n)\quad\mathcal E=n.\mathit{declared\_evidence}\\
  F=\{r\mid\mathsf{functional}_{\mathcal E}(n,r)\land
              \mathsf{dom}_{\mathcal E}(n,r)\}\\
  (\mathsf{blocks}(n)\ne\emptyset)\lor(|\mathsf{occ}(n)|<2)\lor
@@ -366,9 +366,9 @@ the scope analysis does not number contributes nothing, so the rank is total.
  \left(F\ne\emptyset\land
  r=\arg\max_{r\in F}(\mathsf{count}_{\mathcal E}(r),-r)\land
  \mathsf{keyedReads}_{\mathcal E}(n,r)=\mathsf{fullReads}(d)\right)}
- {\mathsf{order}^{\mathcal E}_{\chi}(n)=d[\mathit{evidence}:=\mathcal E]}
+ {\mathsf{order}^{\mathcal E}_{\chi}(n)=d}
 
-\Rule{CK-EvidenceLe}{t.\mathit{evidence}=\mathcal{E}\quad \mathsf{WF}_{VO}(t)\quad
+\Rule{CK-EvidenceLe}{\mathcal{E}=n.\mathit{declared\_evidence}\quad \mathsf{WF}_{VO}(n,t)\\
  F=\{r\mid \mathsf{functional}_{\mathcal{E}}(n,r)\wedge\mathsf{dom}_{\mathcal{E}}(n,r)\}\ne\varnothing\\
  \mathsf{first}(t)\in F\quad
  \mathsf{count}_{\mathcal{E}}(\mathsf{first}(t))=\max_{r\in F}\mathsf{count}_{\mathcal{E}}(r)\\
@@ -378,7 +378,8 @@ the scope analysis does not number contributes nothing, so the rank is total.
  {\mathsf{check}^{\mathcal{E}}(n,t)\Downarrow\ok}
 
 \Rule{R-TpchEvidence}{\text{route}\in\{\mathsf{default},\mathsf{par}\}\quad
- \mathcal{E}=\{\mathsf{count}\ R=n_{SF1}(T_R),\ \mathsf{key}\ R\ [\mathit{pk}(T_R)]\mid R\ \text{a base relation of }q\}\ne\varnothing}
+ \mathcal{E}=\mathsf{checkedDocument}(\code{tpch-sf1-evidence.json})\quad
+ n.\mathit{declared\_evidence}=(\mathcal E,\mathsf{explicitBindings}(q))}
  {\mathsf{plan}(q)=\mathsf{order}^{\mathcal{E}}(q)}
 
 \Rule{O-KnownResolve}{\mathsf{WFBindings}(t)\quad \neg R(\bar x)\text{ at top-level clause }i\text{ of }t.cq\quad
@@ -391,6 +392,19 @@ the scope analysis does not number contributes nothing, so the rank is total.
  t'=t\text{ with }\neg R(\bar x)\text{ moved to position }p}
  {\mathsf{known}(R@i\ \mathsf{at}\ k)(t)=\mathsf{drain}_{I2}(t')}
 \end{mathpar}
+Here the sole evidence source is the checked dataset document attached to the
+CQ input, not a VO annotation or planner option. For an occurrence's explicitly
+bound \code{full} input, $\mathsf{count}_{\mathcal E}$ reads its relation's
+\code{rows} fact only when its claim is \code{equal}, its source is
+\code{exact}, \code{declared} or \code{calibrated}, and its value is present.
+Other views, missing bindings, missing row facts and non-equality observations
+give $\bot$ and select O-EvidenceFallback; no number is guessed from syntax.
+Keys are the document's checked \code{keys} declarations whose complete
+column set survives the explicit correspondence. A missing/projected-away
+key supplies no keyed-read premise. No new key is inferred from a type,
+relation name or column spelling. The existing H-FilterRank policy and
+written-position ties are unchanged; they do not estimate missing statistics.
+
 A read of occurrence $i$ is \emph{keyed} under bound variables $B$
 ($\mathsf{keyBound}_{\mathcal{E}}(i,B)$) when every column of some recorded key
 of its relation is a literal or a variable in $B$: it matches at most one row.
@@ -1477,9 +1491,8 @@ to $N(q)$. Apply $\rho$ to qualified order, reduction and skip selectors before
 passing them to the normal-IR ordering API; unqualified selectors are unchanged.
 \begin{mathpar}
 \Rule{Plan-Prefix}{p=\rho(\mathsf{parsePlanOptions}(args))\quad n=N(q)\quad
- \neg(p.order\land p.evidence)\\
  v_0={\begin{cases}O_{explicit(p.order),Coarse}(n)&p.order\text{ present}\\
- \mathsf{order}^{p.evidence}(n)\ \text{checked by CK-EvidenceLe}&p.evidence\text{ present}\\
+ \mathsf{order}^{n.declared\_evidence}(n)\ \text{checked by CK-EvidenceLe}&n.declared\_evidence\text{ present}\\
  O_{Prefix(Connected),Coarse}(n)&\text{otherwise}\end{cases}}\\
  v=\mathsf{known}(p.known)(v_0[ordering:=p.ordering])\quad
  r=\text{None if }p.no\_reduce,\text{ otherwise Masks}\\
