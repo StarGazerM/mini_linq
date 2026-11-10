@@ -192,6 +192,8 @@ pub fn compile(
             use cq_load::{Date, Load, StringCode};
             type Decimal = cq_load::Decimal<2>;
             #(#modules)*
+            // Keep each query in its module's codegen unit, not the dispatcher.
+            #[inline(never)]
             pub(super) fn run(manifest: &crate::manifest::Manifest, query: &str, conformance_only: bool) -> crate::manifest::Result<serde_json::Value> {
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
                 #preprocessing

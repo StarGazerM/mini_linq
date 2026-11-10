@@ -110,6 +110,15 @@ arguments after `--` belong to the executable (output JSON, query, scale, mode),
 not to Cargo. In particular, Cargo's `--release -p` flags cannot follow that
 separator.
 
+`cq-gpu-tpch` keeps generated query entries and stage executors in separate
+module-level `#[inline(never)]` functions. The GPU workspace release profile uses
+16 codegen units, including runtime dependencies and the Sequence runtime's
+partitioned host runners, without changing query plans or device kernels.
+For build comparisons use
+`cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release -p cq-gpu-tpch --timings`;
+report the crate's frontend/codegen sections separately from dependency builds
+and do not interpret Cargo's combined codegen section as pure LLVM time.
+
 Builds, tests and timings share one machine through two lock files:
 
 ```sh

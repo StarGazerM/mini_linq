@@ -1193,10 +1193,12 @@ fn compile_stage(
                     #(let #fields: #input_types = #bindings;)*
                     Ok(Inputs { #(#fields,)* #catalog_init pool })
                 }
+                #[inline(never)]
                 pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
                     #setup_bindings
                     #execute
                 }
+                #[inline(never)]
                 pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
                     #setup_bindings
                     #(#sequential_bindings)*
