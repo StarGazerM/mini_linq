@@ -11,6 +11,7 @@ mod host_pack;
 mod kernels;
 mod memory;
 pub mod scan;
+pub mod tile;
 use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};

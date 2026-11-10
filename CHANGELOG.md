@@ -13,6 +13,21 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- P6 C resident FOR-native tile realization: independently checked positional
+  scan spines ending in order-insensitive keyless grid folds use existing
+  1024-row vectors with 256 threads and four transposed positions per thread.
+  FOR/Plain predicates compare code-domain intervals; Delta/native retain
+  correct decode. Surviving first `rust_reads` consumers reconstruct fields.
+  Every addition stays checked: unflagged sums are exact; incomplete overflow
+  flagging can change with traversal order. No S1 format, advice knob or
+  performance claim; unsupported shapes stay unchanged.
+  The all-query census changes only h06, h11's Stock total and h15's Revenue
+  maximum (both scales); all 52 Physical/Structures/Sequence plans are unchanged.
+  All 26 queries pass complete first-result comparison at SF1. The three
+  affected queries also pass SF1/SF10 with FOR, Plain64, Delta and native base
+  layouts. Core tests: 80; device-column tests: 20. Timing is deferred to the
+  clean paired campaign because a foreign GPU tenant was active.
+
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`
   where `detect_integer_codec` picks it) with `EncodedColumn::from_host_layout`,

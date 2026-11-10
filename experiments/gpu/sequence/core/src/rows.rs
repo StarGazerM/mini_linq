@@ -840,7 +840,7 @@ impl Rows {
             }
             let fields = &raw[&origin_host];
             let interval = match &realization.access {
-                SourceAccess::Scan => None,
+                SourceAccess::Scan | SourceAccess::Tiles(_) => None,
                 SourceAccess::Positions(interval) => Some(interval),
                 SourceAccess::Provider { selection } => selection.as_ref(),
             };
@@ -1333,6 +1333,17 @@ impl Rows {
         });
         Ok(quote!(#(#reads)*))
     }
+    /// The existing resident view for a checked tile source field.
+    pub(crate) fn tile_view(&self, name: &str, field: &str) -> syn::Result<TokenStream> {
+        let source = self.sources.get(name).ok_or_else(|| error("GPU-TilePredicate: missing resident source"))?;
+        let slot = self.columns[field];
+        let (_, view) = source.reads.iter().find(|(candidate, _)| *candidate == slot)
+            .ok_or_else(|| error("GPU-TilePredicate: missing resident field"))?;
+        self.abi_uses.borrow_mut().extend(source.uses.iter()
+            .filter(|(candidate, _)| **candidate == slot).map(|(_, name)| name.clone()));
+        Ok(view.clone())
+    }
+
     pub fn source_len(&self, name: &str) -> syn::Result<TokenStream> {
         if let Some(source) = self.run_sources.get(name) {
             return Ok(source.length.clone());
@@ -1542,7 +1553,7 @@ impl Rows {
         }
         Ok(output)
     }
-    fn map_definitions(&self, name: &str, input_result: &str) -> syn::Result<Vec<&Definition>> {
+    pub(crate) fn map_definitions(&self, name: &str, input_result: &str) -> syn::Result<Vec<&Definition>> {
         let mut chain = Vec::new();
         let mut current = name;
         while current != input_result {

@@ -490,3 +490,8 @@ features/workloads/src/queries/typed/typed_line_filter.rs	// DECODE P: publish t
 features/workloads/src/queries/typed/typed_priced_products.rs	// DECODE P: publish the price label in the typed priced-products answer.	P	publish the price label in the typed priced-products answer.
 features/workloads/src/queries/typed/typed_priced_products.rs	// DECODE P: publish the product name in the typed priced-products answer.	P	publish the product name in the typed priced-products answer.
 features/workloads/src/queries/typed/typed_tagged_products.rs	// DECODE P: publish the tag in the typed tagged-products answer.	P	publish the tag in the typed tagged-products answer.
+experiments/gpu/device-columns/src/tile.rs	// DECODE ?: survivor inverse is shared by recorded opaque reads and residual or aggregate consumers.	?	survivor inverse is shared by recorded opaque reads and residual or aggregate consumers.
+experiments/gpu/device-columns/src/tile.rs	// DECODE ?: Delta/native fallback serves both tile predicates and authorized survivor reads.	?	Delta/native fallback serves both tile predicates and authorized survivor reads.
+experiments/gpu/sequence/core/src/tiles.rs	// DECODE R: checked TileRead rust_reads demand authorizes this survivor first load.	R	checked TileRead rust_reads demand authorizes this survivor first load.
+experiments/gpu/sequence/core/src/tiles.rs	// DECODE V: P6 residual relational predicates reconstruct only their demanded survivor fields.	V	P6 residual relational predicates reconstruct only their demanded survivor fields.
+experiments/gpu/sequence/core/src/tiles.rs	// DECODE V: P6 direct aggregate source operands reconstruct surviving fold inputs.	V	P6 direct aggregate source operands reconstruct surviving fold inputs.

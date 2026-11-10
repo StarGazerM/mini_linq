@@ -1620,6 +1620,48 @@ operands record the available row-column codec context, selected from subject,
 lower bound, then upper bound; checking validates that recorded context against
 the source range rather than requiring the subject to be a column.
 
+\paragraph{Resident FOR-native tiles (P6 C).}
+This realization uses the existing resident 1024-row vectors, not S1 blocks.
+One 256-thread block visits a vector, grid-striding over vectors; each thread
+visits four physical transposed positions. The same physical position names
+the same occurrence in every column. Tail positions outside the live row
+prefix do not participate. Physical traversal is admissible only for a
+row-order-insensitive keyless grid fold.
+\begin{mathpar}
+\Rule{GPU-TilePredicate}{s\text{ resident}\quad
+ \pi\text{ a positional Rename/Select/Point/Range/Guard/Bind/Project spine}\quad
+ t\text{ a keyless grid fold}\quad
+ \text{every partial and combine addition is checked}}
+ {\mathsf{SourceAccess}(s)=\mathsf{Tiles}(\mathsf{TileScan}(s,\pi,t))}
+\Rule{GPU-NarrowCarrier}{h\text{ a resident vector header}\quad
+ [\ell,u]\text{ the closed predicate interval}\quad
+ c\text{ the packed code of a live physical position}}
+ {\mathsf{test}_h(c,[\ell,u])\iff
+   \ell\leq\mathsf{value}_h(c)\leq u}
+\end{mathpar}
+The realization checker validates the source, positional lineage, capture
+bounds, consumers and terminal independently, without replaying selection.
+Select, Point and Range tests retain Physical order. FOR translates interval
+endpoints relative to its signed base, clipping to the code domain with
+explicit empty/full cases, never overflowing endpoint subtraction or adding
+the base per tested lane. Plain compares its code directly; Delta and native
+headerless columns use their correct logical decode. Open endpoints retain
+their strictness, including at integer extrema. Width zero, width 64 and
+partial vectors obey the same equivalence.
+
+A surviving lane's first consuming Guard or Bind reconstructs demanded source
+fields under that consumer's recorded \code{rust_reads} (DECODE R).
+Residual relational predicates and direct aggregate operands reconstruct only
+their demanded surviving fields at registered DECODE V sites; the shared
+inverse helper itself grants no opaque read authorization. Existing semantic identity
+and capture obligations remain unchanged. Every partial and combine addition
+uses checked addition: an unflagged result is the exact sum, never a wrapped
+sum. Overflow flagging is incomplete; as with the existing occupancy-dependent
+partition, physical traversal can change which cancellation-heavy sums flag.
+No envelope or rejection premise is added. Selection is
+automatic for admitted shapes, introduces no advice knob, and leaves every
+other expansion unchanged.
+
 \paragraph{GPU realization records.}
 Native ABI is a declared provider-token fact. Input instances record the ordered
 logical/storage column schema and optional codec explicitly; every Rust type is

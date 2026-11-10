@@ -2449,6 +2449,20 @@ fn translate_observed(
                     }
                 }
                 let mut load = TokenStream::new();
+                let tile_record = if chain.stored.is_none() {
+                    analysis.gpu_bindings.realization.sources.get(&chain.source)
+                        .and_then(|source| match &source.access {
+                            cq_lang_sequence::gpu::realization::SourceAccess::Tiles(tiles) => Some((source, tiles)),
+                            _ => None,
+                        })
+                } else { None };
+                let mut printed_tiles = if let Some((source, tiles)) = tile_record {
+                    let maps = chain.operations.iter().filter_map(|operation| match operation {
+                        Operation::Map(name, input) => Some((name.clone(), input.clone())),
+                        _ => None,
+                    }).collect::<Vec<_>>();
+                    Some(crate::tiles::print(&compiler.rows, &chain.source, source, tiles, &maps, &used)?)
+                } else { None };
                 let length = if let Some(index) = chain.stored {
                     let stored = &compiler.stored[index];
                     if stored.packed.is_some() || stored.range.is_some() {
@@ -2465,6 +2479,9 @@ fn translate_observed(
                     }
                     let length = format_ident!("__cq_store_length_{index}");
                     quote!(#length)
+                } else if let Some(printed) = &printed_tiles {
+                    load.extend(printed.load.clone());
+                    compiler.rows.source_len(&chain.source)?
                 } else {
                     load.extend(compiler.rows.source_columns(
                         &chain.source,
@@ -2474,7 +2491,7 @@ fn translate_observed(
                     )?);
                     compiler.rows.source_len(&chain.source)?
                 };
-                for operation in &chain.operations {
+                for operation in chain.operations.iter().filter(|_| printed_tiles.is_none()) {
                     match operation {
                         Operation::Map(name, input) => {
                             let code =
@@ -2491,6 +2508,9 @@ fn translate_observed(
                             ));
                         }
                     }
+                }
+                if printed_tiles.is_some() {
+                    used.extend(DeviceRow::uses(load.clone())?);
                 }
                 let mut row = DeviceRow::default();
                 let mut declarations = TokenStream::new();
@@ -2528,11 +2548,18 @@ fn translate_observed(
                 if let Some(index) = chain.stored {
                     uses.insert(format!("__cq_store_rows_{index}"));
                 }
+                let tiles = if let Some(printed) = printed_tiles.take() {
+                    parameters.extend(printed.parameters);
+                    arguments.extend(printed.arguments);
+                    uses.extend(printed.uses);
+                    Some(printed.tiles)
+                } else { None };
                 Some(crate::reduce::GroupInput {
                     uses,
                     parameters,
                     arguments,
                     length,
+                    tiles,
                     load: quote!(#declarations #load),
                     columns: compiler
                         .rows

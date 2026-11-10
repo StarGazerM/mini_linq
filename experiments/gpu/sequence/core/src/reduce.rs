@@ -89,6 +89,7 @@ pub struct GroupInput {
     pub load: TokenStream,
     pub columns: std::collections::BTreeMap<String, TokenStream>,
     pub length: TokenStream,
+    pub tiles: Option<crate::tiles::TileLoop>,
 }
 
 /// Lower the machine instance of BE-Group at an already published canonical
@@ -592,8 +593,69 @@ pub fn global(
         });
     }
     let decoded = decoders(group, &columns, output_columns, output_types, codecs)?;
-    let (load, status) = if let Some(input) = direct {
-        (input.load, quote!())
+    let tile_loop = direct.as_ref().and_then(|input| input.tiles.as_ref());
+    let domain = if let Some(tiles) = tile_loop {
+        let vector_rows = tiles.vector_rows as usize;
+        quote!((#length).div_ceil(#vector_rows))
+    } else {
+        quote!(#length.div_ceil(#threads))
+    };
+    // Formal rule GPU-TilePredicate: all partial and reduction adds remain
+    // checked. An unflagged sum is exact; cancellation-dependent flags depend
+    // on the partition, just as with the previous occupancy grid-stride scan.
+    let body = if let Some(tiles) = tile_loop {
+        let prologue = &tiles.prologue;
+        let predicates = &tiles.predicates;
+        let vector_rows = tiles.vector_rows as usize;
+        let positions = tiles.positions_per_thread as usize;
+        let load = &direct.as_ref().expect("tile input").load;
+        let live_mask = if let Some(frame) = &tiles.live_frame {
+            quote!(::cq_gpu_runtime::tile::live_mask(#frame, __tid))
+        } else {
+            quote!({
+                let mut mask = 0u8;
+                let mut k = 0usize;
+                while k < #positions {
+                    let physical = __tid + k * #threads as usize;
+                    let position = __cq_tile_vector * #vector_rows
+                        + ::cq_gpu_sequence_runtime::device::original_position(physical);
+                    if position < length { mask |= 1u8 << k; }
+                    k += 1;
+                }
+                mask
+            })
+        };
+        quote! {
+            let mut __cq_tile_vector = ::cuda_device::thread::blockIdx_x() as usize;
+            while __cq_tile_vector < length.div_ceil(#vector_rows) {
+                #prologue
+                let mut __cq_tile_mask = #live_mask;
+                #predicates
+                let mut __cq_tile_k = 0usize;
+                while __cq_tile_k < #positions {
+                    let __cq_tile_physical = __tid + __cq_tile_k * #threads as usize;
+                    let mut __live = __cq_tile_mask & (1u8 << __cq_tile_k) != 0;
+                    #load
+                    if __live { #(#update)* }
+                    __cq_tile_k += 1;
+                }
+                __cq_tile_vector += ::cuda_device::thread::gridDim_x() as usize;
+            }
+        }
+    } else {
+        let load = direct.as_ref().map(|input| input.load.clone()).unwrap_or_default();
+        quote! {
+            let mut position = ::cuda_device::thread::index_1d().get() as usize;
+            while position < length {
+                let mut __live = true;
+                #load
+                if __live { #(#update)* }
+                position += ::cuda_device::thread::gridDim_x() as usize * #threads;
+            }
+        }
+    };
+    let status = if direct.is_some() {
+        quote!()
     } else {
         params.extend([
             (format_ident!("packed"), syn::parse_quote!(*const u64)),
@@ -603,10 +665,7 @@ pub fn global(
             (format_ident!("packed"), quote!(#owner.keys().ptr())),
             (format_ident!("lanes"), quote!(#owner.lanes())),
         ]);
-        (
-            quote!(),
-            quote!(__cq_statuses.push(#owner.metadata().clone());),
-        )
+        quote!(__cq_statuses.push(#owner.metadata().clone());)
     };
     let abi = crate::emit::CheckedKernel::lower(kernel, quote! {
         #[kernel]
@@ -616,13 +675,7 @@ pub fn global(
                 unsafe {
                     let __tid = ::cuda_device::thread::threadIdx_x() as usize;
                     #(#declare)*
-                    let mut position = ::cuda_device::thread::index_1d().get() as usize;
-                    while position < length {
-                        let mut __live = true;
-                        #load
-                        if __live { #(#update)* }
-                        position += ::cuda_device::thread::gridDim_x() as usize * #threads;
-                    }
+                    #body
                     let shared = ::cuda_device::DynamicSharedArray::<u8, 16>::get_raw();
                     let values = shared.cast::<i64>();
                     let present = shared.add(#presence).cast::<u32>();
@@ -637,7 +690,7 @@ pub fn global(
         abi.definition(),
         quote! {
             let shape = #shape?;
-            let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#length.div_ceil(#threads),#threads,#shared)?;
+            let grid = ::cq_gpu_runtime::launch_grid_for_kernel(shape.function(),#domain,#threads,#shared)?;
             let __cq_global = ::cq_gpu_sequence_runtime::group::GlobalFold::new(
                 __cq_pool.clone(), grid as usize, &[#(#descriptors),*])?;
             let prepared = #prepare?;

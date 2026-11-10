@@ -51,10 +51,47 @@ pub struct IntervalBound {
     pub value: syn::Expr,
 }
 
+/// One fully translated Physical Select/Point/Range, in spine order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileTest {
+    pub definition: String,
+    /// Original resident column, before the Physical rename.
+    pub column: String,
+    pub bounds: Vec<IntervalBound>,
+}
+
+/// A resident-field demand of an opaque Guard or Bind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileRead {
+    pub consumer: String,
+    pub field: String,
+    pub column: String,
+    /// First reconstruction of this field. A preceding residual row predicate
+    /// may already have populated the row's value.
+    pub first_load: bool,
+}
+
+/// Formal rules GPU-TilePredicate and GPU-NarrowCarrier: one block owns a
+/// resident FOR vector. Positions are always physical (FastLanes-transposed):
+/// `p = thread + iteration * block_threads`, never logical row order.
+/// Every consumer is on the checked positional spine to a keyless grid fold.
+/// Tests and opaque reads retain Physical order; untranslated selections
+/// remain row predicates at their original positions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TileScan {
+    pub vector_rows: u32,
+    pub block_threads: u32,
+    pub positions_per_thread: u32,
+    pub tests: Vec<TileTest>,
+    pub reads: Vec<TileRead>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SourceAccess {
     /// Read every source row.
     Scan,
+    /// Visit resident vectors in physical order, decoding survivor demands.
+    Tiles(TileScan),
     /// Materialize the interval's row positions once, then read through them.
     Positions(Interval),
     /// Build the recorded Range provider over the source, restricted to the

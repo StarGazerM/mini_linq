@@ -1021,6 +1021,56 @@ concrete count/capacity/events/owners remain Sequence/GPU-owned facts.
 An absent encoded envelope is a vacuous check and leaves ordinary program
 printing and selection unchanged.
  
+**P6 C resident FOR-native tiles.** This realization consumes the existing
+1024-row GPU vectors directly; it does not select or construct S1 blocks.
+`SourceAccess::Tiles(TileScan)` records a resident source and positional
+Rename/Select/Point/Range/Guard/Bind/Project spine ending in a keyless grid
+fold. An independent realization checker validates the record without
+replaying selection. Admission is automatic, with no advice knob; all other
+shapes retain their ordinary expansion.
+
+One 256-thread block handles a vector, grid-striding over vectors. Each
+thread visits four physical transposed positions, shared across columns,
+and masks the partial vector's non-live positions. This permutation requires
+order-insensitive consumers. Every partial and combine addition remains
+checked, so an unflagged result is exact and never wraps. Overflow flagging
+is incomplete: physical order can change which cancellation-heavy sums flag,
+just as occupancy-dependent partitioning already can. No envelope or overflow
+rejection premise is introduced.
+
+`GPU-TilePredicate` and `GPU-NarrowCarrier` preserve Physical predicate
+order. Closed Select/Point/Range captures become per-vector code intervals:
+FOR clips bounds relative to the signed base without overflow or per-lane
+base addition; Plain compares directly. Delta and native-headerless inputs
+dispatch to their correct logical decode. Empty/full intervals, strict
+endpoints, zero/full widths and tail vectors retain exact predicate truth.
+Guard/Bind source demands carry checked `rust_reads` (DECODE R), and reconstruct
+only survivors whose values have not already been loaded. Residual relational
+predicates and direct aggregate source operands retain demand-only survivor
+loads at registered DECODE V sites; subsequent consumers reuse those values.
+The shared inverse helper is DECODE ?. Semantic identity eligibility is
+unchanged. There is no host repacking or second storage format, and the ordinary
+source-scan V site retains its non-admitted callers.
+
+Local acceptance (2026-11-10, RTX 6000 Ada): the 52-module census against
+`ef6ca71a` changes only h06's filtered sum, h11 stage 2's Stock total, and h15
+stage 1's Revenue maximum, at SF1/SF10. The other 46 generated modules are
+byte-identical; all 52 Physical/Structures/Sequence plans are unchanged.
+The affected block-reduction tails are unchanged. h15's Revenue input remains
+FOR under every base-codec choice: `GroupedRows::into_columns` gathers the
+native strided group output into `EncodedColumn::from_gather_source`, which
+publishes packed FOR headers. Thus the tile read takes its FOR path, not the
+native fallback; base-codec only selects original table inputs.
+
+All 26 queries passed complete warmup and first-measured answer comparisons at
+SF1. h06, h11 and h15 additionally passed SF1/SF10 with each of `for`, `plain64`,
+`delta` and `native`. Later benchmark invocations use the existing sampled
+policy, so this is full-first exactness, not an all-samples-full JSON flag.
+The 80 Sequence-core and 20 device-column tests passed, including all widths,
+extreme intervals, partial transposed tails and exact payload-load counters.
+No timing effect is claimed: a foreign VLLM tenant was active before sampling;
+the clean paired timing campaign is separate.
+
 **P5 S2 columnar input boundary.** `ScanColumnBuilder<T, F>` retains at most
 one block of ordinals per ordinary column and collects extrema while accepting
 input. A full block flushes directly into the S1 payload; a partial block

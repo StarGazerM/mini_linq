@@ -17,6 +17,7 @@ pub mod providers;
 mod realize;
 mod reduce;
 mod rows;
+mod tiles;
 pub mod runs;
 
 pub use arena::translate_arena;

@@ -9,7 +9,7 @@ use cq_lang_sequence::gpu::realization::{
     DescriptorBounds, Granularity, GroupCompletion, GroupInput, HostEvaluation, HostOutput,
     HostUnion, Interval, Phase, ProviderBuild, Realization, Side, SmallestRealization,
     SmallestSide, SourceAccess, SourceOrigin, SourceRealization, Step, TerminalGroup, Ties,
-    Transfer, TransferSource, UnionArm, Launch,
+    Transfer, TransferSource, UnionArm, Launch, TileRead, TileScan, TileTest,
 };
 use cq_lang_sequence::gpu::{Grid, Publication};
 use cq_lang_sequence::{Analysis, Program, Term};
@@ -129,6 +129,7 @@ pub(crate) fn select(
                 };
             }
         }
+        select_tiles(&facts, &captures, &steps, &mut sources)?;
         let smallest = smallest(&facts)?;
         Ok(Realization {
             rejection: None,
@@ -806,6 +807,273 @@ fn sources(facts: &Facts, captures: &Captures) -> syn::Result<BTreeMap<String, S
         );
     }
     Ok(sources)
+}
+
+/// Checked positional provenance shared by the producer and verifier, not a
+/// realization decision. A source has exactly one consumer chain, ending at
+/// the recorded keyless fold; no keyed reader, generator or publication can
+/// observe the physical visitation order.
+fn tile_spine<'a>(
+    facts: &'a Facts,
+    steps: &[(String, Step)],
+    source: &str,
+) -> Option<Vec<&'a Definition>> {
+    let mut groups = steps.iter().filter_map(|(_, step)| match step {
+        Step::Group(group)
+            if matches!(&group.input, GroupInput::Source { source: input } if input == source) =>
+        {
+            Some(group)
+        }
+        _ => None,
+    });
+    let terminal = groups.next()?;
+    if groups.next().is_some()
+        || !matches!(terminal.completion, GroupCompletion::GridPartials { .. })
+    {
+        return None;
+    }
+    let Operator::Group(group) = &facts.definitions.get(&terminal.group)?.operator else {
+        return None;
+    };
+    if !group.keys.is_empty() {
+        return None;
+    }
+    let mut current = symbol_name(&group.input);
+    let mut spine = Vec::new();
+    let mut seen = BTreeSet::new();
+    loop {
+        if !seen.insert(current.clone())
+            || facts.structure_analysis.physical.readers.get(&current) != Some(&1)
+        {
+            return None;
+        }
+        let definition = facts.definitions.get(&current)?;
+        if facts.analysis.rust_requires_host(&facts.structure_analysis.physical, &definition.operator) {
+            return None;
+        }
+        spine.push(definition);
+        match &definition.operator {
+            Operator::Rename(rename) if rename.constants.is_none() => break,
+            Operator::Select(_) | Operator::Point(_, _) | Operator::Range(_, _)
+            | Operator::Guard(_) | Operator::Project(_) => {}
+            Operator::Bind(bind) if bind.for_token.is_none() => {}
+            _ => return None,
+        }
+        current = symbol_name(definition.operator.input()?);
+    }
+    if !seen.contains(source) {
+        return None;
+    }
+    spine.reverse();
+    // The source adapter absorbs only relational selections and projections.
+    // Opaque work and residual predicates must remain in the emitted map.
+    let Operator::Rename(rename) = &spine[0].operator else { return None };
+    let columns = rename.mapping.iter()
+        .map(|mapping| (symbol_name(&mapping.target), symbol_name(&mapping.source)))
+        .collect();
+    for definition in &spine {
+        match &definition.operator {
+            Operator::Rename(_) | Operator::Project(_) => {}
+            Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select)
+                if tile_condition_column(&select.condition, &columns).is_some() => {}
+            _ => return None,
+        }
+        if symbol_name(&definition.name) == source {
+            break;
+        }
+    }
+    Some(spine)
+}
+
+/// A single-column closed contiguous condition is translatable. Everything
+/// else remains a row predicate, including column comparisons and disjunction.
+fn tile_condition_column(
+    theta: &cq_syntax::algebra::Theta,
+    columns: &BTreeMap<String, String>,
+) -> Option<String> {
+    use cq_syntax::constraint::{Comparison, Constraint, Term as Operand};
+    let mut column = None;
+    let mut observe = |field: &syn::Ident| {
+        let original = columns.get(&symbol_name(field))?;
+        if column.as_ref().is_some_and(|known| known != original) {
+            return None;
+        }
+        column = Some(original.clone());
+        Some(())
+    };
+    let closed = |value: &Operand| matches!(value, Operand::Literal(_) | Operand::Closed(_));
+    for equality in &theta.equalities {
+        if !matches!(equality.right, cq_syntax::EqualityValue::Literal(_)) {
+            return None;
+        }
+        observe(&equality.left)?;
+    }
+    for constraint in &theta.constraints {
+        match constraint {
+            Constraint::Compare { left: Operand::Variable(field), comparison, right }
+                if !matches!(comparison, Comparison::Ne(_)) && closed(right) =>
+            {
+                observe(field)?;
+            }
+            Constraint::Between { term: Operand::Variable(field), low, high }
+                if closed(low) && closed(high) =>
+            {
+                observe(field)?;
+            }
+            _ => return None,
+        }
+    }
+    column
+}
+
+/// Isolate a predicate from the positional spine without changing its
+/// condition, so the ordinary interval producer/checker can inspect it.
+fn tile_predicate_definitions(
+    rename: &Definition,
+    predicate: &Definition,
+) -> BTreeMap<String, Definition> {
+    let mut predicate = predicate.clone();
+    match &mut predicate.operator {
+        Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) => {
+            select.input = rename.name.clone();
+        }
+        _ => unreachable!("tile predicate is a relational selection"),
+    }
+    [
+        (symbol_name(&rename.name), rename.clone()),
+        (symbol_name(&predicate.name), predicate),
+    ].into_iter().collect()
+}
+
+/// Formal rules GPU-TilePredicate and GPU-NarrowCarrier: refine only a
+/// resident positional keyless fold. Existing nonadmitted accesses are intact.
+// Formal rule GPU-TilePredicate: preserve every predicate at its Physical site.
+// Formal rule GPU-NarrowCarrier: reconstruct only demanded survivor values.
+// DESIGN contract8-for-native-tiles
+fn select_tiles(
+    facts: &Facts,
+    captures: &Captures,
+    steps: &[(String, Step)],
+    sources: &mut BTreeMap<String, SourceRealization>,
+) -> syn::Result<()> {
+    let bound = host_bound(&facts.definitions, captures);
+    for (name, source) in sources {
+        if !matches!(source.origin, SourceOrigin::Resident { .. })
+            || matches!(source.access, SourceAccess::Provider { .. })
+        {
+            continue;
+        }
+        let Some(spine) = tile_spine(facts, steps, name) else { continue };
+        let mut tests = Vec::new();
+        let mut reads = Vec::new();
+        let mut loaded = BTreeSet::new();
+        for definition in &spine {
+            let consumer = symbol_name(&definition.name);
+            if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+                &bound[&consumer].operator
+                && tile_condition_column(&select.condition, &source.columns).is_some()
+            {
+                let isolated = tile_predicate_definitions(spine[0], &bound[&consumer]);
+                let interval = crate::rows::origin(&consumer, &isolated)?
+                    .and_then(|origin| origin.selection)
+                    .ok_or_else(|| error("GPU-TilePredicate: translated test lacks bounds"))?;
+                tests.push(TileTest {
+                    definition: consumer.clone(),
+                    column: interval.column,
+                    bounds: interval.bounds,
+                });
+            } else if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+                &definition.operator
+            {
+                loaded.extend(select.condition.columns().into_iter().filter(|field| source.columns.contains_key(field)));
+            }
+            for field in facts.structure_analysis.physical.rust_reads(&definition.operator)
+                .into_iter().flatten()
+            {
+                if let Some(column) = source.columns.get(&field) {
+                    reads.push(TileRead {
+                        consumer: consumer.clone(),
+                        first_load: loaded.insert(field.clone()),
+                        field,
+                        column: column.clone(),
+                    });
+                }
+            }
+        }
+        source.access = SourceAccess::Tiles(TileScan {
+            vector_rows: 1024,
+            block_threads: 256,
+            positions_per_thread: 4,
+            tests,
+            reads,
+        });
+    }
+    Ok(())
+}
+
+/// Independent record validation: inspect supplied tests and read demands,
+/// never invoke the tile selector or replay its produced record.
+fn check_tiles(
+    facts: &Facts,
+    records: &Realization,
+    name: &str,
+    source: &SourceRealization,
+    tile: &TileScan,
+) -> syn::Result<()> {
+    let fail = || error("GPU-TilePredicate/GPU-NarrowCarrier: invalid resident tile record");
+    if tile.vector_rows != 1024 || tile.block_threads != 256 || tile.positions_per_thread != 4 {
+        return Err(fail());
+    }
+    let SourceOrigin::Resident { host } = &source.origin else { return Err(fail()) };
+    if facts.runs.contains(host) {
+        return Err(fail());
+    }
+    let spine = tile_spine(facts, &records.steps, name).ok_or_else(fail)?;
+    let rename = spine[0];
+    check_resident_chain(
+        &facts.definitions, &symbol_name(&rename.name), host, &source.columns, None,
+    )?;
+    let bound = host_bound(&facts.definitions, &records.captures);
+    let mut tests = tile.tests.iter();
+    let mut reads = tile.reads.iter();
+    let mut loaded = BTreeSet::new();
+    for definition in spine {
+        let consumer = symbol_name(&definition.name);
+        if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+            &bound[&consumer].operator
+            && let Some(column) = tile_condition_column(&select.condition, &source.columns)
+        {
+            let test = tests.next().ok_or_else(fail)?;
+            if test.definition != consumer || test.column != column {
+                return Err(fail());
+            }
+            check_resident_chain(
+                &tile_predicate_definitions(rename, &bound[&consumer]),
+                &consumer, host, &source.columns,
+                Some(&Interval { column: test.column.clone(), bounds: test.bounds.clone() }),
+            )?;
+        } else if let Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select) =
+            &definition.operator
+        {
+            loaded.extend(select.condition.columns().into_iter().filter(|field| source.columns.contains_key(field)));
+        }
+        for field in facts.structure_analysis.physical.rust_reads(&definition.operator)
+            .into_iter().flatten()
+        {
+            if let Some(column) = source.columns.get(&field) {
+                let read = reads.next().ok_or_else(fail)?;
+                if read.consumer != consumer || read.field != field || read.column != *column
+                    || read.first_load != loaded.insert(field)
+                {
+                    return Err(fail());
+                }
+            }
+        }
+    }
+    if tests.next().is_some() || reads.next().is_some() {
+        return Err(fail());
+    }
+    Ok(())
 }
 
 pub(crate) fn grouped_boundary<'a>(
@@ -1587,8 +1855,18 @@ pub(crate) fn check(
         {
             return Err(error("source column is absent from its origin layout"));
         }
+        if matches!(source.origin, SourceOrigin::Resident { .. })
+            && matches!(source.access, SourceAccess::Scan | SourceAccess::Positions(_))
+            && tile_spine(&facts, &records.steps, name).is_some()
+        {
+            return Err(error("GPU-TilePredicate: admitted resident fold requires its tile record"));
+        }
         let selection = match &source.access {
             SourceAccess::Scan => None,
+            SourceAccess::Tiles(tile) => {
+                check_tiles(&facts, records, name, source, tile)?;
+                continue;
+            }
             SourceAccess::Positions(interval) => Some(interval),
             SourceAccess::Provider { selection } => {
                 let built = analysis
@@ -2451,6 +2729,193 @@ mod tests {
     include!("../../tests/support/stack.rs");
     use super::*;
     use cq_lang_sequence::gpu::realization::IntervalBound;
+
+    fn resident_fold(residual: bool, keyed: bool) -> (Stack, Analysis) {
+        let condition = if residual {
+            quote::quote!(discount != 0i64)
+        } else {
+            quote::quote!(discount >= 5i64, discount <= 7i64)
+        };
+        let keys = keyed.then(|| quote::quote!(day));
+        let output = keyed.then(|| quote::quote!(day,));
+        let accumulator = keyed.then(|| quote::quote!(
+            grouped group = @group_map as ::std::collections::HashMap<_, (i64,)>;
+        ));
+        let accumulator_provider = keyed.then(|| quote::quote!(
+            group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed };
+        ));
+        let Stack { physical, structures, program } = syn::parse_quote! {
+            physical {
+                relation R(d:i64, disc:i64, qty:i64, p:i64) = (&data);
+                r = pipe rename R {d -> day, disc -> discount, qty -> quantity, p -> price};
+                zdate = pipe select r if (day >= 19940101i64, day < 19950101i64);
+                adiscount = pipe select zdate if (#condition);
+                qguard = pipe guard adiscount if (*quantity < 24i64);
+                again = pipe guard qguard if (*quantity > 0i64);
+                revenue = let canon bind again with amount:i64 = (*price * *discount);
+                grouped = let group revenue by [#keys] { total:i64=sum(amount); };
+                return grouped as answer(#output total);
+            }
+            structures {
+                providers {
+                    device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns };
+                    radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred };
+                    grouped_rows = ::cq_gpu_sequence_runtime::group::GroupedRows<_> { reads [exact, range, membership], build typed };
+                    #accumulator_provider
+                }
+                r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64, i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64,i64,i64)> [];
+                revenue rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                revenue canon = rows;
+                grouped rows = @grouped_rows as ::cq_gpu_sequence_runtime::group::GroupedRows<_>;
+                #accumulator
+            }
+            sequence {
+                source = rows r;
+                feed = map revenue source;
+                result = store group grouped feed;
+                output count;
+            }
+            graded gpu { source at host; feed at host; result at host; }
+        };
+        let structures = crate::bind_structures(&physical, &structures).unwrap();
+        graded(Stack { physical, structures, program })
+    }
+
+    fn tile_record(realization: &mut Realization) -> &mut TileScan {
+        let SourceAccess::Tiles(tile) = &mut realization.sources.get_mut("r").unwrap().access else {
+            panic!("resident positional keyless fold selects tiles");
+        };
+        tile
+    }
+
+    #[test]
+    fn resident_fold_selects_physical_tiles_and_exact_opaque_demands() {
+        let (Stack { physical, structures, program }, analysis) = resident_fold(false, false);
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let mut realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+        assert_eq!(realization.rejection, None);
+        let tile = tile_record(&mut realization);
+        assert_eq!((tile.vector_rows, tile.block_threads, tile.positions_per_thread), (1024, 256, 4));
+        assert_eq!(tile.tests.iter().map(|test| (test.definition.as_str(), test.column.as_str())).collect::<Vec<_>>(),
+            vec![("zdate", "d"), ("adiscount", "disc")]);
+        assert_eq!(tile.reads, vec![
+            TileRead { consumer: "qguard".into(), field: "quantity".into(), column: "qty".into(), first_load: true },
+            TileRead { consumer: "again".into(), field: "quantity".into(), column: "qty".into(), first_load: false },
+            TileRead { consumer: "revenue".into(), field: "discount".into(), column: "disc".into(), first_load: true },
+            TileRead { consumer: "revenue".into(), field: "price".into(), column: "p".into(), first_load: true },
+        ]);
+    }
+
+    #[test]
+    fn tile_checker_rejects_single_record_mutations() {
+        rejects(resident_fold(false, false), &[
+            &|r| r.sources.get_mut("r").unwrap().access = SourceAccess::Scan,
+            &|r| tile_record(r).vector_rows = 2048,
+            &|r| tile_record(r).block_threads = 128,
+            &|r| tile_record(r).positions_per_thread = 8,
+            &|r| { tile_record(r).tests.pop(); },
+            &|r| tile_record(r).tests.swap(0, 1),
+            &|r| { let test = tile_record(r).tests[0].clone(); tile_record(r).tests.push(test); },
+            &|r| tile_record(r).tests[0].definition = "adiscount".into(),
+            &|r| tile_record(r).tests[0].column = "disc".into(),
+            &|r| { tile_record(r).tests[0].bounds.pop(); },
+            &|r| tile_record(r).tests[0].bounds[0].definition = "r".into(),
+            &|r| tile_record(r).tests[0].bounds[0].side = Side::Upper,
+            &|r| tile_record(r).tests[0].bounds[0].inclusive = false,
+            &|r| tile_record(r).tests[0].bounds[0].value = syn::parse_quote!(0i64),
+            &|r| { tile_record(r).reads.pop(); },
+            &|r| tile_record(r).reads.swap(0, 1),
+            &|r| { let read = tile_record(r).reads[0].clone(); tile_record(r).reads.push(read); },
+            &|r| tile_record(r).reads[0].consumer = "again".into(),
+            &|r| tile_record(r).reads[0].field = "price".into(),
+            &|r| tile_record(r).reads[0].column = "p".into(),
+            &|r| tile_record(r).reads[0].first_load = false,
+            &|r| tile_record(r).reads[1].first_load = true,
+        ]);
+    }
+
+    #[test]
+    fn residual_selections_reuse_values_without_opaque_read_cache_entries() {
+        let (Stack { physical, structures, program }, analysis) = resident_fold(true, false);
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let mut realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+        assert_eq!(realization.rejection, None);
+        let tile = tile_record(&mut realization);
+        assert_eq!(tile.tests.len(), 1);
+        assert_eq!(tile.tests[0].definition, "zdate");
+        assert!(tile.reads.iter().all(|read| read.consumer != "adiscount"));
+        assert!(!tile.reads.iter().find(|read| read.field == "discount").unwrap().first_load);
+        tile.reads.iter_mut().find(|read| read.field == "discount").unwrap().first_load = true;
+        assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &realization).is_err());
+    }
+
+    #[test]
+    fn keyed_consumers_keep_the_existing_source_access() {
+        let (Stack { physical, structures, program }, analysis) = resident_fold(false, true);
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let mut realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+        assert_eq!(realization.rejection, None);
+        assert_eq!(realization.sources["r"].access, SourceAccess::Scan);
+        realization.sources.get_mut("r").unwrap().access = SourceAccess::Tiles(TileScan {
+            vector_rows: 1024, block_threads: 256, positions_per_thread: 4,
+            tests: vec![], reads: vec![],
+        });
+        assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &realization).is_err());
+    }
+
+    #[test]
+    fn tile_source_cannot_absorb_opaque_work_or_a_residual_selection() {
+        for (residual, absorbed) in [(false, "qguard"), (true, "adiscount")] {
+            let (Stack { physical, structures, program }, analysis) = resident_fold(residual, false);
+            let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+            let mut realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+            assert_eq!(realization.rejection, None);
+            let source = realization.sources["r"].clone();
+            realization.sources.insert(absorbed.into(), source);
+            for (_, step) in &mut realization.steps {
+                if let Step::Group(group) = step {
+                    group.input = GroupInput::Source { source: absorbed.into() };
+                }
+            }
+            assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &realization).is_err());
+        }
+    }
+
+    #[test]
+    fn tile_checker_requires_an_order_insensitive_single_reader_spine() {
+        let (Stack { physical, structures, program }, analysis) = resident_fold(false, false);
+        let mut structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let realization = select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+        assert_eq!(realization.rejection, None);
+        structure_analysis.physical.readers.insert("r".into(), 2);
+        assert!(check(&physical, &structures, &program, &structure_analysis, &analysis, &realization).is_err());
+    }
+
+    #[test]
+    fn unretained_selection_cannot_bypass_the_positional_map() {
+        let (Stack { physical, structures, mut program }, _) = resident_fold(false, false);
+        program.sequence.definitions[0].term = syn::parse_quote!(rows zdate);
+        // A relational selection is a map, not a new retained host source.
+        // Tile realization does not relax this existing Sequence admission.
+        assert!(cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).is_err());
+    }
+
+    #[test]
+    fn point_and_range_tests_share_checked_closed_bounds() {
+        let rename: Definition = syn::parse_quote!(r = pipe rename R {d -> day};);
+        let columns = [("day".into(), "d".into())].into_iter().collect();
+        for predicate in [
+            syn::parse_quote!(p = pipe select r if (day >= 3i64, day < 9i64);),
+            syn::parse_quote!(p = pipe point select r if (day = 5i64);),
+            syn::parse_quote!(p = pipe range select r if (day >= 3i64, day < 9i64);),
+        ] {
+            let definitions = tile_predicate_definitions(&rename, &predicate);
+            let interval = crate::rows::origin("p", &definitions).unwrap().unwrap().selection.unwrap();
+            assert_eq!(interval.column, "d");
+            assert_eq!(interval.bounds.len(), 2);
+            check_resident_chain(&definitions, "p", "R", &columns, Some(&interval)).unwrap();
+        }
+    }
 
     /// The store `r` publishes the resident rename `r` below host (its inner
     /// store result equals its outer source), and `r` records a Range provider.

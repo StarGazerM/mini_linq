@@ -6,7 +6,7 @@
 use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
 use cuda_device::{device, thread};
 use gpu_device_columns::ColumnView;
-pub use gpu_device_columns::{decode, decode_u32};
+pub use gpu_device_columns::{decode, decode_u32, original_position};
 
 pub use gpu_tiles::{BLOCK_THREADS, SCAN_SCRATCH_WORDS, TILE_ITEMS};
 
