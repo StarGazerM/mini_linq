@@ -82,7 +82,7 @@ def certify(path: Path, types: list[str], keys: list[list[int]], skip_empty: boo
                         seen[i].clear()
                     else:
                         seen[i].add(projected)
-    # Formal rule LD-DoopVerifiedKey: certify only duplicate-free decoded keys,
+    # Premise of LD-DoopVerifiedKey: certify only duplicate-free decoded keys,
     # binding them to the same bytes examined above, not a later file read.
     return {"types": types, "verified_keys": [
         {"columns": key, "set": "verified", "sha256": digest.hexdigest()}
