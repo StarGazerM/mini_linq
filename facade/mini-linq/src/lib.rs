@@ -51,7 +51,8 @@
 //! A Structures printer declares `print_input = structures` to replace the
 //! default Sequence target; its path or alias does not select a language.
 //! ```
-//! let rows = [(1_i32,), (1,), (2,)];
+//! // An input relation is a set: the caller supplies distinct rows.
+//! let rows = [(1_i32,), (2,)];
 //! let answers: Vec<_> = mini_linq::compile! {
 //!     pipeline {
 //!         plan = mini_linq::passes::plan;

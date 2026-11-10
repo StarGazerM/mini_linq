@@ -65,6 +65,8 @@ Lock scope (enforced by review): a measurement driver takes the CPU-exclusive ti
 
 **100-second rule (2026-11-10).** Fast feedback over complete runs: every command has a hard limit of 100 seconds (`timeout 100 CMD` inside the flock wrapper). Choose the smallest command that answers the current question (one package, one test binary, one query, one sample); after at most 100 s read the output, find the reason and act. A failure, a slow phase or a wrong plan nearly always shows within that time; waiting for a full run before analysing blocks development. Do not re-run whole suites in slices during development: run the tests that cover the change. Full gates run once per merge batch, by Main.
 
+A test, test binary or gate step that cannot finish (build, link and run) in 100 s is too large: split it into several units that each do, by package, by test binary, by query or by case. A gate is then a list of such units, each run as its own command; no unit needs a longer limit.
+
 **Development style (2026-11-07).** (1) One IR per branch, small: a step is
 mergeable in hours, not days; split otherwise. (2) Rules before code: the
 `\Rule` for every decision or refusal the step introduces is written in
