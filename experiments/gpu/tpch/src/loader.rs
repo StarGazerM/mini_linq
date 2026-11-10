@@ -2,9 +2,7 @@ use crate::{
     cache as stored,
     manifest::{Manifest, Result},
 };
-use cq_gpu_runtime::{
-    Buffer, ColumnView, DeviceColumns, Dictionary, EncodedColumn, For, Pool,
-};
+use cq_gpu_runtime::{Buffer, ColumnView, DeviceColumns, Dictionary, EncodedColumn, For, Pool};
 use gpu_device_columns::{BaseLayout, Bounds, OutputCount, Table, pack_for};
 use serde_json::{Value, json};
 use std::{
@@ -21,7 +19,8 @@ pub fn parse_layout(name: &str) -> Result<BaseLayout> {
         "plain64" => Ok(BaseLayout::Plain64),
         "native" => Ok(BaseLayout::Native),
         "hostfor" => Ok(BaseLayout::HostFor),
-        _ => Err("--base-codec requires for, plain64, native or hostfor".into()),
+        "delta" => Ok(BaseLayout::Delta),
+        _ => Err("--base-codec requires for, plain64, native, hostfor or delta".into()),
     }
 }
 
@@ -31,6 +30,7 @@ pub fn layout_name(layout: BaseLayout) -> &'static str {
         BaseLayout::Plain64 => "plain64",
         BaseLayout::Native => "native",
         BaseLayout::HostFor => "hostfor",
+        BaseLayout::Delta => "delta",
     }
 }
 
@@ -80,6 +80,7 @@ struct LoadReport {
     pack_ms: f64,
     upload_encode_ms: f64,
     cache_write_ms: f64,
+    catalog_ms: f64,
 }
 
 thread_local! {
@@ -110,8 +111,9 @@ pub fn take_load_report() -> Value {
         "verify_ms": report.verify_ms,
         "pack_ms": report.pack_ms,
         "upload_encode_ms": report.upload_encode_ms,
+        "catalog_ms": report.catalog_ms,
         "cache_write_ms": report.cache_write_ms,
-        "scope": "base columns built for one query, outside query timings; columns = resident columns built (unprojected: full source columns, the only cacheable ones); source_bytes = rows x 8 (raw i64 upload size); read_ms = raw manifest columns or packed files; verify_ms = projected-set deduplication; Catalog (tpch_domains) loads report read_ms and upload_encode_ms only",
+        "scope": "base columns built for one query, outside query timings; columns = resident columns built (unprojected: full source columns, the only cacheable ones); source_bytes = rows x 8 (raw i64 upload size); read_ms = raw manifest columns, packed files and key-column rehashes on packed hits; verify_ms = projected-set deduplication; catalog_ms = whole tpch_domains Catalog build (domains, dedup, ID mapping, packing, upload)",
     })
 }
 
@@ -139,7 +141,7 @@ pub fn compress_catalog(
             report.source_bytes += table.columns.len() * table.rows * 8;
         }
         report.resident_bytes += catalog.bytes();
-        report.upload_encode_ms += elapsed;
+        report.catalog_ms += elapsed;
     });
     Ok(catalog)
 }
@@ -187,9 +189,9 @@ impl<'a> Loader<'a> {
         let identity = persist
             .then(|| stored::identity(self.manifest, table, name))
             .transpose()?;
-        let (values, hash) = self
-            .manifest
-            .read_column_checked(table, name, check_key || persist)?;
+        let (values, hash) =
+            self.manifest
+                .read_column_checked(table, name, check_key || persist)?;
         report(|report| {
             report.read_ms += ms(started);
             report.raw_reads += 1;
@@ -219,19 +221,24 @@ impl<'a> Loader<'a> {
         }
         let mut resident = self.tables.remove(table).unwrap_or_default();
         let cached = resident.projections.iter().find(|projection| {
-            projection.names.iter().map(String::as_str).eq(names.iter().copied())
+            projection
+                .names
+                .iter()
+                .map(String::as_str)
+                .eq(names.iter().copied())
         });
-        let storage = if let Some(projection) = cached {
-            projection.storage.clone()
-        } else {
-            let storage = self.build(table, names, &mut resident)?;
-            resident.projections.push(CachedProjection {
-                names: names.iter().map(|name| (*name).to_owned()).collect(),
-                storage: storage.clone(),
-            });
-            storage
+        let storage = match cached {
+            Some(projection) => Ok(projection.storage.clone()),
+            None => self.build(table, names, &mut resident).inspect(|storage| {
+                resident.projections.push(CachedProjection {
+                    names: names.iter().map(|name| (*name).to_owned()).collect(),
+                    storage: storage.clone(),
+                });
+            }),
         };
+        // A failed build keeps every projection cached before it.
         self.tables.insert(table.to_owned(), resident);
+        let storage = storage?;
         // SAFETY: generated bindings use the manifest's scalar lane ABI and
         // column order, including transparent Decimal/Date values. All views,
         // columns and count belong to this pool; text is already integer-coded.
@@ -250,7 +257,10 @@ impl<'a> Loader<'a> {
         // Formal rule DR-ProjectionReuse: an actually distinct cached subset proves its supersets distinct.
         let proven_set = resident.projections.iter().any(|projection| {
             projection.storage.capacity == relation.rows
-                && projection.names.iter().all(|name| names.contains(&name.as_str()))
+                && projection
+                    .names
+                    .iter()
+                    .all(|name| names.contains(&name.as_str()))
         });
         let keys: Vec<_> = relation
             .verified_keys
@@ -262,7 +272,8 @@ impl<'a> Loader<'a> {
                     && key.columns.keys().all(|name| {
                         names.contains(&name.as_str())
                             && self.manifest.column(table, name).is_ok_and(|column| {
-                                column.encoding == "plain" && key.types.get(name) == Some(&column.ty)
+                                column.encoding == "plain"
+                                    && key.types.get(name) == Some(&column.ty)
                             })
                     })
             })
@@ -284,6 +295,18 @@ impl<'a> Loader<'a> {
                 let started = Instant::now();
                 let file = stored::path(directory, self.manifest, table, name);
                 if let Some(hit) = stored::read(&file, self.manifest, table, name)? {
+                    // A packed file certifies a verified key only for the source
+                    // bytes it was built from: rehash the current key bytes.
+                    if key_column(name)
+                        && hit.hash.as_ref()
+                            != Some(&self.manifest.stored_column_hash(table, name)?)
+                    {
+                        return Err(format!(
+                            "{}: stale for current {table}.{name} bytes",
+                            file.display()
+                        )
+                        .into());
+                    }
                     packed.insert(name, hit);
                 }
                 report(|report| report.read_ms += ms(started));

@@ -1,5 +1,6 @@
 use gpu_device_columns::{
-    check_packed_layout, pack_for, Bounds, Buffer, Codec, EncodedColumn, Pool, VectorHeader,
+    check_packed_layout, pack_for, BaseLayout, Bounds, Buffer, Codec, EncodedColumn, Pool,
+    VectorHeader,
 };
 use std::sync::Arc;
 
@@ -25,45 +26,68 @@ fn corpus() -> Vec<Vec<i64>> {
     ]
 }
 
-/// A native base column must read back exactly through every device reader a
-/// query can reach: whole-column tile decode and per-row source decode (here
-/// via an identity gather that FOR-packs from the native column).
+/// Every device reader a query can reach on a base column: download, whole-
+/// column tile decode and per-row source decode (an identity gather).
+fn assert_reads_back(pool: &Arc<Pool>, column: &EncodedColumn, values: &[i64]) {
+    assert_eq!(column.bounds(), Bounds::from_values(values));
+    assert_eq!(column.capacity(), values.len());
+    assert_eq!(column.to_host().unwrap(), values);
+    if values.is_empty() {
+        return;
+    }
+    assert_eq!(
+        column
+            .decoded()
+            .unwrap()
+            .to_host_prefix(values.len())
+            .unwrap(),
+        values
+    );
+    let count = Arc::new(Buffer::from_host(pool.clone(), &[values.len() as u64]).unwrap());
+    let gathered = unsafe {
+        EncodedColumn::from_gather_source::<u64, i64>(
+            pool.clone(),
+            column.view().into(),
+            std::ptr::null(),
+            values.len(),
+            count,
+            0,
+            column.bounds(),
+        )
+    }
+    .unwrap();
+    assert_eq!(gathered.to_host().unwrap(), values);
+}
+
 #[test]
 fn native_columns_read_back_through_device_decoders() {
     let pool = Pool::new(0, 1 << 20, 256 << 20).unwrap();
     for values in corpus() {
         let native = EncodedColumn::from_host_native(pool.clone(), &values).unwrap();
         assert_eq!(native.codec(), Codec::Plain);
-        assert_eq!(native.bounds(), Bounds::from_values(&values));
-        assert_eq!(native.capacity(), values.len());
-        assert_eq!(native.to_host().unwrap(), values);
-        if values.is_empty() {
-            continue;
-        }
-        assert_eq!(
-            native
-                .decoded()
-                .unwrap()
-                .to_host_prefix(values.len())
-                .unwrap(),
-            values
-        );
-        let count = Arc::new(Buffer::from_host(pool.clone(), &[values.len() as u64]).unwrap());
-        let gathered = unsafe {
-            EncodedColumn::from_gather_source::<u64, i64>(
-                pool.clone(),
-                native.view().into(),
-                std::ptr::null(),
-                values.len(),
-                count,
-                0,
-                native.bounds(),
-            )
-        }
-        .unwrap();
-        assert_eq!(gathered.to_host().unwrap(), values);
-        let packed = EncodedColumn::from_host(pool.clone(), &values, Codec::For).unwrap();
-        assert_eq!(packed.to_host().unwrap(), values);
+        assert_reads_back(&pool, &native, &values);
+    }
+    gpu_device_columns::release_cached_kernels();
+}
+
+/// The FastLanes DELTA layout is chosen per column (sorted keys) and must read
+/// back through the same readers, including from u32 domain-ID lanes.
+#[test]
+fn delta_layout_selects_per_column_and_reads_back() {
+    let pool = Pool::new(0, 1 << 20, 256 << 20).unwrap();
+    let sorted: Vec<i64> = (0..5000).map(|i| 1_000_000 + i * 4 + i % 3).collect();
+    let column = EncodedColumn::from_host_layout(pool.clone(), &sorted, BaseLayout::Delta).unwrap();
+    assert_eq!(column.codec(), Codec::Delta);
+    assert_reads_back(&pool, &column, &sorted);
+    let ids: Vec<u32> = (0..3000).map(|i| i * 2).collect();
+    let column = EncodedColumn::from_host_layout(pool.clone(), &ids, BaseLayout::Delta).unwrap();
+    assert_eq!(column.codec(), Codec::Delta);
+    let widened: Vec<i64> = ids.iter().map(|&id| i64::from(id)).collect();
+    assert_reads_back(&pool, &column, &widened);
+    for values in corpus() {
+        let column =
+            EncodedColumn::from_host_layout(pool.clone(), &values, BaseLayout::Delta).unwrap();
+        assert_reads_back(&pool, &column, &values);
     }
     gpu_device_columns::release_cached_kernels();
 }

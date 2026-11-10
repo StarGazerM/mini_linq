@@ -22,7 +22,7 @@ fn main() -> cq_gpu_tpch::manifest::Result<()> {
                 .map_err(|_| "query name must be UTF-8")?),
             Some("--base-codec") => cq_gpu_tpch::loader::set_base_layout(
                 cq_gpu_tpch::loader::parse_layout(arguments.next()
-                    .ok_or("--base-codec requires for, plain64, native or hostfor")?.to_str()
+                    .ok_or("--base-codec requires for, plain64, native, hostfor or delta")?.to_str()
                     .ok_or("base codec must be UTF-8")?)?)?,
             Some("--base-cache") => cq_gpu_tpch::loader::set_base_cache(PathBuf::from(
                 arguments.next().ok_or("--base-cache requires a directory")?))?,
@@ -38,7 +38,7 @@ fn main() -> cq_gpu_tpch::manifest::Result<()> {
                 return Err(format!("unknown option: {value}").into());
             }
             _ if output.is_none() => output = Some(PathBuf::from(argument)),
-            _ => return Err("usage: cq-gpu-tpch [results.json] [--query NAME]... [--scale sf1|sf10]... [--mode automatic|advised]... [--base-codec for|plain64|native|hostfor] [--base-cache DIR] [--authored H05_RESULTS.json] [--baseline SUITE_RESULTS.json]".into()),
+            _ => return Err("usage: cq-gpu-tpch [results.json] [--query NAME]... [--scale sf1|sf10]... [--mode automatic|advised]... [--base-codec for|plain64|native|hostfor|delta] [--base-cache DIR] [--authored H05_RESULTS.json] [--baseline SUITE_RESULTS.json]".into()),
         }
     }
     let output = output.unwrap_or_else(|| {

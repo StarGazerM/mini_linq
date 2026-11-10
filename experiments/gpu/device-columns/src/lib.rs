@@ -167,6 +167,10 @@ pub enum BaseLayout {
     Native,
     /// Host FOR packing into the device layout; only packed words cross.
     HostFor,
+    /// FastLanes DELTA (unified transposed 64-row lanes) per column where
+    /// [`detect_integer_codec`] finds it smaller than FOR, FOR otherwise;
+    /// raw lane upload, device encode.
+    Delta,
 }
 
 /// Immutable encoded data plus per-vector codec facts. Bounds enclose logical
@@ -239,6 +243,10 @@ impl EncodedColumn {
             BaseLayout::Plain64 => Self::from_host(pool, values, Codec::Plain),
             BaseLayout::Native => Self::from_host_native(pool, &L::widen_all(values)),
             BaseLayout::HostFor => Self::from_host_packed(pool, &L::widen_all(values)),
+            BaseLayout::Delta => {
+                let codec = detect_integer_codec(&L::widen_all(values));
+                Self::from_host(pool, values, codec)
+            }
         }
     }
 

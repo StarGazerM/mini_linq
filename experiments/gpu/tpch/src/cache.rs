@@ -186,7 +186,11 @@ pub fn write(
     output.write_all(&MAGIC)?;
     output.write_all(&(path.len() as u64).to_le_bytes())?;
     output.write_all(path)?;
-    for value in [source.length, source.modified, u64::from(packed.hash.is_some())] {
+    for value in [
+        source.length,
+        source.modified,
+        u64::from(packed.hash.is_some()),
+    ] {
         output.write_all(&value.to_le_bytes())?;
     }
     output.write_all(&hash)?;

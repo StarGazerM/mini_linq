@@ -316,6 +316,13 @@ impl Manifest {
         Ok((values, hash))
     }
 
+    /// SHA-256 of a column's current stored bytes, as `read_column_checked`
+    /// computes it, without decoding values.
+    pub fn stored_column_hash(&self, table: &str, name: &str) -> Result<String> {
+        let column = self.column(table, name)?;
+        Ok(format!("{:x}", Sha256::digest(fs::read(self.root.join(&column.file))?)))
+    }
+
     pub fn read_column(&self, table: &str, name: &str) -> Result<Vec<i64>> {
         let column = self.column(table, name)?;
         let values = self.read_stored_column(table, name)?;
