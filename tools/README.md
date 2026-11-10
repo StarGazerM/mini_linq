@@ -7,7 +7,9 @@ Use the pinned toolchain and keep heavy builds bounded:
 ```sh
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only
-export CARGO_BUILD_JOBS=6
+# 12 jobs: at 6 a cold root build held 6 busy cores with 200+ ready units queued
+# (509 s); cq-planners cold went 66 -> 41 s from 6 to 12 (build-profile-report.md).
+export CARGO_BUILD_JOBS=12
 # Quick tier: 15 bounded compiler/runtime/architecture contracts.
 nice -n 10 bash tools/test_regressions.sh --tier quick
 # Or just the named regression(s) covering the change.
