@@ -67,6 +67,8 @@ Lock scope (enforced by review): a measurement driver takes the CPU-exclusive ti
 
 A test, test binary or gate step that cannot finish (build, link and run) in 100 s is too large: split it into several units that each do, by package, by test binary, by query or by case. A gate is then a list of such units, each run as its own command; no unit needs a longer limit.
 
+Review before run. Before running a test, read it: say which part changed (CPU compiler, CPU runtime, GPU, IO, tests only), what the test checks, and why the change could affect it. Run only tests that the reading says can be affected; a test that reading already settles (for example one that compares sets when only order changed) is not run. A build that would compile crates the change did not touch is a sign the wrong test or the wrong target directory was chosen.
+
 **Development style (2026-11-07).** (1) One IR per branch, small: a step is
 mergeable in hours, not days; split otherwise. (2) Rules before code: the
 `\Rule` for every decision or refusal the step introduces is written in
