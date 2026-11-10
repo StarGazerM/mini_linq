@@ -3,12 +3,13 @@
 //! A standalone external consumer with a terminal Structures → Rust push pass:
 //!
 //! ```rust
-//! let R = [(1_i32,), (1,), (2,)];
+//! // R is a set of distinct rows; dropping `y` leaves two distinct answers.
+//! let R = [(1_i32, 10_i32), (1, 20), (2, 30)];
 //! let answers: Vec<_> = mini_linq::compile! {
 //!     pipeline { print_input = structures; print = own_push::push; }
 //!     struct Q;
-//!     relation R(x: i32);
-//!     answer(x) :- R(x);
+//!     relation R(x: i32, y: i32);
+//!     answer(x) :- R(x, y);
 //! }.collect();
 //! assert_eq!(answers.len(), 2);
 //! ```

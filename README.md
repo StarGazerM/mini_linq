@@ -90,7 +90,8 @@ not compiler-inserted `Arc` handles. See [storage contracts](doc/STORAGE.md#133-
 and [current progress and dated evidence](doc/PLANNING-REDESIGN.md#progress).
 
 ```rust
-let rows = [(1_i32,), (1,), (2,)];
+// An input relation is a set: the caller supplies distinct rows.
+let rows = [(1_i32,), (2,)];
 let answers: Vec<_> = mini_linq::compile! {
     pipeline {
         plan = mini_linq::passes::plan;
