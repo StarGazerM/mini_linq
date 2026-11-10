@@ -61,6 +61,8 @@ change adds nothing below VO. Seam data a checker needs is a side table the
 lowering returns, never an IR field.
 Benchmark datasets outside the repository (read-only, exact paths only, never searched): TPC-H GPU fixtures `/data/tpch-gpu/sf1` and `/data/tpch-gpu/sf10` (manifests/dictionaries by exact filename), DOOP xalan `/data/doop-bench/doop-data/xalan`, prepared field_flow `/data/doop-bench/doop-vs-srdatalog-20261026/fresh-corpus/prepared`.
 
+Lock scope (enforced by review): a measurement driver takes the CPU-exclusive timing lock around ONE sample at a time and releases it between samples; a GPU campaign holds only the GPU lock and releases it between kernels. Holding any exclusive lock across a whole campaign blocks every build on the machine.
+
 **Development style (2026-11-07).** (1) One IR per branch, small: a step is
 mergeable in hours, not days; split otherwise. (2) Rules before code: the
 `\Rule` for every decision or refusal the step introduces is written in
