@@ -1139,13 +1139,16 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   grouped-run integration remain later slices. Slice A retires none of
   the 74 P6 V sites and makes no performance claim; default expanded targets
   must remain identical. Formal registration is not a gate-result claim.
-  **Current state (2026-11-06):** slice C is parked on `codex/p6b-slice` until
-  IR seams 1–2 land, not a merged intermediate/publication cutover or a new
-  performance result. The slice-A boundaries and historical evidence above
-  must not be read as slice-C acceptance. E1 is measured (STORAGE §12.5): FOR
-  manifest-loader base columns beat plain by 1.12–1.16× on the GPU TPC-H
-  suite, so FOR stays the default; host-packed upload and the opt-in
-  persisted packed columns (`--base-cache`) are loader options, not defaults.
+  **Current state (2026-11-10):** IR seams 1–2 have landed (M4b, M5b), so
+  slice C on `codex/p6b-slice` is unblocked but not resumed; it needs its tile
+  records redone against the standalone Sequence before any rebase. It is not
+  a merged intermediate/publication cutover or a new performance result, and
+  the slice-A boundaries and historical evidence above are not slice-C
+  acceptance. E1 is measured (STORAGE §§12.5–12.6). FOR base columns beat
+  plain by 1.16–1.18× and size-selected FastLanes DELTA by 1.35× on the GPU
+  TPC-H suite, including the H05 catalog path, so FOR stays the default.
+  Host-packed upload and the persisted packed columns (`--base-cache`) are
+  loader options, not defaults.
 - **P6b GPU Datalog parallelism — historical initial profile** (2026-10-31,
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel

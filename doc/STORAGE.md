@@ -214,7 +214,7 @@ establish default compiler selection. See `DECODE-AUDIT.md` for disposition.
 | Original baseline | Contract 8 target |
 |---|---|
 | `cq-load::ZoneRows` owns decoded row tuples with per-block min/max (`zone.rs:9-15`) | columnar blocks; summaries over the stored payload |
-| GPU catalog fixes FOR for every column (`experiments/gpu/compress/src/lib.rs`, `Catalog::compress`); it does not call `detect_integer_codec` | per-block codec choice by size; codec set recorded |
+| GPU catalog fixed FOR for every column (`experiments/gpu/compress/src/lib.rs`, `Catalog::compress`) without evidence | E1 (§12.6) measured FOR as the right default here too; `compress_with` keeps plain/FastLanes DELTA as explicit options; per-block choice remains open |
 | GPU vector headers compute min/max then drop max (`device-columns/src/kernels.rs:33-79`) | keep per-vector summary; use it to skip |
 | per-row device-column `decode`/`decode_u32` into an `i64` carrier (`experiments/gpu/sequence/core/src/rows.rs`, input reads) | tile-cooperative decode fused with predicates; narrow carriers |
 | `AdaptiveKeySet` copies keys (`Vec<K>` staging, `Arc<K>` fallback) | read-in-place builds over blocks; inline keys when a copy is required |
@@ -873,7 +873,7 @@ sweeps.
 | M3 | Merge two sorted runs (Datalog) | plain words vs decode-merge-re-encode | merge GB/s; per-round re-encode cost |
 | M4 | Transfer | plain vs compressed over PCIe + device decode | when compression pays for non-resident data |
 | M5 | Encoded execution | group/compare on dictionary codes vs `String` (CPU h01-like) | group-by throughput |
-| E1 | End-to-end | GPU TPC-H with plain columns vs current compressed default | whether today's GPU compression default pays (measured 2026-11-06, §12.5) |
+| E1 | End-to-end | GPU TPC-H with plain columns vs current compressed default | whether today's GPU compression default pays (measured 2026-11-06 §12.5 and 2026-11-10 §12.6) |
 | E2 | End-to-end | per-phase profiles (CPU `perf`, GPU nsys/ncu) of h01/h06/h12/h14 | where time goes before optimizing storage |
 
 A codec/role rule enters the planner only with an M/E result that supports it
@@ -897,10 +897,10 @@ variants, 6,968 checks, no foreign tenants. CPU: 476 measurements.
 **What the evidence decides (supersedes §2's "codec by measured size"):**
 1. **The evidence-free policy default is plain** on every target. A non-plain
    choice needs a (target, role, access, parallelism) row above that supports
-   it. For GPU TPC-H manifest-loader base columns, E1 (§12.5) is that row:
-   device FOR beats both plain layouts on resident query time, so FOR stays
-   the loader default. The `Catalog::compress` path (H05 `tpch_domains`) was
-   not part of E1 and remains unmeasured.
+   it. For GPU TPC-H base columns, E1 (§§12.5–12.6) is that row: device FOR
+   beats plain layouts and size-selected FastLanes DELTA on resident query
+   time for both the manifest loader and the H05 `Catalog::compress` path, so
+   FOR stays the default.
 2. **Index runs and merges stay plain** on CPU and GPU. This confirms §8
    without the directory confound in the Mac comparison.
 3. **CPU scan columns: byte-aligned truncation, not bit-packing.** Bit-
@@ -909,8 +909,8 @@ variants, 6,968 checks, no foreign tenants. CPU: 476 measurements.
    chosen jointly with Tasks placement.
 4. **GPU: compression is for transfer and capacity** (1.7–3.4× on PCIe).
    Resident scans gain 13–28% at SF10 scale and can lose on cache-resident
-   inputs. End to end (E1, §12.5), plain base columns are 1.12–1.16× slower
-   than FOR over the 26-query suite; FOR is a resident win as well.
+   inputs. End to end (E1, §§12.5–12.6), plain base columns are 1.12–1.18×
+   slower than FOR over the 26-query suite; FOR is a resident win as well.
 5. **Encoded execution beats compression.** Grouping/comparing on dictionary
    codes is 12–16× on CPU. This is contract 7's `encoded` representation
    (`where`/group/join on codes), not a storage codec, and it is the largest
@@ -1298,12 +1298,83 @@ Confounds: cached files are read from tmpfs, raw columns from page-cached
 i32/i64 into an i64 vector; the read saving is therefore not attributed to
 compression alone. The cache binds each file to its source column's path,
 length and mtime, rejects stale or malformed files before allocating their
-payload, and is opt-in (`--base-cache`); no default changes. Remaining:
-a read control (raw columns from tmpfs), the `Catalog::compress` (H05) path,
-and the RunPod replication. The measured binary predates the review fixes to
-the cache (identity captured before the raw read, bounded reads, per-call
-temporaries) and to the driver's validated/exact fields; none is on a timed
-path.
+payload, and is opt-in (`--base-cache`); no default changes. The measured
+binary predates the review fixes to the cache (identity captured before the
+raw read, bounded reads, per-call temporaries) and to the driver's
+validated/exact fields; none is on a timed path. §12.6 re-measures on the
+current loader with the H05 catalog path, a tmpfs read control and FastLanes
+DELTA.
+
+### 12.6 E1 on the projection loader: H05 catalog, read control, FastLanes DELTA (2026-11-10)
+
+Source: `experiments/storage-bench/results/gpu-base-codec-2026-11-10.json.gz`
+(driver `gpu_base_codec.py`, branch `codex/compression` rebased on `fadeecc5`,
+binary sha256 `93bc3327…`). Main's loader now verifies or deduplicates every
+projected input set outside query timers; the base-column layout is applied
+to its uploads and, through `Catalog::compress_with`, to the H05
+`tpch_domains` catalog. Generated `queries.rs` differs from `fadeecc5` only
+in H05's two load calls (after normalizing build paths and a path-derived
+kernel-module hash); `plans.json` is equal except `generation_seconds`.
+Variants: `for` (default), `plain64`, `delta` (FastLanes DELTA — unified
+transposed 64-row lanes, device-encoded — where `detect_integer_codec` finds
+it smaller than FOR, FOR elsewhere), `hostfor-cached` (packed files v2, §12.5)
+and `for-tmpfs` (read control: the same verified manifest with byte-identical
+raw columns on tmpfs, checked before the campaign).
+
+Protocol as §12.5, all variants with the verified-key manifests
+(`TPCH_GPU_MANIFEST`, `/data/design-notes/dataset-manifests/sfN.json`):
+60/60 processes validated; 0 discarded samples (rule: any foreign GPU tenant
+or 1-minute load above 8 before or after a sample; observed maximum 2.1);
+0 major faults. A first attempt was abandoned when another user's vLLM job
+took 30–47 GB of the GPU at 100% utilization (a native SF10 run ran out of
+memory); none of its samples are used.
+
+| Scale | Variant | Query total | H05 total | Base load | Upload + encode | Process wall |
+|---|---|---|---|---|---|---|
+| SF1 | plain64 | 1.159 [1.158, 1.159] | 1.166 [1.162, 1.170] | 0.952 [0.889, 1.000] | 1.045 [1.032, 1.058] | 0.969 [0.934, 1.003] |
+| SF1 | delta | 1.362 [1.358, 1.366] | 1.323 [1.299, 1.362] | 1.048 [1.029, 1.065] | 1.688 [1.672, 1.707] | 1.004 [0.992, 1.016] |
+| SF1 | hostfor-cached | 1.000 [0.998, 1.002] | 0.989 [0.988, 0.990] | 0.636 [0.611, 0.668] | 0.113 [0.112, 0.115] | 0.951 [0.941, 0.962] |
+| SF1 | for-tmpfs | 1.002 [0.999, 1.006] | 1.003 [0.999, 1.007] | 0.959 [0.903, 1.001] | 1.024 [1.003, 1.045] | 0.977 [0.938, 1.015] |
+| SF10 | plain64 | 1.177 [1.177, 1.178] | 1.185 [1.179, 1.191] | 1.012 [1.000, 1.027] | 1.011 [1.006, 1.018] | 1.013 [1.004, 1.024] |
+| SF10 | delta | 1.351 [1.349, 1.353] | 1.380 [1.379, 1.382] | 1.078 [1.072, 1.082] | 1.889 [1.877, 1.900] | 1.051 [1.045, 1.057] |
+| SF10 | hostfor-cached | 0.998 [0.997, 0.999] | 0.999 [0.997, 1.001] | 0.686 [0.677, 0.693] | 0.100 [0.096, 0.102] | 0.913 [0.901, 0.925] |
+| SF10 | for-tmpfs | 1.000 [1.000, 1.001] | 0.999 [0.996, 1.001] | 1.001 [0.991, 1.010] | 0.994 [0.989, 1.000] | 0.999 [0.989, 1.008] |
+
+Base load now includes set verification and the H05 catalog build. SF10
+medians summed over the 25 manifest-loader queries, `for`: read 43.5 s,
+deduplication 35.0 s, upload and device encode 6.68 s; H05 catalog build
+10.6 s; query totals 943.6 ms (H05 8.35 ms); process wall 141 s.
+
+⇒ **FOR stays the default on both load paths.** Plain is 1.16–1.18× slower on
+the suite and on H05; FOR keeps H05 SF10 at 8.35 ms against the gate's
+10.35 ms ceiling (plain 9.93 ms).
+
+⇒ **FastLanes DELTA, selected by size, is refuted for these GPU workloads.**
+It shrinks resident bytes only ~10% (SF10 8.31 vs 9.27 GB; H05 213 vs 280 MB)
+but is 1.35–1.36× slower on the suite and 1.32–1.38× on H05 (11.53 ms, over
+the ceiling in every round). Scan-only queries are unchanged (H01, H06, H13,
+H22 ≈ 1.00): tile and stripe reads reconstruct deltas with a warp scan. The
+losses are on probe- and index-heavy queries (H04 2.34–2.47×, H08 2.41–2.47×,
+H09 2.23–2.26×). There, per-row random access (`decode`, `decode_u32` and
+`decode_source` on gathers and index builds) re-adds up to 63 residuals per
+row. Device encoding is 1.7–1.9× slower as well. DELTA would need a
+scan-only role (no random-access consumers) recorded per structure before
+any selection.
+
+⇒ **The tmpfs read control shows no read confound.** Raw columns read from
+tmpfs cost the same as from page-cached `/data` (base load 0.96–1.00, 0
+major faults): the raw read cost is decoding and widening, not storage. The
+§12.5 cache saving is therefore not a tmpfs artifact.
+
+⇒ **Packed files help less on the current loader.** Upload and encode drop to
+0.10–0.11× and base load to 0.64–0.69×, but process wall improves only to
+0.95/0.91 (§12.5: 0.52). Set verification (35 s at SF10, unchanged by any
+layout) now dominates the cold path. Projections that omit a verified key
+still read their raw columns for deduplication (38 of 273 raw reads remain).
+Key columns served from packed files are rehashed against their current
+bytes before they certify a set. Same-length rewrites with preserved mtimes
+are detected for key columns only; other packed columns trust (path, length,
+mtime) and remain an opt-in derived artifact. No default changes.
 
 ## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
 

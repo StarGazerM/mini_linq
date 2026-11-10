@@ -13,6 +13,31 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
+  adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`
+  where `detect_integer_codec` picks it) with `EncodedColumn::from_host_layout`,
+  plus `from_host_native`, `pack_for` (host FOR packing byte-identical to the
+  device encoder), `check_packed_layout`, `from_host_packed` and
+  `from_packed_parts`. `Catalog::compress_with` stores the H05
+  `tpch_domains` catalog in a chosen layout; `compress` keeps FOR. In
+  `cq-gpu-tpch`, `--base-codec for|plain64|native|hostfor|delta` selects the
+  layout for both the projection loader and the catalog. Generated code is
+  unchanged except H05's two load calls, and the default `for` reads,
+  verifies and uploads exactly as before. Results record a per-query
+  `base_columns` load report.
+  `--base-cache DIR` (with `hostfor`) persists packed columns bound to their
+  source file identity and stored-byte SHA-256. Key columns served from them
+  are rehashed against current bytes before certifying a projected set.
+  Measured (26 queries, SF1/SF10, 5 rotated rounds, all validated):
+  - plain is 1.16–1.18× slower than FOR, including H05;
+  - size-selected FastLanes DELTA is 1.35× slower (H05 1.38×, over the
+    10.35 ms ceiling) for about 10% fewer resident bytes;
+  - a tmpfs read control shows no read confound;
+  - persisted packed columns cut upload and encode to 0.10× and SF10 process
+    wall to 0.913 [0.901, 0.925].
+
+  FOR stays the default. Driver: `experiments/storage-bench/gpu_base_codec.py`.
+
 - VO ordering consumes counts and keys only through the source's checked
   dataset document and explicit bindings. Removed the duplicate inline VO
   evidence grammar/type and `PlanOptions.evidence`; missing facts retain the

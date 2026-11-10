@@ -18,7 +18,8 @@
 //! DESIGN contract8-gpu-codecs
 //! Contract 8 §§8/12: scan-column and index-run roles are recorded facts, not loader policy.
 //! Sources: doc/STORAGE.md §§4,6,8,12; BtrBlocks SchemePicker.hpp; DuckDB column_data_checkpointer.cpp.
-//! Known deviation: this catalog fixes FOR; end-to-end benefit is unmeasured (§12 E1, Plan P6).
+//! Measured (STORAGE §12.6, E1): FOR beats plain and size-selected FastLanes DELTA on GPU
+//! TPC-H base columns, including this catalog (H05); `compress_with` keeps the others as options.
 //! DO NOT promote compressed defaults from byte savings alone; plain is the evidence-free default.
 //! Require per-target M/E measurements before codec/role rules; index runs remain byte-addressable.
 //! DO NOT conflate scan codec selection with lookup/expand layout or infer either from type spelling.

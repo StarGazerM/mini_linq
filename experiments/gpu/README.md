@@ -1190,6 +1190,18 @@ provider builds consume resident column descriptors directly, without an
 identity-copy device dispatch. Rebuilding a row-oriented native provider
 continues to require descendant row work.
 
+`--base-codec for|plain64|native|hostfor|delta` selects the resident layout
+of base columns, for the projection loader and for the `tpch_domains` catalog
+(STORAGE §§12.5–12.6). The default is `for`; the other layouts are measurement
+options, not defaults. Generated code is identical for every layout because
+device readers dispatch on each column's recorded codec. `--base-cache DIR`
+(only with `hostfor`) persists and reuses host-packed loader columns. Each
+file is bound to its source column's path, length, mtime and stored-byte
+SHA-256, and key columns are rehashed before they certify a set. Each
+result row reports the query's `base_columns` load accounting (outside query
+timings). `experiments/storage-bench/gpu_base_codec.py` runs rotated paired
+campaigns over these layouts.
+
 
 `TPCH_GPU_ADVICE=/path/advice.json` selects build-time per-query overrides.
 Each entry is a pipeline object, for example:
