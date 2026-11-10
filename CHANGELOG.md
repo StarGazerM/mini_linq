@@ -25,8 +25,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   maximum (both scales); all 52 Physical/Structures/Sequence plans are unchanged.
   All 26 queries pass complete first-result comparison at SF1. The three
   affected queries also pass SF1/SF10 with FOR, Plain64, Delta and native base
-  layouts. Core tests: 80; device-column tests: 20. Timing is deferred to the
+  layouts. Core tests: 81; device-column tests: 20. Timing is deferred to the
   clean paired campaign because a foreign GPU tenant was active.
+  Review follow-up preserves GPU-Capture gating for empty tile sources and
+  registers the Delta/native predicate-time decode violation explicitly.
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`

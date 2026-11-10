@@ -495,3 +495,4 @@ experiments/gpu/device-columns/src/tile.rs	// DECODE ?: Delta/native fallback se
 experiments/gpu/sequence/core/src/tiles.rs	// DECODE R: checked TileRead rust_reads demand authorizes this survivor first load.	R	checked TileRead rust_reads demand authorizes this survivor first load.
 experiments/gpu/sequence/core/src/tiles.rs	// DECODE V: P6 residual relational predicates reconstruct only their demanded survivor fields.	V	P6 residual relational predicates reconstruct only their demanded survivor fields.
 experiments/gpu/sequence/core/src/tiles.rs	// DECODE V: P6 direct aggregate source operands reconstruct surviving fold inputs.	V	P6 direct aggregate source operands reconstruct surviving fold inputs.
+experiments/gpu/device-columns/src/tile.rs	// DECODE V: P6 Delta/native predicate inverse reconstructs logical values instead of comparing codes.	V	P6 Delta/native predicate inverse reconstructs logical values instead of comparing codes.

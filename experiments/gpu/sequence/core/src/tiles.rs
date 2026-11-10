@@ -31,6 +31,7 @@ pub(crate) fn print(
     maps: &[(String, String)],
     terminal: &BTreeSet<usize>,
 ) -> syn::Result<Printed> {
+    let length = rows.source_len(source_name)?;
     let mut prologue = TokenStream::new();
     let mut parameters = Vec::new();
     let mut definitions = Vec::new();
@@ -87,7 +88,7 @@ pub(crate) fn print(
             let value = &bound.value;
             let inclusive = bound.inclusive;
             parameters.push((parameter.clone(), syn::parse_quote!(i64)));
-            arguments.push((parameter.clone(), quote!((#value) as i64)));
+            arguments.push((parameter.clone(), quote!(if (#length) != 0 { (#value) as i64 } else { 0i64 })));
             uses.insert(parameter.to_string());
             match bound.side {
                 Side::Lower => prologue.extend(quote! {

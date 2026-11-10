@@ -2807,6 +2807,40 @@ mod tests {
     }
 
     #[test]
+    fn tile_bound_captures_require_a_nonempty_source_domain() {
+        let (Stack { mut physical, structures, program }, _) = resident_fold(false, false);
+        physical.program.definitions[1] = syn::parse_quote! {
+            zdate = pipe select r if (day >= @(source_bound()), day < 19950101i64);
+        };
+        let (Stack { physical, structures, program }, mut analysis) =
+            graded(Stack { physical, structures, program });
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        analysis.gpu_bindings.realization =
+            select(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+        let source = &analysis.gpu_bindings.realization.sources["r"];
+        let SourceAccess::Tiles(tile) = &source.access else { panic!("admitted tile fixture") };
+        let rows = crate::rows::Rows::new(&physical, &structures, &program, &structure_analysis, &analysis).unwrap();
+        let printed = crate::tiles::print(&rows, "r", source, tile,
+            &[("revenue".into(), "r".into())], &BTreeSet::new()).unwrap();
+        let length = rows.source_len("r").unwrap();
+        let bounds: Vec<_> = tile.tests.iter().flat_map(|test| &test.bounds).collect();
+        assert_eq!(printed.arguments.len(), bounds.len());
+        assert!(bounds.iter().any(|bound| {
+            let value = &bound.value;
+            quote::quote!(#value).to_string().contains("source_bound")
+        }));
+        for ((_, argument), bound) in printed.arguments.iter().zip(bounds) {
+            let value = &bound.value;
+            // The emitted Rust evaluates the capture only in the nonempty arm;
+            // an empty source selects a literal without calling source_bound().
+            let expected: syn::Expr = syn::parse_quote! {
+                if (#length) != 0 { (#value) as i64 } else { 0i64 }
+            };
+            assert_eq!(syn::parse2::<syn::Expr>(argument.clone()).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn tile_checker_rejects_single_record_mutations() {
         rejects(resident_fold(false, false), &[
             &|r| r.sources.get_mut("r").unwrap().access = SourceAccess::Scan,
