@@ -260,6 +260,8 @@ def main():
                         if time.monotonic() > deadline:
                             raise SystemExit('no clean GPU/host within --max-wait')
                         time.sleep(60)
+                    if time.monotonic() > deadline:
+                        raise SystemExit('no clean sample within --max-wait')
                     attempt += 1
                     record = run_one(binary, output, scale, codec, queries, args.mode, cache,
                                      manifest(args, scale, codec))
@@ -271,6 +273,8 @@ def main():
                                           tenants_before=record['tenants_before'],
                                           tenants_after=record['tenants_after'],
                                           loadavg=record['loadavg'], loadavg_after=record['loadavg_after']))
+                    args.results.parent.mkdir(parents=True, exist_ok=True)
+                    args.results.write_text(json.dumps(dict(partial=True, discarded=discarded, runs=runs)))
                 record.update(round=rnd, warmup=rnd < 0, scale=scale, codec=codec, attempts=attempt)
                 if record.get('data_root') != str(args.data_root):
                     record['validated'] = False
