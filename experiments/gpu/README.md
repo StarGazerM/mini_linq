@@ -64,6 +64,14 @@ The monorepo keeps host crates at its root and device/codegen crates under
 `cuda-oxide/crates`. Rebuild the configured release backend from the pinned
 checkout with `RUSTC_BOOTSTRAP=1 cargo build --release --lib --target-dir target`
 in `cuda-oxide/crates/rustc-codegen-cuda`.
+As of 2026-11-10 the configured backend is built one commit after the pin, from
+fork commit `57eacecc0` ("Remove quadratic passes from the device pipeline").
+That commit changes only compiler crates; `cuda-core`, `cuda-device` and
+`cuda-host` are identical to the pin, so the library pins stay. Moving them
+needs a matching RCCL commit first, because RCCL pins cuda-oxide itself.
+Measured on `cq-gpu-sequence-runtime` (530 device functions): device pipeline
+about 52 s to 16 s, with byte-identical PTX for it and the four device crates
+below it (evidence: `design-notes/oxide-profile/`).
 
 The shared host bindings require CUDA 13.0 or newer. With the HPC SDK layout,
 bindgen also needs the separate cuRAND headers under `math_libs`.
