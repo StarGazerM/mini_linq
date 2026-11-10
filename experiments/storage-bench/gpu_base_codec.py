@@ -97,14 +97,22 @@ def run_one(binary, output, scale, codec, queries, mode, cache, manifest_path):
                 validated=row.get('validated'), validation=row.get('validation'),
                 median_ms=row.get('median_ms'), base_columns=row.get('base_columns'),
                 total_ms=[s['total_ms'] for s in row.get('samples', [])],
-                checks=[s.get('check') for s in row.get('samples', [])])
+                checks=[s.get('check') for s in row.get('samples', [])],
+                authored_comparison=row.get('authored_comparison'))
         record['data_root'] = report.get('data_root')
     except (OSError, ValueError, KeyError) as error:
         record['results_error'] = str(error)
-    record['validated'] = (proc.returncode == 0 and bool(record['per_query']) and all(
+    answers = bool(record['per_query']) and all(
         q['status'] == 'ran' and not q['error'] and q['validated'] is True
         and (q['validation'] or {}).get('full_samples', 0) >= 1
-        for q in record['per_query'].values()))
+        for q in record['per_query'].values())
+    # The binary also fails its exit status when advised H05 SF10 exceeds the
+    # default build's 10.35 ms ceiling: a timing outcome of the variant, recorded
+    # separately, not an answer failure.
+    record['h05_ceiling_failed'] = any(
+        (q['authored_comparison'] or {}).get('within_sf10_ceiling') is False
+        for q in record['per_query'].values())
+    record['validated'] = answers and (proc.returncode == 0 or record['h05_ceiling_failed'])
     record['exact'] = record['validated'] and all(
         q['exact'] is True for q in record['per_query'].values())
     return record
