@@ -33,6 +33,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   before queries. Verified-key SHA checks, projection reuse and explicit
   HostFor/cache measurements retain their semantics. Reports expose load phases
   and peak/after-load memory (STORAGE §12.7).
+  Duplicate projections now release newly loaded full-source cache entries
+  before pool trimming, retaining only selected columns and earlier cache
+  entries. Paired h06 process wall ratios are 0.661× (SF1) and 0.113× (SF10),
+  with no significant resident-query change.
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`
