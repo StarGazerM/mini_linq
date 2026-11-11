@@ -1587,6 +1587,30 @@ h06's tiles), and suite process wall falls from 24.3 to 18.3 s. The h06 SF10
 effect stays recorded as placement sensitivity of one kernel, not as a slice-L
 compute cost.
 
+#### Future exploration: GPUDirect Storage (not started)
+
+cuFile/GPUDirect Storage could DMA column files from NVMe straight into
+device memory, replacing slice L's pinned host staging. It is not usable on
+the current workstation (checked 2026-11-11):
+- the TPC-H data lives on `/data`, ext4 on a SATA hard disk;
+- the only NVMe holds the LVM root filesystem;
+- neither the `nvidia-fs` module nor `libcufile` is installed.
+
+In compatibility mode cuFile bounces through host memory, which gains nothing
+over pinned staging. Expected value is limited to cold reads: the first SF10
+h06 load read cold from the hard disk in 17.7 s, against about 265 ms
+warm-cache. Warm repeats may get slower, because GDS bypasses the page cache.
+Load time is reported separately and never counted as query time.
+
+Preconditions:
+- data on a plain ext4/XFS NVMe partition, not LVM;
+- the GDS driver stack (nvidia-fs or P2PDMA) and libcufile;
+- confirmed GDS support for the RTX 6000 Ada.
+
+Then add a cuFile read backend to the loader and measure cold and warm
+loads against pinned staging. Reading packed `--base-cache` columns (about
+5.6x fewer bytes for h06) is the cheaper first lever either way.
+
 ## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
 
 1. **Strings are interned at input on every target.** No query column has
