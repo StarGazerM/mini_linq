@@ -161,10 +161,27 @@ impl DomainCatalog {
         DomainRef { dictionary: dictionary.clone(), marker: PhantomData }
     }
 
-    /// Inverse for logical Rust reads and final publication, never relational work.
-    pub fn decode<T, C: SymbolCodec<T>>(&self, id: u32, code: u32) -> Result<T> {
-        // DECODE ?: domain catalog inversion requires caller-level R/P evidence.
-        Ok(C::decode(self.entry(id)?.metadata.dictionary()?.global(code)?))
+    /// Restore a whole output column with one inverse-table gather.
+    /// The table and packed-field descriptor are resolved once, outside the
+    /// row loop; the codec receives the complete owned global-code column.
+    pub fn decode_packed_column<T, C: SymbolCodec<T>, W: Word>(
+        &self, id: u32, packing: &Packing, column: usize, words: &[W],
+    ) -> Result<Vec<T>> {
+        let dictionary = self.entry(id)?.metadata.dictionary()?;
+        let field = packing.packed_fields().nth(column)
+            .ok_or("output column is outside its packing")?;
+        if packing.bits() > W::BITS || field.signed != 0 || field.bits != dictionary.bits {
+            return Err("output column packing differs from its recorded symbol domain".into());
+        }
+        // DECODE P: final-output bulk gather resolves one component inverse table per column.
+        let codes = words.iter().map(|word| {
+            dictionary.global(word.extract(field.shift, field.bits) as u32)
+        }).collect::<Result<Vec<_>>>()?;
+        let values = C::decode_many(codes);
+        if values.len() != words.len() {
+            return Err("symbol codec changed the output column length".into());
+        }
+        Ok(values)
     }
 
     /// Required constants must belong to this component, not merely the codec.
@@ -475,7 +492,7 @@ mod tests {
         let target = catalog.packing(&[0, 1])?;
         assert_eq!(target.bits(), 4);
         assert_eq!(output, [target.pack::<u64>(&[0, -2])?, target.pack::<u64>(&[1, 3])?]);
-        assert_eq!(catalog.decode::<u32, Handle>(0, 1)?, 102);
+        assert_eq!(catalog.decode_packed_column::<u32, Handle, u64>(0, &target, 0, &output)?, [100, 102]);
         assert!(catalog.encode_required::<u32, Handle>(0, &101).is_err());
         for row in [[99, 0], [101, 0], [103, 0], [100, 4]] {
             let input = Buffer::from_host(pool.clone(), &[source.pack::<u64>(&row)?])?;
@@ -514,7 +531,7 @@ mod tests {
         assert!(catalog.remap(&empty, &narrow, &[0, 0, 0]).is_err());
         assert!(catalog.bits(4).is_err());
         assert!(catalog.packing(&[4]).is_err());
-        assert!(catalog.decode::<u32, Handle>(0, 0).is_err());
+        assert!(catalog.decode_packed_column::<u32, Handle, u64>(0, &Packing::new(&[1])?, 0, &[]).is_err());
         assert!(catalog.encode_required::<u32, Handle>(0, &0).is_err());
         for (component, signed) in [(2, true), (3, false)] {
             let source = Packing::with_fields(&[(1, signed)])?;
