@@ -25,10 +25,13 @@ pub fn compile(
     let mut artifacts = Vec::new();
     let mut output_types: Vec<Vec<syn::Type>> = Vec::new();
     let mut publication_facts: Vec<crate::Publication> = Vec::new();
+    let mut host_uploads = BTreeMap::new();
+    let mut host_references = BTreeMap::new();
     for (index, stage) in program.stages.iter().enumerate() {
         let mut types = BTreeMap::new();
         let mut publications = BTreeMap::new();
         let mut dependencies = Vec::new();
+        let mut sequential_dependencies = Vec::new();
         for input in stage.program.inputs() {
             let name = input.name.to_string();
             let (_, producer_name) = stage
@@ -46,11 +49,45 @@ pub fn compile(
                 types.insert(name.clone(), columns);
                 publications.insert(name, publication_facts[producer].clone());
                 dependencies.push(format_ident!("result_{producer}"));
+                sequential_dependencies.push(format_ident!("result_{producer}"));
             } else {
                 let source = program.input(producer_name).map_err(&reject)?;
                 if !matches!(source.producer, stages::Producer::Table(_)) {
-                    let columns = program.input_columns(source).map_err(&reject)?;
+                    let mut columns = program.input_columns(source).map_err(&reject)?;
                     let width = columns.len();
+                    let mut origins = program.input_origins(source).map_err(&reject)?;
+                    let mut key_fields = Vec::new();
+                    let raw_types: Vec<_> = columns.iter().map(|(_, ty)| ty.clone()).collect();
+                    for (slot, ((column, ty), origin)) in columns.iter_mut().zip(&mut origins).enumerate() {
+                        if let Some((table, field)) = crate::key_domains::host_origin(&source.name.to_string(), &column.to_string()) {
+                            let id = crate::key_domains::id(table, field).expect("static host key membership");
+                            *origin = Some((table.to_owned(), field.to_owned()));
+                            *ty = syn::parse_quote!(u32);
+                            let slot = syn::Index::from(slot);
+                            key_fields.push(quote!((::std::mem::offset_of!((#(#raw_types,)*), #slot), #id)));
+                        }
+                    }
+                    let prepared = stages::Program::prepared_name(source);
+                    let normalized = !key_fields.is_empty();
+                    if normalized {
+                        if key_fields.len() != width {
+                            return Err(reject("host key upload requires a fully recorded integer tuple".into()));
+                        }
+                        let device_name = format_ident!("__cq_device_{}", source.name);
+                        let reference_name = format_ident!("__cq_reference_{}", source.name);
+                        let code_types: Vec<_> = columns.iter().map(|(_, ty)| ty).collect();
+                        host_uploads.insert(source.name.to_string(), quote! {
+                            let #device_name = loader.upload_host_keys::<(#(#raw_types,)*), (#(#code_types,)*)>(
+                                &#prepared, &[#(#key_fields),*],
+                            )?;
+                        });
+                        host_references.insert(source.name.to_string(), quote!(let #reference_name = #device_name.to_host()?;));
+                        dependencies.push(device_name);
+                        sequential_dependencies.push(reference_name);
+                    } else {
+                        dependencies.push(prepared.clone());
+                        sequential_dependencies.push(prepared);
+                    }
                     types.insert(
                         name.clone(),
                         input
@@ -63,13 +100,12 @@ pub fn compile(
                     publications.insert(
                         name,
                         crate::Publication {
-                            placement: advice::Placement::Host,
+                            placement: if normalized { advice::Placement::Device } else { advice::Placement::Host },
                             nullable: vec![false; width],
-                            domains: program.input_origins(source).map_err(&reject)?,
+                            domains: origins,
                             grouped: None,
                         },
                     );
-                    dependencies.push(stages::Program::prepared_name(source));
                 }
             }
         }
@@ -117,7 +153,7 @@ pub fn compile(
         let data = format_ident!("data_{index}");
         let result = format_ident!("result_{index}");
         modules.push(quote!(mod #module { #code }));
-        loads.push(quote!(let #data = #module::load(manifest, pool.clone())?;));
+        loads.push(quote!(let #data = #module::load(manifest, pool.clone(), &mut loader)?;));
         let final_download = stage.final_download;
         device.push(quote! {
             cq_gpu_runtime::take_last_timings();
@@ -125,7 +161,7 @@ pub fn compile(
             let timing = cq_gpu_runtime::take_last_timings().ok_or("stage published no timings")?;
             measurement.add_stage(timing, #final_download);
         });
-        sequential.push(quote!(let #result = #module::sequential(&#data, #(&#dependencies),*)?;));
+        sequential.push(quote!(let #result = #module::sequential(&#data, #(&#sequential_dependencies),*)?;));
     }
     let mut device_terminal = Vec::new();
     let mut cpu_terminal = Vec::new();
@@ -173,6 +209,21 @@ pub fn compile(
         }
     }).collect();
     let preprocessing = program.preprocessing_tokens().map_err(&reject)?;
+    let mut bound_columns: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for input in &program.inputs {
+        if let stages::Producer::Table(table) = &input.producer {
+            let columns = bound_columns.entry(table.to_string()).or_default();
+            for column in input.columns.as_ref().expect("table input schema") {
+                columns.insert(column.name.to_string());
+            }
+        }
+    }
+    let bound_projections: Vec<_> = bound_columns.iter().map(|(table, columns)| {
+        let columns: Vec<_> = columns.iter().collect();
+        quote!((#table, &[#(#columns),*][..]))
+    }).collect();
+    let host_uploads: Vec<_> = host_uploads.into_values().collect();
+    let host_references: Vec<_> = host_references.into_values().collect();
     let terminal_stages: Vec<_> = program
         .terminal
         .iter()
@@ -196,11 +247,17 @@ pub fn compile(
             #[inline(never)]
             pub(super) fn run(manifest: &crate::manifest::Manifest, query: &str, conformance_only: bool) -> crate::manifest::Result<serde_json::Value> {
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(manifest, pool.clone());
+                loader.prepare(&[#(#bound_projections),*])?;
                 #preprocessing
+                #(#host_uploads)*
                 #(#loads)*
+                drop(loader);
+                pool.release_unused()?;
                 let reference_started = ::std::time::Instant::now();
                 let decoders = #first_module::decoders(&#first_data, manifest)?;
                 let reference = if manifest.sf == 1 {
+                    #(#host_references)*
                     #(#sequential)*
                     #(#cpu_terminal)*
                     // DECODE P: the complete terminal CPU reference resolves source dictionaries once before the benchmark loop.
@@ -240,6 +297,11 @@ fn check_terminal_domains(
                     .map(|domain| (domain.table.to_string(), domain.column.to_string()))
             })
             .transpose()?;
+        if declared.is_none() && publication.domains.get(*source).and_then(Option::as_ref)
+            .is_some_and(|(table, column)| crate::key_domains::id(table, column).is_some())
+        {
+            continue;
+        }
         if publication
             .domains
             .get(*source)

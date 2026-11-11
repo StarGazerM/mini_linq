@@ -605,8 +605,8 @@ fn source_bounds(
     Ok(Bounds::Inclusive { min, max })
 }
 
-/// One dense u32 key level, in lexicographic order. Signed values are translated
-/// by `min(0, column.bounds().min)` before indexing; payload values stay unchanged.
+/// One dense u32 key level, in lexicographic order. Values are translated by
+/// the recorded column minimum before indexing; payload values stay unchanged.
 #[derive(Clone)]
 pub struct KeyDescriptor {
     pub column: ColumnDescriptor,
@@ -616,7 +616,7 @@ pub struct KeyDescriptor {
 fn key_base(bounds: Bounds) -> i64 {
     match bounds {
         Bounds::Empty => 0,
-        Bounds::Inclusive { min, .. } => min.min(0),
+        Bounds::Inclusive { min, .. } => min,
     }
 }
 
@@ -640,12 +640,12 @@ mod dense_key_tests {
     use super::{dense_key_domain, key_base, Bounds};
 
     #[test]
-    fn signed_domains_translate_from_their_negative_base() {
+    fn domains_translate_from_their_recorded_minimum() {
         for (min, max, base, size) in [
             (-3, -1, -3, 3),
             (-3, 2, -3, 6),
             (i64::MIN, i64::MIN, i64::MIN, 1),
-            (7, 100, 0, 101),
+            (7, 100, 7, 94),
         ] {
             let bounds = Bounds::Inclusive { min, max };
             assert_eq!(key_base(bounds), base);

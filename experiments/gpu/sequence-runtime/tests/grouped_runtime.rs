@@ -24,7 +24,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
     )?;
     let aggregates = [aggregate(0), aggregate(1), aggregate(2), aggregate(3)];
     let result = unsafe {
-        SegmentedGroup::fold(pool.clone(), &data, None, 3, 1, &aggregates, vec![], &AUX)?
+        SegmentedGroup::fold(pool.clone(), &data, None, 3, &[true], &aggregates, vec![], &AUX)?
     }
     .with_decoder(|v: &[i64], valid: &[u8]| -> Result<_> { Ok((v.to_vec(), valid.to_vec())) });
     assert_eq!(
@@ -42,7 +42,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
             &data,
             Some(&live),
             3,
-            1,
+            &[true],
             &aggregates,
             vec![],
             &AUX,
@@ -53,7 +53,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
     assert_eq!(selected.to_host()?, vec![vec![1, 1, 5, 5, 5]]);
     let empty = Buffer::<i64>::zeroed(pool.clone(), 0)?;
     let result =
-        unsafe { group::fold(pool.clone(), &empty, None, 0, 0, &aggregates, vec![], &AUX)? }
+        unsafe { group::fold(pool.clone(), &empty, None, 0, &[], &aggregates, vec![], &AUX)? }
             .with_decoder(|v: &[i64], valid: &[u8]| -> Result<_> {
                 Ok((v.to_vec(), valid.to_vec()))
             });
@@ -63,7 +63,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
         vec![(vec![0, 0, 0, 0], vec![1, 1, 0, 0])]
     );
     let result = unsafe {
-        SegmentedGroup::fold(pool.clone(), &empty, None, 0, 1, &aggregates, vec![], &AUX)?
+        SegmentedGroup::fold(pool.clone(), &empty, None, 0, &[true], &aggregates, vec![], &AUX)?
     }
     .with_decoder(|v: &[i64], _: &[u8]| -> Result<_> { Ok(v.to_vec()) });
     // DECODE P: diagnostic empty keyed aggregate exposes its empty host answer.
@@ -75,7 +75,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
             &data,
             None,
             2,
-            0,
+            &[],
             &[Aggregate {
                 kind: 1,
                 min: 0,
@@ -95,7 +95,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
             &data,
             None,
             2,
-            0,
+            &[],
             &[aggregate(1)],
             vec![],
             &AUX,
@@ -112,7 +112,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
     };
     assert!(narrow.validate().is_err());
     assert!(
-        unsafe { group::fold(pool, &data, None, 2, 0, &[aggregate(1)], vec![], &narrow) }.is_err()
+        unsafe { group::fold(pool, &data, None, 2, &[], &[aggregate(1)], vec![], &narrow) }.is_err()
     );
     Ok(())
 }

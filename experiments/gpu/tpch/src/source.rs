@@ -174,6 +174,14 @@ impl Kernel {
         Ok(storage)
     }
 
+    pub fn integer_key_types(&self) -> BTreeMap<Origin, syn::Type> {
+        self.relations.iter().flat_map(|relation| {
+            relation.columns.iter().map(|(column, _)| (relation.table.to_string(), column.to_string()))
+        }).chain(self.published_origins.values().flatten().filter_map(Clone::clone))
+            .filter(|(table, column)| crate::key_domains::id(table, column).is_some())
+            .map(|origin| (origin, syn::parse_quote!(u32))).collect()
+    }
+
     /// A declared scalar codec can replace relational reads, never opaque Rust.
     pub fn scalar_codec_types(&self, manifest: &Manifest) -> Result<BTreeMap<Origin, syn::Type>> {
         let variables = self.variable_origins()?;
@@ -261,6 +269,7 @@ impl Kernel {
         let mut program = self.program.clone();
         let origins = self.variable_origins()?;
         encode_scalar_body(&mut program.query.body, manifest, storage, &origins)?;
+        restore_key_body(&mut program.query.body, storage, &origins);
         let output_origins = self.answer_columns()?;
         let output_name = program.query.head.relation.clone();
         // Declaration order is a recorded loader ABI: table inputs, then
@@ -293,6 +302,12 @@ impl Kernel {
                     .and_then(|origin| storage.get(origin))
                     .unwrap_or(&relation.columns[index].1)
                     .clone();
+                if let Some(id) = origin.as_ref().filter(|origin| storage.contains_key(*origin))
+                    .and_then(|(table, column)| crate::key_domains::id(table, column))
+                {
+                    let domain = quote::format_ident!("__tpch_domain_{id}");
+                    column.domain = Some(syn::parse2(quote!(in (#domain)))?);
+                }
                 if let Some(domain) = origin.as_ref().and_then(|origin| {
                     self.domains.iter().find(|domain| {
                         domain.table == origin.0.as_str() && domain.column == origin.1.as_str()
@@ -320,6 +335,13 @@ impl Kernel {
             return Err("output schema differs from query head".into());
         }
         declarations.push(output);
+        // This is a new representation-level declaration boundary. The same
+        // authored i64 identity can now describe u32 keys and i64 measures;
+        // carrying that old ID forward would conflate their device carriers.
+        for column in declarations.iter_mut().flat_map(|declaration| &mut declaration.columns) {
+            column.logical_type_id = None;
+        }
+        cq_lang_cq::syntax::intern_logical_types(&mut declarations)?;
         program.declarations = declarations;
         Ok(program.to_token_stream())
     }
@@ -333,16 +355,57 @@ impl Kernel {
             .args
             .iter()
             .map(|argument| {
-                if let syn::Expr::Path(path) = argument {
-                    path.path
-                        .get_ident()
-                        .and_then(|name| variables.get(&name.to_string()))
-                        .cloned()
+                if let Some(name) = projected_variable(argument) {
+                    variables.get(&name.to_string()).cloned()
                 } else {
                     None
                 }
             })
             .collect())
+    }
+}
+
+fn projected_variable(expression: &syn::Expr) -> Option<&Ident> {
+    match expression {
+        syn::Expr::Path(path) => path.path.get_ident(),
+        syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+            if let syn::Expr::Path(path) = &*unary.expr { path.path.get_ident() } else { None }
+        }
+        _ => None,
+    }
+}
+
+fn restore_key_body(
+    body: &mut cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
+    storage: &BTreeMap<Origin, syn::Type>,
+    origins: &BTreeMap<String, Origin>,
+) {
+    use cq_lang_cq::BodyItem;
+    for item in body {
+        if let BodyItem::Block(block) = item {
+            for branch in &mut block.branches { restore_key_body(&mut branch.body, storage, origins); }
+            continue;
+        }
+        let expression = match item {
+            BodyItem::Filter(filter) => &mut filter.condition,
+            BodyItem::Let(binding) => &mut binding.expression,
+            BodyItem::For(binding) => &mut binding.expression,
+            _ => continue,
+        };
+        let reads = cq_lang_cq::rust::free_variables(expression);
+        let mut inverses = TokenStream::new();
+        for (name, origin) in origins {
+            if !storage.contains_key(origin) || (!reads.opaque && !reads.names.contains(name)) { continue; }
+            let Some(id) = crate::key_domains::id(&origin.0, &origin.1) else { continue; };
+            let variable = quote::format_ident!("{name}");
+            let minimum = quote::format_ident!("__tpch_minimum_{id}");
+            let logical: syn::Type = if matches!(id, 4 | 5 | 8) { syn::parse_quote!(i32) } else { syn::parse_quote!(i64) };
+            // DECODE R: only authored opaque Rust reads restore integer keys.
+            inverses.extend(quote!(let #variable = &((i64::from(*#variable) + #minimum) as #logical);));
+        }
+        if !inverses.is_empty() {
+            *expression = syn::parse_quote!({ #inverses #expression });
+        }
     }
 }
 
@@ -574,6 +637,37 @@ mod tests {
             kernels.push(kernel);
         }
         kernels
+    }
+
+    #[test]
+    fn integer_members_use_shared_captures_and_restore_only_rust_reads() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        for (name, _) in SOURCES {
+            for kernel in kernels(&authored(name), &manifest) {
+                let mut storage = kernel.scalar_codec_types(&manifest).unwrap();
+                storage.extend(kernel.dictionary_types(&manifest).unwrap());
+                storage.extend(kernel.integer_key_types());
+                let encoded: cq_lang_cq::Program = syn::parse2(
+                    kernel.encoded_query_with_types(&manifest, &storage).unwrap(),
+                ).unwrap();
+                for relation in &kernel.relations {
+                    let declaration = encoded.inputs().find(|input| input.name == relation.name).unwrap();
+                    for ((column, _), actual) in relation.columns.iter().zip(&declaration.columns) {
+                        if let Some(id) = crate::key_domains::id(&relation.table.to_string(), &column.to_string()) {
+                            assert_eq!(actual.ty, syn::parse_quote!(u32), "{name}:{column}");
+                            let expected = quote::format_ident!("__tpch_domain_{id}");
+                            assert!(mentions(actual.domain.as_ref().unwrap().to_token_stream(), &expected));
+                        }
+                    }
+                }
+            }
+        }
+        let kernel = kernels(&authored("h20"), &manifest).remove(1);
+        let mut storage = kernel.scalar_codec_types(&manifest).unwrap();
+        storage.extend(kernel.integer_key_types());
+        let encoded = kernel.encoded_query_with_types(&manifest, &storage).unwrap().to_string();
+        assert!(encoded.contains("__tpch_minimum_7"), "available quantity Rust read needs its inverse");
+        assert!(!encoded.contains("__tpch_minimum_0"), "unused order key needs no inverse");
     }
 
     #[test]

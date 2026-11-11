@@ -173,14 +173,27 @@ mod representation_tests {
     }
 }
 
+/// Measured grouping frame. Computed values may exceed the u32 domain policy;
+/// loaded/domain fields may not. Scratch follows `bits`, not the origin flag.
+#[derive(Clone, Copy, Debug)]
+pub struct GroupKeyDomain {
+    pub minimum: i64,
+    pub bound: u128,
+    pub bits: u32,
+}
+
 pub struct GroupedOutput {
     values: Buffer<i64>,
     valid: Buffer<u8>,
     metadata: Arc<Buffer<OutputCount>>,
     statuses: Vec<Arc<Buffer<OutputCount>>>,
     width: usize,
+    key_domains: Vec<GroupKeyDomain>,
 }
 impl GroupedOutput {
+    pub fn key_domains(&self) -> &[GroupKeyDomain] {
+        &self.key_domains
+    }
     pub fn with_decoder<F>(self, decode: F) -> GroupedRows<F> {
         GroupedRows {
             output: self,
@@ -310,12 +323,12 @@ impl SegmentedGroup {
         input: &Buffer<i64>,
         live: Option<&cuda_core::DeviceBuffer<u32>>,
         rows: usize,
-        keys: usize,
+        domain_keys: &[bool],
         aggregates: &[Aggregate],
         statuses: Vec<Arc<Buffer<OutputCount>>>,
         aux: &Auxiliary,
     ) -> Result<GroupedOutput> {
-        unsafe { fold(pool, input, live, rows, keys, aggregates, statuses, aux) }
+        unsafe { fold(pool, input, live, rows, domain_keys, aggregates, statuses, aux) }
     }
 }
 
@@ -334,12 +347,13 @@ pub unsafe fn fold(
     input: &Buffer<i64>,
     live: Option<&cuda_core::DeviceBuffer<u32>>,
     rows: usize,
-    keys: usize,
+    domain_keys: &[bool],
     aggregates: &[Aggregate],
     statuses: Vec<Arc<Buffer<OutputCount>>>,
     aux: &Auxiliary,
 ) -> Result<GroupedOutput> {
     aux.validate()?;
+    let keys = domain_keys.len();
     let element = aux.group;
     let width = keys
         .checked_add(aggregates.len())
@@ -393,11 +407,14 @@ pub unsafe fn fold(
         rows
     };
     let mut alternate_order = temporary::<u32>(stream, rows)?;
-    let mut sort_keys = temporary::<u64>(stream, rows)?;
-    let mut alternate_keys = temporary::<u64>(stream, rows)?;
     let mut offsets = temporary::<u32>(stream, rows.max(1))?;
     let flags = temporary::<u32>(stream, rows)?;
     let mut count = temporary::<u64>(stream, 1)?;
+    let mut key_domains = if rows == 0 {
+        vec![GroupKeyDomain { minimum: 0, bound: 0, bits: 0 }; keys]
+    } else {
+        Vec::with_capacity(keys)
+    };
     if rows != 0 {
         if live.is_none() {
             let shape = module.prepare_identity(element.config(1))?;
@@ -416,8 +433,64 @@ pub unsafe fn fold(
         } else {
             None
         };
+        if keys != 0 {
+            let shape = module.prepare_key_bounds(aux.bounds.config(1))?;
+            let blocks = aux.bounds.grid(shape.function(), rows)?;
+            let partials_per_key = blocks as usize * 16;
+            let partials = unsafe { Buffer::<i64>::uninitialized(pool.clone(), partials_per_key * keys)? };
+            let grid = blocks.checked_mul(u32::try_from(keys)?).ok_or("group bounds grid overflow")?;
+            module.key_bounds(
+                stream, &module.prepare_key_bounds(aux.bounds.config(grid))?,
+                input.ptr(), pointer(&order), rows as u32, width, blocks, partials.ptr(),
+            )?;
+            let partials = partials.to_host()?;
+            for (key, partials) in partials.chunks_exact(partials_per_key).enumerate() {
+                let (min, max) = partials.chunks_exact(2).fold((i64::MAX, i64::MIN), |(min, max), pair| {
+                    (min.min(pair[0]), max.max(pair[1]))
+                });
+                if domain_keys[key] {
+                    gpu_device_columns::KeyDomain::from_bounds(
+                        key as u32, gpu_device_columns::Bounds::Inclusive { min, max },
+                    )?;
+                }
+                let range = (i128::from(max) - i128::from(min)) as u64;
+                key_domains.push(GroupKeyDomain {
+                    minimum: min, bound: u128::from(range) + 1,
+                    bits: (64 - range.leading_zeros()).max(1),
+                });
+            }
+        }
+        let narrow_rows = if key_domains.iter().any(|domain| domain.bits <= 32) { rows } else { 0 };
+        let wide_rows = if key_domains.iter().any(|domain| domain.bits > 32) { rows } else { 0 };
+        let mut sort_keys = temporary::<u32>(stream, narrow_rows)?;
+        let mut alternate_keys = temporary::<u32>(stream, narrow_rows)?;
+        let mut wide_keys = temporary::<u64>(stream, wide_rows)?;
+        let mut alternate_wide = temporary::<u64>(stream, wide_rows)?;
         // Stable least-significant-field passes produce lexicographic group order.
         for key in (0..keys).rev() {
+            if key_domains[key].bits > 32 {
+                let shape = module.prepare_gather_wide_key(element.config(1))?;
+                let blocks = element.grid(shape.function(), rows)?;
+                module.gather_wide_key(
+                    stream, &module.prepare_gather_wide_key(element.config(blocks))?,
+                    input.ptr(), pointer(&order), pointer(&wide_keys), rows as u32,
+                    width, key, key_domains[key].minimum,
+                )?;
+                let mut pairs = rccl_cub::DoubleBuffer::paired(
+                    (&mut wide_keys, &mut order), (&mut alternate_wide, &mut alternate_order),
+                ).ok_or("group wide radix extents differ")?;
+                crate::with_radix_workspace(&pool, &launch, rows, true, |scratch| {
+                    rccl_cub::device_radix_sort_pairs_buffer(&launch, &mut pairs, 0..key_domains[key].bits, scratch)?;
+                    Ok(())
+                })?;
+                let swapped = !pairs.current_is_first();
+                drop(pairs);
+                if swapped {
+                    std::mem::swap(&mut order, &mut alternate_order);
+                    std::mem::swap(&mut wide_keys, &mut alternate_wide);
+                }
+                continue;
+            }
             module.gather_key(
                 stream,
                 gather_prepared.as_ref().expect("nonempty group key domain"),
@@ -427,17 +500,18 @@ pub unsafe fn fold(
                 rows as u32,
                 width,
                 key,
+                key_domains[key].minimum,
             )?;
             let mut pairs = rccl_cub::DoubleBuffer::paired(
                 (&mut sort_keys, &mut order),
                 (&mut alternate_keys, &mut alternate_order),
             )
             .ok_or("group radix extents differ")?;
-            crate::with_radix_workspace(&pool, &launch, rows, true, |scratch| {
+            crate::with_radix_workspace(&pool, &launch, rows, false, |scratch| {
                 rccl_cub::device_radix_sort_pairs_buffer(
                     &launch,
                     &mut pairs,
-                    0..64,
+                    0..key_domains[key].bits,
                     scratch,
                 )?;
                 Ok(())
@@ -449,6 +523,8 @@ pub unsafe fn fold(
                 std::mem::swap(&mut sort_keys, &mut alternate_keys);
             }
         }
+        for buffer in [sort_keys, alternate_keys] { release(stream, buffer)?; }
+        for buffer in [wide_keys, alternate_wide] { release(stream, buffer)?; }
         let shape = module.prepare_boundaries(element.config(1))?;
         let blocks = element.grid(shape.function(), rows)?;
         module.boundaries(
@@ -517,7 +593,7 @@ pub unsafe fn fold(
     for buffer in [order, alternate_order, offsets, flags] {
         release(stream, buffer)?;
     }
-    for buffer in [sort_keys, alternate_keys, count] {
+    for buffer in [count] {
         release(stream, buffer)?;
     }
     Ok(GroupedOutput {
@@ -526,6 +602,7 @@ pub unsafe fn fold(
         metadata,
         statuses,
         width,
+        key_domains,
     })
 }
 
@@ -624,6 +701,7 @@ impl GlobalFold {
             metadata: self.metadata,
             statuses,
             width,
+            key_domains: Vec::new(),
         })
     }
 }
@@ -631,6 +709,40 @@ impl GlobalFold {
 #[cuda_device::cuda_module]
 mod group_kernels {
     use cuda_device::{kernel, launch_bounds, launch_contract};
+    /// Only extrema cross to the host; group key rows never widen for sorting.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn key_bounds(
+        input: *const i64, order: *const u32, rows: u32, width: usize,
+        blocks_per_key: u32, partials: *mut i64,
+    ) {
+        let block = cuda_device::thread::blockIdx_x();
+        let column = (block / blocks_per_key) as usize;
+        let lane = ((block % blocks_per_key) * 256 + cuda_device::thread::threadIdx_x()) as usize;
+        let mut row = lane;
+        let mut min = i64::MAX;
+        let mut max = i64::MIN;
+        while row < rows as usize {
+            let value = unsafe { *input.add(*order.add(row) as usize * width + column) };
+            min = min.min(value);
+            max = max.max(value);
+            row += blocks_per_key as usize * 256;
+        }
+        let mut distance = 16;
+        while distance != 0 {
+            min = min.min(cuda_device::warp::shuffle_xor_u64(min as u64, distance) as i64);
+            max = max.max(cuda_device::warp::shuffle_xor_u64(max as u64, distance) as i64);
+            distance /= 2;
+        }
+        if lane % 32 == 0 {
+            let slot = column * blocks_per_key as usize * 16 + lane / 32 * 2;
+            unsafe {
+                *partials.add(slot) = min;
+                *partials.add(slot + 1) = max;
+            }
+        }
+    }
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain=1,block=(256,1,1))]
@@ -649,17 +761,33 @@ mod group_kernels {
     pub fn gather_key(
         input: *const i64,
         order: *const u32,
-        keys: *mut u64,
+        keys: *mut u32,
         rows: u32,
         width: usize,
         column: usize,
+        minimum: i64,
     ) {
         unsafe {
             let mut i = cuda_device::thread::index_1d().get() as u32;
             while i < rows {
-                *keys.add(i as usize) =
-                    (*input.add(*order.add(i as usize) as usize * width + column) as u64)
-                        ^ (1u64 << 63);
+                *keys.add(i as usize) = (*input.add(*order.add(i as usize) as usize * width + column))
+                    .wrapping_sub(minimum) as u32;
+                i += cuda_device::thread::gridDim_x() * 256;
+            }
+        }
+    }
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn gather_wide_key(
+        input: *const i64, order: *const u32, keys: *mut u64,
+        rows: u32, width: usize, column: usize, minimum: i64,
+    ) {
+        unsafe {
+            let mut i = cuda_device::thread::index_1d().get() as u32;
+            while i < rows {
+                *keys.add(i as usize) = (*input.add(*order.add(i as usize) as usize * width + column))
+                    .wrapping_sub(minimum) as u64;
                 i += cuda_device::thread::gridDim_x() * 256;
             }
         }
@@ -957,6 +1085,40 @@ mod publication_tests {
     }
 
     #[test]
+    fn group_keys_record_narrow_ranges_and_refuse_wide_spans() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let aggregate = Aggregate { kind: 1, min: i64::MIN, max: i64::MAX };
+        let input = Buffer::from_host(pool.clone(), &[
+            i64::MIN + 1, 1i64 << 40, i64::MIN, 7, i64::MIN + 1, 9,
+        ])?;
+        let grouped = unsafe {
+            fold(pool.clone(), &input, None, 3, &[true], &[aggregate], Vec::new(), &Auxiliary::SUPPORTED)?
+        };
+        assert_eq!((grouped.key_domains()[0].minimum, grouped.key_domains()[0].bits), (i64::MIN, 1));
+        let rows = grouped.with_decoder(|values: &[i64], _: &[u8]| -> Result<_> {
+            Ok((values[0], values[1]))
+        }).to_host()?;
+        assert_eq!(rows, [(i64::MIN, 7), (i64::MIN + 1, (1i64 << 40) + 9)]);
+        let computed_narrow = unsafe {
+            fold(pool.clone(), &input, None, 3, &[false], &[aggregate], Vec::new(), &Auxiliary::SUPPORTED)?
+        };
+        assert_eq!(computed_narrow.key_domains()[0].bits, 1);
+        let wide = Buffer::from_host(pool.clone(), &[i64::MIN, 1, i64::MAX, 2])?;
+        let error = unsafe {
+            fold(pool.clone(), &wide, None, 2, &[true], &[aggregate], Vec::new(), &Auxiliary::SUPPORTED)
+        }.err().expect("wide key range must be refused");
+        assert!(error.to_string().contains("u32 code domain"));
+        let computed_wide = unsafe {
+            fold(pool, &wide, None, 2, &[false], &[aggregate], Vec::new(), &Auxiliary::SUPPORTED)?
+        };
+        assert_eq!(computed_wide.key_domains()[0].bits, 64);
+        assert_eq!(computed_wide.with_decoder(|values: &[i64], _: &[u8]| -> Result<_> {
+            Ok((values[0], values[1]))
+        }).to_host()?, [(i64::MIN, 1), (i64::MAX, 2)]);
+        Ok(())
+    }
+
+    #[test]
     fn resident_group_publication_preserves_values_count_and_failure() -> Result<()> {
         let pool = Pool::new(0, 0, 0)?;
         let input = Buffer::from_host(pool.clone(), &[1i64, 3, 1, 7, 2, 5])?;
@@ -980,7 +1142,7 @@ mod publication_tests {
                     &input,
                     None,
                     3,
-                    1,
+                    &[true],
                     &[aggregate],
                     vec![status],
                     &Auxiliary::SUPPORTED,

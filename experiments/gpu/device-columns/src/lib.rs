@@ -5,6 +5,7 @@
 //! Query-output encoding never reads metadata back. All allocations retain the
 //! rccl-memory pool and CUDA stream that own them.
 mod device;
+mod domain;
 mod encoding;
 mod host;
 mod host_pack;
@@ -16,6 +17,7 @@ pub mod scan;
 pub mod tile;
 use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
+pub use domain::KeyDomain;
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
 pub use host_pack::{check_packed_layout, pack_for};

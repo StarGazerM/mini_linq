@@ -109,6 +109,15 @@ fn packing_bounds(bounds: &FieldBounds) -> TokenStream {
 
 fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident) -> TokenStream {
     let bounds = packing_bounds(&field.bounds);
+    // Computed fields have only a declared scalar bound. Loaded/domain-backed
+    // fields carry resident or explicit bounds and must fit the code contract.
+    let check_domain = (!matches!(
+        field.bounds, FieldBounds::Column(ColumnBounds::Scalar { .. })
+    )).then(|| quote! {
+        if __cq_width > 32 {
+            return Err("GPU domain key field exceeds 32 bits".into());
+        }
+    });
     quote! {
         let (#base, __cq_width) = match (#bounds) {
             ::cq_gpu_runtime::Bounds::Empty => (0i64, 0u32),
@@ -116,6 +125,7 @@ fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident) -> Tok
                 (min, 64 - ((max as i128 - min as i128) as u64).leading_zeros())
             }
         };
+        #check_domain
         let #shift = __cq_key_bits;
         __cq_key_bits = __cq_key_bits.checked_add(__cq_width).ok_or("packed Sequence key width overflow")?;
         __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {
@@ -2604,6 +2614,7 @@ fn translate_observed(
                         &compiler.rows.query_captures,
                         geometry,
                         &compiler.rows,
+                        &analysis.gpu_bindings.bounds,
                     )?
                 }
                 GroupCompletion::GridPartials {
@@ -5358,14 +5369,14 @@ mod tests {
                 quote!(host_scan = ::core::iter::Map<_, _> { reads [], build typed };),
             ),
             (
-                quote!(@radix_relation input { keys 2; columns [i64 => i64, i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec TestCodec] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
-                    (i64, ::gpu_datalog_runtime::Symbol<i32, TestCodec>), (), u128, u64, ()>),
+                quote!(@radix_relation input { keys 2; columns [u32 => u32, i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec TestCodec] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
+                    (u32, ::gpu_datalog_runtime::Symbol<i32, TestCodec>), (), u64, u64, ()>),
                 quote!(radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation };),
             ),
         ] {
             let Stack { physical, structures, program } = syn::parse2(quote! {
                 physical {
-                    relation R(id:i64,raw:i32) = (&data.r);
+                    relation R(id:u32,raw:i32) = (&data.r);
                     r = pipe rename R {id -> id,raw -> raw};
                     bound = pipe bind r with value:i64 = (*raw as i64);
                     valuation = let canon project bound keep {id,raw,value};

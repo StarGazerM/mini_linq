@@ -1,0 +1,28 @@
+query	sf	status	validation	warmup_exact_rows	resident_total_ms	constructed_base_bytes	domain_ms	raw_report
+d19	1	ran	full_then_sampled	8962	1.289631962776184	73484376	0.093319	target/compression-domains/d19-sf1.json
+d27	1	ran	full_then_sampled	357	1.3495680093765259	69909040	0.069332	target/compression-domains/d27-sf1.json
+d72_inner	1	ran	full_then_sampled	5344	2.0527679920196533	61459968	0.127724	target/compression-domains/d72_inner-sf1.json
+d85	1	ran	full_then_sampled	8962	1.6086080074310303	77079544	0.110331	target/compression-domains/d85-sf1.json
+h01	1	ran	full_then_sampled	4	36.024417877197266	50457752	0.038773999999999996	target/compression-domains/h01-sf1.json
+h02	1	ran	full_then_sampled	460	11.133658144744873	4708664	0.09794800000000001	target/compression-domains/h02-sf1.json
+h03	1	ran	full_then_sampled	11620	0.8663039803504944	42651368	0.042231000000000005	target/compression-domains/h03-sf1.json
+h04	1	ran	full_then_sampled	52523	0.5533440113067627	57492320	0.033584	target/compression-domains/h04-sf1.json
+h04_not_exists	1	ran	full_then_sampled	4695	0.3877120018005371	59771368	0.839217	target/compression-domains/h04_not_exists-sf1.json
+h05	1	ran	full_then_sampled	7242	1.2085119485855103	45851608	0.085113	tpch/h05-sf1-domains.json
+h06	1	ran	full_then_sampled	1	0.08473599702119827	51020400	0.052160000000000005	target/compression-domains/h06-sf1.json
+h07	1	ran	full_then_sampled	5501	1.328927993774414	61934960	0.073922	target/compression-domains/h07-sf1.json
+h07_block	1	ran	full_then_sampled	5501	1.3105599880218506	61934960	0.084031	target/compression-domains/h07_block-sf1.json
+h08	1	ran	full_then_sampled	2603	1.5355199575424194	73698680	0.140128	target/compression-domains/h08-sf1.json
+h09	1	ran	full_then_sampled	319402	1.820639967918396	70099440	0.075895	target/compression-domains/h09-sf1.json
+h10	1	ran	full_then_sampled	37967	2.6952319145202637	43510248	0.07217900000000001	target/compression-domains/h10-sf1.json
+h11	1	ran	full_then_sampled	1048	6.213375926017761	5336320	0.066377	target/compression-domains/h11-sf1.json
+h12	1	rejected-computed-publication-bounds				43424064	0.043163	target/compression-domains/h12-sf1.json
+h13	1	ran	full_then_sampled	150000	0.9836160242557526	15743216	1.607308	target/compression-domains/h13-sf1.json
+h15	1	rejected-computed-publication-bounds				51833360	0.060656	target/compression-domains/h15-sf1.json
+h16	1	ran	full_then_sampled	118274	6.555040061473846	2945984	0.05787	target/compression-domains/h16-sf1.json
+h18	1	rejected-computed-publication-bounds				33773800	0.057880999999999995	target/compression-domains/h18-sf1.json
+h19	1	ran	full_then_sampled	1	0.9753599762916565	60350176	0.121783	target/compression-domains/h19-sf1.json
+h20	1	ran	full_then_sampled	186	14.252575635910034	58377160	0.108267	target/compression-domains/h20-sf1.json
+h21_positive	1	ran	full_then_sampled	302284	2.293760061264038	39881808	0.052760999999999995	target/compression-domains/h21_positive-sf1.json
+h22	1	ran	full_then_sampled	14086	0.39504000544548035	6255520	0.039966999999999996	target/compression-domains/h22-sf1.json
+h05	10	ran	full_then_sampled	72983	12.087807655334473	508920600	0.08851	target/compression-domains/h05-sf10.json

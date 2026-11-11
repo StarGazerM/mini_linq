@@ -339,13 +339,13 @@ fn multi_run_scan_admits_boundary_duplicates_and_preserves_unsigned_symbols() ->
 #[test]
 fn wide_multi_run_scan_preserves_both_word_halves() -> Result {
     let pool = Pool::new(0, 0, 0)?;
-    let packing = Packing::with_columns(&[Column::I64, Column::I64])?;
+    let packing = Packing::with_columns(&[Column::I32; 4])?;
     let rows = vec![
         vec![],
-        vec![vec![i64::MIN as i128, i64::MAX as i128], vec![-1, 0]],
-        vec![vec![i64::MAX as i128, i64::MIN as i128]],
+        vec![vec![i32::MIN as i128, i32::MAX as i128, -1, 0], vec![-1, 0, 1, 2]],
+        vec![vec![i32::MAX as i128, i32::MIN as i128, 3, -4]],
         vec![],
-        vec![vec![-1, 0], vec![1i128 << 40, -(1i128 << 48)]],
+        vec![vec![-1, 0, 1, 2], vec![1i128 << 20, -(1i128 << 28), 7, 9]],
     ];
     let mut uploaded = Vec::new();
     for run in &rows {
@@ -360,7 +360,7 @@ fn wide_multi_run_scan_preserves_both_word_halves() -> Result {
         // SAFETY: every uploaded word is initialized and the run is sorted/unique.
         uploaded.push(unsafe { SortedBatch::from_sorted(buffer, len)? });
     }
-    let edge = relation::<(i64,i64),u128>(pool.clone(), packing, uploaded)?;
+    let edge = relation::<(i32,i32,i32,i32),u128>(pool.clone(), packing, uploaded)?;
     let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
     let result = cq_gpu_sequence_test_macros::planned_arena_hole!(wide_scan);
     assert_eq!(result.packing().word_bits(), 128);
@@ -565,16 +565,16 @@ fn wide_runs<W: gpu_datalog_runtime::Word>(
 #[test]
 fn three_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result {
     let pool = Pool::new(0, 0, 0)?;
-    let packing = Packing::with_columns(&[Column::I64, Column::I32, Column::I64])?;
+    let packing = Packing::with_fields(&[(21, true), (31, true), (27, true), (29, true), (31, true), (27, true)])?;
     let rows = vec![
         vec![],
-        vec![vec![i64::MIN as i128, -7, i64::MAX as i128], vec![-1, 3, 0]],
+        vec![vec![-(1i128 << 20), -7, (1i128 << 26) - 1, 2, 3, 4], vec![-1, 3, 0, -5, 6, 7]],
         vec![
-            vec![-1, 3, 0],
-            vec![i64::MAX as i128, i32::MIN as i128, i64::MIN as i128],
+            vec![-1, 3, 0, -5, 6, 7],
+            vec![(1i128 << 20) - 1, -(1i128 << 30), -(1i128 << 26), 0, 1, 2],
         ],
     ];
-    let edge = relation::<(i64,i32,i64),[u64;3]>(
+    let edge = relation::<(i32,i32,i32,i32,i32,i32),[u64;3]>(
         pool.clone(),
         packing.clone(),
         wide_runs::<[u64; 3]>(&pool, &packing, &rows)?,
@@ -597,22 +597,16 @@ fn three_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result
 #[test]
 fn four_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result {
     let pool = Pool::new(0, 0, 0)?;
-    let packing = Packing::with_columns(&[
-        Column::I64,
-        Column::I32,
-        Column::I64,
-        Column::I32,
-        Column::I32,
-    ])?;
+    let packing = Packing::with_fields(&[(31, true); 8])?;
     let rows = vec![
         vec![],
-        vec![vec![i64::MIN as i128, -7, i64::MAX as i128, 3, -9]],
+        vec![vec![-(1i128 << 30), -7, (1i128 << 30) - 1, 3, -9, 5, 6, 7]],
         vec![
-            vec![i64::MIN as i128, -7, i64::MAX as i128, 3, -9],
-            vec![-1, i32::MAX as i128, 0, i32::MIN as i128, 4],
+            vec![-(1i128 << 30), -7, (1i128 << 30) - 1, 3, -9, 5, 6, 7],
+            vec![-1, (1i128 << 30) - 1, 0, -(1i128 << 30), 4, 3, 2, 1],
         ],
     ];
-    let edge = relation::<(i64,i32,i64,i32,i32),[u64;4]>(
+    let edge = relation::<(i32,i32,i32,i32,i32,i32,i32,i32),[u64;4]>(
         pool.clone(),
         packing.clone(),
         wide_runs::<[u64; 4]>(&pool, &packing, &rows)?,
@@ -633,5 +627,26 @@ fn four_lane_scan_decodes_cross_lane_fields_and_publishes_exact_bag() -> Result 
     expected.sort();
     expected.dedup();
     assert_eq!(actual, expected);
+    Ok(())
+}
+
+#[test]
+fn wide_domain_key_is_refused_but_wide_computed_canonical_field_is_exact() -> Result {
+    type Wide = gpu_datalog_runtime::RadixLayout<(i64,), (), u64, u64, ()>;
+    let error = Wide::check_schema(&Packing::with_columns(&[Column::I64])?)
+        .err().expect("64-bit domain key must be refused");
+    assert!(error.to_string().contains("32"));
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Packing::with_fields(&[(5, false)])?;
+    let rows = vec![vec![vec![1], vec![7], vec![31]]];
+    let edge = relation::<(u32,),u64>(pool.clone(), packing.clone(), wide_runs::<u64>(&pool, &packing, &rows)?)?;
+    let mut arena = gpu_datalog_runtime::CandidateArena::new(pool);
+    let result = cq_gpu_sequence_test_macros::planned_arena_hole!(wide_computed);
+    let words = result.buffer().to_host_prefix(result.len() * 2)?;
+    let mut actual = words.chunks_exact(2)
+        .map(|word| result.packing().unpack(word[0] as u128 | ((word[1] as u128) << 64)))
+        .collect::<Result<Vec<_>>>()?;
+    actual.sort();
+    assert_eq!(actual, vec![vec![1, (1i128 << 50) + 1], vec![7, (1i128 << 50) + 7], vec![31, (1i128 << 50) + 31]]);
     Ok(())
 }

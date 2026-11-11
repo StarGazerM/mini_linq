@@ -2,6 +2,7 @@
 
 pub mod benchmark;
 pub mod cache;
+pub mod key_domains;
 pub mod loader;
 pub mod manifest;
 #[allow(warnings)]

@@ -4,6 +4,41 @@ pub(crate) mod native_load {
     use crate::{decode, load_element, logical_len, original_position, Codec, VectorHeader};
     use cuda_device::{device, kernel, launch_bounds, launch_contract, thread, warp, DynamicSharedArray};
 
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn domain_bounds(members: *const Facts, count: usize, result: *mut Facts) {
+        if thread::index_1d().get() == 0 {
+            let mut min = i64::MAX;
+            let mut max = i64::MIN;
+            let mut empty = 1;
+            let mut index = 0;
+            while index < count {
+                let member = unsafe { members.add(index).read() };
+                if member.invalid == 0 {
+                    min = min.min(member.min);
+                    max = max.max(member.max);
+                    empty = 0;
+                }
+                index += 1;
+            }
+            unsafe { result.write(Facts { min, max, codec: empty, invalid: 0 }) };
+        }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub unsafe fn domain_rebase(headers: *mut VectorHeader, count: usize, minimum: i64) {
+        let mut index = thread::index_1d().get();
+        let stride = thread::gridDim_x() as usize * 256;
+        while index < count {
+            let header = unsafe { &mut *headers.add(index) };
+            header.base = header.base.wrapping_sub(minimum);
+            index += stride;
+        }
+    }
+
     #[device]
     #[inline(always)]
     unsafe fn valid(source: Input, positions: *const u32, row: usize) -> bool {
@@ -24,7 +59,7 @@ pub(crate) mod native_load {
             // DECODE I: selected source inversion feeds bounds and immediate resident re-encoding, not a logical consumer.
             unsafe { decode(source.column, index as u64) }
         } else {
-            unsafe { load_element(source.column.data.cast(), source.element, index) }
+            unsafe { load_element(source.column.data.cast::<u8>().add(index * source.stride), source.element, 0) }
         }
     }
 
