@@ -76,7 +76,7 @@ fn run(case: &Case, edges: &[(i32,i32)], seeds: &[(i32,)]) -> calibration::Resul
 
 #[test]
 fn complete_run_emits_exact_input_round_physical_and_recosted_evidence() {
-    let edges = [(0,1),(0,1),(1,2),(2,3)]; let seeds = [(0,),(0,)];
+    let edges = [(0,1),(1,2),(2,3)]; let seeds = [(0,)];
     let case = case(&edges, &seeds);
     let result = run(&case, &edges, &seeds).unwrap();
     assert_eq!(result.value, BTreeSet::from([(0,),(1,),(2,),(3,)]));
@@ -145,6 +145,11 @@ fn incomplete_wrong_dataset_and_metadata_runs_never_publish_facts() {
     }).is_err());
     let error = calibration::try_measure::<()>(&case.plans, &case.evidence, &case.request, "loader-error", || Err(export::ExportError("original loader error".into()))).err().unwrap();
     assert_eq!(error.to_string(), "original loader error");
+    // A bound input relation is a set: a repeated complete row is not repaired
+    // and fails the run instead of publishing bag counts as set statistics.
+    let repeated = [(0,1),(0,1)];
+    let raw = case_for(fixture::SOURCE, &repeated, &seeds);
+    assert!(run(&raw, &repeated, &seeds).is_err(), "repeated complete input row");
 }
 
 fn parallel_case(edges: &[(i32,i32)], seeds: &[(i32,)]) -> Case {
@@ -195,7 +200,7 @@ fn parallel_reach(edges: &[(i32,i32)], seeds: &[(i32,)]) -> BTreeSet<(i32,)> {
 #[test]
 fn parallel_push_instances_preserve_complete_rounds_and_evidence_bindings() {
     let edges = [(0,1),(1,2),(2,3),(10,11)];
-    let seeds = [(0,),(10,),(10,)];
+    let seeds = [(0,),(10,)];
     let case = parallel_case(&edges, &seeds);
     let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
     let result = pool.install(|| calibration::measure(&case.plans, &case.evidence, &case.request, "parallel-fixture", || {

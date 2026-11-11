@@ -98,6 +98,33 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   §12.7). Load time, a separate cold-start metric never counted as query time:
   h06 process wall is 0.661× (SF1) and 0.113× (SF10); suite process wall goes
   24.3 → 18.3 s.
+- Datalog EDB loading builds no membership layout for a read-only input
+  (DL-Canonical relaxed). Inputs are sets by the IO contract, so loading
+  inserts each input row into the relation's read layouts as given. An
+  all-column canonical layout is still required, and built by
+  insert-if-absent, for a derived, returned or negated relation; any other
+  input names its first read layout (an input with no read gets one
+  empty-key layout). DOOP default Storage: 209 -> 179 full layouts (30 unread
+  all-column input sets removed; `mainclass`, an output, keeps its set).
+  Measured on xalan `doop-mini`, 9 interleaved pairs: compute 0.978
+  [0.961, 0.999] (8.86 -> 8.63 s median), peak RSS 1621 -> 1520 MiB; all 26
+  outputs (5,657,686 tuples) identical as sets. The parallel and GPU
+  pipelines take the same Storage default. On `394ed5f2` plus this change
+  `tools/gpu_gate.sh` passes on an empty card (448 s; H05 SF10 8.363 ms;
+  Cassandra 26/26 exact).
+  Behavior change: a bound input that repeats a tuple is no longer repaired
+  at load. Derived and returned relations remain sets. Calibration works on
+  loaded sets: its observer keeps each bound input's full-tuple set and fails
+  the run on a repeated complete row (`CanonicalAccumulator`), records
+  `input_unique`, and its dataset evidence must be collected over the loaded
+  set. Tests that bound duplicate raw rows now bind sets.
+- GPU Datalog set sorts accept inputs longer than one RCCL radix portion.
+  `SetOps::sort` sorts `2^28 - 2^20` rows per call; each later portion drops
+  the rows already sorted, unless certified unique, and is merged. The
+  field-flow DOOP program on jython no longer fails `Policy800 one-portion
+  maximum` on a 378 M-row candidate round (it then exhausts the card on a
+  1.96-billion-row round). Under `GPU_DATALOG_TRACE_MEMORY`, a refused pool
+  allocation reports its size and the pool counters.
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`

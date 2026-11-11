@@ -3,9 +3,11 @@
 //! canonical layout, occurrence bindings, and negation-key projections.
 //! Applicable provider types and initializers are opaque Rust syntax whose
 //! collection laws are premises. Delta and next share a move type.
-//! A relation's canonical layout is an ordinary member of its full layouts whose
-//! key covers every column; admission and EDB loading deduplicate against it,
-//! and full scans read it. There is no separate seen, all, or canonical set.
+//! A relation's canonical layout is an ordinary member of its full layouts. For
+//! a derived, returned or negated relation its key covers every column:
+//! admission deduplicates against it, and outputs and frozen-key scans read it.
+//! Any other input relation names an ordinary read layout and builds no
+//! all-column layout. There is no separate seen, all, or canonical set.
 //! Optional per-host certificates record canonical admission roots, complete
 //! maintained layout permutations, and set-valued negation projections.
 //! Negative projections record first variable columns, repeated-column equality
@@ -627,16 +629,29 @@ pub mod contract {
             let rows = row_type(declaration);
             let unit: Type = syn::parse_quote!(());
             provider::check_instance(&program.tokens, &provider.delta, &rows, &unit, Hasher::None)?;
-            // Formal rule DL-Canonical: one complete, all-column-keyed member of
-            // the relation's own full layouts; no separate membership store.
+            // Formal rule DL-Canonical: one member of the relation's own full
+            // layouts, keyed by every column when admission, an output or a
+            // frozen-key scan reads it; no separate membership store.
             let canonical = program.layouts.get(provider.canonical);
+            let complete_key = analysis.component[index].is_some()
+                || program
+                    .incremental
+                    .strata
+                    .source
+                    .outputs
+                    .iter()
+                    .any(|output| *output == declaration.name)
+                || program
+                    .negations
+                    .iter()
+                    .any(|negative| negative.relation == index);
             ensure(
                 canonical.is_some_and(|layout| {
                     analysis.positions.get(&symbol_name(&layout.relation)) == Some(&index)
-                        && layout.key == declaration.arity()
+                        && (!complete_key || layout.key == declaration.arity())
                 }),
                 provider,
-                "canonical must name one of the relation's full layouts keyed by every column",
+                "canonical must name one of the relation's full layouts, keyed by every column when the relation is derived, returned or negated",
             )?;
             if declaration.value.is_some() {
                 let empty: Expr = syn::parse_quote!(::std::vec::Vec::new());

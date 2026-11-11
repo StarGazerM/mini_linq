@@ -3451,6 +3451,33 @@ mod set_representation_tests {
     }
 
     #[test]
+    fn long_inputs_sort_by_portions() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        // Duplicates fall inside one portion and across portions; at three
+        // rows per portion the second portion repeats only the first.
+        let repeated = [9_u64, 3, 9, 3, 9, 3, 1, 7, 1, 8, 2, 9, 0];
+        let distinct = [5_u64, 2, 8, 1, 9, 0, 4];
+        let narrow = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 32)?;
+        let wide = DeviceRadixRun::<u128, u32, ()>::new_set(pool.clone(), PARAMS, 96)?;
+        let lift = |values: &[u64]| values.iter().map(|&v| (v as u128) << 64 | 1).collect::<Vec<_>>();
+        for portion in [3, 4, 64] {
+            let input = Buffer::from_host(pool.clone(), &repeated)?;
+            let unique = narrow.set_ops().sort_by_portions(&input, repeated.len(), false, portion)?;
+            assert_eq!(unique.buffer().to_host()?, [0, 1, 2, 3, 7, 8, 9]);
+            let input = Buffer::from_host(pool.clone(), &distinct)?;
+            let sorted = narrow.set_ops().sort_by_portions(&input, distinct.len(), true, portion)?;
+            assert_eq!(sorted.buffer().to_host()?, [0, 1, 2, 4, 5, 8, 9]);
+            let input = Buffer::from_host(pool.clone(), &lift(&repeated))?;
+            let unique = wide.set_ops().sort_by_portions(&input, repeated.len(), false, portion)?;
+            assert_eq!(unique.buffer().to_host()?, lift(&[0, 1, 2, 3, 7, 8, 9]));
+            let input = Buffer::from_host(pool.clone(), &lift(&distinct))?;
+            let sorted = wide.set_ops().sort_by_portions(&input, distinct.len(), true, portion)?;
+            assert_eq!(sorted.buffer().to_host()?, lift(&[0, 1, 2, 4, 5, 8, 9]));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn work_counters_are_feature_controlled_and_reset_without_device_access() {
         crate::reset_work_counters();
         crate::stats::record_work(|work| work.merges += 1);

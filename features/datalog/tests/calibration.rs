@@ -58,7 +58,8 @@ fn duplicate_admission_seed_consumption_and_completion_match_pull_and_push() {
         ($terminal:path, $input:ident) => {{
             let recorder = Arc::new(Recorder::default());
             TaskContext::default().run(|| calibration::with_observer(recorder.clone(), || {
-                let rows = [(0_i32, String::from("seed")), (0, String::from("seed"))];
+                // An input relation is a set; both rows project to one candidate.
+                let rows = [(0_i32, String::from("seed")), (0, String::from("other"))];
                 let result: BTreeSet<_> = cq_datalog::datalog! {
                     pipeline { cq = pipeline { print = $terminal; print_input = $input; }; }
                     struct ObservedRounds;
@@ -79,9 +80,9 @@ fn duplicate_admission_seed_consumption_and_completion_match_pull_and_push() {
             }));
             let metrics = recorder.0.lock().unwrap();
             assert_eq!((metrics.begins, metrics.ends), (1, 1));
-            assert_eq!(metrics.raw, [(0, "seed".to_owned()), (0, "seed".to_owned())]);
-            assert_eq!(metrics.admitted, [(0, "seed".to_owned())]);
-            assert_eq!(metrics.canonical, [(0, 1)]);
+            assert_eq!(metrics.raw, [(0, "seed".to_owned()), (0, "other".to_owned())]);
+            assert_eq!(metrics.admitted, metrics.raw);
+            assert_eq!(metrics.canonical, [(0, 2)]);
             assert_eq!(metrics.seeds, [(0, vec![(1, 1)])]);
             assert_eq!(metrics.rounds, [
                 (0, 0, vec![(1, 1)]),
@@ -99,7 +100,7 @@ fn duplicate_admission_seed_consumption_and_completion_match_pull_and_push() {
 fn seed_only_stratum_records_its_executed_empty_body_round() {
     let recorder = Arc::new(Recorder::default());
     TaskContext::default().run(|| calibration::with_observer(recorder.clone(), || {
-        let rows = [(7_i32, String::from("seed")), (7, String::from("seed"))];
+        let rows = [(7_i32, String::from("seed")), (7, String::from("other"))];
         let result: Vec<_> = cq_datalog::datalog! {
             struct SeedOnly;
             relation E(x:i32,label:String) = (&rows);
@@ -155,7 +156,7 @@ fn custom_and_generic_columns_without_codecs_preserve_queries_and_report_unsuppo
             self.counts.lock().unwrap().1 += 1;
         }
     }
-    let rows = [(NoCodec(7),), (NoCodec(7),)];
+    let rows = [(NoCodec(7),)];
     assert_eq!(generic_identity(&rows), [(NoCodec(7),)]);
     let observer = Arc::new(Missing::default());
     TaskContext::default().run(|| calibration::with_observer(observer.clone(), || {
@@ -169,7 +170,7 @@ fn custom_and_generic_columns_without_codecs_preserve_queries_and_report_unsuppo
         assert_eq!(actual, [(NoCodec(7),)]);
         assert_eq!(generic_identity(&rows), [(NoCodec(7),)]);
     }));
-    assert_eq!(*observer.counts.lock().unwrap(), (4, 2));
+    assert_eq!(*observer.counts.lock().unwrap(), (2, 2));
 }
 
 #[test]

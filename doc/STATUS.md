@@ -697,8 +697,10 @@ approval.
 - Holes are ordinary CQ programs (default tail `sequence → sequential →
   translate_pull`); typed hole interfaces (pull/push) are checked against a
   terminal registry; Round rewrites may change one hole's CQ sub-pipeline.
-- Dedup ownership: Storage admits full-row sets before publishing CQ inputs;
-  Round records `admit R from [holes]`, authorizing `consumer canonical`
+- Dedup ownership: inputs are sets by the IO contract; EDB loading inserts
+  them into their read layouts and builds an all-column layout only for a
+  returned or negated input (DL-Canonical). Round records
+  `admit R from [holes]`, authorizing `consumer canonical`
   (`doc/formal/context.tex`). Rule holes build no local `__cq_seen`.
 - Negation is core `!R(..)` (anti-join, `doc/formal/guards.tex`) over key sets
   built once per stratum; zero per-call index builds.
@@ -775,6 +777,29 @@ approval.
   See [local SRD report](../experiments/gpu/compare/srd-local-2026-11-03.md)
   for raw evidence, load/lock accounting and the late root-bound membership
   finding in the default planner's array-store delta variants.
+- All-dataset DOOP run (2026-11-10, working tree on `ef6ca71a`, shared
+  machine; `/data/design-notes/doop-all-datasets-2026-11-10.md`, raw results
+  in `/data/doop-bench/corpus-20261110/`). All 21 SRDatalog catalog datasets
+  are prepared locally. GPU `srd-doop-gpu`, three samples each: 18 datasets
+  complete with fixpoint 0.51 to 1.01 of SRDatalog's published GPU median
+  (geometric mean 0.82; soot 6.06 s against 11.89 s); jython, scala and
+  kotlin fail. Device memory on soot: layouts 2.75x the raw tuple bytes, pool
+  reservation 5.8x; Datalog device relations are not compressed (P6 C covers
+  TPC-H base columns). Follow-up the same day
+  (`/data/design-notes/gpu-datalog-memory-2026-11-10.md`): set sorts now run
+  by portions, so jython passes RCCL's one-portion limit (268,435,200 rows)
+  and then exhausts the card on a 1.96-billion-row candidate round; scala
+  stopped on the pool's doubling growth with about 20 GiB free and completes
+  (fixpoint 10.8 s against 9.13 s, counts equal the CPU engine) with a
+  prepared, unpinned RCCL pool patch that costs 3-5% fixpoint on xalan and
+  soot; kotlin fails in its 680 M-row CastTo seed round. CPU field-flow at
+  24 threads: geometric mean 9.8x
+  SRDatalog's GPU fixpoint over 20 datasets (4.0x to 25.6x), kotlin over the
+  100 GiB cap. Order: `driver(delta_first)` is 0.82x on the default DOOP
+  program (faster on 20 of 21 datasets; sequential xalan 8.53 -> 3.00 s) but
+  1.51x on the field-flow program (slower on 17 of 19), where it adds a third
+  full copy of the 80 M-row `CastTo` helper. No default was changed: order
+  and index cost need the M7 cost stage.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; surface sugar
   (disjunction, facts, rule macros). Pure-total Rust remains a semantic premise.

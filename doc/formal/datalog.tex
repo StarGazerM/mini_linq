@@ -223,8 +223,9 @@ negation policies \code{all\_columns} and
 \code{replace\_each\_run}. Each declared layout has a complete column
 permutation and valid key prefix, including additional unused layouts; a
 \code{set} layout is keyed by every column.
-Each relation's \code{canonical} index names one of its own full layouts whose
-key covers every column (\textsc{DL-Canonical}).
+Each relation's \code{canonical} index names one of its own full layouts; it
+is keyed by every column when the relation is derived, returned or negated
+(\textsc{DL-Canonical}).
 For every recorded read, locate the actual source-rule occurrence and derive
 the variables already bound at that written position and its constants.
 The selected structure must belong to the correct relation and version, and
@@ -244,13 +245,18 @@ an EDB, they and their initializers must retain the default row-container
 records; changes to these inapplicable fields are rejected, not silently ignored.
 \begin{mathpar}
 \Rule{DL-Canonical}{\ell=D.\mathrm{layouts}[D.\mathrm{providers}[R].\mathrm{canonical}]\quad
- \ell.\mathrm{relation}=R\quad
- \ell.\mathrm{key}=\mathrm{arity}(R)}
- {\ell\text{ is }R\text{'s canonical layout: admission, EDB loading and outputs use it}}
+ \ell.\mathrm{relation}=R\\
+ R\in\mathrm{heads}(I)\ \lor\ R\in\mathrm{outputs}(I)\ \lor\
+ R\in\mathrm{negated}(I)\ \Rightarrow\ \ell.\mathrm{key}=\mathrm{arity}(R)}
+ {\ell\text{ is }R\text{'s canonical layout: admission, frozen-key scans and outputs use it}}
 \end{mathpar}
 The canonical layout is an ordinary full layout, maintained and read like any
-other; there is no separate accumulated, membership or wrapper store. Its
-all-column key makes it a key set of complete rows in its column permutation.
+other; there is no separate accumulated, membership or wrapper store. Where
+the premise requires it, its all-column key makes it a key set of complete
+rows in its column permutation: admission tests membership in it, and
+frozen-key scans and outputs enumerate it. An input relation with none of
+these consumers needs no all-column key: its \code{canonical} index names an
+ordinary read layout, and no layout is built for membership alone.
 \begin{mathpar}
 \Rule{WF-DL-Storage}{\mathrm{WF}_{\mathrm{Incremental}}(I)\quad
  D\text{ records complete providers, usable reads and maintained layouts}\\
@@ -322,11 +328,13 @@ obligations do not authorize CQ input setness: every compiler input is a set.
 Eligibility follows the recorded layout and maintenance protocol, not a
 provider-type whitelist. Opaque lawful collection and maintenance remain
 premises, not properties proved by inspecting Rust type names.
-EDB binding admission inserts each input row into the canonical layout by
-insert-if-absent and inserts only newly admitted rows into the relation's other
-full layouts. Thus even a malformed duplicate raw binding is normalized before
-any CQ hole reads it. Raw dataset loading deduplicates earlier, outside query
-timers; canonical layout construction remains necessary storage preparation.
+EDB binding inserts each input row into every full layout of its relation.
+The input is a set by the IO contract (\textsc{LD-RelationSet}), so loading
+tests no membership and builds no layout for that purpose. When the
+canonical layout is keyed by every column (a returned or negated input, or a
+read binding every column), loading still inserts into it by insert-if-absent
+and inserts only newly admitted rows into the other full layouts; this is
+that layout's ordinary construction, not an input-set obligation.
 An IDB canonical layout starts empty and receives only admitted fresh batches;
 \code{delta} is precisely one such batch. A full layout receives each admitted
 row once, and a delta layout is reset and rebuilt from the current batch.
@@ -350,9 +358,13 @@ recorded concrete type
 \code{::std::hash::BuildHasherDefault<::cq\_datalog::rustc\_hash::FxHasher>}.
 The delta and next providers are concrete \code{Vec} row types,
 initialized with \code{::std::vec::Vec::new()}. The default storage pass reads
-layouts in the checked occurrence order; each relation's canonical layout is
-its first full layout keyed by every column, otherwise an appended identity
-layout keyed by every column (the admission anti-join binds every column).
+layouts in the checked occurrence order. A derived, returned or negated
+relation's canonical layout is its first full layout keyed by every column,
+otherwise an appended identity layout keyed by every column (the admission
+anti-join binds every column). Any other input relation's canonical layout
+is that first all-column layout if a read created one, otherwise its first
+read layout; an input with no read at all receives one appended identity
+layout with an empty key.
 A layout keyed by every column has no payload, so its default provider is the
 key set \code{::std::collections::HashSet<K, Fx>} with protocol \code{set};
 every other layout uses \code{::std::collections::HashMap<K, Vec<V>, Fx>} with

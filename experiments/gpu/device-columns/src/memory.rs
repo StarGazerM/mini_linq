@@ -263,10 +263,17 @@ impl<T: DeviceCopy> Buffer<T> {
         if std::mem::size_of::<T>() == 0 {
             return Err("zero-sized device elements".into());
         }
-        let block = pool
-            .memory
-            .allocate(layout, pool.stream())
-            .map_err(allocation_error)?;
+        let block = pool.memory.allocate(layout, pool.stream()).map_err(|error| {
+            // Opt-in diagnostic: which request the pool or the driver refused.
+            if std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some() {
+                let stats = pool.memory_stats();
+                eprintln!(
+                    "[gpu-memory] allocation-failed request_bytes={} current_bytes={} reserved_bytes={} cached_bytes={}",
+                    layout.size(), stats.current_bytes, stats.reserved_bytes, stats.cached_bytes,
+                );
+            }
+            allocation_error(error)
+        })?;
         Ok(Self {
             block: Some(block),
             owner: None,

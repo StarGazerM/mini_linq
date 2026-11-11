@@ -460,9 +460,9 @@ fn run_layouts_make_each_idb_canonical_a_payload_free_run() {
         assert_eq!(canonical.hasher, storage::Hasher::None);
         assert_eq!(canonical.protocol, storage::LayoutProtocol::Bulk);
     }
-    // EDB canonical layouts stay native key sets.
+    // EDB layouts stay native.
     let edge = &target.layouts[target.providers[0].canonical];
-    assert_eq!(edge.protocol, storage::LayoutProtocol::Set);
+    assert_ne!(edge.protocol, storage::LayoutProtocol::Bulk);
     assert_eq!(edge, &source.layouts[source.providers[0].canonical]);
 }
 

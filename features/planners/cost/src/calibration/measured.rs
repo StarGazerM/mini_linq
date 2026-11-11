@@ -51,8 +51,8 @@ pub(super) fn finish(
         });
         derived.insert(index, name);
     }
-    // Input values are observed before canonical dedup; set frequencies use the
-    // actual successful admission callback. Hashes must match the planned input.
+    // A bound input is a loaded set: rows are hashed in bound order and a
+    // repeated complete row fails the run. Hashes must match the planned input.
     for input in captured.inputs.values() {
         let actual = input.content_hash.as_ref().ok_or_else(|| invalid("missing input digest"))?;
         let file = manifest.files.get_mut(&input.path).ok_or_else(|| invalid("input digest has no manifest file"))?;
@@ -71,13 +71,13 @@ pub(super) fn finish(
         file.content_hash = Some(actual.clone());
         let schema = manifest.schema.get_mut(&input.dataset_relation).ok_or_else(|| invalid("missing input schema"))?;
         schema.semantics = ev::RelationSemantics::Set;
-        schema.set_certification = Some(ev::SetCertification::FullTupleDeduplicated);
+        schema.set_certification = Some(ev::SetCertification::InputUnique);
         let requested = request.relations.iter().find(|r| r.relation.name == input.dataset_relation).ok_or_else(|| invalid("missing input request"))?;
         let mut recorded = requested.clone();
         recorded.relation.semantics = ev::RelationSemantics::Set;
         manifest.loader_options.insert(format!("relation:{}", input.dataset_relation), serde_json::to_string(&recorded).map_err(|e| invalid(e.to_string()))?);
     }
-    manifest.loader_options.insert("calibration-input-boundary".into(), "DL-InsertNew: raw order/duplicates hashed; exact successful canonical admissions counted".into());
+    manifest.loader_options.insert("calibration-input-boundary".into(), "bound input sets: bound order hashed; every bound row counted; a repeated complete row rejected".into());
     let dataset_hash = manifest.dataset_hash().map_err(evidence_error)?;
     let schema_hash = manifest.schema_hash().map_err(evidence_error)?;
     let mut evidence = ev::DatasetEvidence {
@@ -88,7 +88,7 @@ pub(super) fn finish(
         targets: baseline.targets.clone(), observations: ev::Observations::default(),
     };
     for input in captured.inputs.values_mut() {
-        let mut provenance = provenance(run, input.path.clone(), "typed-row-stream-v1 before dedup; exact column/key frequencies inside successful DL-InsertNew; checked against canonical cardinality");
+        let mut provenance = provenance(run, input.path.clone(), "typed-row-stream-v1 over the bound input set; exact column/key frequencies over its rows; repeated complete rows rejected; checked against the engine's stored row count");
         provenance.artifact_hash = input.content_hash.clone();
         let summary = input.summary.take().ok_or_else(|| invalid("incomplete input summary"))?;
         evidence.relations.insert(input.dataset_relation.clone(), summary.bind(&dataset_hash, ev::Source::Calibrated, provenance).map_err(|e| invalid(e.to_string()))?);

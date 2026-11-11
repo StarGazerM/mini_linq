@@ -1,8 +1,10 @@
-//! Statistics piggybacking on the checked DL-InsertNew admission boundary.
+//! Statistics for one bound input relation of a calibrated run.
 //!
-//! Raw rows feed the canonical content digest. Only the compiler's successful
-//! full-tuple admission callback increments frequencies: no second tuple set or
-//! extra traversal is necessary. Finish checks the actual canonical cardinality.
+//! A bound input is a loaded set (the IO contract): the engine does not repair
+//! a repeated row. Each bound row feeds the content digest and is checked
+//! against the rows already seen; a repeated complete row fails the run, so
+//! exact set statistics are never bag counts. The compiler's admission callback
+//! increments frequencies. Finish checks the engine's row count.
 use super::*;
 use cq_storage::counters::calibration::{CalibrationCell, CalibrationRow, ScalarValue};
 
@@ -19,21 +21,21 @@ impl CanonicalAccumulator {
             return Err(error("canonical admission statistics require set semantics"));
         }
         let width = spec.columns.len();
-        let mut accumulator = RelationAccumulator::new(spec, DistinctMode::Exact)?;
-        // Uniqueness is supplied by the existing canonical insertion, not by an
-        // independently maintained full-tuple set in the observer.
-        accumulator.tuples = None;
+        // Set semantics keeps the accumulator's full-tuple set: it verifies the
+        // input contract; no engine layout is consulted for uniqueness.
+        let accumulator = RelationAccumulator::new(spec, DistinctMode::Exact)?;
         Ok(Self { accumulator, row: vec![0; width], key: Vec::with_capacity(width), pending: false })
     }
 
-    /// Observe the original decoded row BEFORE canonical insertion. Duplicates
-    /// and input order remain part of typed-row-stream-v1 identity.
+    /// Observe one bound row, in bound order, before the engine stores it.
+    /// Bound order is part of typed-row-stream-v1 identity; a repeated
+    /// complete row is rejected.
     pub fn raw(&mut self, row: &dyn CalibrationRow) -> Result<()> {
         self.observe(row, false)
     }
 
-    /// Invoke exactly once inside DL-InsertNew's successful admission callback,
-    /// with the same borrowed declaration-order row passed to `raw`.
+    /// Invoke exactly once when the engine stores the row just passed to
+    /// `raw`, with the same borrowed declaration-order row.
     pub fn admitted(&mut self, row: &dyn CalibrationRow) -> Result<()> {
         self.observe(row, true)
     }
@@ -76,6 +78,12 @@ impl CanonicalAccumulator {
             self.accumulator.count_row(&self.row, &mut self.key)?;
             self.pending = false;
         } else {
+            // Input contract (IO loads a set): a repeated complete row fails.
+            if let Some(tuples) = &mut self.accumulator.tuples
+                && !tuples.insert(self.row.clone())
+            {
+                return Err(error("bound input repeats a complete row; calibration requires a loaded set"));
+            }
             self.pending = true;
         }
         Ok(())
@@ -86,8 +94,8 @@ impl CanonicalAccumulator {
 
     pub fn finish(self, canonical_rows: usize) -> Result<RelationSummary> {
         let canonical_rows = u64::try_from(canonical_rows).map_err(|_| error("canonical row count exceeds u64"))?;
-        if self.accumulator.rows != canonical_rows || self.accumulator.source_rows < canonical_rows {
-            return Err(error("admission observations disagree with the actual canonical cardinality"));
+        if self.accumulator.rows != canonical_rows || self.accumulator.source_rows != canonical_rows {
+            return Err(error("stored rows disagree with the bound input set"));
         }
         self.accumulator.summarize()
     }

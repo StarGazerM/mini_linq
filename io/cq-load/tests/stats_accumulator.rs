@@ -536,16 +536,17 @@ mod canonical {
             RelationSemantics::Set,
         );
         spec.key_sets = vec![vec!["a".into(), "b".into()]];
-        let source = [(1_i32, "x"), (1, "x"), (1, "y"), (2, "x")];
+        // A bound input is a loaded set; every bound row is stored once.
+        let source = [(1_i32, "x"), (1, "y"), (2, "x")];
         let mut canonical = CanonicalAccumulator::new(spec.clone()).unwrap();
         let mut actual_set = BTreeSet::new();
         for row in source {
             canonical.raw(&row).unwrap();
             if actual_set.insert(row) { canonical.admitted(&row).unwrap(); }
         }
-        let ordinary = accumulate(&spec, "1,x\n1,x\n1,y\n2,x\n", DistinctMode::Exact, 2);
+        let ordinary = accumulate(&spec, "1,x\n1,y\n2,x\n", DistinctMode::Exact, 2);
         assert_eq!(canonical.content_hash(), ordinary.content_hash());
-        assert_eq!(canonical.source_rows(), 4);
+        assert_eq!(canonical.source_rows(), 3);
         let observed = canonical.finish(actual_set.len()).unwrap().bind(HASH, Source::Exact, provenance()).unwrap();
         let expected = ordinary.finish(HASH, Source::Exact, provenance()).unwrap();
         assert_eq!(observed, expected);
@@ -586,5 +587,12 @@ mod canonical {
         let mut domain = make();
         assert!(domain.raw(&("not an integer",)).is_err());
         assert!(domain.finish(0).is_err());
+        // A repeated complete row is not a set: it is rejected when bound,
+        // whether or not the engine would have stored it again.
+        let mut bag = make();
+        bag.raw(&(1_i32,)).unwrap();
+        bag.admitted(&(1_i32,)).unwrap();
+        assert!(bag.raw(&(1_i32,)).is_err());
+        assert!(bag.finish(1).is_err());
     }
 }

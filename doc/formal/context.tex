@@ -174,11 +174,13 @@ different remaining values. Neither case is rejected or collapsed by a
 two-column key assumption.
 
 DOOP's file loader establishes the same full-row set boundary once.
-Datalog's existing EDB admission (\textsc{DL-InsertNew}) still constructs
-canonical and maintained indexes, extending them only on first full-row
-admission. A logical set declaration alone never certifies a raw file or
-vector's traversal. IDB delta admission and negative key-set construction
-retain their existing uniqueness guarantees.
+Datalog EDB binding then inserts that set into each of the relation's full
+layouts without a membership test; only a derived, returned or negated
+relation keeps an all-column canonical layout (\textsc{DL-Canonical}).
+A logical set declaration alone never certifies a raw file or vector's
+traversal: the loader that hands the relation to the engine does. IDB delta
+admission and negative key-set construction retain their existing
+uniqueness guarantees.
 
 \paragraph{Instances.} The following languages compile to CQ and may
 discharge facts; each names the checker that proves them.

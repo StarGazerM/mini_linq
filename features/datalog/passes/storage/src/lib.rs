@@ -1,7 +1,9 @@
 //! Choose stable storage layouts in the independently checked occurrence order.
-//! Each relation's canonical layout is the first full layout keyed by every
-//! column (a read binding all columns); otherwise the admission anti-join read
-//! adds the identity all-column-keyed layout. It is an ordinary layout. Every
+//! A derived, returned or negated relation's canonical layout is the first
+//! full layout keyed by every column (a read binding all columns); otherwise
+//! the admission anti-join read adds the identity all-column-keyed layout.
+//! Any other input relation names its first read layout and adds none: its
+//! input is a set by the IO contract. It is an ordinary layout. Every
 //! layout keyed by all columns is a payload-free hash set; the others are
 //! grouped hash maps. Every negation projection records the default `hash_set`
 //! Fx key-set provider; Storage rewrites may select another and fork copies it.
@@ -161,23 +163,37 @@ fn choose_layouts(
             bound.extend(atom.variables().map(symbol_name));
         }
     }
-    // The admission anti-join (and EDB loading) binds every column: reuse a
-    // full layout already keyed by all columns, else complete it in identity order.
+    // Admission, outputs and frozen-key scans read complete rows through an
+    // all-column key: reuse a full layout already keyed by all columns, else
+    // complete it in identity order. An input relation without those consumers
+    // names its first read layout; one with no read gets an empty-key layout.
     let canonical = source
         .strata
         .source
         .declarations
         .iter()
-        .map(|declaration| {
+        .enumerate()
+        .map(|(index, declaration)| {
             let name = symbol_name(&declaration.name);
+            let complete_key = analysis.component[index].is_some()
+                || source.strata.source.outputs.iter().any(|output| *output == declaration.name)
+                || source.variants.iter().any(|variant| {
+                    variant.query.body.iter().any(|item| {
+                        matches!(item, BodyItem::Negation(negative) if negative.atom.relation == declaration.name)
+                    })
+                });
+            let arity = declaration.arity();
             layouts
                 .iter()
-                .position(|layout| {
-                    symbol_name(&layout.relation) == name && layout.key == declaration.arity()
+                .position(|layout| symbol_name(&layout.relation) == name && layout.key == arity)
+                .or_else(|| {
+                    (!complete_key)
+                        .then(|| layouts.iter().position(|layout| symbol_name(&layout.relation) == name))
+                        .flatten()
                 })
                 .unwrap_or_else(|| {
-                    let arity = declaration.arity();
-                    layouts.push(layout(declaration, (0..arity).collect(), arity, false));
+                    let key = if complete_key { arity } else { 0 };
+                    layouts.push(layout(declaration, (0..arity).collect(), key, false));
                     layouts.len() - 1
                 })
         })

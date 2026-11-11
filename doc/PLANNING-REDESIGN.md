@@ -354,11 +354,16 @@ explicit stats request, a run ID and one execution closure. They install an
 isolated counter epoch, execute the unchanged program, and invoke the offline
 cost tool only **after** a complete return. They never adopt advice at runtime.
 
-The generated input hooks reuse the existing canonicalization traversal:
-raw decoded rows feed `typed-row-stream-v1`, including order/duplicates;
-only successful full-tuple admission updates exact frequencies. The canonical
-cardinality is independently checked at input completion. No second tuple set
-or data-file pass is introduced. Raw metadata bytes must be forwarded from
+The generated input hooks reuse the engine's input-binding traversal. A bound
+input is a loaded set (the IO contract; since 2026-11-10 the engine no longer
+repairs a repeated row for a read-only input, DL-Canonical): its rows feed
+`typed-row-stream-v1` in bound order and update exact frequencies. The
+calibration observer keeps the full-tuple set of each bound input and fails
+the run on a repeated complete row, so exact set statistics are never bag
+counts; a raw file that repeats tuples must be loaded as a set first, and its
+dataset evidence collected over that set. The stored row count is
+independently checked at input completion. No data-file pass is introduced.
+Raw metadata bytes must be forwarded from
 the same loader read; the prepared DOOP loader does this for `meta.json`.
 Unsupported scalar codecs produce an explicit calibration failure, not a
 coercion or a new query type bound. Without an active observer the codec is
@@ -835,7 +840,9 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
     5 interleaved pairs, CIs below 1.0). `seen`, `all`,
     the `Canonical` wrapper, `ShardedSeen`/`RunSeen`, `seen(runs)`,
     `RuleHole.insertion` and DL-RunAdmission are gone; Datalog uses no
-    `maintain::{Fresh, Publish}` trait.
+    `maintain::{Fresh, Publish}` trait. Since 2026-11-10 an input relation
+    that is neither returned nor negated gets no all-column layout: EDB
+    loading inserts the input set into its read layouts (DL-Canonical).
   - **Parallel tracks** (decided 2026-10-30). M0 (`e189e296` baseline plus the
     contract commit: ADM-*/IX-* in `incremental.tex`; its admission/publication
     provider traits were later deleted by track A's canonical-reference

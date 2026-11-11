@@ -537,20 +537,24 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
                 = ::core::default::Default::default();
         ));
     }
-    // EDB loading is one admission: each input row new to the canonical layout
-    // extends every full layout. Delta layouts name IDBs, which start empty.
+    // EDB loading inserts each input row into every full layout. An all-column
+    // canonical layout is built by insert-if-absent, gating the other layouts;
+    // otherwise the input set is inserted as given, with no membership layout.
+    // Delta layouts name IDBs, which start empty.
     for (index, relation) in context.relations.iter().enumerate() {
         let Some(value) = &relation.declaration.value else {
             continue;
         };
         let expression = &value.expression;
         let canonical = &context.layouts[relation.providers.canonical];
+        let complete_key = canonical.key == relation.declaration.arity();
         let inserts = context
             .layouts
             .iter()
             .enumerate()
             .filter(|&(position, layout)| {
-                layout.relation == index && position != relation.providers.canonical
+                layout.relation == index
+                    && !(complete_key && position == relation.providers.canonical)
             })
             .map(|(_, layout)| insert_layout(layout, true));
         // `Rows::rows` yields every input column borrowed.
@@ -565,25 +569,26 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
         let dispatch_import = (arity != 0).then(|| {
             quote!(use ::cq_storage::counters::calibration::ScalarCell as _;)
         });
-        let admit = admit_canonical(
-            canonical,
-            None,
-            &canonical.host,
-            &borrowed,
-            quote!(
-                ::cq_storage::calibration_select! {
-                    plain {}
-                    calibration {
-                        if let Some(row) = &#observed {
-                            ::cq_storage::counters::calibration::input_admitted(#index, row);
-                        }
-                    }
-                }
-                #(#inserts)*
-            ),
-        );
-        let input = Ident::new("__cq_input", Span::mixed_site());
+        let loaded = Ident::new("__cq_calibration_loaded_rows", Span::mixed_site());
         let canonical_host = &canonical.host;
+        let admitted = quote!(
+            ::cq_storage::calibration_select! {
+                plain {}
+                calibration {
+                    if let Some(row) = &#observed {
+                        ::cq_storage::counters::calibration::input_admitted(#index, row);
+                    }
+                    #loaded += 1;
+                }
+            }
+            #(#inserts)*
+        );
+        let admit = if complete_key {
+            admit_canonical(canonical, None, canonical_host, &borrowed, admitted)
+        } else {
+            quote!({ #admitted })
+        };
+        let input = Ident::new("__cq_input", Span::mixed_site());
         // Keep the original host alive, including temporary and grouped hosts.
         bindings.push(quote!({
             let #input = &(#expression);
@@ -592,6 +597,7 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
                 calibration {
                     ::cq_storage::counters::calibration::input_begin(#index);
                     let #observing = ::cq_storage::counters::calibration::observing();
+                    let mut #loaded = 0usize;
                 }
             }
             for row in ::cq_storage::rows::Rows::rows(#input) {
@@ -615,7 +621,7 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
             }
             ::cq_storage::calibration_select! {
                 plain {}
-                calibration { ::cq_storage::counters::calibration::input_end(#index, #canonical_host.len()); }
+                calibration { ::cq_storage::counters::calibration::input_end(#index, #loaded); }
             }
         }));
     }

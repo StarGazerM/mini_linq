@@ -116,8 +116,6 @@ fn disconnected_full_reads_are_scans_and_negative_reads_have_separate_policy() {
             ("E".into(), vec![0], 0),
             ("A".into(), vec![0], 0),
             ("F".into(), vec![0], 0),
-            ("E".into(), vec![0], 1),
-            ("F".into(), vec![0], 1),
             ("Blocked".into(), vec![0], 1),
             ("A".into(), vec![0], 1),
             ("B".into(), vec![0], 1),
@@ -143,7 +141,6 @@ fn independent_strata_and_empty_idbs_are_explicit() {
         choices(&target),
         vec![
             ("E".into(), vec![0], 0),
-            ("E".into(), vec![0], 1),
             ("A".into(), vec![0], 1),
             ("Empty".into(), vec![0], 1),
         ]
@@ -165,8 +162,6 @@ fn authored_written_order_layouts_preserve_later_delta_probes() {
             ("VarPointsTo".into(), vec![0, 1], 0),
             ("Assign".into(), vec![0, 1], 0),
             ("VarPointsTo".into(), vec![0, 1], 2),
-            ("Alloc".into(), vec![0, 1], 2),
-            ("Assign".into(), vec![0, 1], 2),
         ]
     );
     let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
@@ -197,13 +192,50 @@ fn delta_demands_cover_constants_later_scans_and_shared_mixed_keys_exactly() {
         choices(&target),
         vec![
             ("E".into(), vec![0, 1, 2], 0),
-            ("E".into(), vec![0, 1, 2], 3),
             ("R".into(), vec![0, 1, 2], 3),
         ]
     );
     let replay: Program = syn::parse2(target.to_token_stream()).unwrap();
     assert_eq!(target, replay);
     check(&source, &replay).unwrap();
+}
+#[test]
+fn inputs_get_an_all_column_layout_only_when_returned_or_negated() {
+    let (_, target) = scheduled(syn::parse_quote! {
+        struct Inputs;
+        relation Read(x:i32,y:i32) = (read);
+        relation Returned(x:i32,y:i32) = (returned);
+        relation Negated(x:i32,y:i32) = (negated);
+        relation Unread(x:i32,y:i32) = (unread);
+        relation R(x:i32,y:i32);
+        output R, Returned;
+        R(*x,*y) :- Read(x,y), Returned(y,z), !Negated(x,y);
+    });
+    assert_eq!(
+        choices(&target),
+        vec![
+            ("Read".into(), vec![0, 1], 0),
+            ("Returned".into(), vec![0, 1], 1),
+            ("Returned".into(), vec![0, 1], 2),
+            ("Negated".into(), vec![0, 1], 2),
+            ("Unread".into(), vec![0, 1], 0),
+            ("R".into(), vec![0, 1], 2),
+        ]
+    );
+    // A read-only input names its read layout; no membership layout is added.
+    let canonical: Vec<_> = target.providers.iter().map(|p| p.canonical).collect();
+    assert_eq!(canonical, [0, 2, 3, 4, 5]);
+    let changes: &[fn(&mut Program)] = &[
+        // A returned input must be enumerated through an all-column key.
+        |p| p.providers[1].canonical = 1,
+        // A canonical layout belongs to its own relation.
+        |p| p.providers[0].canonical = 4,
+    ];
+    for change in changes {
+        let mut changed = target.clone();
+        change(&mut changed);
+        assert!(contract::check(&changed).is_err());
+    }
 }
 #[test]
 fn insertion_negation_and_read_semantics_are_checked() {

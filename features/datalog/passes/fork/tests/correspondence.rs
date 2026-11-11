@@ -103,8 +103,9 @@ fn authored_holes_preserve_contracts_and_select_borrowed_hosts() {
     assert_eq!(stratum.keys.len(), 1);
     assert_eq!(stratum.keys[0].columns, [0]);
     assert_eq!(target.holes.len(), 3);
-    // Two read layouts plus identity canonical layouts for Edge, Blocked and Reach.
-    assert_eq!(context.layouts.len(), 5);
+    // Two read layouts plus identity canonical layouts for negated Blocked and
+    // derived Reach; read-only Edge names its read layout.
+    assert_eq!(context.layouts.len(), 4);
     for entry in &target.holes {
         let hole = &entry.cq;
         cq_lang_cq::contract::check(hole).unwrap();
@@ -608,8 +609,8 @@ fn later_delta_reuses_var_points_to_probe_without_moving_partial_guards() {
     let probe = &context.layouts[1];
     assert_eq!(probe.columns, [1, 0]);
     assert_eq!(probe.key, 1);
-    // Alloc and Assign add identity canonical layouts; VarPointsTo reuses its lookup.
-    assert_eq!(context.layouts.len(), 8);
+    // Read-only Alloc and Assign add no layout; VarPointsTo reuses its lookup.
+    assert_eq!(context.layouts.len(), 6);
     assert_eq!(context.delta_layouts.len(), 2);
     let delta_probe = &context.delta_layouts[0];
     assert_eq!(delta_probe.columns, [1, 0]);
@@ -739,8 +740,8 @@ fn delta_hosts_are_shared_only_by_exact_demand_and_keep_written_bodies() {
     let target = compile(&source).unwrap();
     let context = &target.context;
     assert_eq!(context.delta_layouts.len(), 4);
-    // E reuses its all-column lookup; R adds its identity canonical layout.
-    assert_eq!(context.layouts.len(), 3);
+    // Read-only E keeps its scan layout; R adds its identity canonical layout.
+    assert_eq!(context.layouts.len(), 2);
     let constant = &context.delta_layouts[0].name;
     let keyed = &context.delta_layouts[1].name;
     let zero = &context.delta_layouts[2].name;

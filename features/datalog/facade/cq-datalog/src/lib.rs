@@ -44,7 +44,7 @@
 //! one checked admission owner for its head relation. Frozen-key holes have
 //! their own canonical key-set consumer. Every CQ input is unconditionally a
 //! set of distinct complete rows. Raw IO deduplicates before this boundary;
-//! Datalog binding admission builds canonical storage before holes read it.
+//! Datalog binding inserts each input set into its relation's layouts.
 //! Round checks admission owners, host origins and layout maintenance directly
 //! from the supplied records; it never regenerates Fork's output to justify
 //! these obligations. Opaque providers must still obey their recorded
@@ -173,8 +173,9 @@
 //! cq_datalog::passes::print_rounds }; <strata program> }`.
 //! For authored Incremental text, enter [`passes::storage!`] instead.
 //! Every direct entry accepts `arguments { ... }; pipeline { ... }; <IR>`.
-//! Storage records full and delta layouts separately; each relation's canonical
-//! layout is one of its full layouts keyed by every column, and every layout
+//! Storage records full and delta layouts separately; a derived, returned or
+//! negated relation's canonical layout is one of its full layouts keyed by
+//! every column, any other input names an ordinary read layout, and every layout
 //! keyed by all columns is a payload-free `HashSet` by default.
 //! Full layouts, the canonical one included, receive per-admitted-row
 //! insertions. Each demanded delta

@@ -32,7 +32,7 @@ fn chunked_push_tasks_keep_hole_round_counter_epoch_through_join() {
         rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
             let observer = Arc::new(Recorder::default());
             TaskContext::default().run(|| calibration::with_observer(observer.clone(), || {
-                let rows: Vec<_> = (0..32_i32).chain(0..32).map(|x| (x,)).collect();
+                let rows: Vec<_> = (0..32_i32).map(|x| (x,)).collect();
                 let actual: BTreeSet<_> = cq_datalog::datalog! {
                     pipeline {
                         storage_rewrites = [cq_datalog_parallel::shard_storage];
@@ -66,7 +66,7 @@ fn chunked_push_tasks_keep_hole_round_counter_epoch_through_join() {
                 assert!(calibration::observer_failures().is_empty());
             }));
             let metrics = observer.0.lock().unwrap();
-            assert_eq!((metrics.raw, metrics.admitted), (64, 32));
+            assert_eq!((metrics.raw, metrics.admitted), (32, 32));
             assert_eq!(metrics.canonical, [(0, 32)]);
             assert_eq!(metrics.seeds, [(0, vec![(1, 32)])]);
             assert_eq!(metrics.rounds, [(0, 0, vec![(1, 32)]), (0, 1, vec![(1, 32)])]);

@@ -105,6 +105,11 @@ unsafe impl<W: Word> cuda_host::KernelSliceArg for Output<W> {
 // SAFETY: mutable access is exclusive and output is unpublished until launch.
 unsafe impl<W: Word> cuda_host::KernelSliceArgMut for Output<W> {}
 
+/// Rows given to one RCCL radix sort. RCCL accepts a single CUB Policy800
+/// portion, `2^28 - 1` rounded down to its tile size; this stays below that
+/// for every tile of at most `2^20` items.
+const SORT_PORTION_ROWS: usize = (1 << 28) - (1 << 20);
+
 /// Shared stateless full-key sorting, compaction, subtraction and merge kernels.
 /// Accepted state belongs exclusively to DeviceRadixRun.
 pub(crate) struct SetOps<'a> {
@@ -117,6 +122,14 @@ impl SetOps<'_> {
     /// Formal rule DL-SortKnownUnique: certified injective full-key permutations
     /// skip unique compaction and count readback, but never skip sorting.
     pub(crate) fn sort<W: Word>(&self, input: &Buffer<W>, rows: usize, known_unique: bool) -> Result<SortedBatch<W>> {
+        self.sort_by_portions(input, rows, known_unique, SORT_PORTION_ROWS)
+    }
+    /// RCCL's radix sort takes one portion, so a longer input is sorted
+    /// `portion` rows at a time: each later portion drops the rows already
+    /// sorted (unless certified unique) and is merged into the result.
+    pub(crate) fn sort_by_portions<W: Word>(
+        &self, input: &Buffer<W>, rows: usize, known_unique: bool, portion: usize,
+    ) -> Result<SortedBatch<W>> {
         if !self.pool.shares_memory(input.pool()) || rows > input.len() || rows > u32::MAX as usize
         {
             return Err("invalid sort input pool or live length".into());
@@ -134,6 +147,25 @@ impl SetOps<'_> {
             let rows = rows.min(1);
             return unsafe { SortedBatch::from_sorted(Buffer::zeroed(self.pool.clone(), rows)?, rows) };
         }
+        let mut sorted: Option<SortedBatch<W>> = None;
+        for start in (0..rows).step_by(portion) {
+            // Device address arithmetic; the host never dereferences it.
+            let words = input.ptr().wrapping_add(start).cast_const();
+            let mut next = self.sort_portion(words, (rows - start).min(portion), known_unique)?;
+            sorted = Some(match sorted {
+                None => next,
+                Some(previous) => {
+                    if !known_unique {
+                        next = self.subtract(&next, &[previous.view()])?;
+                    }
+                    // A portion holding only rows already sorted adds nothing.
+                    if next.is_empty() { previous } else { self.merge(&previous, &next)? }
+                }
+            });
+        }
+        Ok(sorted.expect("a nonempty input has a first portion"))
+    }
+    fn sort_portion<W: Word>(&self, input: *const W, rows: usize, known_unique: bool) -> Result<SortedBatch<W>> {
         // SAFETY: kernels initialize the returned prefix before publication.
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
@@ -171,18 +203,20 @@ impl SetOps<'_> {
         let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
         {
             // The permutation owner lives until this branch has enqueued its consumer.
-            let permutation = stable_order(
+            let permutation = stable_row_order(
                 &self.pool,
                 &self.module,
                 &launch,
-                input,
+                input.cast(),
                 rows,
-                self.params.block_threads,
                 self.active_bits,
+                W::BITS / 64,
+                W::MS_FIRST,
+                self.params.block_threads,
             )?;
             let order = permutation.get().cu_deviceptr() as *const u32;
             if let Some((count, compact)) = &mut compaction {
-                let source = input.ptr();
+                let source = input;
                 let words =
                     rccl_cub::DeviceMap::new(DeviceSliceRead::new(order), move |row: u32| unsafe {
                         *source.add(row as usize)
@@ -212,7 +246,7 @@ impl SetOps<'_> {
                 self.module.gather_sorted::<W>(
                     self.pool.stream(),
                     &self.module.prepare_gather_sorted::<W>(config)?,
-                    input.ptr(),
+                    input,
                     rows as u32,
                     order,
                     output.ptr(),
@@ -682,7 +716,7 @@ unsafe impl<W: Word> cuda_host::KernelSliceArgMut for ScalarOutput<W> {}
 fn stable_keys<W: Word>(
     pool: &Arc<Pool>,
     launch: &rccl_cub::cuda::Launch<'_, '_>,
-    input: &Buffer<W>,
+    input: *const W,
     rows: usize,
     bits: u32,
 ) -> Result<Buffer<W>> {
@@ -693,7 +727,7 @@ fn stable_keys<W: Word>(
     let mut alternate = ScalarOutput(unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? });
     unsafe {
         cuda_core::simt::memory::memcpy_dtod_async(
-            first.0.cu_deviceptr(), input.cu_deviceptr(), rows * 8,
+            first.0.cu_deviceptr(), input as u64, rows * 8,
             pool.stream().cu_stream(),
         )?;
     }

@@ -55,11 +55,14 @@ merely a set interpretation of duplicate physical rows. Raw DOOP loading uses
 in-place full-row `sort_unstable` followed by `dedup` before query timing;
 the CPU harness includes that work in `load_seconds`, not `compute_seconds`.
 CPU Datalog binding
-admission still builds canonical storage and only publishes newly admitted rows
-to other layouts before any hole executes; duplicate raw bindings therefore
-cannot reach a CQ read. This storage preparation is separate from the loader's
-sort/dedup cost. Consumer-canonical context remains checked, while optional
-host-set certificates and their discharged facts are absent.
+inserts that set into every full layout of its relation before any hole
+executes. A derived, returned or negated relation has an all-column canonical
+layout, built by insert-if-absent; any other input relation has none and its
+rows are inserted as given, so a duplicate raw binding there is a violation of
+the input contract, not something binding repairs. This storage preparation
+is separate from the loader's sort/dedup cost. Consumer-canonical context
+remains checked, while optional host-set certificates and their discharged
+facts are absent.
 GPU Datalog similarly packs/uploads EDB rows and runs full-key sort/unique
 admission against empty canonical storage before publishing hole inputs.
 Its `sorted_unique`/`unique_permutation` admitted-order records are retained:
@@ -74,7 +77,7 @@ storage preparation nor its accounting. No loader timing is claimed here.
 | Rule / inventory | TeX file:line | Opened code anchor | Premises as written | What the code checks/does | Status | Invariant maintained |
 |---|---|---|---|---|---|---|
 | DL-LayoutProtocol | `doc/formal/datalog.tex` (DL-LayoutProtocol) | `features/datalog/languages/dl-storage/src/lib.rs` (`LayoutProtocol`); `features/datalog/print/src/lib.rs` (`admit_canonical`, `full_insert`, `delta_rebuild`, `insert_layout`, `outputs`) | Provider obeys the declared grouped-map, set or bulk operations. | Storage records a typed, printable protocol equal to the layout token's declared protocol and requires set layouts to key every column; Round correspondence checks equality; both printers consume the protocol without inspecting provider names. | **exact**, conditional on provider laws | Recorded maintenance determines emitted operations |
-| DL-Canonical | `doc/formal/datalog.tex` (DL-Canonical) | `features/datalog/languages/dl-storage/src/lib.rs` (`contract::check`); `features/datalog/passes/storage/src/lib.rs` (`choose_layouts`) | `providers[R].canonical` names a full layout of `R` keyed by every column. | The contract checks relation and key; the storage pass reuses the first such read layout, else appends the identity key-set layout. | **exact** | Admission, EDB loading and outputs share one ordinary layout |
+| DL-Canonical | `doc/formal/datalog.tex` (DL-Canonical) | `features/datalog/languages/dl-storage/src/lib.rs` (`contract::check`); `features/datalog/passes/storage/src/lib.rs` (`choose_layouts`) | `providers[R].canonical` names a full layout of `R`, keyed by every column when `R` is derived, returned or negated. | The contract checks relation and, for those relations, key; the storage pass reuses the first all-column read layout, else appends the identity key-set layout. Any other input names its first read layout (an input with no read gets one empty-key layout). | **exact** | Admission, frozen-key scans and outputs share one ordinary layout; EDB loading inserts the input set into every full layout without a membership layout |
 | P-DL-PublicationOrder, implementation | `doc/formal/datalog.tex` (P-DL-PublicationOrder) | `features/datalog-parallel/print/src/publication.rs` (`operations`, `member`, `publication`, `layout_phase`) | Checked ordered operations; injective layout owners; each operation completes before the next. | Early and phase-barrier publication interpret the supplied operations, preserve split layout groups and never sort by owner; each group's exclusive tasks join before its successor. | **exact**, conditional on provider laws | Recorded publication order determines execution |
 | DL-PlanningOwner | `doc/formal/datalog.tex` (DL-PlanningOwner) | `features/datalog/passes/fork/src/lib.rs` (`check_planning_owner`); `features/datalog/languages/dl-round/src/lib.rs` (`Hole.plan`) | Authored order has a valid declared planning owner with no conflicting arguments. | Configuration records the named phase ordinal; Fork targets that index and rejects missing owners/conflicts. Round checks the owner precedes lowering. | **exact** | Authored order reaches its declared planning owner independently of spelling |
 | I5; VO ordering inputs | `doc/formal/passes.tex` (`I5`, `VO-Order`) | `features/datalog/passes/fork/src/lib.rs`; Round `Planning` ordering inputs (`features/datalog/languages/dl-round/src/planning.rs`, DL-OrderingInputs); `PlanOptions` `ordering(...)`; VO `Valuation.ordering` (VO-OrderingInputs) | Recorded seed/delta identity, WrittenOrder/DeltaFirst driver, original occurrence permutation and optional per-stratum shared demand; CQ has no ordering syntax. | Fork carries the facts unchanged into the planning invocation; demand must name existing Storage key prefixes and has no ranking effect. | exact transport, staged ownership | Step 1 deliberately retains Incremental ordering and Storage prefix layouts; CQ-only ordering and VO-derived Storage are step 1b. |
