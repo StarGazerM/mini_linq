@@ -13,6 +13,11 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Fix: CPU TPC-H `aggregate!` kernels (Q06 default/par) failed to build since
+  `fadeecc5` (`expected struct`): the evidence adapter parsed a core struct
+  header before aggregate/correlated expansion. Evidence now attaches as the
+  final surface pass (`cq_workload_passes::tpch_evidence`), and the real Q06
+  dispatch is compiled by the default `catalog` test.
 - P6 C resident FOR-native tile realization: independently checked positional
   scan spines ending in order-insensitive keyless grid folds use existing
   1024-row vectors with 256 threads and four transposed positions per thread.
