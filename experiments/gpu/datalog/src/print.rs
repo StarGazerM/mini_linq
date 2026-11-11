@@ -803,15 +803,49 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let canonical = &context.layouts[relation.providers.canonical];
         let host = &canonical.host;
         let at = &device.relations[output.relation].output_permutation;
-        let fields = relation.declaration.columns.iter().zip(at).enumerate().map(|(column, (declared, position))| {
+        if let Some(domains) = &domains {
+            let word = &device.layouts[relation.providers.canonical].word;
+            let mut columns = Vec::new();
+            let mut values = Vec::new();
+            for (column, (declared, position)) in relation.declaration.columns.iter().zip(at).enumerate() {
+                let name = format_ident!("__cq_gpu_output_column_{column}");
+                let ty = &declared.ty;
+                let decoded = match symbols.codec(declared.logical_type_id) {
+                    Some(codec) => {
+                        let id = domains.columns[output.relation][column];
+                        // DECODE P: final DOOP output gathers each component inverse in one column batch.
+                        quote!(__cq_gpu_domains.decode_packed_column::<#ty, #codec, #word>(
+                            #id, #host.packing(), #position, &words)?)
+                    }
+                    None => quote!({
+                        let field = #host.packing().packed_fields().nth(#position)
+                            .expect("checked output field");
+                        words.iter().map(|word| {
+                            let code = <#word as ::gpu_datalog_runtime::Word>::extract(
+                                word, field.shift, field.bits) as i128;
+                            let value = if field.signed != 0 {
+                                code - (1i128 << (field.bits - 1))
+                            } else { code };
+                            value as #ty
+                        }).collect::<::std::vec::Vec<#ty>>()
+                    }),
+                };
+                columns.push(quote!(let mut #name = (#decoded).into_iter();));
+                values.push(quote!(#name.next().expect("checked bulk output column length")));
+            }
+            let runner = program_runner();
+            return quote!(#runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
+                let words = #host.to_host()?;
+                let rows = words.len();
+                #(#columns)*
+                ::std::mem::drop(words);
+                Ok((0..rows).map(|_| (#(#values,)*))
+                    .collect::<::std::vec::Vec<_>>().into_iter())
+            })?);
+        }
+        let fields = relation.declaration.columns.iter().zip(at).map(|(declared, position)| {
             let ty = &declared.ty;
             match symbols.codec(declared.logical_type_id) {
-                Some(codec) if domains.is_some() => {
-                    let id = domains.as_ref().unwrap().columns[output.relation][column];
-                    // DECODE P: final DOOP output uses its field's recorded component inverse.
-                    quote!(__cq_gpu_domains.decode::<#ty, #codec>(#id, row[#position] as u32)
-                        .expect("invalid dense symbol code in final output"))
-                }
                 // DECODE P: generated SymbolCodec inverse resolves final datalog host output fields.
                 Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(row[#position] as u32)),
                 // DECODE P: generated numeric carrier inversion constructs final host output fields.

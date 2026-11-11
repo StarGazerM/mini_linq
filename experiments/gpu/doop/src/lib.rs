@@ -9,10 +9,15 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
         value.code()
     }
 
-    // DECODE P: datalog output printer invokes DoopSymbols only for final host answer symbols.
+    // DECODE ?: scalar DOOP handle inversion requires an explicit logical consumer.
     fn decode(code: u32) -> doop_shared::IStr {
-        // DECODE P: process-global symbol code inversion restores the final DOOP host answer handle.
+        // DECODE ?: global handle restoration inherits the scalar codec caller boundary.
         doop_shared::IStr::from_code(code)
+    }
+
+    fn decode_many(codes: Vec<u32>) -> Vec<doop_shared::IStr> {
+        // DECODE P: bulk DOOP output restores handles using one dictionary bounds snapshot.
+        doop_shared::IStr::from_codes(codes)
     }
 }
 

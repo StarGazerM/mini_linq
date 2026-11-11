@@ -33,6 +33,17 @@ impl IStr {
         assert!(exists, "symbol code {code} has never been interned");
         Self(code)
     }
+
+    /// Restore a column of handles with one dictionary bounds snapshot.
+    /// Codes must already be interned when this batch begins. The dictionary
+    /// is append-only; no string lookup or lock is needed for individual rows.
+    pub fn from_codes(codes: Vec<u32>) -> Vec<Self> {
+        let bound = interner().lock().expect("string interner poisoned").strings.len();
+        codes.into_iter().map(|code| {
+            assert!((code as usize) < bound, "symbol code {code} has never been interned");
+            Self(code)
+        }).collect()
+    }
 }
 
 /// IStr's Ord is code order, so its code is a total injective
@@ -90,6 +101,20 @@ mod tests {
         // DECODE R: this diagnostic format! reads resolved text to compute a new descriptor, not to reorganize unchanged codes.
         assert_eq!(sym(&format!("{}({})", res(id), "int")), sym("void(int)"));
         assert_eq!(IStr::from_code(id.code()), id);
+    }
+
+    #[test]
+    fn bulk_handles_preserve_order_and_reuse_the_code_column() {
+        let first = sym("bulk first");
+        let second = sym("bulk second");
+        let codes = vec![second.code(), first.code(), second.code()];
+        let pointer = codes.as_ptr();
+        let restored = IStr::from_codes(codes);
+        assert_eq!(restored, [second, first, second]);
+        assert_eq!(restored.as_ptr().cast::<u32>(), pointer);
+        assert!(IStr::from_codes(Vec::new()).is_empty());
+        assert!(std::panic::catch_unwind(|| IStr::from_codes(vec![u32::MAX])).is_err());
+        assert_eq!(IStr::from_codes(vec![first.code()]), [first]);
     }
 
     #[test]
