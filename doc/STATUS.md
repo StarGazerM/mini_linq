@@ -8,6 +8,24 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Batch gates (2026-11-11, P5 scan-contract salvage `227310ce` vs `61b73315`):**
+three single-owner commits (Structures `a25bc3e8`, Sequence `f84b77e7`,
+workload/runtime `227310ce`), independent review "merge".
+- Expanded gate: only `tpch_q06` changes generated code (32 hunks: dead
+  summary checks removed, explicit scan geometry, `row-par` route).
+- `cargo xtask compile-tpch`: all 29 CPU kernels build.
+- `tools/gpu_gate.sh` **PASS** (838 s; H05 SF10 8.392 ms; Cassandra 26/26).
+- Q06 same-route query time vs baseline (9 pairs,
+  [evidence](../experiments/storage-bench/results/p5-salvage-isolation.json)):
+  Bytes serial 1.039 [0.982, 1.097]; Bytes Tasks-24 0.999; row serial 1.002.
+  Plain serial is 1.058 at default link order and 0.995 [0.969, 1.013] with
+  the same source relinked, so it is code placement.
+- No route is promoted: `default`/`par` stay row-backed.
+- The per-batch CPU TPC-H baseline is pending.
+
+Also landed (`0464ff89`): the Q06 `aggregate!` build failure introduced by
+`fadeecc5` is fixed, and the real Q06 dispatch is in the default `catalog` test.
+
 **Per-batch GPU baseline (2026-11-10, P6 C GPU-first `2184de85` vs
 `ef6ca71a`):** [raw results](../experiments/gpu/compare/p6c-2026-11-10.results.json),
 STORAGE §12.7 and the P6 C tile paragraph. Only `experiments/gpu` and docs
