@@ -431,6 +431,13 @@ impl<T: OrdinalDecode, F: Family> ScanColumn<T, F> {
                 "ordered scan predicate requires an ordered domain"
             );
         }
+        // Validate even empty/dead masks at the typed boundary. Authored None
+        // specializes away here instead of branching in every shared kernel call.
+        match prune {
+            PruneMode::None => {}
+            PruneMode::BlockMinMax => assert!(self.summary.is_some(), "declared block summaries"),
+            PruneMode::VectorMinMax => assert!(self.vector_summary.is_some(), "declared vector summaries"),
+        }
         intersect_vector(
             &self.headers,
             self.payload(),
@@ -792,17 +799,17 @@ fn intersect_vector(
     prune: PruneMode,
     test: TestMode,
 ) -> Classification {
-    let summaries = match prune {
-        PruneMode::None => None,
-        PruneMode::BlockMinMax => Some((summaries.expect("declared block summaries"), block_rows.get())),
-        PruneMode::VectorMinMax => Some((vector_summaries.expect("declared vector summaries"), VECTOR_ROWS)),
-    };
     if out.is_empty() || !out.iter().any(|&live| live != 0) {
         return Classification::Disqualified;
     }
     let block = start / block_rows.get();
-    if let Some((summaries, rows)) = summaries {
-        match predicate.classify(summaries[start / rows]) {
+    if prune != PruneMode::None {
+        let bounds = match prune {
+            PruneMode::None => unreachable!(),
+            PruneMode::BlockMinMax => summaries.expect("declared block summaries")[block],
+            PruneMode::VectorMinMax => vector_summaries.expect("declared vector summaries")[start / VECTOR_ROWS],
+        };
+        match predicate.classify(bounds) {
             Classification::Disqualified => {
                 out.fill(0);
                 return Classification::Disqualified;

@@ -18,6 +18,22 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   header before aggregate/correlated expansion. Evidence now attaches as the
   final surface pass (`cq_workload_passes::tpch_evidence`), and the real Q06
   dispatch is compiled by the default `catalog` test.
+
+- P5 independent scan hardening, without the parked join machinery:
+  encoded predicates reject column-free leaves, Fold Sum refuses encoded base
+  reads, summary levels are explicit, and execution consumes source-owned
+  vector geometry. Comparator-row capability replaces provider-name checks
+  at existing blocked canonical boundaries. Q06 adds an explicit `row-par`
+  control; `par` remains row-backed and `blocks-bytes-par` remains the candidate.
+  The original `p5-joins-q06.json` is retained unchanged as historical evidence,
+  not a current-main performance claim.
+  Initial serial timing regressions were isolated with instruction-level and
+  same-source linker controls. Summary capability checks now stay at the typed
+  boundary; `None` adds no shared-kernel branches. Final Bytes same-route ratios
+  include parity (serial 1.039 [0.982, 1.097], Tasks-24 0.999 [0.862, 1.155]);
+  Plain's unchanged-source shuffle control is 0.995 [0.969, 1.013], identifying
+  candidate placement sensitivity. No dead checks or linker tuning are retained.
+
 - P6 C resident FOR-native tile realization: independently checked positional
   scan spines ending in order-insensitive keyless grid folds use existing
   1024-row vectors with 256 threads and four transposed positions per thread.

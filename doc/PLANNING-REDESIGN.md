@@ -1125,6 +1125,26 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   `par` configuration still uses the row host; promoting Bytes into that route
   is not merged. Join/index integration and H12/H14/H19 authorship remain
   follow-on work, subject to exactness, paired measurements and layout controls.
+  **Independent salvage (2026-11-11):** preserve the parked
+  `p5-joins-q06.json` unchanged; its Tasks-24 Bytes/row ratio
+  **0.851 [0.772, 0.939]** is historical, not a current-main result.
+  Reimplement only column-bearing predicate checks, encoded-base Fold Sum
+  refusal, exact block/vector summary capabilities, source-owned vector
+  geometry, and comparator-row authorization at existing canonical consumers.
+  No join bindings, retained payloads or deleted uniqueness policy are ported.
+  Q06's explicit `row-par` control is available; `par` is still row-backed.
+  **Isolation completed:** the initial serial Bytes same-route slowdown led
+  to typed-boundary summary validation, preserving empty-mask refusal without
+  additional shared-kernel branches. Nine-pair final Bytes ratios versus the
+  fix-only baseline are **1.039 [0.982, 1.097]** serial and
+  **0.999 [0.862, 1.155]** Tasks-24. Plain's default-link ratio
+  1.058 [1.042, 1.074] becomes **0.995 [0.969, 1.013]** when the unchanged
+  candidate is relinked with fixed shuffle seed 503; instruction-level analysis
+  confirms placement sensitivity, not added Plain boundary work.
+  Fresh final Bytes/row is **1.170 [1.132, 1.212]** serial and
+  **0.762 [0.701, 0.859]** Tasks-24, with greater load cost. No route is promoted.
+  STORAGE §12.4 and `p5-salvage-isolation.json` retain all controls, exactness
+  (404 timed answers, 2,020 warmups), source identities and bounded gates.
 - **P6 GPU storage** (compression for transfer/capacity first; resident
   scan codecs only where measured). Slice A adds an opt-in shared S1
   Plain/Bytes format and recorded read contracts, not automatic selection.

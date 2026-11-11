@@ -17,6 +17,7 @@ pub const CONFIGS: &[&str] = &[
     "built_hash",
     "built_radix",
     "par",
+    "row-par",
     "no-reduce",
     "generic-smallest",
     "staged",
@@ -73,6 +74,17 @@ enum LineitemInput {
     Bytes(BytesTable),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputLayout { Rows, Plain, Bytes }
+
+fn input_layout(config: &str) -> InputLayout {
+    match config {
+        "blocks-plain" | "blocks-plain-par" => InputLayout::Plain,
+        "blocks-bytes" | "blocks-bytes-par" => InputLayout::Bytes,
+        _ => InputLayout::Rows,
+    }
+}
+
 impl LineitemInput {
     fn as_slice(&self) -> &[LineitemRow] {
         let Self::Rows(rows) = self else {
@@ -123,16 +135,16 @@ fn scan_domains() -> [cq_storage::scan::format::Domain; 6] {
 pub fn load(root: &Path, config: &str) -> Result<Data, Box<dyn Error>> {
     let path = root.join("lineitem.parquet");
     let blocks = cq_storage::scan::BlockRows::new(1024).unwrap();
-    let lineitem = match config {
-        "blocks-plain" | "blocks-plain-par" => LineitemInput::Plain(
+    let lineitem = match input_layout(config) {
+        InputLayout::Plain => LineitemInput::Plain(
             PlainLineitemLoader::parquet(path, Default::default(), blocks, false)?
                 .bind_domains(&scan_domains())?,
         ),
-        "blocks-bytes" | "blocks-bytes-par" => LineitemInput::Bytes(
+        InputLayout::Bytes => LineitemInput::Bytes(
             BytesLineitemLoader::parquet(path, Default::default(), blocks, false)?
                 .bind_domains(&scan_domains())?,
         ),
-        _ => LineitemInput::Rows(LineitemLoader::parquet(path, Default::default())?),
+        InputLayout::Rows => LineitemInput::Rows(LineitemLoader::parquet(path, Default::default())?),
     };
     Ok(Data { lineitem })
 }
@@ -204,7 +216,7 @@ crate::tpch_runtime::configuration!(staged, $,
     query_body!();
 });
 
-// Authored scan representations; ordinary configurations retain their row host.
+// Authored scan candidates; default, par and explicit row-par retain their row host.
 crate::tpch_runtime::configuration!(blocks_plain, $, {
     select = ::mini_linq::passes::select(blocks(lineitem {
         block_rows 1024; summary none;
@@ -247,7 +259,7 @@ pub fn run(data: &Data, config: &str) -> Vec<Answer> {
         "radix_retained" => radix_retained::execute(data),
         "built_hash" => built_hash::execute(data),
         "built_radix" => built_radix::execute(data),
-        "par" => par::execute(data),
+        "par" | "row-par" => par::execute(data),
         "staged" => staged::execute(data),
         "no-reduce" => no_reduce::execute(data),
         "generic-smallest" => generic_smallest::execute(data),
@@ -292,28 +304,36 @@ mod tests {
             builder.extend(rows.iter().map(value));
             builder.finish()
         }
-        let lineitem = match config {
-            "blocks-plain" | "blocks-plain-par" => LineitemInput::Plain(
+        let lineitem = match input_layout(config) {
+            InputLayout::Plain => LineitemInput::Plain(
                 cq_storage::scan::ScanTable::new((
                     column(rows, |r| r.0), column(rows, |r| r.1),
                     column(rows, |r| r.2), column(rows, |r| r.3),
                     column(rows, |r| r.4), column(rows, |r| r.5),
                 )).into_set().bind_domains(&scan_domains()).unwrap(),
             ),
-            "blocks-bytes" | "blocks-bytes-par" => LineitemInput::Bytes(
+            InputLayout::Bytes => LineitemInput::Bytes(
                 cq_storage::scan::ScanTable::new((
                     column(rows, |r| r.0), column(rows, |r| r.1),
                     column(rows, |r| r.2), column(rows, |r| r.3),
                     column(rows, |r| r.4), column(rows, |r| r.5),
                 )).into_set().bind_domains(&scan_domains()).unwrap(),
             ),
-            _ => {
+            InputLayout::Rows => {
                 let mut rows = rows.to_vec();
                 cq_load::canonicalize(&mut rows);
                 LineitemInput::Rows(rows)
             }
         };
         Data { lineitem }
+    }
+
+    #[test]
+    fn parallel_control_keeps_row_loading_and_bytes_candidate_explicit() {
+        for config in ["par", "row-par"] {
+            assert_eq!(input_layout(config), InputLayout::Rows);
+        }
+        assert_eq!(input_layout("blocks-bytes-par"), InputLayout::Bytes);
     }
 
     #[test]
@@ -361,7 +381,7 @@ mod tests {
             ))
             .collect();
         rows.push(rows[0]);
-        for config in ["default", "par", "blocks-plain", "blocks-bytes",
+        for config in ["default", "par", "row-par", "blocks-plain", "blocks-bytes",
             "blocks-plain-par", "blocks-bytes-par"] {
             assert_eq!(run(&input(&rows, config), config), [Some(2057 * 50_000)]);
         }

@@ -1213,8 +1213,20 @@ premise is involved. Captured and computed values retain their existing
 ownership. Outer folds demanding encoded base values remain a checked
 unsupported ownership boundary of this initial checkpoint.
 
+The independent P5 salvage hardens this boundary without adding joins.
+Every encoded predicate leaf must name a declared column's translation domain;
+closed-only predicates are rejected rather than interpreted by emission.
+Block and vector min/max are distinct recorded capabilities: runtime accesses
+only the selected level and refuses a missing buffer, even if the other level
+exists. Structures owns the provider's vector extent; Sequence scan references,
+task alignment and emitted scan/filter calls consume it without duplicate
+tile/scratch declarations. Existing blocked canonical boundaries require
+`ComparatorRows`, not a provider token spelling.
+Authored `summary minmax` selects block summaries; `summary vector_minmax`
+selects vector summaries. `summary none` accesses neither buffer.
+
 Only Q06 has authored `blocks-plain`, `blocks-bytes`, and corresponding `-par`
-routes at this checkpoint; existing default/par routes remain row hosts.
+routes at this checkpoint; default, `par`, and explicit `row-par` remain row hosts.
 Its quantity/discount/date predicates are all `where`; the retail H06 opaque
 numeric guards are not rewritten. Initial admission rejects join/index
 boundaries, grouping directly on encoded base fields, restricted source
@@ -1255,6 +1267,86 @@ The legacy scan counters do not instrument the new bounded protocol; their
 zero row-test/block counts are not evidence of zero work or DRAM traffic.
 Raw samples, page faults, controls, exactness/counter gates, source/binary
 identities and command times: `experiments/storage-bench/results/p5-s3-q06.json`.
+
+**Salvage branch measurement (2026-11-11; not merge acceptance).** Baseline
+`1270d38b` fixes main's evidence-before-aggregate dispatch bug; candidate
+`0f3a9b5a` adds only the salvage. Five interleaved fresh-process pairs per
+same-route comparison, five exact warmups and one exact resident sample per
+process, CPU-exclusive lock per process, Tasks-24. Loading is excluded from
+query time. Ratios below are candidate/baseline, **not Bytes/row**.
+
+| Route | Resident ms baseline → candidate | Ratio [paired bootstrap 95% CI] | Load ms baseline → candidate |
+|---|---|---|---|
+| Row serial | 22.774 → 23.353 | 1.023 [1.020, 1.025] | 564.295 → 560.696 |
+| Plain serial | 38.202 → 38.591 | 1.006 [0.990, 1.020] | 669.517 → 659.787 |
+| Bytes serial | 24.568 → 29.113 | **1.175 [1.073, 1.287]** | 638.407 → 630.967 |
+| Row Tasks-24 | 10.086 → 9.863 | 1.000 [0.895, 1.078] | 562.906 → 566.294 |
+| Plain Tasks-24 | 11.073 → 11.255 | 0.973 [0.939, 1.006] | 668.975 → 661.610 |
+| Bytes Tasks-24 | 7.679 → 10.151 | 1.213 [0.999, 1.455] | 654.116 → 648.556 |
+
+All 60 timed answers and 300 warmups were exact. This first checkpoint blocked
+merge while the same-route serial Bytes slowdown was unresolved. The original
+samples and incomplete-at-that-time gate accounting remain unchanged in
+`experiments/storage-bench/results/p5-salvage-q06.json`; the investigation below
+supersedes that checkpoint's unresolved status.
+
+**Isolation and final hardening (2026-11-11).** Capability validation moved to
+the typed `ScanColumn` boundary, retaining missing-summary refusal even for
+empty/dead masks. Authored `None` specializes away there. The private kernel
+again checks empty/live lanes before summary dispatch. No dead generated checks
+or linker flags were restored. Measured revision `ad5aa38a` rebases to
+`43857cd5` on main `61b73315`; baseline `1270d38b` is the source-equivalent
+evidence fix now on main as `0464ff89`.
+
+`nm -S`, `rustfilt` and bounded-symbol `objdump -d --no-show-raw-insn` establish
+that all ten reachable row functions and fourteen of fifteen reachable
+Plain/Bytes functions have identical normalized instructions. The sole changed
+function, `cq_storage::scan::intersect_vector`, has the same Q06 `None` branches
+and hot loops, with one fewer entry register move; non-None exact summary paths
+intentionally differ. `ScanPositions::next`, the typed boundary and SIMD mask
+loops are unchanged: no runtime vector geometry, extra Plain check or lost
+vectorization survives compilation.
+
+Nine interleaved process pairs per final same-route comparison give:
+
+| Route | Candidate / baseline resident ratio [95% CI] |
+|---|---|
+| Row serial | 1.00244 [1.00010, 1.00498] |
+| Plain serial | 1.058 [1.042, 1.074] |
+| Bytes serial | 1.039 [0.982, 1.097] |
+| Row Tasks-24 | 0.952 [0.886, 1.034] |
+| Plain Tasks-24 | 0.963 [0.876, 1.061] |
+| Bytes Tasks-24 | 0.999 [0.862, 1.155] |
+
+The row interval strictly excludes one, despite identical code; its 0.24%
+difference is smaller than the baseline row linker control
+0.994 [0.974, 1.013]. Baseline Plain controls alone do **not** explain its
+5.8% gap: sort-section gives 1.008 [0.994, 1.021], shuffle seed 503 gives
+1.012 [0.988, 1.032]. Relinking the **unchanged candidate** resolves the open
+question: Plain is 1.024 [1.016, 1.032] with sort-section and
+**0.995 [0.969, 1.013]** with shuffle 503. Thus the original candidate placement,
+not added boundary work, explains the observed Plain regression. These controls
+are evidence, not production tuning. Serial Bytes is likewise placement-sensitive
+at roughly 5–9%; its baseline linker control is 1.032 [0.989, 1.079].
+
+Five fresh-process pairs per cross-layout comparison on the final candidate:
+
+| Comparison | Resident ratio [95% CI] | Row → candidate query ms | Row → candidate load ms |
+|---|---|---|---|
+| Plain / row serial | 1.762 [1.728, 1.789] | 22.681 → 40.104 | 562.788 → 669.212 |
+| Bytes / row serial | 1.170 [1.132, 1.212] | 22.815 → 27.024 | 560.497 → 652.859 |
+| Plain / row Tasks-24 | 1.058 [0.963, 1.162] | 10.058 → 11.727 | 564.856 → 672.026 |
+| Bytes / row Tasks-24 | 0.762 [0.701, 0.859] | 10.510 → 7.753 | 562.785 → 653.654 |
+
+Every follow-up process checks five warmups and one resident sample: 404 timed
+answers and 2,020 warmups are exact. Each process holds the CPU-exclusive lock
+only for that sample process; load and answer comparison are outside query time.
+Paired bootstrap resamples processes, not warmups. Plain is not a serial win;
+Bytes wins resident Tasks-24 but has greater loading cost. **Keep default/par
+row-backed; promotion remains Main's decision.** Complete source/binary
+identities, item-reversion controls, assembly extraction/diffs, load times and
+bounded correctness/quick/API/GPU host-compile gates:
+`experiments/storage-bench/results/p5-salvage-isolation.json`.
 
 S1 microbenchmark (`experiments/storage-bench/scan_bench.py`, raw
 `results/p5-s1-scan-vectorized.json`): 4,194,304 and 67,108,864 u64 values,
