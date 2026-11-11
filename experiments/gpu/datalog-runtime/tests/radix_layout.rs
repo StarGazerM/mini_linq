@@ -1,6 +1,8 @@
 //! Runtime laws of the typed radix view (P4-GPU design §4): formal rules
 //! GPU-RadixLayout, GPU-RadixCursor and GPU-RadixLaneRead against a stable
 //! occurrence oracle. Fixed seeds throughout.
+//! Runtime key fields are at most 32 bits; physical multiword carriers and
+//! native 64-bit payload lanes are exercised independently of key widths.
 use std::{collections::BTreeMap, sync::Arc};
 
 use gpu_datalog_runtime::{
@@ -12,7 +14,7 @@ use gpu_device_columns::{Buffer, Pool};
 
 type Result<T = (), E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 type Items = (Buffer<u64>, Buffer<i32>);
-type Layout = RadixLayout<(i64,), (u64, i32), u64, u32, Items>;
+type Layout = RadixLayout<(i32,), (u64, i32), u64, u32, Items>;
 
 struct Random(u64);
 
@@ -39,11 +41,11 @@ fn pack<W: Word>(packing: &Packing, key: &[i128]) -> W {
     packing.pack(key).expect("key fits its packing")
 }
 
-/// Publish `(key, (serial, tag))` rows with `i64` keys.
+/// Publish `(key, (serial, tag))` rows with `i32` keys and `u64` payloads.
 fn publish_rows(
     run: &mut DeviceRadixRun<u64, u32, Items>,
     packing: &Packing,
-    rows: &[(i64, (u64, i32))],
+    rows: &[(i32, (u64, i32))],
 ) -> Result {
     let pool = run.pool().clone();
     let keys: Vec<u64> = rows
@@ -106,8 +108,8 @@ fn expand<W: Word, O: OffsetWord, C: DeviceItemColumns, T: ItemLane>(
 }
 
 /// Stable occurrence oracle grouped by key, in publication order.
-fn groups(rows: &[(i64, (u64, i32))]) -> BTreeMap<i64, Vec<(u64, i32)>> {
-    let mut groups = BTreeMap::<i64, Vec<(u64, i32)>>::new();
+fn groups(rows: &[(i32, (u64, i32))]) -> BTreeMap<i32, Vec<(u64, i32)>> {
+    let mut groups = BTreeMap::<i32, Vec<(u64, i32)>>::new();
     for &(key, item) in rows {
         groups.entry(key).or_default().push(item);
     }
@@ -115,8 +117,8 @@ fn groups(rows: &[(i64, (u64, i32))]) -> BTreeMap<i64, Vec<(u64, i32)>> {
 }
 
 /// Every distinct key and its absent neighbours, plus the full-domain extremes.
-fn probe_keys(groups: &BTreeMap<i64, Vec<(u64, i32)>>) -> Vec<i64> {
-    let mut probes = vec![i64::MIN, i64::MAX];
+fn probe_keys(groups: &BTreeMap<i32, Vec<(u64, i32)>>) -> Vec<i32> {
+    let mut probes = vec![i32::MIN, i32::MAX];
     for &key in groups.keys() {
         probes.extend([key, key.wrapping_sub(1), key.wrapping_add(1)]);
     }
@@ -131,9 +133,9 @@ fn probe_keys(groups: &BTreeMap<i64, Vec<(u64, i32)>>) -> Vec<i64> {
 fn check_layout(
     layout: &Layout,
     pool: &Arc<Pool>,
-    rows: &[(i64, (u64, i32))],
+    rows: &[(i32, (u64, i32))],
     run_items: &[usize],
-) -> Result<Vec<(i64, (u64, i32))>> {
+) -> Result<Vec<(i32, (u64, i32))>> {
     let expected = groups(rows);
     let probes = probe_keys(&expected);
     let packed: Vec<u64> = probes
@@ -185,9 +187,9 @@ fn layout_factorizes_and_preserves_occurrence_order_across_runs() -> Result {
             .into_iter()
             .enumerate()
         {
-            let batch: Vec<(i64, (u64, i32))> = (0..size)
+            let batch: Vec<(i32, (u64, i32))> = (0..size)
                 .map(|i| {
-                    let key = (random.next() % 97) as i64 - 48;
+                    let key = (random.next() % 97) as i32 - 48;
                     (key, ((round * 1000 + i) as u64, -(i as i32) ^ round as i32))
                 })
                 .collect();
@@ -257,7 +259,7 @@ fn snapshot_publication_constructs_without_host_readback() -> Result {
     assert!(!layout.count_ptr().is_null());
     assert_eq!(layout.view().count, layout.count_ptr());
     assert_eq!(layout.view().field_count, 1);
-    assert_eq!(layout.view().bits, 64);
+    assert_eq!(layout.view().bits, 32);
     assert_eq!(layout.logical_count()?, 3);
     Ok(())
 }
@@ -267,8 +269,8 @@ fn republish_reuses_descriptors_and_snapshots_survive_publish_and_release() -> R
     let pool = Pool::new(0, 0, 0)?;
     let packing = Layout::derive_packing()?;
     let mut run = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(2, 6))?;
-    let first: Vec<(i64, (u64, i32))> = (0..400)
-        .map(|i| ((i % 37) as i64 - 18, (i as u64, i as i32)))
+    let first: Vec<(i32, (u64, i32))> = (0..400)
+        .map(|i| ((i % 37) as i32 - 18, (i as u64, i as i32)))
         .collect();
     publish_rows(&mut run, &packing, &first)?;
     let layout = Layout::publish(&run, packing.clone())?;
@@ -299,8 +301,8 @@ fn republish_reuses_descriptors_and_snapshots_survive_publish_and_release() -> R
     let mut rows = first.clone();
     let mut successor = layout.clone();
     for round in 1..8_u64 {
-        let batch: Vec<(i64, (u64, i32))> = (0..round * 50)
-            .map(|i| ((i % 11) as i64, (round * 10_000 + i, round as i32)))
+        let batch: Vec<(i32, (u64, i32))> = (0..round * 50)
+            .map(|i| ((i % 11) as i32, (round * 10_000 + i, round as i32)))
             .collect();
         publish_rows(&mut run, &packing, &batch)?;
         rows.extend(batch);
@@ -346,7 +348,7 @@ fn zero_publication_reads_exact_empty_results() -> Result {
     assert!(layout.is_empty());
     assert_eq!(layout.run_count(), 0);
     assert_eq!(layout.logical_count()?, 0);
-    let probes: Vec<u64> = [i64::MIN, 0, i64::MAX]
+    let probes: Vec<u64> = [i32::MIN, 0, i32::MAX]
         .iter()
         .map(|&key| pack(&packing, &[key as i128]))
         .collect();
@@ -384,10 +386,10 @@ fn lane_reads_follow_fork_and_join_readiness() -> Result {
     let mut random = Random(77);
     let mut rows = Vec::new();
     for round in 0..4_u64 {
-        let batch: Vec<(i64, (u64, i32))> = (0..300)
+        let batch: Vec<(i32, (u64, i32))> = (0..300)
             .map(|i| {
                 (
-                    (random.next() % 50) as i64,
+                    (random.next() % 50) as i32,
                     (round * 1000 + i, round as i32),
                 )
             })
@@ -414,8 +416,8 @@ fn lane_reads_follow_fork_and_join_readiness() -> Result {
     );
 
     // Lane-produced keys become build input on main only after join readiness.
-    let delta: Vec<(i64, (u64, i32))> = (0..100)
-        .map(|i| ((i % 7) as i64, (90_000 + i, 9)))
+    let delta: Vec<(i32, (u64, i32))> = (0..100)
+        .map(|i| ((i % 7) as i32, (90_000 + i, 9)))
         .collect();
     let keys = Buffer::from_host_async(
         lane.clone(),
@@ -500,11 +502,13 @@ fn empty_keys_and_all_equal_keys_form_one_group() -> Result {
 
 #[test]
 fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
-    type Wide = RadixLayout<(i64, u64), (u8,), u128, u64, Buffer<u8>>;
+    type Wide = RadixLayout<(i32, u32, u32, u32), (u8,), u128, u64, Buffer<u8>>;
     let pool = Pool::new(0, 0, 0)?;
     let packing = Wide::derive_packing()?;
-    let firsts = [i64::MIN, -1, 0, 1, i64::MAX];
-    let seconds = [0, 1, u64::MAX - 1, u64::MAX];
+    let firsts = [i32::MIN, -1, 0, 1, i32::MAX];
+    let seconds = [0, 1, u32::MAX - 1, u32::MAX];
+    // Separate varying fields by two zero fields so both physical lanes
+    // independently distinguish keys, despite the 32-bit per-field limit.
     let mut rows = Vec::new();
     for (index, &a) in firsts.iter().enumerate() {
         for (inner, &b) in seconds.iter().enumerate() {
@@ -518,7 +522,10 @@ fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
     for chunk in rows.chunks(5) {
         let keys: Vec<u128> = chunk
             .iter()
-            .map(|row| pack(&packing, &[row.0 .0 as i128, row.0 .1 as i128]))
+            .map(|row| {
+                let (a, b) = row.0;
+                pack(&packing, &[a as i128, 0, 0, b as i128])
+            })
             .collect();
         let items: Vec<u8> = chunk.iter().map(|row| row.1).collect();
         run.publish(
@@ -537,7 +544,7 @@ fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
     }
     let packed: Vec<u128> = probes
         .iter()
-        .map(|&(a, b)| pack(&packing, &[a as i128, b as i128]))
+        .map(|&(a, b)| pack(&packing, &[a as i128, 0, 0, b as i128]))
         .collect();
     let matches = layout.probe_matches(
         &pool,
@@ -554,7 +561,7 @@ fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
         assert_eq!(items[index], expected, "key {key:?}");
     }
     // Prefix intervals: present first columns count their groups, absent ones none.
-    let prefixes = [i64::MIN, -1, 0, 1, i64::MAX, 2, -2];
+    let prefixes = [i32::MIN, -1, 0, 1, i32::MAX, 2, -2];
     let (mut low, mut high) = (Vec::new(), Vec::new());
     for &a in &prefixes {
         let range = layout.prefix_interval(&[a as i128])?;
@@ -582,14 +589,70 @@ fn multiword_extrema_and_prefix_intervals_are_exact() -> Result {
 }
 
 #[test]
+fn runtime_key_widths_preserve_extrema_prefixes_and_native_payloads() -> Result {
+    type Narrow = RadixLayout<
+        (i32, u32), (u64, i64), u64, u32, (Buffer<u64>, Buffer<i64>),
+    >;
+    let pool = Pool::new(0, 0, 0)?;
+    for bits in [1, 7, 19, 31, 32] {
+        let packing = Narrow::derive_packing_with_fields(&[(bits, true), (bits, false)])?;
+        let minimum = -(1_i128 << (bits - 1));
+        let maximum = (1_i128 << (bits - 1)) - 1;
+        let unsigned_maximum = (1_i128 << bits) - 1;
+        let rows = [
+            [minimum, 0],
+            [minimum, unsigned_maximum],
+            [maximum, 0],
+            [maximum, unsigned_maximum],
+        ];
+        let keys = rows.iter().map(|row| packing.pack::<u64>(row)).collect::<Result<Vec<_>>>()?;
+        assert!(keys.windows(2).all(|pair| pair[0] < pair[1]));
+        let serials = [u64::MAX, 1_u64 << 63, 0, 7];
+        let tags = [i64::MIN, i64::MAX, -1, 0];
+        let mut run = DeviceRadixRun::<u64, u32, (Buffer<u64>, Buffer<i64>)>::new(
+            pool.clone(), params(4, 0),
+        )?;
+        // Reversed publication order makes the GPU sort all four extreme keys.
+        run.publish(
+            &Buffer::from_host(pool.clone(), &keys.iter().rev().copied().collect::<Vec<_>>())?,
+            &(
+                Buffer::from_host(pool.clone(), &serials.iter().rev().copied().collect::<Vec<_>>())?,
+                Buffer::from_host(pool.clone(), &tags.iter().rev().copied().collect::<Vec<_>>())?,
+            ),
+            rows.len(),
+        )?;
+        let layout = Narrow::publish(&run, packing)?;
+        assert_eq!(layout.view().bits, bits * 2);
+        let probes = Buffer::from_host(pool.clone(), &keys)?;
+        let matches = layout.probe_matches(&pool, &probes, rows.len())?;
+        assert_eq!(
+            expand(&pool, &matches, &layout.item_column::<u64>(0)?)?,
+            serials.map(|value| vec![value]),
+        );
+        assert_eq!(
+            expand(&pool, &matches, &layout.item_column::<i64>(1)?)?,
+            tags.map(|value| vec![value]),
+        );
+        for prefix in [minimum, maximum] {
+            let range = layout.prefix_interval(&[prefix])?;
+            let low = Buffer::from_host(pool.clone(), &[*range.start()])?;
+            let high = Buffer::from_host(pool.clone(), &[*range.end()])?;
+            let interval = layout.probe_intervals(&pool, &low, &high, 1)?.to_host()?;
+            assert_eq!((interval[0].groups, interval[0].items), (2, 2));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn many_runs_keep_run_local_cursors() -> Result {
     let pool = Pool::new(0, 0, 0)?;
     let packing = Layout::derive_packing()?;
     let mut run = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(2, 2))?;
     let mut rows = Vec::new();
     for (round, size) in [1024_usize, 256, 64, 16, 4, 1].into_iter().enumerate() {
-        let batch: Vec<(i64, (u64, i32))> = (0..size)
-            .map(|i| ((i % 5) as i64, ((round * 10_000 + i) as u64, round as i32)))
+        let batch: Vec<(i32, (u64, i32))> = (0..size)
+            .map(|i| ((i % 5) as i32, ((round * 10_000 + i) as u64, round as i32)))
             .collect();
         publish_rows(&mut run, &packing, &batch)?;
         rows.extend(batch);
@@ -696,20 +759,20 @@ fn layout_schemas_are_checked_against_their_carriers() -> Result {
     let pool = Pool::new(0, 0, 0)?;
     let run = DeviceRadixRun::<u64, u32, Items>::new(pool.clone(), params(4, 0))?;
     // Packing differing from the key tuple schema.
-    assert!(Layout::publish(&run, Packing::with_columns(&[Column::U64])?).is_err());
-    assert!(Layout::publish(&run, Packing::with_columns(&[Column::I64, Column::I64])?).is_err());
+    assert!(Layout::publish(&run, Packing::with_columns(&[Column::U32])?).is_err());
+    assert!(Layout::publish(&run, Packing::with_columns(&[Column::I32, Column::I32])?).is_err());
     // Value lanes that cannot hold the value schema or differ in arity.
     let narrow =
         DeviceRadixRun::<u64, u32, (Buffer<u64>, Buffer<u32>)>::new(pool.clone(), params(4, 0))?;
-    type Narrow = RadixLayout<(i64,), (u64, i64), u64, u32, (Buffer<u64>, Buffer<u32>)>;
+    type Narrow = RadixLayout<(i32,), (u64, i64), u64, u32, (Buffer<u64>, Buffer<u32>)>;
     assert!(Narrow::publish(&narrow, Narrow::derive_packing()?).is_err());
-    type Arity = RadixLayout<(i64,), (u64,), u64, u32, Items>;
+    type Arity = RadixLayout<(i32,), (u64,), u64, u32, Items>;
     assert!(Arity::publish(&run, Arity::derive_packing()?).is_err());
     // Key packing wider than the key word.
-    type Overwide = RadixLayout<(i64, u64), (u64, i32), u64, u32, Items>;
+    type Overwide = RadixLayout<(i32, u32, u32), (u64, i32), u64, u32, Items>;
     assert!(Overwide::publish(&run, Overwide::derive_packing()?).is_err());
     // Wider lanes of the same signedness, and unsigned values in wider signed lanes, hold exactly.
-    type Widened = RadixLayout<(i64,), (u32, u16), u64, u32, Items>;
+    type Widened = RadixLayout<(i32,), (u32, u16), u64, u32, Items>;
     assert!(Widened::publish(&run, Widened::derive_packing()?).is_ok());
     assert!(LaneKind {
         bits: 64,

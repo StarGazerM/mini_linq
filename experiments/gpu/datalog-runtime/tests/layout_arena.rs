@@ -170,13 +170,13 @@ fn resident_words_are_zeroed_once_and_grow() -> Result<()> {
 #[test]
 fn candidate_batches_retain_inputs_and_prevent_arena_reuse() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
-    let packing = Packing::with_columns(&[Column::U64, Column::I64])?;
+    let packing = Packing::with_columns(&[Column::U32, Column::U32, Column::I32, Column::U32])?;
     let mut arena = CandidateArena::new(pool);
     let lease = arena.reserve(packing.clone(), 3)?;
     let first_ptr = lease.buffer().ptr();
     let values = [
-        packing.pack::<u128>(&[4, -9])?,
-        packing.pack::<u128>(&[u64::MAX as i128, 7])?,
+        packing.pack::<u128>(&[4, 0, -9, 0])?,
+        packing.pack::<u128>(&[u32::MAX as i128, u32::MAX as i128, 7, 0])?,
     ];
     let lanes = [
         values[0] as u64,
@@ -298,13 +298,13 @@ fn concatenate_u64_candidates_and_retain_accepted_snapshot() -> Result<()> {
 
 #[test]
 fn concatenate_u128_candidates_and_retain_accepted_snapshot() -> Result<()> {
-    concatenate_case::<(u64, u64), u128>(Packing::new(&[64, 64])?)
+    concatenate_case::<(u32, u32, u32, u32), u128>(Packing::new(&[32; 4])?)
 }
 
 #[test]
 fn concatenate_wide_candidates_and_retain_accepted_snapshot() -> Result<()> {
-    concatenate_case::<(u64, u64, u64), [u64; 3]>(Packing::new(&[64; 3])?)?;
-    concatenate_case::<(u64, u64, u64, u64), [u64; 4]>(Packing::new(&[64; 4])?)
+    concatenate_case::<(u32, u32, u32, u32, u32, u32), [u64; 3]>(Packing::new(&[32; 6])?)?;
+    concatenate_case::<(u32, u32, u32, u32, u32, u32, u32, u32), [u64; 4]>(Packing::new(&[32; 8])?)
 }
 
 #[cuda_host::cuda_module]
@@ -363,14 +363,57 @@ mod decode_kernel {
 }
 
 #[test]
+fn runtime_widths_decode_and_encode_signed_prefixes_on_device() -> Result<()> {
+    type Layout = RadixLayout<(i32, u32), (), u64, u64, ()>;
+    let pool = Pool::new(0, 0, 0)?;
+    let module = unsafe { decode_kernel::load(pool.context())? };
+    for bits in [1, 7, 19, 31, 32] {
+        let packing = Layout::derive_packing_with_fields(&[(bits, true), (bits, false)])?;
+        let minimum = -(1_i128 << (bits - 1));
+        let maximum = (1_i128 << (bits - 1)) - 1;
+        let unsigned_maximum = (1_i128 << bits) - 1;
+        let rows = [
+            [minimum, 0],
+            [minimum, unsigned_maximum],
+            [maximum, 0],
+            [maximum, unsigned_maximum],
+        ];
+        let words = rows.iter().map(|row| packing.pack::<u64>(row))
+            .collect::<Result<Vec<_>>>()?;
+        // SAFETY: signed bias makes these four initialized words sorted and unique.
+        let batch = unsafe {
+            SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, rows.len())?
+        };
+        let layout = Layout::from_sorted(pool.clone(), packing, PARAMS, batch, bits * 2)?;
+        let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 2)?;
+        let ranges = Buffer::<u64>::zeroed(pool.clone(), rows.len() * 2)?;
+        // DECODE P: diagnostic reconstruction and re-encoding check runtime field widths.
+        module.decode_datalog_test_layout(
+            pool.stream(),
+            &module.prepare_decode_datalog_test_layout(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+            layout.view(),
+            rows.len() as u32,
+            output.ptr(),
+            ranges.ptr(),
+        )?;
+        assert_eq!(
+            output.to_host()?,
+            rows.into_iter().flatten().map(|value| value as i64).collect::<Vec<_>>(),
+        );
+        assert_eq!(ranges.to_host()?, vec![0, 2, 0, 2, 2, 4, 2, 4]);
+    }
+    Ok(())
+}
+
+#[test]
 fn wide_layout_erased_device_decode_and_lookup() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
-    type Layout = RadixLayout<(u8, i64, u64, u64), (), [u64; 4], u64, ()>;
+    type Layout = RadixLayout<(u8, i32, u32, u32, u32, u32, u32), (), [u64; 4], u64, ()>;
     let packing = Layout::derive_packing()?;
     let rows = [
-        [0, i64::MIN as i128, u64::MAX as i128, 7],
-        [0, -1, 0, u64::MAX as i128],
-        [255, i64::MAX as i128, 9, 0],
+        [0, i32::MIN as i128, u32::MAX as i128, 0, 7, 1, 2],
+        [0, -1, 0, u32::MAX as i128, 8, 3, 4],
+        [255, i32::MAX as i128, 9, 0, 9, 5, 6],
     ];
     let words = rows
         .iter()
@@ -380,7 +423,7 @@ fn wide_layout_erased_device_decode_and_lookup() -> Result<()> {
     let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
     let layout = Layout::from_sorted(pool.clone(), packing, PARAMS, batch, 200)?;
     assert_eq!(layout.view().bits, 200);
-    let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 4)?;
+    let output = Buffer::<i64>::zeroed(pool.clone(), rows.len() * 7)?;
     let ranges = Buffer::<u64>::zeroed(pool.clone(), rows.len() * 2)?;
     let module = unsafe { decode_kernel::load(pool.context())? };
     // DECODE P: diagnostic wide-layout launch reconstructs values for host exactness checking.
@@ -477,11 +520,11 @@ fn permuted_provider_preserves_rows_and_searches_new_leading_key() -> Result<()>
 
 #[test]
 fn typed_set_layouts_preserve_recorded_narrow_and_full_word_windows() -> Result<()> {
-    type Layout = RadixLayout<(u32, u64), (), [u64; 3], u64, ()>;
+    type Layout = RadixLayout<(u32, u32, u32), (), [u64; 3], u64, ()>;
     let pool = Pool::new(0, 0, 0)?;
     let packing = Layout::derive_packing()?;
     assert_eq!(packing.bits(), 96);
-    let rows = [[1, u64::MAX as i128], [2, 0], [u32::MAX as i128, 1]];
+    let rows = [[1, u32::MAX as i128, u32::MAX as i128], [2, 0, 0], [u32::MAX as i128, 0, 1]];
     let words = rows.iter().map(|row| packing.pack::<[u64; 3]>(row))
         .collect::<Result<Vec<_>>>()?;
     let batch = unsafe {
@@ -500,7 +543,7 @@ fn typed_set_layouts_preserve_recorded_narrow_and_full_word_windows() -> Result<
         assert_eq!(unchanged.snapshot().active_bits(), active_bits);
         gpu_datalog_runtime::reset_work_counters();
         let before = gpu_datalog_runtime::readback_count();
-        let permuted = layout.permuted_provider::<(u64, u32)>(&pool, &[1, 0], PARAMS, 256, active_bits)?;
+        let permuted = layout.permuted_provider::<(u32, u32, u32)>(&pool, &[1, 2, 0], PARAMS, 256, active_bits)?;
         assert_eq!(gpu_datalog_runtime::readback_count(), before);
         #[cfg(feature = "radix-counters")]
         {
@@ -512,11 +555,11 @@ fn typed_set_layouts_preserve_recorded_narrow_and_full_word_windows() -> Result<
         }
         assert_eq!(permuted.snapshot().active_bits(), active_bits);
         assert_eq!(permuted.to_rows()?, vec![
-            vec![0, 2], vec![1, u32::MAX as i128], vec![u64::MAX as i128, 1],
+            vec![0, 0, 2], vec![0, 1, u32::MAX as i128], vec![u32::MAX as i128, u32::MAX as i128, 1],
         ]);
         // A materialization's recorded choice is independent of its source.
         let alternate_bits = if active_bits == 96 { 192 } else { 96 };
-        let alternate = layout.permuted_provider::<(u64, u32)>(&pool, &[1, 0], PARAMS, 256, alternate_bits)?;
+        let alternate = layout.permuted_provider::<(u32, u32, u32)>(&pool, &[1, 2, 0], PARAMS, 256, alternate_bits)?;
         assert_eq!(alternate.snapshot().active_bits(), alternate_bits);
         assert_eq!(alternate.to_host()?, permuted.to_host()?);
         assert_eq!(layout.to_host()?, words);

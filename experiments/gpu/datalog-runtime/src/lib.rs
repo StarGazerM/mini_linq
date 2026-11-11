@@ -7,6 +7,7 @@
 //! [`DeviceRadixRun`] is the occurrence-preserving grouped index engine;
 //! [`RadixLayout`] is its typed relational view over one immutable publication.
 pub mod arena;
+pub mod domains;
 pub mod lanes;
 pub mod layout;
 pub mod pack;
@@ -15,6 +16,7 @@ pub mod radix_run;
 mod runs;
 mod stats;
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
+pub use domains::{DomainCatalog, DomainInput, DomainRef};
 pub use gpu_device_columns::{Buffer, Pool};
 pub use lanes::{Job, Lane, Lanes};
 pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};
@@ -39,7 +41,7 @@ const _: () = {
     send_sync::<Pool>();
     send_sync::<Buffer<u64>>();
     send_sync::<Packing>();
-    send_sync::<RadixLayout<(u32, i64), (), u128, u64, ()>>();
+    send_sync::<RadixLayout<(u32, i32), (), u128, u64, ()>>();
     send_sync::<CandidateBatch>();
     send::<CandidateArena>();
     send::<Job>();

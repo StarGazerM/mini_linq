@@ -8,6 +8,7 @@ radix-counters = []
 
 [dependencies]
 cq-load = { path = "../../../io/cq-load" }
+cq-storage = { path = "../../../runtime/cq-storage" }
 cuda-core.workspace = true
 cuda-device.workspace = true
 cuda-host.workspace = true
@@ -15,6 +16,3 @@ cq-gpu-runtime = { path = "../printer-runtime" }
 gpu-device-columns = { path = "../device-columns" }
 rccl-cub.workspace = true
 rccl-memory.workspace = true
-
-[dev-dependencies]
-cq-storage = { path = "../../../runtime/cq-storage" }
