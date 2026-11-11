@@ -1,0 +1,1 @@
+{"job": ["expand"], "command": "flock /tmp/mini_linq-gpu.lock nice -n 19 /data/mini_linq-wt/compression-exp/experiments/storage-bench/gpu/compressed_ops expand", "returncode": 0, "started_utc": "2026-11-11T08:29:45.110093+00:00", "ended_utc": "2026-11-11T08:30:03.103713+00:00", "stderr": ""}

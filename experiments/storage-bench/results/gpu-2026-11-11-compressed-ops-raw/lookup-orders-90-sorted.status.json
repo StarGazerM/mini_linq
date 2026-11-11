@@ -1,0 +1,1 @@
+{"job": ["lookup", "orders", "90", "sorted"], "command": "flock /tmp/mini_linq-gpu.lock nice -n 19 /data/mini_linq-wt/compression-exp/experiments/storage-bench/gpu/compressed_ops lookup orders 90 sorted", "returncode": 0, "started_utc": "2026-11-11T08:26:10.865243+00:00", "ended_utc": "2026-11-11T08:26:19.254265+00:00", "stderr": ""}

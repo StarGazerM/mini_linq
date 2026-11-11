@@ -1,0 +1,49 @@
+[
+  {
+    "table": "lineitem",
+    "rows": 59986052,
+    "name": "l_orderkey",
+    "type": "i64",
+    "logical_type": "i64",
+    "encoding": "plain",
+    "file": "lineitem.l_orderkey.bin"
+  },
+  {
+    "table": "lineitem",
+    "rows": 59986052,
+    "name": "l_partkey",
+    "type": "i64",
+    "logical_type": "i64",
+    "encoding": "plain",
+    "file": "lineitem.l_partkey.bin"
+  },
+  {
+    "table": "orders",
+    "rows": 15000000,
+    "name": "o_orderkey",
+    "type": "i64",
+    "logical_type": "i64",
+    "encoding": "plain",
+    "file": "orders.o_orderkey.bin"
+  },
+  {
+    "table": "orders",
+    "rows": 15000000,
+    "name": "o_custkey",
+    "type": "i64",
+    "logical_type": "i64",
+    "encoding": "plain",
+    "file": "orders.o_custkey.bin"
+  },
+  {
+    "table": "orders",
+    "rows": 15000000,
+    "name": "o_orderdate",
+    "type": "i32",
+    "logical_type": "Date",
+    "encoding": "days_since_epoch",
+    "file": "orders.o_orderdate.bin",
+    "epoch": "1970-01-01",
+    "unit": "day"
+  }
+]

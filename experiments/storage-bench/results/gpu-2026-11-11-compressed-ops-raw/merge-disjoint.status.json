@@ -1,0 +1,1 @@
+{"job": ["merge", "disjoint"], "command": "flock /tmp/mini_linq-gpu.lock nice -n 19 /data/mini_linq-wt/compression-exp/experiments/storage-bench/gpu/compressed_ops merge disjoint", "returncode": 0, "started_utc": "2026-11-11T08:33:49.174452+00:00", "ended_utc": "2026-11-11T08:34:11.703611+00:00", "stderr": ""}

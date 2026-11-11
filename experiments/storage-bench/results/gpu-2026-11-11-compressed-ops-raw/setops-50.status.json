@@ -1,0 +1,1 @@
+{"job": ["setops", "50"], "command": "flock /tmp/mini_linq-gpu.lock nice -n 19 /data/mini_linq-wt/compression-exp/experiments/storage-bench/gpu/compressed_ops setops 50", "returncode": 0, "started_utc": "2026-11-11T08:31:56.349579+00:00", "ended_utc": "2026-11-11T08:32:07.985892+00:00", "stderr": ""}

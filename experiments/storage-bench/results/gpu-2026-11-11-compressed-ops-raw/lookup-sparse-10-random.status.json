@@ -1,0 +1,1 @@
+{"job": ["lookup", "sparse", "10", "random"], "command": "flock /tmp/mini_linq-gpu.lock nice -n 19 /data/mini_linq-wt/compression-exp/experiments/storage-bench/gpu/compressed_ops lookup sparse 10 random", "returncode": 0, "started_utc": "2026-11-11T08:28:30.016231+00:00", "ended_utc": "2026-11-11T08:28:41.462032+00:00", "stderr": ""}
