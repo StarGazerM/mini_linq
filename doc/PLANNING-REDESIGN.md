@@ -1146,15 +1146,16 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   (`--base-cache`) are loader options, not defaults. Slice C has been redone
   GPU-first (`codex/p6c-both`; design
   `/data/design-notes/p6c-for-design.md`). The S1 route on `codex/p6b-slice`
-  is dropped: its host S1 encoding made process wall 1.3–1.6× slower.
+  is dropped: its host S1 encoding made loads 1.3–1.6× slower in process wall.
   Slice T realizes resident keyless-fold scans as checked FOR-native tiles
   (`SourceAccess::Tiles`): code-domain predicates and survivor-only reads.
-  It is automatic for h06, h11 and h15 only. h06 resident is 0.771× (SF1)
-  and 0.809× (SF10). Slice L moves the TPC-H cold-load dedup, bounds and
-  encoding onto the device, streaming native-width pinned staging: h06
-  process wall is 0.661× (SF1) and 0.113× (SF10). On the 26-query SF1 suite
-  the geomean is 0.991 [0.989, 0.993]. Grouped-base admission (h01/h15 keys),
-  joins/probes and intermediate publication remain later slices.
+  It is automatic for h06, h11 and h15 only. Query time (load excluded): h06
+  is 0.771× (SF1) and 0.809× (SF10), and the 26-query SF1 geomean is 0.991
+  [0.989, 0.993]. Slice L moves the TPC-H cold-load dedup, bounds and encoding
+  onto the device, streaming native-width pinned staging. It changes load
+  time only, never counted as query time: h06 process wall is 0.661× (SF1)
+  and 0.113× (SF10). Grouped-base admission (h01/h15 keys), joins/probes and
+  intermediate publication remain later slices.
 - **P6b GPU Datalog parallelism — historical initial profile** (2026-10-31,
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel

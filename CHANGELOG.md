@@ -37,12 +37,13 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   and peak/after-load memory (STORAGE §12.7).
   Duplicate projections now release newly loaded full-source cache entries
   before pool trimming, retaining only selected columns and earlier cache
-  entries. Paired h06 process wall ratios are 0.661× (SF1) and 0.113× (SF10),
-  but later controlled SF10 runs expose an address-sensitive resident-query
-  regression of about 2.2% in h06's kernel (identical SASS; STORAGE §12.7).
-  The 26-query SF1 paired baseline (with tiles) shows no systematic resident
-  cost: unchanged queries lie within [0.997, 1.007], geomean 0.991
-  [0.989, 0.993], and suite process wall falls 24.3 → 18.3 s.
+  entries. Query time (load excluded): the 26-query SF1 paired baseline (with
+  tiles) shows no systematic cost. Unchanged queries lie within [0.997, 1.007]
+  and the geomean is 0.991 [0.989, 0.993]. Controlled SF10 runs show an
+  address-sensitive ~2.2% difference in h06's kernel (identical SASS; STORAGE
+  §12.7). Load time, a separate cold-start metric never counted as query time:
+  h06 process wall is 0.661× (SF1) and 0.113× (SF10); suite process wall goes
+  24.3 → 18.3 s.
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`
