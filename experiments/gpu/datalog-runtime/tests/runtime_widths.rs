@@ -43,11 +43,18 @@ fn resident_sources_use_runtime_widths_and_reject_overflow() -> Result {
         headers: std::ptr::null(), data: buffer.ptr(), len: buffer.len() as u64,
         count: std::ptr::null(), codec: Codec::Plain as u32,
     });
+    gpu_datalog_runtime::reset_work_counters();
+    let before = gpu_datalog_runtime::readback_count();
     // SAFETY: both initialized columns live through this ordered build.
     let layout = unsafe { Layout::from_sources_with_packing(
         pool.clone(), params, packing.clone(), &[view(&first), view(&second)],
         &[], std::ptr::null(), 4,
     )? };
+    assert_eq!(gpu_datalog_runtime::readback_count() - before, 1);
+    assert_eq!(gpu_datalog_runtime::work_counters().grouping_readbacks,
+        u64::from(cfg!(feature = "radix-counters")));
+    assert_eq!(gpu_datalog_runtime::work_counters().occurrence.passes,
+        if cfg!(feature = "radix-counters") { 4 } else { 0 });
     assert_eq!(layout.snapshot().active_bits(), 26);
     // DECODE P: final integration-test publication compares all logical rows.
     assert_eq!(layout.to_rows()?, [vec![0,0], vec![7,1], vec![7,127], vec![(1 << 19)-1,127]]);
@@ -56,6 +63,19 @@ fn resident_sources_use_runtime_widths_and_reject_overflow() -> Result {
     ])?;
     let found = layout.probe_keys(&pool, &probes, 2)?.to_host()?;
     assert_eq!(found.iter().map(|probe| probe.contains).collect::<Vec<_>>(), [1,0]);
+    type Native = RadixLayout<(u32,), (), u64, u64, ()>;
+    gpu_datalog_runtime::reset_work_counters();
+    let before = gpu_datalog_runtime::readback_count();
+    // SAFETY: the native u32 source satisfies the schema without validation work.
+    let native = unsafe { Native::from_sources(
+        pool.clone(), params, &[view(&first)], &[], std::ptr::null(), 4,
+    )? };
+    assert_eq!(native.snapshot().active_bits(), 64);
+    assert_eq!(gpu_datalog_runtime::readback_count() - before, 1);
+    assert_eq!(gpu_datalog_runtime::work_counters().grouping_readbacks,
+        u64::from(cfg!(feature = "radix-counters")));
+    assert_eq!(gpu_datalog_runtime::work_counters().occurrence.passes,
+        if cfg!(feature = "radix-counters") { 8 } else { 0 });
     for (a,b) in [(1u64 << 19, 0u64), (0, 128)] {
         let a = Buffer::from_host(pool.clone(), &[a])?;
         let b = Buffer::from_host(pool.clone(), &[b])?;
