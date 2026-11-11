@@ -207,6 +207,45 @@ mod tests {
         assert_eq!(RadixLayout::<(), (), u64, u64, ()>::derive_packing().unwrap().bits(), 0);
     }
 
+    #[test]
+    fn runtime_key_widths_round_trip_and_bound_the_carrier() {
+        type Layout = crate::RadixLayout<(u32, u32, u32), (), u128, u64, ()>;
+        for widths in [[1, 1, 1], [21, 17, 17], [32, 32, 32]] {
+            let fields = widths.map(|bits| (bits, false));
+            let packing = Layout::derive_packing_with_fields(&fields).unwrap();
+            assert_eq!(packing.bits(), widths.iter().sum::<u32>());
+            let row = widths.map(|bits| (1_i128 << bits) - 1);
+            let word = packing.pack::<u128>(&row).unwrap();
+            // DECODE P: runtime-width round-trip publishes decoded diagnostic fields.
+            assert_eq!(packing.unpack(word).unwrap(), row);
+            let permuted = packing.permute(&[2, 0, 1]).unwrap();
+            assert_eq!(permuted.widths().collect::<Vec<_>>(),
+                [widths[2], widths[0], widths[1]]);
+        }
+        assert!(Layout::derive_packing_with_fields(&[(33, false); 3]).is_err());
+        assert!(Layout::derive_packing_with_fields(&[(1, true); 3]).is_err());
+        assert!(Layout::derive_packing_with_fields(&[(1, false); 2]).is_err());
+        assert!(Layout::derive_packing_with_fields(&[(0, false); 3]).is_err());
+        type Small = crate::RadixLayout<(u8,), (), u64, u64, ()>;
+        assert!(Small::derive_packing_with_fields(&[(9, false)]).is_err());
+        type ShortWord = crate::RadixLayout<(u32, u32, u32), (), u64, u64, ()>;
+        assert!(ShortWord::derive_packing_with_fields(&[(32, false); 3]).is_err());
+    }
+
+    #[test]
+    fn runtime_key_policy_keeps_wide_payloads_and_generic_packing() {
+        type Layout = crate::RadixLayout<(i64,), (u64,), u64, u64, crate::Buffer<u64>>;
+        let packing = Layout::derive_packing_with_fields(&[(17, true)]).unwrap();
+        let word = packing.pack::<u64>(&[-65_536]).unwrap();
+        // DECODE P: signed runtime-width test publishes the boundary value.
+        assert_eq!(packing.unpack(word).unwrap(), [-65_536]);
+        assert!(Layout::check_schema(&Layout::derive_packing().unwrap()).is_err());
+        let generic = Packing::with_fields(&[(64, false)]).unwrap();
+        assert_eq!(generic.pack::<u64>(&[u64::MAX as i128]).unwrap(), u64::MAX);
+        type Unit = crate::RadixLayout<(), (), u64, u64, ()>;
+        assert_eq!(Unit::derive_packing_with_fields(&[]).unwrap().bits(), 0);
+    }
+
     fn key_fields<W: crate::Word>(columns: &[Column], rows: &[Vec<i128>]) {
         use crate::radix_run::{device, RadixKeysView, RadixLayoutView, RadixRunView};
         let packing = Packing::with_columns(columns).unwrap();
