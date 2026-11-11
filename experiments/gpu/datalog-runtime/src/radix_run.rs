@@ -2207,7 +2207,8 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
         self.require_full_key_set()?;
         if columns.len() == self.packing().len()
             && self.packing().packed_fields().zip(columns).all(|(field, column)| {
-                field.bits == column.bits() && (field.signed != 0) == column.is_signed()
+                field.bits <= 32 && field.bits <= column.bits()
+                    && (field.signed != 0) == column.is_signed()
             })
         {
             Ok(())
