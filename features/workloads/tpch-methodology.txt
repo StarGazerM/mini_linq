@@ -110,6 +110,10 @@ Every retail query compiles the same authored clauses in these configurations:
   explicit stage-file bindings. Scalar domains are deliberately uncertified;
   the adapter does not scan rows, measure statistics, or certify input sets.
   Other CPU routes and Sequence count/bounds advice are unchanged.
+  Evidence attachment is the final surface pass, after aggregate/correlated
+  contexts expand their checked core holes. It never parses those extensions'
+  grammars. The ordinary catalog regression compiles Q06's actual default/par
+  dispatch so this boundary is covered without the opt-in compile-only matrix.
 - radix and radix_retained: the same-plan provider comparisons described below;
 - transfer: the CQ planner's exact forward/backward semijoin schedule, rooted
   at the written outer stream, over its Masks reductions. This configuration

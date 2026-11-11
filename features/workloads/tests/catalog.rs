@@ -1,3 +1,14 @@
+#![recursion_limit = "512"]
+
+// Compile the real aggregate routes in the default regression inventory.
+// Evidence must reach the core hole only after aggregate surface expansion.
+#[allow(unused_imports, unused_macros, dead_code)]
+#[path = "../src/tpch_runtime.rs"]
+mod tpch_runtime;
+#[allow(dead_code)]
+#[path = "../src/queries/tpch/tpch_q06.rs"]
+mod q06_dispatch;
+
 use std::{
     collections::BTreeSet,
     fs,

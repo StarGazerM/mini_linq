@@ -53,7 +53,6 @@ macro_rules! configuration {
                         $($stages)*
                         select = ::mini_linq::passes::select(positional($d($d host),*));
                         structures = [$($extra,)* ];
-                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
                     }
                     $d($d tokens)*
                 } };
@@ -61,7 +60,6 @@ macro_rules! configuration {
                     $module; {
                         $($stages)*
                         structures = [$($extra,)* ];
-                        surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
                     }
                     $d($d tokens)*
                 } };
@@ -179,7 +177,6 @@ macro_rules! standalone_query {
             $module; {
                 $($stages)*
                 structures = [$($extra,)* ];
-                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
             }
             $($tokens)*
         }
@@ -194,13 +191,29 @@ pub(crate) use standalone_query;
 /// Other configurations keep their existing planning inputs.
 macro_rules! evidence_query {
     (default; $pipeline:tt $($tokens:tt)*) => {
-        ::cq_workload_passes::tpch_evidence_query! { $pipeline $($tokens)* }
+        crate::tpch_runtime::evidence_query!(@checked $pipeline $($tokens)*)
     };
     (par; $pipeline:tt $($tokens:tt)*) => {
-        ::cq_workload_passes::tpch_evidence_query! { $pipeline $($tokens)* }
+        crate::tpch_runtime::evidence_query!(@checked $pipeline $($tokens)*)
+    };
+    (@checked { $($pipeline:tt)* } $($tokens:tt)*) => {
+        ::mini_linq::compile! {
+            pipeline {
+                $($pipeline)*
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated,
+                    ::cq_workload_passes::tpch_evidence];
+            }
+            $($tokens)*
+        }
     };
     ($module:ident; { $($pipeline:tt)* } $($tokens:tt)*) => {
-        ::mini_linq::compile! { pipeline { $($pipeline)* } $($tokens)* }
+        ::mini_linq::compile! {
+            pipeline {
+                $($pipeline)*
+                surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
+            }
+            $($tokens)*
+        }
     };
 }
 pub(crate) use evidence_query;

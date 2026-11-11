@@ -1507,6 +1507,7 @@ dependencies = [
 name = "cq-workload-passes"
 version = "0.1.0"
 dependencies = [
+ "cq-ext-support",
  "cq-lang-sequence",
  "cq-lang-structures",
  "cq-sequence-conformance",

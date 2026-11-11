@@ -2,14 +2,13 @@
 //! inner instances of composite tokens, by `sorted_index`, preserving every
 //! written curried level and all other representation decisions.
 
-/// Attach the workload's checked SF1 document before the ordinary public
-/// pipeline runs. Query bodies remain opaque to this boundary adapter.
+/// Attach checked SF1 evidence to the core hole after extension expansion.
+/// The aggregate/correlated passes keep ownership of their surface grammars.
 #[proc_macro]
-pub fn tpch_evidence_query(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn tpch_evidence(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     use quote::quote;
     use syn::parse::{Parse, ParseStream};
     struct Request {
-        pipeline: proc_macro2::TokenStream,
         visibility: syn::Visibility,
         name: syn::Ident,
         declarations: Vec<cq_syntax::RelationDecl>,
@@ -17,31 +16,24 @@ pub fn tpch_evidence_query(input: proc_macro::TokenStream) -> proc_macro::TokenS
     }
     impl Parse for Request {
         fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-            let pipeline;
-            syn::braced!(pipeline in input);
-            let pipeline = pipeline.parse()?;
             let visibility = input.parse()?;
             input.parse::<syn::Token![struct]>()?;
             let name = input.parse()?;
             input.parse::<syn::Token![;]>()?;
             let declarations = cq_syntax::parse_declarations(input)?;
-            Ok(Self { pipeline, visibility, name, declarations, body: input.parse()? })
+            Ok(Self { visibility, name, declarations, body: input.parse()? })
         }
     }
-    let result = (|| -> syn::Result<proc_macro2::TokenStream> {
-        let Request { pipeline, visibility, name, declarations, body } = syn::parse(input)?;
+    cq_ext_support::surface(input.into(), |tokens, pipeline| {
+        let Request { visibility, name, declarations, body } = syn::parse2(tokens.clone())?;
         let evidence = cq_workload_authored::tpch_evidence::load_sf1(&declarations)?;
-        Ok(quote!({
-            ::mini_linq::compile! {
-                pipeline { #pipeline }
-                #visibility struct #name;
-                #evidence
-                #(#declarations)*
-                #body
-            }
-        }))
-    })();
-    result.unwrap_or_else(syn::Error::into_compile_error).into()
+        pipeline.clone().start(quote! {
+            #visibility struct #name;
+            #evidence
+            #(#declarations)*
+            #body
+        }).map(Some)
+    }).into()
 }
 
 /// The workload-owned sorted bucket index token (Rc-backed, host only). It

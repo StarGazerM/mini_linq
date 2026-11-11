@@ -16,6 +16,7 @@ syn.workspace = true
 cq-lang-sequence.workspace = true
 cq-sequence-lowering.workspace = true
 cq-workload-authored = { path = "../authored" }
+cq-ext-support.workspace = true
 quote.workspace = true
 proc-macro2.workspace = true
 cq-sequence-conformance = { path = "../../sequence-conformance" }

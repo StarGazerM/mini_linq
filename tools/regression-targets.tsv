@@ -140,6 +140,7 @@ cq-workload-corpus	manifest-target-test	kernel_elimination_fine	Cargo.toml
 cq-workload-corpus	manifest-target-test	kernel_le	Cargo.toml
 cq-workload-corpus	manifest-target-test	kernel_le_runs	Cargo.toml
 cq-workloads	manifest-target-test	extended_catalog	Cargo.toml
+cq-workloads	manifest-target-test	catalog	Cargo.toml
 cq-workload-e2e	manifest-target-test	extended	Cargo.toml
 cq-rewrites	manifest-target-test	generated	Cargo.toml
 cq-rewrites	manifest-target-test	growth	Cargo.toml
