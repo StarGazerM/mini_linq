@@ -1,11 +1,14 @@
 #![recursion_limit = "1024"]
-//! Directed i64 triangles: `probe first [b]` over authored Range providers,
+//! Directed u32 triangles: `probe first [b]` over authored Range providers,
 //! the default GPU triangle plan (`triangle-smallest` is the measured,
 //! slower `probe smallest` radix configuration).
 //!
-//! IDs remain native i64 values through upload, range payload packing and
-//! output decoding. The recorded dense directory still requires nonnegative
-//! u32-range keys, and canonical output fields must fit one packed u64.
+//! IDs remain native u32 values through upload, range payload packing and
+//! output decoding. Pair payloads fit u64 words; canonical output retains
+//! all three u32 lanes in the ordinary full-row set output.
+//! The Range plan requires a dense key span below u32::MAX (reserved sentinel).
+//! Its current zero-based directory also makes large positive IDs expensive;
+//! `triangle-smallest` supports sparse, full-u32 IDs instead.
 //! `--check` compares the compiled GPU tuples with the independent CPU reference.
 //!
 //! Supported scheduling advice is recorded below: 256 lanes × 4 items becomes
@@ -20,7 +23,16 @@ use std::{
     time::Instant,
 };
 
-fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
+fn parse_vertex(value: &str) -> Result<u32, Box<dyn Error>> {
+    value.parse::<u32>().map_err(|error| {
+        format!(
+            "invalid vertex ID {value:?}: expected an unsigned integer in 0..=4294967295 (negative or overflowing IDs are unsupported): {error}"
+        )
+        .into()
+    })
+}
+
+fn load(path: &str) -> Result<Vec<(u32, u32)>, Box<dyn Error>> {
     let mut rows = Vec::new();
     for line in BufReader::with_capacity(1 << 20, std::fs::File::open(path)?).lines() {
         let line = line?;
@@ -31,20 +43,27 @@ fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
         let (Some(a), Some(b)) = (fields.next(), fields.next()) else {
             return Err(format!("malformed edge line: {line}").into());
         };
-        rows.push((a.parse()?, b.parse()?));
+        rows.push((parse_vertex(a)?, parse_vertex(b)?));
     }
     rows.sort_unstable();
     rows.dedup();
     Ok(rows)
 }
 
-// The default first-probe triangle with signed vertex types.
-fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, (i64, i64, i64)> {
-    cq_sequence_rewrites::grade! {
+// The default first-probe triangle with unsigned vertex types.
+fn triangles<'a>(
+    edges: &'a DeviceColumns<'_, (u32, u32)>,
+) -> Result<DeviceColumns<'a, (u32, u32, u32)>, Box<dyn Error>> {
+    // Match the Range provider's directory contract using resident metadata,
+    // before the generated execution path can panic on an unsupported span.
+    for &bounds in &edges.storage().bounds {
+        cq_gpu_sequence_runtime::dense_key_domain(bounds)?;
+    }
+    Ok(cq_sequence_rewrites::grade! {
         arguments { gpu, Edges at host, ByB at host, ByA at host, result at device };
         pipeline { ::cq_gpu_sequence::machine_grade, ::cq_gpu_sequence::translate };
         physical {
-            relation E(src:i64,dst:i64) = (edges);
+            relation E(src:u32,dst:u32) = (edges);
             l = pipe rename E {src -> a,dst -> b};
             r = let rename E {src -> b,dst -> c};
             s = let rename E {src -> a,dst -> c};
@@ -53,9 +72,9 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             return checked as answer(a,b,c);
         }
         structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
-            l host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            s host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
+            l host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            s host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
             r = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [b];
             s = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider [a][c];
             r rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
@@ -71,12 +90,12 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
                 flatten lookup r [b] tile 1024 items 4 Edges;
             output count;
         }
-    }
+    })
 }
 
 /// Independent CPU reference over the same canonical edges.
-fn reference(edges: &[(i64, i64)]) -> Vec<(i64, i64, i64)> {
-    let range = |key: i64| {
+fn reference(edges: &[(u32, u32)]) -> Vec<(u32, u32, u32)> {
+    let range = |key: u32| {
         edges.partition_point(|&(s, _)| s < key)..edges.partition_point(|&(s, _)| s <= key)
     };
     let mut out = Vec::new();
@@ -123,7 +142,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut samples = [[0.0f64; 5]; 5];
     for iteration in 0..6 {
         let started = Instant::now();
-        let answer = triangles(&resident);
+        let answer = triangles(&resident)?;
         let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
         let timing = cq_gpu_runtime::take_last_timings()
             .ok_or("triangle translator supplied no execution timings")?;
@@ -134,7 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             actual.sort_unstable();
             assert_eq!(
                 &actual, expected,
-                "compiled i64 triangle differs from CPU reference"
+                "compiled u32 triangle differs from CPU reference"
             );
         }
         println!(
@@ -168,17 +187,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compiled_i64_triangle_preserves_vertex_ids() -> Result<(), Box<dyn Error>> {
+    fn vertex_parse_checks_u32_domain() -> Result<(), Box<dyn Error>> {
+        assert_eq!(parse_vertex("0")?, u32::MIN);
+        assert_eq!(parse_vertex("2147483648")?, 1 << 31);
+        assert_eq!(parse_vertex("4294967295")?, u32::MAX);
+        for value in ["-1", "4294967296", "18446744073709551616"] {
+            let error = parse_vertex(value).unwrap_err().to_string();
+            assert!(error.contains(value), "{error}");
+            assert!(error.contains("0..=4294967295"), "{error}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_u32_triangle_preserves_vertex_ids() -> Result<(), Box<dyn Error>> {
         let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
         for mut rows in [
             vec![],
             vec![
-                (0i64, 0),
+                (0u32, 0),
                 (1, 2),
                 (2, 3),
                 (1, 3),
                 (1, 3),
                 (1_000_000, 1_000_000),
+            ],
+            // Clustered high IDs remain exact without allocating a near-u32
+            // directory. Actual-min directory integration can lift this limit.
+            vec![
+                (1_000_000, 1_000_001),
+                (1_000_001, 1_000_003),
+                (1_000_000, 1_000_003),
+                (1_000_000, 1_000_002),
+                (1_000_002, 1_000_003),
+                (1_000_001, 1_000_002),
+                (1_000_003, 1_000_000),
+                (1_000_007, 1_000_001),
+                (1_000_007, 1_000_003),
+                (1_000_007, 1_000_002),
+                (1_000_007, 1_000_000),
+                (1_000_000, 1_000_007),
             ],
         ] {
             rows.sort_unstable();
@@ -189,14 +237,43 @@ mod tests {
                 &mut cq_gpu_runtime::Dictionary::default(),
                 &[cq_gpu_runtime::Codec::For; 2],
             )?;
-            let answer = triangles(&resident);
-            // DECODE P: diagnostic signed-boundary triangle publication exposes reconstructed result tuples.
+            let answer = triangles(&resident)?;
+            // DECODE P: diagnostic unsigned-boundary triangle publication exposes reconstructed result tuples.
             let mut actual = answer.to_host()?;
             actual.sort_unstable();
             let mut expected = reference(&rows);
             expected.sort_unstable();
             assert_eq!(answer.checked_len()?, expected.len());
             assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_triangle_rejects_unsupported_dense_span() -> Result<(), Box<dyn Error>> {
+        let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+        // Exercise each key column independently, as well as a full-domain
+        // graph with triangles that the sparse Smallest plan can enumerate.
+        for rows in [
+            vec![(u32::MAX, 0)],
+            vec![(0, u32::MAX)],
+            vec![(u32::MAX - 1, 0)],
+            vec![(0, 1), (0, u32::MAX), (1, u32::MAX)],
+        ] {
+            let resident = DeviceColumns::from_rows(
+                pool.clone(),
+                &rows,
+                &mut cq_gpu_runtime::Dictionary::default(),
+                &[cq_gpu_runtime::Codec::For; 2],
+            )?;
+            let error = match triangles(&resident) {
+                Ok(_) => panic!("unsupported dense key span was accepted"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.to_string(),
+                "dense key domain must leave u32::MAX available as a sentinel"
+            );
         }
         Ok(())
     }

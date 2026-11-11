@@ -1,15 +1,15 @@
 #![recursion_limit = "1024"]
-//! Directed i64 triangles: `probe smallest` over authored radix layouts. An
+//! Directed u32 triangles: `probe smallest` over authored radix layouts. An
 //! authored configuration, not the default: on DBLP it is 1.54× slower than
 //! `triangle-compiled`'s `probe first` Range plan (README, paired timing).
 //!
-//! IDs remain native i64 values through upload, radix key packing, item lanes
-//! and output decoding; full-domain signed IDs need no dense directory. The
+//! IDs remain native u32 values through upload, radix key packing, item lanes
+//! and output decoding; full-domain unsigned IDs need no dense directory. The
 //! two candidate sides `r [b][c]` and `s [a][c]` are `RadixLayout`s with
-//! authored advice (u128 words for two i64 key fields, u32 offsets, ratio 4,
+//! authored advice (u64 words for two u32 key fields, u32 offsets, ratio 4,
 //! 16 directory bits). Per edge, GPU-Smallest counts both sides' distinct `c`
 //! exactly, enumerates the first smaller one and keeps candidates the other
-//! side contains. The full-domain `(a,b,c)` heading (192 bits) retains all
+//! side contains. The full-domain `(a,b,c)` heading (96 bits) retains all
 //! three lanes in the ordinary full-row set output.
 //! `--check` compares the compiled GPU tuples with the independent CPU reference.
 //!
@@ -25,7 +25,16 @@ use std::{
     time::Instant,
 };
 
-fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
+fn parse_vertex(value: &str) -> Result<u32, Box<dyn Error>> {
+    value.parse::<u32>().map_err(|error| {
+        format!(
+            "invalid vertex ID {value:?}: expected an unsigned integer in 0..=4294967295 (negative or overflowing IDs are unsupported): {error}"
+        )
+        .into()
+    })
+}
+
+fn load(path: &str) -> Result<Vec<(u32, u32)>, Box<dyn Error>> {
     let mut rows = Vec::new();
     for line in BufReader::with_capacity(1 << 20, std::fs::File::open(path)?).lines() {
         let line = line?;
@@ -36,20 +45,20 @@ fn load(path: &str) -> Result<Vec<(i64, i64)>, Box<dyn Error>> {
         let (Some(a), Some(b)) = (fields.next(), fields.next()) else {
             return Err(format!("malformed edge line: {line}").into());
         };
-        rows.push((a.parse()?, b.parse()?));
+        rows.push((parse_vertex(a)?, parse_vertex(b)?));
     }
     rows.sort_unstable();
     rows.dedup();
     Ok(rows)
 }
 
-// The authored Smallest triangle with signed vertex types.
-fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, (i64, i64, i64)> {
+// The authored Smallest triangle with unsigned vertex types.
+fn triangles<'a>(edges: &'a DeviceColumns<'_, (u32, u32)>) -> DeviceColumns<'a, (u32, u32, u32)> {
     cq_sequence_rewrites::grade! {
         arguments { gpu, Edges at host, ByB at host, ByA at host, result at device };
         pipeline { ::cq_gpu_sequence::machine_grade, ::cq_gpu_sequence::translate };
         physical {
-            relation E(src:i64,dst:i64) = (edges);
+            relation E(src:u32,dst:u32) = (edges);
             l = pipe rename E {src -> a,dst -> b};
             r = let rename E {src -> b,dst -> c};
             s = let rename E {src -> a,dst -> c};
@@ -58,11 +67,11 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
             return checked as answer(a,b,c);
         }
         structures { providers { device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns }; range_provider = ::cq_gpu_sequence_runtime::RangeProvider { reads [exact, range, membership], build inferred, abi range, contiguous_range }; radix_layout = ::gpu_datalog_runtime::RadixLayout<_, _, _, _, _> { reads [exact, range, membership, candidates], build typed, abi radix }; radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred }; }
-            l host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            s host scan = @device_columns input { keys 0; columns [i64 => i64, i64 => i64] } as ::cq_gpu_runtime::DeviceColumns<'static,(i64,i64)> [];
-            r = @radix_layout radix { word u128; offset u32; ratio 4; radix_bits 16; merge_tile 1024 } as ::gpu_datalog_runtime::RadixLayout<(i64,i64),(i64,i64),u128,u32,(::gpu_datalog_runtime::Buffer<i64>,::gpu_datalog_runtime::Buffer<i64>)> [b][c];
-            s = @radix_layout radix { word u128; offset u32; ratio 4; radix_bits 16; merge_tile 1024 } as ::gpu_datalog_runtime::RadixLayout<(i64,i64),(i64,i64),u128,u32,(::gpu_datalog_runtime::Buffer<i64>,::gpu_datalog_runtime::Buffer<i64>)> [a][c];
+            l host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            r host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            s host scan = @device_columns input { keys 0; columns [u32 => u32, u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,u32)> [];
+            r = @radix_layout radix { word u64; offset u32; ratio 4; radix_bits 16; merge_tile 1024 } as ::gpu_datalog_runtime::RadixLayout<(u32,u32),(u32,u32),u64,u32,(::gpu_datalog_runtime::Buffer<u32>,::gpu_datalog_runtime::Buffer<u32>)> [b][c];
+            s = @radix_layout radix { word u64; offset u32; ratio 4; radix_bits 16; merge_tile 1024 } as ::gpu_datalog_runtime::RadixLayout<(u32,u32),(u32,u32),u64,u32,(::gpu_datalog_runtime::Buffer<u32>,::gpu_datalog_runtime::Buffer<u32>)> [a][c];
             r rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
             s rows = @range_provider as ::cq_gpu_sequence_runtime::RangeProvider;
             checked rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
@@ -80,8 +89,8 @@ fn triangles<'a>(edges: &'a DeviceColumns<'_, (i64, i64)>) -> DeviceColumns<'a, 
 }
 
 /// Independent CPU reference over the same canonical edges.
-fn reference(edges: &[(i64, i64)]) -> Vec<(i64, i64, i64)> {
-    let range = |key: i64| {
+fn reference(edges: &[(u32, u32)]) -> Vec<(u32, u32, u32)> {
+    let range = |key: u32| {
         edges.partition_point(|&(s, _)| s < key)..edges.partition_point(|&(s, _)| s <= key)
     };
     let mut out = Vec::new();
@@ -139,7 +148,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             actual.sort_unstable();
             assert_eq!(
                 &actual, expected,
-                "compiled i64 triangle differs from CPU reference"
+                "compiled u32 triangle differs from CPU reference"
             );
         }
         println!(
@@ -173,33 +182,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compiled_i64_triangle_preserves_vertex_ids() -> Result<(), Box<dyn Error>> {
+    fn vertex_parse_checks_u32_domain() -> Result<(), Box<dyn Error>> {
+        assert_eq!(parse_vertex("0")?, u32::MIN);
+        assert_eq!(parse_vertex("2147483648")?, 1 << 31);
+        assert_eq!(parse_vertex("4294967295")?, u32::MAX);
+        for value in ["-1", "4294967296", "18446744073709551616"] {
+            let error = parse_vertex(value).unwrap_err().to_string();
+            assert!(error.contains(value), "{error}");
+            assert!(error.contains("0..=4294967295"), "{error}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compiled_u32_triangle_preserves_vertex_ids() -> Result<(), Box<dyn Error>> {
         let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
         for mut rows in [
             vec![],
             vec![
-                (0i64, 0),
+                (0u32, 0),
                 (1, 2),
                 (2, 3),
                 (1, 3),
                 (1, 3),
                 (1_000_000, 1_000_000),
             ],
-            // Full-domain signed IDs: extremes, both signs, candidates shared
-            // under several prefixes and both sides chosen as smallest.
+            // Full-domain IDs, shared candidates, and both smallest-side choices.
             vec![
-                (i64::MIN, -1),
-                (-1, i64::MAX),
-                (i64::MIN, i64::MAX),
-                (i64::MIN, 0),
-                (0, i64::MAX),
-                (-1, 0),
-                (i64::MAX, i64::MIN),
-                (-7, -1),
-                (-7, i64::MAX),
-                (-7, 0),
-                (-7, i64::MIN),
-                (i64::MIN, -7),
+                (u32::MIN, 1),
+                (1, u32::MAX),
+                (u32::MIN, u32::MAX),
+                (u32::MIN, 1 << 31),
+                (1 << 31, u32::MAX),
+                (1, 1 << 31),
+                (u32::MAX, u32::MIN),
+                (7, 1),
+                (7, u32::MAX),
+                (7, 1 << 31),
+                (7, u32::MIN),
+                (u32::MIN, 7),
             ],
         ] {
             rows.sort_unstable();
@@ -211,7 +232,7 @@ mod tests {
                 &[cq_gpu_runtime::Codec::For; 2],
             )?;
             let answer = triangles(&resident);
-            // DECODE P: diagnostic signed-boundary triangle publication exposes reconstructed result tuples.
+            // DECODE P: diagnostic unsigned-boundary triangle publication exposes reconstructed result tuples.
             let mut actual = answer.to_host()?;
             actual.sort_unstable();
             let mut expected = reference(&rows);
