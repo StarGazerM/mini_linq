@@ -5,9 +5,14 @@ use gpu_datalog_runtime::{DomainCatalog, DomainInput, SymbolCodec};
 struct Handle(u32);
 struct BatchCodec;
 static BATCHES: AtomicUsize = AtomicUsize::new(0);
+static SCALAR_DECODES: AtomicUsize = AtomicUsize::new(0);
 impl SymbolCodec<Handle> for BatchCodec {
     fn code(value: &Handle) -> u32 { value.0 }
-    fn decode(_: u32) -> Handle { panic!("publication must use the column batch inverse") }
+    fn decode(code: u32) -> Handle {
+        SCALAR_DECODES.fetch_add(1, Ordering::Relaxed);
+        // DECODE P: diagnostic scalar publication records calls to the non-bulk inverse.
+        Handle(code)
+    }
     fn decode_many(codes: Vec<u32>) -> Vec<Handle> {
         BATCHES.fetch_add(1, Ordering::Relaxed);
         // DECODE P: the fixture publishes a whole logical handle column in one call.
@@ -24,6 +29,7 @@ fn dense_symbol_and_signed_columns_publish_in_bulk() -> gpu_datalog_runtime::Res
     ])?);
     let rows = vec![(Handle(20), 3i32), (Handle(10), -2)];
     BATCHES.store(0, Ordering::Relaxed);
+    SCALAR_DECODES.store(0, Ordering::Relaxed);
     let output = cq_datalog::datalog! {
         pipeline {
             storage_rewrites = [::cq_gpu_datalog::domain_storage(symbols(Handle => [0] BatchCodec))];
@@ -51,5 +57,6 @@ fn dense_symbol_and_signed_columns_publish_in_bulk() -> gpu_datalog_runtime::Res
     actual.sort_unstable();
     assert_eq!(actual, [(-2, Handle(10)), (3, Handle(20))]);
     assert_eq!(BATCHES.load(Ordering::Relaxed), 1);
+    assert_eq!(SCALAR_DECODES.load(Ordering::Relaxed), 0);
     Ok(())
 }

@@ -57,8 +57,8 @@ pub trait SymbolCodec<T> {
     // DECODE P: datalog print output reconstruction invokes this inverse for final host answer rows.
     fn decode(code: u32) -> T;
 
-    /// Restore one complete output column. Consuming the codes permits codecs
-    /// with equally sized logical handles to reuse the allocation.
+    /// Preserve input order and the scalar `decode` result for every code.
+    /// Consuming the column permits equally sized handles to reuse its allocation.
     fn decode_many(codes: Vec<u32>) -> Vec<T> {
         // DECODE P: the bulk publication adapter restores a complete output column.
         codes.into_iter().map(Self::decode).collect()
