@@ -633,7 +633,7 @@ pub struct DeviceRadixRun<W: Word, O: OffsetWord, C: DeviceItemColumns> {
     /// Construction witness, not inferred from C=(): set admission guarantees
     /// unit offsets and disjoint complete keys across all accepted runs.
     full_key_set: bool,
-    /// Caller-recorded sort window; occurrences always use the full word.
+    /// Caller-recorded sort window; native occurrence builders default to the full word.
     active_bits: u32,
     /// The current publication's descriptors, uploaded once on first read and
     /// replaced only when a publication changes the runs.
@@ -815,7 +815,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             return Ok(None);
         }
         let pool = &self.pool;
-        crate::stats::record_sort(crate::stats::SortKind::Occurrence, rows, W::BITS, true);
+        crate::stats::record_sort(crate::stats::SortKind::Occurrence, rows, self.active_bits, true);
         let module = &self.kernels.module;
         let cub = rccl_cub::cuda::Program::load(pool.context())?;
         let launch = cub.on(pool.stream())?;
@@ -826,7 +826,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             keys,
             rows,
             self.params.block_threads,
-            W::BITS,
+            self.active_bits,
         )?;
         let order = permutation.get().cu_deviceptr() as *const u32;
         // SAFETY: the flag kernel initializes all rows + 1 entries.
@@ -2337,8 +2337,8 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
     /// Formal rule GPU-RadixSourceBuild: one publication of `rows` occurrences
     /// read from resident source columns (through `positions` unless null):
     /// key fields packed by `K`'s packing into whole `W` keys, one item lane
-    /// per value source. Grouping is the ordinary GPU-RadixPublish build; the
-    /// only host synchronization is its group-count download.
+    /// per value source. Grouping is the ordinary GPU-RadixPublish build;
+    /// validation reads one error flag before the group-count download.
     ///
     /// # Safety
     /// Every source must describe initialized values of its schema column at
@@ -2353,11 +2353,31 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
         rows: usize,
     ) -> Result<Self> {
         let packing = Self::derive_packing()?;
+        unsafe { Self::from_sources_with_packing(pool, params, packing, keys, values, positions, rows) }
+    }
+
+    /// Build with recorded runtime field widths and significant sort bits.
+    /// Values outside a supplied field are refused before sorting, never masked
+    /// into another key. Scalar types and W are carrier upper bounds.
+    ///
+    /// # Safety
+    /// The source initialization, lifetime and selected-position obligations
+    /// are exactly those of [`Self::from_sources`].
+    pub unsafe fn from_sources_with_packing(
+        pool: Arc<Pool>,
+        params: RadixRunParams,
+        packing: Packing,
+        keys: &[SourceView],
+        values: &[SourceView],
+        positions: *const u32,
+        rows: usize,
+    ) -> Result<Self> {
         Self::check_schema(&packing)?;
         if keys.len() != K::COLUMNS.len() || values.len() != C::COLUMNS {
             return Err("radix sources differ from the layout's key and value schema".into());
         }
         let mut run = DeviceRadixRun::<W, O, C>::new(pool.clone(), params)?;
+        run.active_bits = packing.bits();
         if rows != 0 {
             u32::try_from(rows).map_err(|_| "radix source build exceeds the u32 row domain")?;
             let sources = Buffer::from_host_async(pool.clone(), keys)?;
@@ -2367,6 +2387,7 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
             )?;
             // SAFETY: the pack kernel initializes every key before grouping.
             let words = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
+            let error = Buffer::from_host_async(pool.clone(), &[0u32])?;
             let module = &run.kernels.module;
             let initial = module.prepare_pack_sources::<W>(run.kernels.shape())?;
             let config = run.kernels.config(initial.function(), rows)?;
@@ -2379,7 +2400,11 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
                 positions,
                 rows as u64,
                 words.ptr(),
+                error.ptr(),
             )?;
+            if error.to_host()?[0] != 0 {
+                return Err("radix source value does not fit its recorded key field".into());
+            }
             let items = C::from_sources(&run.kernels, values, positions, rows)?;
             run.publish(&words, &items, rows)?;
         }
@@ -2848,6 +2873,7 @@ mod radix_kernels {
         Word,
     };
     use cuda_device::{kernel, launch_bounds, launch_contract, thread};
+    use cuda_device::atomic::{AtomicOrdering, DeviceAtomicU32};
     use gpu_device_columns::{decode_source, SourceView};
 
     /// Pack each read row's key fields (most significant first, sign bit
@@ -2862,6 +2888,7 @@ mod radix_kernels {
         positions: *const u32,
         rows: u64,
         keys: *mut W,
+        error: *mut u32,
     ) {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
@@ -2876,14 +2903,21 @@ mod radix_kernels {
             while index < field_count {
                 let field = unsafe { *fields.add(index as usize) };
                 // DECODE V: radix source build reconstructs resident FOR values before key packing; P4 pack encoded order keys directly.
-                let value = unsafe { decode_source(*sources.add(index as usize), source) } as u64;
+                let value = unsafe { decode_source(*sources.add(index as usize), source) };
+                let (minimum, maximum) = if field.signed != 0 {
+                    let half = 1_i64 << (field.bits - 1);
+                    (-half, half)
+                } else { (0, 1_i64 << field.bits) };
+                if value < minimum || value >= maximum {
+                    unsafe { DeviceAtomicU32::from_ptr(error).store(1, AtomicOrdering::Relaxed) };
+                }
                 let mask = u64::MAX >> (64 - field.bits);
                 let sign = if field.signed != 0 {
                     1_u64 << (field.bits - 1)
                 } else {
                     0
                 };
-                key.insert(field.shift, field.bits, (value & mask) ^ sign);
+                key.insert(field.shift, field.bits, (value as u64 & mask) ^ sign);
                 index += 1;
             }
             unsafe {
