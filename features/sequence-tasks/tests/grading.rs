@@ -68,7 +68,7 @@ fn program(sequence: proc_macro2::TokenStream, grades: proc_macro2::TokenStream)
             relation R(a:i32);
             r = let canon rename R {a -> a};
             return r as answer(a);
-        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #sequence }
         graded tasks { #grades }
     })
@@ -84,7 +84,7 @@ fn witness_program(sequence: proc_macro2::TokenStream, grades: proc_macro2::Toke
             r = let canon project raw keep {a};
             return r as answer(a);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } raw host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } raw host scan = @host_scan as ::core::iter::Map<_, _> []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #sequence }
         graded tasks { #grades }
     })
@@ -2829,9 +2829,13 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
         return out as answer(x,value);
     });
     let (physical, structures) = cq_structure_selection::compile_with(&physical, quote::quote!(
-        blocks(R { block_rows 1024; summary minmax; columns [a:bytes u64,b:plain u64,witness:plain u64]; })
+        blocks(R { block_rows 4096; summary minmax; columns [a:bytes u64,b:plain u64,witness:plain u64]; })
     )).unwrap();
     let lowered = cq_sequence_lowering::compile(&physical, &structures).unwrap();
+    let source = lowered.representation.blocks.scans["r"].source;
+    let vector_rows = structures.encoded.blocks.sources[&source].vector_rows;
+    assert_eq!(vector_rows, 1024);
+    assert_eq!(structures.encoded.blocks.sources[&source].block_rows, 4096);
     let representation = lowered.representation.clone();
     let program: Fixture = syn::parse_quote! {
         #physical
@@ -2871,6 +2875,8 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
     cq_lang_sequence::blocks::record_routing(&routed.physical, &routed.structures, &mut routed.program).unwrap();
     let routed_facts = check_grading(&routed.physical, &routed.structures, &routed.program, &machine()).unwrap();
     let routed_expression = translate(&routed.physical, &routed.structures, &routed.program, &routed_facts).unwrap();
+    let rendered = routed_expression.to_token_stream().to_string();
+    assert!(rendered.contains("div_ceil (1024usize)"), "{rendered}");
     let printed = routed.to_token_stream();
     assert_eq!(syn::parse2::<Fixture>(printed).unwrap(), routed);
     let mut missing_read = routed.clone();
@@ -2895,9 +2901,9 @@ fn blocked_tasks_borrow_disjoint_ranges_and_canon_logical_keys() {
                     let b:Vec<i64> = (0..count).map(|i| (i/2 % 7) as i64).collect();
                     let witnesses:Vec<i64> = (0..count).map(|i| i as i64).collect();
                     let R = ScanTable::new((
-                        ScanColumn::<i64,Bytes>::new(&a,BlockRows::new(1024).unwrap(),true),
-                        ScanColumn::<i64,Plain>::new(&b,BlockRows::new(1024).unwrap(),true),
-                        ScanColumn::<i64,Plain>::new(&witnesses,BlockRows::new(1024).unwrap(),true),
+                        ScanColumn::<i64,Bytes>::new(&a,BlockRows::new(4096).unwrap(),true),
+                        ScanColumn::<i64,Plain>::new(&b,BlockRows::new(4096).unwrap(),true),
+                        ScanColumn::<i64,Plain>::new(&witnesses,BlockRows::new(4096).unwrap(),true),
                     )).bind_domains(&[domain,domain,domain]).unwrap();
                     let survivors:Vec<_> = a.iter().copied().zip(b.iter().copied()).filter(|&(x,y)| x>=3 && y<4).collect();
                     let mut expected:Vec<_> = survivors.iter().map(|&(x,y)| (x,x*10+y)).collect();

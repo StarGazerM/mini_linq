@@ -11,10 +11,6 @@ mod kw { syn::custom_keyword!(blocks); syn::custom_keyword!(scan); syn::custom_k
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scan {
     pub source: structures::encoded::SourceId,
-    /// Native source positions; no narrowing to a whole-relation u32 index.
-    pub tile_rows: usize,
-    /// One reusable byte mask per active scan/filter iterator, not per input.
-    pub scratch_rows: usize,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase { Prune, Exact, Positions }
@@ -62,7 +58,7 @@ impl Execution {
             }
         }
         Self {
-            scans: blocks.scans.iter().map(|(name, scan)| (name.clone(), Scan { source: scan.source, tile_rows: 1024, scratch_rows: 1024 })).collect(),
+            scans: blocks.scans.iter().map(|(name, scan)| (name.clone(), Scan { source: scan.source })).collect(),
             predicates: blocks.predicates.keys().map(|name| (name.clone(), vec![Phase::Prune, Phase::Exact, Phase::Positions])).collect(),
             runs,
             reads: blocks.reads.keys().cloned().collect(),
@@ -80,11 +76,9 @@ impl Parse for Execution {
                 body.parse::<kw::scan>()?;
                 let name: LitStr = body.parse()?;
                 let args; parenthesized!(args in body);
-                let source: LitInt = args.parse()?; args.parse::<Token![,]>()?;
-                let tile: LitInt = args.parse()?; args.parse::<Token![,]>()?;
-                let scratch: LitInt = args.parse()?;
+                let source: LitInt = args.parse()?;
                 if !args.is_empty() { return Err(args.error("unexpected scan execution field")); }
-                if result.scans.insert(name.value(), Scan { source: structures::encoded::SourceId(source.base10_parse()?), tile_rows: tile.base10_parse()?, scratch_rows: scratch.base10_parse()? }).is_some() { return Err(syn::Error::new_spanned(name, "duplicate block scan")); }
+                if result.scans.insert(name.value(), Scan { source: structures::encoded::SourceId(source.base10_parse()?) }).is_some() { return Err(syn::Error::new_spanned(name, "duplicate block scan")); }
             } else if body.peek(kw::predicate) {
                 body.parse::<kw::predicate>()?;
                 let name: LitStr = body.parse()?;
@@ -131,7 +125,7 @@ impl Parse for Execution {
 impl ToTokens for Execution {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         if self.is_empty() { return; }
-        let scans = self.scans.iter().map(|(name, scan)| { let source = scan.source.0; let tile = scan.tile_rows; let scratch = scan.scratch_rows; quote!(scan #name (#source, #tile, #scratch);) });
+        let scans = self.scans.iter().map(|(name, scan)| { let source = scan.source.0; quote!(scan #name (#source);) });
         let predicates = self.predicates.iter().map(|(name, phases)| { let phases = phases.iter().map(|phase| match phase { Phase::Prune => quote!(prune), Phase::Exact => quote!(exact), Phase::Positions => quote!(positions) }); quote!(predicate #name [#(#phases),*];) });
         let reads = self.reads.iter().map(|name| quote!(read #name;));
         let runs = self.runs.iter().map(|(root, names)| quote!(run #root [#(#names),*];));
@@ -153,7 +147,7 @@ pub fn check(physical: &structures::physical::Program, structures: &structures::
     if !execution.scans.keys().eq(blocks.scans.keys()) || !execution.predicates.keys().eq(blocks.predicates.keys()) || !execution.reads.iter().eq(blocks.reads.keys()) { return Err(invalid()); }
     for (name, scan) in &execution.scans {
         let source = &blocks.scans[name];
-        if scan.source != source.source || scan.tile_rows != 1024 || scan.scratch_rows != scan.tile_rows || blocks.sources[&source.source].block_rows % scan.tile_rows as u64 != 0 { return Err(invalid()); }
+        if scan.source != source.source { return Err(invalid()); }
     }
     if execution.predicates.values().any(|phases| phases != &[Phase::Prune, Phase::Exact, Phase::Positions]) { return Err(invalid()); }
     let definitions: BTreeMap<_, _> = physical.program.definitions.iter().map(|d| (structures::symbol_name(&d.name), d)).collect();
@@ -250,7 +244,7 @@ pub fn check_task_covers(physical: &structures::physical::Program, structures: &
             Term::Choose(arms) => arms.iter().any(|(_, arm)| unstored_source(arm, program)),
         }
     }
-    fn visit(term: &Term, program: &Program, terms: &BTreeMap<*const Term, &crate::task_execution::Node>) -> syn::Result<()> {
+    fn visit(term: &Term, structures: &structures::Program, program: &Program, terms: &BTreeMap<*const Term, &crate::task_execution::Node>) -> syn::Result<()> {
         if let Term::Tile { n, inner, .. } = term {
             let producer = terms[&(term as *const Term)];
             if matches!(producer.staging, Some(crate::task_execution::Staging::TileInput)) && unstored_source(inner, program) {
@@ -258,19 +252,20 @@ pub fn check_task_covers(physical: &structures::physical::Program, structures: &
             }
             if let Some(source) = producer.borrowed_host.as_ref() {
                 if let Some(scan) = program.representation.blocks.scans.get(source) {
-                    if *n == 0 || *n % scan.tile_rows != 0 { return Err(syn::Error::new_spanned(program, "BE-Blocks: task range must align to source blocks")); }
+                    let vector_rows = structures.encoded.blocks.sources[&scan.source].vector_rows;
+                    if *n == 0 || *n % vector_rows != 0 { return Err(syn::Error::new_spanned(program, "BE-Blocks: task range must align to source vectors")); }
                 }
             }
         }
         match term {
-            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Group(_, inner) | Term::Flatten(inner) | Term::Fold(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => visit(inner, program, terms)?,
-            Term::Union(arms) => for arm in arms { visit(arm, program, terms)?; },
-            Term::Choose(arms) => for (_, arm) in arms { visit(arm, program, terms)?; },
+            Term::Map(_, inner) | Term::Compact(_, inner) | Term::Group(_, inner) | Term::Flatten(inner) | Term::Fold(_, inner) | Term::Canon(inner) | Term::Store { inner, .. } | Term::Tile { inner, .. } | Term::PartitionK { inner, .. } | Term::Lookup { inner, .. } => visit(inner, structures, program, terms)?,
+            Term::Union(arms) => for arm in arms { visit(arm, structures, program, terms)?; },
+            Term::Choose(arms) => for (_, arm) in arms { visit(arm, structures, program, terms)?; },
             Term::Rows(_) | Term::Ref(_) => {},
         }
         Ok(())
     }
-    for definition in &program.sequence.definitions { visit(&definition.term, program, &terms)?; }
+    for definition in &program.sequence.definitions { visit(&definition.term, structures, program, &terms)?; }
     Ok(())
 }
 

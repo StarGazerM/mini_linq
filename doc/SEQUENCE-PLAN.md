@@ -131,11 +131,12 @@ impl cq_stage::Language for Program { … }
 `Representation { identity: BTreeSet<String>, encoded: BTreeSet<String>,
 blocks: blocks::Execution }` prints as optional trailing
 `representation { identity [...]; encoded [...]; blocks { ... } }`
-after evidence. The optional CPU blocks section records source scan geometry,
-native position carriers, bounded scratch, ordered predicate phases, fused
-predicate runs and exact read-consumer identities. It references the
-Structures-owned representations and predicate decisions, rather than selecting
-families or reinterpreting Rust types. `BE-Blocks` checks phase coverage,
+after evidence. The optional CPU blocks section records source scan references,
+native position carriers, ordered predicate phases, fused predicate runs and
+exact read-consumer identities. Vector extent and bounded scratch derive from
+the Structures-owned source geometry, not duplicate Sequence fields.
+It references Structures representations and predicate decisions rather than
+selecting families or reinterpreting Rust types. `BE-Blocks` checks phase coverage,
 single-consumer fusion paths, aligned disjoint tiles and demanded-read placement
 independently of the producer; a lawful split run is not rejected merely because
 the lowering prefers one reused mask. Pull and Tasks print these checked facts.
@@ -145,6 +146,9 @@ Structures representation. Routing compares/hashes compatible global ordinal
 carriers, never block-relative residuals or reconstructed logical rows. The
 checker validates exact constructor-key demand independently of the routing
 producer; native blocked source chunks remain bounded and source-borrowed.
+`Fold Sum` rejects a still-encoded base column, including through retained
+references; a computed owned value and `Fold Count` remain legal. This is an
+ownership refusal, not an implicit decoding or uniqueness policy.
 Unknown columns do not justify device Rust. `LevelNode.host_rust`
 is true for host and CPU task execution, false for device/block/lane execution.
 Every Rust expression is pure-total by premise and emitted unchanged; device

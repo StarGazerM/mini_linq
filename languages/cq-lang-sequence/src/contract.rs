@@ -1221,6 +1221,40 @@ impl Checked<'_> {
                             "sum column is absent from the input heading",
                         );
                     }
+                    if !self.prefix.program.encoded.blocks.scans.is_empty() {
+                        let origins = cq_lang_structures::representation_bases(
+                            &self.prefix.physical_program,
+                            &self.prefix.program,
+                            &self.prefix.analysis,
+                        );
+                        let column_name = symbol_name(column);
+                        let blocked_result = |name: &str| origins.get(name)
+                            .into_iter().flatten().any(|origin| {
+                                self.prefix.program.encoded.blocks.scans.contains_key(&origin.occurrence)
+                                    && origin.columns.contains_key(&column_name)
+                            });
+                        let blocked_host = |name: &str| self.prefix.program.encoded.blocks.scans
+                            .values().any(|scan| {
+                                self.prefix.program.encoded.obligations.sources[&scan.source].relation == name
+                            });
+                        fn blocked_field(
+                            meaning: &Meaning,
+                            blocked: &impl Fn(&str) -> bool,
+                            host: &impl Fn(&str) -> bool,
+                        ) -> bool {
+                            match meaning {
+                                Meaning::Result(name) => blocked(name),
+                                Meaning::Host(name) => host(name),
+                                Meaning::Lookup(provider, _, inner) =>
+                                    blocked(provider) || blocked_field(inner, blocked, host),
+                                Meaning::Fold(_, _) => false,
+                            }
+                        }
+                        if blocked_field(&fact.meaning, &blocked_result, &blocked_host) {
+                            return fail(column, "BE-Blocks",
+                                "sum requires an owned computed operand, not a blocked source field");
+                        }
+                    }
                 }
                 fact.meaning = Meaning::Fold(monoid.clone(), Box::new(fact.meaning));
                 fact.unique = (fact.depth == 0).then(Vec::new);

@@ -65,7 +65,7 @@ fn probe_shape_and_structural_checker_reject_mutations() {
             j = pipe probe first [a] l,r;
             out = let canon project j keep {b};
             return out as answer(b);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; provider = Provider { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @provider as Provider [a]; out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
         }
@@ -101,7 +101,7 @@ fn correspondence_accepts_authored_output_names_but_not_another_result() {
             s = let canon rename S {a -> a};
             u = let canon union r,s;
             return u as answer(a);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             r host scan = @reader as Reader []; s host scan = @reader as Reader [];
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; s rows = @sort as ::cq_storage::dedup::Sort; s canon = rows; u rows = @sort as ::cq_storage::dedup::Sort; u canon = rows;
         }
@@ -128,7 +128,7 @@ fn output_name_is_fresh_and_return_canon_is_preserved() {
             relation R(a:i32);
             __sequence_output = pipe rename R {a -> a};
             return canon __sequence_output as answer(a);
-        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        } structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             __sequence_output host scan = @reader as Reader [];
             __sequence_output head = @sort as ::cq_storage::dedup::Sort;
         }
@@ -379,6 +379,17 @@ fn blocked_execution_roundtrips_and_accepts_lawful_shorter_runs() {
     assert_eq!(target.representation.blocks.runs["t"], ["t"]);
     let printed = syn::parse_quote!(#target);
     assert_eq!(syn::parse2::<Program>(printed).unwrap(), target);
+    let execution: cq_lang_sequence::blocks::Execution = syn::parse_quote!(
+        blocks { scan "r" (0); predicate "p" [prune, exact, positions]; }
+    );
+    assert_eq!(execution.predicates["p"], [
+        cq_lang_sequence::blocks::Phase::Prune,
+        cq_lang_sequence::blocks::Phase::Exact,
+        cq_lang_sequence::blocks::Phase::Positions,
+    ]);
+    assert!(syn::parse2::<cq_lang_sequence::blocks::Execution>(
+        syn::parse_quote!(blocks { scan "r" (0, 1024, 1024); })
+    ).is_err(), "Sequence must not accept duplicate source geometry");
     let mut separate = target.clone();
     separate.representation.blocks.runs.remove("r");
     separate.representation.blocks.runs.insert("p".into(), vec!["p".into()]);
@@ -394,14 +405,14 @@ fn blocked_execution_roundtrips_and_accepts_lawful_shorter_runs() {
 }
 
 #[test]
-fn blocked_execution_rejects_forged_phases_scratch_and_opaque_crossing() {
+fn blocked_execution_rejects_forged_phases_sources_and_opaque_crossing() {
     let (physical, source) = blocked_source();
     let target = accept(&physical, &source);
     let mut changed = target.clone();
     changed.representation.blocks.predicates.get_mut("p").unwrap().swap(0,1);
     assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target.clone();
-    changed.representation.blocks.scans.get_mut("r").unwrap().scratch_rows = 2048;
+    changed.representation.blocks.scans.get_mut("r").unwrap().source = cq_lang_structures::encoded::SourceId(u64::MAX);
     assert!(check(&physical, &source, &changed).is_err());
     let mut changed = target.clone();
     changed.representation.blocks.runs.get_mut("r").unwrap().push("t".into());
@@ -413,4 +424,72 @@ fn blocked_execution_rejects_forged_phases_scratch_and_opaque_crossing() {
     let mut changed = target;
     changed.representation.blocks.reads.remove("g");
     assert!(check(&physical, &source, &changed).is_err());
+}
+
+#[test]
+fn blocked_fold_sum_requires_owned_computed_operands() {
+    for family in [syn::parse_quote!(plain), syn::parse_quote!(bytes)] {
+        let family: syn::Ident = family;
+        let physical = syn::parse_quote!(physical {
+            relation R(a: i64 [1], witness: i64 [1]);
+            r = pipe rename R {a -> x, witness -> witness};
+            p = pipe range select r if (x >= 3);
+            v = pipe bind p with amount: i64 = (*x * 2);
+            out = pipe project v keep {x, amount};
+            return canon out as answer(x,amount);
+        });
+        let (physical, structures) = cq_structure_selection::compile_with(&physical, syn::parse_quote!(
+            blocks(R { block_rows 1024; summary none; columns [a: #family u64, witness: plain u64]; })
+        )).unwrap();
+        let sequence = accept(&physical, &structures);
+        for term in [
+            syn::parse_quote!(fold sum a rows R),
+            syn::parse_quote!(fold sum x rows r),
+            syn::parse_quote!(fold sum x map p rows r),
+            syn::parse_quote!(fold sum x map out map v map p rows r),
+            syn::parse_quote!(fold sum x canon map out map v map p rows r),
+            syn::parse_quote!(fold sum x store rows r),
+        ] {
+            let mut changed = sequence.clone();
+            changed.sequence.definitions.insert(0, cq_lang_sequence::Definition {
+                name: syn::parse_quote!(probe),
+                term,
+            });
+            let error = cq_lang_sequence::contract::check(&physical, &structures, &changed)
+                .unwrap_err().to_string();
+            assert!(error.contains("BE-Blocks") && error.contains("owned computed operand"), "{error}");
+        }
+        for term in [
+            syn::parse_quote!(fold sum amount map v map p rows r),
+            syn::parse_quote!(fold count rows r),
+        ] {
+            let mut changed = sequence.clone();
+            changed.sequence.definitions.insert(0, cq_lang_sequence::Definition {
+                name: syn::parse_quote!(probe),
+                term,
+            });
+            cq_lang_sequence::contract::check(&physical, &structures, &changed).unwrap();
+        }
+        let mut referenced = sequence.clone();
+        referenced.sequence.definitions.splice(0..0, [
+            cq_lang_sequence::Definition {
+                name: syn::parse_quote!(source_view),
+                term: syn::parse_quote!(rows r),
+            },
+            cq_lang_sequence::Definition {
+                name: syn::parse_quote!(probe),
+                term: syn::parse_quote!(fold sum x source_view),
+            },
+        ]);
+        let error = cq_lang_sequence::contract::check(&physical, &structures, &referenced)
+            .unwrap_err().to_string();
+        assert!(error.contains("owned computed operand"), "{error}");
+        let ordinary = cq_structure_selection::compile(&physical).unwrap();
+        let mut ordinary_sequence = accept(&physical, &ordinary);
+        ordinary_sequence.sequence.definitions.insert(0, cq_lang_sequence::Definition {
+            name: syn::parse_quote!(probe),
+            term: syn::parse_quote!(fold sum x rows r),
+        });
+        cq_lang_sequence::contract::check(&physical, &ordinary, &ordinary_sequence).unwrap();
+    }
 }

@@ -1272,14 +1272,15 @@ boundaries.
 Structures owns source/declaration/representation identities, the exact
 Physical predicate, its translation and summary strategy, and every authorized
 read demand. Sequence adds a printable execution refinement, not another
-family or domain table. Each scan names its Structures source, a native
-snapshot-bound position carrier, a 1024-row vector and a 1024-byte reusable
-mask. The final vector is clipped to the initialized source extent; an empty
+family, domain or geometry table. Each scan names only its Structures source;
+native snapshot-bound positions, vector width and reusable byte-mask size
+follow that source's checked \code{vector\_rows} (currently 1024).
+The final vector is clipped to the initialized source extent; an empty
 extent produces no positions and performs no predicate or payload work.
 \begin{mathpar}
 \Rule{BE-Blocks}{
- \mathsf{STRBlocks}(s)\quad
- \mathsf{cover}(s)=\biguplus_i[1024i,\min(1024(i+1),|s|))\\
+ \mathsf{STRBlocks}(s)\quad v=s.\mathsf{vectorRows}\quad
+ \mathsf{cover}(s)=\biguplus_i[vi,\min(v(i+1),|s|))\\
  \mathsf{run}(r)=[p_1,\ldots,p_k]\text{ is an exact single-use Physical spine}\\
  \mathsf{phases}(p_j)=[\mathsf{prune},\mathsf{exact},\mathsf{positions}]
  \quad \mathsf{reads}(c)=\mathsf{StructuresDemand}(c)
@@ -1309,6 +1310,11 @@ complete logical valuations collapse even at distinct source positions; the
 chosen representative retains its original snapshot-bound position. Final
 answer reads have their separate publication authorization. String codes
 remain codes throughout these actions.
+Sequence \code{Fold Sum} refuses an encoded base field, including one retained
+through a projection, reference, store or canonicalization. It requires an
+owned computed operand instead; \code{Fold Count} does not read source values.
+This refusal derives occurrence lineage from the explicitly supplied Physical
+and Structures contexts, not from an embedded program or Rust type syntax.
 
 The independent checker checks source and predicate coverage, phase order,
 the original intervening operators and their use counts, materialization
@@ -1319,7 +1325,8 @@ The initial host slice rejects unsupported join/index and unrecorded
 relational reconstruction boundaries before either printer runs.
 
 For Tasks, BE-TaskProducer names the borrowed blocked source and partitions
-aligned half-open ranges, clipped only at the live final extent. Each task
+half-open ranges aligned to its Structures-owned vector width, clipped only
+at the live final extent. Each task
 executes the same recorded run on its disjoint range, with worker-local
 bounded scratch; no complete source collection or repeated whole-table scan
 is a source adapter. BE-CarrierPublication retains immutable source owners

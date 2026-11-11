@@ -98,7 +98,7 @@ pub(crate) fn partition(
     } else if let Some(result) = borrowed_host {
         if let Some(scan) = emitter.analysis.representation.blocks.scans.get(result) {
             let host = cq_print::Context::positional_host(&context.physical_analysis.hosts[result]);
-            let vector = scan.tile_rows;
+            let vector = context.encoded.blocks.sources[&scan.source].vector_rows;
             let range = quote!({
                 let __cq_start = __cq_chunk * #vector;
                 __cq_start..__cq_start.saturating_add(#vector).min(#host.len())
