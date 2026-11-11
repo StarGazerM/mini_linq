@@ -1982,16 +1982,28 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
         )
     }
 
-    fn check_schema(packing: &Packing) -> Result<()> {
+    /// Construct key fields from loaded domain widths, not native type widths.
+    /// The scalar tuple and packed word are carrier upper bounds.
+    pub fn derive_packing_with_fields(fields: &[(u32, bool)]) -> Result<Packing> {
+        let packing = Packing::with_fields(fields)?;
+        Self::check_schema(&packing)?;
+        Ok(packing)
+    }
+
+    /// Check runtime key widths against their carrier schema and GPU policy.
+    /// Payload lanes retain their independently checked native widths.
+    pub fn check_schema(packing: &Packing) -> Result<()> {
         if packing.len() != K::COLUMNS.len()
             || !packing
                 .packed_fields()
                 .zip(K::COLUMNS)
                 .all(|(field, column)| {
-                    field.bits == column.bits() && (field.signed != 0) == column.is_signed()
+                    field.bits <= 32
+                        && field.bits <= column.bits()
+                        && (field.signed != 0) == column.is_signed()
                 })
         {
-            return Err("radix layout packing differs from its key tuple schema".into());
+            return Err("radix key fields must match schema arity/signedness and fit their scalar carrier and 32-bit code limit".into());
         }
         if packing.bits() > W::BITS {
             return Err("radix layout key packing exceeds the key word".into());

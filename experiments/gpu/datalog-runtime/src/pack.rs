@@ -266,6 +266,13 @@ impl Packing {
         )
     }
 
+    /// Construct recorded runtime fields as `(bits, signed)` pairs.
+    /// Widths remain generic (`1..=64`); GPU key layouts enforce their
+    /// narrower key policy separately, without restricting payload packing.
+    pub fn with_fields(fields: &[(u32, bool)]) -> Result<Self> {
+        Self::build(fields.iter().copied())
+    }
+
     pub(crate) fn build(columns: impl Iterator<Item = (u32, bool)>) -> Result<Self> {
         let mut fields = Vec::with_capacity(columns.size_hint().0);
         let mut bits = 0_u32;
