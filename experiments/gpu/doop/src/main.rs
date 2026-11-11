@@ -14,7 +14,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `--gpu-only` loads once and skips the CPU reference and comparison, so a
     // timeout bounds the GPU evaluation alone; set GPU_DATALOG_PHASES=1 for the
     // setup / fixpoint / output split.
-    let gpu_facts = doop_shared::Facts::load(&directory)?;
+    let load_started = Instant::now();
+    let gpu_facts = doop_gpu::load(&directory)?;
+    let load_elapsed = load_started.elapsed();
     let mini_facts = if gpu_only {
         None
     } else {
@@ -32,6 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut actual = doop_gpu::run(gpu_facts);
     let gpu_elapsed = start.elapsed();
     println!("dataset\t{}", directory.display());
+    println!("load_seconds\t{:.6}", load_elapsed.as_secs_f64());
     if let Some(path) = std::env::var_os("BENCH_CHECK_WITNESS") {
         let started = Instant::now();
         let policy = bench_check::Policy::from_env(0)?;
@@ -57,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("mini_evaluation_seconds\t{:.6}", mini_elapsed.as_secs_f64());
     println!("gpu_evaluation_seconds\t{:.6}", gpu_elapsed.as_secs_f64());
     println!(
-        "timing_scope\tGPU includes upload, layout construction, execution, download; excludes fact loading and CUDA context creation; GPU_DATALOG_PHASES=1 splits setup/fixpoint/output"
+        "timing_scope\tGPU includes upload, layout construction, execution, download; excludes fact/domain preparation and CUDA context creation; GPU_DATALOG_PHASES=1 splits setup/fixpoint/output"
     );
     actual.print_sizes();
     Ok(())

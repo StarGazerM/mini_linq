@@ -1,5 +1,7 @@
 //! Device realization of the ordinary Datalog Storage and Round records.
 pub mod bindings;
+pub mod domains;
+pub mod encode;
 pub mod lanes;
 pub mod print;
 pub mod storage;

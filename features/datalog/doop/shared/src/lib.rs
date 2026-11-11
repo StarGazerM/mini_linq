@@ -3,6 +3,7 @@
 #![recursion_limit = "1024"]
 
 pub mod ascent_engine;
+mod domains;
 pub mod harness;
 pub mod interner;
 mod loader;
@@ -10,6 +11,7 @@ mod manifest;
 pub mod mini_engine;
 
 pub use interner::IStr;
+pub use domains::DomainValues;
 use std::{io, path::Path};
 
 /// The 32 raw input relations and dataset-precomputed method descriptors.
@@ -59,46 +61,72 @@ impl Facts {
     /// Load with an explicit certificate path, or discover doop-set-manifest.json.
     /// Invalid or absent certificates retain full-row deduplication.
     pub fn load_with_manifest(directory: &Path, path: Option<&Path>) -> io::Result<Self> {
+        Self::load_inner(directory, path, None)
+    }
+
+    /// Load facts and equality-component memberships in the existing parsing pass.
+    ///
+    /// Schema names are facts field names; each column contains its component ID.
+    /// The returned vector is indexed by that ID. Missing files still initialize
+    /// typed empty domains; unreferenced ID gaps are empty symbol domains.
+    /// Symbol memberships contain distinct global codes, sorted without revisiting rows.
+    pub fn load_with_domains(
+        directory: &Path,
+        schema: &[(&str, &[u32])],
+    ) -> io::Result<(Self, Vec<DomainValues>)> {
+        let path = std::env::var_os("DOOP_SET_MANIFEST").map(std::path::PathBuf::from);
+        let mut domains = domains::Domains::new(schema);
+        let facts = Self::load_inner(directory, path.as_deref(), Some(&mut domains))?;
+        Ok((facts, domains.finish()))
+    }
+
+    fn load_inner(
+        directory: &Path,
+        path: Option<&Path>,
+        mut domains: Option<&mut domains::Domains<'_>>,
+    ) -> io::Result<Self> {
         let manifest = manifest::Manifest::load(directory, path);
         macro_rules! load {
-            ($name:literal) => { loader::load(&directory.join($name), &manifest) };
+            ($field:ident, $name:literal) => {
+                loader::load(&directory.join($name), &manifest, stringify!($field), domains.as_deref_mut())
+            };
         }
-        let methods = load!("Method.facts")?;
-        let method_descriptor = loader::method_descriptors(&methods);
+        let methods = load!(_method, "Method.facts")?;
+        let method_descriptor = loader::method_descriptors(&methods, domains.as_deref_mut())?;
         Ok(Self {
-            directsuperclass: load!("DirectSuperclass.facts")?,
-            directsuperinterface: load!("DirectSuperinterface.facts")?,
-            mainclass: load!("MainClass.facts")?,
-            formalparam: load!("FormalParam.facts")?,
-            componenttype: load!("ComponentType.facts")?,
-            assignreturnvalue: load!("AssignReturnValue.facts")?,
-            actualparam: load!("ActualParam.facts")?,
-            method_modifier: load!("Method-Modifier.facts")?,
-            var_type: load!("Var-Type.facts")?,
-            _classtype: load!("ClassType.facts")?,
-            _arraytype: load!("ArrayType.facts")?,
-            _interfacetype: load!("InterfaceType.facts")?,
-            _var_declaringmethod: load!("Var-DeclaringMethod.facts")?,
-            _applicationclass: load!("ApplicationClass.facts")?,
-            _thisvar: load!("ThisVar.facts")?,
-            _normalheap: load!("NormalHeap.facts")?,
-            _stringconstant: load!("StringConstant.facts")?,
-            _assignheapallocation: load!("AssignHeapAllocation.facts")?,
-            _assignlocal: load!("AssignLocal.facts")?,
-            _assigncast: load!("AssignCast.facts")?,
-            _field: load!("Field.facts")?,
-            _staticmethodinvocation: load!("StaticMethodInvocation.facts")?,
-            _specialmethodinvocation: load!("SpecialMethodInvocation.facts")?,
-            _virtualmethodinvocation: load!("VirtualMethodInvocation.facts")?,
+            directsuperclass: load!(directsuperclass, "DirectSuperclass.facts")?,
+            directsuperinterface: load!(directsuperinterface, "DirectSuperinterface.facts")?,
+            mainclass: load!(mainclass, "MainClass.facts")?,
+            formalparam: load!(formalparam, "FormalParam.facts")?,
+            componenttype: load!(componenttype, "ComponentType.facts")?,
+            assignreturnvalue: load!(assignreturnvalue, "AssignReturnValue.facts")?,
+            actualparam: load!(actualparam, "ActualParam.facts")?,
+            method_modifier: load!(method_modifier, "Method-Modifier.facts")?,
+            var_type: load!(var_type, "Var-Type.facts")?,
+            _classtype: load!(_classtype, "ClassType.facts")?,
+            _arraytype: load!(_arraytype, "ArrayType.facts")?,
+            _interfacetype: load!(_interfacetype, "InterfaceType.facts")?,
+            _var_declaringmethod: load!(_var_declaringmethod, "Var-DeclaringMethod.facts")?,
+            _applicationclass: load!(_applicationclass, "ApplicationClass.facts")?,
+            _thisvar: load!(_thisvar, "ThisVar.facts")?,
+            _normalheap: load!(_normalheap, "NormalHeap.facts")?,
+            _stringconstant: load!(_stringconstant, "StringConstant.facts")?,
+            _assignheapallocation: load!(_assignheapallocation, "AssignHeapAllocation.facts")?,
+            _assignlocal: load!(_assignlocal, "AssignLocal.facts")?,
+            _assigncast: load!(_assigncast, "AssignCast.facts")?,
+            _field: load!(_field, "Field.facts")?,
+            _staticmethodinvocation: load!(_staticmethodinvocation, "StaticMethodInvocation.facts")?,
+            _specialmethodinvocation: load!(_specialmethodinvocation, "SpecialMethodInvocation.facts")?,
+            _virtualmethodinvocation: load!(_virtualmethodinvocation, "VirtualMethodInvocation.facts")?,
             _method: methods,
             method_descriptor,
-            _storeinstancefield: load!("StoreInstanceField.facts")?,
-            _loadinstancefield: load!("LoadInstanceField.facts")?,
-            _storestaticfield: load!("StoreStaticField.facts")?,
-            _loadstaticfield: load!("LoadStaticField.facts")?,
-            _storearrayindex: load!("StoreArrayIndex.facts")?,
-            _loadarrayindex: load!("LoadArrayIndex.facts")?,
-            _return: load!("Return.facts")?,
+            _storeinstancefield: load!(_storeinstancefield, "StoreInstanceField.facts")?,
+            _loadinstancefield: load!(_loadinstancefield, "LoadInstanceField.facts")?,
+            _storestaticfield: load!(_storestaticfield, "StoreStaticField.facts")?,
+            _loadstaticfield: load!(_loadstaticfield, "LoadStaticField.facts")?,
+            _storearrayindex: load!(_storearrayindex, "StoreArrayIndex.facts")?,
+            _loadarrayindex: load!(_loadarrayindex, "LoadArrayIndex.facts")?,
+            _return: load!(_return, "Return.facts")?,
         })
     }
 }

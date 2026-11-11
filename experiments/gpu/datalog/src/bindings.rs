@@ -117,11 +117,51 @@ fn key_providers(program: &Program) -> syn::Result<Vec<Vec<round::storage::Provi
         .collect()
 }
 
+fn domain_declarations(program: &Program) -> syn::Result<Vec<Option<Vec<cq_syntax::RelationDecl>>>> {
+    if !crate::storage::uses_domains(&program.storage) {
+        return Ok(vec![None; program.holes.len()]);
+    }
+    let domains = crate::domains::DomainComponents::infer(&program.storage.incremental.strata.source)?;
+    let symbols = crate::storage::Symbols::from_program(&program.storage)?;
+    let mut names = BTreeMap::new();
+    for (index, relation) in program.context.relations.iter().enumerate() {
+        if let Some(delta) = &relation.delta {
+            names.insert(delta.to_string(), domains.columns[index].clone());
+        }
+    }
+    for layout in program.context.layouts.iter().chain(&program.context.delta_layouts) {
+        names.insert(layout.name.to_string(), layout.columns.iter()
+            .map(|&column| domains.columns[layout.relation][column]).collect());
+    }
+    for stratum in &program.context.strata {
+        for key in &stratum.keys {
+            let ids: Vec<_> = key.columns.iter().map(|&column| domains.columns[key.relation][column]).collect();
+            names.insert(key.name.to_string(), ids.clone());
+            names.insert(program.holes[key.hole].cq.query.head.relation.to_string(), ids);
+        }
+        for rule in stratum.seeds.iter().chain(&stratum.steps) {
+            names.insert(program.holes[rule.hole].cq.query.head.relation.to_string(), domains.columns[rule.head].clone());
+            if let Some(scan) = &rule.scan {
+                let ids = match scan.source {
+                    InputSource::Delta(index) => domains.columns[index].clone(),
+                    InputSource::Layout(index) => {
+                        let layout = &program.context.layouts[index];
+                        layout.columns.iter().map(|&column| domains.columns[layout.relation][column]).collect()
+                    }
+                };
+                names.insert(scan.binding.to_string(), ids);
+            }
+        }
+    }
+    program.holes.iter().map(|hole| crate::encode::declarations(&hole.cq, &names, &symbols).map(Some)).collect()
+}
+
 /// Each input carries its Storage token, declared GPU facts and physical schema.
 fn packet(
     hole: &Hole,
     inputs: &BTreeMap<String, cq_lang_structures::Provider>,
     providers: &[cq_lang_structures::Declaration],
+    encoded: Option<&[cq_syntax::RelationDecl]>,
 ) -> TokenStream {
     let declared = hole
         .cq
@@ -139,6 +179,21 @@ fn packet(
             .any(|(_, provider)| provider.token == declaration.token)
     });
     let bindings = inputs.iter().map(|(name, provider)| {
+        let mut adapted;
+        let provider = if let Some(declarations) = encoded {
+            adapted = (**provider).clone();
+            if let Some(input) = &mut adapted.input {
+                let declaration = declarations.iter().find(|declaration| declaration.name == name.as_str())
+                    .expect("checked hole input declaration");
+                for (column, declared) in input.columns.iter_mut().zip(&declaration.columns) {
+                    column.logical = declared.ty.clone();
+                    column.logical_type_id = declared.logical_type_id;
+                    column.codec_id = None;
+                    column.codec = None;
+                }
+            }
+            &adapted
+        } else { provider };
         let name = Ident::new(name, proc_macro2::Span::call_site());
         quote!(#name => #provider;)
     });
@@ -167,7 +222,8 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     crate::storage::check_device(&source.storage)?;
     let mut target = source.clone();
     let inputs = input_providers(&target)?;
-    for hole in &mut target.holes {
+    let encoded = domain_declarations(&target)?;
+    for (index, hole) in target.holes.iter_mut().enumerate() {
         ensure(
             hole.interface == HoleInterface::Batch,
             &*hole,
@@ -183,6 +239,11 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
             &*hole,
             "binding invocation already has arguments or an owner",
         )?;
+        if let Some(declarations) = &encoded[index] {
+            let adapter = &mut hole.pipeline.passes[0];
+            ensure(adapter.arguments.is_empty(), &*adapter, "domain surface adapter already has arguments")?;
+            adapter.arguments = quote!(#(#declarations)*);
+        }
         let bindings = packet(
             hole,
             &inputs,
@@ -192,6 +253,7 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
                 .as_ref()
                 .expect("checked device records")
                 .providers,
+            encoded[index].as_deref(),
         );
         hole.binding = Some(owner);
         hole.pipeline.passes[owner].arguments = bindings;
@@ -222,7 +284,8 @@ pub fn check(program: &Program) -> syn::Result<()> {
         }
     }
     let inputs = input_providers(program)?;
-    for hole in &program.holes {
+    let encoded = domain_declarations(program)?;
+    for (index, hole) in program.holes.iter().enumerate() {
         let owner = hole
             .binding
             .ok_or_else(|| syn::Error::new_spanned(hole, "missing GPU binding invocation owner"))?;
@@ -234,6 +297,10 @@ pub fn check(program: &Program) -> syn::Result<()> {
             hole,
             "GPU binding invocation owner is outside the Structures pipeline",
         )?;
+        if let Some(declarations) = &encoded[index] {
+            ensure(hole.pipeline.passes[0].arguments.to_string() == quote!(#(#declarations)*).to_string(),
+                hole, "domain surface adapter differs from checked component declarations")?;
+        }
         ensure(
             invocation.arguments.to_string()
                 == packet(
@@ -245,6 +312,7 @@ pub fn check(program: &Program) -> syn::Result<()> {
                         .as_ref()
                         .expect("checked device records")
                         .providers,
+                    encoded[index].as_deref(),
                 )
                 .to_string(),
             hole,

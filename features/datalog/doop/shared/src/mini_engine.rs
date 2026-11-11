@@ -3,51 +3,29 @@
 // Head variables are relational projections (Ascent's `*x` copies would be
 // opaque Rust, which must run at host on symbol-encoded GPU columns).
 #![allow(unused_variables)]
-/// Instantiate the unchanged DOOP program with arbitrary named pipeline tokens.
+/// Pass the unchanged DOOP query to a callback macro, after arbitrary prefix tokens.
+///
+/// The callback receives `PREFIX struct Doop; ...`, including every declaration,
+/// evidence block, rule and output. Callbacks compiling the query import `IStr`
+/// and `sym` from this crate's interner.
 #[macro_export]
-macro_rules! doop_engine {
-    ($name:ident, pipeline { $($pipeline:tt)* }) => {
-pub fn $name(facts: $crate::Facts) -> $crate::Results {
-    use $crate::{Results, interner::{IStr, sym}};
-    let (
-        mainclass,
-        method_simplename,
-        method_declaringtype,
-        method_modifier,
-        method_paramtypes,
-        method_returntype,
-        method_descriptor,
-        methodlookup,
-        methodimplemented,
-        directsubclass,
-        subclass,
-        superclass,
-        superinterface,
-        subtypeof,
-        supertypeof,
-        subtypeofdifferent,
-        mainmethoddeclaration,
-        classinitializer,
-        initializedclass,
-        assign,
-        varpointsto,
-        instancefieldpointsto,
-        staticfieldpointsto,
-        callgraphedge,
-        arrayindexpointsto,
-        reachable,
-    ) = cq_datalog::datalog! {
-        pipeline { $($pipeline)* }
+macro_rules! doop_query {
+    ($($callback:ident)::+; $($prefix:tt)*) => {
+        $crate::doop_query! { @with_facts facts; $($callback)::+; $($prefix)* }
+    };
+    (@with_facts $facts:ident; $($callback:ident)::+; $($prefix:tt)*) => {
+        $($callback)::+! {
+        $($prefix)*
         struct Doop;
-        relation directsuperclass(c0: IStr, c1: IStr) = (facts.directsuperclass);
-        relation directsuperinterface(c0: IStr, c1: IStr) = (facts.directsuperinterface);
-        relation mainclass(c0: IStr) = (facts.mainclass);
-        relation formalparam(c0: i32, c1: IStr, c2: IStr) = (facts.formalparam);
-        relation componenttype(c0: IStr, c1: IStr) = (facts.componenttype);
-        relation assignreturnvalue(c0: IStr, c1: IStr) = (facts.assignreturnvalue);
-        relation actualparam(c0: i32, c1: IStr, c2: IStr) = (facts.actualparam);
-        relation method_modifier(c0: IStr, c1: IStr) = (facts.method_modifier);
-        relation var_type(c0: IStr, c1: IStr) = (facts.var_type);
+        relation directsuperclass(c0: IStr, c1: IStr) = ($facts.directsuperclass);
+        relation directsuperinterface(c0: IStr, c1: IStr) = ($facts.directsuperinterface);
+        relation mainclass(c0: IStr) = ($facts.mainclass);
+        relation formalparam(c0: i32, c1: IStr, c2: IStr) = ($facts.formalparam);
+        relation componenttype(c0: IStr, c1: IStr) = ($facts.componenttype);
+        relation assignreturnvalue(c0: IStr, c1: IStr) = ($facts.assignreturnvalue);
+        relation actualparam(c0: i32, c1: IStr, c2: IStr) = ($facts.actualparam);
+        relation method_modifier(c0: IStr, c1: IStr) = ($facts.method_modifier);
+        relation var_type(c0: IStr, c1: IStr) = ($facts.var_type);
         relation heapallocation_type(c0: IStr, c1: IStr);
         relation istype(c0: IStr);
         relation isreferencetype(c0: IStr);
@@ -99,30 +77,30 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
         relation assignheapallocation(c0: IStr, c1: IStr, c2: IStr);
         relation returnvar(c0: IStr, c1: IStr);
         relation staticmethodinvocation(c0: IStr, c1: IStr, c2: IStr);
-        relation _classtype(c0: IStr) = (facts._classtype);
-        relation _arraytype(c0: IStr) = (facts._arraytype);
-        relation _interfacetype(c0: IStr) = (facts._interfacetype);
-        relation _var_declaringmethod(c0: IStr, c1: IStr) = (facts._var_declaringmethod);
-        relation _applicationclass(c0: IStr) = (facts._applicationclass);
-        relation _thisvar(c0: IStr, c1: IStr) = (facts._thisvar);
-        relation _normalheap(c0: IStr, c1: IStr) = (facts._normalheap);
-        relation _stringconstant(c0: IStr) = (facts._stringconstant);
-        relation _assignheapallocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: i32) = (facts._assignheapallocation);
-        relation _assignlocal(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._assignlocal);
-        relation _assigncast(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = (facts._assigncast);
-        relation _field(c0: IStr, c1: IStr, c2: IStr, c3: IStr) = (facts._field);
-        relation _staticmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr) = (facts._staticmethodinvocation);
-        relation _specialmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._specialmethodinvocation);
-        relation _virtualmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._virtualmethodinvocation);
-        relation _method(c0: IStr, c1: IStr, c2: IStr, c3: IStr, c4: IStr, c5: IStr, c6: i32) = (facts._method);
-        relation method_descriptor(c0: IStr, c1: IStr) = (facts.method_descriptor);
-        relation _storeinstancefield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = (facts._storeinstancefield);
-        relation _loadinstancefield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = (facts._loadinstancefield);
-        relation _storestaticfield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._storestaticfield);
-        relation _loadstaticfield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._loadstaticfield);
-        relation _storearrayindex(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._storearrayindex);
-        relation _loadarrayindex(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = (facts._loadarrayindex);
-        relation _return(c0: IStr, c1: i32, c2: IStr, c3: IStr) = (facts._return);
+        relation _classtype(c0: IStr) = ($facts._classtype);
+        relation _arraytype(c0: IStr) = ($facts._arraytype);
+        relation _interfacetype(c0: IStr) = ($facts._interfacetype);
+        relation _var_declaringmethod(c0: IStr, c1: IStr) = ($facts._var_declaringmethod);
+        relation _applicationclass(c0: IStr) = ($facts._applicationclass);
+        relation _thisvar(c0: IStr, c1: IStr) = ($facts._thisvar);
+        relation _normalheap(c0: IStr, c1: IStr) = ($facts._normalheap);
+        relation _stringconstant(c0: IStr) = ($facts._stringconstant);
+        relation _assignheapallocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: i32) = ($facts._assignheapallocation);
+        relation _assignlocal(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = ($facts._assignlocal);
+        relation _assigncast(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = ($facts._assigncast);
+        relation _field(c0: IStr, c1: IStr, c2: IStr, c3: IStr) = ($facts._field);
+        relation _staticmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr) = ($facts._staticmethodinvocation);
+        relation _specialmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = ($facts._specialmethodinvocation);
+        relation _virtualmethodinvocation(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = ($facts._virtualmethodinvocation);
+        relation _method(c0: IStr, c1: IStr, c2: IStr, c3: IStr, c4: IStr, c5: IStr, c6: i32) = ($facts._method);
+        relation method_descriptor(c0: IStr, c1: IStr) = ($facts.method_descriptor);
+        relation _storeinstancefield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = ($facts._storeinstancefield);
+        relation _loadinstancefield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr, c5: IStr) = ($facts._loadinstancefield);
+        relation _storestaticfield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = ($facts._storestaticfield);
+        relation _loadstaticfield(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = ($facts._loadstaticfield);
+        relation _storearrayindex(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = ($facts._storearrayindex);
+        relation _loadarrayindex(c0: IStr, c1: i32, c2: IStr, c3: IStr, c4: IStr) = ($facts._loadarrayindex);
+        relation _return(c0: IStr, c1: i32, c2: IStr, c3: IStr) = ($facts._return);
         relation methodlookup(c0: IStr, c1: IStr, c2: IStr, c3: IStr);
         relation methodimplemented(c0: IStr, c1: IStr, c2: IStr, c3: IStr);
         relation directsubclass(c0: IStr, c1: IStr);
@@ -584,35 +562,103 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             thisvar(tomethod, this);
 
     reachable(method) :- mainmethoddeclaration(method);
-        };
-    Results {
-        mainclass: mainclass.collect(),
-        method_simplename: method_simplename.collect(),
-        method_declaringtype: method_declaringtype.collect(),
-        method_modifier: method_modifier.collect(),
-        method_paramtypes: method_paramtypes.collect(),
-        method_returntype: method_returntype.collect(),
-        method_descriptor: method_descriptor.collect(),
-        methodlookup: methodlookup.collect(),
-        methodimplemented: methodimplemented.collect(),
-        directsubclass: directsubclass.collect(),
-        subclass: subclass.collect(),
-        superclass: superclass.collect(),
-        superinterface: superinterface.collect(),
-        subtypeof: subtypeof.collect(),
-        supertypeof: supertypeof.collect(),
-        subtypeofdifferent: subtypeofdifferent.collect(),
-        mainmethoddeclaration: mainmethoddeclaration.collect(),
-        classinitializer: classinitializer.collect(),
-        initializedclass: initializedclass.collect(),
-        assign: assign.collect(),
-        varpointsto: varpointsto.collect(),
-        instancefieldpointsto: instancefieldpointsto.collect(),
-        staticfieldpointsto: staticfieldpointsto.collect(),
-        callgraphedge: callgraphedge.collect(),
-        arrayindexpointsto: arrayindexpointsto.collect(),
-        reachable: reachable.collect(),
-    }
-}
+        }
     };
+}
+
+/// Instantiate the DOOP program with arbitrary named pipeline tokens.
+///
+/// The optional context argument follows `facts` and is visible to pipeline
+/// expressions, without changing the CPU entry point or result representation.
+#[macro_export]
+macro_rules! doop_engine {
+    ($name:ident, pipeline { $($pipeline:tt)* }) => {
+        $crate::doop_engine!(@function $name, [], pipeline { $($pipeline)* });
+    };
+    ($name:ident, context $context:ident : $context_ty:ty, pipeline { $($pipeline:tt)* }) => {
+        $crate::doop_engine!(@function $name, [$context : $context_ty], pipeline { $($pipeline)* });
+    };
+    (@function $name:ident, [$($context:ident : $context_ty:ty)?], pipeline { $($pipeline:tt)* }) => {
+        pub fn $name(facts: $crate::Facts $(, $context: $context_ty)?) -> $crate::Results {
+            use $crate::{Results, interner::{IStr, sym}};
+            let (
+                mainclass,
+                method_simplename,
+                method_declaringtype,
+                method_modifier,
+                method_paramtypes,
+                method_returntype,
+                method_descriptor,
+                methodlookup,
+                methodimplemented,
+                directsubclass,
+                subclass,
+                superclass,
+                superinterface,
+                subtypeof,
+                supertypeof,
+                subtypeofdifferent,
+                mainmethoddeclaration,
+                classinitializer,
+                initializedclass,
+                assign,
+                varpointsto,
+                instancefieldpointsto,
+                staticfieldpointsto,
+                callgraphedge,
+                arrayindexpointsto,
+                reachable,
+            ) = $crate::doop_query!(@with_facts facts; cq_datalog::datalog; pipeline { $($pipeline)* });
+            Results {
+                mainclass: mainclass.collect(),
+                method_simplename: method_simplename.collect(),
+                method_declaringtype: method_declaringtype.collect(),
+                method_modifier: method_modifier.collect(),
+                method_paramtypes: method_paramtypes.collect(),
+                method_returntype: method_returntype.collect(),
+                method_descriptor: method_descriptor.collect(),
+                methodlookup: methodlookup.collect(),
+                methodimplemented: methodimplemented.collect(),
+                directsubclass: directsubclass.collect(),
+                subclass: subclass.collect(),
+                superclass: superclass.collect(),
+                superinterface: superinterface.collect(),
+                subtypeof: subtypeof.collect(),
+                supertypeof: supertypeof.collect(),
+                subtypeofdifferent: subtypeofdifferent.collect(),
+                mainmethoddeclaration: mainmethoddeclaration.collect(),
+                classinitializer: classinitializer.collect(),
+                initializedclass: initializedclass.collect(),
+                assign: assign.collect(),
+                varpointsto: varpointsto.collect(),
+                instancefieldpointsto: instancefieldpointsto.collect(),
+                staticfieldpointsto: staticfieldpointsto.collect(),
+                callgraphedge: callgraphedge.collect(),
+                arrayindexpointsto: arrayindexpointsto.collect(),
+                reachable: reachable.collect(),
+            }
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    mod callback {
+        macro_rules! capture {
+            (const $name:ident; struct Doop; $($query:tt)*) => {
+                const $name: &str = stringify!($($query)*);
+            };
+        }
+        pub(super) use capture;
+    }
+
+    crate::doop_query!(callback::capture; const QUERY;);
+
+    #[test]
+    fn query_callback_receives_prefix_and_program() {
+        assert!(QUERY.contains("relation directsuperclass"));
+        assert!(QUERY.contains("relation method_descriptor"));
+        assert!(QUERY.contains("evidence"));
+        assert!(QUERY.contains("reachable"));
+    }
 }

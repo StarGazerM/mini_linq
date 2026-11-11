@@ -25,4 +25,4 @@
 //! the holes of each multi-hole wave run on up to `K` streams, joined before
 //! admission.
 pub use cq_gpu_datalog_core::{bindings, lanes, print, storage};
-pub use cq_gpu_datalog_macros::{bind_inputs, bind_round, device_storage, lanes, print_rounds};
+pub use cq_gpu_datalog_macros::{bind_inputs, bind_round, device_storage, domain_schema, domain_storage, encode_domains, lanes, print_rounds};

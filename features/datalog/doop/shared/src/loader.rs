@@ -1,3 +1,4 @@
+use crate::domains::{Domain, Domains};
 use crate::interner::{IStr, res, sym};
 use crate::manifest::{CertifiedReader, Manifest};
 use std::{
@@ -9,12 +10,17 @@ use std::{
 trait Column: Sized {
     const TYPE: &'static str;
     fn parse(value: &str) -> io::Result<Self>;
+    fn record(&self, domain: &mut Domain);
 }
 
 impl Column for IStr {
     const TYPE: &'static str = "string";
     fn parse(value: &str) -> io::Result<Self> {
         Ok(sym(value))
+    }
+    fn record(&self, domain: &mut Domain) {
+        let Domain::Symbols(values) = domain else { unreachable!("symbol domain type") };
+        values.insert(self.code());
     }
 }
 
@@ -25,21 +31,37 @@ impl Column for i32 {
             .parse()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
+    fn record(&self, domain: &mut Domain) {
+        let Domain::Integers(bounds) = domain else { unreachable!("integer domain type") };
+        *bounds = Some(match *bounds {
+            Some((min, max)) => (min.min(*self), max.max(*self)),
+            None => (*self, *self),
+        });
+    }
 }
 
 pub(crate) trait Row: Sized {
     const TYPES: &'static [&'static str];
-    fn parse(line: &str) -> io::Result<Self>;
+    fn parse(line: &str, domains: Option<(&[u32], &mut Domains<'_>)>) -> io::Result<Self>;
 }
 
 macro_rules! tuple_row {
     ($($column:ident),+) => {
         impl<$($column: Column),+> Row for ($($column,)+) {
             const TYPES: &'static [&'static str] = &[$($column::TYPE),+];
-            fn parse(line: &str) -> io::Result<Self> {
+            fn parse(line: &str, mut domains: Option<(&[u32], &mut Domains<'_>)>) -> io::Result<Self> {
                 let mut fields = line.split('\t');
-                let row = ($($column::parse(fields.next().ok_or_else(||
-                    io::Error::new(io::ErrorKind::InvalidData, "too few columns"))?)?,)+);
+                let mut column = 0;
+                let row = ($({
+                    let value = $column::parse(fields.next().ok_or_else(||
+                        io::Error::new(io::ErrorKind::InvalidData, "too few columns"))?)?;
+                    if let Some((ids, values)) = domains.as_mut() {
+                        value.record(values.get_mut(ids[column]));
+                    }
+                    column += 1;
+                    value
+                },)+);
+                let _ = column;
                 if fields.next().is_some() {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "too many columns"));
                 }
@@ -56,7 +78,17 @@ tuple_row!(A, B, C, D, E);
 tuple_row!(A, B, C, D, E, F);
 tuple_row!(A, B, C, D, E, F, G);
 
-pub(crate) fn load<T: Row + Ord>(path: &Path, manifest: &Manifest) -> io::Result<Vec<T>> {
+pub(crate) fn load<T: Row + Ord>(
+    path: &Path,
+    manifest: &Manifest,
+    relation: &str,
+    mut domains: Option<&mut Domains<'_>>,
+) -> io::Result<Vec<T>> {
+    // Initialize from tuple types even if the relation's file is absent.
+    let columns = match domains.as_mut() {
+        Some(domains) => domains.columns(relation, T::TYPES)?,
+        None => None,
+    };
     // The upstream harness treats omitted input relations as empty.
     let file = match File::open(path) {
         Ok(file) => file,
@@ -73,7 +105,8 @@ pub(crate) fn load<T: Row + Ord>(path: &Path, manifest: &Manifest) -> io::Result
         number += 1;
         let text = line.strip_suffix('\n').unwrap_or(&line);
         let text = text.strip_suffix('\r').unwrap_or(text);
-        rows.push(T::parse(text).map_err(|error| {
+        let membership = columns.zip(domains.as_deref_mut());
+        rows.push(T::parse(text, membership).map_err(|error| {
             io::Error::new(
                 error.kind(),
                 format!("{}:{number}: {error}", path.display()),
@@ -92,7 +125,12 @@ pub(crate) fn load<T: Row + Ord>(path: &Path, manifest: &Manifest) -> io::Result
 /// each raw row: repeated method IDs can contribute multiple values to either.
 pub(crate) fn method_descriptors(
     methods: &[(IStr, IStr, IStr, IStr, IStr, IStr, i32)],
-) -> Vec<(IStr, IStr)> {
+    mut domains: Option<&mut Domains<'_>>,
+) -> io::Result<Vec<(IStr, IStr)>> {
+    let columns = match domains.as_mut() {
+        Some(domains) => domains.columns("method_descriptor", &["string", "string"])?,
+        None => None,
+    };
     use std::collections::{BTreeMap, BTreeSet};
 
     let mut projected = BTreeMap::<IStr, (BTreeSet<IStr>, BTreeSet<IStr>)>::new();
@@ -108,13 +146,18 @@ pub(crate) fn method_descriptors(
             let returntype = res(returntype);
             for &params in &parameters {
                 // DECODE R: method_descriptors reads parameter text in opaque format! before interning the computed descriptor.
-                descriptors.push((method, sym(&format!("{}({})", returntype, res(params)))));
+                let descriptor = sym(&format!("{}({})", returntype, res(params)));
+                if let Some((columns, values)) = columns.zip(domains.as_deref_mut()) {
+                    method.record(values.get_mut(columns[0]));
+                    descriptor.record(values.get_mut(columns[1]));
+                }
+                descriptors.push((method, descriptor));
             }
         }
     }
     descriptors.sort_unstable();
     descriptors.dedup();
-    descriptors
+    Ok(descriptors)
 }
 
 #[cfg(test)]
@@ -123,10 +166,72 @@ mod tests {
     use crate::interner::res;
 
     #[test]
+    fn shared_components_collect_membership_across_rows_and_columns() {
+        let schema: &[(&str, &[u32])] = &[
+            ("directsuperclass", &[0, 0]),
+            ("mainclass", &[0]),
+        ];
+        let mut domains = Domains::new(schema);
+        let columns = domains.columns("directsuperclass", <(IStr, IStr)>::TYPES).unwrap().unwrap();
+        <(IStr, IStr)>::parse("domain-left\tdomain-right", Some((columns, &mut domains))).unwrap();
+        <(IStr, IStr)>::parse("domain-left\tdomain-left", Some((columns, &mut domains))).unwrap();
+        let columns = domains.columns("mainclass", <(IStr,)>::TYPES).unwrap().unwrap();
+        <(IStr,)>::parse("domain-third", Some((columns, &mut domains))).unwrap();
+        let mut expected = ["domain-left", "domain-right", "domain-third"]
+            .map(|value| sym(value).code()).to_vec();
+        expected.sort_unstable();
+        assert_eq!(domains.finish(), [crate::DomainValues::Symbols(expected)]);
+    }
+
+    #[test]
+    fn missing_relations_initialize_typed_empty_domains() {
+        let directory = std::env::temp_dir()
+            .join(format!("doop-domain-missing-{}", std::process::id()))
+            .join("absent");
+        let (facts, domains) = crate::Facts::load_with_domains(&directory, &[
+            ("formalparam", &[0, 1, 1]),
+            ("method_descriptor", &[1, 2]),
+        ]).unwrap();
+        assert!(facts.formalparam.is_empty());
+        assert!(facts.method_descriptor.is_empty());
+        assert_eq!(domains, [
+            crate::DomainValues::Integers(None),
+            crate::DomainValues::Symbols(Vec::new()),
+            crate::DomainValues::Symbols(Vec::new()),
+        ]);
+    }
+
+    #[test]
+    fn numeric_components_accumulate_inclusive_bounds() {
+        let mut domains = Domains::new(&[("numbers", &[0, 0])]);
+        let columns = domains.columns("numbers", <(i32, i32)>::TYPES).unwrap().unwrap();
+        <(i32, i32)>::parse("-7\t3", Some((columns, &mut domains))).unwrap();
+        <(i32, i32)>::parse("-2147483648\t2147483647", Some((columns, &mut domains))).unwrap();
+        <(i32, i32)>::parse("0\t0", Some((columns, &mut domains))).unwrap();
+        assert_eq!(domains.finish(), [
+            crate::DomainValues::Integers(Some((i32::MIN, i32::MAX))),
+        ]);
+    }
+
+    #[test]
+    fn computed_descriptors_contribute_domain_membership() {
+        let method = sym("domain-method");
+        let unused = sym("");
+        let methods = [(method, unused, sym("int"), unused, sym("void"), unused, 0)];
+        let mut domains = Domains::new(&[("method_descriptor", &[0, 1])]);
+        let descriptors = method_descriptors(&methods, Some(&mut domains)).unwrap();
+        assert_eq!(descriptors, [(method, sym("void(int)"))]);
+        assert_eq!(domains.finish(), [
+            crate::DomainValues::Symbols(vec![method.code()]),
+            crate::DomainValues::Symbols(vec![sym("void(int)").code()]),
+        ]);
+    }
+
+    #[test]
     fn file_loading_deduplicates_complete_rows_not_leading_keys() {
         let path = std::env::temp_dir().join(format!("doop-set-input-{}.facts", std::process::id()));
         std::fs::write(&path, "2\t7\n1\t9\n2\t7\n1\t8\n").unwrap();
-        let rows = load::<(i32, i32)>(&path, &Manifest::default()).unwrap();
+        let rows = load::<(i32, i32)>(&path, &Manifest::default(), "", None).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(rows, [(1, 8), (1, 9), (2, 7)]);
     }
@@ -188,20 +293,20 @@ mod tests {
             .map(|descriptor| (method, sym(descriptor)))
             .to_vec();
         expected.sort_unstable();
-        assert_eq!(method_descriptors(&methods), expected);
-        assert!(method_descriptors(&[]).is_empty());
+        assert_eq!(method_descriptors(&methods, None).unwrap(), expected);
+        assert!(method_descriptors(&[], None).unwrap().is_empty());
     }
 
     #[test]
     fn exact_columns_and_empty_strings() {
-        let (index, name, empty) = <(i32, IStr, IStr)>::parse("-3\tname\t").unwrap();
+        let (index, name, empty) = <(i32, IStr, IStr)>::parse("-3\tname\t", None).unwrap();
         assert_eq!(index, -3);
         // DECODE P: exact_columns_and_empty_strings exposes the parsed name for a diagnostic answer assertion.
         assert_eq!(&*res(name), "name");
         // DECODE P: exact_columns_and_empty_strings exposes the empty symbol for a diagnostic answer assertion.
         assert_eq!(&*res(empty), "");
-        assert!(<(IStr, IStr)>::parse("one").is_err());
-        assert!(<(IStr,)>::parse("one\ttwo").is_err());
-        assert!(<(i32,)>::parse("2147483648").is_err());
+        assert!(<(IStr, IStr)>::parse("one", None).is_err());
+        assert!(<(IStr,)>::parse("one\ttwo", None).is_err());
+        assert!(<(i32,)>::parse("2147483648", None).is_err());
     }
 }

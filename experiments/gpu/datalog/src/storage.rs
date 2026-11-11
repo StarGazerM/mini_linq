@@ -642,6 +642,96 @@ pub fn compile_with(source: &Program, args: TokenStream) -> syn::Result<Program>
     Ok(target)
 }
 
+/// Domain-adapted storage keeps the original symbol declarations for R/P,
+/// while its already-encoded input fields have no pending symbol codec.
+pub fn uses_domains(program: &Program) -> bool {
+    program.device.as_ref().is_some_and(|device| {
+        !device.symbols.is_empty()
+            && device.relations.iter().flat_map(|relation| &relation.input.columns)
+                .all(|column| column.codec_id.is_none())
+    })
+}
+
+fn domain_packing(components: &[u32]) -> Expr {
+    syn::parse_quote!(__cq_gpu_domains.packing(&[#(#components),*])?)
+}
+
+fn domain_bits(components: &[u32]) -> Expr {
+    syn::parse_quote!(__cq_gpu_domains.total_bits(&[#(#components),*])?)
+}
+
+fn domain_empty(provider: &Type, ratio: usize, components: &[u32]) -> Expr {
+    let packing = domain_packing(components);
+    syn::parse_quote!(<#provider>::empty(
+        __cq_gpu_pool.clone(), #packing,
+        ::gpu_datalog_runtime::RadixRunParams {
+            ratio: #ratio, radix_bits: 0u32, merge_tile_rows: 32u32, block_threads: 256u32
+        }, __cq_gpu_active_bits)?)
+}
+
+/// Realize inferred domains without changing the authored Datalog relation types.
+pub fn compile_domains_with(source: &Program, args: TokenStream) -> syn::Result<Program> {
+    let Advice { mut symbols, ratio } = syn::parse2(args)?;
+    symbols.intern(source)?;
+    ensure(!symbols.0.is_empty(), source, "domain storage requires declared symbol codecs")?;
+    let components = crate::domains::DomainComponents::infer(&source.incremental.strata.source)?;
+    let mut target = realize(source, &symbols, ratio)?;
+    let analysis = storage::contract::check(source)?;
+    fn encode(input: &mut InputSchema) {
+        for column in &mut input.columns {
+            if column.codec_id.take().is_some() {
+                column.storage = syn::parse_quote!(u32);
+            }
+            column.codec = None;
+        }
+    }
+    let device = target.device.as_mut().expect("realized device storage");
+    for (index, relation) in device.relations.iter_mut().enumerate() {
+        encode(&mut relation.input);
+        let types: Vec<_> = relation.input.columns.iter().map(|column| &column.storage).collect();
+        relation.word = word_type(types.iter().copied())?;
+        relation.packing = domain_packing(&components.columns[index]);
+        if source.incremental.strata.source.declarations[index].value.is_none() {
+            let ty = layout_type(&types);
+            let provider = &mut target.providers[index];
+            provider.delta.ty = ty.clone();
+            provider.next.ty = ty.clone();
+            provider.delta_init = domain_empty(&ty, ratio, &components.columns[index]);
+            provider.next_init = provider.delta_init.clone();
+        }
+    }
+    let adapt_state = |record: &mut DeviceState, ids: Vec<u32>| -> syn::Result<()> {
+        encode(&mut record.input);
+        let types: Vec<_> = record.input.columns.iter().map(|column| &column.storage).collect();
+        record.provider = layout_type(&types);
+        record.word = word_type(types.iter().copied())?;
+        let word = &record.word;
+        record.state = syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>);
+        record.packing = domain_packing(&ids);
+        record.active_bits = domain_bits(&ids);
+        let (state, provider, active_bits) = (&record.state, &record.provider, &record.active_bits);
+        let (ratio, radix_bits, merge_tile_rows, block_threads) =
+            (record.ratio, record.radix_bits, record.merge_tile_rows, record.block_threads);
+        record.state_init = syn::parse_quote!(<#state>::new_set(__cq_gpu_pool.clone(),
+            ::gpu_datalog_runtime::RadixRunParams { ratio: #ratio, radix_bits: #radix_bits,
+                merge_tile_rows: #merge_tile_rows, block_threads: #block_threads }, #active_bits)?);
+        record.init = syn::parse_quote!(<#provider>::publish(&__cq_gpu_state, __cq_gpu_packing.clone())?);
+        Ok(())
+    };
+    for (layout, record) in target.layouts.iter_mut().zip(&mut device.layouts)
+        .chain(target.delta_layouts.iter_mut().zip(&mut device.delta_layouts)) {
+        let relation = analysis.positions[&cq_syntax::symbol_name(&layout.relation)];
+        adapt_state(record, layout.columns.iter().map(|&column| components.columns[relation][column]).collect())?;
+        layout.provider.ty = record.provider.clone();
+    }
+    for (negative, record) in target.negations.iter_mut().zip(&mut device.negations) {
+        adapt_state(record, negative.columns.iter().map(|&column| components.columns[negative.relation][column]).collect())?;
+        negative.provider.ty = record.provider.clone();
+    }
+    check(source, &target)?;
+    Ok(target)
+}
+
 /// Formal rule CK-DL-DeviceStorage: independently check token facts, schemas,
 /// state parameters, initializers and scratch policy; structural erasure alone
 /// restores the source. No device producer is replayed by the checker.
@@ -668,6 +758,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
     let analysis = storage::contract::check(program)?;
     let symbols = Symbols::from_program(program)?;
     let declarations = &program.incremental.strata.source.declarations;
+    let domains = uses_domains(program).then(|| crate::domains::DomainComponents::infer(&program.incremental.strata.source)).transpose()?;
     ensure(
         advice.ratio >= 2,
         program,
@@ -706,11 +797,11 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         program,
         "device read token facts differ from its declared ABI",
     )?;
-    for ((relation, declaration), providers) in advice
+    for (relation_index, ((relation, declaration), providers)) in advice
         .relations
         .iter()
         .zip(declarations)
-        .zip(&program.providers)
+        .zip(&program.providers).enumerate()
     {
         let logical = declaration.columns.iter().collect::<Vec<_>>();
         check_input(&relation.input, &logical, logical.len(), &symbols, program)?;
@@ -723,10 +814,12 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         let columns = types
             .iter()
             .map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
+        let expected_packing = domains.as_ref().map_or_else(
+            || syn::parse_quote!(::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?),
+            |domains| domain_packing(&domains.columns[relation_index]));
         ensure(
             relation.word == word_type(types.iter().copied())?
-                && relation.packing
-                    == syn::parse_quote!(::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?)
+                && relation.packing == expected_packing
                 && relation.candidates
                     == syn::parse_quote!(::std::vec::Vec<::gpu_datalog_runtime::CandidateBatch>)
                 && relation.candidates_init == syn::parse_quote!(::std::vec::Vec::new())
@@ -789,7 +882,9 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             let word = &relation.word;
             let ty: Type = syn::parse_quote!(
                 ::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>);
-            let init = empty_view(&ty, advice.ratio, 0, 32, 256);
+            let init = domains.as_ref().map_or_else(
+                || empty_view(&ty, advice.ratio, 0, 32, 256),
+                |domains| domain_empty(&ty, advice.ratio, &domains.columns[relation_index]));
             ensure(
                 providers.delta.token == RADIX_RELATION
                     && providers.next.token == RADIX_RELATION
@@ -833,7 +928,9 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             "every device layout must use its declared bulk provider",
         )?;
         check_input(&state.input, &logical, logical.len(), &symbols, program)?;
-        check_state(state, advice.ratio, program)?;
+        let ids = domains.as_ref().map(|domains| layout.columns.iter()
+            .map(|&column| domains.columns[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]][column]).collect::<Vec<_>>());
+        check_state(state, advice.ratio, program, ids.as_deref())?;
         let relation = &advice.relations[analysis.positions[&cq_syntax::symbol_name(&layout.relation)]];
         ensure(
             state.admitted_order.and_then(|index| relation.admitted_orders.get(index))
@@ -858,7 +955,9 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             .map(|&column| &declaration.columns[column])
             .collect::<Vec<_>>();
         check_input(&state.input, &logical, logical.len(), &symbols, program)?;
-        check_state(state, advice.ratio, program)?;
+        let ids = domains.as_ref().map(|domains| negative.columns.iter()
+            .map(|&column| domains.columns[negative.relation][column]).collect::<Vec<_>>());
+        check_state(state, advice.ratio, program, ids.as_deref())?;
     }
     storage::contract::check(&restore(program)?)?;
     Ok(())
@@ -877,19 +976,20 @@ fn check_input(
         "device input schema has an incorrect key boundary or column count",
     )?;
     for (column, ty) in input.columns.iter().zip(logical) {
+        let encoded = uses_domains(program);
         let declared = symbols.declaration(ty.logical_type_id);
         ensure(
             column.logical_type_id.is_some()
                 && column.logical_type_id == ty.logical_type_id
-                && column.codec_id == declared.map(|symbol| symbol.codec_id)
-                && column.codec.as_ref() == declared.map(|symbol| &symbol.codec),
+                && column.codec_id == if encoded { None } else { declared.map(|symbol| symbol.codec_id) }
+                && column.codec.as_ref() == if encoded { None } else { declared.map(|symbol| &symbol.codec) },
             program,
             "device column disagrees with its logical schema or declared codec",
         )?;
         // Scalar's sealed implementation set checks fixed-width integer support
         // in rustc, including aliases. Do not classify a type by its spelling.
         ensure(
-            column.storage == symbols.device_type(ty),
+            column.storage == if encoded && declared.is_some() { syn::parse_quote!(u32) } else { symbols.device_type(ty) },
             program,
             "device column storage disagrees with its codec ABI",
         )?;
@@ -897,7 +997,7 @@ fn check_input(
     Ok(())
 }
 
-fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> syn::Result<()> {
+fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program, components: Option<&[u32]>) -> syn::Result<()> {
     ensure(
         record.token == RADIX_RELATION
             && record.ratio == advice_ratio
@@ -927,8 +1027,11 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
     let state = &record.state;
     let active_bits = &record.active_bits;
     ensure(
-        *active_bits == self::active_bits(&types)
-            || *active_bits == syn::parse_quote!(<#word as ::gpu_datalog_runtime::Word>::BITS),
+        match components {
+            Some(ids) => *active_bits == domain_bits(ids),
+            None => *active_bits == self::active_bits(&types)
+                || *active_bits == syn::parse_quote!(<#word as ::gpu_datalog_runtime::Word>::BITS),
+        },
         program,
         "active radix window must cover the complete declared codec widths",
     )?;
@@ -939,7 +1042,8 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
             == syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>)
             && *word == word_type(types.iter().copied())?
             && *state == syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
-            && record.packing == syn::parse_quote!(<#provider>::derive_packing()?)
+            && record.packing == components.map_or_else(
+                || syn::parse_quote!(<#provider>::derive_packing()?), domain_packing)
             && record.state_init
                 == syn::parse_quote!(<#state>::new_set(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
             ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
@@ -1207,6 +1311,29 @@ mod tests {
             }
         })
         .unwrap()
+    }
+
+    #[test]
+    fn inferred_domain_storage_records_runtime_packing_and_keeps_logical_source() {
+        let source = cq_datalog_storage::compile(&syn::parse_quote! {
+            struct DomainInput;
+            relation E(a:String,b:String,n:i32) = (input);
+            output E;
+            strata {}
+            incremental { scheme seminaive_covering; }
+        }).unwrap();
+        let target = compile_domains_with(&source, quote!(symbols(String => Global))).unwrap();
+        assert!(uses_domains(&target));
+        assert_eq!(target.incremental, source.incremental);
+        let relation = &target.device.as_ref().unwrap().relations[0];
+        assert_eq!(relation.input.columns[0].storage, syn::parse_quote!(u32));
+        assert!(relation.input.columns[0].codec_id.is_none());
+        assert_eq!(relation.packing, syn::parse_quote!(__cq_gpu_domains.packing(&[0u32,1u32,2u32])?));
+        let mut stale = target.clone();
+        stale.device.as_mut().unwrap().relations[0].packing =
+            syn::parse_quote!(__cq_gpu_domains.packing(&[1u32,0u32,2u32])?);
+        assert!(check(&source, &stale).is_err());
+        check(&source, &target).unwrap();
     }
 
     #[test]

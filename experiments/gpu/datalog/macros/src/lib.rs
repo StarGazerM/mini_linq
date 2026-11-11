@@ -22,10 +22,36 @@ pub fn device_storage(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro]
+pub fn domain_storage(input: TokenStream) -> TokenStream {
+    cq_stage::rewrite::<cq_lang_datalog_storage::Program>(
+        input.into(), cq_gpu_datalog_core::storage::compile_domains_with,
+    ).into()
+}
+
+#[proc_macro]
+pub fn domain_schema(input: TokenStream) -> TokenStream {
+    cq_gpu_datalog_core::domains::schema(input.into())
+        .unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+#[proc_macro]
+pub fn encode_domains(input: TokenStream) -> TokenStream {
+    cq_stage::pass::<cq_lang_datalog_round::cq::Program, cq_lang_datalog_round::cq::Program>(
+        input.into(), cq_gpu_datalog_core::encode::compile,
+    ).into()
+}
+
+#[proc_macro]
 pub fn print_rounds(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_datalog_round::Program, syn::Expr>(input.into(), |source, args| {
-        no_arguments(args)?;
-        cq_gpu_datalog_core::print::compile(source)
+        if cq_gpu_datalog_core::storage::uses_domains(&source.storage) {
+            let catalog: syn::Expr = syn::parse2(args)?;
+            let body = cq_gpu_datalog_core::print::compile(source)?;
+            Ok(syn::parse_quote!({ let __cq_gpu_domains = #catalog; #body }))
+        } else {
+            no_arguments(args)?;
+            cq_gpu_datalog_core::print::compile(source)
+        }
     })
     .into()
 }

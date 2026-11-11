@@ -14,7 +14,7 @@ cq-stage = { path = "../../../facade/cq-stage" }
 cq-syntax = { path = "../../../languages/cq-syntax" }
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
 
 [dev-dependencies]
 cq-datalog-storage = { path = "../../../features/datalog/passes/storage" }

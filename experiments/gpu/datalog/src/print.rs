@@ -156,6 +156,32 @@ fn full_layouts(
     quote!(#(#updates)*)
 }
 
+fn concatenate(
+    program: &Program,
+    relation: usize,
+    columns: Option<&[usize]>,
+    word: &Type,
+    packing: TokenStream,
+    batches: TokenStream,
+) -> syn::Result<TokenStream> {
+    if !crate::storage::uses_domains(&program.storage) {
+        return Ok(quote!(::gpu_datalog_runtime::concatenate_batches::<#word>(
+            __cq_gpu_pool.clone(), #packing, #batches)?));
+    }
+    let domains = crate::domains::DomainComponents::infer(&program.storage.incremental.strata.source)?;
+    let input = &device(program).relations[relation].input;
+    let columns: Vec<_> = columns.map_or_else(|| (0..input.columns.len()).collect(), |columns| columns.to_vec());
+    let ids: Vec<_> = columns.iter().map(|&column| domains.columns[relation][column]).collect();
+    let types = columns.iter().map(|&column| &input.columns[column].storage);
+    let fields = types.map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
+    Ok(quote!({
+        let source_packing = ::gpu_datalog_runtime::Packing::with_columns(&[#(#fields),*])?;
+        let codes = ::gpu_datalog_runtime::concatenate_batches::<#word>(
+            __cq_gpu_pool.clone(), &source_packing, #batches)?;
+        __cq_gpu_domains.repack_codes(&codes, &source_packing, &[#(#ids),*])?
+    }))
+}
+
 /// One member's admission and recorded publication transaction.
 fn admit_publish(
     program: &Program,
@@ -172,6 +198,7 @@ fn admit_publish(
     let candidates = local("candidates", i);
     let fresh = local("fresh", i);
     let buffer = format_ident!("__cq_gpu_candidate_rows");
+    let concatenate = concatenate(program, i, None, word, quote!(&#packing), quote!(&#candidates))?;
     let admit = admission(program, context, i, &buffer, &fresh);
     let orders = admitted_orders(program, i, &fresh);
     let relation_name = relation.declaration.name.to_string();
@@ -207,7 +234,7 @@ fn admit_publish(
     }
     Ok(quote!({
         let #fresh = {
-            let #buffer = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &#packing, &#candidates)?;
+            let #buffer = #concatenate;
             ::std::mem::drop(#candidates);
             let candidates = #buffer.len();
             #admit
@@ -425,6 +452,8 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         )?;
     }
     let symbols = crate::storage::Symbols::from_program(&program.storage)?;
+    let domains = crate::storage::uses_domains(&program.storage)
+        .then(|| crate::domains::DomainComponents::infer(&program.storage.incremental.strata.source)).transpose()?;
     // Hosts a hole may read through its CQ declarations, with their providers.
     let mut hosts = BTreeMap::<String, Type>::new();
     for relation in &context.relations {
@@ -470,6 +499,12 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let mut cq = hole.cq.clone();
         let mut parameters = Vec::new();
         if standalone {
+            if domains.is_some() {
+                parameters.push((
+                    format_ident!("__cq_gpu_domains"), format_ident!("__cq_gpu_domains"),
+                    syn::parse_quote!(::std::sync::Arc<::gpu_datalog_runtime::DomainCatalog>),
+                ));
+            }
             for declaration in &mut cq.declarations {
                 if let Some(value) = &mut declaration.value {
                     let expression = value.expression.to_token_stream();
@@ -607,6 +642,16 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 None => quote!(*row.#field as i128),
             }
         });
+        let (upload_packing, remap) = if let Some(domains) = &domains {
+            let types = device.relations[index].input.columns.iter().map(|column| &column.storage);
+            let columns = types.map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
+            let ids = &domains.columns[index];
+            (
+                quote!(let __cq_gpu_source_packing = ::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?;),
+                quote!(let __cq_gpu_upload = __cq_gpu_domains.remap(&__cq_gpu_upload, &__cq_gpu_source_packing, &[#(#ids),*])?;),
+            )
+        } else { (quote!(), quote!()) };
+        let source_packing = if domains.is_some() { quote!(__cq_gpu_source_packing) } else { quote!(#packing) };
         let upload = format_ident!("__cq_gpu_upload");
         let fresh = local("fresh", index);
         let admit = admission(program, context, index, &upload, &fresh);
@@ -623,10 +668,12 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         initialize.push(quote!(
             #runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> {
                 let host = &(#expression);
+                #upload_packing
                 let words = ::cq_storage::rows::Rows::rows(host)
-                    .map(|row| #packing.pack::<#word>(&[#(#fields),*]))
+                    .map(|row| #source_packing.pack::<#word>(&[#(#fields),*]))
                     .collect::<::gpu_datalog_runtime::Result<::std::vec::Vec<_>>>()?;
                 let #upload = ::gpu_datalog_runtime::Buffer::from_host_async(__cq_gpu_pool.clone(), &words)?;
+                #remap
                 #admit
                 #orders
                 #publish
@@ -676,12 +723,14 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             let relation = &device.relations[key.relation];
             let (arena_ty, arena_init) = (&relation.arena, &relation.arena_init);
             let invocation = &holes[key.hole];
+            let concatenate = concatenate(program, key.relation, Some(&key.columns),
+                word, quote!(&packing), quote!(&[batch]))?;
             keys.push(quote!(let #name: #ty = {
                 let mut arena: #arena_ty = #arena_init;
                 let __cq_gpu_arena = &mut arena;
                 let batch = #invocation;
                 let packing = #packing;
-                let buffer = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &packing, &[batch])?;
+                let buffer = #concatenate;
                 let state: #state_ty = #state_init;
                 // SAFETY: candidate concatenation used this checked projected packing.
                 let run = unsafe { state.sort_unique(&buffer, buffer.len())? };
@@ -754,9 +803,15 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let canonical = &context.layouts[relation.providers.canonical];
         let host = &canonical.host;
         let at = &device.relations[output.relation].output_permutation;
-        let fields = relation.declaration.columns.iter().zip(at).map(|(declared, position)| {
+        let fields = relation.declaration.columns.iter().zip(at).enumerate().map(|(column, (declared, position))| {
             let ty = &declared.ty;
             match symbols.codec(declared.logical_type_id) {
+                Some(codec) if domains.is_some() => {
+                    let id = domains.as_ref().unwrap().columns[output.relation][column];
+                    // DECODE P: final DOOP output uses its field's recorded component inverse.
+                    quote!(__cq_gpu_domains.decode::<#ty, #codec>(#id, row[#position] as u32)
+                        .expect("invalid dense symbol code in final output"))
+                }
                 // DECODE P: generated SymbolCodec inverse resolves final datalog host output fields.
                 Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(row[#position] as u32)),
                 // DECODE P: generated numeric carrier inversion constructs final host output fields.
@@ -911,6 +966,8 @@ fn phase(
                 let rows = format_ident!("__cq_expansion_candidates");
                 let fresh = format_ident!("__cq_expansion_fresh");
                 let admit = admission(program, context, rule.head, &rows, &fresh);
+                let concatenate = concatenate(program, rule.head, None, word, quote!(&#packing),
+                    quote!(::core::slice::from_ref(&__cq_gpu_batch)))?;
                 Some(quote! {
                     if ::gpu_datalog_runtime::trace_kernels() {
                         if let Some(timing) = ::cq_gpu_runtime::take_last_timings() {
@@ -922,8 +979,7 @@ fn phase(
                     }
                     // SQ-ExpansionCounters: this rule's fresh rows against the
                     // committed canonical layout, without publishing them.
-                    let #rows = ::gpu_datalog_runtime::concatenate_batches::<#word>(
-                        __cq_gpu_pool.clone(), &#packing, ::core::slice::from_ref(&__cq_gpu_batch))?;
+                    let #rows = #concatenate;
                     #admit
                     __cq_expansion_capture.report(#rule_name, #variant, __cq_gpu_round, #fresh.len());
                 })
