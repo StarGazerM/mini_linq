@@ -36,7 +36,7 @@ fn catalog() -> Catalog {
     let declared: structures::Providers = syn::parse_quote!(providers {
         range_provider = RangeProvider { reads [exact, range, membership], build inferred };
         host_index = HostIndex { reads [exact, range, membership], build inferred };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
     });
     let mut declarations = declared.declarations.into_iter();
     let mut catalog = Catalog {
@@ -66,7 +66,7 @@ fn code_reader(retained: bool) -> (structures::physical::Program, structures::Pr
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b,label);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r host result(answer) = @reader as Reader [a];
             answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
@@ -134,7 +134,7 @@ fn numeric_lookup_is_published_before_host_code_expansion() {
             answer = let canon project selected keep {a,b};
             return answer as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; range_provider = RangeProvider { reads [exact, range, membership], build inferred }; host_index = HostIndex { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; range_provider = RangeProvider { reads [exact, range, membership], build inferred }; host_index = HostIndex { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             r host scan = @reader as Reader []; s host scan = @reader as Reader []; t host scan = @reader as Reader [];
             s = @range_provider as RangeProvider [a]; t = @host_index as HostIndex [b];
             answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
@@ -310,7 +310,7 @@ fn full_key_host_membership() -> (structures::physical::Program, structures::Pro
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; host_membership = HostMembership { reads [membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; host_membership = HostMembership { reads [membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r host result(answer) = @host_membership as HostMembership [a] membership;
             answer rows = @sort as ::cq_storage::dedup::Sort;

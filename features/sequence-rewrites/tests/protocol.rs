@@ -31,7 +31,7 @@ macro_rules! apply_macro {
                 r = let canon rename R {a -> a};
                 return r as answer(a);
             }
-            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+            structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
             sequence {
                 a = rows r;
                 b = flatten tile 8 a;
@@ -49,7 +49,7 @@ fn source() -> Stack {
             r = let canon rename R {a -> a};
             return r as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence {
             a = rows r;
             b = flatten tile 8 a;
@@ -159,7 +159,7 @@ fn registered_macros_chain_and_forward_advice() {
             r = let canon rename R {a -> a};
             return r as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence {
             a = rows r;
             b = flatten tile 8 a;

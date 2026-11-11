@@ -5,9 +5,9 @@ use crate::{encoded::*, physical::Operator, symbol_name, Analysis, Program, Repr
 use cq_syntax::{LogicalTypeId, constraint::{Constraint, Term}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Summary { None, MinMax }
+pub enum Summary { None, BlockMinMax, VectorMinMax }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Prune { None, MinMax }
+pub enum Prune { None, BlockMinMax, VectorMinMax }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Test { Encoded, DecodeCodes }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +26,8 @@ pub struct Column {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
     pub block_rows: u64,
+    /// Fixed-vector protocol advertised by the S1 provider and consumed by execution.
+    pub vector_rows: usize,
     pub summary: Summary,
     pub columns: BTreeMap<String, Column>,
 }
@@ -87,6 +89,23 @@ pub fn preserved_operations(condition: &cq_syntax::algebra::Theta) -> BTreeSet<P
     result
 }
 
+/// Every encoded comparison needs a declared column's translation domain.
+/// Closed-only leaves cannot be translated by an unrelated predicate column.
+pub fn check_predicate_operands(condition: &cq_syntax::algebra::Theta) -> syn::Result<()> {
+    fn pair(left: &Term, right: &Term) -> bool {
+        matches!(left, Term::Variable(_)) || matches!(right, Term::Variable(_))
+    }
+    fn supported(constraint: &Constraint) -> bool {
+        match constraint {
+            Constraint::Compare { left, right, .. } => pair(left, right),
+            Constraint::Between { term, low, high } => pair(term, low) && pair(term, high),
+            Constraint::In { term, .. } => matches!(term, Term::Variable(_)),
+            Constraint::Or(arms) => arms.iter().flatten().all(supported),
+        }
+    }
+    require(condition.constraints.iter().all(supported), "blocked predicate has a column-free comparison")
+}
+
 /// Formal rule STR-Blocks: independently discharge original source/schema obligations.
 /// Formal rule STR-BlockPredicate: retain the exact Physical formula and demand.
 pub(crate) fn check(physical: &crate::physical::Program, program: &Program, facts: &Analysis) -> syn::Result<BTreeSet<RepresentationId>> {
@@ -100,7 +119,7 @@ pub(crate) fn check(physical: &crate::physical::Program, program: &Program, fact
         let binding = contract.sources.get(&scan.source).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing blocked source binding"))?;
         let source = encoded.obligations.sources.get(&scan.source).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "missing encoded source"))?;
         require(source.occurrence == *occurrence, "source occurrence changed")?;
-        require(binding.block_rows > 0 && binding.block_rows <= u32::MAX as u64 && binding.block_rows % 1024 == 0, "invalid block geometry")?;
+        require(binding.vector_rows == 1024 && binding.block_rows > 0 && binding.block_rows <= u32::MAX as u64 && binding.block_rows % binding.vector_rows as u64 == 0, "invalid block geometry")?;
         let relation = physical.inputs().find(|r| symbol_name(&r.name) == source.relation).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked relation"))?;
         let definition = physical.program.definitions.iter().find(|d| symbol_name(&d.name) == *occurrence).ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "unknown blocked occurrence"))?;
         require(!facts.physical.fused.values().any(|group| group.prefix == *occurrence || group.members.contains(occurrence)), "blocked source cannot enter a fused scope")?;
@@ -121,7 +140,11 @@ pub(crate) fn check(physical: &crate::physical::Program, program: &Program, fact
             let native = match declaration.carrier { Carrier::U8 => 1, Carrier::U16 => 2, Carrier::U32 => 4, Carrier::U64 => 8 };
             let widths = if declaration.family == Family::Plain { BTreeSet::from([native]) } else { [0, 1, 2, native].into_iter().filter(|w| *w <= native).collect() };
             require(bound.widths == widths, "invalid physical width set")?;
-            require(binding.summary != Summary::MinMax || declaration.buffers.contains(&BufferKind::BlockSummaries), "summary enclosure capability missing")?;
+            require(match binding.summary {
+                Summary::None => true,
+                Summary::BlockMinMax => declaration.buffers.contains(&BufferKind::BlockSummaries),
+                Summary::VectorMinMax => declaration.buffers.contains(&BufferKind::VectorSummaries),
+            }, "summary enclosure capability missing")?;
             require(declaration.preserves == BTreeSet::from([Preservation::Equality, Preservation::Order]), "S1 ordinal preserved-operation law missing")?;
             used.insert(id);
         }
@@ -156,6 +179,7 @@ pub(crate) fn check(physical: &crate::physical::Program, program: &Program, fact
             active.insert(name.clone());
         }
         if let Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) = &definition.operator {
+            check_predicate_operands(&s.condition)?;
             expected_predicates.insert(name.clone());
             let p = contract.predicates.get(&name).ok_or_else(|| syn::Error::new_spanned(&definition.name, "missing exact blocked predicate"))?;
             require(p.input == symbol_name(&s.input), "predicate input changed")?;
@@ -169,7 +193,11 @@ pub(crate) fn check(physical: &crate::physical::Program, program: &Program, fact
                 Strategy::Window => s.condition.range_bounds().is_some(),
                 Strategy::Point => columns.len() == 1 && s.condition.equalities.len() + s.condition.constraints.len() == 1 && columns.iter().all(|c| crate::selection_constants(s).contains_key(c)),
             }, "predicate strategy does not execute the exact formula")?;
-            require(p.prune != Prune::MinMax || (contract.sources[&p.source].summary == Summary::MinMax && columns.len() == 1 && p.strategy != Strategy::Formula), "illegal summary strategy")?;
+            require(match p.prune {
+                Prune::None => true,
+                Prune::BlockMinMax => contract.sources[&p.source].summary == Summary::BlockMinMax && columns.len() == 1 && p.strategy != Strategy::Formula,
+                Prune::VectorMinMax => contract.sources[&p.source].summary == Summary::VectorMinMax && columns.len() == 1 && p.strategy != Strategy::Formula,
+            }, "illegal summary strategy")?;
             require(p.strategy != Strategy::Formula || p.test == Test::DecodeCodes, "formula requires recorded physical decode to global codes")?;
             for (logical, id) in &p.columns {
                 let base = origins[&name].iter().find(|o| o.occurrence == source.occurrence).and_then(|o| o.columns.get(logical)).ok_or_else(|| syn::Error::new_spanned(&definition.name, "predicate column has no retained lineage"))?;
@@ -206,7 +234,8 @@ pub(crate) fn check(physical: &crate::physical::Program, program: &Program, fact
             }
         }
         if carry && definition.canon.is_some() {
-            require(matches!(facts.canonical.get(&name), Some(crate::CanonSource::Rows(provider)) if symbol_name(&provider.token) == "sort"), "blocked canonical boundary requires recorded comparator rows")?;
+            // Formal rule STR-ComparatorRows: canonical carriers use the declared comparator interface.
+            require(matches!(facts.canonical.get(&name), Some(crate::CanonSource::Rows(provider)) if facts.facts(provider).reads(&crate::Capability::ComparatorRows)), "blocked canonical boundary requires recorded comparator rows")?;
             let key = format!("canon:{name}");
             check_read(physical, program, facts, &origins, &key, &name, facts.physical.headings[&name].iter().cloned().collect(), Consumer::Relational(name.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;
             expected_reads.insert(key);
@@ -215,7 +244,7 @@ pub(crate) fn check(physical: &crate::physical::Program, program: &Program, fact
     let returned = symbol_name(&physical.program.returned);
     if active.contains(&returned) {
         if physical.program.return_canon.is_some() {
-            require(facts.head_dedup.get(&returned).is_some_and(|provider| symbol_name(&provider.token) == "sort"), "blocked return canonical boundary requires recorded comparator rows")?;
+            require(facts.head_dedup.get(&returned).is_some_and(|provider| facts.facts(provider).reads(&crate::Capability::ComparatorRows)), "blocked return canonical boundary requires recorded comparator rows")?;
             let key = format!("canon:{returned}");
             if expected_reads.insert(key.clone()) {
                 check_read(physical, program, facts, &origins, &key, &returned, facts.physical.headings[&returned].iter().cloned().collect(), Consumer::Relational(returned.clone()), ReadPurpose::PreserveCarrier, &mut read_ids)?;

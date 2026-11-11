@@ -20,7 +20,7 @@ fn program() -> (Physical, Structures, Program) {
             providers {
                 reader = Reader { reads [exact, range, membership], build inferred };
                 index = Index { reads [exact, range, membership], build inferred };
-                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
             }
             r host scan = @reader as Reader [];
             s host scan = @reader as Reader [];

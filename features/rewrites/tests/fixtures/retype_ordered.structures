@@ -5,7 +5,7 @@ structures {
         trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
         host_scan = ::core::iter::Map<_, _> { reads [], build typed };
         vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         replacement = Replacement<_, Vec<_>> { reads [exact, range, membership], build typed };
     }
     o = @replacement as Replacement<_, Vec<_>> [x];

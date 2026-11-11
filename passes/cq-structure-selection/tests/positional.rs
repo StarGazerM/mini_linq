@@ -687,6 +687,80 @@ fn blocks_are_authored_complete_printable_and_preserve_physical() {
 }
 
 #[test]
+fn blocks_author_exact_summary_levels_and_source_vector_geometry() {
+    use ir::{blocks as b, encoded::BufferKind};
+    for (spelling, summary, prune, buffer) in [
+        ("none", b::Summary::None, b::Prune::None, None),
+        ("minmax", b::Summary::BlockMinMax, b::Prune::BlockMinMax, Some(BufferKind::BlockSummaries)),
+        ("vector_minmax", b::Summary::VectorMinMax, b::Prune::VectorMinMax, Some(BufferKind::VectorSummaries)),
+    ] {
+        let summary_token = syn::Ident::new(spelling, proc_macro2::Span::call_site());
+        let source = block_source();
+        let (physical, target) = cq_structure_selection::compile_with(&source, quote!(blocks(R {
+            block_rows 2048; summary #summary_token;
+            columns [a: bytes u64, b: plain u64];
+        }))).unwrap();
+        assert_eq!(physical, source);
+        let blocks = &target.encoded.blocks;
+        let binding = &blocks.sources[&blocks.scans["r"].source];
+        assert_eq!((binding.block_rows, binding.vector_rows, binding.summary), (2048, 1024, summary));
+        assert_eq!(blocks.predicates["p"].prune, prune);
+        for column in binding.columns.values() {
+            let mut expected = std::collections::BTreeSet::from([BufferKind::Payload, BufferKind::Headers]);
+            expected.extend(buffer);
+            assert_eq!(target.encoded.obligations.declarations[&column.declaration].buffers, expected);
+        }
+        let parsed = parse_annotations(&physical, target.to_token_stream());
+        assert_eq!(parsed, target);
+        ir::contract::check(&physical, &parsed).unwrap();
+    }
+}
+
+#[test]
+fn blocks_selection_rejects_column_free_predicate_leaves() {
+    for condition in [
+        quote!(1 < 2),
+        quote!(x >= 3, 1 < 2),
+        quote!((x >= 3) or (1 < 2)),
+        quote!((x >= 3 and ((y < 9) or (1 < 2)))),
+        quote!(x >= 3, 1 between 0 and y),
+        quote!(x >= 3, 1 in {1, 2}),
+    ] {
+        let source: physical::Program = syn::parse2(quote! { physical {
+            relation R(a: Alias [17], b: Alias [17]);
+            r = pipe rename R { a -> x, b -> y };
+            p = pipe select r if (#condition);
+            return canon p as answer(x,y);
+        }}).unwrap();
+        cq_structure_selection::compile(&source).unwrap();
+        assert!(cq_structure_selection::compile_with(&source, block_advice()).is_err());
+    }
+}
+
+#[test]
+fn blocks_checker_rejects_column_free_leaf_in_otherwise_valid_formula() {
+    let source: physical::Program = syn::parse_quote! { physical {
+        relation R(a: Alias [17], b: Alias [17]);
+        r = pipe rename R { a -> x, b -> y };
+        p = pipe select r if (x != 3);
+        return canon p as answer(x,y);
+    }};
+    let (mut physical, target) = cq_structure_selection::compile_with(&source, block_advice()).unwrap();
+    let physical::Operator::Select(select) = &mut physical.program.definitions[1].operator else { unreachable!() };
+    select.condition = syn::parse_quote!(x != 3, 1 != 2);
+    assert!(ir::contract::check(&physical, &target).is_err());
+}
+
+#[test]
+fn blocks_retained_canonical_rows_reject_distinct_without_comparator() {
+    let (physical, mut target) = cq_structure_selection::compile_with(&block_source(), block_advice()).unwrap();
+    target.structures.providers.declarations.iter_mut()
+        .find(|provider| provider.token == "sort").unwrap().facts.reads
+        .retain(|capability| *capability != ir::Capability::ComparatorRows);
+    assert!(ir::contract::check(&physical, &target).is_err());
+}
+
+#[test]
 fn blocks_reject_partial_schema_and_unknown_hosts_without_type_recognition() {
     for advice in [
         quote!(blocks(R { block_rows 1024; summary none; columns [a: bytes u64]; })),

@@ -681,6 +681,14 @@ impl Wire for u64 {
         syn::LitInt::new(&self.to_string(), Span::call_site()).to_tokens(tokens);
     }
 }
+impl Wire for usize {
+    fn read(input: ParseStream<'_>) -> syn::Result<Self> {
+        input.parse::<syn::LitInt>()?.base10_parse()
+    }
+    fn emit(&self, tokens: &mut TokenStream) {
+        syn::LitInt::new(&self.to_string(), Span::call_site()).to_tokens(tokens);
+    }
+}
 impl Wire for bool {
     fn read(input: ParseStream<'_>) -> syn::Result<Self> {
         Ok(input.parse::<syn::LitBool>()?.value)
@@ -937,14 +945,14 @@ record!(Contract {
 mod blocked_wire {
     use super::*;
     use crate::blocks::{Column, Source, Scan, Predicate, FieldRead, Read, Contract, Summary, Prune, Test, Translation, Strategy, ReadAction};
-    atoms!(Summary { None, MinMax });
-    atoms!(Prune { None, MinMax });
+    atoms!(Summary { None, BlockMinMax, VectorMinMax });
+    atoms!(Prune { None, BlockMinMax, VectorMinMax });
     atoms!(Test { Encoded, DecodeCodes });
     atoms!(Translation { S1Ordinal });
     atoms!(Strategy { Window, Point, Formula });
     atoms!(ReadAction { Owned, BorrowedScoped, Ordinal });
     record!(Column { slot, logical, declaration, widths });
-    record!(Source { block_rows, summary, columns });
+    record!(Source { block_rows, vector_rows, summary, columns });
     record!(Scan { source, columns });
     record!(Predicate { input, source, columns, prune, test, strategy, translation, preserves });
     record!(FieldRead { representation, action });

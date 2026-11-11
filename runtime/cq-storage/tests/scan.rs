@@ -136,8 +136,8 @@ fn check<T: OrdinalDecode + std::fmt::Debug, F: Family + EncodedPoint + EncodedW
                         .collect();
                     assert_eq!(selected, expected, "mask {p:?}");
                     for test in [TestMode::Encoded, TestMode::DecodeToCode] {
-                        for prune in [PruneMode::None, PruneMode::MinMax] {
-                            if prune == PruneMode::MinMax && !summary {
+                        for prune in [PruneMode::None, PruneMode::BlockMinMax] {
+                            if prune == PruneMode::BlockMinMax && !summary {
                                 continue;
                             }
                             let mut selected = Vec::new();
@@ -289,21 +289,21 @@ fn bounded_laws<F: Family + EncodedPoint + EncodedWindow>() {
             let membership = Predicate::Membership(vec![0i64.ordinal(), 7i64.ordinal(), 1007i64.ordinal(), 4002i64.ordinal()]);
             let window = Predicate::Window { lo: Included(7i64.ordinal()), hi: Unbounded };
             for test in [TestMode::Encoded, TestMode::DecodeToCode] {
-                for prune in [PruneMode::None, PruneMode::MinMax] {
-                    if prune == PruneMode::MinMax && !summaries {
+                for prune in [PruneMode::None, PruneMode::BlockMinMax] {
+                    if prune == PruneMode::BlockMinMax && !summaries {
                         continue;
                     }
                     let expected: Vec<_> = values.iter().enumerate().filter_map(|(i, value)| {
                         (membership.matches(value.ordinal()) && window.matches(value.ordinal())).then_some(i)
                     }).collect();
-                    let actual: Vec<_> = table.scan_positions(0..count, |tile| {
+                    let actual: Vec<_> = table.scan_positions(0..count, VECTOR_ROWS, |tile| {
                         tile.intersect::<0>(&membership, prune, test);
                         tile.intersect::<1>(&window, prune, test);
                     }).map(ScanPosition::index).collect();
                     assert_eq!(actual, expected);
 
                     let mut mask = ScanMask::default();
-                    let mut empty = table.tile(count, &mut mask);
+                    let mut empty = table.tile(count, VECTOR_ROWS, &mut mask);
                     assert!(empty.is_empty());
                     empty.intersect::<0>(&membership, prune, test);
                     assert_eq!(empty.positions().count(), 0);
@@ -328,7 +328,7 @@ fn lazy_ranges_and_carrier_filters_preserve_order_and_multiplicity() {
         ScanColumn::<u64, Bytes>::new(&values, BlockRows::new(1024).unwrap(), false),
     ));
     let calls = Cell::new(0);
-    let mut scan = table.scan_positions(1024..2051, |tile| {
+    let mut scan = table.scan_positions(1024..2051, VECTOR_ROWS, |tile| {
         calls.set(calls.get() + 1);
         tile.intersect::<0>(&Predicate::Point(1), PruneMode::None, TestMode::Encoded);
     });
@@ -339,24 +339,24 @@ fn lazy_ranges_and_carrier_filters_preserve_order_and_multiplicity() {
     drop(scan);
     assert_eq!(calls.get(), 1, "early stop must not prepare the next vector");
 
-    let last = table.scan_positions(2048..2051, |_| {}).next().unwrap();
+    let last = table.scan_positions(2048..2051, VECTOR_ROWS, |_| {}).next().unwrap();
     let input = [(last, "late"), (first, "first"), (first, "duplicate"), (last, "again")];
-    let filtered: Vec<_> = table.filter_rows(input, |item| item.0, |tile| {
+    let filtered: Vec<_> = table.filter_rows(input, VECTOR_ROWS, |item| item.0, |tile| {
         tile.retain(|position| table.read_ordinal::<0>(position) == 1);
     }).collect();
     assert_eq!(filtered, vec![(first, "first"), (first, "duplicate")]);
-    assert_eq!(table.scan_positions(0..1024, |_| {}).count(), 1024);
-    assert_eq!(table.scan_positions(1024..2048, |_| {}).count(), 1024);
-    assert_eq!(table.scan_positions(2048..2051, |_| {}).count(), 3);
+    assert_eq!(table.scan_positions(0..1024, VECTOR_ROWS, |_| {}).count(), 1024);
+    assert_eq!(table.scan_positions(1024..2048, VECTOR_ROWS, |_| {}).count(), 1024);
+    assert_eq!(table.scan_positions(2048..2051, VECTOR_ROWS, |_| {}).count(), 3);
 }
 
 #[test]
 fn table_positions_cannot_cross_snapshots() {
     let a = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
     let b = ScanTable::new((ScanColumn::<u64, Plain>::new(&[3], BlockRows::new(1024).unwrap(), false),));
-    let position = a.scan_positions(0..1, |_| {}).next().unwrap();
+    let position = a.scan_positions(0..1, VECTOR_ROWS, |_| {}).next().unwrap();
     assert_eq!(a.read_ordinal::<0>(position), 3);
-    let same_table = b.scan_positions(0..1, |_| {}).next().unwrap();
+    let same_table = b.scan_positions(0..1, VECTOR_ROWS, |_| {}).next().unwrap();
     assert_eq!(b.read_ordinal::<0>(same_table), 3);
     assert!(std::panic::catch_unwind(|| b.read_ordinal::<0>(position)).is_err());
 }
@@ -382,7 +382,7 @@ fn only_authorized_demanded_fields_are_materialized() {
         ),
         ScanColumn::<i64, Plain>::new(&[-8, 12], BlockRows::new(1024).unwrap(), false),
     ));
-    let position = table.scan_positions(0..2, |tile| {
+    let position = table.scan_positions(0..2, VECTOR_ROWS, |tile| {
         tile.intersect::<0>(&Predicate::Point(2), PruneMode::None, TestMode::DecodeToCode);
     }).next().unwrap();
     assert_eq!(table.read_ordinal::<0>(position), 2);
@@ -439,7 +439,7 @@ fn input_set_boundary_compacts_full_encoded_rows_without_materializing_values() 
             first_column.finish(),
             ScanColumn::<u64, Plain>::new(&second, block_rows, summaries),
         )).into_set();
-        let rows: Vec<_> = table.scan_positions(0..table.len(), |_| {})
+        let rows: Vec<_> = table.scan_positions(0..table.len(), VECTOR_ROWS, |_| {})
             .map(|position| (
                 table.read_ordinal::<0>(position),
                 table.read_ordinal::<1>(position),

@@ -158,7 +158,7 @@ fn declarations() -> Vec<structures::Declaration> {
     let base: structures::Providers = syn::parse_quote!(providers {
         host_scan = ::core::iter::Map<_, _> { reads [], build typed };
         vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] };
         adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared };
         alias = Alias { reads [exact, range, membership], supports [retain, expand, keys], build inferred };
@@ -218,7 +218,7 @@ fn constant_occurrences_use_ordinary_storage() {
         relation R(a:i32,b:i32);
         r = let canon rename R {a -> x} constants {b = 7};
         return r as answer(x);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r rows = @sort as ::cq_storage::dedup::Sort;
         r canon = rows;
@@ -240,7 +240,7 @@ fn constant_occurrences_use_ordinary_storage() {
         r = let rename R {a -> x,c -> y} constants {b = 7};
         j = let canon probe first [x] l,r;
         return j as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -271,7 +271,7 @@ fn smallest_expand_program() -> Fixture {
         candidate = pipe probe smallest [b] l,r;
         checked = let canon semi eager [a,c] candidate,s;
         return checked as answer(a,b,c);
-    } structures { providers { directory = ::custom::Directory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; directory_alias = DirectoryAlias { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { directory = ::custom::Directory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; directory_alias = DirectoryAlias { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         r = @directory as ::custom::Directory [b][c] supports [retain, expand];
         s = @directory_alias as DirectoryAlias [a][c] supports [expand];
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -291,7 +291,7 @@ fn resident_expand_program() -> Fixture {
         r = pipe rename R {a -> x,b -> y,c -> z};
         p = let canon probe first [x,y] l,r;
         return p as answer(x,y,z);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot = ::custom::Snapshot<_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot = ::custom::Snapshot<_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host result(p) = @snapshot as ::custom::Snapshot<_> [x,y] supports [expand];
@@ -326,7 +326,7 @@ fn composite_prefix_ranges_support_expansion_and_shared_witnesses() {
             p = let canon probe first [x,y] s,r;
             return p as answer(x,y,z);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; directory = ::custom::Directory<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; directory = ::custom::Directory<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_,_> [];
             r = @directory as ::custom::Directory<_,_> [x][y] supports [expand];
             r host scan = @host_scan as ::core::iter::Map<_,_> [];
@@ -397,7 +397,7 @@ fn membership_bridge_program() -> Fixture {
         last = pipe probe first [c] after,t;
         out = let canon project last keep {a,b,c,d,tag};
         return out as answer(a,b,c,d,tag);
-    } structures { providers { adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; exact_cursor = ::custom::ExactCursor<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; exact_cursor = ::custom::ExactCursor<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         selected = @adaptive_keyset as ::cq_storage::AdaptiveKeySet<_,::cq_storage::I64Codec,64> [b] membership payload [b] constants {tag = 7};
         r = @exact_cursor as ::custom::ExactCursor<_,_> [a] supports [expand];
         s = @exact_cursor as ::custom::ExactCursor<_,_> [b] supports [expand];
@@ -602,7 +602,7 @@ fn program() -> Fixture {
         relation L(a:i32); relation R(a:i32,b:i32);
         l = pipe rename L {a -> x}; r = let rename R {a -> x,b -> y};
         j = let canon probe first [x] l,r; return j as answer(x,y);
-    } structures { providers { user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r = @user_index as UserIndex [x]; r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; l host scan = @host_scan as ::core::iter::Map<_, _> []; j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows; } }
+    } structures { providers { user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r = @user_index as UserIndex [x]; r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; l host scan = @host_scan as ::core::iter::Map<_, _> []; j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows; } }
 }
 
 #[test]
@@ -642,7 +642,7 @@ fn only_built_lets_have_entries_and_input_sets_preserve_uniqueness() {
     let mut q = p;
     q.0.program.definitions[1].mode = syn::parse_quote!(pipe);
     assert!(check(&q).is_err());
-    q.1.structures = syn::parse_quote!(structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; user_index = UserIndex { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    q.1.structures = syn::parse_quote!(structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; user_index = UserIndex { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
         r host scan = @host_scan as ::core::iter::Map<_, _> [];
         r host result(j) = @user_index as UserIndex [x]; j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
@@ -657,7 +657,7 @@ fn canonicality_comes_from_input_sets_plan_boundaries_and_key_preservation() {
         r = let canon rename R {a -> a,b -> b};
         e = pipe bind r with n: i32 = (1);
         p = pipe project e keep {a,b}; return p as answer(a,b);
-    } structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort; r host scan = @host_scan as ::core::iter::Map<_, _> []; } };
+    } structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; } r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort; r host scan = @host_scan as ::core::iter::Map<_, _> []; } };
     let a = check(&p).unwrap();
     assert_eq!(a.unique["p"], ["a", "b"]);
     let mut q = p.clone();
@@ -675,7 +675,7 @@ fn ordered_premises_require_storage_or_a_same_key_merge_stream() {
         relation L(a:i32); relation R(a:i32,b:i32); relation S(b:i32);
         l = pipe rename L {a -> a}; r = pipe rename R {a -> a,b -> b}; s = pipe rename S {b -> b};
         j = let merge[a] l,r; k = let canon merge[b] j,s; return k as answer(a,b);
-    } structures { providers { ordered = Ordered { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
+    } structures { providers { ordered = Ordered { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
         j = @ordered as Ordered [b]; j rows = @vec as ::std::vec::Vec<_>; k rows = @sort as ::cq_storage::dedup::Sort; k canon = rows;
         l host scan = @host_scan as ::core::iter::Map<_, _> []; r host scan = @host_scan as ::core::iter::Map<_, _> []; s host scan = @host_scan as ::core::iter::Map<_, _> [];
         l host result(j) = @ordered as Ordered [a]; r host result(j) = @ordered as Ordered [a]; s host result(k) = @ordered as Ordered [b];
@@ -710,7 +710,7 @@ fn complete_read_structures_take_precedence_over_candidate_prefixes() {
         j = pipe probe first [x] l,r;
         checked = let canon probe first [x,y] j,r;
         return checked as answer(x,y);
-    } structures { providers { curried = Curried { reads [exact, range, membership], build inferred }; full = Full { reads [exact, range, membership], build inferred }; payload = Payload { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { curried = Curried { reads [exact, range, membership], build inferred }; full = Full { reads [exact, range, membership], build inferred }; payload = Payload { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         r = @curried as Curried [x][y]; r = @full as Full [x,y]; r = @payload as Payload [x];
         r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> [];
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -747,7 +747,7 @@ fn a_const_only_read_cannot_justify_a_built_entry() {
         r = let rename R { a -> x };
         p = let canon point select r if (x = 5);
         return p as answer(x);
-    } structures { providers { vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows; } };
+    } structures { providers { vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; p rows = @sort as ::cq_storage::dedup::Sort; p canon = rows; } };
     check(&p).unwrap();
     let mut invalid = p;
     invalid
@@ -766,7 +766,7 @@ fn const_reads_can_coexist_with_storage_justified_by_a_stream() {
         j = pipe probe first [x] l,r;
         out = let canon semi eager [x] j,p;
         return out as answer(x);
-    } structures { providers { user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r = @user_index as UserIndex [x]; p = @user_index as UserIndex [x]; r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; p rows = @vec as ::std::vec::Vec<_>; out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows; l host scan = @host_scan as ::core::iter::Map<_, _> []; } };
+    } structures { providers { user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r = @user_index as UserIndex [x]; p = @user_index as UserIndex [x]; r rows = @vec as ::std::vec::Vec<_>; r host scan = @host_scan as ::core::iter::Map<_, _> []; p rows = @vec as ::std::vec::Vec<_>; out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows; l host scan = @host_scan as ::core::iter::Map<_, _> []; } };
     check(&p).unwrap();
 }
 
@@ -810,7 +810,7 @@ fn represented_program() -> Fixture {
         b = pipe bind s with z: i32 = (x + y);
         out = let canon project b keep {x,y,z};
         return out as answer(x,y,z);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         r host scan = @host_scan as ::core::iter::Map<_, _> [];
         out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
     } }
@@ -941,7 +941,7 @@ fn generator_bind_round_trip_drops_inherited_uniqueness() {
         u = pipe unit;
         g = pipe bind u with for x = ([1, 1, 2]);
         return canon g as answer(x);
-    } structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         g head = @sort as ::cq_storage::dedup::Sort;
     } };
     let facts = check(&source).unwrap();
@@ -968,7 +968,7 @@ fn shared_program() -> Fixture {
         s = pipe semi eager [x] l,b;
         p = let canon probe first [x] s,b;
         return p as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; exact_cursor = ::custom::ExactCursor<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; exact_cursor = ::custom::ExactCursor<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
         b host scan = @host_scan as ::core::iter::Map<_, _> [];
         b rows = @vec as ::std::vec::Vec<_>;
@@ -1008,7 +1008,7 @@ fn retained_snapshot_witness_requires_identical_provider_and_key() {
         s = pipe semi eager [x] l,b;
         p = let canon probe first [x] s,b;
         return p as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot = ::custom::Snapshot<_,_,Layout0> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; snapshot = ::custom::Snapshot<_,_,Layout0> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         b host scan = @host_scan as ::core::iter::Map<_,_> [];
         b host result(s) = @snapshot as ::custom::Snapshot<_,_,Layout0> [x] supports [retain, expand];
@@ -1311,7 +1311,7 @@ fn join_filter_uses_declared_keys_and_preserves_scalar_and_totality_proofs() {
             r = let rename R {a -> x,b -> y};
             p = let canon probe first [x] l,r;
             return p as answer(x,y);
-        } structures { providers { scan = Scan { reads [exact, range, membership], build inferred }; index = ::custom::Index<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; filter = Filter { reads [exact, range, membership], build inferred }; }
+        } structures { providers { scan = Scan { reads [exact, range, membership], build inferred }; index = ::custom::Index<_,_> { reads [exact, range, membership], supports [retain, expand, keys], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; filter = Filter { reads [exact, range, membership], build inferred }; }
             l host scan = @scan as Scan [];
             r host scan = @scan as Scan [];
             r = @index as ::custom::Index<_,_> [x] supports [keys];
@@ -1473,7 +1473,7 @@ fn reject_providers(
         providers {
             vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
             host_scan = ::core::iter::Map<_, _> { reads [], build typed };
-            sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
             #table
         }
         #built
@@ -1488,7 +1488,7 @@ fn providers_table_round_trips_every_fact() {
         sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] };
         trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
         sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         hash_set = ::cq_storage::HashSet<_> { reads [membership, ordered, resident], build typed, accounting keys };
         packed = ::cq_storage::dedup::Packed { reads [distinct], build inferred, packed_bits 64 };
         range = OpaqueRange { reads [range], abi range, contiguous_range };
@@ -1507,7 +1507,7 @@ fn providers_table_round_trips_every_fact() {
             trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
             vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
             host_scan = ::core::iter::Map<_, _> { reads [], build typed };
-            sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         }
         r = @trie(@hash_set as ::cq_storage::HashSet<_>)
             as ::cq_storage::Trie<'_, _, ::cq_storage::HashSet<_>> [x];
@@ -1578,7 +1578,7 @@ fn str_routed_restricts_inner_facts_to_exact_membership_and_keys() {
             sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] };
             vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
             host_scan = ::core::iter::Map<_, _> { reads [], build typed };
-            sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+            sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         }
         r = @sharded(@sorted_run as ::cq_storage::SortedRun<_, _>)
             as ::cq_storage::sharded::Sharded<::cq_storage::SortedRun<_, _>> [x];
@@ -1668,7 +1668,7 @@ fn native_input_program(abi: proc_macro2::TokenStream) -> Fixture {
             providers {
                 vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
                 host_scan = ::core::iter::Map<_, _> { reads [], build typed };
-                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
                 index = Index { reads [exact], build inferred };
                 native = Arbitrary { reads [], abi #abi };
             }

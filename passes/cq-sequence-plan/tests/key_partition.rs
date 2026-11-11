@@ -54,7 +54,7 @@ fn catalog() -> Catalog {
     let declared: structures::Providers = syn::parse_quote!(providers {
         index = Index { reads [exact], build inferred };
         sharded = ::cq_storage::sharded::Sharded<_> { reads [], build typed, routed 0, shared };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
     });
     let [index, sharded, sort] = <[_; 3]>::try_from(declared.declarations).unwrap();
     let mut catalog = Catalog {
@@ -131,7 +131,7 @@ fn grouped(global: bool) -> (Physical, Structures, Program) {
             };
             return totals as answer(#head sum_qty, sum_base_price, count_order);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; group_map = ::std::collections::HashMap<_, _, ::cq_storage::HashState> { reads [], build typed }; }
             lineitem host scan = @reader as Reader [];
             lineitem rows = @sort as ::cq_storage::dedup::Sort;
             lineitem canon = rows;
@@ -439,7 +439,7 @@ fn canon_partition_and_machine_width_are_explicit() {
             r = let canon rename R {a -> a,b -> b};
             return r as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             r host scan = @reader as Reader [];
             r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows;
         }
@@ -483,7 +483,7 @@ fn provider_program() -> (Physical, Structures, Program) {
             joined = let canon probe first [a] l,r;
             return joined as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader []; r = @index as Index [a];
             joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
         }
@@ -951,7 +951,7 @@ fn exact_membership_provider_supports_runtime_partition_choice() {
             j = let canon semi eager [a] l,r;
             return j as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @index as Index [a];
             j rows = @sort as ::cq_storage::dedup::Sort; j canon = rows;
@@ -1027,7 +1027,7 @@ fn smallest_candidate_directories_keep_their_native_two_level_providers() {
             checked = let canon semi eager [a,c] candidate,s;
             return checked as answer(a,b,c);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader []; s host scan = @reader as Reader [];
             r = @index as Index [b][c]; s = @index as Index [a][c];
             checked rows = @sort as ::cq_storage::dedup::Sort; checked canon = rows;
@@ -1074,7 +1074,7 @@ fn filtered_provider_retains_valid_single_level_routing() {
             answer = let canon project joined keep {a,b};
             return answer as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @index as Index [a] payload [a,b] constants {};
             answer rows = @sort as ::cq_storage::dedup::Sort; answer canon = rows;
@@ -1185,7 +1185,7 @@ fn provider_rewrite_preserves_shared_flat_rows_and_published_length_guards() {
             final_rows = let canon semi eager [a] joined,selected;
             return final_rows as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @index as Index [a]; selected = @index as Index [a];
             final_rows rows = @sort as ::cq_storage::dedup::Sort; final_rows canon = rows;
@@ -1662,7 +1662,7 @@ fn adaptive_provider_publication_preserves_task_owned_pipe_execution() {
             joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             selected = @index as Index [a];
             joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
@@ -1760,7 +1760,7 @@ fn filtered_provider_uses_host_layout_bound_before_demanding_input_count() {
             joined = let canon probe first [a] l,selected;
             return joined as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             selected = @index as Index [a];
             joined rows = @sort as ::cq_storage::dedup::Sort; joined canon = rows;
@@ -1815,7 +1815,7 @@ fn expanding_provider_join_requires_exact_count_without_a_host_shortcut() {
             final_rows = let canon probe first [a] l,joined;
             return final_rows as answer(a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader []; r host scan = @reader as Reader [];
             r = @index as Index [a]; joined = @index as Index [a];
             final_rows rows = @sort as ::cq_storage::dedup::Sort; final_rows canon = rows;
@@ -1961,7 +1961,7 @@ fn automatic_probe_chain_preserves_filtered_shared_index_contracts() {
             r11 = let canon project r10 keep {o,a,b};
             return r11 as answer(o,a,b);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             r0 host scan = @reader as Reader []; r1 host scan = @reader as Reader []; r3 host scan = @reader as Reader [];
             r5 host scan = @reader as Reader []; r7 host scan = @reader as Reader []; r9 host scan = @reader as Reader [];
             r1 = @index as Index [a]; r3 = @index as Index [b];

@@ -994,7 +994,7 @@ fn occurrence_checks() -> Vec<proc_macro2::TokenStream> {
         p = pipe probe first [x] l,r;
         j = let canon project p keep {x,y};
         return j as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -1494,4 +1494,61 @@ fn blocked_external_witnesses_dedup_equal_values_without_inverse_codecs() {
     };
     let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/cq-storage/src/lib.rs");
     cq_testkit::rustc::Runtime::new(&runtime, false).run(&source.to_string());
+}
+
+#[test]
+fn blocked_emission_consumes_source_vectors_and_exact_summary_level() {
+    use syn::visit::Visit;
+
+    struct GeometryCalls {
+        vector_rows: usize,
+        scans: usize,
+        filters: usize,
+    }
+    impl<'ast> Visit<'ast> for GeometryCalls {
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            let name = call.method.to_string();
+            if name == "scan_positions" || name == "filter_rows" {
+                let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(rows), .. }) = &call.args[1] else {
+                    panic!("source vector geometry must precede the closures");
+                };
+                assert_eq!(rows.base10_parse::<usize>().unwrap(), self.vector_rows);
+                if name == "scan_positions" { self.scans += 1; } else { self.filters += 1; }
+            }
+            syn::visit::visit_expr_method_call(self, call);
+        }
+    }
+
+    for family in [quote!(plain), quote!(bytes)] {
+        for (summary, prune, block_summary, vector_summary) in [
+            (quote!(none), "None", false, false),
+            (quote!(minmax), "BlockMinMax", true, false),
+            (quote!(vector_minmax), "VectorMinMax", false, true),
+        ] {
+            let physical = syn::parse_quote!(physical {
+                relation R(a: i64 [1], witness: i64 [1]);
+                r = pipe rename R {a -> x, witness -> witness};
+                p = pipe range select r if (x >= 3);
+                g = pipe guard p if (observe(x));
+                q = pipe range select g if (x < 9);
+                out = pipe project q keep {x};
+                return canon out as answer(x);
+            });
+            let (physical, selected) = cq_structure_selection::compile_with(&physical, quote!(
+                blocks(R { block_rows 4096; summary #summary; columns [a: #family u64, witness: plain u64]; })
+            )).unwrap();
+            let source = selected.encoded.blocks.scans["r"].source;
+            let vector_rows = selected.encoded.blocks.sources[&source].vector_rows;
+            assert_eq!(vector_rows, 1024);
+            let expression = sequence_rows(&physical, &selected).unwrap();
+            let mut calls = GeometryCalls { vector_rows, scans: 0, filters: 0 };
+            calls.visit_expr(&expression);
+            assert_eq!(calls.scans, 1);
+            assert_eq!(calls.filters, 1, "opaque reads split the fused predicate run");
+            let rendered = text(&expression);
+            assert!(rendered.contains(&format!("PruneMode :: {prune}")), "{rendered}");
+            assert_eq!(rendered.contains(". summaries ()"), block_summary, "{rendered}");
+            assert_eq!(rendered.contains(". vector_summaries ()"), vector_summary, "{rendered}");
+        }
+    }
 }

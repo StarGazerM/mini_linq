@@ -4,7 +4,7 @@ structures {
         hash_set = ::cq_storage::HashSet<_> { reads [membership], build typed, accounting keys, shared };
         host_scan = ::core::iter::Map<_, _> { reads [], build typed };
         vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         replacement = Replacement<'_, _, _> { reads [exact, range, membership], build typed };
     }
     o = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];

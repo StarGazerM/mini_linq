@@ -16,7 +16,7 @@
 //!                 "ratio" Integer ";" "radix_bits" Integer ";" "merge_tile" Integer "}"
 //! Declaration ::= Ident "=" RustType "{" Fact,* "}" ";"
 //! Fact ::= "reads" "[" ("exact" | "range" | "membership" | "ordered"
-//!              | "distinct" | "resident" | "candidates"),* "]"
+//!              | "distinct" | "comparator_rows" | "resident" | "candidates"),* "]"
 //!        | "supports" "[" ("retain" | "expand" | "keys"),* "]"
 //!        | "build" ("inferred" | "typed") | "accounting" ("rows" | "keys")
 //!        | ("nested" | "routed") Integer | "join_filter" | "shared"
@@ -101,6 +101,9 @@ pub enum Capability {
     /// each stored row once. Such a provider may type a canonical rows record
     /// (a canon result's identity index, SRDatalog's sorted array).
     Distinct,
+    /// Sort arbitrary carriers by the supplied complete logical comparator,
+    /// retaining one representative per equal key; supports sort/par_sort.
+    ComparatorRows,
     /// Formal rule GPU-RadixCandidates: for a two-level `[prefix][v]` instance,
     /// enumerate each distinct `v` under a bound prefix exactly once, with the
     /// exact distinct count across every publication (union, not a sum of
@@ -114,12 +117,13 @@ pub enum Capability {
 }
 
 impl Capability {
-    const ALL: [(Capability, &'static str); 8] = [
+    const ALL: [(Capability, &'static str); 9] = [
         (Capability::Exact, "exact"),
         (Capability::Range, "range"),
         (Capability::Membership, "membership"),
         (Capability::Ordered, "ordered"),
         (Capability::Distinct, "distinct"),
+        (Capability::ComparatorRows, "comparator_rows"),
         (Capability::Resident, "resident"),
         (Capability::Candidates, "candidates"),
         (Capability::Positions, "positions"),

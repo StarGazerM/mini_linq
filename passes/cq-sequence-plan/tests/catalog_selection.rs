@@ -183,7 +183,7 @@ fn one_provider_must_satisfy_all_reads_not_separate_tokens() {
             answer = let canon semi eager [a] projected,r;
             return answer as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; index = Index { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @reader as Reader [];
             r host scan = @reader as Reader [];
             r = @index as Index [a];
@@ -216,7 +216,7 @@ fn host_keyed_read() -> (structures::physical::Program, structures::Program) {
             answer = let canon probe first [a] l,r;
             return answer as answer(a,b);
         }
-        structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_columns as HostColumns [];
             r host scan = @host_columns as HostColumns [];
             r host result(answer) = @host_columns as HostColumns [a];
@@ -326,7 +326,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                 answer = let canon project r keep {a,b,c};
                 return answer as answer(a,b,c);
             }
-            structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+            structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                 r host scan = @host_columns as HostColumns [];
                 answer rows = @sort as ::cq_storage::dedup::Sort;
                 answer canon = rows;
@@ -340,7 +340,7 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
                     answer = let canon project r keep {a,b};
                     return answer as answer(a,b);
                 }
-                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { host_columns = HostColumns { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                     r host scan = @host_columns as HostColumns [];
                     answer rows = @sort as ::cq_storage::dedup::Sort;
                     answer canon = rows;
@@ -359,5 +359,54 @@ fn canon_selection_requires_codec_bounds_not_type_width_guesses() {
             catalog.providers.pop();
             assert!(select_from_catalog(&physical, &source, &catalog).is_err());
         }
+    }
+}
+
+#[test]
+fn blocked_canonical_catalog_requires_comparator_rows_not_a_token_name() {
+    for retained in [false, true] {
+        let boundary = if retained {
+            quote::quote! {
+                out = let canon project r keep {x};
+                return out as answer(x);
+            }
+        } else {
+            quote::quote! {
+                out = pipe project r keep {x};
+                return canon out as answer(x);
+            }
+        };
+        let physical: structures::physical::Program = syn::parse2(quote::quote! { physical {
+            relation R(a: i64 [17], b: i64 [17]);
+            r = pipe rename R {a -> x, b -> y};
+            #boundary
+        }}).unwrap();
+        let (physical, source) = cq_structure_selection::compile_with(&physical, quote::quote!(
+            blocks(R { block_rows 1024; summary none; columns [a: bytes u64, b: plain u64]; })
+        )).unwrap();
+        let mut catalog = Catalog::default();
+        catalog.register(
+            syn::parse_quote!(distinct_only = DistinctOnly { reads [distinct], build inferred, shared };),
+            vec![vec!["host".into()]],
+        );
+        assert!(select_from_catalog(&physical, &source, &catalog).is_err());
+        catalog.register(
+            syn::parse_quote!(logical_comparator = LogicalComparator { reads [distinct, comparator_rows], build inferred, shared };),
+            vec![vec!["host".into()]],
+        );
+        let (selected_physical, selected) = select_from_catalog(&physical, &source, &catalog).unwrap();
+        assert_eq!(selected_physical, physical);
+        assert_eq!(selected.encoded, source.encoded);
+        structures::check_rewrite(&physical, &source, &selected_physical, &selected).unwrap();
+        let analysis = structures::contract::check(&selected_physical, &selected).unwrap();
+        let selected_provider = if retained {
+            analysis.canonical["out"].rows_provider().unwrap()
+        } else {
+            &analysis.head_dedup["out"]
+        };
+        assert_eq!(selected_provider.token, "logical_comparator");
+        declaration(&mut catalog, "logical_comparator").facts.reads
+            .retain(|capability| *capability != Capability::ComparatorRows);
+        assert!(select_from_catalog(&physical, &source, &catalog).is_err());
     }
 }

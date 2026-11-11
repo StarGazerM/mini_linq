@@ -6,7 +6,7 @@ structures {
         trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
         host_scan = ::core::iter::Map<_, _> { reads [], build typed };
         vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
     }
     o = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];
     r = @hash_index as ::cq_storage::HashIndex<'_, _, _> [x];

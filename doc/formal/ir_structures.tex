@@ -13,7 +13,7 @@ Fact ::= reads [Cap,...] | supports [Support,...] | build (inferred | typed)
        | contiguous_range | bounds resident_columns
        | items N [rows Type, columns Type]
        | choice N [eager Arg, lazy Arg]
-Cap ::= exact | range | membership | ordered | distinct | resident
+Cap ::= exact | range | membership | ordered | distinct | resident | comparator_rows
 Provider ::= @x [(Provider)] [InputSchema] as Type
 InputSchema ::= input { keys N; columns [InputColumn,...] }
 InputColumn ::= Type => Type [codec ["[" N "]"] Type]
@@ -1049,7 +1049,7 @@ the immutable table binding, aligned lengths, geometry, domain and snapshot.
  \mathsf{serves}(P,o) \quad
  \mathsf{repr}(c)=(P,R,o,c,s,d,\mathsf{S1},f,w) \quad
  f\in\{\mathsf{Plain},\mathsf{Bytes}\}\\
- b>0 \quad b\bmod1024=0 \quad b\leq 2^{32}-1 \quad
+ v=B.\mathsf{vectorRows}=1024 \quad b>0 \quad b\bmod v=0 \quad b\leq 2^{32}-1 \quad
  \mathsf{widths}(\mathsf{Plain},w)=\{w\} \quad
  \mathsf{widths}(\mathsf{Bytes},w)=\{0,1,2,w\}\cap[0,w]
 }{
@@ -1057,7 +1057,11 @@ the immutable table binding, aligned lengths, geometry, domain and snapshot.
 }
 \end{mathpar}
 The abstraction concatenates decoded blocks in original occurrence order.
-Summary capability means an enclosing min/max for that same immutable source.
+Source records own the vector geometry; execution consumes it without a second
+geometry declaration. Summary policies are \code{none}, \code{minmax}
+(block min/max), and \code{vector\_minmax} (vector min/max). Each nonempty policy
+requires the matching declared buffer kind enclosing that same immutable source;
+neither summary level substitutes for the other.
 Geometry and permissible physical widths are checked independently of the
 encoder; the actual residual width remains runtime header data. Domain
 namespaces reify explicit binder identities, scoped by this source provider:
@@ -1080,8 +1084,9 @@ dictionary version or zero. This is not a cross-query dictionary equivalence.
  \mathsf{lineage}(p)=\mathsf{originalLineage}(p)\\
  \mathsf{ops}(\theta)\subseteq\mathsf{preserves}(P) \quad
  \mathsf{translation}=\mathsf{S1Ordinal} \quad
- \mathsf{prune}=\mathsf{minmax}\Rightarrow
-    (\mathsf{enclosingSummary}(P)\land\mathsf{unaryExactTemplate}(\theta))
+ \forall q\in\mathsf{comparisonLeaves}(\theta).\ \mathsf{FV}(q)\ne\varnothing\\
+ \mathsf{prune}\ne\mathsf{none}\Rightarrow
+    (\mathsf{prune}=\mathsf{summary}(P)\land\mathsf{unaryExactTemplate}(\theta))
 }{
  p\vdash(\mathsf{prune},\mathsf{test},\mathsf{strategy})
 }
@@ -1098,6 +1103,23 @@ read once for the live row before evaluating the full formula. Necessary unary
 envelopes cannot discharge a correlated formula. Window and Point admit both
 encoded residual testing and explicitly selected physical decode-to-code tests.
 Adding a frame base reconstructs a global ordinal, not an authored Rust value.
+Every comparison leaf needs a declared column to determine its translation
+domain, recursively through disjunctions. Between requires this for both
+endpoint comparisons; membership requires a variable subject. Closed-only
+leaves are rejected even when another leaf mentions a column.
+
+\begin{mathpar}
+\Rule{STR-ComparatorRows}{
+ \mathsf{blocked}(r)\quad \mathsf{canonicalRows}(r)=P\quad
+ \mathsf{ComparatorRows}\in\mathsf{capabilities}(P)
+}{
+ r\vdash\mathsf{canonicalCarrierRows}(P)
+}
+\end{mathpar}
+ComparatorRows promises complete logical-comparator sorting and one carrier
+representative per equal key, including parallel sorting. Distinct alone does
+not promise that interface. The same requirement applies at blocked return
+canonical boundaries and is preserved by catalog provider selection.
 
 \paragraph{Reads, ownership and the checkpoint boundary.}
 Each opaque Bind/Guard records exactly its original free-variable demand,

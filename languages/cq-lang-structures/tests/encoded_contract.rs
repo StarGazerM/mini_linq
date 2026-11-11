@@ -827,7 +827,7 @@ fn blocked_fixture() -> Fixture {
         structures {
             providers {
                 input = ScanProvider { reads [], build typed };
-                sort = Dedup { reads [distinct], build inferred, shared };
+                sort = Dedup { reads [distinct, comparator_rows], build inferred, shared };
             }
             r host scan = @input as ScanProvider [];
             r host result(p) = @input as ScanProvider [x];
@@ -863,12 +863,12 @@ fn blocked_fixture() -> Fixture {
         selected.insert(name.into(), representation);
     }
     program.1.encoded.blocks.sources.insert(source, b::Source {
-        block_rows: 1024, summary: b::Summary::MinMax, columns,
+        block_rows: 1024, vector_rows: 1024, summary: b::Summary::BlockMinMax, columns,
     });
     program.1.encoded.blocks.scans.insert("r".into(), b::Scan { source, columns: selected });
     program.1.encoded.blocks.predicates.insert("p".into(), b::Predicate {
         input: "r".into(), source, columns: [("x".into(), RepresentationId(0))].into(),
-        prune: b::Prune::MinMax, test: b::Test::Encoded, strategy: b::Strategy::Window,
+        prune: b::Prune::BlockMinMax, test: b::Test::Encoded, strategy: b::Strategy::Window,
         translation: b::Translation::S1Ordinal, preserves: [Preservation::Order].into(),
     });
     program.1.encoded.blocks.reads.insert("g".into(), b::Read {
@@ -902,6 +902,113 @@ fn blocks_independent_authored_contract_roundtrips() {
     let parsed = parse_annotations(&program.0, program.1.to_token_stream()).unwrap();
     assert_eq!(parsed, program.1);
     structures::contract::check(&program.0, &parsed).unwrap();
+}
+
+#[test]
+fn blocks_summary_levels_roundtrip_and_reject_substitution() {
+    use structures::blocks as b;
+    for (summary, prune, buffer) in [
+        (b::Summary::None, b::Prune::None, None),
+        (b::Summary::BlockMinMax, b::Prune::BlockMinMax, Some(BufferKind::BlockSummaries)),
+        (b::Summary::VectorMinMax, b::Prune::VectorMinMax, Some(BufferKind::VectorSummaries)),
+    ] {
+        let mut program = blocked_fixture();
+        program.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().summary = summary;
+        program.1.encoded.blocks.predicates.get_mut("p").unwrap().prune = prune;
+        for declaration in program.1.encoded.obligations.declarations.values_mut() {
+            declaration.buffers = [BufferKind::Payload, BufferKind::Headers].into();
+            declaration.buffers.extend(buffer);
+        }
+        check(&program).unwrap();
+        let parsed = parse_annotations(&program.0, program.1.to_token_stream()).unwrap();
+        assert_eq!(parsed, program.1);
+        structures::contract::check(&program.0, &parsed).unwrap();
+        for forged_prune in [b::Prune::BlockMinMax, b::Prune::VectorMinMax] {
+            if forged_prune == prune { continue; }
+            let mut forged = program.clone();
+            forged.1.encoded.blocks.predicates.get_mut("p").unwrap().prune = forged_prune;
+            assert!(check(&forged).is_err());
+        }
+        if let Some(buffer) = buffer {
+            let wrong = if buffer == BufferKind::BlockSummaries { BufferKind::VectorSummaries } else { BufferKind::BlockSummaries };
+            let declaration = program.1.encoded.obligations.declarations.get_mut(&DeclarationId(1)).unwrap();
+            declaration.buffers.remove(&buffer);
+            declaration.buffers.insert(wrong);
+            assert!(check(&program).is_err());
+        }
+    }
+}
+
+#[test]
+fn blocks_source_rejects_unsupported_vector_geometry() {
+    for vector_rows in [0, 1, 512, 2048, usize::MAX] {
+        let mut program = blocked_fixture();
+        program.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().vector_rows = vector_rows;
+        assert!(check(&program).is_err());
+    }
+    for block_rows in [1, 1023, 1025, u32::MAX as u64 + 1] {
+        let mut program = blocked_fixture();
+        program.1.encoded.blocks.sources.get_mut(&SourceId(1)).unwrap().block_rows = block_rows;
+        assert!(check(&program).is_err());
+    }
+}
+
+#[test]
+fn blocks_predicate_operands_require_a_column_in_every_comparison() {
+    for condition in [
+        "1 < 2",
+        "@(lower()) < @(upper())",
+        "1 between 0 and 2",
+        "1 between x and 2",
+        "1 between 0 and x",
+        "1 in {1, 2}",
+        "x >= 3, 1 < 2",
+        "(x >= 3) or (1 < 2)",
+        "(x >= 3 and ((x < 9) or (1 < 2)))",
+    ] {
+        let theta = syn::parse_str(condition).unwrap();
+        assert!(structures::blocks::check_predicate_operands(&theta).is_err(), "{condition}");
+    }
+    for condition in [
+        "x = 3",
+        "3 < x",
+        "x < @(upper())",
+        "x between 0 and 9",
+        "1 between x and y",
+        "x in {1, 2}",
+        "(x >= 3 and ((x < 9) or (y < 2)))",
+    ] {
+        let theta = syn::parse_str(condition).unwrap();
+        structures::blocks::check_predicate_operands(&theta).unwrap();
+    }
+}
+
+#[test]
+fn blocked_canonical_rows_require_capability_not_provider_name() {
+    use structures::Capability;
+    let mut program = blocked_fixture();
+    let declaration = program.1.structures.providers.declarations.iter_mut().find(|p| p.token == "sort").unwrap();
+    declaration.token = syn::parse_quote!(logical_comparator);
+    for entry in &mut program.1.structures.entries {
+        if let Some(provider) = entry.structure.provider_mut()
+            && provider.token == "sort"
+        {
+            provider.token = syn::parse_quote!(logical_comparator);
+        }
+    }
+    check(&program).unwrap();
+    let parsed = parse_annotations(&program.0, program.1.to_token_stream()).unwrap();
+    assert_eq!(parsed, program.1);
+    program.1.structures.providers.declarations.iter_mut()
+        .find(|p| p.token == "logical_comparator").unwrap().facts.reads
+        .retain(|capability| *capability != Capability::ComparatorRows);
+    assert!(check(&program).is_err());
+
+    let mut named_sort = blocked_fixture();
+    named_sort.1.structures.providers.declarations.iter_mut()
+        .find(|p| p.token == "sort").unwrap().facts.reads
+        .retain(|capability| *capability != Capability::ComparatorRows);
+    assert!(check(&named_sort).is_err());
 }
 
 #[test]

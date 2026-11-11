@@ -27,7 +27,11 @@ impl Context<'_> {
                 let namespace = declaration.domain.code.map_or(2 * u64::from(column.logical.0) + 1, |id| 2 * u64::from(id.0) + 2);
                 let version = declaration.domain.dictionary.as_ref().map_or(0, |dictionary| dictionary.version);
                 let block_rows = binding.block_rows as usize;
-                let summary = binding.summary == structures::blocks::Summary::MinMax;
+                let summary = match binding.summary {
+                    structures::blocks::Summary::None => quote!(),
+                    structures::blocks::Summary::BlockMinMax => quote!(::core::assert!(__cq_column.summaries().is_some(), "blocked source summary capability");),
+                    structures::blocks::Summary::VectorMinMax => quote!(::core::assert!(__cq_column.vector_summaries().is_some(), "blocked source summary capability");),
+                };
                 self.statements.push(syn::parse_quote! {
                     {
                         let __cq_column: &::cq_storage::scan::ScanColumn<#value_type, #family> = #host.column::<#slot>();
@@ -36,7 +40,7 @@ impl Context<'_> {
                             id: ::cq_storage::scan::format::DomainId { namespace: #namespace, version: #version },
                             carrier: #width, equality: true, order: true,
                         }), "blocked source domain");
-                        if #summary { ::core::assert!(__cq_column.summaries().is_some(), "blocked source summary capability"); }
+                        #summary
                     }
                 });
             }
@@ -46,12 +50,13 @@ impl Context<'_> {
         let scan = &self.encoded.blocks.scans[result];
         let source = &self.encoded.obligations.sources[&scan.source];
         let host = Self::positional_host(&source.relation);
+        let vector_rows = self.encoded.blocks.sources[&scan.source].vector_rows;
         let range = range.unwrap_or_else(|| quote!(0..#host.len()));
         let run = self.blocked_runs.get(result).map_or(&[][..], Vec::as_slice);
         let (preparation, configure) = self.blocked_run(run);
         self.positional_rows(result, quote!({
             #(#preparation)*
-            #host.scan_positions(#range, move |__cq_tile| { #(#configure)* })
+            #host.scan_positions(#range, #vector_rows, move |__cq_tile| { #(#configure)* })
         }))
     }
 
@@ -192,6 +197,7 @@ impl Context<'_> {
         let predicate = &self.encoded.blocks.predicates[name];
         let source = &self.encoded.obligations.sources[&predicate.source];
         let host = Self::positional_host(&source.relation);
+        let vector_rows = self.encoded.blocks.sources[&predicate.source].vector_rows;
         let input = &predicate.input;
         if self.blocked_runs.values().any(|run| run.iter().any(|predicate| predicate == name))
             && !self.blocked_runs.contains_key(name)
@@ -203,7 +209,7 @@ impl Context<'_> {
         let base = bases.iter().position(|base| symbol_name(&base.base) == source.relation).expect("checked predicate occurrence");
         let position = self.position_ident(input, base);
         let (preparation, configure) = self.blocked_run(&self.blocked_runs[name]);
-        let filtered = quote!({ #(#preparation)* #host.filter_rows(#rows, move |#pattern| #position, move |__cq_tile| { #(#configure)* }) });
+        let filtered = quote!({ #(#preparation)* #host.filter_rows(#rows, #vector_rows, move |#pattern| #position, move |__cq_tile| { #(#configure)* }) });
         self.forward(name, input, filtered)
     }
 
@@ -212,7 +218,11 @@ impl Context<'_> {
         let source = &self.encoded.obligations.sources[&predicate.source];
         let host = Self::positional_host(&source.relation);
         let (Operator::Select(select) | Operator::Point(_, select) | Operator::Range(_, select)) = &self.physical[name].operator else { unreachable!("checked blocked predicate") };
-        let prune = match predicate.prune { Prune::None => quote!(::cq_storage::scan::PruneMode::None), Prune::MinMax => quote!(::cq_storage::scan::PruneMode::MinMax) };
+        let prune = match predicate.prune {
+            Prune::None => quote!(::cq_storage::scan::PruneMode::None),
+            Prune::BlockMinMax => quote!(::cq_storage::scan::PruneMode::BlockMinMax),
+            Prune::VectorMinMax => quote!(::cq_storage::scan::PruneMode::VectorMinMax),
+        };
         let test = match predicate.test { Test::Encoded => quote!(::cq_storage::scan::TestMode::Encoded), Test::DecodeCodes => quote!(::cq_storage::scan::TestMode::DecodeToCode) };
         let mut preparation = Vec::new();
         let configure = match predicate.strategy {

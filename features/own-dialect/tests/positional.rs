@@ -112,7 +112,7 @@ fn borrowed_keysets_preserve_positive_and_negative_membership() {
                     out = let canon $operator eager [x] l,s;
                     return out as answer(x);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; adaptive_keyset = ::cq_storage::AdaptiveKeySet<_, _, _> { reads [membership], build typed, shared }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                     l host scan = @host_scan as ::core::iter::Map<_,_> [];
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     s rows = @vec as ::std::vec::Vec<_>;

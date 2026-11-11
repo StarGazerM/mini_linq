@@ -452,7 +452,7 @@ mini_linq::passes::sequence! {
         out = let canon project selected keep {a,b};
         return out as answer(a,b);
     }
-    structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         selected read = positional base R lineage {a -> a,b -> b}
             column a marker MarkerAlias predicate physical;

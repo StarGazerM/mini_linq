@@ -43,7 +43,7 @@ fn membership_advice_preserves_a_fully_bound_physical_probe() {
         r = let rename R {a -> x,b -> y};
         joined = let canon probe first [x,y] l,r;
         return joined as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x,y] supports [keys];
@@ -75,7 +75,7 @@ fn membership_advice_cannot_discard_a_demanded_payload() {
         r = let rename R {a -> x,b -> y};
         joined = let canon probe first [x] l,r;
         return joined as answer(x,y);
-    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; hash_index = ::cq_storage::HashIndex<'_, _, _> { reads [exact, membership], supports [keys], build typed, join_filter, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact hash_finalize stat_rows host optional build single, keys: keys distinct_keys exact hash_finalize stat_keys host optional build single, max_group: max_group max_bucket_occurrences exact hash_finalize stat_max_group host optional build single ] }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         l host scan = @host_scan as ::core::iter::Map<_,_> [];
         r host scan = @host_scan as ::core::iter::Map<_,_> [];
         r = @hash_index as ::cq_storage::HashIndex<'_,_,_> [x];
@@ -93,7 +93,7 @@ fn smallest_expand_source() -> Fixture {
         candidate = pipe probe smallest [b] l,r;
         checked = let canon probe first [a,c] candidate,s;
         return checked as answer(a,b,c);
-    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+    } structures { providers { custom_directory = CustomDirectory { reads [exact, range, membership], supports [retain, expand, keys], build inferred }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
         r = @custom_directory as CustomDirectory [b][c] supports [expand];
         s = @custom_directory as CustomDirectory [a][c] supports [expand];
         l host scan = @host_scan as ::core::iter::Map<_, _> [];
@@ -522,7 +522,7 @@ fn computed_head_uses_sort_without_touching_physical() {
             relation R(a:i32); r = let canon rename R {a -> x};
             return dedup r as answer(*x % 2);
         }
-        structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
+        structures { providers { sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; host_scan = ::core::iter::Map<_, _> { reads [], build typed }; }
             r canon = rows; r rows = @sort as ::cq_storage::dedup::Sort;
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             r head = @sort as ::cq_storage::dedup::Sort;
@@ -564,7 +564,7 @@ fn shared_host_fallbacks_cannot_disagree_after_retyping_one_kind() {
         }
         structures {
             providers {
-                sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+                sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
                 host_scan = ::core::iter::Map<_, _> { reads [], build typed };
                 shared_index = Shared<'_, _, _> { reads [exact, membership], build typed };
             }

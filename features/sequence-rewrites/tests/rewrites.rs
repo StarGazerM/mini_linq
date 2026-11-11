@@ -24,7 +24,7 @@ fn program(body: TokenStream) -> (Physical, Structures, Program) {
             r = let canon rename R {a -> a};
             return r as answer(a);
         }
-        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
+        structures { providers { reader = Reader { reads [exact, range, membership], build inferred }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; } r host scan = @reader as Reader []; r rows = @sort as ::cq_storage::dedup::Sort; r canon = rows; }
         sequence { #body }
     })
 }

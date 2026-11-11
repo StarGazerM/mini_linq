@@ -20,7 +20,7 @@ fn chain() -> (cq_lang_structures::physical::Program, structures::Program) {
             c = let canon project p keep {v};
             return c as answer(v);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             c rows = @sort as ::cq_storage::dedup::Sort; c canon = rows;
         }
@@ -57,7 +57,7 @@ fn joins_and_opaque_binds_end_the_positional_chain() {
             c = let canon project b keep {k,v,n};
             return c as answer(k,v,n);
         }
-        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+        structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; user_index = UserIndex { reads [exact, range, membership], build inferred }; vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
             l host scan = @host_scan as ::core::iter::Map<_, _> [];
             r host scan = @host_scan as ::core::iter::Map<_, _> [];
             r = @user_index as UserIndex [k]; r rows = @vec as ::std::vec::Vec<_>;

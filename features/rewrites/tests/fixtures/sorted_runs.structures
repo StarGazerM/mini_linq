@@ -6,7 +6,7 @@ structures {
         trie = ::cq_storage::Trie<'_, _, _> { reads [exact, membership], build typed, nested 2 };
         host_scan = ::core::iter::Map<_, _> { reads [], build typed };
         vec = ::std::vec::Vec<_> { reads [], build typed, accounting rows };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         sorted_run = ::cq_storage::SortedRun<_, _> { reads [exact, range, membership], supports [retain, expand, keys], build typed, join_filter, run_filter, shared, statistics_build [rows, max_group], statistics [ rows: rows occurrences exact run_finalize stat_rows host required build single, keys: keys distinct_keys exact run_finalize stat_keys host required build single, max_group: max_group max_bucket_occurrences exact run_finalize stat_max_group host required build single, runs: runs runs exact run_finalize stat_runs host required build single ] };
     }
     o = @btree_map_grouped as ::std::collections::BTreeMap<_, ::std::vec::Vec<_>> [x];

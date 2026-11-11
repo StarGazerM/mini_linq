@@ -243,7 +243,7 @@ fn positions_representation_is_explicitly_refused() {
                     out = let canon project r keep {x,y};
                     return out as answer(x,y);
                 }
-                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared }; }
+                structures { providers { host_scan = ::core::iter::Map<_, _> { reads [], build typed }; sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared }; }
                     r host scan = @host_scan as ::core::iter::Map<_,_> [];
                     out rows = @sort as ::cq_storage::dedup::Sort; out canon = rows;
                     r repr = positions { R lineage {x -> a,y -> b} } owned [];
@@ -291,7 +291,7 @@ fn lookup_witness_and_expansion_are_refused() {
                             runs: runs runs exact run_finalize stat_runs host required build single
                         ]
                     }};
-                    sort = ::cq_storage::dedup::Sort {{ reads [distinct], build inferred, shared }};
+                    sort = ::cq_storage::dedup::Sort {{ reads [distinct, comparator_rows], build inferred, shared }};
                 }}
                 l host scan = @host_scan as ::core::iter::Map<_,_> [];
                 r host scan = @host_scan as ::core::iter::Map<_,_> [];

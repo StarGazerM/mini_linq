@@ -82,7 +82,7 @@ pub fn declarations() -> Vec<Declaration> {
         dense_membership = ::cq_storage::DenseMembership<_, 16777216> {
             reads [membership], build typed, shared
         };
-        sort = ::cq_storage::dedup::Sort { reads [distinct], build inferred, shared };
+        sort = ::cq_storage::dedup::Sort { reads [distinct, comparator_rows], build inferred, shared };
         packed = ::cq_storage::dedup::Packed { reads [distinct], build inferred, shared };
         exists = ::cq_storage::Exists { reads [distinct], build inferred, shared };
         sharded_index = ::cq_storage::sharded::Index<_, _> {

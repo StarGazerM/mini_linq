@@ -25,7 +25,7 @@ impl Parse for Advice {
             body.parse::<syn::Token![;]>()?;
             word(&body, "summary")?;
             let summary: syn::Ident = body.parse()?;
-            let summary = match summary.to_string().as_str() { "none" => b::Summary::None, "minmax" => b::Summary::MinMax, _ => return Err(syn::Error::new_spanned(summary, "expected none or minmax")) };
+            let summary = match summary.to_string().as_str() { "none" => b::Summary::None, "minmax" => b::Summary::BlockMinMax, "vector_minmax" => b::Summary::VectorMinMax, _ => return Err(syn::Error::new_spanned(summary, "expected none, minmax or vector_minmax")) };
             body.parse::<syn::Token![;]>()?;
             word(&body, "columns")?;
             let columns_body; syn::bracketed!(columns_body in body);
@@ -76,7 +76,11 @@ pub(super) fn choose(physical: &structures::physical::Program, target: &mut stru
             let native = match carrier { e::Carrier::U8 => 1, e::Carrier::U16 => 2, e::Carrier::U32 => 4, e::Carrier::U64 => 8 };
             let widths = if family == e::Family::Plain { BTreeSet::from([native]) } else { [0, 1, 2, native].into_iter().filter(|w| *w <= native).collect() };
             let mut buffers = BTreeSet::from([e::BufferKind::Payload, e::BufferKind::Headers]);
-            if binding.summary == b::Summary::MinMax { buffers.insert(e::BufferKind::BlockSummaries); }
+            match binding.summary {
+                b::Summary::None => {}
+                b::Summary::BlockMinMax => { buffers.insert(e::BufferKind::BlockSummaries); }
+                b::Summary::VectorMinMax => { buffers.insert(e::BufferKind::VectorSummaries); }
+            }
             target.encoded.obligations.declarations.insert(declaration, e::Declaration {
                 provider: provider.clone(), domain: e::Domain { code: column.domain.as_ref().and_then(|d| d.id), dictionary: None },
                 role: e::Role::ScanColumn, family, layout: e::Layout::S1, carrier, identity: false,
@@ -87,7 +91,7 @@ pub(super) fn choose(physical: &structures::physical::Program, target: &mut stru
             selected.insert(name, representation);
         }
         target.encoded.obligations.sources.insert(source, e::Source { relation: base.clone(), occurrence: occurrence.clone(), snapshot });
-        target.encoded.blocks.sources.insert(source, b::Source { block_rows: binding.block_rows, summary: binding.summary, columns });
+        target.encoded.blocks.sources.insert(source, b::Source { block_rows: binding.block_rows, vector_rows: 1024, summary: binding.summary, columns });
         target.encoded.blocks.scans.insert(occurrence, b::Scan { source, columns: selected });
         matched.insert(base);
     }
@@ -116,6 +120,7 @@ pub(super) fn choose(physical: &structures::physical::Program, target: &mut stru
             active.insert(name.clone());
         }
         if let Operator::Select(s) | Operator::Point(_, s) | Operator::Range(_, s) = &definition.operator {
+            b::check_predicate_operands(&s.condition)?;
             let origin = origins[&name].first().ok_or_else(|| syn::Error::new_spanned(&definition.name, "blocked predicate lacks source lineage"))?;
             let scan = &target.encoded.blocks.scans[&origin.occurrence];
             let mut columns = BTreeMap::new();
@@ -124,7 +129,11 @@ pub(super) fn choose(physical: &structures::physical::Program, target: &mut stru
                 columns.insert(logical, scan.columns[base]);
             }
             let strategy = if s.condition.range_bounds().is_some() { b::Strategy::Window } else if columns.len() == 1 && s.condition.equalities.len() + s.condition.constraints.len() == 1 && columns.keys().all(|c| structures::selection_constants(s).contains_key(c)) { b::Strategy::Point } else { b::Strategy::Formula };
-            let prune = if target.encoded.blocks.sources[&scan.source].summary == b::Summary::MinMax && strategy != b::Strategy::Formula { b::Prune::MinMax } else { b::Prune::None };
+            let prune = match (target.encoded.blocks.sources[&scan.source].summary, strategy) {
+                (_, b::Strategy::Formula) | (b::Summary::None, _) => b::Prune::None,
+                (b::Summary::BlockMinMax, _) => b::Prune::BlockMinMax,
+                (b::Summary::VectorMinMax, _) => b::Prune::VectorMinMax,
+            };
             let test = if strategy == b::Strategy::Formula { b::Test::DecodeCodes } else { b::Test::Encoded };
             target.encoded.blocks.predicates.insert(name.clone(), b::Predicate { input: symbol_name(&s.input), source: scan.source, columns, prune, test, strategy, translation: b::Translation::S1Ordinal, preserves: b::preserved_operations(&s.condition) });
         }

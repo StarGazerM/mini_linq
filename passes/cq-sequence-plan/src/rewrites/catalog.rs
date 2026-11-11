@@ -332,6 +332,9 @@ fn select(
             | Structure::Stage { .. }
             | Structure::Share { .. } => continue,
         };
+        if kind == "canon" && target.encoded.blocks.reads.contains_key(&format!("canon:{name}")) {
+            required.push(Capability::ComparatorRows);
+        }
         let support_required = match &entry.structure {
             Structure::Built { keyed, .. } => {
                 required_support(physical, &analysis, &name, keyed, false)
@@ -367,7 +370,8 @@ fn select(
                         recorded(&candidate)
                     } else if kind == "canon" {
                         // Packed bounds are runtime codec facts, never inferred from Rust types.
-                        facts.packed_bits.is_none() && facts.reads(&Capability::Distinct)
+                        facts.packed_bits.is_none()
+                            && required.iter().all(|capability| facts.reads(capability))
                     } else {
                         supplies_support(&facts, &support_required)
                             && required.iter().all(|capability| facts.reads(capability))
