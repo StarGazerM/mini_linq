@@ -712,10 +712,14 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
     /// Reads of every snapshot include all unmerged runs. Empty deltas are no-ops;
     /// a failed build or merge leaves the published runs unchanged.
     pub fn publish(&mut self, keys: &Buffer<W>, items: &C, rows: usize) -> Result<()> {
+        self.publish_with_control(keys, items, rows, None)
+    }
+
+    fn publish_with_control(&mut self, keys: &Buffer<W>, items: &C, rows: usize, control: Option<&Buffer<u64>>) -> Result<()> {
         if self.full_key_set {
             return Err("occurrence publication requires an occurrence constructor".into());
         }
-        let Some(segment) = self.group(keys, items, rows)? else {
+        let Some(segment) = self.group(keys, items, rows, control)? else {
             return Ok(());
         };
         let mut merged = Arc::new(segment);
@@ -800,7 +804,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         self.kernels.config(function, parts)
     }
 
-    fn group(&self, keys: &Buffer<W>, items: &C, rows: usize) -> Result<Option<Segment<W, O, C>>> {
+    fn group(&self, keys: &Buffer<W>, items: &C, rows: usize, control: Option<&Buffer<u64>>) -> Result<Option<Segment<W, O, C>>> {
         if !self.pool.shares_memory(keys.pool()) || rows > keys.len() {
             return Err("radix run keys use another pool's memory or exceed their capacity".into());
         }
@@ -880,8 +884,27 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             &mut workspace,
         )?;
         let items = items.gather(&self.kernels, order, rows)?;
-        let key_count = runs::read_count(pool, offset_count.get())? - 1;
-        crate::stats::record_work(|work| work.grouping_readbacks += 1);
+        let count = if let Some(control) = control {
+            // Join the validation flag and group count in one metadata transfer.
+            unsafe {
+                cuda_core::simt::memory::memcpy_dtod_async(
+                    control.cu_deviceptr(), offset_count.get().cu_deviceptr(), 8,
+                    pool.stream().cu_stream(),
+                )?;
+            }
+            let result = control.to_host()?;
+            crate::record_readback();
+            crate::stats::record_work(|work| work.grouping_readbacks += 1);
+            if result[1] != 0 {
+                return Err("radix source value does not fit its recorded key field".into());
+            }
+            usize::try_from(result[0])?
+        } else {
+            let count = runs::read_count(pool, offset_count.get())?;
+            crate::stats::record_work(|work| work.grouping_readbacks += 1);
+            count
+        };
+        let key_count = count - 1;
         let directory = self.directory(&distinct, key_count)?;
         Ok(Some(Segment {
             keys: Arc::new(distinct),
@@ -2337,8 +2360,8 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
     /// Formal rule GPU-RadixSourceBuild: one publication of `rows` occurrences
     /// read from resident source columns (through `positions` unless null):
     /// key fields packed by `K`'s packing into whole `W` keys, one item lane
-    /// per value source. Grouping is the ordinary GPU-RadixPublish build;
-    /// validation reads one error flag before the group-count download.
+    /// per value source. Grouping is the ordinary GPU-RadixPublish build.
+    /// Native-width sources retain its single group-count synchronization.
     ///
     /// # Safety
     /// Every source must describe initialized values of its schema column at
@@ -2353,12 +2376,13 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
         rows: usize,
     ) -> Result<Self> {
         let packing = Self::derive_packing()?;
-        unsafe { Self::from_sources_with_packing(pool, params, packing, keys, values, positions, rows) }
+        unsafe { Self::build_sources(pool, params, packing, keys, values, positions, rows, W::BITS) }
     }
 
     /// Build with recorded runtime field widths and significant sort bits.
-    /// Values outside a supplied field are refused before sorting, never masked
-    /// into another key. Scalar types and W are carrier upper bounds.
+    /// Values outside a supplied field are refused before publication, never
+    /// silently truncated. Validation shares the existing group-count readback.
+    /// Native fields omit validation work. Scalar types and W are upper bounds.
     ///
     /// # Safety
     /// The source initialization, lifetime and selected-position obligations
@@ -2372,12 +2396,21 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
         positions: *const u32,
         rows: usize,
     ) -> Result<Self> {
+        let active_bits = packing.bits();
+        unsafe { Self::build_sources(pool, params, packing, keys, values, positions, rows, active_bits) }
+    }
+
+    unsafe fn build_sources(
+        pool: Arc<Pool>, params: RadixRunParams, packing: Packing,
+        keys: &[SourceView], values: &[SourceView], positions: *const u32,
+        rows: usize, active_bits: u32,
+    ) -> Result<Self> {
         Self::check_schema(&packing)?;
         if keys.len() != K::COLUMNS.len() || values.len() != C::COLUMNS {
             return Err("radix sources differ from the layout's key and value schema".into());
         }
         let mut run = DeviceRadixRun::<W, O, C>::new(pool.clone(), params)?;
-        run.active_bits = packing.bits();
+        run.active_bits = active_bits;
         if rows != 0 {
             u32::try_from(rows).map_err(|_| "radix source build exceeds the u32 row domain")?;
             let sources = Buffer::from_host_async(pool.clone(), keys)?;
@@ -2387,7 +2420,14 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
             )?;
             // SAFETY: the pack kernel initializes every key before grouping.
             let words = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
-            let error = Buffer::from_host_async(pool.clone(), &[0u32])?;
+            // Equality here selects only the native validation-free fast path;
+            // schema compatibility itself accepts widths up to the carrier.
+            let native = packing.packed_fields().zip(K::COLUMNS)
+                .all(|(field, column)| field.bits == column.bits());
+            let control = if native { None } else { Some(Buffer::<u64>::zeroed(pool.clone(), 2)?) };
+            let error = control.as_ref().map_or(std::ptr::null_mut(), |control| unsafe {
+                control.ptr().add(1).cast::<u32>()
+            });
             let module = &run.kernels.module;
             let initial = module.prepare_pack_sources::<W>(run.kernels.shape())?;
             let config = run.kernels.config(initial.function(), rows)?;
@@ -2400,13 +2440,10 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Source
                 positions,
                 rows as u64,
                 words.ptr(),
-                error.ptr(),
+                error,
             )?;
-            if error.to_host()?[0] != 0 {
-                return Err("radix source value does not fit its recorded key field".into());
-            }
             let items = C::from_sources(&run.kernels, values, positions, rows)?;
-            run.publish(&words, &items, rows)?;
+            run.publish_with_control(&words, &items, rows, control.as_ref())?;
         }
         Self::publish(&run, packing)
     }
@@ -2904,12 +2941,14 @@ mod radix_kernels {
                 let field = unsafe { *fields.add(index as usize) };
                 // DECODE V: radix source build reconstructs resident FOR values before key packing; P4 pack encoded order keys directly.
                 let value = unsafe { decode_source(*sources.add(index as usize), source) };
-                let (minimum, maximum) = if field.signed != 0 {
-                    let half = 1_i64 << (field.bits - 1);
-                    (-half, half)
-                } else { (0, 1_i64 << field.bits) };
-                if value < minimum || value >= maximum {
-                    unsafe { DeviceAtomicU32::from_ptr(error).store(1, AtomicOrdering::Relaxed) };
+                if !error.is_null() {
+                    let (minimum, maximum) = if field.signed != 0 {
+                        let half = 1_i64 << (field.bits - 1);
+                        (-half, half)
+                    } else { (0, 1_i64 << field.bits) };
+                    if value < minimum || value >= maximum {
+                        unsafe { DeviceAtomicU32::from_ptr(error).store(1, AtomicOrdering::Relaxed) };
+                    }
                 }
                 let mask = u64::MAX >> (64 - field.bits);
                 let sign = if field.signed != 0 {
