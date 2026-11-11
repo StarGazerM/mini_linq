@@ -1139,16 +1139,22 @@ DOOP GPU xalan/batik counts and time, and `doc/formal/check.py`.
   grouped-run integration remain later slices. Slice A retires none of
   the 74 P6 V sites and makes no performance claim; default expanded targets
   must remain identical. Formal registration is not a gate-result claim.
-  **Current state (2026-11-10):** IR seams 1–2 have landed (M4b, M5b), so
-  slice C on `codex/p6b-slice` is unblocked but not resumed; it needs its tile
-  records redone against the standalone Sequence before any rebase. It is not
-  a merged intermediate/publication cutover or a new performance result, and
-  the slice-A boundaries and historical evidence above are not slice-C
-  acceptance. E1 is measured (STORAGE §§12.5–12.6). FOR base columns beat
-  plain by 1.16–1.18× and size-selected FastLanes DELTA by 1.35× on the GPU
-  TPC-H suite, including the H05 catalog path, so FOR stays the default.
-  Host-packed upload and the persisted packed columns (`--base-cache`) are
-  loader options, not defaults.
+  **Current state (2026-11-10):** E1 is measured (STORAGE §§12.5–12.6). FOR
+  base columns beat plain by 1.16–1.18× and size-selected FastLanes DELTA by
+  1.35× on the GPU TPC-H suite, including the H05 catalog path, so FOR stays
+  the default. Host-packed upload and the persisted packed columns
+  (`--base-cache`) are loader options, not defaults. Slice C has been redone
+  GPU-first (`codex/p6c-both`; design
+  `/data/design-notes/p6c-for-design.md`). The S1 route on `codex/p6b-slice`
+  is dropped: its host S1 encoding made process wall 1.3–1.6× slower.
+  Slice T realizes resident keyless-fold scans as checked FOR-native tiles
+  (`SourceAccess::Tiles`): code-domain predicates and survivor-only reads.
+  It is automatic for h06, h11 and h15 only. h06 resident is 0.771× (SF1)
+  and 0.809× (SF10). Slice L moves the TPC-H cold-load dedup, bounds and
+  encoding onto the device, streaming native-width pinned staging: h06
+  process wall is 0.661× (SF1) and 0.113× (SF10). On the 26-query SF1 suite
+  the geomean is 0.991 [0.989, 0.993]. Grouped-base admission (h01/h15 keys),
+  joins/probes and intermediate publication remain later slices.
 - **P6b GPU Datalog parallelism — historical initial profile** (2026-10-31,
   `experiments/gpu/compare/p3b-profile/01-doop-report.md`): fixpoint xalan 1.76 s /
   batik 4.97 s vs SRDatalog ~1.0–1.5 s / 1.8–3.0 s; one stream, zero kernel

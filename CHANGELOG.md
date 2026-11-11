@@ -19,14 +19,14 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   FOR/Plain predicates compare code-domain intervals; Delta/native retain
   correct decode. Surviving first `rust_reads` consumers reconstruct fields.
   Every addition stays checked: unflagged sums are exact; incomplete overflow
-  flagging can change with traversal order. No S1 format, advice knob or
-  performance claim; unsupported shapes stay unchanged.
+  flagging can change with traversal order. No S1 format or advice knob;
+  unsupported shapes stay unchanged.
   The all-query census changes only h06, h11's Stock total and h15's Revenue
   maximum (both scales); all 52 Physical/Structures/Sequence plans are unchanged.
   All 26 queries pass complete first-result comparison at SF1. The three
   affected queries also pass SF1/SF10 with FOR, Plain64, Delta and native base
-  layouts. Core tests: 81; device-column tests: 20. Timing is deferred to the
-  clean paired campaign because a foreign GPU tenant was active.
+  layouts. Core tests: 81; device-column tests: 20. Paired h06 resident total:
+  0.771× [0.743, 0.796] SF1, 0.809× [0.808, 0.811] SF10 (CPU-exclusive).
   Review follow-up preserves GPU-Capture gating for empty tile sources and
   registers the Delta/native predicate-time decode violation explicitly.
 - GPU TPC-H manifest cold loads use reusable pinned native-width staging;
@@ -39,8 +39,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   before pool trimming, retaining only selected columns and earlier cache
   entries. Paired h06 process wall ratios are 0.661× (SF1) and 0.113× (SF10),
   but later controlled SF10 runs expose an address-sensitive resident-query
-  regression of about 2.2%; allocation experiments and their limits are
-  recorded in STORAGE §12.7.
+  regression of about 2.2% in h06's kernel (identical SASS; STORAGE §12.7).
+  The 26-query SF1 paired baseline (with tiles) shows no systematic resident
+  cost: unchanged queries lie within [0.997, 1.007], geomean 0.991
+  [0.989, 0.993], and suite process wall falls 24.3 → 18.3 s.
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`

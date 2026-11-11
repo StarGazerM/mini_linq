@@ -8,6 +8,22 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Per-batch GPU baseline (2026-11-10, P6 C GPU-first `2184de85` vs
+`ef6ca71a`):** [raw results](../experiments/gpu/compare/p6c-2026-11-10.results.json),
+STORAGE §12.7 and the P6 C tile paragraph. Only `experiments/gpu` and docs
+changed, so no CPU baseline was run. Generated TPC-H code changes only in h06,
+h11 and h15 (FOR-native tiles); all 52 plans are unchanged. Every run was
+fresh-process, paired and validated, with no foreign GPU work in the samples:
+- GPU TPC-H SF1 advised geomean **0.991 [0.989, 0.993]**: h06 0.766×, every
+  query with unchanged code within [0.997, 1.007]; suite process wall 24.3 → 18.3 s;
+- h06 resident **0.771× [0.743, 0.796]** (SF1) and **0.809× [0.808, 0.811]**
+  (SF10, CPU-exclusive); process wall **0.591×** (SF1) and **0.140×** (SF10)
+  with the device cold load;
+- doop-gpu xalan fixpoint **1.012 [0.994, 1.026]** GPU-only and
+  **1.014 [0.990, 1.045]** CPU-exclusive, so no confirmed effect.
+
+`tools/gpu_gate.sh` **PASS** (722 s; H05 SF10 8.347 ms; Cassandra 26/26).
+
 **Per-batch GPU baseline (2026-11-10, compression batch `04776a2f` vs
 `20f1f04e`):** [report](../experiments/gpu/compare/baseline-2026-11-10-compression.md),
 [raw results](../experiments/gpu/compare/baseline-2026-11-10-compression.results.json).

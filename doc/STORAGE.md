@@ -1071,8 +1071,14 @@ policy, so this is full-first exactness, not an all-samples-full JSON flag.
 The 81 Sequence-core and 20 device-column tests passed, including empty-source
 capture gating, all widths, extreme intervals, partial transposed tails and
 exact payload-load counters.
-No timing effect is claimed: a foreign VLLM tenant was active before sampling;
-the clean paired timing campaign is separate.
+Paired timing (2026-11-10, fresh rotated processes, paired bootstrap 95% CI,
+[evidence](../experiments/gpu/compare/p6c-2026-11-10.results.json)): h06
+resident total 0.771× [0.743, 0.796] at SF1 (0.116 → 0.089 ms) and 0.809×
+[0.808, 0.811] at SF10 (1.015 → 0.821 ms, CPU-exclusive; GPU-only 0.811×).
+Across the 26-query SF1 suite (main `ef6ca71a` vs tiles + slice L, 5 rounds,
+no foreign GPU work) the geomean is 0.991× [0.989, 0.993]: h06 0.766×; h11
+0.999× and h15 1.006× (their tiled stages are a small part of the query);
+every other query is within [0.997, 1.007].
 
 **P5 S2 columnar input boundary.** `ScanColumnBuilder<T, F>` retains at most
 one block of ordinals per ordinary column and collects extrema while accepting
@@ -1570,9 +1576,16 @@ guard aborted after the untimed warmup. Both allocator experiments were
 reverted, retaining `e2b00891` runtime behavior. The supported conclusion is
 **placement sensitivity**, not a demonstrated universally preferable layout:
 the same resident SASS has different times at different addresses, and main's
-placement is arbitrary too. Main's paired 26-query baseline is the decision
-basis for whether the effect is systematic. The evidence JSON records the
-profiles, addresses, code hashes, failed runs and measurement limits.
+placement is arbitrary too. The evidence JSON records the profiles,
+addresses, code hashes, failed runs and measurement limits.
+
+Main's paired 26-query SF1 baseline (main `ef6ca71a` vs slices T+L, five
+rounds, no foreign GPU work; [results](../experiments/gpu/compare/p6c-2026-11-10.results.json))
+shows no systematic resident cost: every query whose generated code is
+unchanged lies within [0.997, 1.007] (geomean 0.991 [0.989, 0.993] including
+h06's tiles), and suite process wall falls from 24.3 to 18.3 s. The h06 SF10
+effect stays recorded as placement sensitivity of one kernel, not as a slice-L
+compute cost.
 
 ## 13. Engine-wide rules adopted 2026-10-29 (user decisions + evidence)
 
