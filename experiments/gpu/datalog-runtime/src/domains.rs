@@ -130,7 +130,7 @@ pub struct DomainCatalog {
 /// consumes the validation flag, so repacking adds no query-time synchronization.
 pub struct DomainBatch<W: Word> {
     pub(crate) words: Buffer<W>,
-    pub(crate) validation: Option<Buffer<u64>>,
+    pub(crate) validation: Option<crate::runs::Native<u64>>,
     pub(crate) packing: Packing,
 }
 
@@ -229,7 +229,15 @@ impl DomainCatalog {
     pub fn remap<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32]) -> Result<Buffer<W>> {
         let batch = self.repack(input, source, components, false)?;
         if let Some(validation) = &batch.validation {
-            let result = validation.to_host()?;
+            let mut result = [0u64; 2];
+            // SAFETY: repacking initialized both words on this stream.
+            unsafe {
+                cuda_core::simt::memory::memcpy_dtoh_async(
+                    result.as_mut_ptr(), validation.get().cu_deviceptr(), 16,
+                    self.pool.stream().cu_stream(),
+                )?;
+            }
+            self.pool.stream().synchronize()?;
             crate::record_readback();
             if result[1] != 0 {
                 return Err("uploaded value is outside its recorded equality component".into());
@@ -291,10 +299,15 @@ impl DomainCatalog {
             return Ok(DomainBatch { words: output, validation: None, packing: target });
         }
         let descriptors = Buffer::from_host_async(self.pool.clone(), &descriptors)?;
-        // Slot zero receives the unique count at the existing admission barrier.
-        // Slot one is the sticky error flag; all eight bytes start initialized.
-        let validation = Buffer::<u64>::zeroed(self.pool.clone(), 2)?;
-        let error = unsafe { validation.ptr().add(1).cast::<u32>() };
+        // CUB writes the unique count directly into slot zero at admission.
+        // Slot one is the sticky error flag; both words start initialized.
+        let validation = crate::runs::Native::<u64>::new(&self.pool, 2)?;
+        unsafe {
+            cuda_core::simt::memory::memset_d8_async(
+                validation.get().cu_deviceptr(), 0, 16, self.pool.stream().cu_stream(),
+            )?;
+        }
+        let error = unsafe { (validation.get().cu_deviceptr() as *mut u64).add(1).cast::<u32>() };
         let module = &self.module;
         let initial = module.prepare_remap::<W>(LaunchConfig1D::new(1, 256, 0))?;
         let grid = cq_gpu_runtime::launch_grid_for_kernel(initial.function(), input.len().div_ceil(256), 256, 0)?;

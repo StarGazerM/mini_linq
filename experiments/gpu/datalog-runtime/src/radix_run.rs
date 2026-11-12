@@ -1160,7 +1160,7 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         if input.packing.bits() > self.active_bits {
             return Err("domain batch packing exceeds the state's sort window".into());
         }
-        self.set_ops().sort(&input.words, input.len(), false, input.validation.as_ref())
+        self.set_ops().sort(&input.words, input.len(), false, input.validation)
     }
 
     /// Admit a domain-coded batch without an extra validation synchronization.

@@ -1590,8 +1590,9 @@ typed empty bounds), not a type-width fallback. Derived values outside a
 frozen observed range are rejected explicitly.
 Candidate sealing returns a pending \code{DomainBatch}: its validation flag
 travels with its packed words, including through permutations. Canonical
-sorting combines that flag with its existing unique-count download before
-publishing a sorted batch. This adds no fixpoint metadata synchronization.
+sorting writes its unique count directly beside that flag in one native
+control allocation, then downloads both before publishing a sorted batch.
+There is no intermediate count copy or additional fixpoint synchronization.
 Initial uploads may validate separately during setup.
 The catalog-free generic entry remains available in this slice, selected by
 \code{uses\_domains}; it does not promise dense component codes. Its remaining
