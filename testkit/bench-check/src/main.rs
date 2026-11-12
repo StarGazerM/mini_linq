@@ -42,9 +42,53 @@ fn read_witness(value: &Value) -> Result<Witness> {
     serde_json::from_value(value).map_err(|e| e.to_string())
 }
 
+/// Split one TSV record. DuckDB's exporter wraps a field in double quotes when
+/// it contains `#`, a quote or the delimiter, doubling embedded quotes; the
+/// oracle value is the unquoted text (the same reading as the `csv` crate).
+fn tsv_fields(record: &str) -> Result<Row> {
+    let mut row = Row::new();
+    let mut rest = record;
+    loop {
+        if let Some(quoted) = rest.strip_prefix('"') {
+            let mut field = String::new();
+            let mut tail = quoted;
+            loop {
+                let end = tail.find('"').ok_or_else(|| format!("unterminated quoted TSV field: {record}"))?;
+                field.push_str(&tail[..end]);
+                tail = &tail[end + 1..];
+                if let Some(after) = tail.strip_prefix('"') {
+                    field.push('"');
+                    tail = after;
+                } else {
+                    break;
+                }
+            }
+            row.push(field);
+            match tail.strip_prefix('\t') {
+                Some(next) => rest = next,
+                None if tail.is_empty() => return Ok(row),
+                None => return Err(format!("text after a quoted TSV field: {record}")),
+            }
+        } else {
+            match rest.split_once('\t') {
+                Some((field, next)) => {
+                    row.push(field.to_owned());
+                    rest = next;
+                }
+                None => {
+                    row.push(rest.to_owned());
+                    return Ok(row);
+                }
+            }
+        }
+    }
+}
+
 /// TSV exporters supply canonical distinct relations. Count records exactly;
 /// parse only reservoir-selected rows on later samples. No Python tuple loop.
-fn tsv_witness(path: &Path, relation: &str, policy: Policy) -> Result<RelationWitness> {
+/// `quoted` selects the exporter-quoted reading (`tsv-quoted`); plain `tsv`
+/// keeps every byte between tabs.
+fn tsv_witness(path: &Path, relation: &str, policy: Policy, quoted: bool) -> Result<RelationWitness> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut input = std::io::BufReader::new(file);
     let mut line = String::new();
@@ -61,7 +105,7 @@ fn tsv_witness(path: &Path, relation: &str, policy: Policy) -> Result<RelationWi
             rows.len()
         } else { random.below(count) };
         if policy.mode == Mode::Full || selected < policy.sample_size {
-            let row: Row = row.split('\t').map(str::to_owned).collect();
+            let row: Row = if quoted { tsv_fields(row)? } else { row.split('\t').map(str::to_owned).collect() };
             if selected == rows.len() { rows.push(row); } else { rows[selected] = row; }
         }
     }
@@ -72,7 +116,8 @@ fn file_witnesses(value: &Value, policy: Policy) -> Result<Witness> {
     let format = value.get("format").and_then(Value::as_str).unwrap_or("tsv");
     files(value)?.into_iter().map(|(name, path)| {
         let witness = match format {
-            "tsv" => tsv_witness(Path::new(&path), &name, policy)?,
+            "tsv" => tsv_witness(Path::new(&path), &name, policy, false)?,
+            "tsv-quoted" => tsv_witness(Path::new(&path), &name, policy, true)?,
             "json" => {
                 let mut value = read_json(Path::new(&path))?;
                 if value.is_object() { value = value.get_mut("rows").ok_or("JSON reference lacks rows")?.take(); }
@@ -228,5 +273,14 @@ mod tests {
         plan(&mut server,"a",0);
         assert!(server.request(json!({"op":"check","key":"a","reference_id":"data","ordinal":0,"witness":{}})).is_err());
         assert!(server.request(json!({"op":"check","key":"a","reference_id":"data","ordinal":0,"witness":{"r":{"count":1,"rows":[["a"]]}}})).is_err());
+    }
+
+    #[test]
+    fn tsv_fields_unquote_exporter_quoting() {
+        assert_eq!(tsv_fields("-1\t\"Supplier#1\"\tFRANCE\t").unwrap(), ["-1", "Supplier#1", "FRANCE", ""]);
+        assert_eq!(tsv_fields("\"a\tb\"\t\"say \"\"hi\"\"\"").unwrap(), ["a\tb", "say \"hi\""]);
+        assert_eq!(tsv_fields("plain \"mid\" quote").unwrap(), ["plain \"mid\" quote"]);
+        assert!(tsv_fields("\"open\tx").is_err());
+        assert!(tsv_fields("\"closed\"x").is_err());
     }
 }
