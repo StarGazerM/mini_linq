@@ -1,0 +1,153 @@
+{
+  "direct_control_commit": "4ef372d4",
+  "performance_conclusion": "No local performance claim: foreign VLLM tenants were present. Main owns four-build RunPod measurement.",
+  "earlier_revision": "ae10ab4d",
+  "reviewed_revision": "f037eb06",
+  "original_integration": "7b4dffe9",
+  "current_integration": "4b90426e",
+  "generated_rule_modules": {
+    "compared": 155,
+    "byte_identical": 155,
+    "revisions": [
+      "ae10ab4d",
+      "f037eb06"
+    ],
+    "details": "regression-generated-code.json"
+  },
+  "per_round_api": "regression-round-api.tsv",
+  "integration_per_round_api": "regression-integration-rounds.tsv",
+  "per_round_sort_work": "regression-round-sort-work.tsv",
+  "sort_work": {
+    "all_observed_events": 1649,
+    "all_event_rows_windows_indexed_flags_identical_across_ae_f_merge_tip": true,
+    "inside_rounds": {
+      "rounds": 324,
+      "sorts": 1610,
+      "rows": 28907895,
+      "eight_bit_digit_equivalents": 8254,
+      "modeled_radix_bytes": 2856084752
+    },
+    "outside_round_fixpoint_sorts": [
+      {
+        "kind": "canonical",
+        "rows": 8681,
+        "bits": 17,
+        "indexed": false,
+        "passes": 3,
+        "modeled_bytes": 416688
+      },
+      {
+        "kind": "canonical",
+        "rows": 93196,
+        "bits": 44,
+        "indexed": true,
+        "passes": 6,
+        "modeled_bytes": 13420224
+      }
+    ],
+    "whole_fixpoint": {
+      "sorts": 1612,
+      "eight_bit_digit_equivalents": 8263,
+      "modeled_radix_bytes": 2869921664
+    },
+    "bytes_definition": "rows * ceil(active_bits/8) * 2 * (8 for keys; 12 for u64-key/u32-index pairs). Excludes gathers, compaction and initial copies; not measured DRAM traffic.",
+    "ae_round_assignment": "The complete ordered sort-event log equals f exactly; f NVTX sort markers identify each round, independently checked against equal per-round semantic radix launches."
+  },
+  "review_changes": {
+    "round_kernel_launches_ae": 30764,
+    "round_kernel_launches_f": 30764,
+    "per_round_semantic_launches_and_geometry_identical": true,
+    "pool_allocation_calls_each": 1872,
+    "native_async_allocation_calls_each": 5394,
+    "f_minus_ae": {
+      "dtoh": -1185,
+      "stream_synchronize": -1185,
+      "htod": -1185,
+      "memset": 1185,
+      "dtod": 1185
+    },
+    "kernel_name_comparison": "Only the _TID_ monomorphization identity suffix is normalized; generated rule module names and bodies are independently equal."
+  },
+  "run_mode": {
+    "pod_args": [
+      "/data/doop-bench/doop-data/xalan",
+      "--gpu-only"
+    ],
+    "environment": {
+      "GPU_DATALOG_PHASES": "1",
+      "BENCH_CHECK_MODE": "full",
+      "BENCH_CHECK_SAMPLE": "0",
+      "BENCH_CHECK_SIZE": "1000",
+      "BENCH_CHECK_SEED_candidate": "2863521951347499496",
+      "BENCH_CHECK_SEED_base": "3853650587077040514",
+      "BENCH_CHECK_WITNESS": "worktree-local target/regression-<revision>-pod-witness.json"
+    },
+    "base_and_f_round_readbacks_identical": true,
+    "instrumented_readbacks": 4689,
+    "f_full_vs_gpu_only": "All per-round launch counts, allocation/readback/synchronization counts identical; event-record/wait scheduling differs.",
+    "source_seam": "Catalog/inverses/widths precede run; global-code remap is setup; witnesses follow output. No GPU-only preparation branch."
+  },
+  "integration": {
+    "7b4dffe9": {
+      "round_kernels": 30774,
+      "extra_publication_bounds": 10,
+      "extra_dtoh": 10,
+      "extra_htod": 10,
+      "extra_stream_syncs": 20,
+      "affected_rounds": [
+        {
+          "stratum": 57,
+          "phase": "seed",
+          "round": 0,
+          "extra_kernels": 4
+        },
+        {
+          "stratum": 60,
+          "phase": "seed",
+          "round": 0,
+          "extra_kernels": 6
+        }
+      ]
+    },
+    "4b90426e": {
+      "round_kernels": 30764,
+      "extra_publication_bounds": 0,
+      "all_round_semantic_kernel_counts_equal_f": true,
+      "all_round_sort_work_equal_f": true,
+      "extra_dtoh": 0,
+      "extra_stream_syncs": 0,
+      "native_async_allocations_delta": -1,
+      "native_allocation_delta_round": [
+        57,
+        "seed",
+        0
+      ],
+      "event_wait_record_variation": "11 fewer cuStreamWaitEvent and 4 fewer cuEventRecord than f; scheduling diagnostics, not elapsed-time evidence."
+    }
+  },
+  "direct_fix_tests": {
+    "domain_admission": 2,
+    "runtime_widths": 2,
+    "features": [
+      "radix-counters"
+    ],
+    "xalan_full_witnesses": "All 26 complete witnesses equal e4e08c99, f037eb06, 7b4dffe9 and 4b90426e.",
+    "xalan_readbacks": 4689,
+    "all_324_round_readbacks_equal_base": true,
+    "formal": "Passed unchanged checker after temporarily parking completed GPU build artifacts outside its rglob scope; tree restored."
+  },
+  "diagnostic_failures": {
+    "nsys_memory_usage_true": "Exited139 before first setup sort; successful traces disable this optional profiler mode.",
+    "full_mode_direct_attempts": "Two 100-second pre-report timeouts; a 30-second syscall diagnostic completed GPU-only in 14.31s, and the subsequent full-witness/counter invocation completed. No timing or full-mode exact-comparison claim is made for the timed-out attempts."
+  },
+  "raw_evidence": {
+    "ae_full": "target/regression-ae.sqlite",
+    "f_full": "target/regression-f.sqlite",
+    "f_pod": "target/regression-f-pod.sqlite",
+    "merge_pod": "target/regression-merge-pod.sqlite",
+    "tip_pod": "target/regression-tip-pod.sqlite",
+    "direct_counter_log": "artifact://2018",
+    "tip_counter_log": "artifact://2014"
+  },
+  "code_change_scope": "Runtime native count/control ownership only; no Sequence/core or IR change; diagnostic NVTX and sort logging live only in ignored snapshot trees."
+}

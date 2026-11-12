@@ -1,0 +1,325 @@
+stratum	phase	round	sorts	rows	digit_equivalents	modeled_radix_bytes	logical_windows
+0	seed	0	2	244000	8	15616000	canonical:31:keysx1;layout:31:keysx1
+0	step	1	0	0	0	0	
+1	seed	0	1	91027	2	2912864	canonical:14:keysx1
+1	step	1	0	0	0	0	
+2	seed	0	1	13148	2	420736	canonical:14:keysx1
+2	step	1	0	0	0	0	
+3	seed	0	1	750	2	24000	canonical:14:keysx1
+3	step	1	0	0	0	0	
+4	seed	0	1	9699	2	310368	canonical:14:keysx1
+4	step	1	0	0	0	0	
+5	seed	0	1	1198	2	38336	canonical:14:keysx1
+5	step	1	0	0	0	0	
+6	seed	0	1	1501	2	48032	canonical:14:keysx1
+6	step	1	0	0	0	0	
+7	seed	0	1	52898	4	3385472	canonical:30:keysx1
+7	step	1	0	0	0	0	
+8	seed	0	2	203754	8	13040256	canonical:31:keysx1;layout:31:keysx1
+8	step	1	0	0	0	0	
+9	seed	0	1	101877	4	6520128	canonical:29:keysx1
+9	step	1	0	0	0	0	
+10	seed	0	1	101877	4	6520128	canonical:32:keysx1
+10	step	1	0	0	0	0	
+11	seed	0	1	101877	4	6520128	canonical:31:keysx1
+11	step	1	0	0	0	0	
+12	seed	0	1	87309	5	6984720	canonical:38:keysx1
+12	step	1	0	0	0	0	
+13	seed	0	1	1224859	5	97988720	canonical:38:keysx1
+13	step	1	0	0	0	0	
+14	seed	0	2	2448691	10	195895280	canonical:38:keysx1;layout:38:keysx1
+14	step	1	0	0	0	0	
+15	seed	0	1	229341	3	11008368	canonical:21:keysx1
+15	step	1	0	0	0	0	
+16	seed	0	1	46708	3	2241984	canonical:21:keysx1
+16	step	1	0	0	0	0	
+17	seed	0	1	256229	5	20498320	canonical:37:keysx1
+17	step	1	0	0	0	0	
+18	seed	0	1	150686	6	14465856	canonical:42:keysx1
+18	step	1	0	0	0	0	
+19	seed	0	1	150686	6	14465856	canonical:42:keysx1
+19	step	1	0	0	0	0	
+20	seed	0	1	54538	6	5235648	canonical:42:keysx1
+20	step	1	0	0	0	0	
+21	seed	0	1	54538	6	5235648	canonical:42:keysx1
+21	step	1	0	0	0	0	
+22	seed	0	1	40547	6	3892512	canonical:42:keysx1
+22	step	1	0	0	0	0	
+23	seed	0	1	10458	6	1003968	canonical:42:keysx1
+23	step	1	0	0	0	0	
+24	seed	0	1	19288	6	1851648	canonical:42:keysx1
+24	step	1	0	0	0	0	
+25	seed	0	1	19288	6	1851648	canonical:42:keysx1
+25	step	1	0	0	0	0	
+26	seed	0	1	90670	6	8704320	canonical:42:keysx1
+26	step	1	0	0	0	0	
+27	seed	0	1	90670	6	8704320	canonical:42:keysx1
+27	step	1	0	0	0	0	
+28	seed	0	1	421537	6	40467552	canonical:42:keysx1
+28	step	1	0	0	0	0	
+29	seed	0	1	44399	6	4262304	canonical:42:keysx1
+29	step	1	0	0	0	0	
+30	seed	0	1	44399	5	3551920	canonical:35:keysx1
+30	step	1	0	0	0	0	
+31	seed	0	1	197803	6	18989088	canonical:42:keysx1
+31	step	1	0	0	0	0	
+32	seed	0	1	179335	5	14346800	canonical:38:keysx1
+32	step	1	0	0	0	0	
+33	seed	0	1	73444	6	7050624	canonical:42:keysx1
+33	step	1	0	0	0	0	
+34	seed	0	1	363200	5	29056000	canonical:38:keysx1
+34	step	1	0	0	0	0	
+35	seed	0	2	458682	12	44033472	canonical:42:keysx1;layout:42:keysx1
+35	step	1	0	0	0	0	
+36	seed	0	1	229291	5	18343280	canonical:36:keysx1
+36	step	1	0	0	0	0	
+37	seed	0	1	229291	5	18343280	canonical:36:keysx1
+37	step	1	0	0	0	0	
+38	seed	0	2	174302	12	16732992	canonical:42:keysx1;layout:42:keysx1
+38	step	1	0	0	0	0	
+39	seed	0	1	316492	6	30383232	canonical:42:keysx1
+39	step	1	0	0	0	0	
+40	seed	0	3	451510	30	108362400	canonical:75:pairsx1;layout:75:pairsx2
+40	step	1	0	0	0	0	
+41	seed	0	3	163280	30	39187200	canonical:75:pairsx1;layout:75:pairsx2
+41	step	1	0	0	0	0	
+42	seed	0	2	81042	14	13615056	canonical:54:pairsx1;layout:54:pairsx1
+42	step	1	0	0	0	0	
+43	seed	0	2	20915	14	3513720	canonical:54:pairsx1;layout:54:pairsx1
+43	step	1	0	0	0	0	
+44	seed	0	2	38310	16	7355520	canonical:59:pairsx1;layout:59:pairsx1
+44	step	1	0	0	0	0	
+45	seed	0	3	270276	24	51892992	canonical:59:pairsx1;layout:59:pairsx2
+45	step	1	0	0	0	0	
+46	seed	0	3	133155	30	31957200	canonical:73:pairsx1;layout:73:pairsx2
+46	step	1	0	0	0	0	
+47	seed	0	2	395208	16	75879936	canonical:59:pairsx1;layout:59:pairsx1
+47	step	1	0	0	0	0	
+48	seed	0	2	358577	14	60240936	canonical:55:pairsx1;layout:55:pairsx1
+48	step	1	0	0	0	0	
+49	seed	0	2	146403	10	11712240	canonical:38:keysx1;layout:38:keysx1
+49	step	1	0	0	0	0	
+50	seed	0	2	93416	14	15693888	canonical:55:pairsx1;layout:55:pairsx1
+50	step	1	0	0	0	0	
+51	seed	0	1	93196	8	17893632	canonical:61:pairsx1
+51	step	1	0	0	0	0	
+52	seed	0	1	93196	8	17893632	canonical:61:pairsx1
+52	step	1	1	132529	8	25445568	canonical:61:pairsx1
+52	step	2	1	91266	8	17523072	canonical:61:pairsx1
+52	step	3	1	64102	8	12307584	canonical:61:pairsx1
+52	step	4	1	32538	8	6247296	canonical:61:pairsx1
+52	step	5	1	15750	8	3024000	canonical:61:pairsx1
+52	step	6	1	3742	8	718464	canonical:61:pairsx1
+52	step	7	1	709	8	136128	canonical:61:pairsx1
+52	step	8	1	55	8	10560	canonical:61:pairsx1
+52	step	9	0	0	0	0	
+53	seed	0	1	9693	4	620352	canonical:28:keysx1
+53	step	1	0	0	0	0	
+54	seed	0	1	9693	4	620352	canonical:28:keysx1
+54	step	1	1	5016	4	321024	canonical:28:keysx1
+54	step	2	1	2926	4	187264	canonical:28:keysx1
+54	step	3	1	1352	4	86528	canonical:28:keysx1
+54	step	4	1	555	4	35520	canonical:28:keysx1
+54	step	5	1	146	4	9344	canonical:28:keysx1
+54	step	6	1	39	4	2496	canonical:28:keysx1
+54	step	7	1	5	4	320	canonical:28:keysx1
+54	step	8	0	0	0	0	
+55	seed	0	1	19732	4	1262848	canonical:28:keysx1
+55	step	1	0	0	0	0	
+56	seed	0	2	10390	8	664960	canonical:28:keysx1;layout:28:keysx1
+56	step	1	2	9791	8	626624	canonical:28:keysx1;layout:28:keysx1
+56	step	2	2	7156	8	457984	canonical:28:keysx1;layout:28:keysx1
+56	step	3	2	4160	8	266240	canonical:28:keysx1;layout:28:keysx1
+56	step	4	2	1792	8	114688	canonical:28:keysx1;layout:28:keysx1
+56	step	5	2	464	8	29696	canonical:28:keysx1;layout:28:keysx1
+56	step	6	2	128	8	8192	canonical:28:keysx1;layout:28:keysx1
+56	step	7	2	40	8	2560	canonical:28:keysx1;layout:28:keysx1
+56	step	8	2	2	8	128	canonical:28:keysx1;layout:28:keysx1
+56	step	9	0	0	0	0	
+57	seed	0	1	62248	4	3983872	canonical:28:keysx1
+57	step	1	1	2424	4	155136	canonical:28:keysx1
+57	step	2	1	33	4	2112	canonical:28:keysx1
+57	step	3	0	0	0	0	
+58	seed	0	1	53066	4	3396224	canonical:28:keysx1
+58	step	1	0	0	0	0	
+59	seed	0	1	41419	4	2650816	canonical:28:keysx1
+59	step	1	0	0	0	0	
+60	seed	0	1	1	3	48	canonical:17:keysx1
+60	step	1	0	0	0	0	
+61	seed	0	1	2101	4	134464	canonical:31:keysx1
+61	step	1	0	0	0	0	
+62	seed	0	2	2	5	80	canonical:14:keysx1;canonical:17:keysx1
+62	step	1	5	864	20	52128	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	2	7	1163	31	78624	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	3	6	1486	26	106608	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	4	9	1909	41	133184	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:33:keysx1;layout:38:keysx1
+62	step	5	11	2644	55	199208	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	6	11	3972	55	299416	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	7	11	4786	55	359776	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	8	11	7391	55	549672	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	9	11	8959	55	673008	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	10	11	9063	55	753008	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	11	11	9142	55	786952	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	12	11	8984	55	753816	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	13	11	11246	55	940728	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	14	11	15113	55	1385624	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	15	11	15173	55	1374480	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	16	11	15820	55	1479008	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	17	11	23162	55	2020368	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	18	11	22041	55	1795344	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	19	11	21265	55	1991528	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	20	11	28557	55	2927992	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	21	11	29210	55	2909264	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	22	11	31527	55	2933352	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	23	11	46611	55	4813664	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	24	11	47223	55	4524112	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	25	11	39110	55	3716016	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	26	11	40763	55	3909712	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	27	11	54407	55	5540208	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	28	11	63260	55	6091832	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	29	11	60986	55	6217072	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	30	11	69503	55	6144464	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	31	11	90712	55	8167384	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	32	11	79057	55	7167576	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	33	11	111506	55	11361016	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	34	11	128964	55	12610568	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	35	11	194178	55	17254952	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	36	11	141424	55	13349488	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	37	11	147953	55	14338368	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	38	11	167190	55	18018048	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	39	11	169257	55	16335544	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	40	11	264932	55	31526776	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	41	11	205087	55	18687008	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	42	11	273901	55	32171728	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	43	11	197347	55	16946496	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	44	11	170966	55	16434216	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	45	11	347922	55	46043680	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	46	11	179365	55	18676344	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	47	11	209081	55	20943952	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	48	9	253297	45	24666856	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	49	11	211739	55	18317392	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	50	11	185419	55	17467064	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	51	11	459270	55	52782736	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	52	11	253996	55	22293360	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	53	9	214038	45	21752584	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	54	11	192386	55	16576400	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	55	11	206565	55	17673936	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	56	11	208367	55	18519416	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	57	11	335755	55	31451704	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	58	9	354734	45	29384344	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	59	9	271848	45	29030528	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	60	9	296372	45	28820304	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	61	11	204234	55	18813944	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	62	11	303384	55	26955584	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	63	11	377775	55	36282000	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	64	11	450767	55	37362584	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	65	9	405135	45	36781328	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	66	9	308914	45	26404888	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	67	10	371433	53	31691576	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	68	9	430251	45	41828808	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	69	11	381128	55	31539176	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	70	11	331104	55	27094312	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	71	10	427917	53	35158992	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	72	10	381650	53	38195896	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	73	8	799835	43	63984656	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	74	10	752641	53	69625624	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	75	10	809696	53	86578312	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	76	10	484026	53	49197040	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	77	11	218669	55	19814992	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	78	10	106287	53	9207736	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	79	11	75892	55	6783464	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	80	11	142292	55	15957680	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	81	8	131571	43	10646296	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	82	8	70271	43	5646096	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	83	11	110657	55	9467032	canonical:14:keysx1;canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	84	8	81125	43	6553336	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	85	9	83397	45	6923784	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	86	9	94587	45	7626288	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	87	8	81551	43	7067704	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	88	8	167074	43	13284880	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	89	8	172369	43	13763200	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	90	8	90734	43	7418984	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	91	9	87980	45	7107984	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	92	7	95683	38	8366216	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	93	10	88481	53	7623728	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	94	8	92808	43	7684848	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	95	9	109536	45	8679376	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	96	10	26720	53	2089848	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	97	8	52712	43	4197120	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	98	8	21653	43	1909952	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	99	9	29976	45	2831656	canonical:14:keysx1;canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	100	7	22225	33	1861896	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1
+62	step	101	8	24203	40	1934824	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	102	8	30513	43	2448072	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	103	10	21149	53	1527584	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	104	7	15273	38	1217008	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	105	8	21854	43	1612872	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	106	7	15192	38	1132688	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	107	6	12603	26	1005248	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	108	8	23449	43	2582440	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	109	5	11550	24	868272	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	110	7	27740	38	4450512	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	111	7	10454	38	813312	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	112	6	7740	31	575248	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1
+62	step	113	7	2295	38	183216	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	114	5	5905	24	438656	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	115	7	3515	38	258416	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	116	6	1648	26	130560	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	117	6	8350	32	646496	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	118	5	2263	24	158800	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	119	6	6742	26	538656	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	120	4	11596	18	822560	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	121	8	2645	43	186496	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	122	7	6209	38	496128	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	123	7	10804	37	769616	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	124	7	3380	38	271024	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	125	5	17596	23	1358944	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	126	6	5428	32	413664	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	127	7	3687	38	312704	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	128	6	4253	32	340096	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	129	6	5008	32	425184	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	130	7	3736	38	298432	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	131	5	6276	24	450080	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;layout:38:keysx1
+62	step	132	8	9411	40	740624	canonical:14:keysx1;canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	133	7	133614	38	10684400	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	134	7	14601	38	1076592	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	135	7	26402	38	2101248	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	136	8	35451	43	2779712	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	137	8	7474	43	595232	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	138	7	16241	37	1236496	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	139	8	10188	43	726880	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	140	10	2719	53	217744	canonical:17:keysx1;canonical:33:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	141	7	17307	37	1448008	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	142	8	7994	43	575456	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	143	8	2479	43	196784	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	144	7	3514	37	272776	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	145	9	3346	48	247168	canonical:17:keysx1;canonical:33:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	146	7	1858	38	147696	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	147	8	2805	42	216048	canonical:17:keysx1;canonical:33:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:33:keysx1;layout:38:keysx1;layout:50:pairsx1
+62	step	148	7	2485	38	192056	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	149	8	1812	43	154016	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	150	7	2212	37	190072	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	151	7	2943	37	234864	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	152	8	1547	43	124856	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	153	7	2003	37	160904	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	154	7	3961	37	315008	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	155	7	923	38	77240	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	156	7	5253	37	432752	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	157	7	1842	37	140176	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	158	7	1453	38	115568	canonical:17:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	159	5	1562	23	123808	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	160	4	1354	18	96448	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	161	8	456	43	46272	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	162	6	963	32	80464	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	163	7	1494	37	131168	canonical:17:keysx1;canonical:34:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	164	4	281	23	22584	canonical:38:keysx1;canonical:42:keysx1;canonical:50:pairsx1;layout:38:keysx1
+62	step	165	4	224	18	17248	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	166	5	168	25	13328	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1
+62	step	167	6	134	32	12656	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	168	4	77	18	6096	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	169	6	116	32	13568	canonical:17:keysx1;canonical:38:keysx2;canonical:50:pairsx1;layout:38:keysx1;layout:50:pairsx1
+62	step	170	4	74	18	5888	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	171	4	75	18	5680	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	172	4	35	18	2704	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	173	4	38	18	2784	canonical:17:keysx1;canonical:38:keysx2;layout:38:keysx1
+62	step	174	3	6	13	416	canonical:17:keysx1;canonical:38:keysx2
