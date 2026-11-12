@@ -347,14 +347,15 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
                 )?,
                 UploadBounds::Scalar => scalar_bounds(column)?,
             };
+            let bounds = if rows == 0 { Bounds::Empty } else { bounds };
             let codec = match record.codec {
                 UploadCodec::For => Codec::For,
             };
-            // This upload initialized the complete prefix. The immutable
-            // metadata retains its exact count; no compact-extent readback
-            // is needed in a timed provider build.
+            // The upload initialized the complete prefix and already measured
+            // its source bounds (or supplied a proven scalar range). Reuse that
+            // enclosure without another publication reduction or readback.
             unsafe {
-                EncodedColumn::from_device_pending(
+                EncodedColumn::from_device_with_bounds(
                     pool.clone(),
                     input.ptr(),
                     rows,
@@ -363,10 +364,10 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
                     codec,
                     bounds,
                 )
+                .map(Arc::new)
             }
         })
         .collect::<Result<Vec<_>>>()?;
-    let columns = gpu_device_columns::PendingColumn::publish(columns)?;
     let bounds = columns.iter().map(|column| column.bounds()).collect();
     let host_views: Vec<_> = columns
         .iter()
@@ -430,6 +431,7 @@ impl<'a> DenseDictionary<'a> {
 }
 
 /// An owning source column and its known live row prefix.
+/// Bounds enclose the live values; a subset need not retain either endpoint.
 #[derive(Clone)]
 pub struct ColumnDescriptor {
     owner: ColumnOwner,
@@ -1270,7 +1272,7 @@ impl<'pool> RangeBuilder<'pool> {
                 })
                 .collect::<Result<Vec<_>>>()?;
             let offsets = unsafe {
-                EncodedColumn::from_device(
+                EncodedColumn::from_device_with_bounds(
                     pool.clone(),
                     std::ptr::null::<i64>(),
                     0,
@@ -1290,7 +1292,7 @@ impl<'pool> RangeBuilder<'pool> {
         if rows == 0 {
             let zeros = Buffer::<i64>::zeroed(pool.clone(), entries)?;
             let offsets = unsafe {
-                EncodedColumn::from_device(
+                EncodedColumn::from_device_with_bounds(
                     pool.clone(),
                     zeros.ptr(),
                     entries,
@@ -1447,7 +1449,8 @@ impl<'pool> RangeBuilder<'pool> {
             })
             .collect::<Result<Vec<_>>>()?;
         let packed_offsets = unsafe {
-            EncodedColumn::from_device(
+            // Lower-bound positions lie in 0..=rows, including empty buckets.
+            EncodedColumn::from_device_with_bounds(
                 pool.clone(),
                 pointer(&offsets) as *const i64,
                 entries,
@@ -1516,11 +1519,13 @@ unsafe fn pack_payload(
     rows: usize,
     count: Arc<Buffer<u64>>,
 ) -> Result<EncodedColumn> {
-    let bounds = payload.column.bounds();
+    // A permutation or subset preserves the source enclosure, not necessarily
+    // its extrema. A known empty prefix has no values to enclose.
+    let bounds = if rows == 0 { Bounds::Empty } else { payload.column.bounds() };
     match payload.kind {
         PayloadKind::U32 => unsafe {
             // DECODE I: u32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
-            EncodedColumn::from_gather_source::<_, u32>(
+            EncodedColumn::from_gather_source_with_bounds::<_, u32>(
                 pool.clone(),
                 payload.column.view(),
                 order,
@@ -1532,7 +1537,7 @@ unsafe fn pack_payload(
         },
         PayloadKind::I32 => unsafe {
             // DECODE I: i32 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
-            EncodedColumn::from_gather_source::<_, i32>(
+            EncodedColumn::from_gather_source_with_bounds::<_, i32>(
                 pool.clone(),
                 payload.column.view(),
                 order,
@@ -1544,7 +1549,7 @@ unsafe fn pack_payload(
         },
         PayloadKind::I64 => unsafe {
             // DECODE I: i64 payload gather decodes then re-encodes a permutation; avoidable reorganization, P4 prefer plain indexes.
-            EncodedColumn::from_gather_source::<_, i64>(
+            EncodedColumn::from_gather_source_with_bounds::<_, i64>(
                 pool.clone(),
                 payload.column.view(),
                 order,

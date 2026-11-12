@@ -1,49 +1,49 @@
-query	sf	status	validated	validation	answer_rows	constructed_columns	constructed_base_bytes	post_load_device_bytes	retained_domain_bytes	raw_report
-d19	1	ran	True	full warmup + first measured; later sampled	8962	15	70108504	40665088	1500000	target/compression-domains/review-d19-sf1.json
-d27	1	ran	True	full warmup + first measured; later sampled	357	14	66533168	37088512	1500000	target/compression-domains/review-d27-sf1.json
-d72_inner	1	ran	True	full warmup + first measured; later sampled	5344	16	59584512	61095168	1500000	target/compression-domains/review-d72_inner-sf1.json
-d85	1	ran	True	full warmup + first measured; later sampled	8962	19	73703672	44262144	1500000	target/compression-domains/review-d85-sf1.json
-h01	1	ran	True	full warmup + first measured; later sampled	4	7	48957336	50461184	1500000	target/compression-domains/review-h01-sf1.json
-h02	1	ran	True	full warmup + first measured; later sampled	460	19	4708664	4720128	0	target/compression-domains/review-h02-sf1.json
-h03	1	ran	True	full warmup + first measured; later sampled	11620	9	39300072	25044480	1500000	target/compression-domains/review-h03-sf1.json
-h04	1	ran	True	full warmup + first measured; later sampled	52523	8	54116704	30669312	1500000	target/compression-domains/review-h04-sf1.json
-h04_not_exists	1	ran	True	full warmup + first measured; later sampled	4695	9	56051688	32605184	1500000	target/compression-domains/review-h04_not_exists-sf1.json
-h05	1	ran	True	full warmup + first measured; later sampled	7242	15	42475992	26724864	1500000	target/compression-domains/review-h05-sf1.json
-h06	1	ran	True	full warmup + first measured; later sampled	1	6	49519984	51023104	1500000	target/compression-domains/review-h06-sf1.json
-h07	1	ran	True	full warmup + first measured; later sampled	5501	14	58559088	33615872	1500000	target/compression-domains/review-h07-sf1.json
-h07_block	1	ran	True	full warmup + first measured; later sampled	5501	14	58559088	33615872	1500000	target/compression-domains/review-h07_block-sf1.json
-h08	1	ran	True	full warmup + first measured; later sampled	2603	19	70322808	40881920	1500000	target/compression-domains/review-h08-sf1.json
-h09	1	ran	True	full warmup + first measured; later sampled	319402	14	66723568	37278976	1500000	target/compression-domains/review-h09-sf1.json
-h10	1	ran	True	full warmup + first measured; later sampled	37967	17	41634792	43145216	1500000	target/compression-domains/review-h10-sf1.json
-h11	1	ran	True	full warmup + first measured; later sampled	1048	8	5336320	5341184	0	target/compression-domains/review-h11-sf1.json
-h12	1	ran	True	full warmup + first measured; later sampled	2	8	41548608	43053312	1500000	target/compression-domains/review-h12-sf1.json
-h13	1	ran	True	full warmup + first measured; later sampled	150000	6	14996976	7170560	1500000	target/compression-domains/review-h13-sf1.json
-h15	1	ran	True	full warmup + first measured; later sampled	1	10	50332944	51838208	1500000	target/compression-domains/review-h15-sf1.json
-h16	1	ran	True	full warmup + first measured; later sampled	118274	8	2945984	2950656	0	target/compression-domains/review-h16-sf1.json
-h18	1	ran	True	full warmup + first measured; later sampled	57	9	31898344	33404416	1500000	target/compression-domains/review-h18-sf1.json
-h19	1	ran	True	full warmup + first measured; later sampled	1	12	58849760	60356096	1500000	target/compression-domains/review-h19-sf1.json
-h20	1	ran	True	full warmup + first measured; later sampled	186	17	56876744	58386688	1500000	target/compression-domains/review-h20-sf1.json
-h21_positive	1	ran	True	full warmup + first measured; later sampled	302284	10	38006352	39513088	1500000	target/compression-domains/review-h21_positive-sf1.json
-h22	1	ran	True	full warmup + first measured; later sampled	14086	4	5880480	7383552	1500000	target/compression-domains/review-h22-sf1.json
-d19	10	ran	True	full warmup + first measured; later sampled	90015	15	796368408	457013504	15000000	target/compression-domains/review-d19-sf10.json
-d27	10	ran	True	full warmup + first measured; later sampled	3575	14	754995504	415639296	15000000	target/compression-domains/review-d27-sf10.json
-d72_inner	10	ran	True	full warmup + first measured; later sampled	53966	16	650054880	665066240	15000000	target/compression-domains/review-d72_inner-sf10.json
-d85	10	ran	True	full warmup + first measured; later sampled	90015	19	836186712	496834048	15000000	target/compression-domains/review-d85-sf10.json
-h02	10	ran	True	full warmup + first measured; later sampled	4667	19	50996824	51009024	0	target/compression-domains/review-h02-sf10.json
-h03	10	ran	True	full warmup + first measured; later sampled	114003	9	398541416	256014080	15000000	target/compression-domains/review-h03-sf10.json
-h04	10	ran	True	full warmup + first measured; later sampled	526040	8	540936992	306552832	15000000	target/compression-domains/review-h04-sf10.json
-h04_not_exists	10	ran	True	full warmup + first measured; later sampled	47631	9	560278696	325895424	15000000	target/compression-domains/review-h04_not_exists-sf10.json
-h05	10	ran	True	full warmup + first measured; later sampled	72983	15	475177496	295163648	15000000	target/compression-domains/review-h05-sf10.json
-h07	10	ran	True	full warmup + first measured; later sampled	54142	14	635926000	364055040	15000000	target/compression-domains/review-h07-sf10.json
-h07_block	10	ran	True	full warmup + first measured; later sampled	54142	14	635926000	364055040	15000000	target/compression-domains/review-h07_block-sf10.json
-h08	10	ran	True	full warmup + first measured; later sampled	24254	19	798498296	459145984	15000000	target/compression-domains/review-h08-sf10.json
-h09	10	ran	True	full warmup + first measured; later sampled	3261612	14	761528496	422172672	15000000	target/compression-domains/review-h09-sf10.json
-h10	10	ran	True	full warmup + first measured; later sampled	381105	17	423425320	438436352	15000000	target/compression-domains/review-h10-sf10.json
-h11	10	ran	True	full warmup + first measured; later sampled	0	8	57199360	57204736	0	target/compression-domains/review-h11-sf10.json
-h12	10	ran	True	full warmup + first measured; later sampled	2	8	415295040	430299648	15000000	target/compression-domains/review-h12-sf10.json
-h15	10	ran	True	full warmup + first measured; later sampled	1	10	525642256	540647424	15000000	target/compression-domains/review-h15-sf10.json
-h16	10	ran	True	full warmup + first measured; later sampled	1186602	8	33349504	33354752	0	target/compression-domains/review-h16-sf10.json
-h18	10	ran	True	full warmup + first measured; later sampled	624	9	324499432	339505408	15000000	target/compression-domains/review-h18-sf10.json
-h20	10	ran	True	full warmup + first measured; later sampled	1804	17	618113896	633124352	15000000	target/compression-domains/review-h20-sf10.json
-h21_positive	10	ran	True	full warmup + first measured; later sampled	2930274	10	402368208	417374976	15000000	target/compression-domains/review-h21_positive-sf10.json
-h22	10	ran	True	full warmup + first measured; later sampled	140489	4	64971552	79974912	15000000	target/compression-domains/review-h22-sf10.json
+query	sf	status	validated	validation	answer_rows	constructed_columns	constructed_base_bytes	post_load_device_bytes	retained_domain_bytes	host_input_upload_ms	raw_report
+d19	1	ran	True	full warmup + first measured; later sampled	8962	15	70108504	40665088	1500000	0.0	target/compression-domains/rank3-d19-sf1.json
+d27	1	ran	True	full warmup + first measured; later sampled	357	14	66533168	37088512	1500000	0.0	target/compression-domains/rank3-d27-sf1.json
+d72_inner	1	ran	True	full warmup + first measured; later sampled	5344	16	59584512	61095168	1500000	0.0	target/compression-domains/rank3-d72_inner-sf1.json
+d85	1	ran	True	full warmup + first measured; later sampled	8962	19	73703672	44262144	1500000	0.0	target/compression-domains/rank3-d85-sf1.json
+h01	1	ran	True	full warmup + first measured; later sampled	4	7	48957336	50461184	1500000	0.0	target/compression-domains/rank3-h01-sf1.json
+h02	1	ran	True	full warmup + first measured; later sampled	460	19	4708664	4720128	0	0.0	target/compression-domains/rank3-h02-sf1.json
+h03	1	ran	True	full warmup + first measured; later sampled	11620	9	39300072	25044480	1500000	0.0	target/compression-domains/rank3-h03-sf1.json
+h04	1	ran	True	full warmup + first measured; later sampled	52523	8	54116704	30669312	1500000	0.0	target/compression-domains/rank3-h04-sf1.json
+h04_not_exists	1	ran	True	full warmup + first measured; later sampled	4695	9	56051688	32605184	1500000	8.665173999999999	target/compression-domains/rank3-h04_not_exists-sf1.json
+h05	1	ran	True	full warmup + first measured; later sampled	7242	15	42475992	26724864	1500000	0.0	target/compression-domains/rank3-h05-sf1.json
+h06	1	ran	True	full warmup + first measured; later sampled	1	6	49519984	51023104	1500000	0.0	target/compression-domains/rank3-h06-sf1.json
+h07	1	ran	True	full warmup + first measured; later sampled	5501	14	58559088	33615872	1500000	0.0	target/compression-domains/rank3-h07-sf1.json
+h07_block	1	ran	True	full warmup + first measured; later sampled	5501	14	58559088	33615872	1500000	0.0	target/compression-domains/rank3-h07_block-sf1.json
+h08	1	ran	True	full warmup + first measured; later sampled	2603	19	70322808	40881920	1500000	0.0	target/compression-domains/rank3-h08-sf1.json
+h09	1	ran	True	full warmup + first measured; later sampled	319402	14	66723568	37278976	1500000	0.0	target/compression-domains/rank3-h09-sf1.json
+h10	1	ran	True	full warmup + first measured; later sampled	37967	17	41634792	43145216	1500000	0.0	target/compression-domains/rank3-h10-sf1.json
+h11	1	ran	True	full warmup + first measured; later sampled	1048	8	5336320	5341184	0	0.0	target/compression-domains/rank3-h11-sf1.json
+h12	1	ran	True	full warmup + first measured; later sampled	2	8	41548608	43053312	1500000	0.0	target/compression-domains/rank3-h12-sf1.json
+h13	1	ran	True	full warmup + first measured; later sampled	150000	6	14996976	7170560	1500000	11.719251	target/compression-domains/rank3-h13-sf1.json
+h15	1	ran	True	full warmup + first measured; later sampled	1	10	50332944	51838208	1500000	0.0	target/compression-domains/rank3-h15-sf1.json
+h16	1	ran	True	full warmup + first measured; later sampled	118274	8	2945984	2950656	0	0.0	target/compression-domains/rank3-h16-sf1.json
+h18	1	ran	True	full warmup + first measured; later sampled	57	9	31898344	33404416	1500000	0.0	target/compression-domains/rank3-h18-sf1.json
+h19	1	ran	True	full warmup + first measured; later sampled	1	12	58849760	60356096	1500000	0.0	target/compression-domains/rank3-h19-sf1.json
+h20	1	ran	True	full warmup + first measured; later sampled	186	17	56876744	58386688	1500000	0.0	target/compression-domains/rank3-h20-sf1.json
+h21_positive	1	ran	True	full warmup + first measured; later sampled	302284	10	38006352	39513088	1500000	0.0	target/compression-domains/rank3-h21_positive-sf1.json
+h22	1	ran	True	full warmup + first measured; later sampled	14086	4	5880480	7383552	1500000	0.0	target/compression-domains/rank3-h22-sf1.json
+d19	10	ran	True	full warmup + first measured; later sampled	90015	15	796368408	457013504	15000000	0.0	target/compression-domains/rank3-d19-sf10.json
+d27	10	ran	True	full warmup + first measured; later sampled	3575	14	754995504	415639296	15000000	0.0	target/compression-domains/rank3-d27-sf10.json
+d72_inner	10	ran	True	full warmup + first measured; later sampled	53966	16	650054880	665066240	15000000	0.0	target/compression-domains/rank3-d72_inner-sf10.json
+d85	10	ran	True	full warmup + first measured; later sampled	90015	19	836186712	496834048	15000000	0.0	target/compression-domains/rank3-d85-sf10.json
+h02	10	ran	True	full warmup + first measured; later sampled	4667	19	50996824	51009024	0	0.0	target/compression-domains/rank3-h02-sf10.json
+h03	10	ran	True	full warmup + first measured; later sampled	114003	9	398541416	256014080	15000000	0.0	target/compression-domains/rank3-h03-sf10.json
+h04	10	ran	True	full warmup + first measured; later sampled	526040	8	540936992	306552832	15000000	0.0	target/compression-domains/rank3-h04-sf10.json
+h04_not_exists	10	ran	True	full warmup + first measured; later sampled	47631	9	560278696	325895424	15000000	15.382829000000001	target/compression-domains/rank3-h04_not_exists-sf10.json
+h05	10	ran	True	full warmup + first measured; later sampled	72983	15	475177496	295163648	15000000	0.0	target/compression-domains/rank3-h05-sf10.json
+h07	10	ran	True	full warmup + first measured; later sampled	54142	14	635926000	364055040	15000000	0.0	target/compression-domains/rank3-h07-sf10.json
+h07_block	10	ran	True	full warmup + first measured; later sampled	54142	14	635926000	364055040	15000000	0.0	target/compression-domains/rank3-h07_block-sf10.json
+h08	10	ran	True	full warmup + first measured; later sampled	24254	19	798498296	459145984	15000000	0.0	target/compression-domains/rank3-h08-sf10.json
+h09	10	ran	True	full warmup + first measured; later sampled	3261612	14	761528496	422172672	15000000	0.0	target/compression-domains/rank3-h09-sf10.json
+h10	10	ran	True	full warmup + first measured; later sampled	381105	17	423425320	438436352	15000000	0.0	target/compression-domains/rank3-h10-sf10.json
+h11	10	ran	True	full warmup + first measured; later sampled	0	8	57199360	57204736	0	0.0	target/compression-domains/rank3-h11-sf10.json
+h12	10	ran	True	full warmup + first measured; later sampled	2	8	415295040	430299648	15000000	0.0	target/compression-domains/rank3-h12-sf10.json
+h15	10	ran	True	full warmup + first measured; later sampled	1	10	525642256	540647424	15000000	0.0	target/compression-domains/rank3-h15-sf10.json
+h16	10	ran	True	full warmup + first measured; later sampled	1186602	8	33349504	33354752	0	0.0	target/compression-domains/rank3-h16-sf10.json
+h18	10	ran	True	full warmup + first measured; later sampled	624	9	324499432	339505408	15000000	0.0	target/compression-domains/rank3-h18-sf10.json
+h20	10	ran	True	full warmup + first measured; later sampled	1804	17	618113896	633124352	15000000	0.0	target/compression-domains/rank3-h20-sf10.json
+h21_positive	10	ran	True	full warmup + first measured; later sampled	2930274	10	402368208	417374976	15000000	0.0	target/compression-domains/rank3-h21_positive-sf10.json
+h22	10	ran	True	full warmup + first measured; later sampled	140489	4	64971552	79974912	15000000	0.0	target/compression-domains/rank3-h22-sf10.json

@@ -267,6 +267,24 @@ mod tests {
     }
 
     #[test]
+    fn host_built_input_queries_disclose_load_side_upload_boundary() -> Result<()> {
+        // Inspect the selected executors, as the conformance fixtures do.
+        for report in crate::plans()?.iter().filter(|report| {
+            matches!(report["query"].as_str(), Some("h13" | "h04_not_exists"))
+        }) {
+            assert_eq!(report["status"], "accepted", "{}", report["error"]);
+            let note = report["timing"].as_str().expect("stage timing metadata");
+            assert!(note.contains("NOTE: host-built input upload/normalization is load-side"));
+            assert!(note.contains("host_input_upload_ms, separate from base domain_ms"));
+            assert!(note.contains("unlike base e4e08c99"));
+            assert!(note.contains("upload occurred in execute"));
+            assert!(note.contains("authored host preprocessing remains load-side"));
+            assert!(note.contains("indexes remain timed"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn filtered_table_keeps_each_mode_and_needs_no_other_scale() {
         let rows = ["automatic", "advised"].map(|mode| {
             json!({

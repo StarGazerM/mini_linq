@@ -69,8 +69,9 @@ pub fn check_options() -> Result<()> {
     Ok(())
 }
 
-/// Untimed load accounting: native file reads, device set verification and
-/// upload/encoding. Host packing is exclusive to the HostFor measurement mode.
+/// Load-side accounting: native file reads, device set verification,
+/// upload/encoding and authored host-input normalization. Host packing is
+/// exclusive to the HostFor measurement mode.
 #[derive(Default)]
 struct LoadReport {
     columns: usize,
@@ -89,6 +90,7 @@ struct LoadReport {
     upload_encode_ms: f64,
     cache_write_ms: f64,
     domain_ms: f64,
+    host_input_upload_ms: f64,
     domains: Vec<Value>,
 }
 
@@ -104,7 +106,7 @@ fn ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
-/// Take this thread's accumulated base-column load report.
+/// Take this thread's accumulated base-column and authored host-input load report.
 pub fn take_load_report() -> Value {
     let report = REPORT.with(|report| std::mem::take(&mut *report.borrow_mut()));
     json!({
@@ -125,10 +127,11 @@ pub fn take_load_report() -> Value {
         "pack_ms": report.pack_ms,
         "upload_encode_ms": report.upload_encode_ms,
         "domain_ms": report.domain_ms,
+        "host_input_upload_ms": report.host_input_upload_ms,
         "domains": report.domains,
         "rank_span_distinct_threshold": gpu_device_columns::RANK_SPARSITY_THRESHOLD,
         "cache_write_ms": report.cache_write_ms,
-        "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed, with domain normalization replacing source bytes rather than counting another column; domains[].bytes = retained Rank bitmap/per-word-prefix metadata (Offset retains none); unprojected = full source columns (cacheable); source_bytes = native stored bytes read; read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); domain_ms = device union bitmap/prefix construction, Offset header normalization or Rank translation/FOR encoding, plus frozen Rank-membership/Offset-range validation and normalization of pre-existing opaque host inputs; pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; domain publication mirrors are lazy and reported separately",
+        "scope": "base columns and authored host-built inputs prepared for one query, outside query timings; columns/resident_bytes = encoded source, selected and host-input columns constructed, with base domain normalization replacing source bytes rather than counting another column; domains[].bytes = retained Rank bitmap/per-word-prefix metadata (Offset retains none); unprojected = full source columns (cacheable); source_bytes = native stored bytes read; read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = base-column staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); domain_ms = base-column device union bitmap/prefix construction, Offset header normalization or Rank translation/FOR encoding only; host_input_upload_ms = host-built input upload, frozen Rank-membership/Offset-range validation and normalization, separate from domain_ms and excluding authored host preprocessing; authored host preprocessing remains load-side and indexes remain timed; pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; domain publication mirrors are lazy and reported separately",
     })
 }
 
@@ -408,7 +411,7 @@ impl<'a> Loader<'a> {
         self.pool.release_unused()?;
         self.report_memory();
         report(|report| {
-            report.domain_ms += ms(started);
+            report.host_input_upload_ms += ms(started);
             report.columns += fields.len();
             report.resident_bytes += storage.columns.iter().map(|column| column.bytes()).sum::<usize>();
         });
@@ -747,6 +750,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn load_report_separates_host_input_upload_from_base_domains() {
+        take_load_report();
+        report(|report| {
+            report.domain_ms = 13.0;
+            report.host_input_upload_ms = 7.0;
+        });
+        let report = take_load_report();
+        assert_eq!(report["domain_ms"], 13.0);
+        assert_eq!(report["host_input_upload_ms"], 7.0);
+        let reset = take_load_report();
+        assert_eq!(reset["domain_ms"], 0.0);
+        assert_eq!(reset["host_input_upload_ms"], 0.0);
+    }
+
+    #[test]
     fn query_bound_member_union_ranks_without_loading_unbound_columns() -> Result<()> {
         let root = std::env::temp_dir().join(format!("cq-key-domain-load-{}", std::process::id()));
         fs::create_dir_all(&root)?;
@@ -775,15 +793,22 @@ mod tests {
         let report = take_load_report();
         assert_eq!(report["columns"], 2);
         assert_eq!(report["unprojected"], 2);
+        assert_eq!(report["host_input_upload_ms"], 0.0);
         let retained_bytes: usize = loader.tables.values()
             .flat_map(|table| table.columns.values()).map(|column| column.bytes()).sum();
         assert_eq!(report["resident_bytes"], retained_bytes);
         assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?, [(1,), (2,)]);
         assert_eq!(loader.bind::<(u32,)>("lineitem", &["l_orderkey"])?.to_host()?, [(0,), (2,)]);
+        let base_domain_ms = REPORT.with(|report| report.borrow().domain_ms);
         let uploaded = loader.upload_host_keys::<(i64,), (u32,)>(
             &[(9,), (-8,)], &[(std::mem::offset_of!((i64,), 0), 0)],
         )?;
         assert_eq!(uploaded.to_host()?, [(2,), (0,)]);
+        let upload_report = take_load_report();
+        assert_eq!(upload_report["domain_ms"], base_domain_ms);
+        assert!(upload_report["host_input_upload_ms"].is_number());
+        assert_eq!(upload_report["columns"], 1);
+        assert_eq!(upload_report["unprojected"], 0);
         let error = loader.upload_host_keys::<(i64,), (u32,)>(
             &[(-9,)], &[(std::mem::offset_of!((i64,), 0), 0)],
         ).err().expect("host key outside its frozen base domain");
@@ -845,14 +870,21 @@ mod tests {
             assert_eq!(report["columns"], 1);
             assert_eq!(report["cache_hits"], usize::from(cache_hit));
             assert_eq!(report["raw_reads"], usize::from(!cache_hit));
+            assert_eq!(report["host_input_upload_ms"], 0.0);
             assert_eq!(report["resident_bytes"], loader.tables["orders"].columns["o_orderkey"].bytes());
             assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?,
                 [(0,), (1,), (2,), (3,)]);
             assert_eq!((domain.value(0), domain.value(3)), (-7, -4));
+            let base_domain_ms = REPORT.with(|report| report.borrow().domain_ms);
             let uploaded = loader.upload_host_keys::<(i64,), (u32,)>(
                 &[(-7,), (-4,)], &[(std::mem::offset_of!((i64,), 0), 0)],
             )?;
             assert_eq!(uploaded.to_host()?, [(0,), (3,)]);
+            let upload_report = take_load_report();
+            assert_eq!(upload_report["domain_ms"], base_domain_ms);
+            assert!(upload_report["host_input_upload_ms"].is_number());
+            assert_eq!(upload_report["columns"], 1);
+            assert_eq!(upload_report["unprojected"], 0);
         }
         fs::remove_dir_all(root)?;
         Ok(())
