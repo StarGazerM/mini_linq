@@ -8,6 +8,35 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Batch gates (2026-11-12, compression Phase 1a: GPU TPC-H key domains
+`7abd4f14` vs `e4e08c99`):** keys become u32 codes in shared load-recorded
+Offset/Rank domains (CHANGELOG, STORAGE). Only `experiments/gpu`, `testkit`,
+`tools` and docs change; no IR grammar (`check_ir_scope` PASS for both IR
+crates). Independent review "merge after fixes"; fixes applied.
+- GPU gate on RunPod RTX 6000 Ada **PASS** (crates, radix-counters, H05 SF10
+  8.478 ms ≤ 10.35, Cassandra 26/26).
+- Paired query time, load excluded (5 alternating pairs, every sample exact
+  under the independent checker;
+  [raw](../experiments/gpu/compare/comp-tpch-domains-2026-11-12.pod-bench.json)):
+  SF10 geomean **0.753 [0.741, 0.785]**, SF1 **0.842 [0.793, 0.894]**.
+  h13 and h04_not_exists (0.13–0.21×) include a boundary change: their
+  host-built inputs are now uploaded at load (`host_input_upload_ms`), not in
+  `execute`. Without them: SF10 **0.856 [0.841, 0.897]**, SF1
+  **0.945 [0.910, 1.009]**.
+- Slower with CI above 1: h02 SF10 1.189 [1.169, 1.210] (grouped host
+  download/decode boundary), h05 SF1 1.065, d85 SF1 1.096. Terminal packed
+  publication and device-resident nullable grouped publication are the
+  identified follow-ups.
+- SF10 process wall 41.3 s vs 64.6 s (host H05 catalog removed).
+- doop-gpu xalan (DOOP unchanged except shared radix runtime): fixpoint
+  1.049 [1.036, 1.123], setup 1.052 [0.932, 1.107], output 1.046
+  [0.982, 1.085]; provisional, not yet attributed.
+- DOOP per-domain codes (`codex/comp-doop-domains`) are not landed: its
+  fixpoint is 1.42× on xalan with output 0.48× (whole GPU evaluation 1.005×);
+  the remaining cost needs a clean-GPU kernel profile.
+- The pinned dataset revision is now `e29e21fd` (tools/README); the checker
+  reads DuckDB-quoted TPC-H oracles (`tsv-quoted`).
+
 **Batch gates (2026-11-11, P5 scan-contract salvage `227310ce` vs `61b73315`):**
 three single-owner commits (Structures `a25bc3e8`, Sequence `f84b77e7`,
 workload/runtime `227310ce`), independent review "merge".
