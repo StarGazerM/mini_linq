@@ -56,7 +56,7 @@ fn resident_sources_use_runtime_widths_and_reject_overflow() -> Result {
     assert_eq!(gpu_datalog_runtime::work_counters().occurrence.passes,
         if cfg!(feature = "radix-counters") { 4 } else { 0 });
     assert_eq!(layout.snapshot().active_bits(), 26);
-    // DECODE P: final integration-test publication compares all logical rows.
+    // DECODE P: resident-source publication compares complete runtime-width logical rows.
     assert_eq!(layout.to_rows()?, [vec![0,0], vec![7,1], vec![7,127], vec![(1 << 19)-1,127]]);
     let probes = Buffer::from_host(pool.clone(), &[
         packing.pack::<u64>(&[7,127])?, packing.pack::<u64>(&[8,127])?,
