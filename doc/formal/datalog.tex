@@ -1583,6 +1583,11 @@ domain mode the static word is an upper bound: candidate codes are sealed
 on device before sorting, while fixed-carrier allocated bytes are reported
 separately from useful bits.  Domain preparation and device global-to-dense
 translation perform no additional host row pass.
+The host also records the number of significant 64-bit lanes. Comparisons
+between stored keys skip unused high carrier lanes in probes, deduplication,
+subtraction and merging. Native search first checks its unbounded probe against
+the full-width minimum and maximum; only the bounded inner search skips
+padding. Thus an out-of-width probe cannot become a truncated in-domain match.
 The preparation schema types every component, including components used only
 by derived relations. Numeric components without an EDB member use checked
 declared scalar bounds; those with EDB members retain observed bounds (or

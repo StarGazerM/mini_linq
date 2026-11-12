@@ -523,3 +523,4 @@ experiments/gpu/datalog-runtime/tests/runtime_widths.rs	// DECODE P: resident-so
 experiments/gpu/datalog-runtime/tests/domain_admission.rs	// DECODE P: diagnostic domain admission publishes its permuted field codes.	P	diagnostic domain admission publishes its permuted field codes.
 experiments/gpu/datalog/facade/tests/domain_boundaries.rs	// DECODE P: final boundary-test answers restore logical handles for assertions.	P	final boundary-test answers restore logical handles for assertions.
 experiments/gpu/datalog/facade/tests/domain_endpoints.rs	// DECODE P: endpoint-test publication restores final logical handles.	P	endpoint-test publication restores final logical handles.
+experiments/gpu/datalog-runtime/tests/active_lanes.rs	// DECODE P: active-lane regression publication restores final numeric keys.	P	active-lane regression publication restores final numeric keys.

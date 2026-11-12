@@ -37,7 +37,15 @@ pub trait Word: sealed::Sealed + Copy + Ord + Debug + DeviceCopy + Send + Sync {
     /// Lane-wise ordering avoids array intrinsics unavailable in device code.
     #[inline(always)]
     fn compare(&self, other: &Self) -> std::cmp::Ordering {
-        let mut lane = Self::BITS / 64;
+        self.compare_lanes(other, Self::BITS / 64)
+    }
+
+    /// Compare the recorded low lanes, skipping unused high carrier padding.
+    /// `key_lanes` is host-derived and at most `Self::BITS / 64`. Omitted lanes
+    /// must be zero when this comparison represents whole-key ordering.
+    #[inline(always)]
+    fn compare_lanes(&self, other: &Self, key_lanes: u32) -> std::cmp::Ordering {
+        let mut lane = key_lanes;
         while lane != 0 {
             lane -= 1;
             let left = self.lane(lane);

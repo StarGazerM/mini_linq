@@ -255,6 +255,7 @@ mod tests {
         let run = RadixRunView {
             keys: words.as_ptr(), offsets: offsets.as_ptr(), directory: std::ptr::null(),
             keys_len: rows.len() as u64, items: rows.len() as u64, radix_bits: 0, unit_offsets: 0,
+            key_lanes: packing.bits().div_ceil(64),
         };
         let runs = [run];
         let view = RadixLayoutView {

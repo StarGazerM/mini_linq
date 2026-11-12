@@ -474,6 +474,8 @@ pub struct RadixRunView<W: Word, O: OffsetWord> {
     pub keys_len: u64,
     pub items: u64,
     pub radix_bits: u32,
+    /// Host-recorded active 64-bit lanes; stored keys are zero above this width.
+    pub key_lanes: u32,
     /// 0 = materialized offsets; 1 = unit offsets (offset(slot) == slot).
     pub unit_offsets: u32,
 }
@@ -588,6 +590,7 @@ struct Segment<W: Word, O: OffsetWord, C> {
     key_count: usize,
     item_count: usize,
     radix_bits: u32,
+    key_lanes: u32,
 }
 
 impl<W: Word, O: OffsetWord, C> Segment<W, O, C> {
@@ -603,6 +606,7 @@ impl<W: Word, O: OffsetWord, C> Segment<W, O, C> {
             keys_len: self.key_count as u64,
             items: self.item_count as u64,
             radix_bits: self.radix_bits,
+            key_lanes: self.key_lanes,
             unit_offsets: u32::from(self.offsets.is_none()),
         }
     }
@@ -818,6 +822,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         if rows == 0 {
             return Ok(None);
         }
+        let key_lanes = self.active_bits.div_ceil(64);
         let pool = &self.pool;
         crate::stats::record_sort(crate::stats::SortKind::Occurrence, rows, self.active_bits, true);
         let module = &self.kernels.module;
@@ -844,6 +849,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             order,
             rows as u64,
             flags.ptr(),
+            key_lanes,
         )?;
         // SAFETY: stable selections initialize the prefixes read below.
         let offsets = unsafe { Buffer::<O>::uninitialized(pool.clone(), rows + 1)? };
@@ -914,6 +920,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             key_count,
             item_count: rows,
             radix_bits: self.params.radix_bits,
+            key_lanes,
         }))
     }
 
@@ -1033,6 +1040,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             key_count,
             item_count: total,
             radix_bits: self.params.radix_bits,
+            key_lanes: left.key_lanes,
         })
     }
 
@@ -1182,7 +1190,8 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         let keys = batch.shared_buffer()?;
         let directory = self.directory(&keys, rows)?;
         Ok(Segment { keys: Arc::new(keys), offsets: None, directory, items: (), key_count: rows,
-            item_count: rows, radix_bits: self.params.radix_bits })
+            item_count: rows, radix_bits: self.params.radix_bits,
+            key_lanes: self.active_bits.div_ceil(64) })
     }
 
     /// Adopt a sorted unique delta, maintaining the ordinary radix ratio law.
@@ -2566,6 +2575,7 @@ pub mod device {
         if len == 0 {
             return (0, false);
         }
+        // Probes may set inactive lanes, so both range guards stay full-width.
         let min = unsafe { *run.keys };
         if key.compare(&min).is_lt() {
             return (0, false);
@@ -2592,7 +2602,7 @@ pub mod device {
         while low < high {
             let middle = low + (high - low) / 2;
             if unsafe { &*run.keys.add(middle as usize) }
-                .compare(&key)
+                .compare_lanes(&key, run.key_lanes)
                 .is_lt()
             {
                 low = middle + 1;
@@ -2604,7 +2614,7 @@ pub mod device {
             low,
             low < len
                 && unsafe { &*run.keys.add(low as usize) }
-                    .compare(&key)
+                    .compare_lanes(&key, run.key_lanes)
                     .is_eq(),
         )
     }
@@ -3022,7 +3032,9 @@ mod radix_kernels {
     #[kernel]
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1))]
-    pub fn group_flags<W: Word>(input: *const W, order: *const u32, rows: u64, flags: *mut u32) {
+    pub fn group_flags<W: Word>(
+        input: *const W, order: *const u32, rows: u64, flags: *mut u32, key_lanes: u32,
+    ) {
         let mut row = thread::index_1d().get() as u64;
         let stride = thread::gridDim_x() as u64 * thread::blockDim_x() as u64;
         while row <= rows {
@@ -3030,7 +3042,7 @@ mod radix_kernels {
                 || row == rows
                 || unsafe {
                     !(*input.add(*order.add(row as usize) as usize))
-                        .compare(&*input.add(*order.add(row as usize - 1) as usize))
+                        .compare_lanes(&*input.add(*order.add(row as usize - 1) as usize), key_lanes)
                         .is_eq()
                 };
             unsafe {
@@ -3074,6 +3086,7 @@ mod radix_kernels {
         flags: *mut u32,
     ) {
         let (left_len, right_len) = (left.keys_len as usize, right.keys_len as usize);
+        let key_lanes = left.key_lanes;
         let slots = left_len + right_len;
         let mut tile = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * thread::blockDim_x() as usize;
@@ -3087,15 +3100,16 @@ mod radix_kernels {
         while tile < tiles {
             let start = tile * tile_rows as usize;
             let end = start + (slots - start).min(tile_rows as usize);
-            let mut a =
-                unsafe { crate::runs::corank(left.keys, left_len, right.keys, right_len, start) };
+            let mut a = unsafe {
+                crate::runs::corank(left.keys, left_len, right.keys, right_len, start, key_lanes)
+            };
             let mut b = start - a;
             let mut slot = start;
             while slot < end {
                 let take_left = a < left_len
                     && (b == right_len
                         || !unsafe { &*left.keys.add(a) }
-                            .compare(unsafe { &*right.keys.add(b) })
+                            .compare_lanes(unsafe { &*right.keys.add(b) }, key_lanes)
                             .is_gt());
                 let position =
                     unsafe { device::offset(left, a as u64) + device::offset(right, b as u64) };
@@ -3104,13 +3118,13 @@ mod radix_kernels {
                     let key = unsafe { &*left.keys.add(a) };
                     (
                         a as u64,
-                        b > 0 && unsafe { &*right.keys.add(b - 1) }.compare(key).is_eq(),
+                        b > 0 && unsafe { &*right.keys.add(b - 1) }.compare_lanes(key, key_lanes).is_eq(),
                     )
                 } else {
                     let key = unsafe { &*right.keys.add(b) };
                     (
                         b as u64 | SIDE,
-                        a > 0 && unsafe { &*left.keys.add(a - 1) }.compare(key).is_eq(),
+                        a > 0 && unsafe { &*left.keys.add(a - 1) }.compare_lanes(key, key_lanes).is_eq(),
                     )
                 };
                 unsafe {
@@ -3454,6 +3468,40 @@ mod set_representation_tests {
         assert_eq!(current[0].count, 4);
         assert_eq!(current[2].count, 3);
         Ok(())
+    }
+
+    fn narrow_occurrence_merge<W: Word>() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let mut state = DeviceRadixRun::<W, u32, ()>::new(pool.clone(), PARAMS)?;
+        // Match the runtime-width source builder without widening its public API.
+        state.active_bits = 17;
+        crate::reset_work_counters();
+        let before = crate::readback_count();
+        for values in [[7u128, 7, 9, 131071], [7, 9, 9, 11]] {
+            let words = values.map(W::from_u128);
+            state.publish(&Buffer::from_host(pool.clone(), &words)?, &(), words.len())?;
+        }
+        assert_eq!(crate::readback_count() - before, 3);
+        assert_eq!(state.run_count(), 1);
+        let snapshot = state.snapshot()?;
+        assert_eq!(snapshot.descriptors.to_host()?[0].key_lanes, 1);
+        let probes = [7u128, 9, 11, 131071, 1 << 17, 1 << 100].map(W::from_u128);
+        let found = snapshot.probe_keys(&pool,
+            &Buffer::from_host(pool.clone(), &probes)?, probes.len())?.to_host()?;
+        assert_eq!(found.iter().map(|p| p.count).collect::<Vec<_>>(), [3, 3, 1, 1, 0, 0]);
+        #[cfg(feature = "radix-counters")]
+        {
+            assert_eq!(crate::work_counters().occurrence.radix_bits, 34);
+            assert_eq!(crate::work_counters().occurrence.passes, 6);
+            assert_eq!(crate::work_counters().grouping_readbacks, 3);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn narrow_occurrences_deduplicate_and_merge_in_active_lanes() -> Result<()> {
+        narrow_occurrence_merge::<u128>()?;
+        narrow_occurrence_merge::<[u64; 3]>()
     }
 
     #[test]

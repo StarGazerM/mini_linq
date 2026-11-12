@@ -137,6 +137,7 @@ impl SetOps<'_> {
             let rows = rows.min(1);
             return unsafe { SortedBatch::from_sorted(Buffer::zeroed(self.pool.clone(), rows)?, rows) };
         }
+        let key_lanes = self.active_bits.div_ceil(64);
         // SAFETY: kernels initialize the returned prefix before publication.
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
@@ -196,7 +197,7 @@ impl SetOps<'_> {
                     words,
                     DeviceSliceWrite::new(output.ptr()),
                     count.get_mut(),
-                    |a: W, b: W| a.compare(&b).is_eq(),
+                    move |a: W, b: W| a.compare_lanes(&b, key_lanes).is_eq(),
                     rows,
                     compact,
                 )?;
@@ -233,6 +234,7 @@ impl SetOps<'_> {
         unsafe { SortedBatch::from_sorted(output, rows) }
     }
     pub(crate) fn subtract<W: Word>(&self, unique: &SortedBatch<W>, accepted: &[RunView<W>]) -> Result<SortedBatch<W>> {
+        let key_lanes = self.active_bits.div_ceil(64);
         let rows = unique.len();
         let descriptors = Buffer::from_host_async(self.pool.clone(), accepted)?;
         crate::stats::record_work(|work| {
@@ -262,6 +264,7 @@ impl SetOps<'_> {
             descriptors.ptr(),
             accepted.len() as u32,
             flags.ptr(),
+            key_lanes,
         )?;
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
@@ -285,6 +288,7 @@ impl SetOps<'_> {
         unsafe { SortedBatch::from_sorted(output, fresh) }
     }
     pub(crate) fn merge<W: Word>(&self, first: &SortedBatch<W>, second: &SortedBatch<W>) -> Result<SortedBatch<W>> {
+        let key_lanes = self.active_bits.div_ceil(64);
         let rows = first
             .len()
             .checked_add(second.len())
@@ -313,6 +317,7 @@ impl SetOps<'_> {
                 second.view(),
                 output.0.ptr(),
                 self.params.merge_tile_rows as usize,
+                key_lanes,
             )?;
             // SAFETY: disjoint merge-path tiles initialize the sorted union.
             return unsafe { SortedBatch::from_sorted(output.0, rows) };
@@ -331,7 +336,7 @@ impl SetOps<'_> {
             second,
             &mut workspace,
             &mut output,
-            |a: &W, b: &W| a.compare(b),
+            move |a: &W, b: &W| a.compare_lanes(b, key_lanes),
         )?;
         // SAFETY: merging disjoint sorted unique runs produces a sorted unique run.
         unsafe { SortedBatch::from_sorted(output.0, rows) }
@@ -714,6 +719,7 @@ fn stable_keys<W: Word>(
 /// when equal words take the first run before the second.
 /// # Safety
 /// Both pointers must address initialized sorted words of the given lengths.
+/// Words must be zero-padded above the `key_lanes` least-significant lanes.
 #[inline(always)]
 pub(crate) unsafe fn corank<W: Word>(
     first: *const W,
@@ -721,6 +727,7 @@ pub(crate) unsafe fn corank<W: Word>(
     second: *const W,
     second_len: usize,
     diagonal: usize,
+    key_lanes: u32,
 ) -> usize {
     let mut lo = diagonal.saturating_sub(second_len);
     let mut hi = diagonal.min(first_len);
@@ -730,7 +737,7 @@ pub(crate) unsafe fn corank<W: Word>(
         if other > 0
             && mid < first_len
             && !unsafe { &*first.add(mid) }
-                .compare(unsafe { &*second.add(other - 1) })
+                .compare_lanes(unsafe { &*second.add(other - 1) }, key_lanes)
                 .is_gt()
         {
             lo = mid + 1;
@@ -756,6 +763,7 @@ pub(crate) mod run_kernels {
         second: RunView<W>,
         output: *mut W,
         merge_tile_rows: usize,
+        key_lanes: u32,
     ) {
         let rows = first.len + second.len;
         let mut tile = thread::index_1d().get() as usize;
@@ -766,8 +774,9 @@ pub(crate) mod run_kernels {
             let end = start + (rows - start).min(merge_tile_rows);
             // Find how many first-run rows precede this output diagonal.
             // Equal keys prefer the first run, matching the merge below.
-            let lo =
-                unsafe { crate::runs::corank(first.ptr, first.len, second.ptr, second.len, start) };
+            let lo = unsafe {
+                crate::runs::corank(first.ptr, first.len, second.ptr, second.len, start, key_lanes)
+            };
             let mut a = lo;
             let mut b = start - lo;
             let mut row = start;
@@ -775,7 +784,7 @@ pub(crate) mod run_kernels {
                 let take_first = a < first.len
                     && (b == second.len
                         || !unsafe { &*first.ptr.add(a) }
-                            .compare(unsafe { &*second.ptr.add(b) })
+                            .compare_lanes(unsafe { &*second.ptr.add(b) }, key_lanes)
                             .is_gt());
                 unsafe {
                     if take_first {
@@ -843,6 +852,7 @@ pub(crate) mod run_kernels {
         runs: *const RunView<W>,
         count: u32,
         flags: *mut u32,
+        key_lanes: u32,
     ) {
         let mut row = thread::index_1d().get() as usize;
         let stride = thread::gridDim_x() as usize * 256;
@@ -856,14 +866,14 @@ pub(crate) mod run_kernels {
                 let mut end = view.len;
                 while begin < end {
                     let mid = begin + (end - begin) / 2;
-                    if unsafe { &*view.ptr.add(mid) }.compare(&value).is_lt() {
+                    if unsafe { &*view.ptr.add(mid) }.compare_lanes(&value, key_lanes).is_lt() {
                         begin = mid + 1;
                     } else {
                         end = mid;
                     }
                 }
-                absent =
-                    begin == view.len || !unsafe { &*view.ptr.add(begin) }.compare(&value).is_eq();
+                absent = begin == view.len
+                    || !unsafe { &*view.ptr.add(begin) }.compare_lanes(&value, key_lanes).is_eq();
                 run += 1;
             }
             unsafe {
