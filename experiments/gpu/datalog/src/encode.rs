@@ -4,7 +4,7 @@ use cq_syntax::{rust, symbol_name, RelationDecl};
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::collections::BTreeMap;
-use syn::{Expr, visit_mut::VisitMut};
+use syn::Expr;
 
 /// Adapter arguments are existing relation declarations, not a new IR record.
 pub fn compile(source: &Program, arguments: TokenStream) -> syn::Result<Program> {
@@ -41,11 +41,13 @@ pub fn compile(source: &Program, arguments: TokenStream) -> syn::Result<Program>
     cq_syntax::intern_domains(&mut target.declarations)?;
     let positions: BTreeMap<_, _> = target.declarations.iter().map(|declaration| (symbol_name(&declaration.name), declaration)).collect();
     let mut domains = BTreeMap::new();
+    let mut identifiers = BTreeMap::new();
     let mut atom = |atom: &cq_syntax::Atom| -> syn::Result<()> {
         let declaration = positions.get(&symbol_name(&atom.relation))
             .ok_or_else(|| syn::Error::new_spanned(atom, "domain adapter atom has no declaration"))?;
         for (argument, column) in atom.args.iter().zip(&declaration.columns) {
             if let (Some(variable), Some(domain)) = (rust::variable(argument), &column.domain) {
+                identifiers.insert(symbol_name(variable), variable.clone());
                 if let Some(previous) = domains.insert(symbol_name(variable), domain.clone())
                     && previous.id != domain.id {
                     return Err(syn::Error::new_spanned(argument, "compared symbol columns belong to different domain components"));
@@ -63,22 +65,21 @@ pub fn compile(source: &Program, arguments: TokenStream) -> syn::Result<Program>
         }
     }
     let reads: std::collections::BTreeSet<_> = domains.keys().cloned().collect();
-    struct Restore<'a> { domains: &'a BTreeMap<String, cq_syntax::CodeDomain>, reads: std::collections::BTreeSet<String> }
-    impl VisitMut for Restore<'_> {
-        fn visit_expr_mut(&mut self, expression: &mut Expr) {
-            if let Some(variable) = rust::variable(expression)
-                && self.reads.contains(&symbol_name(variable)) {
-                let domain = &self.domains[&symbol_name(variable)].expression;
-                // DECODE R: only free symbol variables actually read by opaque Rust are reconstructed.
-                *expression = syn::parse_quote!(&(#domain).decode(*#variable).expect("invalid symbol code at Rust boundary"));
-                return;
-            }
-            syn::visit_mut::visit_expr_mut(self, expression);
-        }
-    }
+    // Keep opaque Rust intact: lexical shadowing restores the logical inputs
+    // without changing closure parameters, local bindings, or macro tokens.
     let restore = |expression: &mut Expr| {
         let dependencies = rust::free_variables(expression).dependencies(&reads);
-        Restore { domains: &domains, reads: dependencies }.visit_expr_mut(expression);
+        if dependencies.is_empty() { return; }
+        let bindings = dependencies.iter().map(|name| {
+            let variable = &identifiers[name];
+            let domain = &domains[name].expression;
+            // DECODE R: restore free rule-variable reads outside unchanged opaque Rust.
+            quote!(let #variable = &(#domain).decode(*#variable).expect("invalid symbol code at Rust boundary");)
+        });
+        let mut wrapper: syn::ExprBlock = syn::parse_quote!({ #(#bindings)* });
+        let original = std::mem::replace(expression, syn::parse_quote!(()));
+        wrapper.block.stmts.push(syn::Stmt::Expr(original, None));
+        *expression = Expr::Block(wrapper);
     };
     for item in &mut target.query.body {
         match item {

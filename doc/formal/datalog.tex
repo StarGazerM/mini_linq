@@ -1568,6 +1568,9 @@ Absent filter constants map to the reserved missing code; creating-head
 constants must enter their component before freezing, and later absent
 created symbols are rejected.  Only free variables consumed by opaque Rust
 are inverted at R; output fields are inverted at P.
+R restoration binds inverse-valued shadows around the unchanged user expression.
+It does not substitute identifiers inside closure bodies, local bindings, or
+macro token streams; Rust itself resolves any inner shadowing.
 The P adapter gathers one complete output column at a time, resolving its
 component inverse table once and passing an owned code vector to
 \code{SymbolCodec::decode\_many}. DOOP restores that vector to global handles
