@@ -1,0 +1,105 @@
+query	sf	stage	field	declared_carrier	uses
+h01	1	0	__cq_4_2	i64	payload
+h01	1	0	__cq_4_3	i64	payload
+h01	1	0	__cq_4_4	usize	payload
+h01	10	0	__cq_4_2	i64	payload
+h01	10	0	__cq_4_3	i64	payload
+h01	10	0	__cq_4_4	usize	payload
+h02	1	0	__cq_6_1	Option < i64 >	payload
+h02	1	0	cost_units	i64	canonical identity
+h02	1	1	__cq_11_0	i64	canonical identity
+h02	1	1	kind	u32	payload
+h02	1	1	minimum_cost	Option < i64 >	payload
+h02	1	1	part_key	u32	canonical identity,payload
+h02	10	0	__cq_6_1	Option < i64 >	payload
+h02	10	0	cost_units	i64	canonical identity
+h02	10	1	__cq_11_0	i64	canonical identity
+h02	10	1	kind	u32	payload
+h02	10	1	minimum_cost	Option < i64 >	payload
+h02	10	1	part_key	u32	canonical identity,payload
+h06	1	0	__cq_6_0	i64	payload
+h06	10	0	__cq_6_0	i64	payload
+h09	1	0	part_name	u32	payload
+h09	10	0	part_name	u32	payload
+h10	1	0	__cq_9_2	i64	payload
+h10	1	0	balance_units	i64	group key,payload
+h10	1	0	revenue_units	i64	payload
+h10	10	0	__cq_9_2	i64	payload
+h10	10	0	balance_units	i64	group key,payload
+h10	10	0	revenue_units	i64	payload
+h11	1	0	__cq_5_0	u32	canonical identity
+h11	1	0	__cq_5_1	u32	canonical identity
+h11	1	0	__cq_5_2	u32	canonical identity
+h11	1	0	__cq_5_3	i64	canonical identity
+h11	1	1	__cq_2_1	i64	payload
+h11	1	2	__cq_2_0	i64	payload
+h11	1	3	__cq_3_0	u32	canonical identity
+h11	1	3	__cq_3_1	i64	canonical identity
+h11	1	3	total	i64	payload
+h11	10	0	__cq_5_0	u32	canonical identity
+h11	10	0	__cq_5_1	u32	canonical identity
+h11	10	0	__cq_5_2	u32	canonical identity
+h11	10	0	__cq_5_3	i64	canonical identity
+h11	10	1	__cq_2_1	i64	payload
+h11	10	2	__cq_2_0	i64	payload
+h11	10	3	__cq_3_0	u32	canonical identity
+h11	10	3	__cq_3_1	i64	canonical identity
+h11	10	3	total	i64	payload
+h12	1	1	__cq_2_1	i64	payload
+h12	1	2	__cq_3_1	i64	payload
+h12	1	2	commitdate	i32	payload
+h12	1	2	priority	u32	payload
+h12	1	2	receiptdate	i32	payload
+h12	1	2	shipdate	i32	payload
+h12	1	3	__cq_3_2	i64	canonical identity
+h12	1	3	high	i64	canonical identity,payload
+h12	1	3	total	i64	payload
+h12	1	4	__cq_2_1	i64	canonical identity
+h12	1	4	__cq_neg_1	i64	payload
+h12	1	4	total	i64	canonical identity,payload
+h12	10	1	__cq_2_1	i64	payload
+h12	10	2	__cq_3_1	i64	payload
+h12	10	2	commitdate	i32	payload
+h12	10	2	priority	u32	payload
+h12	10	2	receiptdate	i32	payload
+h12	10	2	shipdate	i32	payload
+h12	10	3	__cq_3_2	i64	canonical identity
+h12	10	3	high	i64	canonical identity,payload
+h12	10	3	total	i64	payload
+h12	10	4	__cq_2_1	i64	canonical identity
+h12	10	4	__cq_neg_1	i64	payload
+h12	10	4	total	i64	canonical identity,payload
+h13	1	0	__cq_2_1	usize	payload
+h13	1	1	__cq_neg_1	usize	payload
+h13	10	0	__cq_2_1	usize	payload
+h13	10	1	__cq_neg_1	usize	payload
+h15	1	0	__cq_4_1	i64	payload
+h15	1	1	__cq_1_0	Option < i64 >	payload
+h15	1	2	maximum	Option < i64 >	payload
+h15	1	2	revenue	i64	canonical identity,payload
+h15	10	0	__cq_4_1	i64	payload
+h15	10	1	__cq_1_0	Option < i64 >	payload
+h15	10	2	maximum	Option < i64 >	payload
+h15	10	2	revenue	i64	canonical identity,payload
+h16	1	0	comment	u32	payload
+h16	1	1	kind	u32	payload
+h16	10	0	comment	u32	payload
+h16	10	1	kind	u32	payload
+h18	1	0	__cq_2_1	i64	payload
+h18	1	1	price_units	i64	canonical identity
+h18	1	1	sum_quantity	i64	canonical identity,payload
+h18	10	0	__cq_2_1	i64	payload
+h18	10	1	price_units	i64	canonical identity
+h18	10	1	sum_quantity	i64	canonical identity,payload
+h19	1	0	__cq_6_0	i64	payload
+h19	1	0	revenue_units	i64	payload
+h19	10	0	__cq_6_0	i64	payload
+h19	10	0	revenue_units	i64	payload
+h20	1	0	__cq_4_2	i64	payload
+h20	1	1	part_name	u32	payload
+h20	1	1	quantity_units	i64	payload
+h20	10	0	__cq_4_2	i64	payload
+h20	10	1	part_name	u32	payload
+h20	10	1	quantity_units	i64	payload
+h22	1	0	phone	u32	payload
+h22	10	0	phone	u32	payload
