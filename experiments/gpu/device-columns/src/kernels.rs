@@ -447,8 +447,10 @@ pub(crate) mod codecs {
                         rows: count as u32,
                         padding: 0,
                     });
-                    summaries.add(vector as usize * 2).write(low);
-                    summaries.add(vector as usize * 2 + 1).write(high);
+                    if !summaries.is_null() {
+                        summaries.add(vector as usize * 2).write(low);
+                        summaries.add(vector as usize * 2 + 1).write(high);
+                    }
                 }
             }
             // Sixteen independent T=64 lanes, as in `encode`.

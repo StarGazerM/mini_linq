@@ -235,9 +235,14 @@ pub fn compile(
         .iter()
         .map(|terminal| terminal.direct)
         .collect();
+    let timing = if host_uploads.is_empty() {
+        "sum of stage phase timings; host-graded stages use elapsed host execution"
+    } else {
+        "sum of stage phase timings; host-graded stages use elapsed host execution; NOTE: host-built input upload/normalization is load-side (host_input_upload_ms, separate from base domain_ms), unlike base e4e08c99 where host-built input upload occurred in execute; authored host preprocessing remains load-side; indexes remain timed"
+    };
     let artifact = json!({"stages": artifacts, "terminal_stages": terminal_stages,
         "stage_source": program.to_token_stream().to_string(), "terminal_direct": terminal_direct,
-        "timing": "sum of stage phase timings; host-graded stages use elapsed host execution"});
+        "timing": timing});
     Ok((
         quote! {
             use cq_load::{Date, Load, StringCode};
