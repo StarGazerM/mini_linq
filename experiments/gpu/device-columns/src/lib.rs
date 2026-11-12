@@ -3,8 +3,8 @@
 //! Alternatively the loader FOR-packs on the host into the same layout
 //! (`host_pack`) and uploads only packed words.
 //! Query-output encoding publishes exact logical extrema from transient
-//! encode-time summaries. Only the final scalar pair is downloaded; allocations
-//! retain the rccl-memory pool and CUDA stream that own them.
+//! encode-time summaries. One transfer downloads the final extrema pairs for
+//! every field of a publication; allocations retain their pool and CUDA stream.
 mod device;
 mod domain;
 mod encoding;
@@ -209,6 +209,80 @@ pub struct EncodedColumn {
     count: *const u64,
     codec: Codec,
     bounds: Bounds,
+}
+
+/// Encoded storage whose transient extrema have not yet been published.
+pub struct PendingColumn {
+    column: EncodedColumn,
+    summaries: Buffer<i64>,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PublicationSummary {
+    summaries: *const i64,
+    capacity: u64,
+    count: *const u64,
+}
+unsafe impl DeviceCopy for PublicationSummary {}
+
+impl PendingColumn {
+    fn descriptor(&self) -> PublicationSummary {
+        PublicationSummary {
+            summaries: self.summaries.ptr(),
+            capacity: self.column.capacity as u64,
+            count: self.column.count,
+        }
+    }
+
+    fn measure(pool: &Arc<Pool>, fields: &[PublicationSummary]) -> Result<Vec<i64>> {
+        let records = Buffer::from_host(pool.clone(), fields)?;
+        let extrema = unsafe { Buffer::<i64>::uninitialized(pool.clone(), fields.len() * 2)? };
+        let module = module(pool)?;
+        let launch = module.prepare_publication_bounds(LaunchConfig1D::new(
+            fields.len().try_into().map_err(|_| "too many publication fields")?, 256, 4096,
+        ))?;
+        unsafe {
+            module.publication_bounds(pool.stream(), &launch, records.ptr(), extrema.ptr())?;
+        }
+        let values = extrema.to_host()?;
+        #[cfg(test)]
+        PUBLICATION_READBACKS.with(|count| count.set(count.get() + 1));
+        Ok(values)
+    }
+
+    fn finish(mut self) -> Result<EncodedColumn> {
+        let values = Self::measure(self.summaries.pool(), &[self.descriptor()])?;
+        self.column.bounds = if values[0] > values[1] {
+            Bounds::Empty
+        } else {
+            Bounds::Inclusive { min: values[0], max: values[1] }
+        };
+        Ok(self.column)
+    }
+
+    /// Finalize all fields with one reduction launch and one metadata transfer.
+    pub fn publish(pending: Vec<Self>) -> Result<Vec<Arc<EncodedColumn>>> {
+        if pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pool = pending[0].summaries.pool();
+        if pending.iter().any(|field| !Arc::ptr_eq(pool, field.summaries.pool())) {
+            return Err("publication fields must share one pool".into());
+        }
+        let records = pending.iter().map(Self::descriptor).collect::<Vec<_>>();
+        let values = Self::measure(pool, &records)?;
+        Ok(pending.into_iter().enumerate().map(|(index, mut field)| {
+            let (min, max) = (values[index * 2], values[index * 2 + 1]);
+            field.column.bounds = if min > max { Bounds::Empty } else { Bounds::Inclusive { min, max } };
+            Arc::new(field.column)
+        }).collect())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PUBLICATION_READBACKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 impl EncodedColumn {
     /// Load native device lanes, optionally selecting `positions` in output
@@ -421,6 +495,24 @@ impl EncodedColumn {
         codec: Codec,
         bounds: Bounds,
     ) -> Result<Self> {
+        let pending = unsafe {
+            Self::from_device_pending(pool, input, capacity, count_owner, count_offset, codec, bounds)?
+        };
+        pending.finish()
+    }
+
+    /// Encode one field; the publication must finalize all fields together.
+    /// # Safety
+    /// The requirements of `from_device` apply.
+    pub unsafe fn from_device_pending<T: DeviceCopy + 'static, L: Lane>(
+        pool: Arc<Pool>,
+        input: *const L,
+        capacity: usize,
+        count_owner: Arc<Buffer<T>>,
+        count_offset: usize,
+        codec: Codec,
+        bounds: Bounds,
+    ) -> Result<PendingColumn> {
         let count = count_pointer(&pool, &count_owner, count_offset)?;
         let input = input as *const u8;
         let summaries = unsafe {
@@ -449,8 +541,7 @@ impl EncodedColumn {
             &headers, &data, input, L::ELEMENT, capacity, count,
             if codec == Codec::Plain { summaries.ptr() } else { std::ptr::null_mut() },
         )?;
-        let bounds = Self::publication_bounds(&summaries, capacity, count)?;
-        Ok(Self {
+        Ok(PendingColumn { summaries, column: Self {
             headers: Some(headers),
             data: ColumnData::Packed(data),
             extent: Some(extent),
@@ -459,7 +550,7 @@ impl EncodedColumn {
             count,
             codec,
             bounds,
-        })
+        } })
     }
 
     /// Gather `source[order[i]]` over the count-gated prefix of `rows` and
@@ -516,6 +607,24 @@ impl EncodedColumn {
         count_offset: usize,
         bounds: Bounds,
     ) -> Result<Self> {
+        let pending = unsafe {
+            Self::from_gather_source_pending::<T, L>(pool, source, order, rows, count_owner, count_offset, bounds)?
+        };
+        pending.finish()
+    }
+
+    /// Gather one field without a readback; finalize the whole publication together.
+    /// # Safety
+    /// The requirements of `from_gather_source` apply.
+    pub unsafe fn from_gather_source_pending<T: DeviceCopy + 'static, L: Lane>(
+        pool: Arc<Pool>,
+        source: SourceView,
+        order: *const u32,
+        rows: usize,
+        count_owner: Arc<Buffer<T>>,
+        count_offset: usize,
+        bounds: Bounds,
+    ) -> Result<PendingColumn> {
         let count = count_pointer(&pool, &count_owner, count_offset)?;
         let slot_width = match bounds {
             Bounds::Empty => 0,
@@ -559,8 +668,7 @@ impl EncodedColumn {
                 )?;
             }
         }
-        let bounds = Self::publication_bounds(&summaries, rows, count)?;
-        Ok(Self {
+        Ok(PendingColumn { summaries, column: Self {
             headers: Some(headers),
             data: ColumnData::Packed(data),
             extent: None,
@@ -569,31 +677,9 @@ impl EncodedColumn {
             count,
             codec: Codec::For,
             bounds,
-        })
+        } })
     }
 
-    /// Read scalar metadata only, never encoded values or unused vector suffixes.
-    fn publication_bounds(
-        summaries: &Buffer<i64>,
-        capacity: usize,
-        count: *const u64,
-    ) -> Result<Bounds> {
-        let pool = summaries.pool();
-        let extrema = unsafe { Buffer::<i64>::uninitialized(pool.clone(), 2)? };
-        let module = module(pool)?;
-        let launch = module.prepare_publication_bounds(LaunchConfig1D::new(1, 256, 4096))?;
-        unsafe {
-            module.publication_bounds(
-                pool.stream(), &launch, summaries.ptr(), capacity as u64, count, extrema.ptr(),
-            )?;
-        }
-        let values = extrema.to_host()?;
-        Ok(if values[0] > values[1] {
-            Bounds::Empty
-        } else {
-            Bounds::Inclusive { min: values[0], max: values[1] }
-        })
-    }
 
     fn make_headers(
         pool: Arc<Pool>,
@@ -883,6 +969,46 @@ mod publication_tests {
     use super::*;
 
     const FULL: Bounds = Bounds::Inclusive { min: i64::MIN, max: i64::MAX };
+
+    #[test]
+    fn multi_column_publication_has_one_bounds_readback() {
+        let pool = Pool::new(0, 1 << 20, 256 << 20).unwrap();
+        let count = Arc::new(Buffer::from_host(pool.clone(), &[2051u64]).unwrap());
+        let mut pending = Vec::new();
+        let before = PUBLICATION_READBACKS.with(|count| count.get());
+        for field in 0..4i64 {
+            let values = (0..2051).map(|row| row as i64 - field * 10_000).collect::<Vec<_>>();
+            let input = Buffer::from_host(pool.clone(), &values).unwrap();
+            pending.push(unsafe {
+                if field % 2 == 0 {
+                    EncodedColumn::from_device_pending(
+                        pool.clone(), input.ptr(), values.len(), count.clone(), 0,
+                        Codec::For, FULL,
+                    ).unwrap()
+                } else {
+                    let source = SourceView::from(ColumnView {
+                        headers: std::ptr::null(),
+                        data: input.ptr().cast(),
+                        len: values.len() as u64,
+                        count: std::ptr::null(),
+                        codec: Codec::Plain as u32,
+                    });
+                    EncodedColumn::from_gather_source_pending::<_, i64>(
+                        pool.clone(), source, std::ptr::null(), values.len(),
+                        count.clone(), 0, FULL,
+                    ).unwrap()
+                }
+            });
+        }
+        assert_eq!(PUBLICATION_READBACKS.with(|count| count.get()), before);
+        let columns = PendingColumn::publish(pending).unwrap();
+        assert_eq!(PUBLICATION_READBACKS.with(|count| count.get()), before + 1);
+        for (field, column) in columns.iter().enumerate() {
+            assert_eq!(column.bounds(), Bounds::Inclusive {
+                min: -(field as i64) * 10_000, max: 2050 - field as i64 * 10_000,
+            });
+        }
+    }
 
     fn values() -> Vec<Vec<i64>> {
         vec![

@@ -264,8 +264,8 @@ impl<F> GroupedRows<F> {
                 codec: Codec::Plain as u32,
             });
             source.stride = output.width as u64;
-            columns.push(Arc::new(unsafe {
-                EncodedColumn::from_gather_source::<_, i64>(
+            columns.push(unsafe {
+                EncodedColumn::from_gather_source_pending::<_, i64>(
                     pool.clone(),
                     source,
                     std::ptr::null(),
@@ -274,8 +274,9 @@ impl<F> GroupedRows<F> {
                     0,
                     bounds,
                 )?
-            }));
+            });
         }
+        let columns = gpu_device_columns::PendingColumn::publish(columns)?;
         let views: Vec<_> = columns
             .iter()
             .map(|column| unsafe { column.view() })

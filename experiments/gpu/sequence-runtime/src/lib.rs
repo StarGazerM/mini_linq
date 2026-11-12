@@ -354,7 +354,7 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
             // metadata retains its exact count; no compact-extent readback
             // is needed in a timed provider build.
             unsafe {
-                EncodedColumn::from_device(
+                EncodedColumn::from_device_pending(
                     pool.clone(),
                     input.ptr(),
                     rows,
@@ -363,10 +363,10 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
                     codec,
                     bounds,
                 )
-                .map(Arc::new)
             }
         })
         .collect::<Result<Vec<_>>>()?;
+    let columns = gpu_device_columns::PendingColumn::publish(columns)?;
     let bounds = columns.iter().map(|column| column.bounds()).collect();
     let host_views: Vec<_> = columns
         .iter()

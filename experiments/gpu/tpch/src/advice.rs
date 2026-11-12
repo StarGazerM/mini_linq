@@ -177,7 +177,7 @@ impl Pipeline {
     // segmented Orders/Lineitem, full-key Supplier membership and count output.
     pub fn h05() -> Self {
         Self {
-            storage: "tpch_domains".into(),
+            storage: "tpch_dictionary".into(),
             plan: "no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier)".into(),
             physical: vec!["build_host_reads()".into()],
             structures: Vec::new(),

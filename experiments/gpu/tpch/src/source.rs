@@ -303,6 +303,7 @@ impl Kernel {
     ) -> Result<TokenStream> {
         let mut program = self.program.clone();
         let origins = self.variable_origins()?;
+        self.check_key_expressions(storage, &origins)?;
         encode_scalar_body(&mut program.query.body, manifest, storage, &origins)?;
         restore_key_body(&mut program.query.body, storage, &origins);
         let output_origins = self.answer_columns()?;
@@ -379,6 +380,55 @@ impl Kernel {
         cq_lang_cq::syntax::intern_logical_types(&mut declarations)?;
         program.declarations = declarations;
         Ok(program.to_token_stream())
+    }
+
+    fn check_key_expressions(
+        &self,
+        storage: &BTreeMap<Origin, syn::Type>,
+        origins: &BTreeMap<String, Origin>,
+    ) -> Result<()> {
+        for item in cq_lang_cq::blocks::walk(&self.program.query.body) {
+            let cq_lang_cq::BodyItem::Aggregate(aggregate) = item else { continue; };
+            let relation = self.relations.iter().find(|relation| relation.name == aggregate.atom.relation);
+            for (slot, argument) in aggregate.atom.args.iter().enumerate() {
+                let origin = relation.and_then(|relation| relation.columns.get(slot).map(|(column, _)|
+                    (relation.table.to_string(), column.to_string())))
+                    .or_else(|| self.published_origins.get(&aggregate.atom.relation.to_string())
+                        .and_then(|columns| columns.get(slot)).cloned().flatten());
+                let Some(origin) = origin else { continue; };
+                if !storage.contains_key(&origin) || crate::key_domains::id(&origin.0, &origin.1).is_none() {
+                    continue;
+                }
+                if let Some(name) = projected_variable(argument) {
+                    if aggregate.arguments.iter().any(|argument| argument == name) {
+                        return Err(format!("unsupported domain-key read `{name}` in aggregate item; restore the logical key in an explicit let binding before aggregation").into());
+                    }
+                }
+            }
+        }
+        for (name, origin) in origins {
+            if !storage.contains_key(origin) || crate::key_domains::id(&origin.0, &origin.1).is_none() {
+                continue;
+            }
+            for argument in &self.program.query.head.args {
+                if projected_variable(argument).is_some_and(|variable| variable == name.as_str()) {
+                    continue;
+                }
+                if !closed_to(argument, name) {
+                    return Err(format!("unsupported domain-key read `{name}` in head expression; restore the logical key in an explicit let binding before projection or aggregation").into());
+                }
+            }
+            for item in cq_lang_cq::blocks::walk(&self.program.query.body) {
+                if let cq_lang_cq::BodyItem::Aggregate(aggregate) = item {
+                    if aggregate.arguments.iter().any(|argument| argument == name.as_str())
+                        || mentions(aggregate.aggregator.to_token_stream(), &quote::format_ident!("{name}"))
+                    {
+                        return Err(format!("unsupported domain-key read `{name}` in aggregate item; restore the logical key in an explicit let binding before aggregation").into());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn answer_columns(&self) -> Result<Vec<Option<Origin>>> {
@@ -672,6 +722,28 @@ mod tests {
             kernels.push(kernel);
         }
         kernels
+    }
+
+    #[test]
+    fn rejects_domain_keys_in_head_expressions_and_aggregates() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        for clause in [
+            "answer(i64::from(*key)) :- Orders(key)",
+            "answer(max(key)) :- Orders(key)",
+            "answer(value) :- agg value = max(key) in Orders(key)",
+        ] {
+            let mut kernel = authored("h05").kernel(0, &BTreeMap::new()).unwrap();
+            kernel.program = syn::parse_str(&format!(
+                "struct Refusal; relation Orders(key:i64); relation answer(value:i64); {clause};"
+            )).unwrap();
+            kernel.relations = vec![Relation {
+                name: syn::parse_quote!(Orders),
+                table: syn::parse_quote!(orders),
+                columns: vec![(syn::parse_quote!(o_orderkey), syn::parse_quote!(i64))],
+            }];
+            let error = kernel.encoded_query_with_types(&manifest, &kernel.integer_key_types()).unwrap_err();
+            assert!(error.to_string().contains("unsupported domain-key read `key`"), "{error}");
+        }
     }
 
     #[test]

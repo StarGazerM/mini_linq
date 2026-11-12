@@ -494,11 +494,12 @@ pub(crate) mod codecs {
     #[launch_bounds(256)]
     #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (4096, 4096))]
     pub unsafe fn publication_bounds(
-        summaries: *const i64,
-        capacity: u64,
-        count: *const u64,
+        fields: *const crate::PublicationSummary,
         output: *mut i64,
     ) {
+        let field = unsafe { fields.add(thread::blockIdx_x() as usize).read() };
+        let (summaries, capacity, count) = (field.summaries, field.capacity, field.count);
+        let output = unsafe { output.add(thread::blockIdx_x() as usize * 2) };
         let len = unsafe { count.read() }.min(capacity);
         let lane = thread::threadIdx_x() as usize;
         let mut vector = lane as u64;

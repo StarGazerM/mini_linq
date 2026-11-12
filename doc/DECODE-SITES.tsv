@@ -509,3 +509,4 @@ experiments/gpu/sequence-runtime/tests/measured_radix_source.rs	// DECODE P: mea
 experiments/gpu/datalog-runtime/src/layout.rs	// DECODE P: runtime-width round-trip publishes decoded diagnostic fields.	P	runtime-width round-trip publishes decoded diagnostic fields.
 experiments/gpu/datalog-runtime/src/layout.rs	// DECODE P: signed runtime-width test publishes the boundary value.	P	signed runtime-width test publishes the boundary value.
 experiments/gpu/datalog-runtime/tests/runtime_widths.rs	// DECODE P: final integration-test publication compares all logical rows.	P	final integration-test publication compares all logical rows.
+experiments/gpu/sequence-runtime/tests/grouped_runtime.rs	// DECODE P: diagnostic multi-key grouped sum publishes exact masked answers.	P	diagnostic multi-key grouped sum publishes exact masked answers.

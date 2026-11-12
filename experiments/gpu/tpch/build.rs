@@ -299,7 +299,7 @@ fn compile_stage(
     let cpu_source = kernel.cpu_query();
     let host = matches!(pipeline.target, advice::Target::Host);
     match pipeline.storage.as_str() {
-        "" | "tpch_dictionary" | "tpch_domains" => {}
+        "" | "tpch_dictionary" => {}
         other => {
             return Err(Rejected {
                 phase: "loader profile",
@@ -822,11 +822,25 @@ fn compile_stage(
         phase: "publication origin check", error: error.to_string(), term: cpu_source.to_string(),
     })?;
     artifact["computed_publication_inputs"] = json!(computed_inputs);
-    let computed_field = |column: &str| match analysis.gpu_bindings.bounds.get(column) {
-        Some(cq_lang_sequence::gpu::bindings::ColumnBounds::Scalar { .. }) => true,
-        Some(cq_lang_sequence::gpu::bindings::ColumnBounds::Resident { sources }) =>
-            sources.iter().all(|source| computed_inputs.contains(source)),
-        None => false,
+    let publication_origins = checked(
+        "publication field origins", &planned.structures,
+        cq_lang_structures::contract::check(&planned.physical, &planned.structures),
+    )?;
+    let computed_field = |column: &str| {
+        let mut renamed = false;
+        for (result, mapping) in &publication_origins.physical.renames {
+            let Some(source) = mapping.get(column) else { continue; };
+            renamed = true;
+            let host = &publication_origins.physical.hosts[result];
+            let Some(input) = planned.physical.inputs().find(|input| input.name == host.as_str()) else {
+                return false;
+            };
+            let Some(slot) = input.columns.iter().position(|field| field.name == source.as_str()) else {
+                return false;
+            };
+            if !computed_inputs.contains(&(host.clone(), slot)) { return false; }
+        }
+        renamed || publication_origins.physical.rows.values().any(|row| row.computed.contains(column))
     };
     let mut computed_fields: std::collections::BTreeMap<String, std::collections::BTreeSet<&str>> =
         std::collections::BTreeMap::new();
@@ -1006,7 +1020,72 @@ fn compile_stage(
     }
     let catalog_field = quote!(domains: [Option<gpu_device_columns::Domain>; crate::key_domains::COUNT],);
     let catalog_init = quote!(domains: loader.domains(),);
-    let load_setup = quote!();
+    // Keep A-Domain provenance intact through every checker and planner.
+    // Only the final Rust realization reads the prepared scalar instead.
+    let mut prepared_fields = Vec::new();
+    let mut prepared_types = Vec::new();
+    let mut prepared_values = Vec::new();
+    let mut prepare_captures = TokenStream::new();
+    let mut replacements = Vec::new();
+    let mut needed_names = std::collections::BTreeSet::new();
+    let mut needed_captures = std::collections::BTreeSet::new();
+    let mut opaque_dependency = false;
+    for (index, capture) in normal.query.captures.items.iter().enumerate().rev() {
+        if matches!(capture, cq_syntax::Capture::Domain(_)) || opaque_dependency
+            || capture.binders().iter().any(|name| needed_names.contains(&name.to_string()))
+        {
+            needed_captures.insert(index);
+            for expression in capture.expressions() {
+                let reads = cq_syntax::rust::free_variables(expression);
+                needed_names.extend(reads.names);
+                opaque_dependency |= reads.opaque;
+            }
+        }
+    }
+    for (index, capture) in normal.query.captures.items.iter().enumerate() {
+        if !needed_captures.contains(&index) { continue; }
+        if let Some(binding) = capture.binding() {
+            let value = format_ident!("__tpch_prepared_{index}");
+            let pattern = &binding.pattern;
+            let annotation = &binding.annotation;
+            let expression = &binding.expression;
+            prepare_captures.extend(quote! {
+                let #value #annotation = #expression;
+                let #pattern = &#value;
+            });
+            if let cq_syntax::Capture::Domain(domain) = capture {
+                prepared_fields.push(value.clone());
+                prepared_types.push(domain.ty.clone());
+                prepared_values.push(quote!(#value));
+                replacements.push((expression.clone(), syn::parse_quote!(data.#value)));
+            }
+        }
+    }
+    struct PreparedReads<'a>(&'a [(syn::Expr, syn::Expr)]);
+    impl syn::visit_mut::VisitMut for PreparedReads<'_> {
+        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+            if let Some((_, replacement)) = self.0.iter().find(|(source, _)| source == expression) {
+                *expression = replacement.clone();
+            } else {
+                syn::visit_mut::visit_expr_mut(self, expression);
+            }
+        }
+    }
+    let prepared_query = |tokens: TokenStream| -> std::result::Result<TokenStream, Rejected> {
+        let mut expression: syn::Expr = checked("prepared capture Rust", &tokens, syn::parse2(tokens.clone()))?;
+        syn::visit_mut::VisitMut::visit_expr_mut(&mut PreparedReads(&replacements), &mut expression);
+        Ok(quote!(#expression))
+    };
+    let gpu = prepared_query(quote!(#gpu))?;
+    let cpu = prepared_query(quote!(#cpu))?;
+    let load_setup = if prepared_fields.is_empty() { quote!() } else {
+        quote! {
+            struct DomainInputs { #catalog_field }
+            let data = DomainInputs { #catalog_init };
+            #host_setup_bindings
+            #prepare_captures
+        }
+    };
     {
         let names: Vec<_> = kernel.published.iter().map(|r| &r.name).collect();
         let rows: Vec<_> = kernel
@@ -1135,11 +1214,11 @@ fn compile_stage(
                 type Decimal = cq_load::Decimal<2>;
                 pub(super) type Answer = (#(#answer_types,)*);
                 pub(super) type Output = #output_type;
-                pub(super) struct Inputs { #(#fields: #input_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
+                pub(super) struct Inputs { #(#fields: #input_types,)* #(#prepared_fields: #prepared_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
                 pub(super) fn load(manifest: &crate::manifest::Manifest, pool: ::std::sync::Arc<cq_gpu_runtime::Pool>, loader: &mut crate::loader::Loader<'_>) -> crate::manifest::Result<Inputs> {
                     #load_setup
                     #(let #fields: #input_types = #bindings;)*
-                    Ok(Inputs { #(#fields,)* #catalog_init pool })
+                    Ok(Inputs { #(#fields,)* #(#prepared_fields: #prepared_values,)* #catalog_init pool })
                 }
                 #[inline(never)]
                 pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
@@ -1335,8 +1414,90 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         &publication_program, "publication_origins", &manifest, "advised",
         Some(&publication_pipeline),
     ).map_err(|error| format!("Host publication origin regression {}: {}", error.phase, error.error))?;
+    let mut rank_source = String::from("program rank_constants { input Orders(o_orderkey:i64) = table(orders);");
+    let mut rank_checks = TokenStream::new();
+    let mut rank_terminals = String::new();
+    let mut index = 0;
+    for comparison in ["==", "<", "<=", ">", ">="] {
+        for constant in [100i64, 99, 0, 1001] {
+            rank_source.push_str(&format!(
+                "stage s{index} {{ inputs {{ Orders = Orders; }} captures []; evidence {{}} cq {{
+                    struct RankConstant{index}; relation Orders(key:i64); relation answer(key:i64);
+                    answer(key) :- Orders(key), where key {comparison} {constant};
+                }} }}"
+            ));
+            rank_terminals.push_str(&format!("from s{index} project [column(0)] dictionaries [];"));
+            let module = format_ident!("stage_{index}");
+            let mut expected = [1i64, 100, 1000].into_iter().filter(|key| match comparison {
+                "==" => *key == constant,
+                "<" => *key < constant,
+                "<=" => *key <= constant,
+                ">" => *key > constant,
+                ">=" => *key >= constant,
+                _ => unreachable!(),
+            }).map(|key| key.to_string()).collect::<Vec<_>>();
+            expected.sort();
+            rank_checks.extend(quote! {
+                {
+                    let data = #module::load(&manifest, pool.clone(), &mut loader)?;
+                    for _ in 0..2 {
+                        let result = #module::execute(&data)?;
+                        let mut actual = #module::decode(&data, &manifest, result)?;
+                        actual.sort();
+                        let expected: Vec<Vec<String>> = vec![#(vec![#expected.to_owned()]),*];
+                        assert_eq!(actual, expected, "{} {}", #comparison, #constant);
+                        let mut reference = #module::decode(&data, &manifest, #module::sequential(&data)?)?;
+                        reference.sort();
+                        assert_eq!(reference, expected);
+                    }
+                }
+            });
+            index += 1;
+        }
+    }
+    rank_source.push_str(&format!("terminal {{ {rank_terminals} }} }}"));
+    let rank_program = stages::Program::import(&rank_source)?;
+    let mut rank_pipeline = advice::Pipeline::baseline();
+    rank_pipeline.publication = advice::Placement::Host;
+    let (rank_code, _) = build_stages::compile(
+        &rank_program, "rank_constants", &manifest, "advised", Some(&rank_pipeline),
+    ).map_err(|error| format!("Rank constants regression {}: {}", error.phase, error.error))?;
+    rank_pipeline.target = advice::Target::Host;
+    let (rank_host_code, _) = build_stages::compile(
+        &rank_program, "rank_constants", &manifest, "advised", Some(&rank_pipeline),
+    ).map_err(|error| format!("Host Rank constants regression {}: {}", error.phase, error.error))?;
     let directory = directory.to_string_lossy();
     Ok(quote! {
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod rank_constant_regression {
+            #rank_code
+            #[test]
+            fn rank_comparisons_prepare_once() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                assert!(loader.domains()[0].as_ref().unwrap().is_rank());
+                #rank_checks
+                Ok(())
+            }
+        }
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod rank_host_constant_regression {
+            #rank_host_code
+            #[test]
+            fn rank_comparisons_prepare_once() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                assert!(loader.domains()[0].as_ref().unwrap().is_rank());
+                #rank_checks
+                Ok(())
+            }
+        }
         #[cfg(test)]
         #[allow(non_snake_case, dead_code)]
         mod string_guard_regression {
@@ -1645,10 +1806,6 @@ fn main() -> Result<()> {
                     // choice must not replace the existing accepted GPU baseline.
                     advice::Pipeline::baseline()
                 };
-                // Storage is a loader decision shared by both competing schedules.
-                if name == "h05" && pipeline.storage.is_empty() {
-                    pipeline.storage = "tpch_domains".into();
-                }
                 let mut report = json!({"query": name, "sf": sf, "mode": mode,
                     "stage_source": staged.to_token_stream().to_string(), "pipeline": pipeline});
                 let generation_started = std::time::Instant::now();

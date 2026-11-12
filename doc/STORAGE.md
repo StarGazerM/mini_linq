@@ -77,8 +77,9 @@ u32 codes, not logical i64 keys. Device Rust reads use the domain descriptor's
 inverse; final host publication uses a lazy inverse mirror. The independent
 Sequential oracle uses the owning host inverse, never device pointers.
 
-Encode/gather passes collect exact publication extrema, reduce on device and
-return one bounds pair. Adoption through `from_plain_buffer` or
+Encode/gather passes collect exact publication extrema, then reduce all fields
+in one device launch and transfer all bounds pairs together once per publication.
+Standalone column constructors finalize eagerly. Adoption through `from_plain_buffer` or
 `from_packed_parts` retains conservative supplied bounds. Origin is tracked
 separately: GPU domain key fields must fit 32 bits; computed fields without a
 domain origin and measures/accumulators are exempt. Segmented sorting uses u32
@@ -90,6 +91,8 @@ The `experiments/gpu/tpch/compression-*.tsv` files record these gaps, generated
 code and Rust placement, and census-vs-branch index bytes. Their timings are
 single-run sanity observations, not paired performance claims.
 
+Radix indexes remain stricter than the group/canonical computed-field exemption:
+they reject key fields wider than 32 bits, including computed fields.
 
 ## 2. Runtime data structures
 

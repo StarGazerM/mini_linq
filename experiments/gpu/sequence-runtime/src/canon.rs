@@ -208,8 +208,8 @@ impl PackedColumnsAdapter {
                 mask: if field.bits == 64 { u64::MAX } else { (1u64 << field.bits) - 1 },
                 base: field.base,
             };
-            columns.push(Arc::new(unsafe {
-                EncodedColumn::from_gather_source::<_, i64>(
+            columns.push(unsafe {
+                EncodedColumn::from_gather_source_pending::<_, i64>(
                     self.pool.clone(),
                     source,
                     std::ptr::null(),
@@ -218,8 +218,9 @@ impl PackedColumnsAdapter {
                     0,
                     bound,
                 )?
-            }));
+            });
         }
+        let columns = gpu_device_columns::PendingColumn::publish(columns)?;
         let bounds = columns.iter().map(|column| column.bounds()).collect();
         self.host_views.clear();
         self.host_views

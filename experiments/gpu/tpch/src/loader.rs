@@ -128,7 +128,7 @@ pub fn take_load_report() -> Value {
         "domains": report.domains,
         "rank_span_distinct_threshold": gpu_device_columns::RANK_SPARSITY_THRESHOLD,
         "cache_write_ms": report.cache_write_ms,
-        "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed; domains[].bytes = retained Rank bitmap/per-word-prefix metadata (Offset retains none); unprojected = full source columns (cacheable); source_bytes = native stored bytes read; read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); domain_ms = device union bitmap/prefix construction, Offset header normalization or Rank translation/FOR encoding, plus frozen Rank-membership/Offset-range validation and normalization of pre-existing opaque host inputs; pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; domain publication mirrors are lazy and reported separately",
+        "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed, with domain normalization replacing source bytes rather than counting another column; domains[].bytes = retained Rank bitmap/per-word-prefix metadata (Offset retains none); unprojected = full source columns (cacheable); source_bytes = native stored bytes read; read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); domain_ms = device union bitmap/prefix construction, Offset header normalization or Rank translation/FOR encoding, plus frozen Rank-membership/Offset-range validation and normalization of pre-existing opaque host inputs; pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; domain publication mirrors are lazy and reported separately",
     })
 }
 
@@ -332,13 +332,11 @@ impl<'a> Loader<'a> {
                 for (name, column) in &mut resident.columns {
                     if crate::key_domains::id(table, name) == Some(id) {
                         let column = Arc::get_mut(column).ok_or("key normalization cannot mutate a published column")?;
+                        let previous_bytes = column.bytes();
                         domain.normalize(column)?;
-                        if domain.is_rank() {
-                            report(|report| {
-                                report.columns += 1;
-                                report.resident_bytes += column.bytes();
-                            });
-                        }
+                        report(|report| {
+                            report.resident_bytes = report.resident_bytes - previous_bytes + column.bytes();
+                        });
                     }
                 }
             }
@@ -769,10 +767,17 @@ mod tests {
         manifest.root = root.clone();
         let pool = Pool::new(0, 0, 0)?;
         let mut loader = Loader::new(&manifest, pool.clone());
+        take_load_report();
         loader.prepare(&[("orders", &["o_orderkey"]), ("lineitem", &["l_orderkey"])])?;
         let domain = loader.domains()[0].take().unwrap();
         assert_eq!((domain.minimum, domain.bound, domain.bits), (-8, 3, 2));
         assert!(domain.is_rank());
+        let report = take_load_report();
+        assert_eq!(report["columns"], 2);
+        assert_eq!(report["unprojected"], 2);
+        let retained_bytes: usize = loader.tables.values()
+            .flat_map(|table| table.columns.values()).map(|column| column.bytes()).sum();
+        assert_eq!(report["resident_bytes"], retained_bytes);
         assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?, [(1,), (2,)]);
         assert_eq!(loader.bind::<(u32,)>("lineitem", &["l_orderkey"])?.to_host()?, [(0,), (2,)]);
         let uploaded = loader.upload_host_keys::<(i64,), (u32,)>(
@@ -795,6 +800,60 @@ mod tests {
         loader.prepare(&[("orders", &["o_orderkey"])])?;
         assert_eq!(loader.domains()[0].as_ref().unwrap().minimum, -3);
         drop(loader);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn hostfor_offset_normalization_survives_cache_hit() -> Result<()> {
+        const CHILD: &str = "CQ_TEST_HOSTFOR_OFFSET_CACHE";
+        // Loader options are process-wide OnceLocks; isolate this codec from
+        // the default-device loader tests rather than mutating shared state.
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .arg("hostfor_offset_normalization_survives_cache_hit")
+                .arg("--nocapture")
+                .env(CHILD, "1")
+                .status()?;
+            assert!(status.success());
+            return Ok(());
+        }
+        let root = std::env::temp_dir().join(format!("cq-offset-cache-{}", std::process::id()));
+        fs::create_dir_all(&root)?;
+        let values = [-7i64, -6, -5, -4];
+        fs::write(root.join("orders.bin"), values.into_iter().flat_map(i64::to_le_bytes).collect::<Vec<_>>())?;
+        let mut manifest: Manifest = serde_json::from_value(json!({
+            "schema_version": 1, "sf": 1, "byte_order": "little",
+            "relations": {"orders": {"rows": 4, "columns": [
+                {"name":"o_orderkey","type":"i64","logical_type":"integer","encoding":"plain","file":"orders.bin"}
+            ]}}
+        }))?;
+        manifest.root = root.clone();
+        set_base_layout(BaseLayout::HostFor)?;
+        set_base_cache(root.join("cache"))?;
+        check_options()?;
+        let pool = Pool::new(0, 0, 0)?;
+        for cache_hit in [false, true] {
+            take_load_report();
+            let mut loader = Loader::new(&manifest, pool.clone());
+            loader.prepare(&[("orders", &["o_orderkey"])])?;
+            let domain = loader.domains()[0].take().unwrap();
+            assert!(!domain.is_rank());
+            assert_eq!((domain.minimum, domain.bound, domain.bits), (-7, 4, 2));
+            assert_eq!(domain.bytes(), 0);
+            let report = take_load_report();
+            assert_eq!(report["columns"], 1);
+            assert_eq!(report["cache_hits"], usize::from(cache_hit));
+            assert_eq!(report["raw_reads"], usize::from(!cache_hit));
+            assert_eq!(report["resident_bytes"], loader.tables["orders"].columns["o_orderkey"].bytes());
+            assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?,
+                [(0,), (1,), (2,), (3,)]);
+            assert_eq!((domain.value(0), domain.value(3)), (-7, -4));
+            let uploaded = loader.upload_host_keys::<(i64,), (u32,)>(
+                &[(-7,), (-4,)], &[(std::mem::offset_of!((i64,), 0), 0)],
+            )?;
+            assert_eq!(uploaded.to_host()?, [(0,), (3,)]);
+        }
         fs::remove_dir_all(root)?;
         Ok(())
     }
