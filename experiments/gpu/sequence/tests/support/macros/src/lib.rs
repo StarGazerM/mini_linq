@@ -122,6 +122,7 @@ mod run_holes;
 fn arena_hole(
     name: &syn::Ident,
     output: cq_lang_sequence::OutputProtocol,
+    layout: Option<syn::Expr>,
 ) -> syn::Result<syn::Expr> {
     let run_holes::StructuresStack { mut physical, mut structures } = run_holes::fixture(&name.to_string());
     let normalized = cq_gpu_sequence_core::constants::compile(&physical)?;
@@ -181,12 +182,15 @@ fn arena_hole(
     }
     planned.program.sequence.output = Some(output);
     let analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
-    cq_gpu_sequence_core::translate_arena(
+    cq_gpu_sequence_core::arena::translate_emission(
         &planned.physical,
         &planned.structures,
         &planned.program,
         &analysis,
-        &syn::parse_quote!(&mut arena),
+        &cq_gpu_sequence_core::arena::ArenaEmission {
+            arena: syn::parse_quote!(&mut arena),
+            layout,
+        },
     )
 }
 
@@ -194,7 +198,7 @@ fn arena_hole(
 #[proc_macro]
 pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, None) {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -204,7 +208,7 @@ pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn arena_hole_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, None) {
         Ok(expression) => {
             syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
                 .into_token_stream()
@@ -218,7 +222,19 @@ pub fn arena_hole_source(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, None) {
+        Ok(expression) => expression.into_token_stream().into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+/// Exercise direct measured-layout writes through the production emitter.
+#[proc_macro]
+pub fn planned_domain_arena_hole(input: TokenStream) -> TokenStream {
+    let name = syn::parse_macro_input!(input as syn::Ident);
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve,
+        Some(syn::parse_quote!(arena.output_layout()?)))
+    {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -228,7 +244,7 @@ pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn arena_hole_previous_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, None) {
         Ok(expression) => {
             syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
                 .into_token_stream()

@@ -1,6 +1,25 @@
 //! Named pipeline adapters for checked GPU Datalog realization.
 use proc_macro::TokenStream;
 
+/// Emit domain codes directly into the arena's measured output layout.
+#[proc_macro]
+pub fn translate_domain_arena(input: TokenStream) -> TokenStream {
+    cq_stage::Sequence::<cq_lang_structures::physical::Program, cq_lang_structures::Program, cq_lang_sequence::Program>::pass::<syn::Expr>(
+        input.into(), |physical, structures, source, arguments| {
+            let arena: syn::Expr = syn::parse2(arguments)?;
+            let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
+            let analysis = cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
+            cq_gpu_sequence_core::arena::translate_emission(
+                physical, structures, &source, &analysis,
+                &cq_gpu_sequence_core::arena::ArenaEmission {
+                    arena: arena.clone(),
+                    layout: Some(syn::parse_quote!((#arena).output_layout()?)),
+                },
+            )
+        },
+    ).into()
+}
+
 fn no_arguments(args: proc_macro2::TokenStream) -> syn::Result<()> {
     if args.is_empty() {
         Ok(())

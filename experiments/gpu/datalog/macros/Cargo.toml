@@ -11,6 +11,8 @@ cq-gpu-datalog-core = { path = ".." }
 cq-lang-datalog-storage = { path = "../../../../features/datalog/languages/dl-storage" }
 cq-lang-datalog-round = { path = "../../../../features/datalog/languages/dl-round" }
 cq-lang-structures = { path = "../../../../languages/cq-lang-structures" }
+cq-lang-sequence = { path = "../../../../languages/cq-lang-sequence" }
+cq-gpu-sequence-core = { path = "../../sequence/core" }
 cq-stage = { path = "../../../../facade/cq-stage" }
 proc-macro2 = "1"
 syn = { version = "2", features = ["full"] }

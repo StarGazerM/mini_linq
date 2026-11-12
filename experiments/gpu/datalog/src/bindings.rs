@@ -263,6 +263,9 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
             &terminal.path,
             "GPU batch terminal already has arguments",
         )?;
+        if encoded[index].is_some() {
+            terminal.path = syn::parse_quote!(::cq_gpu_datalog::translate_domain_arena);
+        }
         terminal.arguments = quote!(&mut *__cq_gpu_arena);
     }
     round::check_rewrite(source, &target)?;
@@ -321,6 +324,8 @@ pub fn check(program: &Program) -> syn::Result<()> {
         ensure(
             hole.pipeline.passes.last().is_some_and(|terminal| {
                 terminal.arguments.to_string() == quote!(&mut *__cq_gpu_arena).to_string()
+                    && (encoded[index].is_some()
+                        == (terminal.path == syn::parse_quote!(::cq_gpu_datalog::translate_domain_arena)))
             }),
             hole,
             "GPU batch invocation differs from its recorded arena argument",

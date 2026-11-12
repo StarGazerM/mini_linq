@@ -653,7 +653,14 @@ Device Storage records each complete-codec active-bit expression, the
 `native_keys_or_lanes` sort form, implicit-unit set offsets, and certified
 admitted-row permutations. Canonical sorted/unique input is adopted; each
 other admitted order is sorted once and shared by full/delta views.
-Widths come from declared scalar/codec metadata, never observed row maxima.
+Native widths come from declared scalar/codec metadata. Domain-mode Datalog
+instead supplies a validated `ArenaLayout` with catalog-measured field widths
+and bounds, retaining the relation's static word carrier. Its registered
+`translate_domain_arena` terminal delegates to the Sequence emitter through
+typed `ArenaEmission`; producer kernels write the measured bits directly.
+Out-of-layout values set the existing dispatch failure flag and are refused
+by the existing count readback, without a per-admission repack or extra barrier.
+Ordinary Sequence `translate_arena` keeps its unchanged static encoding.
 The ordinary occurrence API keeps materialized group offsets; a full-key
 `new_set(pool, params, active_bits)` publication carries an explicit set witness.
 

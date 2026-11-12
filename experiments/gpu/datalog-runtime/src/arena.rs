@@ -2,6 +2,55 @@
 use crate::{Buffer, Packing, Pool, Result, Word};
 use std::{any::Any, sync::Arc};
 
+/// Validated producer metadata for one relation's immutable output layout.
+///
+/// Bounds are inclusive native values (signed fields) or dense codes (unsigned
+/// fields). `None` denotes an empty domain and must reject every emitted value.
+/// Producers pass these host scalars in their existing kernel argument list and
+/// report violations through their existing failure flag/count readback; no
+/// descriptor upload or additional synchronization is required.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArenaLayout {
+    packing: Packing,
+    bounds: Vec<Option<(i64, i64)>>,
+}
+impl ArenaLayout {
+    pub fn new(packing: Packing, bounds: Vec<Option<(i64, i64)>>) -> Result<Self> {
+        if packing.len() != bounds.len() {
+            return Err("arena bounds differ from packing arity".into());
+        }
+        for (field, bounds) in packing.packed_fields().zip(&bounds) {
+            if field.bits > 32 {
+                return Err("arena domain fields require at most 32 bits".into());
+            }
+            if let Some((minimum, maximum)) = *bounds {
+                let sign = if field.signed != 0 { 1i64 << (field.bits - 1) } else { 0 };
+                let limit = (1i64 << field.bits) - 1 - sign;
+                if minimum > maximum || minimum < -sign || maximum > limit {
+                    return Err("arena bounds exceed their recorded field domain".into());
+                }
+            }
+        }
+        Ok(Self { packing, bounds })
+    }
+    pub fn packing(&self) -> &Packing {
+        &self.packing
+    }
+    pub fn widths(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
+        self.packing.widths()
+    }
+    /// Width of a recorded producer field. Panics for an invalid column.
+    pub fn width(&self, column: usize) -> u32 {
+        self.packing.width(column)
+    }
+    pub fn bounds(&self) -> &[Option<(i64, i64)>] {
+        &self.bounds
+    }
+    pub fn carrier_bits(&self) -> u32 {
+        self.packing.word_bits()
+    }
+}
+
 /// Reusable storage for generated Sequence terminals on one pool stream.
 ///
 /// A lease exclusively reserves a slot. Published batches keep that slot and
@@ -18,6 +67,7 @@ pub struct CandidateArena {
     previous_counts: Vec<usize>,
     hole: usize,
     resident: Option<Arc<Buffer<u32>>>,
+    layout: Option<Arc<ArenaLayout>>,
 }
 impl CandidateArena {
     pub fn new(pool: Arc<Pool>) -> Self {
@@ -27,7 +77,17 @@ impl CandidateArena {
             previous_counts: Vec::new(),
             hole: 0,
             resident: None,
+            layout: None,
         }
+    }
+    /// Configure measured field widths while retaining a fixed native carrier.
+    /// A configured arena cannot reserve another layout or carrier stride.
+    pub fn with_layout(pool: Arc<Pool>, layout: ArenaLayout) -> Self {
+        Self { layout: Some(Arc::new(layout)), ..Self::new(pool) }
+    }
+    /// Clone only the metadata owner, never its field vectors or device data.
+    pub fn output_layout(&self) -> Result<Arc<ArenaLayout>> {
+        self.layout.clone().ok_or_else(|| "candidate arena has no configured output layout".into())
     }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
@@ -106,8 +166,8 @@ impl CandidateArena {
         self.previous_counts.clear();
     }
 
-    /// Reserve the minimum complete u64 lanes for each row. Native u128 words
-    /// use low-lane-first storage; words wider than 128 bits use MS-first arrays.
+    /// Reserve complete u64 lanes for each row, including carrier padding.
+    /// Native u128 words use low-lane-first storage; wider words use MS-first arrays.
     /// The lease's capacity is the chosen slot's full row capacity (at least the
     /// request, at most `u32::MAX` rows), so an attempt may use spare retained
     /// storage instead of replaying (GPU-ReservePrevious).
@@ -115,6 +175,9 @@ impl CandidateArena {
     /// `GPU_DATALOG_TRACE_MEMORY=1` logs requested and actual backing bytes on
     /// allocation/growth, including failed retries, without device readbacks.
     pub fn reserve(&mut self, packing: Packing, capacity: usize) -> Result<CandidateLease> {
+        if self.layout.as_ref().is_some_and(|layout| layout.packing() != &packing) {
+            return Err("candidate packing differs from configured arena layout".into());
+        }
         let lanes = lane_count(&packing, capacity)?;
         let fitting = self
             .slots
@@ -274,8 +337,8 @@ impl CandidateBatch {
 
 /// Concatenate candidate bags on the pool stream without downloading rows.
 ///
-/// `W` must be the packing's narrowest native representation: `u64` through
-/// 64 bits, `u128` through 128 bits, then `[u64; L]` with MS-first lanes.
+/// `W` must match the packing's carrier: `u64` for 64 bits, `u128` for
+/// 128 bits, then `[u64; L]` with MS-first lanes. High padding remains zero.
 /// Batch order and duplicates are preserved; admission remains separate.
 /// The returned allocation is initialized by stream-ordered device copies.
 /// Batches may come from lane pools sharing this pool's memory; the caller
@@ -336,6 +399,29 @@ pub fn concatenate_batches<W: Word>(
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn output_layout_validates_domains_and_fixed_carrier() {
+        let packing = Packing::with_fields(&[(2, false), (3, true)]).unwrap()
+            .with_carrier_bits(192).unwrap();
+        let layout = ArenaLayout::new(packing.clone(), vec![Some((0, 2)), Some((-2, 3))]).unwrap();
+        assert_eq!(layout.widths().collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(layout.bounds(), [Some((0, 2)), Some((-2, 3))]);
+        assert_eq!(layout.carrier_bits(), 192);
+        assert_eq!(lane_count(layout.packing(), 7).unwrap(), 21);
+        for bounds in [
+            vec![Some((0, 2))],
+            vec![Some((-1, 2)), Some((-2, 3))],
+            vec![Some((0, 4)), Some((-2, 3))],
+            vec![Some((0, 2)), Some((-5, 3))],
+            vec![Some((0, 2)), Some((2, 1))],
+        ] {
+            assert!(ArenaLayout::new(packing.clone(), bounds).is_err());
+        }
+        assert!(ArenaLayout::new(packing, vec![None, None]).is_ok());
+        assert!(ArenaLayout::new(Packing::new(&[33]).unwrap(), vec![None]).is_err());
+        assert!(ArenaLayout::new(Packing::new(&[]).unwrap(), vec![]).is_ok());
+    }
     #[test]
     fn row_capacity_uses_native_lanes() {
         assert_eq!(lane_count(&Packing::new(&[]).unwrap(), 7).unwrap(), 7);

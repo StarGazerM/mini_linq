@@ -4,6 +4,10 @@
 //! [`CandidateArena`] leases packed output lanes to Sequence
 //! terminals; [`CandidateBatch`] retains those lanes and input owners without a
 //! candidate-row download. Signed packing preserves numeric lexicographic order.
+//! [`ArenaLayout`] configures measured domain widths and inclusive bounds while
+//! retaining the generated word's fixed carrier stride. Producers pack directly
+//! into that layout and validate through their existing failure/count barrier;
+//! admission sorts those words without a domain-repacking pass.
 //! [`DeviceRadixRun`] is the occurrence-preserving grouped index engine;
 //! [`RadixLayout`] is its typed relational view over one immutable publication.
 pub mod arena;
@@ -15,8 +19,8 @@ pub mod phases;
 pub mod radix_run;
 mod runs;
 mod stats;
-pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
-pub use domains::{DomainBatch, DomainCatalog, DomainInput, DomainRef};
+pub use arena::{concatenate_batches, ArenaLayout, CandidateArena, CandidateBatch, CandidateLease};
+pub use domains::{DomainCatalog, DomainInput, DomainRef};
 pub use gpu_device_columns::{Buffer, Pool};
 pub use lanes::{Job, Lane, Lanes};
 pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};

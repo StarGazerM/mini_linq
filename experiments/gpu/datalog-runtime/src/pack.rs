@@ -256,6 +256,7 @@ fn mask(bits: u32) -> u128 {
 pub struct Packing {
     fields: Vec<Field>,
     bits: u32,
+    carrier_bits: u32,
 }
 
 impl Packing {
@@ -301,16 +302,31 @@ impl Packing {
         for field in &mut fields {
             field.shift = bits - field.shift;
         }
-        Ok(Self { fields, bits })
+        Ok(Self { fields, bits, carrier_bits: bits.div_ceil(64).max(1) * 64 })
     }
 
     pub fn bits(&self) -> u32 {
         self.bits
     }
 
-    /// Minimal storage width, rounded up to at least one complete u64 lane.
+    /// Select an optional larger, whole-lane carrier without changing field
+    /// offsets or significant bits. Padding remains zero in every packed row.
+    pub fn with_carrier_bits(mut self, carrier_bits: u32) -> Result<Self> {
+        if carrier_bits == 0 || carrier_bits % 64 != 0 || carrier_bits < self.bits {
+            return Err("packing carrier must contain its fields in complete u64 lanes".into());
+        }
+        self.carrier_bits = carrier_bits;
+        Ok(self)
+    }
+
+    /// Physical storage width, including any explicitly selected high padding.
     pub fn word_bits(&self) -> u32 {
-        self.bits.div_ceil(64).max(1) * 64
+        self.carrier_bits
+    }
+
+    /// Width of a recorded column. Panics if `column` is outside the schema.
+    pub fn width(&self, column: usize) -> u32 {
+        self.fields[column].bits
     }
 
     pub fn widths(&self) -> impl ExactSizeIterator<Item = u32> + '_ {
@@ -335,7 +351,7 @@ impl Packing {
     }
 
     fn check_word<W: Word>(&self) -> Result<()> {
-        if self.bits > W::BITS {
+        if self.carrier_bits > W::BITS {
             return Err("packing exceeds the selected word width".into());
         }
         Ok(())
@@ -414,7 +430,7 @@ impl Packing {
         Self::build(order.iter().map(|&index| {
             let field = self.fields[index];
             (field.bits, field.signed)
-        }))
+        }))?.with_carrier_bits(self.carrier_bits)
     }
 
     /// Permute column bit fields on the input buffer's stream without a host
@@ -705,6 +721,25 @@ mod tests {
                     .contains(&key));
             }
         }
+    }
+
+    #[test]
+    fn explicit_carrier_preserves_fields_padding_and_permutations() {
+        let packing = Packing::with_fields(&[(3, true), (2, false)]).unwrap()
+            .with_carrier_bits(192).unwrap();
+        assert_eq!(packing.bits(), 5);
+        assert_eq!(packing.word_bits(), 192);
+        assert_eq!(packing.pack::<[u64; 3]>(&[-2, 3]).unwrap(), [0, 0, 11]);
+        assert_eq!(packing.permute(&[1, 0]).unwrap().word_bits(), 192);
+        assert!(packing.pack::<u128>(&[0, 0]).is_err());
+        // DECODE P: carrier padding must remain zero at publication.
+        assert!(packing.unpack([1u64, 0, 11]).is_err());
+        for bits in [0, 1, 63, 65] {
+            assert!(Packing::new(&[5]).unwrap().with_carrier_bits(bits).is_err());
+        }
+        assert!(Packing::new(&[64, 1]).unwrap().with_carrier_bits(64).is_err());
+        assert_eq!(Packing::new(&[]).unwrap().with_carrier_bits(128).unwrap()
+            .pack::<u128>(&[]).unwrap(), 0);
     }
 
     #[test]

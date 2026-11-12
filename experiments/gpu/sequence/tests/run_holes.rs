@@ -443,6 +443,39 @@ fn native_host_lookup_uses_supplied_runs_without_building() -> Result {
 }
 
 #[test]
+fn measured_arena_hole_refuses_out_of_layout_values() -> Result {
+    let pool = Pool::new(0, 0, 0)?;
+    let dp = Packing::with_columns(&[Column::I32, Column::I32])?;
+    let ep = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let delta = relation::<(i32, i32), u64>(
+        pool.clone(), dp.clone(), runs(&pool, &dp, &[vec![vec![-13, -7]]])?,
+    )?;
+    let edge = relation::<(i32, u32), u64>(
+        pool.clone(), ep.clone(), runs(&pool, &ep, &[vec![vec![-7, 8]]])?,
+    )?;
+    let packing = Packing::with_fields(&[(5, true), (4, false)])?.with_carrier_bits(64)?;
+    for (maximum, accepted) in [(8, true), (7, false)] {
+        let layout = gpu_datalog_runtime::ArenaLayout::new(
+            packing.clone(), vec![Some((-13, -13)), Some((0, maximum))],
+        )?;
+        let mut arena = gpu_datalog_runtime::CandidateArena::with_layout(pool.clone(), layout);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cq_gpu_sequence_test_macros::planned_domain_arena_hole!(native_linear)
+        }));
+        if accepted {
+            let result = result.unwrap();
+            assert_eq!(bag(result.buffer(), result.len(), result.packing())?, vec![vec![-13, 8]]);
+        } else {
+            let error = result.err().expect("out-of-layout candidate must set the failure flag");
+            let message = error.downcast_ref::<String>().map(String::as_str)
+                .or_else(|| error.downcast_ref::<&str>().copied()).unwrap_or("");
+            assert!(message.contains("Sequence device count or fold overflow"), "{message}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn native_host_lookup_accepts_a_leading_full_key_column() {
     let fixtures::StructuresStack { physical, structures: mut source } = fixtures::fixture("native_linear");
     source.structures.entries[1] = syn::parse_quote!(e host scan = @radix_relation input { keys 2; columns [[0] i32 => i32, [1] u32 => u32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,u32),(),u64,u64,()> [];);

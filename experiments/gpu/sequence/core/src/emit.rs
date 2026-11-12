@@ -2321,7 +2321,7 @@ pub(crate) fn translate_impl(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    arena: Option<&crate::arena::ArenaEmission>,
 ) -> syn::Result<syn::Expr> {
     translate_observed(
         physical,
@@ -2338,7 +2338,7 @@ fn translate_observed(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    arena: Option<&crate::arena::ArenaEmission>,
     expansion_counters: bool,
 ) -> syn::Result<syn::Expr> {
     translate_with_metadata(physical, structures, program, analysis, arena, expansion_counters, &BTreeSet::new(), None)
@@ -2349,7 +2349,7 @@ fn translate_with_metadata(
     structures: &cq_lang_structures::Program,
     program: &Program,
     analysis: &Analysis,
-    arena: Option<&syn::Expr>,
+    arena: Option<&crate::arena::ArenaEmission>,
     expansion_counters: bool,
     computed_inputs: &BTreeSet<(String, usize)>,
     device_captures: Option<&crate::DeviceCaptureBindings>,
@@ -2466,11 +2466,11 @@ fn translate_with_metadata(
     let terminal_record = publication_record(analysis, final_name)?;
     // GPU-Arena: only a recorded raw-candidate terminal publishes into an arena.
     let arena_packing = arena
-        .map(|_| {
+        .map(|emission| {
             terminal_record
                 .arena
                 .as_ref()
-                .map(crate::arena::Packing::new)
+                .map(|record| crate::arena::Packing::new(record, emission.layout.is_some()))
                 .ok_or_else(|| {
                     error("GPU arena terminal requires a recorded raw-candidate arena encoding")
                 })
@@ -3684,6 +3684,9 @@ fn translate_with_metadata(
                 uses.remove(&format!("__cq_pack_shift_{i}"));
             }
         }
+        let arena_parameters = generator.arena_packing.map_or_else(Vec::new, |packing| packing.parameters());
+        let arena_arguments = generator.arena_packing.map_or_else(Vec::new, |packing| packing.arguments());
+        uses.extend(parameter_uses(&arena_parameters));
         let outputs = vec![
             abi_parameter(format_ident!("__output_rows"), syn::parse_quote!(*mut i64)),
             abi_parameter(format_ident!("__output_begin"), syn::parse_quote!(*mut u32)),
@@ -3723,6 +3726,7 @@ fn translate_with_metadata(
             dispatch_parameters.push(parameter);
         }
         dispatch_parameters.extend(tail.clone());
+        dispatch_parameters.extend(arena_parameters.clone());
         let dispatch_abi = CheckedKernel::lower(&kernel_name, quote! {
             #[kernel]
             #[launch_bounds(256)]
@@ -3744,6 +3748,7 @@ fn translate_with_metadata(
         let combine_abi = if whole_reduction {
             let mut combine_uses = output_uses;
             combine_uses.extend(parameter_uses(&tail));
+            combine_uses.extend(parameter_uses(&arena_parameters));
             for chain_index in 0..chains.len() {
                 combine_uses.insert(format!("__cq_enabled_{chain_index}"));
             }
@@ -3765,7 +3770,7 @@ fn translate_with_metadata(
                 #[kernel]
                 #[launch_bounds(256)]
                 #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
-            }, [parameters.clone(), outputs, tail].concat(), combine_uses, quote! {
+            }, [parameters.clone(), outputs, tail, arena_parameters].concat(), combine_uses, quote! {
                     unsafe {
                         let __tid=::cuda_device::thread::threadIdx_x() as usize;
                         let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
@@ -3987,7 +3992,7 @@ fn translate_with_metadata(
                     abi_argument(format_ident!("__meta"), quote!(#store_meta.ptr())),
                     abi_argument(format_ident!("__partials"), quote!(__cq_partials.ptr())),
                     abi_argument(format_ident!("__blocks"), quote!(__cq_grid)),
-                ]].concat())?;
+                ], arena_arguments.clone()].concat())?;
             quote! {
                 let prepared = #preparation?;
                 #call?;
@@ -4066,7 +4071,7 @@ fn translate_with_metadata(
             ], meta_pointers, vec![
                 abi_argument(format_ident!("__partials"), partials_pointer),
                 abi_argument(format_ident!("__blocks"), quote!(__cq_grid)),
-            ]].concat())?;
+            ], arena_arguments].concat())?;
         let record_flat = (!final_output
             && (virtual_range.is_some() || structure_analysis.retained.contains_key(dispatch_result))
             && matches!(&record.storage, PublicationStorage::FlatRows(_))).then(|| {
@@ -4598,7 +4603,7 @@ mod tests {
         let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
         let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
         assert_eq!(analysis.gpu_bindings.realization.launches, [Launch::ProgramOccupancy]);
-        let arena: syn::Expr = syn::parse_quote!(arena);
+        let arena = crate::arena::ArenaEmission { arena: syn::parse_quote!(arena), layout: None };
         let printed = translate_observed(&physical, &structures, &program, &analysis, Some(&arena), false)
             .unwrap().to_token_stream().to_string();
         assert!(printed.contains("ProgramLaunchCache"));
@@ -4678,7 +4683,7 @@ mod tests {
         assert!(rejected(&|records| {
             records.get_mut("index").unwrap().arena = Some(arena.clone());
         }));
-        let arena_expr: syn::Expr = syn::parse_quote!(arena);
+        let arena_expr = crate::arena::ArenaEmission { arena: syn::parse_quote!(arena), layout: None };
         translate_observed(&physical, &structures, &program, &analysis, Some(&arena_expr), false).unwrap();
         // A canonical terminal publishes no raw candidates into an arena.
         let Stack { physical, structures, program } = arena_program(true);

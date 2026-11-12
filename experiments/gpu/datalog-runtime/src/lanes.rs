@@ -29,12 +29,14 @@ use std::{
     thread,
 };
 
+type ArenaFactory = Arc<dyn Fn(usize, Arc<Pool>) -> CandidateArena + Send + Sync>;
+
 /// A lane worker's stream and its candidate arenas, one per head relation.
 /// Arenas live until [`Lanes::release`] at the component boundary.
 pub struct Lane {
     pool: Arc<Pool>,
     arenas: BTreeMap<usize, CandidateArena>,
-    initialize: fn(usize, Arc<Pool>) -> CandidateArena,
+    initialize: ArenaFactory,
 }
 
 impl Lane {
@@ -83,22 +85,26 @@ pub struct Lanes {
 }
 
 impl Lanes {
+    /// The initializer may capture immutable measured layouts. Workers share
+    /// its owner and invoke it only when first opening a relation's arena.
     pub fn new(
         main: &Arc<Pool>,
         streams: usize,
-        initialize: fn(usize, Arc<Pool>) -> CandidateArena,
+        initialize: impl Fn(usize, Arc<Pool>) -> CandidateArena + Send + Sync + 'static,
         release_scratch: fn(&Arc<Pool>),
     ) -> Result<Self> {
         if streams == 0 {
             return Err("wave lanes need at least one stream".into());
         }
         let mut workers = Vec::with_capacity(streams - 1);
+        let initialize: ArenaFactory = Arc::new(initialize);
         for index in 1..streams {
             let pool = main.lane()?;
             let done = Arc::new(main.context().new_event(None)?);
             let (messages, inbox) = mpsc::channel::<Message>();
             let (outbox, replies) = mpsc::channel::<Reply>();
             let (lane_pool, lane_done) = (pool.clone(), done.clone());
+            let initialize = initialize.clone();
             let handle = thread::Builder::new()
                 .name(format!("gpu-datalog-lane-{index}"))
                 .spawn(move || {
@@ -218,7 +224,7 @@ fn work(
     done: Arc<CudaEvent>,
     inbox: mpsc::Receiver<Message>,
     outbox: mpsc::Sender<Reply>,
-    initialize: fn(usize, Arc<Pool>) -> CandidateArena,
+    initialize: ArenaFactory,
     release_scratch: fn(&Arc<Pool>),
 ) {
     if pool.context().bind_to_thread().is_err() {

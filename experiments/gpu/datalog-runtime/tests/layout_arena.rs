@@ -61,6 +61,36 @@ fn lane_workers_consume_recorded_initializer_and_release_thread_scratch() -> Res
 }
 
 #[test]
+fn lane_workers_capture_measured_layouts_without_query_readbacks() -> Result<()> {
+    let pool = Pool::new(0, 0, 0)?;
+    let layout = gpu_datalog_runtime::ArenaLayout::new(
+        Packing::new(&[2])?.with_carrier_bits(128)?, vec![Some((0, 2))],
+    )?;
+    let lanes = gpu_datalog_runtime::Lanes::new(&pool, 2, move |relation, pool| {
+        assert_eq!(relation, 7);
+        CandidateArena::with_layout(pool, layout.clone())
+    }, |_| {})?;
+    lanes.fork()?;
+    lanes.submit(1, 0, Box::new(|lane| {
+        let arena = lane.arena(7, 0);
+        let before = gpu_datalog_runtime::readback_count();
+        let layout = arena.output_layout().unwrap();
+        assert_eq!(layout.width(0), 2);
+        assert_eq!(layout.bounds(), [Some((0, 2))]);
+        assert_eq!(layout.carrier_bits(), 128);
+        let lease = arena.reserve(layout.packing().clone(), 0).unwrap();
+        // SAFETY: the empty prefix is initialized without touching device rows.
+        let batch = unsafe { lease.finish(0, vec![]).unwrap() };
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        batch
+    }))?;
+    let batches = lanes.join()?;
+    assert_eq!(batches[0].1.packing().word_bits(), 128);
+    lanes.release()?;
+    Ok(())
+}
+
+#[test]
 fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
     type Layout = RadixLayout<(i32, u32), (), u64, u64, ()>;

@@ -761,6 +761,8 @@ fn layout_schemas_are_checked_against_their_carriers() -> Result {
     // Packing differing from the key tuple schema.
     assert!(Layout::publish(&run, Packing::with_columns(&[Column::U32])?).is_err());
     assert!(Layout::publish(&run, Packing::with_columns(&[Column::I32, Column::I32])?).is_err());
+    // Significant fields may fit while an explicitly selected carrier does not.
+    assert!(Layout::publish(&run, Layout::derive_packing()?.with_carrier_bits(128)?).is_err());
     // Value lanes that cannot hold the value schema or differ in arity.
     let narrow =
         DeviceRadixRun::<u64, u32, (Buffer<u64>, Buffer<u32>)>::new(pool.clone(), params(4, 0))?;

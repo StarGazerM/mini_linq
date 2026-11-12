@@ -27,9 +27,9 @@ fn absent_ordered_endpoints_inside_and_outside_the_domain_are_exact() -> gpu_dat
                 decompose = [::cq_gpu_sequence::decompose];
                 stage = ::cq_gpu_sequence::stage;
                 grade = ::cq_gpu_sequence::machine_grade;
-                print = ::cq_gpu_sequence::translate_arena;
+                print = ::cq_gpu_datalog::translate_domain_arena;
             };
-            terminals = [::cq_gpu_sequence::translate_arena => batch];
+            terminals = [::cq_gpu_datalog::translate_domain_arena => batch];
             round = [::cq_gpu_datalog::bind_round(binding = 6)];
             print = ::cq_gpu_datalog::print_rounds(catalog);
         }

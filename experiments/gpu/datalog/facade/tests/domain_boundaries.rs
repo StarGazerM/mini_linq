@@ -26,9 +26,9 @@ macro_rules! execute {
                     decompose = [::cq_gpu_sequence::decompose];
                     stage = ::cq_gpu_sequence::stage;
                     grade = ::cq_gpu_sequence::machine_grade;
-                    print = ::cq_gpu_sequence::translate_arena;
+                    print = ::cq_gpu_datalog::translate_domain_arena;
                 };
-                terminals = [::cq_gpu_sequence::translate_arena => batch];
+                terminals = [::cq_gpu_datalog::translate_domain_arena => batch];
                 round = [::cq_gpu_datalog::bind_round(binding = 6)];
                 print = ::cq_gpu_datalog::print_rounds($catalog);
             }
@@ -130,7 +130,7 @@ macro_rules! observed_program {
 }
 
 #[test]
-#[should_panic(expected = "outside its recorded equality component")]
+#[should_panic(expected = "Sequence device count or fold overflow")]
 fn derived_number_outside_observed_edb_bounds_is_rejected() {
     let (_, types, _) = observed_program!(cq_gpu_datalog::domain_schema; rows;
         symbols(Handle => [0] Codec);
@@ -141,8 +141,8 @@ fn derived_number_outside_observed_edb_bounds_is_rejected() {
     let catalog = Arc::new(DomainCatalog::new(gpu_datalog_runtime::thread_pool().unwrap(), vec![
         DomainInput::Signed(Some((1, 2))), DomainInput::Dictionary(vec![10]),
     ]).unwrap());
-    // 3 fits the observed range's physical signed width: rejection must check
-    // the recorded range, not merely overflow of its three-bit representation.
+    // 3 fits the observed physical signed width. The producer must reject it
+    // through its existing failure flag before returning a candidate batch.
     assert_eq!(catalog.bits(0).unwrap(), 3);
     let rows = vec![(1i32, Handle(10)), (2, Handle(10))];
     let output = observed_program!(execute; rows; catalog;);

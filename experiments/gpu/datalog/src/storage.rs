@@ -652,16 +652,23 @@ pub fn uses_domains(program: &Program) -> bool {
     })
 }
 
-fn domain_packing(components: &[u32]) -> Expr {
-    syn::parse_quote!(__cq_gpu_domains.packing(&[#(#components),*])?)
+fn domain_packing(components: &[u32], word: &Type) -> Expr {
+    syn::parse_quote!(__cq_gpu_domains.packing(&[#(#components),*])?.with_carrier_bits(<#word as ::gpu_datalog_runtime::Word>::BITS)?)
+}
+
+fn domain_arena(components: &[u32], word: &Type) -> Expr {
+    syn::parse_quote!(::gpu_datalog_runtime::CandidateArena::with_layout(
+        __cq_gpu_pool.clone(),
+        __cq_gpu_domains.arena_layout(&[#(#components),*], <#word as ::gpu_datalog_runtime::Word>::BITS)?
+    ))
 }
 
 fn domain_bits(components: &[u32]) -> Expr {
     syn::parse_quote!(__cq_gpu_domains.total_bits(&[#(#components),*])?)
 }
 
-fn domain_empty(provider: &Type, ratio: usize, components: &[u32]) -> Expr {
-    let packing = domain_packing(components);
+fn domain_empty(provider: &Type, word: &Type, ratio: usize, components: &[u32]) -> Expr {
+    let packing = domain_packing(components, word);
     syn::parse_quote!(<#provider>::empty(
         __cq_gpu_pool.clone(), #packing,
         ::gpu_datalog_runtime::RadixRunParams {
@@ -690,13 +697,14 @@ pub fn compile_domains_with(source: &Program, args: TokenStream) -> syn::Result<
         encode(&mut relation.input);
         let types: Vec<_> = relation.input.columns.iter().map(|column| &column.storage).collect();
         relation.word = word_type(types.iter().copied())?;
-        relation.packing = domain_packing(&components.columns[index]);
+        relation.packing = domain_packing(&components.columns[index], &relation.word);
+        relation.arena_init = domain_arena(&components.columns[index], &relation.word);
         if source.incremental.strata.source.declarations[index].value.is_none() {
             let ty = layout_type(&types);
             let provider = &mut target.providers[index];
             provider.delta.ty = ty.clone();
             provider.next.ty = ty.clone();
-            provider.delta_init = domain_empty(&ty, ratio, &components.columns[index]);
+            provider.delta_init = domain_empty(&ty, &relation.word, ratio, &components.columns[index]);
             provider.next_init = provider.delta_init.clone();
         }
     }
@@ -707,7 +715,7 @@ pub fn compile_domains_with(source: &Program, args: TokenStream) -> syn::Result<
         record.word = word_type(types.iter().copied())?;
         let word = &record.word;
         record.state = syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>);
-        record.packing = domain_packing(&ids);
+        record.packing = domain_packing(&ids, word);
         record.active_bits = domain_bits(&ids);
         let (state, provider, active_bits) = (&record.state, &record.provider, &record.active_bits);
         let (ratio, radix_bits, merge_tile_rows, block_threads) =
@@ -816,7 +824,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             .map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
         let expected_packing = domains.as_ref().map_or_else(
             || syn::parse_quote!(::gpu_datalog_runtime::Packing::with_columns(&[#(#columns),*])?),
-            |domains| domain_packing(&domains.columns[relation_index]));
+            |domains| domain_packing(&domains.columns[relation_index], &relation.word));
         ensure(
             relation.word == word_type(types.iter().copied())?
                 && relation.packing == expected_packing
@@ -825,9 +833,9 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
                 && relation.candidates_init == syn::parse_quote!(::std::vec::Vec::new())
                 && relation.arena == syn::parse_quote!(::gpu_datalog_runtime::CandidateArena)
                 && relation.arena_init
-                    == syn::parse_quote!(::gpu_datalog_runtime::CandidateArena::new(
-                        __cq_gpu_pool.clone()
-                    ))
+                    == domains.as_ref().map_or_else(
+                        || syn::parse_quote!(::gpu_datalog_runtime::CandidateArena::new(__cq_gpu_pool.clone())),
+                        |domains| domain_arena(&domains.columns[relation_index], &relation.word))
                 && relation.next == "fresh_run",
             program,
             "inconsistent relation storage ABI or initializer",
@@ -884,7 +892,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
                 ::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>);
             let init = domains.as_ref().map_or_else(
                 || empty_view(&ty, advice.ratio, 0, 32, 256),
-                |domains| domain_empty(&ty, advice.ratio, &domains.columns[relation_index]));
+                |domains| domain_empty(&ty, &relation.word, advice.ratio, &domains.columns[relation_index]));
             ensure(
                 providers.delta.token == RADIX_RELATION
                     && providers.next.token == RADIX_RELATION
@@ -1043,7 +1051,7 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program, com
             && *word == word_type(types.iter().copied())?
             && *state == syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
             && record.packing == components.map_or_else(
-                || syn::parse_quote!(<#provider>::derive_packing()?), domain_packing)
+                || syn::parse_quote!(<#provider>::derive_packing()?), |ids| domain_packing(ids, word))
             && record.state_init
                 == syn::parse_quote!(<#state>::new_set(__cq_gpu_pool.clone(), ::gpu_datalog_runtime::RadixRunParams {
             ratio: #ratio, radix_bits: #radix_bits, merge_tile_rows: #merge_tile_rows, block_threads: #block_threads
@@ -1328,7 +1336,12 @@ mod tests {
         let relation = &target.device.as_ref().unwrap().relations[0];
         assert_eq!(relation.input.columns[0].storage, syn::parse_quote!(u32));
         assert!(relation.input.columns[0].codec_id.is_none());
-        assert_eq!(relation.packing, syn::parse_quote!(__cq_gpu_domains.packing(&[0u32,1u32,2u32])?));
+        assert_eq!(relation.packing, domain_packing(&[0, 1, 2], &relation.word));
+        assert_eq!(relation.arena_init, domain_arena(&[0, 1, 2], &relation.word));
+        let mut stale_arena = target.clone();
+        stale_arena.device.as_mut().unwrap().relations[0].arena_init =
+            syn::parse_quote!(::gpu_datalog_runtime::CandidateArena::new(__cq_gpu_pool.clone()));
+        assert!(check(&source, &stale_arena).is_err());
         let mut stale = target.clone();
         stale.device.as_mut().unwrap().relations[0].packing =
             syn::parse_quote!(__cq_gpu_domains.packing(&[1u32,0u32,2u32])?);

@@ -86,7 +86,6 @@ fn admission(
     index: usize,
     candidates: &Ident,
     fresh: &Ident,
-    pending: bool,
 ) -> TokenStream {
     let canonical = context.relations[index].providers.canonical;
     let threads = device(program).layouts[canonical].permutation_threads;
@@ -96,19 +95,12 @@ fn admission(
     let order = &record.admitted_orders[0].columns;
     let ordered = match record.candidate_order.to_string().as_str() {
         "canonical" => quote!(),
-        "permutation" if pending => quote!(
-            let #candidates = #candidates.permuted(&[#(#order),*], #threads)?;
-        ),
         "permutation" => quote!(
             let #candidates = #packing.permute_device(&#candidates, #candidates.len(), &[#(#order),*], #threads)?;
         ),
         _ => unreachable!("checked candidate order certificate"),
     };
-    let fresh_call = if pending {
-        quote!(#state.fresh_codes(#candidates)?)
-    } else {
-        quote!(#state.fresh(&#candidates, #candidates.len())?)
-    };
+    let fresh_call = quote!(#state.fresh(&#candidates, #candidates.len())?);
     quote!(#ordered
         // SAFETY: declared packing initializes exactly the recorded codec bit window.
         let #fresh = unsafe { #fresh_call };
@@ -166,29 +158,12 @@ fn full_layouts(
 }
 
 fn concatenate(
-    program: &Program,
-    relation: usize,
-    columns: Option<&[usize]>,
     word: &Type,
     packing: TokenStream,
     batches: TokenStream,
 ) -> syn::Result<TokenStream> {
-    if !crate::storage::uses_domains(&program.storage) {
-        return Ok(quote!(::gpu_datalog_runtime::concatenate_batches::<#word>(
-            __cq_gpu_pool.clone(), #packing, #batches)?));
-    }
-    let domains = crate::domains::DomainComponents::infer(&program.storage.incremental.strata.source)?;
-    let input = &device(program).relations[relation].input;
-    let columns: Vec<_> = columns.map_or_else(|| (0..input.columns.len()).collect(), |columns| columns.to_vec());
-    let ids: Vec<_> = columns.iter().map(|&column| domains.columns[relation][column]).collect();
-    let types = columns.iter().map(|&column| &input.columns[column].storage);
-    let fields = types.map(|ty| quote!(<#ty as ::gpu_datalog_runtime::Scalar>::COLUMN));
-    Ok(quote!({
-        let source_packing = ::gpu_datalog_runtime::Packing::with_columns(&[#(#fields),*])?;
-        let codes = ::gpu_datalog_runtime::concatenate_batches::<#word>(
-            __cq_gpu_pool.clone(), &source_packing, #batches)?;
-        __cq_gpu_domains.repack_codes(&codes, &source_packing, &[#(#ids),*])?
-    }))
+    Ok(quote!(::gpu_datalog_runtime::concatenate_batches::<#word>(
+        __cq_gpu_pool.clone(), #packing, #batches)?))
 }
 
 /// One member's admission and recorded publication transaction.
@@ -207,8 +182,8 @@ fn admit_publish(
     let candidates = local("candidates", i);
     let fresh = local("fresh", i);
     let buffer = format_ident!("__cq_gpu_candidate_rows");
-    let concatenate = concatenate(program, i, None, word, quote!(&#packing), quote!(&#candidates))?;
-    let admit = admission(program, context, i, &buffer, &fresh, crate::storage::uses_domains(&program.storage));
+    let concatenate = concatenate(word, quote!(&#packing), quote!(&#candidates))?;
+    let admit = admission(program, context, i, &buffer, &fresh);
     let orders = admitted_orders(program, i, &fresh);
     let relation_name = relation.declaration.name.to_string();
     let canonical = local("layout", relation.providers.canonical);
@@ -663,7 +638,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let source_packing = if domains.is_some() { quote!(__cq_gpu_source_packing) } else { quote!(#packing) };
         let upload = format_ident!("__cq_gpu_upload");
         let fresh = local("fresh", index);
-        let admit = admission(program, context, index, &upload, &fresh, false);
+        let admit = admission(program, context, index, &upload, &fresh);
         let orders = admitted_orders(program, index, &fresh);
         let layouts = context
             .layouts
@@ -694,18 +669,30 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     // lane workers; their arenas are component-scoped like the main arenas.
     let streams = program.schedule.streams;
     let (create_lanes, release_lanes) = if streams > 1 {
+        let lane_layouts = domains.as_ref().map(|domains| {
+            let layouts = device.relations.iter().enumerate().map(|(i, record)| {
+                let ids = &domains.columns[i];
+                let word = &record.word;
+                quote!(__cq_gpu_domains.arena_layout(&[#(#ids),*], <#word as ::gpu_datalog_runtime::Word>::BITS)?)
+            });
+            quote!(let __cq_gpu_lane_layouts = [#(#layouts),*];)
+        });
         let initializers = device
             .relations
             .iter()
             .enumerate()
             .map(|(relation, record)| {
                 let (ty, init) = (&record.arena, &record.arena_init);
+                if domains.is_some() {
+                    return quote!(#relation => ::gpu_datalog_runtime::CandidateArena::with_layout(
+                        __cq_gpu_pool.clone(), __cq_gpu_lane_layouts[#relation].clone()));
+                }
                 quote!(#relation => { let arena: #ty = #init; arena })
             });
         (
-            quote!(let __cq_gpu_lanes = ::gpu_datalog_runtime::Lanes::new(
+            quote!(#lane_layouts let __cq_gpu_lanes = ::gpu_datalog_runtime::Lanes::new(
                 &__cq_gpu_pool, #streams,
-                |relation, __cq_gpu_pool| match relation {
+                move |relation, __cq_gpu_pool| match relation {
                     #(#initializers,)*
                     _ => unreachable!("checked lane head relation"),
                 },
@@ -731,14 +718,16 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             );
             let relation = &device.relations[key.relation];
             let (arena_ty, arena_init) = (&relation.arena, &relation.arena_init);
+            let arena_init = if let Some(domains) = &domains {
+                let ids: Vec<_> = key.columns.iter().map(|&column| domains.columns[key.relation][column]).collect();
+                quote!(::gpu_datalog_runtime::CandidateArena::with_layout(
+                    __cq_gpu_pool.clone(),
+                    __cq_gpu_domains.arena_layout(&[#(#ids),*], <#word as ::gpu_datalog_runtime::Word>::BITS)?
+                ))
+            } else { quote!(#arena_init) };
             let invocation = &holes[key.hole];
-            let concatenate = concatenate(program, key.relation, Some(&key.columns),
-                word, quote!(&packing), quote!(&[batch]))?;
-            let sort = if domains.is_some() {
-                quote!(state.sort_codes(buffer)?)
-            } else {
-                quote!(state.sort_unique(&buffer, buffer.len())?)
-            };
+            let concatenate = concatenate(word, quote!(&packing), quote!(&[batch]))?;
+            let sort = quote!(state.sort_unique(&buffer, buffer.len())?);
             keys.push(quote!(let #name: #ty = {
                 let mut arena: #arena_ty = #arena_init;
                 let __cq_gpu_arena = &mut arena;
@@ -1013,8 +1002,8 @@ fn phase(
                     .unwrap_or_else(|| format!("{}/{}", head_name, program.holes[hole].cq.name));
                 let rows = format_ident!("__cq_expansion_candidates");
                 let fresh = format_ident!("__cq_expansion_fresh");
-                let admit = admission(program, context, rule.head, &rows, &fresh, crate::storage::uses_domains(&program.storage));
-                let concatenate = concatenate(program, rule.head, None, word, quote!(&#packing),
+                let admit = admission(program, context, rule.head, &rows, &fresh);
+                let concatenate = concatenate(word, quote!(&#packing),
                     quote!(::core::slice::from_ref(&__cq_gpu_batch)))?;
                 Some(quote! {
                     if ::gpu_datalog_runtime::trace_kernels() {

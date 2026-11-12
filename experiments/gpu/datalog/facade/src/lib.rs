@@ -12,6 +12,12 @@
 //! identifies the first Structures rewrite in this queue (add one for each
 //! preceding surface/physical rewrite). Checked construction records both the
 //! binding packet and arena argument; printing never fills invocation arguments.
+//!
+//! Domain storage uses `::cq_gpu_datalog::translate_domain_arena` as both
+//! the Sequence print terminal and registered batch terminal. It delegates to
+//! the same Sequence representation checker and emitter, supplying the arena's
+//! measured widths, bounds, and native carrier. Producers validate each code
+//! before admission; no per-admission domain repacking is performed.
 //! `device_storage(symbols(T => Codec), ratio(4))` records optional codecs and
 //! geometric run-maintenance advice; omitted ratio advice defaults to four.
 //!
@@ -26,3 +32,4 @@
 //! admission.
 pub use cq_gpu_datalog_core::{bindings, lanes, print, storage};
 pub use cq_gpu_datalog_macros::{bind_inputs, bind_round, device_storage, domain_schema, domain_storage, encode_domains, lanes, print_rounds};
+pub use cq_gpu_datalog_macros::translate_domain_arena;

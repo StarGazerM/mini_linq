@@ -4,7 +4,7 @@
 //! order. Only distinct dictionary entries are inspected on the host. Signed
 //! components retain their native values and use the smallest signed field that
 //! contains the observed range. Neither kind changes generic payload packing.
-use crate::{Buffer, Packing, Pool, Result, SymbolCodec, Word};
+use crate::{ArenaLayout, Buffer, Packing, Pool, Result, SymbolCodec, Word};
 use cq_storage::{CodeDomain, OrderedCodeDomain};
 use cuda_core::LaunchConfig1D;
 use std::{marker::PhantomData, sync::Arc};
@@ -125,27 +125,6 @@ pub struct DomainCatalog {
     entries: Vec<Entry>,
 }
 
-/// Packed candidates whose domain validation is pending on their pool stream.
-/// Only admission/sort can expose a published batch: its existing count readback
-/// consumes the validation flag, so repacking adds no query-time synchronization.
-pub struct DomainBatch<W: Word> {
-    pub(crate) words: Buffer<W>,
-    pub(crate) validation: Option<crate::runs::Native<u64>>,
-    pub(crate) packing: Packing,
-}
-
-impl<W: Word> DomainBatch<W> {
-    pub fn len(&self) -> usize { self.words.len() }
-    pub fn is_empty(&self) -> bool { self.words.is_empty() }
-
-    /// Reorder fields without discarding the original validation dependency.
-    pub fn permuted(self, order: &[usize], block_threads: u32) -> Result<Self> {
-        let words = self.packing.permute_device(&self.words, self.len(), order, block_threads)?;
-        let packing = self.packing.permute(order)?;
-        Ok(Self { words, validation: self.validation, packing })
-    }
-}
-
 impl DomainCatalog {
     pub fn new(pool: Arc<Pool>, inputs: Vec<DomainInput>) -> Result<Self> {
         if inputs.len() > u32::MAX as usize {
@@ -174,6 +153,21 @@ impl DomainCatalog {
         Packing::with_fields(&fields)
     }
 
+    /// Producer metadata for measured fields in the generated word's fixed
+    /// carrier. No device descriptors or per-admission adaptation are needed.
+    pub fn arena_layout(&self, components: &[u32], carrier_bits: u32) -> Result<ArenaLayout> {
+        let packing = self.packing(components)?.with_carrier_bits(carrier_bits)?;
+        let bounds = components.iter().map(|&id| {
+            Ok(match &self.entry(id)?.metadata {
+                Metadata::Dictionary(dictionary) => {
+                    (!dictionary.inverse.is_empty()).then(|| (0, dictionary.inverse.len() as i64 - 1))
+                }
+                Metadata::Signed { range, .. } => *range,
+            })
+        }).collect::<Result<Vec<_>>>()?;
+        ArenaLayout::new(packing, bounds)
+    }
+
     /// Own a typed symbol-domain handle, independent of the catalog's lifetime.
     /// Panics for an invalid ID or a signed component (which has no symbol codec).
     pub fn domain<T, C: SymbolCodec<T>>(&self, id: u32) -> DomainRef<T, C> {
@@ -191,7 +185,7 @@ impl DomainCatalog {
         let dictionary = self.entry(id)?.metadata.dictionary()?;
         let field = packing.packed_fields().nth(column)
             .ok_or("output column is outside its packing")?;
-        if packing.bits() > W::BITS || field.signed != 0 || field.bits != dictionary.bits {
+        if packing.word_bits() > W::BITS || field.signed != 0 || field.bits != dictionary.bits {
             return Err("output column packing differs from its recorded symbol domain".into());
         }
         // DECODE P: final-output bulk gather resolves one component inverse table per column.
@@ -227,37 +221,11 @@ impl DomainCatalog {
     /// must be ordered on this catalog's pool stream. One error word, never rows,
     /// is read back before returning an initialized result.
     pub fn remap<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32]) -> Result<Buffer<W>> {
-        let batch = self.repack(input, source, components, false)?;
-        if let Some(validation) = &batch.validation {
-            let mut result = [0u64; 2];
-            // SAFETY: repacking initialized both words on this stream.
-            unsafe {
-                cuda_core::simt::memory::memcpy_dtoh_async(
-                    result.as_mut_ptr(), validation.get().cu_deviceptr(), 16,
-                    self.pool.stream().cu_stream(),
-                )?;
-            }
-            self.pool.stream().synchronize()?;
-            crate::record_readback();
-            if result[1] != 0 {
-                return Err("uploaded value is outside its recorded equality component".into());
-            }
-        }
-        Ok(batch.words)
-    }
-
-    /// Seal already-domain-coded candidate rows at their recorded field widths.
-    /// This preserves codes; it does not look up or reconstruct global symbols.
-    pub fn repack_codes<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32]) -> Result<DomainBatch<W>> {
-        self.repack(input, source, components, true)
-    }
-
-    fn repack<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32], dense: bool) -> Result<DomainBatch<W>> {
-        let target = self.packing(components)?;
+        let target = self.packing(components)?.with_carrier_bits(W::BITS)?;
         if source.len() != components.len() {
             return Err("component count differs from source packing arity".into());
         }
-        if source.bits() > W::BITS || target.bits() > W::BITS {
+        if source.word_bits() > W::BITS {
             return Err("domain remap packing exceeds the selected word width".into());
         }
         if !self.pool.shares_memory(input.pool()) || self.pool.stream().cu_stream() != input.pool().stream().cu_stream() {
@@ -274,12 +242,8 @@ impl DomainCatalog {
                     if source.signed != 0 || source.bits > 32 {
                         return Err("dictionary source must contain unsigned global u32 handles".into());
                     }
-                    if dense {
-                        descriptors.extend_from_slice(&[2, 0, dictionary.inverse.len() as u64, 0, 0, 0, 0]);
-                    } else {
-                        let forward = entry.forward.as_ref().expect("dictionary forward table");
-                        descriptors.extend_from_slice(&[0, dictionary.base as u64, forward.len() as u64, forward.cu_deviceptr(), 0, 0, 0]);
-                    }
+                    let forward = entry.forward.as_ref().expect("dictionary forward table");
+                    descriptors.extend_from_slice(&[0, dictionary.base as u64, forward.len() as u64, forward.cu_deviceptr(), 0, 0, 0]);
                 }
                 Metadata::Signed { range, .. } => {
                     if source.signed == 0 || source.bits > 32 {
@@ -296,24 +260,21 @@ impl DomainCatalog {
             unsafe { Buffer::uninitialized(self.pool.clone(), input.len())? }
         };
         if input.is_empty() || components.is_empty() {
-            return Ok(DomainBatch { words: output, validation: None, packing: target });
+            return Ok(output);
         }
         let descriptors = Buffer::from_host_async(self.pool.clone(), &descriptors)?;
-        // CUB writes the unique count directly into slot zero at admission.
-        // Slot one is the sticky error flag; both words start initialized.
-        let validation = crate::runs::Native::<u64>::new(&self.pool, 2)?;
-        unsafe {
-            cuda_core::simt::memory::memset_d8_async(
-                validation.get().cu_deviceptr(), 0, 16, self.pool.stream().cu_stream(),
-            )?;
-        }
-        let error = unsafe { (validation.get().cu_deviceptr() as *mut u64).add(1).cast::<u32>() };
+        let error = Buffer::<u32>::zeroed(self.pool.clone(), 1)?;
         let module = &self.module;
         let initial = module.prepare_remap::<W>(LaunchConfig1D::new(1, 256, 0))?;
         let grid = cq_gpu_runtime::launch_grid_for_kernel(initial.function(), input.len().div_ceil(256), 256, 0)?;
         let launch = module.prepare_remap::<W>(LaunchConfig1D::new(grid, 256, 0))?;
-        module.remap::<W>(self.pool.stream(), &launch, input.ptr().cast(), output.ptr().cast(), input.len() as u64, descriptors.ptr(), components.len() as u32, error)?;
-        Ok(DomainBatch { words: output, validation: Some(validation), packing: target })
+        module.remap::<W>(self.pool.stream(), &launch, input.ptr().cast(), output.ptr().cast(), input.len() as u64, descriptors.ptr(), components.len() as u32, error.ptr())?;
+        let invalid = error.to_host()?[0];
+        crate::record_readback();
+        if invalid != 0 {
+            return Err("uploaded value is outside its recorded equality component".into());
+        }
+        Ok(output)
     }
 }
 
@@ -401,9 +362,6 @@ mod domain_kernels {
                             encoded = dense as u64;
                         }
                     }
-                } else if unsafe { *descriptor.add(4) } == 2 {
-                    valid = value < unsafe { *descriptor.add(6) };
-                    encoded = value;
                 } else {
                     // DECODE I: rebase a 32-bit sign ordinal between runtime field widths.
                     let native = (value as u32).wrapping_sub(1_u32 << (source_bits - 1)) as i32;

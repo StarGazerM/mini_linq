@@ -2,7 +2,7 @@
 
 use cq_lang_sequence::{LevelNode, Machine};
 
-mod arena;
+pub mod arena;
 // DESIGN gpu-provider-records
 // P3d/T-Gpu: select once into GPU analysis; check recorded facts and print them.
 // Runtime layout algorithms belong to the selected provider, never the emitter.

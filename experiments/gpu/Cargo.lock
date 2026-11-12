@@ -382,8 +382,10 @@ name = "cq-gpu-datalog-macros"
 version = "0.1.0"
 dependencies = [
  "cq-gpu-datalog-core",
+ "cq-gpu-sequence-core",
  "cq-lang-datalog-round",
  "cq-lang-datalog-storage",
+ "cq-lang-sequence",
  "cq-lang-structures",
  "cq-stage",
  "proc-macro2",
