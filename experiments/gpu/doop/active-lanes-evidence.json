@@ -1,0 +1,239 @@
+{
+  "code_commit": "c0f3b878",
+  "change": "Host-recorded active-lane comparisons; carrier and sort windows unchanged.",
+  "design": "Word::compare_lanes starts at key_lanes-1; host computes ceil(active_bits/64). Segment/RadixRunView carry the count; canonical kernels receive it as a uniform parameter.",
+  "coverage": [
+    "native bounded binary search and final equality",
+    "full-width min/max guards for unbounded lower/upper probes",
+    "wide deduplication",
+    "canonical subtraction",
+    "CUB merge comparator",
+    "custom wide merge/corank",
+    "occurrence group dedup and merging"
+  ],
+  "exceptions": [
+    "Scalar u64 equality remains a single native comparison.",
+    "Unbounded min/max guards retain full-carrier comparison.",
+    "Final host key sort stays in output and keeps ordinary Ord."
+  ],
+  "static_lane_evidence": {
+    "relations": 103,
+    "relations_skipping_high_lanes": 25,
+    "table": "active-lanes-xalan.tsv",
+    "example": "50-bit u128: first useful lane was visit2, now visit1; equal-key worst case2->1. 96-bit u128 remains2 lanes. Array carriers can skip1 or2 zero lanes.",
+    "out_of_width_probe_test": "u128/[u64;3] probes at bits17,64,100 and array lane2; both interval ends and zero-width sets covered."
+  },
+  "tests": {
+    "existing_counter_runtime_facade_core_passes": 154,
+    "new_active_lane_tests": 4,
+    "new_occurrence_merge_test": 1,
+    "ignored_performance_probes": 2,
+    "results": [
+      {
+        "binary": "target/release/deps/gpu_datalog_runtime-76c93b4a707eeddb",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/domain_admission-15c596a42587f2d9",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/layout_arena-5271f44b0a5a7dc3",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/radix_candidates-e4e135cf54b9329b",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/radix_layout-9faf1e299fed978b",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/radix_run-5be88b10941b6aca",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.80s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/runs-a15cb77fd99cdb36",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 14.26s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/runtime_widths-62c71b0a1dd2d294",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/cq_gpu_datalog-62e39b8202d2df1a",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/domain_boundaries-fdc9264aa6177e4a",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/domain_endpoints-e54764c2022f4dd3",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/domains-e0a0e1cf84b88b39",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/heapalloc-a0fa312acb97db90",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/oracle-82d49df6139a39f8",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 24.79s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/symbols-9efa79ffee3c51cf",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/cq_gpu_datalog_core-f27ca0043be22bb7",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/domain_adapter-f8ec8f83b3840439",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "binary": "target/release/deps/domain_components-1a66d40c4689816b",
+        "exit_code": 0,
+        "summary": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+        ]
+      }
+    ],
+    "formal": "Passed;525 decode comments.",
+    "xalan": "All26 full witnesses equal base and ae10ab4d."
+  },
+  "counter_parity": {
+    "rounds": 324,
+    "readbacks": 4689,
+    "every_round_equal_base": true,
+    "canonical_sorts": 1187,
+    "canonical_digit_equivalents": 5801,
+    "layout_sorts": 425,
+    "layout_digit_equivalents": 2462,
+    "canonical_radix_bits_sum": 40960,
+    "layout_radix_bits_sum": 17823,
+    "modeled_radix_bytes": 2869921664,
+    "merges": 1735,
+    "descriptor_materializations": 4286,
+    "descriptor_bytes_before": 380872,
+    "descriptor_bytes_after": 431576,
+    "descriptor_growth_reason": "Native run view gains one u32 active-lane record plus alignment; no added allocation batch or readback."
+  },
+  "phase_boundary": {
+    "moved_work": false,
+    "marks_changed": false,
+    "e4_generated_fixpoint_mark": "target/baseline-doop-expanded.rs:309540-309541",
+    "ae_generated_fixpoint_mark": "target/regression-ae-expanded.rs:295653-295654",
+    "e4_first_output_download": 309547,
+    "ae_first_output_download": 295660,
+    "shared_output_work": [
+      "Download retained canonical key segments",
+      "Host sort_unstable of concatenated keys",
+      "Eagerly construct26 tuple vectors before output mark"
+    ],
+    "removed_output_work": [
+      "Per-row Vec<i128> unpack allocation",
+      "Per-symbol interner bounds lock; now once per column"
+    ],
+    "fixpoint_addition": "Candidate-code repacking/validation before admission, not relocated publication. Worker joins and stratum scratch release are on the same side of the mark in both revisions."
+  },
+  "original_single_run_provenance": {
+    "recorded_source": "cadeee77, not ae10ab4d itself",
+    "old_local_base_sha256": "7d6e89f288d337dba7266649dbe257eac939ebae4e041585c0fa992b6c60e344",
+    "remote_base_sha256": "faa118dadc55f905ef5c0dec57c11378fd7d2b4612487cdfdd9c5fa7529d9329",
+    "remote_ae_sha256": "47a2cff4e2b2a5aabbbc7c34f04c6746f76fb187b0ac1e06838aafc0ded66de6",
+    "old_local_branch_sha256": null,
+    "compiler_flags_common": [
+      "cargo+1.99.1",
+      "sm_89",
+      "materialize-cubin",
+      "release"
+    ],
+    "known_environment_differences": [
+      "Different build worktrees and resulting binaries",
+      "Remote bundle jobs6/nice10 versus local jobs8/12",
+      "Local sample was unpaired/full mode with variable CPU/build load; remote rotated repeats and full/GPU-only modes"
+    ],
+    "gpu_model": "Both available current-local trace and remote evidence are RTX6000Ada; model difference is not an explanation.",
+    "limitation": "No saved local branch executable hash or complete contemporaneous environment exists. Cannot identify a precise binary/environment cause for the earlier misleading0.70s sample; rotated RunPod results supersede it."
+  },
+  "indicative_device_trace": {
+    "valid_clean_timing": false,
+    "foreign_tenant_before_and_after": "2919223 VLLM::EngineCore",
+    "order": [
+      "base",
+      "ae",
+      "active-fix"
+    ],
+    "summed_kernel_ms": {
+      "base": 862.153194,
+      "ae": 830.788633,
+      "fix": 866.312791
+    },
+    "ratio_ae_over_base": 0.9636206636845098,
+    "ratio_fix_over_base": 1.0048246611262917,
+    "ratio_fix_over_ae": 1.0427595619257828,
+    "rounds": "active-lanes-indicative-rounds.tsv",
+    "kernels": "active-lanes-indicative-kernels.tsv",
+    "scope": "CUDA activity duration sums attributed through host API enqueue timestamps between NVTX round-end markers; intervals include between-round preparation and a separate final-cleanup window. Stream-overlapping durations are summed, not wall time.",
+    "conclusion": "Only indicative as requested. No demonstrated speedup or attribution of the clean +0.37s; kernel sums roughly flat while shared-device host waits dominate."
+  },
+  "remaining_lead": "Admission adds descriptor preparation/upload and a full-row repack pass; branch still has these costs. The active-lane fix removes a proven comparison penalty but does not claim to account for all of the regression."
+}
