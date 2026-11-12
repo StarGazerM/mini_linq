@@ -1,0 +1,810 @@
+{
+  "base_revision": "e4e08c99",
+  "starting_revision": "68eb0e54",
+  "code_revision": "eda173e1",
+  "timings_valid": false,
+  "reason": "Foreign GPU tenant; exactness and structural counters only.",
+  "acceptance": {
+    "1": {
+      "status": "pass",
+      "stratum": 62,
+      "base_launches": 30320,
+      "fix_launches": 27750,
+      "branch_only_kernel_identities": [],
+      "repack_launches_base_and_fix": 0,
+      "rounds": [
+        {
+          "round": 25,
+          "base_launches": 249,
+          "fix_launches": 221,
+          "candidate_rows_across_attempts": 31918,
+          "admission_rows": 27478
+        },
+        {
+          "round": 37,
+          "base_launches": 258,
+          "fix_launches": 228,
+          "candidate_rows_across_attempts": 174979,
+          "admission_rows": 112758
+        },
+        {
+          "round": 61,
+          "base_launches": 238,
+          "fix_launches": 210,
+          "candidate_rows_across_attempts": 151113,
+          "admission_rows": 145214
+        }
+      ],
+      "all_324_round_readbacks_identical": true,
+      "readbacks_base_and_fix": 4689,
+      "kernel_table": "direct-layout-kernels.tsv",
+      "producer_table": "direct-layout-producer-rows.tsv",
+      "row_count_scope": "Actual per-producer candidates including retries; auxiliary kernel row arguments are not recorded by existing counters/nsys. No repack launches means zero repack rows."
+    },
+    "2": {
+      "status": "pass",
+      "xalan": "comparison\texact full-tuple sets, all 26 outputs",
+      "cassandra": "comparison\texact full-tuple sets, all 26 outputs"
+    },
+    "3": {
+      "status": "pass",
+      "all_52_modules_byte_identical": true,
+      "before_and_after_queries_sha256": "0fd6c78c1c4bb2adb5a939f9eb053da4a691d753ddb610377253703084d86df3"
+    },
+    "4": {
+      "status": "pass except local timeout",
+      "suites": [
+        "cq-gpu-sequence-core",
+        "cq-gpu-sequence",
+        "gpu-datalog-runtime default",
+        "gpu-datalog-runtime radix-counters",
+        "cq-gpu-datalog-core",
+        "cq-gpu-datalog facade",
+        "doop-gpu lib"
+      ],
+      "new_failure_flag_test": "measured_arena_hole_refuses_out_of_layout_values: pass",
+      "unverified": "grouped_h01 h01_gpu_matches_duckdb_sf10 exceeded required 100-second cap, including isolated invocation. SF1 passed. Parent confirms same baseline limitation; deferred to RunPod gate. Existing opt-in ignored throughput/timing tests remain ignored."
+    },
+    "5": {
+      "status": "pass",
+      "formal": "531 registered comments",
+      "scope_structures": "PASS",
+      "scope_sequence": "PASS"
+    }
+  },
+  "checks": [
+    {
+      "label": "sequence-facade-build",
+      "command": "flock -s /tmp/mini_linq-timing.lock cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release -p cq-gpu-sequence -p cq-gpu-datalog --no-run",
+      "exit_code": 101,
+      "seconds": 88.21802662604023,
+      "log": "target/direct-layout-sequence-facade-build.log",
+      "summary": [],
+      "log_sha256": "7cb6bacb0e4b242262d0653d0e53ae027b5fa77fefda932cef3ea698062a570c"
+    },
+    {
+      "label": "sequence-facade-build-fixed",
+      "command": "flock -s /tmp/mini_linq-timing.lock cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release -p cq-gpu-sequence -p cq-gpu-datalog --no-run",
+      "exit_code": 0,
+      "seconds": 42.03887326794211,
+      "log": "target/direct-layout-sequence-facade-build-fixed.log",
+      "summary": [],
+      "log_sha256": "5c27bfd27aad6361c96bdc605c7fddfaeba62f3d843a2a0844509eac2571a752"
+    },
+    {
+      "label": "run-holes",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/run_holes-e3e30cc76c19dbb9 --test-threads=1",
+      "exit_code": 101,
+      "seconds": 4.9091833549318835,
+      "log": "target/direct-layout-run-holes.log",
+      "summary": [
+        "test result: FAILED. 18 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.89s"
+      ],
+      "log_sha256": "06a02f3cad2a3b3cc1112e784d286fa790adba127962c927e9964168f96c18b9"
+    },
+    {
+      "label": "cq_gpu_datalog_core-6d0e0cb3a55f4ea2",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/cq_gpu_datalog_core-6d0e0cb3a55f4ea2 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 2.3920682860771194,
+      "log": "target/direct-layout-cq_gpu_datalog_core-6d0e0cb3a55f4ea2.log",
+      "summary": [
+        "test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.38s"
+      ],
+      "log_sha256": "606d33107637e7d9ff0ea01c1b3538084c8ef2e1b39068bf68edf35c86cdb4ba"
+    },
+    {
+      "label": "domain_adapter-a43199b1128c5c60",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/domain_adapter-a43199b1128c5c60 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.009044826962053776,
+      "log": "target/direct-layout-domain_adapter-a43199b1128c5c60.log",
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "log_sha256": "5076d353c442585244cdc446b7e461e8619b0745b9fba1bdb891bb20962e017e"
+    },
+    {
+      "label": "domain_components-fc84bc5712be54f5",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/domain_components-fc84bc5712be54f5 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.005822576931677759,
+      "log": "target/direct-layout-domain_components-fc84bc5712be54f5.log",
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "log_sha256": "d11ce31442a302bfa522e4b5a8fcf3266b6c7d65ccaa53f775b72ef55038fdea"
+    },
+    {
+      "label": "cq_gpu_sequence_core-7bdc126be1e8a04a",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/cq_gpu_sequence_core-7bdc126be1e8a04a --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.5219465090194717,
+      "log": "target/direct-layout-cq_gpu_sequence_core-7bdc126be1e8a04a.log",
+      "summary": [
+        "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s"
+      ],
+      "log_sha256": "7d8519a052250f33e9e321793f495b1d08560cf432e3a89d23c71aa31b144be3"
+    },
+    {
+      "label": "capture_constants-71abcb851c35d08d",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/capture_constants-71abcb851c35d08d --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.005512261996045709,
+      "log": "target/direct-layout-capture_constants-71abcb851c35d08d.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "log_sha256": "63ff5f71822fb1d98bd4c16d618ca0806f25685a8abe8274edf9e2397dfb1c5a"
+    },
+    {
+      "label": "gpu_datalog_runtime-38b07262616141bf",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/gpu_datalog_runtime-38b07262616141bf --test-threads=1",
+      "exit_code": 0,
+      "seconds": 1.8037859259638935,
+      "log": "target/direct-layout-gpu_datalog_runtime-38b07262616141bf.log",
+      "summary": [
+        "test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s"
+      ],
+      "log_sha256": "d204259932b7354ca0b139a47f1f53a39f78310a2a33bf8f3666d2221230791f"
+    },
+    {
+      "label": "active_lanes-98680603287bfa8b",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/active_lanes-98680603287bfa8b --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.8378738909959793,
+      "log": "target/direct-layout-active_lanes-98680603287bfa8b.log",
+      "summary": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s"
+      ],
+      "log_sha256": "ad399e20b12f240b602bfbdadc0372895d28ce0d4f5c3ef3c1c2b66d95abac54"
+    },
+    {
+      "label": "domain_admission-baa5097a84c72b18",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/domain_admission-baa5097a84c72b18 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.7995381149230525,
+      "log": "target/direct-layout-domain_admission-baa5097a84c72b18.log",
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s"
+      ],
+      "log_sha256": "c37e43f53df9326256da84f45d218f8a7dc98b6294a741d96fb3d8c9b7c5aeae"
+    },
+    {
+      "label": "layout_arena-07fc4d3cd09ee16e",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/layout_arena-07fc4d3cd09ee16e --test-threads=1",
+      "exit_code": 0,
+      "seconds": 3.5653918529860675,
+      "log": "target/direct-layout-layout_arena-07fc4d3cd09ee16e.log",
+      "summary": [
+        "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s"
+      ],
+      "log_sha256": "340cb7278c0890c91370f70e45103f05a96caafadec3cbd8b681cf09514f7762"
+    },
+    {
+      "label": "radix_candidates-e7a520aa96778410",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/radix_candidates-e7a520aa96778410 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 2.1403875730466098,
+      "log": "target/direct-layout-radix_candidates-e7a520aa96778410.log",
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.12s"
+      ],
+      "log_sha256": "4ac327062bf9b0e3004cb72f92b4f25b5c9a69acde68487a06da5e9e596ee882"
+    },
+    {
+      "label": "radix_layout-3408fc089620a1f7",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/radix_layout-3408fc089620a1f7 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 6.628332796040922,
+      "log": "target/direct-layout-radix_layout-3408fc089620a1f7.log",
+      "summary": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.61s"
+      ],
+      "log_sha256": "0c02ae32ec5477c0e812e49e556eb8a7f576ba569dd06ed73b47bbec7db66da7"
+    },
+    {
+      "label": "radix_run-ba1311f89b3b3f19",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/radix_run-ba1311f89b3b3f19 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 28.713871061918326,
+      "log": "target/direct-layout-radix_run-ba1311f89b3b3f19.log",
+      "summary": [
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.69s"
+      ],
+      "log_sha256": "5dbee47f6409289881f77936b082cfc29b1176402cba881290a03ef7b29d541f"
+    },
+    {
+      "label": "runs-4758384276010b42",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/runs-4758384276010b42 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 11.511535234050825,
+      "log": "target/direct-layout-runs-4758384276010b42.log",
+      "summary": [
+        "test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.48s"
+      ],
+      "log_sha256": "6d226fced4cc55d0cfc85064b9606ea97bd22845ee1c4f3e69360da472af567a"
+    },
+    {
+      "label": "runtime_widths-0e92053fc65cfa2c",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/runtime_widths-0e92053fc65cfa2c --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.41433431196492165,
+      "log": "target/direct-layout-runtime_widths-0e92053fc65cfa2c.log",
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s"
+      ],
+      "log_sha256": "3a5c24ea63f06b01a2489aabad32ede18c3f5fffbc4f0356bd351ce631a893e7"
+    },
+    {
+      "label": "doop-tpch-build-complete",
+      "command": "flock -s /tmp/mini_linq-timing.lock cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release -p doop-gpu -p cq-gpu-tpch --features gpu-datalog-runtime/radix-counters",
+      "exit_code": 0,
+      "seconds": 0.295502444030717,
+      "log": "target/direct-layout-doop-tpch-build-complete.log",
+      "summary": [],
+      "log_sha256": "913c8491d3742e6c1c6a325c9e3e0279be4ab69135cec23e4ef037caa6b510c9"
+    },
+    {
+      "label": "xalan-exact",
+      "command": "flock /tmp/mini_linq-gpu.lock env GPU_DATALOG_TRACE_ROUNDS=1 GPU_DATALOG_TRACE_KERNELS=1 target/release/doop-gpu /data/doop-bench/doop-data/xalan",
+      "exit_code": 0,
+      "seconds": 32.70334701100364,
+      "log": "target/direct-layout-xalan-exact.log",
+      "summary": [
+        "comparison\texact full-tuple sets, all 26 outputs"
+      ],
+      "log_sha256": "26a9ced41663d93dbe42d30013eb044cd5cd8bb1e5d427bfd95025070afa51dd"
+    },
+    {
+      "label": "cassandra-exact",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/doop-gpu /data/doop-bench/doop-data/cassandra",
+      "exit_code": 0,
+      "seconds": 23.9954166400712,
+      "log": "target/direct-layout-cassandra-exact.log",
+      "summary": [
+        "comparison\texact full-tuple sets, all 26 outputs"
+      ],
+      "log_sha256": "9e72348d153b79a66293046e286c3b662a5c4384bf07d31c5b11c25cbaa87278"
+    },
+    {
+      "label": "remaining-tests-build",
+      "command": "flock -s /tmp/mini_linq-timing.lock cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release -p cq-gpu-sequence -p cq-gpu-sequence-core -p doop-gpu --lib --no-run",
+      "exit_code": 0,
+      "seconds": 64.36217271792702,
+      "log": "target/direct-layout-remaining-tests-build.log",
+      "summary": [],
+      "log_sha256": "e48fd3d46679bece7a66763c5b2131e34651ab1429a8cafbd94b27876ab4ec55"
+    },
+    {
+      "label": "holes-build",
+      "command": "flock -s /tmp/mini_linq-timing.lock cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release -p cq-gpu-sequence --test run_holes --no-run",
+      "exit_code": 0,
+      "seconds": 7.626215010997839,
+      "log": "target/direct-layout-holes-build.log",
+      "summary": [],
+      "log_sha256": "e19de3b1005740ca1de27fa9e2e8b2e0ef3f6df654c03c8bad5b38aaf97c495c"
+    },
+    {
+      "label": "cq_gpu_datalog-6f418746d857f691",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/cq_gpu_datalog-6f418746d857f691 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.007584464969113469,
+      "log": "target/direct-layout-cq_gpu_datalog-6f418746d857f691.log",
+      "summary": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "log_sha256": "df166913f47ff1f04202cae9b31df67ed272d692d99a0023a8117dc3029100dd"
+    },
+    {
+      "label": "domain_boundaries-6cf59a3c47af2d4c",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/domain_boundaries-6cf59a3c47af2d4c --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.6323450229829177,
+      "log": "target/direct-layout-domain_boundaries-6cf59a3c47af2d4c.log",
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s"
+      ],
+      "log_sha256": "2001a97db722f391e0d553bd6bdc3553d341f7d818d78da16a53f03806443f03"
+    },
+    {
+      "label": "domain_endpoints-a9502213a23abdee",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/domain_endpoints-a9502213a23abdee --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.32905344502069056,
+      "log": "target/direct-layout-domain_endpoints-a9502213a23abdee.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s"
+      ],
+      "log_sha256": "b3d5091a99417579fc3c7da3b54ef670d6e3d6031afe3c4e41d7d508892fb3aa"
+    },
+    {
+      "label": "domains-6d357eb731b11667",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/domains-6d357eb731b11667 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.3046735390089452,
+      "log": "target/direct-layout-domains-6d357eb731b11667.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s"
+      ],
+      "log_sha256": "96c7f1a4ab9fe49b0191cf50b50d70b376ae5547d214075d901b181b12ffcaf6"
+    },
+    {
+      "label": "heapalloc-2cfb756995423082",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/heapalloc-2cfb756995423082 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.3935062439413741,
+      "log": "target/direct-layout-heapalloc-2cfb756995423082.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s"
+      ],
+      "log_sha256": "fbcf25eb8962c67ef45fbf254c847b5cc079f4d8338c1c3f3bbcc05707952143"
+    },
+    {
+      "label": "oracle-419d8f2d88b35e3d",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/oracle-419d8f2d88b35e3d --test-threads=1",
+      "exit_code": 0,
+      "seconds": 24.788983035017736,
+      "log": "target/direct-layout-oracle-419d8f2d88b35e3d.log",
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 24.77s"
+      ],
+      "log_sha256": "9f5dced00a90a4ca5f7d771436241779cfccac147d9d39ac19284afcb3e2fb38"
+    },
+    {
+      "label": "symbols-744b1b584753181e",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/symbols-744b1b584753181e --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.46692006499506533,
+      "log": "target/direct-layout-symbols-744b1b584753181e.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s"
+      ],
+      "log_sha256": "477f904def595e96a11ea4888bfb6661727c0405e576f684f2dd2ab8fa00e953"
+    },
+    {
+      "label": "cq_gpu_sequence-92d84efbc272e1e7",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/cq_gpu_sequence-92d84efbc272e1e7 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.006517559057101607,
+      "log": "target/direct-layout-cq_gpu_sequence-92d84efbc272e1e7.log",
+      "summary": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "log_sha256": "df166913f47ff1f04202cae9b31df67ed272d692d99a0023a8117dc3029100dd"
+    },
+    {
+      "label": "closed_restrictions-ab4b00a43c6f134f",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/closed_restrictions-ab4b00a43c6f134f --test-threads=1",
+      "exit_code": 0,
+      "seconds": 2.0788737679831684,
+      "log": "target/direct-layout-closed_restrictions-ab4b00a43c6f134f.log",
+      "summary": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s"
+      ],
+      "log_sha256": "e4ff5ec26ad9f53da6fe78c0964d878784b4ffdc80066c54c8a0f287e9776ad1"
+    },
+    {
+      "label": "fuzz_ranges-d8f897ab204c8fd6",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/fuzz_ranges-d8f897ab204c8fd6 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.9451591569231823,
+      "log": "target/direct-layout-fuzz_ranges-d8f897ab204c8fd6.log",
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s"
+      ],
+      "log_sha256": "ef2c91ef726972982eee3788291d446ff0b9256c314b1afa89670d8d0661b5f8"
+    },
+    {
+      "label": "fuzz_sources-64dbcacaa70394f1",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/fuzz_sources-64dbcacaa70394f1 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.9992720850277692,
+      "log": "target/direct-layout-fuzz_sources-64dbcacaa70394f1.log",
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s"
+      ],
+      "log_sha256": "ac0a2f0b0999527fa7d957a99ee4d0832600ff5931df2d965348d58365bf6790"
+    },
+    {
+      "label": "group-20665e294110e53e",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/group-20665e294110e53e --test-threads=1",
+      "exit_code": 0,
+      "seconds": 1.4108049670467153,
+      "log": "target/direct-layout-group-20665e294110e53e.log",
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s"
+      ],
+      "log_sha256": "c62b1aa77fc54a2fbd7a96824c7fb5cc06a2f01949f597938ea3c5554479f9c8"
+    },
+    {
+      "label": "grouped_h01-53341296173a6a71",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/grouped_h01-53341296173a6a71 --test-threads=1",
+      "exit_code": 124,
+      "seconds": 100.34082472498994,
+      "log": "target/direct-layout-grouped_h01-53341296173a6a71.log",
+      "summary": [],
+      "log_sha256": "59affc56c6ac098c1d5beb0ed0804e19570a9aee59fd3ea6e4fbeaea5c70b4cc"
+    },
+    {
+      "label": "h05-6f1b647186baa40f",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/h05-6f1b647186baa40f --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.2229684260673821,
+      "log": "target/direct-layout-h05-6f1b647186baa40f.log",
+      "summary": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s"
+      ],
+      "log_sha256": "8abe5e194ce6a2b9f72ad64aa32c8147dde0c0da1d135136476ed5a7a7c863fe"
+    },
+    {
+      "label": "h05_conformance-6af48497e9bdef46",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/h05_conformance-6af48497e9bdef46 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 3.942662765039131,
+      "log": "target/direct-layout-h05_conformance-6af48497e9bdef46.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.91s"
+      ],
+      "log_sha256": "1e2ccfb01928f7baf7b8e25708c93dbb77649a8989da13119b1bc30018e66441"
+    },
+    {
+      "label": "host_union-e5d9d8d0bf8180df",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/host_union-e5d9d8d0bf8180df --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.027098709950223565,
+      "log": "target/direct-layout-host_union-e5d9d8d0bf8180df.log",
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ],
+      "log_sha256": "4c5cfbfca0fc0bea1affaf945cb0989afb30494c927dc1b5d16e8948276106ac"
+    },
+    {
+      "label": "i64-568d17fbc79ab255",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/i64-568d17fbc79ab255 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.7079764869995415,
+      "log": "target/direct-layout-i64-568d17fbc79ab255.log",
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s"
+      ],
+      "log_sha256": "03bfa802129f19035e5fc12b5ddac6099df63008a8a3f12ba7d0d1fe5bb5e531"
+    },
+    {
+      "label": "planner-eb99b7d154672849",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/planner-eb99b7d154672849 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.5916300599928945,
+      "log": "target/direct-layout-planner-eb99b7d154672849.log",
+      "summary": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s"
+      ],
+      "log_sha256": "38a58a91a2a00da1b5283d203097900e266015c2e6ace372d72735e485c130be"
+    },
+    {
+      "label": "publication_storage-e621e1df6a8addbd",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/publication_storage-e621e1df6a8addbd --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.7405472709797323,
+      "log": "target/direct-layout-publication_storage-e621e1df6a8addbd.log",
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s"
+      ],
+      "log_sha256": "84c5a0d0485704d7313531803fe77312dd5d21d0bf867c843bf9efc06e193c44"
+    },
+    {
+      "label": "rejections-15c1deea249aa6b3",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/rejections-15c1deea249aa6b3 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.044312290963716805,
+      "log": "target/direct-layout-rejections-15c1deea249aa6b3.log",
+      "summary": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s"
+      ],
+      "log_sha256": "78f4c073975335230590178897b5f7ba03a277e86f26660d6de7eb051815befe"
+    },
+    {
+      "label": "rows-e6ce9d00bd9a9725",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/rows-e6ce9d00bd9a9725 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.15070940798614174,
+      "log": "target/direct-layout-rows-e6ce9d00bd9a9725.log",
+      "summary": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s"
+      ],
+      "log_sha256": "1e0ed3a3c1e658cf13a558da561d704dea82d1f8816136f46a633a054aaa18bc"
+    },
+    {
+      "label": "run_holes-3f8cd73f2e87e8de-final",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/run_holes-3f8cd73f2e87e8de --test-threads=1",
+      "exit_code": 0,
+      "seconds": 4.316983697004616,
+      "log": "target/direct-layout-run_holes-3f8cd73f2e87e8de-final.log",
+      "summary": [
+        "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.29s"
+      ],
+      "log_sha256": "4402077ef172c98b4f7c2a2d876b6f30bfebe051f35c01ba534d0ef2370f8972"
+    },
+    {
+      "label": "doop_gpu-a76c051495b26b32-final",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/doop_gpu-a76c051495b26b32 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.008007155964151025,
+      "log": "target/direct-layout-doop_gpu-a76c051495b26b32-final.log",
+      "summary": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "log_sha256": "df166913f47ff1f04202cae9b31df67ed272d692d99a0023a8117dc3029100dd"
+    },
+    {
+      "label": "cq_gpu_sequence_core-7bdc126be1e8a04a-final",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/cq_gpu_sequence_core-7bdc126be1e8a04a --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.5259660299634561,
+      "log": "target/direct-layout-cq_gpu_sequence_core-7bdc126be1e8a04a-final.log",
+      "summary": [
+        "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s"
+      ],
+      "log_sha256": "7d8519a052250f33e9e321793f495b1d08560cf432e3a89d23c71aa31b144be3"
+    },
+    {
+      "label": "radix-counters-build",
+      "command": "flock -s /tmp/mini_linq-timing.lock cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release -p gpu-datalog-runtime --features radix-counters --no-run",
+      "exit_code": 0,
+      "seconds": 13.913317011902109,
+      "log": "target/direct-layout-radix-counters-build.log",
+      "summary": [],
+      "log_sha256": "65387f64876f2a20fa04d602268bb4459e03c1cff58ca2ebb8355255878fe8f3"
+    },
+    {
+      "label": "grouped-h01-sf10",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/grouped_h01-53341296173a6a71 h01_gpu_matches_duckdb_sf10 --exact --test-threads=1",
+      "exit_code": 124,
+      "seconds": 100.25438609998673,
+      "log": "target/direct-layout-grouped-h01-sf10.log",
+      "summary": [],
+      "log_sha256": "960fec47573bc31e34df893827af5f3cd3558786ca62ad7c5472aec90ae2dc3a"
+    },
+    {
+      "label": "gpu_datalog_runtime-7c0f4e4c10595056",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/gpu_datalog_runtime-7c0f4e4c10595056 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 1.8946579430485144,
+      "log": "target/direct-layout-gpu_datalog_runtime-7c0f4e4c10595056.log",
+      "summary": [
+        "test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s"
+      ],
+      "log_sha256": "d6228da018ae03174fbd6494f3b3c3736ebeb43c263b793cac737fcc6e6ee037"
+    },
+    {
+      "label": "active_lanes-ba35c195941ed67e",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/active_lanes-ba35c195941ed67e --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.9190048119053245,
+      "log": "target/direct-layout-active_lanes-ba35c195941ed67e.log",
+      "summary": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s"
+      ],
+      "log_sha256": "7e19c3a7262665532b7d7b57ef646d9c89071655763a76b9e7f1bce7bf02b621"
+    },
+    {
+      "label": "domain_admission-625d6fd769ac6abd",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/domain_admission-625d6fd769ac6abd --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.8192129849921912,
+      "log": "target/direct-layout-domain_admission-625d6fd769ac6abd.log",
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s"
+      ],
+      "log_sha256": "551d3cd924f5498db68389cbcb149197bb423f5ab49b173b67ae1f9dba46744e"
+    },
+    {
+      "label": "layout_arena-ab5fe5f91e36a0e2",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/layout_arena-ab5fe5f91e36a0e2 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 3.7684032690012828,
+      "log": "target/direct-layout-layout_arena-ab5fe5f91e36a0e2.log",
+      "summary": [
+        "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.75s"
+      ],
+      "log_sha256": "91fe32699c70c8a7fec2efa35a0f32535356bdaa8448f930ae442ab14265fb50"
+    },
+    {
+      "label": "radix_candidates-fecf4720598c5fd3",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/radix_candidates-fecf4720598c5fd3 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 1.8511867640772834,
+      "log": "target/direct-layout-radix_candidates-fecf4720598c5fd3.log",
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.83s"
+      ],
+      "log_sha256": "89f4d39974bf6704f1937d0c7d3e801fb6b1b3e674d3546ac8e5f493a8d399b4"
+    },
+    {
+      "label": "radix_layout-ef1964c534644212",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/radix_layout-ef1964c534644212 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 5.689527070964687,
+      "log": "target/direct-layout-radix_layout-ef1964c534644212.log",
+      "summary": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.67s"
+      ],
+      "log_sha256": "41908aede079268eff42c07f81c56fbb298061cc3c76226edf807e0860b0413d"
+    },
+    {
+      "label": "radix_run-0ef3b5c798812d8e",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/radix_run-0ef3b5c798812d8e --test-threads=1",
+      "exit_code": 0,
+      "seconds": 27.955878052976914,
+      "log": "target/direct-layout-radix_run-0ef3b5c798812d8e.log",
+      "summary": [
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.94s"
+      ],
+      "log_sha256": "d0f6bec38ab7c9c57596c9facd6fd0566fda545db18e1801c48489f76f711b3c"
+    },
+    {
+      "label": "runs-32ce2823ec476d85",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/runs-32ce2823ec476d85 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 19.421717916964553,
+      "log": "target/direct-layout-runs-32ce2823ec476d85.log",
+      "summary": [
+        "test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 19.40s"
+      ],
+      "log_sha256": "4d98156f77fcd9f255ca4fdd18bfaf8275b28298a818f08b91ebc9d2c6751803"
+    },
+    {
+      "label": "runtime_widths-d1f9f69fb82a4b29",
+      "command": "flock /tmp/mini_linq-gpu.lock target/release/deps/runtime_widths-d1f9f69fb82a4b29 --test-threads=1",
+      "exit_code": 0,
+      "seconds": 0.45393894298467785,
+      "log": "target/direct-layout-runtime_widths-d1f9f69fb82a4b29.log",
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s"
+      ],
+      "log_sha256": "9fe2284cedb1e487a3893490323f726e18281f5bbbe9dc7a2b428539477712f2"
+    },
+    {
+      "label": "formal",
+      "command": "python3 doc/formal/check.py",
+      "exit_code": 1,
+      "seconds": 0.4467394060920924,
+      "log": "target/direct-layout-formal.log",
+      "summary": [],
+      "log_sha256": "5d2a95dd690ede7d56a9d6a88bfd5370a9b652ffcbbce9fcaa3f775a8155f690"
+    },
+    {
+      "label": "scope-structures",
+      "command": "python3 tools/check_ir_scope.py --owner cq-lang-structures --base e4e08c99",
+      "exit_code": 0,
+      "seconds": 0.12252910097595304,
+      "log": "target/direct-layout-scope-structures.log",
+      "summary": [
+        "PASS: no IR grammar added outside ['cq-lang-structures'] since e4e08c99"
+      ],
+      "log_sha256": "cc05c11d18adb8c769269e0e5a7bb616c55547959040a9e5ffe9a394238b54e1"
+    },
+    {
+      "label": "scope-sequence",
+      "command": "python3 tools/check_ir_scope.py --owner cq-lang-sequence --base e4e08c99",
+      "exit_code": 0,
+      "seconds": 0.14357642398681492,
+      "log": "target/direct-layout-scope-sequence.log",
+      "summary": [
+        "PASS: no IR grammar added outside ['cq-lang-sequence'] since e4e08c99"
+      ],
+      "log_sha256": "3551f2f76c7f89c3f1dec4ce824f41b9cdc68895c448cda05605dfad3d9672b4"
+    },
+    {
+      "label": "base-profile",
+      "command": "flock /tmp/mini_linq-gpu.lock env GPU_DATALOG_PHASES=1 GPU_DATALOG_TRACE_ROUNDS=1 GPU_DATALOG_TRACE_KERNELS=1 nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --cuda-memory-usage=false --force-overwrite=true -o target/direct-layout-base target/compression-base-doop-target/release/doop-gpu /data/doop-bench/doop-data/xalan",
+      "exit_code": 0,
+      "seconds": 21.32197224907577,
+      "log": "target/direct-layout-base-profile.log",
+      "summary": [
+        "comparison\texact full-tuple sets, all 26 outputs"
+      ],
+      "log_sha256": "10eeccdf5ae7369b955f22d241d32d6fb57bbf94bbc8c1f320e1bc553d7e991f"
+    },
+    {
+      "label": "fix-profile",
+      "command": "flock /tmp/mini_linq-gpu.lock env GPU_DATALOG_PHASES=1 GPU_DATALOG_TRACE_ROUNDS=1 GPU_DATALOG_TRACE_KERNELS=1 nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --cuda-memory-usage=false --force-overwrite=true -o ../../target/direct-layout-fix target/release/doop-gpu /data/doop-bench/doop-data/xalan",
+      "exit_code": 0,
+      "seconds": 19.431993885082193,
+      "log": "target/direct-layout-fix-profile.log",
+      "summary": [
+        "comparison\texact full-tuple sets, all 26 outputs"
+      ],
+      "log_sha256": "b8f7131a9d83dc0727f80229b0a0eb70087698b5abd23c725f753eb44c009bdb"
+    },
+    {
+      "label": "base-export",
+      "command": "nsys export --type=sqlite --force-overwrite=true -o target/direct-layout-base.sqlite target/direct-layout-base.nsys-rep",
+      "exit_code": 0,
+      "seconds": 0.34909825993236154,
+      "log": "target/direct-layout-base-export.log",
+      "summary": [],
+      "log_sha256": "dfda2c0d51adc6c9b8d6af98da20f6188f9db2efd8ed83c9a540b1b29ebbf0ca"
+    },
+    {
+      "label": "fix-export",
+      "command": "nsys export --type=sqlite --force-overwrite=true -o target/direct-layout-fix.sqlite target/direct-layout-fix.nsys-rep",
+      "exit_code": 0,
+      "seconds": 0.3292800940107554,
+      "log": "target/direct-layout-fix-export.log",
+      "summary": [],
+      "log_sha256": "6f5756a14e96912930b1ebdcecba904777052c5d261ba77a2441cd83786cc2a2"
+    },
+    {
+      "label": "formal-registered",
+      "command": "python3 doc/formal/check.py",
+      "exit_code": 0,
+      "seconds": 0.3485794860171154,
+      "log": "target/direct-layout-formal-registered.log",
+      "summary": [
+        "Decode sites: R=15, P=286, V=76, I=22, ?=132 (531 registered comments)."
+      ],
+      "log_sha256": "a9931761048dcb2efc1652b3c5f6d87ea14359beed9c0ef683c3c486b9e0dcf8"
+    },
+    {
+      "label": "base-marked-profile",
+      "command": "flock /tmp/mini_linq-gpu.lock env GPU_DATALOG_PHASES=1 GPU_DATALOG_TRACE_ROUNDS=1 GPU_DATALOG_TRACE_KERNELS=1 LD_PRELOAD=/data/mini_linq-wt/comp-doop/target/active-compare-markers.so nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --cuda-memory-usage=false --force-overwrite=true -o target/direct-layout-base-marked target/compression-base-doop-target/release/doop-gpu /data/doop-bench/doop-data/xalan",
+      "exit_code": 0,
+      "seconds": 19.111811358947307,
+      "log": "target/direct-layout-base-marked-profile.log",
+      "summary": [
+        "comparison\texact full-tuple sets, all 26 outputs"
+      ],
+      "log_sha256": "4b910147e4da720f96677087f7f46987b5f44b8de9b77961dab1a3f65bf2728f"
+    },
+    {
+      "label": "fix-marked-profile",
+      "command": "flock /tmp/mini_linq-gpu.lock env GPU_DATALOG_PHASES=1 GPU_DATALOG_TRACE_ROUNDS=1 GPU_DATALOG_TRACE_KERNELS=1 LD_PRELOAD=/data/mini_linq-wt/comp-doop/target/active-compare-markers.so nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --cuda-memory-usage=false --force-overwrite=true -o ../../target/direct-layout-fix-marked target/release/doop-gpu /data/doop-bench/doop-data/xalan",
+      "exit_code": 0,
+      "seconds": 20.10415254998952,
+      "log": "target/direct-layout-fix-marked-profile.log",
+      "summary": [
+        "comparison\texact full-tuple sets, all 26 outputs"
+      ],
+      "log_sha256": "b1485bdd3a881e0d6020fbfb3ba9b503032784fe16bef36648eff385dea0086d"
+    },
+    {
+      "label": "base-marked-export",
+      "command": "nsys export --type=sqlite --force-overwrite=true -o target/direct-layout-base-marked.sqlite target/direct-layout-base-marked.nsys-rep",
+      "exit_code": 0,
+      "seconds": 0.3532934379763901,
+      "log": "target/direct-layout-base-marked-export.log",
+      "summary": [],
+      "log_sha256": "8cd04af1ceb7c3ed168fa1281fb1d176bf3ae0035d42c55e4bbd222bdb9b83e7"
+    },
+    {
+      "label": "fix-marked-export",
+      "command": "nsys export --type=sqlite --force-overwrite=true -o target/direct-layout-fix-marked.sqlite target/direct-layout-fix-marked.nsys-rep",
+      "exit_code": 0,
+      "seconds": 0.331223658984527,
+      "log": "target/direct-layout-fix-marked-export.log",
+      "summary": [],
+      "log_sha256": "e14e40043216cb1551c6e1e0d3ca3be5e7f53f367ea27724600111cd23f21ba4"
+    }
+  ]
+}
