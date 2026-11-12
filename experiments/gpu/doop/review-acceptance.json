@@ -1,0 +1,259 @@
+{
+  "code_revision": "342c96fb",
+  "review_commits": {
+    "a_opaque_rust": "6b35ffe0",
+    "b_unconditional_census": "81d4a56f",
+    "c_numeric_components": "4200c1e8",
+    "d_readback_fusion": "a365370f",
+    "e_boundary_tests": "c4ab5064",
+    "f_approved_generic_boundary": "342c96fb"
+  },
+  "default_suites": [
+    {
+      "binary": "target/release/deps/cq_gpu_datalog-cbc5d2fb03d249e2",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "wall_seconds": 0.005147879011929035
+    },
+    {
+      "binary": "target/release/deps/domain_boundaries-54c2b9365ace37fb",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s"
+      ],
+      "wall_seconds": 0.4982251370092854
+    },
+    {
+      "binary": "target/release/deps/domain_endpoints-bba66b8fd8883b68",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s"
+      ],
+      "wall_seconds": 0.30192513403017074
+    },
+    {
+      "binary": "target/release/deps/domains-467c1bf7616d7112",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s"
+      ],
+      "wall_seconds": 0.35476942593231797
+    },
+    {
+      "binary": "target/release/deps/heapalloc-dbb6974894906333",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s"
+      ],
+      "wall_seconds": 0.5277107460424304
+    },
+    {
+      "binary": "target/release/deps/oracle-813701d309a6d250",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 24.15s"
+      ],
+      "wall_seconds": 24.166835628915578
+    },
+    {
+      "binary": "target/release/deps/symbols-beb86fcf32f4c30a",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s"
+      ],
+      "wall_seconds": 0.6201525529613718
+    },
+    {
+      "binary": "target/release/deps/cq_gpu_datalog_core-f27ca0043be22bb7",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s"
+      ],
+      "wall_seconds": 0.5359127700794488
+    },
+    {
+      "binary": "target/release/deps/domain_adapter-f8ec8f83b3840439",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "wall_seconds": 0.005866886931471527
+    },
+    {
+      "binary": "target/release/deps/domain_components-1a66d40c4689816b",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "wall_seconds": 0.004054964054375887
+    },
+    {
+      "binary": "target/release/deps/gpu_datalog_runtime-3093039efbf61939",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s"
+      ],
+      "wall_seconds": 0.5683655979810283
+    },
+    {
+      "binary": "target/release/deps/domain_admission-01177940277fbe78",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s"
+      ],
+      "wall_seconds": 0.4869887849781662
+    },
+    {
+      "binary": "target/release/deps/layout_arena-1bc9d5432c554610",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s"
+      ],
+      "wall_seconds": 0.5598060289630666
+    },
+    {
+      "binary": "target/release/deps/radix_candidates-cf7be1aa692b69cb",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s"
+      ],
+      "wall_seconds": 0.8388580810278654
+    },
+    {
+      "binary": "target/release/deps/radix_layout-323ffb745071f491",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.40s"
+      ],
+      "wall_seconds": 1.4186403370695189
+    },
+    {
+      "binary": "target/release/deps/radix_run-78d814ddb0701980",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.25s"
+      ],
+      "wall_seconds": 23.27462966903113
+    },
+    {
+      "binary": "target/release/deps/runs-b609d0cb07f26823",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.84s"
+      ],
+      "wall_seconds": 13.864570311037824
+    },
+    {
+      "binary": "target/release/deps/runtime_widths-8d6e6d7229bba002",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s"
+      ],
+      "wall_seconds": 0.4687200100161135
+    }
+  ],
+  "default_passed": 154,
+  "default_ignored": 2,
+  "radix_counter_suites": [
+    {
+      "binary": "target/release/deps/gpu_datalog_runtime-7c0f4e4c10595056",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s"
+      ],
+      "wall_seconds": 0.571233636001125
+    },
+    {
+      "binary": "target/release/deps/domain_admission-625d6fd769ac6abd",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s"
+      ],
+      "wall_seconds": 0.47763479000423104
+    },
+    {
+      "binary": "target/release/deps/layout_arena-ab5fe5f91e36a0e2",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s"
+      ],
+      "wall_seconds": 0.5061951479874551
+    },
+    {
+      "binary": "target/release/deps/radix_candidates-fecf4720598c5fd3",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s"
+      ],
+      "wall_seconds": 0.6700129670789465
+    },
+    {
+      "binary": "target/release/deps/radix_layout-ef1964c534644212",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s"
+      ],
+      "wall_seconds": 1.3314623039914295
+    },
+    {
+      "binary": "target/release/deps/radix_run-0ef3b5c798812d8e",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.10s"
+      ],
+      "wall_seconds": 23.121568609029055
+    },
+    {
+      "binary": "target/release/deps/runs-32ce2823ec476d85",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 13.82s"
+      ],
+      "wall_seconds": 13.841973338043317
+    },
+    {
+      "binary": "target/release/deps/runtime_widths-d1f9f69fb82a4b29",
+      "exit_code": 0,
+      "summary": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s"
+      ],
+      "wall_seconds": 0.4588205630425364
+    }
+  ],
+  "counter_passed": 101,
+  "counter_ignored": 1,
+  "ignored_reasons": [
+    "50M-row/10M-candidate throughput probe",
+    "opt-in GPU/mini/15-thread timing probe"
+  ],
+  "shared": {
+    "passed": 23,
+    "binary": "experiments/gpu/target/release/deps/doop_shared-c8147215b5544c7c"
+  },
+  "cpu": {
+    "build": "cargo build --release --bin doop from features/datalog/doop: passed",
+    "default_cassandra": "mini and ascent completed, 26 output counts identical",
+    "check_cassandra": "mini and mini-keyed each full_tuple_sets exact against ascent, all 26 relations"
+  },
+  "gpu_exactness": {
+    "cassandra": "exact full-tuple sets, all 26 outputs",
+    "xalan": "exact full-tuple sets, all 26 outputs",
+    "features": [
+      "gpu-datalog-runtime/radix-counters"
+    ],
+    "timings_valid": false,
+    "reason": "foreign VLLM compute tenant; no performance claim"
+  },
+  "doop_package": {
+    "build": "cargo +1.99.1 oxide test --arch sm_89 --materialize-cubin -- --release -p doop-gpu --no-run: passed",
+    "lib_test_binary": "doop_gpu-a23cf7d15ea96352",
+    "main_test_binary": "doop_gpu-03d0515fef247820",
+    "result": "both binaries passed; zero unit tests, dataset exactness exercised separately"
+  },
+  "formal": "python3 doc/formal/check.py: passed; 523 rules, 524 decode comments",
+  "ir_scope": "python3 tools/check_ir_scope.py --base e4e08c99: passed",
+  "readbacks": "review-readback-evidence.json; all 324 per-round records equal base",
+  "full_gpu_gate": "not run; Main owns it"
+}
