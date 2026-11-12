@@ -116,7 +116,7 @@ pub(crate) struct SetOps<'a> {
 impl SetOps<'_> {
     /// Formal rule DL-SortKnownUnique: certified injective full-key permutations
     /// skip unique compaction and count readback, but never skip sorting.
-    pub(crate) fn sort<W: Word>(&self, input: &Buffer<W>, rows: usize, known_unique: bool, validation: Option<&Buffer<u64>>) -> Result<SortedBatch<W>> {
+    pub(crate) fn sort<W: Word>(&self, input: &Buffer<W>, rows: usize, known_unique: bool, validation: Option<Native<u64>>) -> Result<SortedBatch<W>> {
         if !self.pool.shares_memory(input.pool()) || rows > input.len() || rows > u32::MAX as usize
         {
             return Err("invalid sort input pool or live length".into());
@@ -140,11 +140,12 @@ impl SetOps<'_> {
         // SAFETY: kernels initialize the returned prefix before publication.
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
+        let checked = validation.is_some();
         let mut compaction = if known_unique {
             None
         } else {
             Some((
-                Native::<u64>::new(&self.pool, 1)?,
+                match validation { Some(control) => control, None => Native::<u64>::new(&self.pool, 1)? },
                 rccl_cub::thrust_integration::compaction_workspace_in(
                     self.pool.resource(),
                     &launch,
@@ -165,7 +166,7 @@ impl SetOps<'_> {
                     rows,
                     compact,
                 )?;
-                let rows = read_count_validated(&self.pool, count.get(), validation)?;
+                let rows = read_count_validated(&self.pool, count.get(), checked)?;
                 return unsafe { SortedBatch::from_sorted(output, rows) };
             }
             // Adopt the actual sorted buffer: no post-sort copy or spare output.
@@ -223,7 +224,7 @@ impl SetOps<'_> {
             }
         }
         let rows = if let Some((count, _)) = &compaction {
-            read_count_validated(&self.pool, count.get(), validation)?
+            read_count_validated(&self.pool, count.get(), checked)?
         } else {
             rows
         };
@@ -584,16 +585,13 @@ pub(crate) fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usiz
 
 /// Consume a pending domain error beside the count in one existing transfer.
 /// The ordinary path keeps its original one-word readback unchanged.
-fn read_count_validated(pool: &Pool, count: &DeviceBuffer<u64>, validation: Option<&Buffer<u64>>) -> Result<usize> {
-    let Some(validation) = validation else { return read_count(pool, count); };
+fn read_count_validated(pool: &Pool, count: &DeviceBuffer<u64>, checked: bool) -> Result<usize> {
+    if !checked { return read_count(pool, count); }
     let mut result = [0u64; 2];
-    // SAFETY: both initialized control words share this ordered stream.
+    // SAFETY: validation and compaction initialized this shared control buffer.
     unsafe {
-        cuda_core::simt::memory::memcpy_dtod_async(
-            validation.cu_deviceptr(), count.cu_deviceptr(), 8, pool.stream().cu_stream(),
-        )?;
         cuda_core::simt::memory::memcpy_dtoh_async(
-            result.as_mut_ptr(), validation.cu_deviceptr(), 16, pool.stream().cu_stream(),
+            result.as_mut_ptr(), count.cu_deviceptr(), 16, pool.stream().cu_stream(),
         )?;
     }
     crate::record_readback();
