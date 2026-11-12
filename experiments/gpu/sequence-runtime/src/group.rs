@@ -300,13 +300,13 @@ impl<F> GroupedRows<F> {
         let rows = self.checked_len()?;
         let values = self.output.values.to_host()?;
         let valid = self.output.valid.to_host()?;
-        (0..rows)
-            .map(|row| {
-                let range = row * self.output.width..(row + 1) * self.output.width;
-                // DECODE P: final grouped answer decoder reconstructs logical keys and nullable aggregates.
-                (self.decode)(&values[range.clone()], &valid[range])
-            })
-            .collect()
+        let mut output = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let range = row * self.output.width..(row + 1) * self.output.width;
+            // DECODE P: final grouped answer decoder reconstructs logical keys and nullable aggregates.
+            output.push((self.decode)(&values[range.clone()], &valid[range])?);
+        }
+        Ok(output)
     }
 }
 

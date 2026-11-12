@@ -26,6 +26,8 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   bounds instead of measuring again; publication descriptors upload asynchronously.
   Host-built input upload cost is separately reported as load-side work, exposing
   the h13/h04_not_exists timing-boundary difference from e4e08c99.
+  Grouped host publication preallocates its decoded result from the checked row
+  count; nullable decoding and the host/device publication boundary are unchanged.
 
 - Fix: CPU TPC-H `aggregate!` kernels (Q06 default/par) failed to build since
   `fadeecc5` (`expected struct`): the evidence adapter parsed a core struct
