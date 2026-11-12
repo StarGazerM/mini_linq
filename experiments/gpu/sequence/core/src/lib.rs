@@ -12,6 +12,7 @@ pub mod constants;
 mod domains;
 mod emit;
 mod grouping;
+mod handles;
 pub mod layout;
 pub mod providers;
 mod realize;
@@ -21,7 +22,8 @@ mod tiles;
 pub mod runs;
 
 pub use arena::translate_arena;
-pub use emit::translate;
+pub use emit::{translate, translate_with_origins};
+pub use handles::{CaptureHandle, DeviceCaptureBindings};
 
 /// Select target-owned accumulator providers before checking GPU Structures.
 /// The only grouping selection site: pipelines reach it through `stage`, the

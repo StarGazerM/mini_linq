@@ -254,6 +254,7 @@ pub fn compile(
                 #(#loads)*
                 drop(loader);
                 pool.release_unused()?;
+                crate::loader::finish_load(&pool);
                 let reference_started = ::std::time::Instant::now();
                 let decoders = #first_module::decoders(&#first_data, manifest)?;
                 let reference = if manifest.sf == 1 {

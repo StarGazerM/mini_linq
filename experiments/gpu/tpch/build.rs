@@ -370,14 +370,13 @@ fn compile_stage(
             error: error.to_string(),
             term: cpu_source.to_string(),
         })?;
-    for id in domains.values().copied().collect::<std::collections::BTreeSet<_>>() {
-        let domain = format_ident!("__tpch_domain_{id}");
-        let minimum = format_ident!("__tpch_minimum_{id}");
-        setup_bindings.extend(quote! {
-            let #domain = data.domains[#id].ok_or("missing loaded key domain")?;
-            let #minimum = #domain.minimum;
-        });
-    }
+    let domain_handles = domains.values().copied().collect::<std::collections::BTreeSet<_>>()
+        .into_iter().map(|id| cq_gpu_sequence::CaptureHandle {
+            name: format_ident!("__tpch_domain_{id}"),
+            host_type: syn::parse_quote!(&gpu_device_columns::Domain),
+            host_value: syn::parse_quote!(data.domains[#id].as_ref().ok_or("missing loaded key domain")?),
+            device_type: syn::parse_quote!(gpu_device_columns::DomainView),
+        }).collect();
     let mut publication = checked(
         "publication contract",
         &normal,
@@ -672,11 +671,14 @@ fn compile_stage(
                 error: error.to_string(),
                 term: cpu_source.to_string(),
             })?;
-        if domains.contains_key(&origin)
-            || (matches!(
-                metadata.encoding.as_str(),
-                "scaled_integer" | "days_since_epoch"
-            ) && stored_types.contains_key(&origin))
+        if domains.contains_key(&origin) {
+            // The adapted declaration is a code. Its Rust reads explicitly
+            // invert the recorded domain, so the input carrier is identity.
+            sequence.representation.identity.insert(variable);
+        } else if matches!(
+            metadata.encoding.as_str(),
+            "scaled_integer" | "days_since_epoch"
+        ) && stored_types.contains_key(&origin)
         {
             sequence.representation.encoded.insert(variable);
         } else {
@@ -808,6 +810,58 @@ fn compile_stage(
         &planned.program,
         cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine),
     )?;
+    let device_captures = checked(
+        "device handle bindings", &planned.program,
+        cq_gpu_sequence::DeviceCaptureBindings::bind(
+            &analysis.gpu_bindings.realization.captures.captures, domain_handles,
+        ),
+    )?;
+    setup_bindings.extend(checked("host handle bindings", &planned.program, device_captures.host_setup())?);
+    let host_setup_bindings = setup_bindings.clone();
+    let computed_inputs = kernel.computed_publication_inputs().map_err(|error| Rejected {
+        phase: "publication origin check", error: error.to_string(), term: cpu_source.to_string(),
+    })?;
+    artifact["computed_publication_inputs"] = json!(computed_inputs);
+    let computed_field = |column: &str| match analysis.gpu_bindings.bounds.get(column) {
+        Some(cq_lang_sequence::gpu::bindings::ColumnBounds::Scalar { .. }) => true,
+        Some(cq_lang_sequence::gpu::bindings::ColumnBounds::Resident { sources }) =>
+            sources.iter().all(|source| computed_inputs.contains(source)),
+        None => false,
+    };
+    let mut computed_fields: std::collections::BTreeMap<String, std::collections::BTreeSet<&str>> =
+        std::collections::BTreeMap::new();
+    for record in analysis.gpu_publications.values() {
+        match &record.storage {
+            cq_lang_sequence::gpu::publication::PublicationStorage::FlatRows(rows) => {
+                for column in &rows.columns {
+                    if computed_field(column) {
+                        computed_fields.entry(column.clone()).or_default().insert("payload");
+                    }
+                }
+            }
+            cq_lang_sequence::gpu::publication::PublicationStorage::PackedKeys(keys) => {
+                for field in keys.codec.fields() {
+                    if computed_field(&field.column) {
+                        computed_fields.entry(field.column.clone()).or_default().insert("canonical identity");
+                    }
+                }
+            }
+        }
+    }
+    for definition in &planned.physical.program.definitions {
+        if let cq_lang_structures::physical::Operator::Group(group) = &definition.operator {
+            for key in &group.keys {
+                let column = cq_lang_structures::physical::symbol_name(key);
+                if computed_field(&column) {
+                    computed_fields.entry(column).or_default().insert("group key");
+                }
+            }
+        }
+    }
+    artifact["computed_fields"] = json!(computed_fields.into_iter().map(|(column, uses)| {
+        let ty = analysis.gpu_bindings.carriers[&column].to_token_stream().to_string();
+        json!({"field": column, "type": ty, "uses": uses})
+    }).collect::<Vec<_>>());
     // The checked GPU publication records (storage layout, union staging, set
     // build, arena), printed as recorded.
     artifact["gpu_publications"] = json!(analysis
@@ -825,7 +879,7 @@ fn compile_stage(
         checked(
             "translate",
             &planned.program,
-            cq_gpu_sequence::translate(&planned.physical, &planned.structures, &planned.program, &analysis),
+            cq_gpu_sequence::translate_with_origins(&planned.physical, &planned.structures, &planned.program, &analysis, &computed_inputs, &device_captures),
         )?
     };
 
@@ -927,8 +981,8 @@ fn compile_stage(
         });
         if let Some(domain) = column.as_ref().and_then(|column| domains.get(column)) {
             let decoder = format_ident!("domain_{index}");
-            decode_bindings.push(quote!(let #decoder = data.domains[#domain].ok_or("missing loaded key domain")?;));
-            // DECODE P: final answer formatting restores shared minimum-offset integer keys.
+            decode_bindings.push(quote!(let #decoder = data.domains[#domain].as_ref().ok_or("missing loaded key domain")?;));
+            // DECODE P: final answer formatting restores keys through their recorded Offset/Rank inverse.
             owned_outputs.push(quote!(#decoder.value(*value).to_string()));
         } else if column.as_ref().is_some_and(|origin| {
             stored_types.contains_key(origin)
@@ -951,7 +1005,7 @@ fn compile_stage(
             owned_outputs.push(quote!(value.to_string()));
         }
     }
-    let catalog_field = quote!(domains: [Option<gpu_device_columns::KeyDomain>; crate::key_domains::COUNT],);
+    let catalog_field = quote!(domains: [Option<gpu_device_columns::Domain>; crate::key_domains::COUNT],);
     let catalog_init = quote!(domains: loader.domains(),);
     let load_setup = quote!();
     {
@@ -1055,10 +1109,15 @@ fn compile_stage(
             } else {
                 quote!(output)
             };
+            let record_bounds = resident.then(|| quote! {
+                cq_gpu_sequence_runtime::index_bytes::publication(module_path!(), &result.storage().bounds);
+            });
             quote! {
                 #(let #fields = &data.#fields;)*
                 let output = #gpu;
-                Ok(#publish)
+                let result = #publish;
+                #record_bounds
+                Ok(result)
             }
         };
         let mut artifact = artifact;
@@ -1090,7 +1149,7 @@ fn compile_stage(
                 }
                 #[inline(never)]
                 pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
-                    #setup_bindings
+                    #host_setup_bindings
                     #(#sequential_bindings)*
                     Ok((#cpu).map(|row| #own_row).collect())
                 }
@@ -1115,6 +1174,7 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         ("keys.bin", [1_i32, 2, 3, 1]),
         ("names.bin", [0_i32, 1, 0, 0]),
         ("unique-keys.bin", [1_i32, 2, 3, 4]),
+        ("sparse-keys.bin", [1_i32, 100, 1000, 1]),
     ] {
         fs::write(
             directory.join(name),
@@ -1137,6 +1197,10 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
             "schema_version": 2, "sf": 1, "byte_order": "little",
             "relations": {
                 "partsupp": {"rows": 4, "columns": [key("ps_partkey")]},
+                "orders": {"rows": 4, "columns": [{
+                    "name": "o_orderkey", "type": "i32", "logical_type": "Integer",
+                    "encoding": "plain", "file": "sparse-keys.bin"
+                }]},
                 "unique_rows": {"rows": 4, "columns": [
                     {
                         "name": "id", "type": "i32", "logical_type": "Integer",
@@ -1203,6 +1267,75 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
     )
     .map_err(|error| format!("Host set regression {}: {}", error.phase, error.error))?;
     let preprocessing = program.preprocessing_tokens()?;
+    let publication_program = stages::Program::import(r#"
+        program publication_origins {
+            input Orders(o_orderkey: i64) = table(orders);
+            stage s0 {
+                inputs { Orders = Orders; }
+                captures [];
+                evidence {}
+                cq {
+                    struct Producer;
+                    relation Orders(o_orderkey:i64);
+                    relation answer(key:i64, narrow:i64, wide:i64);
+                    answer(key, sum(narrow), sum(wide)) :- Orders(key),
+                        let narrow:i64 = *key,
+                        let wide:i64 = *key * 1099511627776i64;
+                }
+            }
+            publish Produced = s0 owned;
+            stage s1 {
+                inputs { Produced = Produced; }
+                captures [];
+                evidence {}
+                cq {
+                    struct Consumer;
+                    relation Produced(key:i64,narrow:i64,wide:i64);
+                    relation answer(key:i64,narrow:i64,wide:i64);
+                    answer(key,narrow,wide) :- Produced(key,narrow,wide);
+                }
+            }
+            stage s2 {
+                inputs { Produced = Produced; }
+                captures [];
+                evidence {}
+                cq {
+                    struct MissingConstant;
+                    relation Produced(key:i64,narrow:i64,wide:i64);
+                    relation answer(key:i64,narrow:i64,wide:i64);
+                    answer(key,narrow,wide) :- Produced(key,narrow,wide), where key == 999;
+                }
+            }
+            stage s3 {
+                inputs { Produced = Produced; }
+                captures [];
+                evidence {}
+                cq {
+                    struct EdgeConstant;
+                    relation Produced(key:i64,narrow:i64,wide:i64);
+                    relation answer(key:i64,narrow:i64,wide:i64);
+                    answer(key,narrow,wide) :- Produced(key,narrow,wide), where key == 1000;
+                }
+            }
+            terminal {
+                from s1 project [column(0),column(1),column(2)] dictionaries [];
+                from s2 project [column(0),column(1),column(2)] dictionaries [];
+                from s3 project [column(0),column(1),column(2)] dictionaries [];
+            }
+        }
+    "#)?;
+    let mut publication_pipeline = advice::Pipeline::baseline();
+    publication_pipeline.publication = advice::Placement::Device;
+    let (publication_code, _) = build_stages::compile(
+        &publication_program, "publication_origins", &manifest, "advised",
+        Some(&publication_pipeline),
+    ).map_err(|error| format!("Publication origin regression {}: {}", error.phase, error.error))?;
+    publication_pipeline.target = advice::Target::Host;
+    publication_pipeline.publication = advice::Placement::Host;
+    let (host_publication_code, _) = build_stages::compile(
+        &publication_program, "publication_origins", &manifest, "advised",
+        Some(&publication_pipeline),
+    ).map_err(|error| format!("Host publication origin regression {}: {}", error.phase, error.error))?;
     let directory = directory.to_string_lossy();
     Ok(quote! {
         #[cfg(test)]
@@ -1237,8 +1370,9 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
                 let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
-                let full = loader.bind::<(i32, i32)>("part", &["p_partkey", "p_name"])?;
-                assert_eq!(full.to_host()?, vec![(1, 0), (2, 1), (3, 0)]);
+                loader.prepare(&[("part", &["p_partkey", "p_name"])])?;
+                let full = loader.bind::<(u32, i32)>("part", &["p_partkey", "p_name"])?;
+                assert_eq!(full.to_host()?, vec![(0, 0), (1, 1), (2, 0)]);
                 let projected = loader.bind::<(i32,)>("part", &["p_name"])?;
                 assert_eq!(projected.to_host()?, vec![(0,), (1,)]);
                 let alias = loader.bind::<(i32,)>("part", &["p_name"])?;
@@ -1349,6 +1483,73 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                     vec!["1".to_owned(), "green part".to_owned()],
                     vec!["3".to_owned(), "green part".to_owned()],
                 ]);
+                Ok(())
+            }
+        }
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod publication_origin_regression {
+            #publication_code
+            #[test]
+            fn staged_narrow_computed_wide_computed_and_domain_keys_are_exact() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                assert!(loader.domains()[0].as_ref().unwrap().is_rank());
+                let producer = stage_0::load(&manifest, pool.clone(), &mut loader)?;
+                let consumer = stage_1::load(&manifest, pool.clone(), &mut loader)?;
+                let missing = stage_2::load(&manifest, pool.clone(), &mut loader)?;
+                let edge = stage_3::load(&manifest, pool, &mut loader)?;
+                gpu_device_columns::rank::take_host_inverse_report();
+                let rows = stage_0::execute(&producer)?;
+                assert_eq!(gpu_device_columns::rank::take_host_inverse_report().0, 0,
+                    "device Rust must not initialize a host inverse mirror");
+                assert_eq!(rows.storage().bounds, vec![
+                    gpu_device_columns::Bounds::Inclusive { min: 0, max: 2 },
+                    gpu_device_columns::Bounds::Inclusive { min: 1, max: 1000 },
+                    gpu_device_columns::Bounds::Inclusive { min: 1i64 << 40, max: 1000i64 << 40 },
+                ]);
+                let answer = stage_1::execute(&consumer, &rows)?;
+                let mut actual = stage_1::decode(&consumer, &manifest, answer.to_host()?)?;
+                actual.sort();
+                assert_eq!(actual, [1i64, 100, 1000].into_iter().map(|key| vec![
+                    key.to_string(), key.to_string(), (key << 40).to_string(),
+                ]).collect::<Vec<_>>());
+                let reference = stage_0::sequential(&producer)?;
+                let reference = stage_1::sequential(&consumer, &reference)?;
+                let mut reference = stage_1::decode(&consumer, &manifest, reference)?;
+                reference.sort();
+                assert_eq!(actual, reference);
+                assert!(stage_2::execute(&missing, &rows)?.to_host()?.is_empty());
+                let edge_rows = stage_3::execute(&edge, &rows)?.to_host()?;
+                assert_eq!(stage_3::decode(&edge, &manifest, edge_rows)?, vec![vec![
+                    "1000".to_owned(), "1000".to_owned(), (1000i64 << 40).to_string(),
+                ]]);
+                Ok(())
+            }
+        }
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod publication_host_origin_regression {
+            #host_publication_code
+            #[test]
+            fn staged_host_rank_rust_read_uses_owning_handle() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                let bytes = loader.domains()[0].as_ref().unwrap().bytes();
+                let producer = stage_0::load(&manifest, pool, &mut loader)?;
+                gpu_device_columns::rank::take_host_inverse_report();
+                let rows = stage_0::execute(&producer)?;
+                assert_eq!(gpu_device_columns::rank::take_host_inverse_report().0, bytes);
+                let mut actual = stage_0::decode(&producer, &manifest, rows)?;
+                actual.sort();
+                assert_eq!(actual, [1i64, 100, 1000].into_iter().map(|key| vec![
+                    key.to_string(), key.to_string(), (key << 40).to_string(),
+                ]).collect::<Vec<_>>());
+                assert_eq!(gpu_device_columns::rank::take_host_inverse_report().0, 0);
                 Ok(())
             }
         }

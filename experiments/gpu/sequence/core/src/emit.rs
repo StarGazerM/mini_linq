@@ -107,13 +107,18 @@ fn packing_bounds(bounds: &FieldBounds) -> TokenStream {
     }
 }
 
-fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident) -> TokenStream {
+fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident, computed_inputs: &BTreeSet<(String, usize)>) -> TokenStream {
     let bounds = packing_bounds(&field.bounds);
     // Computed fields have only a declared scalar bound. Loaded/domain-backed
     // fields carry resident or explicit bounds and must fit the code contract.
-    let check_domain = (!matches!(
-        field.bounds, FieldBounds::Column(ColumnBounds::Scalar { .. })
-    )).then(|| quote! {
+    let computed = match &field.bounds {
+        FieldBounds::Column(ColumnBounds::Scalar { .. }) => true,
+        FieldBounds::Column(ColumnBounds::Resident { sources }) =>
+            sources.iter().all(|source| computed_inputs.contains(source)),
+        // Explicit intervals are checked scalar-fold ranges, not loaded domains.
+        FieldBounds::Inclusive { .. } => true,
+    };
+    let check_domain = (!computed).then(|| quote! {
         if __cq_width > 32 {
             return Err("GPU domain key field exceeds 32 bits".into());
         }
@@ -134,7 +139,7 @@ fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident) -> Tok
     }
 }
 
-fn packing_fields(codec: &KeyCodec) -> Vec<TokenStream> {
+fn packing_fields(codec: &KeyCodec, computed_inputs: &BTreeSet<(String, usize)>) -> Vec<TokenStream> {
     match codec {
         KeyCodec::FrameOfReference { fields } => fields
             .iter()
@@ -144,6 +149,7 @@ fn packing_fields(codec: &KeyCodec) -> Vec<TokenStream> {
                     field,
                     &format_ident!("__cq_pack_base_{i}"),
                     &format_ident!("__cq_pack_shift_{i}"),
+                    computed_inputs,
                 )
             })
             .collect(),
@@ -2182,6 +2188,28 @@ pub fn translate(
     translate_impl(physical, structures, program, analysis, None)
 }
 
+/// Carry checked producer-origin facts independently of resident measured bounds.
+pub fn translate_with_origins(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+    computed_inputs: &BTreeSet<(String, usize)>,
+    device_captures: &crate::DeviceCaptureBindings,
+) -> syn::Result<syn::Expr> {
+    for (name, slot) in computed_inputs {
+        let input = physical.inputs().find(|input| input.name == name.as_str())
+            .ok_or_else(|| error("GPU publication origin names an absent input"))?;
+        if *slot >= input.columns.len() || input.columns[*slot].domain.is_some() {
+            return Err(error("GPU computed publication origin conflicts with its input domain"));
+        }
+    }
+    translate_with_metadata(
+        physical, structures, program, analysis, None,
+        std::env::var_os("CQ_EXPANSION_COUNTERS").is_some(), computed_inputs, Some(device_captures),
+    )
+}
+
 pub(crate) fn translate_impl(
     physical: &cq_lang_structures::physical::Program,
     structures: &cq_lang_structures::Program,
@@ -2206,6 +2234,19 @@ fn translate_observed(
     analysis: &Analysis,
     arena: Option<&syn::Expr>,
     expansion_counters: bool,
+) -> syn::Result<syn::Expr> {
+    translate_with_metadata(physical, structures, program, analysis, arena, expansion_counters, &BTreeSet::new(), None)
+}
+
+fn translate_with_metadata(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+    arena: Option<&syn::Expr>,
+    expansion_counters: bool,
+    computed_inputs: &BTreeSet<(String, usize)>,
+    device_captures: Option<&crate::DeviceCaptureBindings>,
 ) -> syn::Result<syn::Expr> {
     if program
         .graded
@@ -2246,7 +2287,10 @@ fn translate_observed(
             ))
         })?;
     }
-    let rows = Rows::new(physical, structures, program, structure_analysis, analysis)?;
+    let rows = match device_captures {
+        Some(bindings) => Rows::with_capture_bindings(physical, structures, program, structure_analysis, analysis, Some(bindings))?,
+        None => Rows::new(physical, structures, program, structure_analysis, analysis)?,
+    };
     let codecs =
         crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
     let mut compiler = Compiler {
@@ -2615,6 +2659,7 @@ fn translate_observed(
                         geometry,
                         &compiler.rows,
                         &analysis.gpu_bindings.bounds,
+                        computed_inputs,
                     )?
                 }
                 GroupCompletion::GridPartials {
@@ -2818,7 +2863,7 @@ fn translate_observed(
                         let base = format_ident!("base_{field}");
                         let shift = format_ident!("shift_{field}");
                         let slot = flat_slot(staging, &recipe.column);
-                        fields.push(packing_field(recipe, &base, &shift));
+                        fields.push(packing_field(recipe, &base, &shift, computed_inputs));
                         params.extend([abi_parameter(base.clone(), syn::parse_quote!(i64)), abi_parameter(shift.clone(), syn::parse_quote!(u32))]);
                         args.extend([abi_argument(base.clone(), quote!(#base)), abi_argument(shift.clone(), quote!(#shift))]);
                         parts.push(quote! {
@@ -2881,6 +2926,7 @@ fn translate_observed(
                     let canonicalize = quote! {
                         let #owner = unsafe { <#provider>::build_set(
                             &__cq_pool, &#keys, #store_length, __cq_key_bits, #set_params)? };
+                        ::cq_gpu_sequence_runtime::index_bytes::canonical(&#owner);
                     };
                     if final_output {
                         output = Some(if canonical {
@@ -3075,7 +3121,7 @@ fn translate_observed(
             .storage
             .codec()
             .filter(|_| !(arena.is_some() && final_output))
-            .map(packing_fields)
+            .map(|codec| packing_fields(codec, computed_inputs))
             .unwrap_or_default();
         let kernel_name = format_ident!("__cq_sequence_dispatch_{index}_{module_name}");
         compiler.rows.begin_abi_uses();
@@ -3911,6 +3957,17 @@ fn translate_observed(
                 abi_argument(format_ident!("__partials"), partials_pointer),
                 abi_argument(format_ident!("__blocks"), quote!(__cq_grid)),
             ]].concat())?;
+        let record_flat = (!final_output && matches!(&record.storage, PublicationStorage::FlatRows(_))).then(|| {
+            let meta_bytes = if resident { quote!(0usize) } else { quote!(#store_meta.bytes()) };
+            quote! {
+                if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
+                    ::cq_gpu_sequence_runtime::index_bytes::record_allocated(
+                        "flat publication",
+                        #store_rows.bytes() + #store_begin.bytes() + #store_offsets.bytes() + #meta_bytes,
+                    );
+                }
+            }
+        });
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -3940,6 +3997,7 @@ fn translate_observed(
                 break (#stores #output_keys,#meta_value,__cq_logical);
             };
             #remember_count
+            #record_flat
         });
         if final_output {
             output = Some(if arena.is_some() {
@@ -3950,6 +4008,7 @@ fn translate_observed(
                 quote! {
                     let __cq_keys=unsafe {<#provider>::build_set(
                         &__cq_pool, &#output_keys, #store_length, __cq_key_bits, #set_params)?};
+                    ::cq_gpu_sequence_runtime::index_bytes::canonical(&__cq_keys);
                     // DECODE V: P6 canonical output adapter reconstructs device i64 columns before final host publication.
                     let __cq_result=__cq_output_adapter.borrow_mut().unpack_columns(__cq_keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
                 }
@@ -3967,6 +4026,7 @@ fn translate_observed(
             launches.push(quote! {
                 let #canonical_owner=unsafe {<#provider>::build_set(
                     &__cq_pool, &#output_keys, #store_length, __cq_key_bits, #set_params)?};
+                ::cq_gpu_sequence_runtime::index_bytes::canonical(&#canonical_owner);
                 let #store_length=#canonical_owner.logical_count()?;
                 let #fields=__cq_fields;
                 drop(#output_keys);
@@ -4031,7 +4091,7 @@ fn translate_observed(
                 .storage
                 .codec()
                 .ok_or_else(|| error("GPU-PublicationStorage: host output lacks recorded keys"))?;
-            let packing = packing_fields(codec);
+            let packing = packing_fields(codec, computed_inputs);
             for i in 0..codec.fields().len() {
                 let base = format_ident!("__cq_pack_base_{i}");
                 let shift = format_ident!("__cq_pack_shift_{i}");
@@ -4108,6 +4168,7 @@ fn translate_observed(
                     let keys = unsafe { <#provider>::build_set(
                         &__cq_pool, &__cq_host_output_keys, __cq_host_output_length,
                         __cq_key_bits, #set_params)? };
+                    ::cq_gpu_sequence_runtime::index_bytes::canonical(&keys);
                     // DECODE V: P6 host-origin canonical output is reuploaded then expanded on device, rather than decoded at host publication.
                     let __cq_result = __cq_output_adapter.borrow_mut().unpack_columns(
                         keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
@@ -5141,7 +5202,7 @@ mod tests {
                 },
             ],
         };
-        let packing = packing_fields(&codec);
+        let packing = packing_fields(&codec, &BTreeSet::new());
         assert!(idents(packing[0].clone()).contains("__cq_pack_base_0"));
         assert!(idents(packing[1].clone()).contains("__cq_sequence_host_s"));
     }

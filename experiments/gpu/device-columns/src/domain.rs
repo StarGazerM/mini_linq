@@ -1,4 +1,7 @@
-//! Load-recorded integer identity, separate from each column's FOR frames.
+//! Load-recorded integer identity, independent of each column's FOR frames.
+//!
+//! `KeyDomain` is the scalar Offset descriptor. `Domain` owns the frozen GPU
+//! membership index used by both Offset and sparse, order-preserving Rank.
 use crate::{Bounds, Result};
 
 /// Minimum-offset codes share this record across all joined member columns.
@@ -60,9 +63,141 @@ impl cq_storage::OrderedCodeDomain for KeyDomain {
     fn upper(&self, value: &i64) -> u32 { (*self).upper(*value) }
 }
 
+/// Rank wins at and above this inclusive span/cardinality ratio.
+pub const RANK_SPARSITY_THRESHOLD: u64 = 2;
+
+pub fn use_rank(span: u32, distinct: u32) -> bool {
+    distinct != 0 && u64::from(span) >= RANK_SPARSITY_THRESHOLD * u64::from(distinct)
+}
+
+/// Owning runtime record. Clones retain the membership and inverse allocations
+/// independently of the loader. Only `view()` may be copied into device code.
+#[derive(Clone)]
+pub struct Domain {
+    pub id: u32,
+    pub minimum: i64,
+    pub bound: u32,
+    pub bits: u32,
+    pub(crate) offset: KeyDomain,
+    pub(crate) index: Option<std::sync::Arc<crate::rank::Index>>,
+    pub(crate) distinct: u32,
+}
+
+/// Non-owning device descriptor; retain its `Domain` until stream completion.
+/// Null bitmap/directory pointers mean Offset, which owns no device metadata.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DomainView {
+    pub minimum: i64,
+    pub bound: u32,
+    pub span: u32,
+    pub bitmap: *const u32,
+    pub directory: *const u32,
+}
+unsafe impl cuda_core::DeviceCopy for DomainView {}
+
+impl DomainView {
+    /// # Safety
+    /// Retain the owning domain and pass a valid code on its CUDA stream.
+    #[inline(always)]
+    pub unsafe fn value(self, code: u32) -> i64 {
+        unsafe { domain_value(self, code) }
+    }
+}
+
+/// Reconstruct a logical key at an R/P boundary.
+///
+/// # Safety
+/// The owning domain must be alive, and `code < domain.bound`.
+#[cuda_device::device]
+#[inline(always)]
+pub unsafe fn domain_value(domain: DomainView, code: u32) -> i64 {
+    // DECODE ?: recorded Offset/Rank inverse requires a caller Rust-read or publication boundary.
+    let offset = if domain.directory.is_null() {
+        code
+    } else {
+        let words = (domain.span as usize).div_ceil(32);
+        let mut low = 0;
+        let mut high = words;
+        // Upper bound handles empty bitmap words and repeated prefixes.
+        while low < high {
+            let mid = low + (high - low) / 2;
+            if unsafe { domain.directory.add(mid).read() } <= code {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        let word = low - 1;
+        let mut remaining = code - unsafe { domain.directory.add(word).read() };
+        let mut bits = unsafe { domain.bitmap.add(word).read() };
+        while remaining != 0 {
+            bits &= bits - 1;
+            remaining -= 1;
+        }
+        word as u32 * 32 + bits.trailing_zeros()
+    };
+    domain.minimum.wrapping_add(i64::from(offset))
+}
+
+/// Exact code or the reserved missing sentinel.
+///
+/// # Safety
+/// The owning domain and its immutable GPU buffers must remain alive.
+#[cuda_device::device]
+#[inline(always)]
+pub unsafe fn domain_exact(domain: DomainView, value: i64) -> u32 {
+    if value < domain.minimum { return u32::MAX; }
+    let offset = (value as u64).wrapping_sub(domain.minimum as u64);
+    if offset >= domain.span as u64 { return u32::MAX; }
+    let word = offset as usize / 32;
+    if !domain.bitmap.is_null()
+        && unsafe { domain.bitmap.add(word).read() } & (1 << (offset % 32)) == 0
+    {
+        return u32::MAX;
+    }
+    unsafe { domain_lower(domain, value) }
+}
+
+/// Ordered lower bound, including absent and out-of-range constants.
+///
+/// # Safety
+/// The owning domain and its immutable GPU buffers must remain alive.
+#[cuda_device::device]
+#[inline(always)]
+pub unsafe fn domain_lower(domain: DomainView, value: i64) -> u32 {
+    if value < domain.minimum { return 0; }
+    let offset = (value as u64).wrapping_sub(domain.minimum as u64);
+    if offset >= domain.span as u64 { return domain.bound; }
+    if domain.directory.is_null() { return offset as u32; }
+    let word = offset as usize / 32;
+    let rank = unsafe { domain.directory.add(word).read() };
+    let before = (1u32 << (offset % 32)) - 1;
+    rank + (unsafe { domain.bitmap.add(word).read() } & before).count_ones()
+}
+
+impl cq_storage::CodeDomain for Domain {
+    type Value = i64;
+    type Code = u32;
+    fn exact(&self, value: &i64) -> u32 { Domain::exact(self, *value) }
+}
+impl cq_storage::OrderedCodeDomain for Domain {
+    fn lower(&self, value: &i64) -> u32 { Domain::lower(self, *value) }
+    fn upper(&self, value: &i64) -> u32 { Domain::upper(self, *value) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rank_threshold_is_inclusive_and_empty_stays_offset() {
+        assert!(!use_rank(0, 0));
+        assert!(!use_rank(1, 1));
+        assert!(!use_rank(7, 4));
+        assert!(use_rank(8, 4));
+        assert!(use_rank(u32::MAX - 1, 1));
+    }
 
     #[test]
     fn empty_and_singleton_domains() {

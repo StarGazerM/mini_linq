@@ -118,7 +118,7 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
     );
     // DECODE P: diagnostic large signed maximum publishes logical host values for exact assertions.
     assert_eq!(large.to_host()?[300_002], (i64::MAX,));
-    // Scalar bounds take the lane type's full range instead of measuring.
+    // Scalar bounds size storage; publication records the encoder's exact extrema.
     let scalar = upload_numeric_columns::<(i32, u8), _>(
         pool.clone(),
         |columns| {
@@ -133,8 +133,8 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
         scalar.storage().bounds,
         [
             Bounds::Inclusive {
-                min: i32::MIN as i64,
-                max: i32::MAX as i64
+                min: -4,
+                max: 9
             },
             Bounds::Inclusive { min: 1, max: 2 }
         ]

@@ -94,11 +94,17 @@ pub fn run(
             // A runtime failure is neither a planning rejection nor a passing
             // measurement. Preserve it, continue the inventory, then fail main.
             loader::take_load_report();
+            gpu_device_columns::rank::take_host_inverse_report();
             let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 execute_query(&query, &manifest, &mode, false)
             }));
             // Zero columns: this query's inputs did not use the manifest loader.
             result["base_columns"] = loader::take_load_report();
+            let (bytes, milliseconds) = gpu_device_columns::rank::take_host_inverse_report();
+            result["domain_host_inverse"] = json!({
+                "host_mirror_bytes": bytes, "host_mirror_ms": milliseconds,
+                "scope": "lazy Rank structural mirror for host Rust reads or final publication; never load-time work; host-island reads remain in query timing, final formatting is outside it",
+            });
             let execution = match execution {
                 Ok(value) => value,
                 Err(payload) => {

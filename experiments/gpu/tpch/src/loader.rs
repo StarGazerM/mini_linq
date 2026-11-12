@@ -126,9 +126,22 @@ pub fn take_load_report() -> Value {
         "upload_encode_ms": report.upload_encode_ms,
         "domain_ms": report.domain_ms,
         "domains": report.domains,
+        "rank_span_distinct_threshold": gpu_device_columns::RANK_SPARSITY_THRESHOLD,
         "cache_write_ms": report.cache_write_ms,
-        "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed; unprojected = full source columns (cacheable); source_bytes = native stored bytes read; read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); domain_ms = scalar domain-bound reduction and header-only normalization, plus normalization upload of pre-existing opaque host inputs; pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context",
+        "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed; domains[].bytes = retained Rank bitmap/per-word-prefix metadata (Offset retains none); unprojected = full source columns (cacheable); source_bytes = native stored bytes read; read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); domain_ms = device union bitmap/prefix construction, Offset header normalization or Rank translation/FOR encoding, plus frozen Rank-membership/Offset-range validation and normalization of pre-existing opaque host inputs; pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; domain publication mirrors are lazy and reported separately",
     })
+}
+
+/// Refresh the post-load snapshot after temporary loader owners and scratch
+/// have been dropped and the pool trimmed, before any query executes.
+pub fn finish_load(pool: &Pool) {
+    let stats = pool.memory_stats();
+    report(|report| {
+        report.peak_device_bytes = report.peak_device_bytes.max(stats.peak_bytes);
+        report.peak_reserved_device_bytes = report.peak_reserved_device_bytes.max(stats.reserved_bytes);
+        report.device_bytes_after_load = stats.current_bytes;
+        report.reserved_device_bytes_after_load = stats.reserved_bytes;
+    });
 }
 
 
@@ -139,7 +152,7 @@ pub struct Loader<'a> {
     pool: Arc<Pool>,
     tables: BTreeMap<String, CachedTable>,
     staging: RefCell<NativeStaging>,
-    domains: [Option<gpu_device_columns::KeyDomain>; crate::key_domains::COUNT],
+    domains: [Option<gpu_device_columns::Domain>; crate::key_domains::COUNT],
 }
 
 #[derive(Default)]
@@ -280,7 +293,7 @@ impl<'a> Loader<'a> {
             staging: RefCell::new(NativeStaging::new(pool.clone())),
             pool,
             tables: BTreeMap::new(),
-            domains: [None; crate::key_domains::COUNT],
+            domains: std::array::from_fn(|_| None),
         }
     }
 
@@ -310,35 +323,47 @@ impl<'a> Loader<'a> {
         for id in 0..crate::key_domains::COUNT as u32 {
             let members: Vec<_> = self.tables.iter().flat_map(|(table, resident)| {
                 resident.columns.iter().filter_map(move |(name, column)| {
-                    (crate::key_domains::id(table, name) == Some(id)).then(|| column.bounds())
+                    (crate::key_domains::id(table, name) == Some(id)).then_some(column.as_ref())
                 })
             }).collect();
             if members.is_empty() { continue; }
-            let domain = gpu_device_columns::native::record_domain(self.pool.clone(), id, &members)?;
+            let domain = gpu_device_columns::Domain::record(self.pool.clone(), id, &members)?;
             for (table, resident) in &mut self.tables {
                 for (name, column) in &mut resident.columns {
                     if crate::key_domains::id(table, name) == Some(id) {
-                        Arc::get_mut(column).ok_or("key normalization cannot mutate a published column")?
-                            .normalize_key(domain)?;
+                        let column = Arc::get_mut(column).ok_or("key normalization cannot mutate a published column")?;
+                        domain.normalize(column)?;
+                        if domain.is_rank() {
+                            report(|report| {
+                                report.columns += 1;
+                                report.resident_bytes += column.bytes();
+                            });
+                        }
                     }
                 }
             }
-            self.domains[id as usize] = Some(domain);
             report(|report| report.domains.push(json!({
                 "id": domain.id, "minimum": domain.minimum, "bound": domain.bound, "bits": domain.bits,
+                "mapping": if domain.is_rank() { "rank" } else { "offset" },
+                "span": domain.span(), "distinct": domain.distinct(), "bytes": domain.bytes(),
             })));
+            self.domains[id as usize] = Some(domain);
         }
+        self.report_memory();
         self.pool.stream().synchronize()?;
+        self.pool.release_unused()?;
+        self.report_memory();
         report(|report| report.domain_ms += ms(started));
         Ok(())
     }
 
-    pub fn domains(&self) -> [Option<gpu_device_columns::KeyDomain>; crate::key_domains::COUNT] {
-        self.domains
+    /// Cloning the catalog retains domain allocations beyond the loader.
+    pub fn domains(&self) -> [Option<gpu_device_columns::Domain>; crate::key_domains::COUNT] {
+        self.domains.clone()
     }
 
-    /// Upload an authored logical host tuple once, then encode its integer key
-    /// fields on device. Bounds reduction validates every field before rebasing.
+    /// Upload an authored logical host tuple once, then validate Rank membership
+    /// or the Offset range and encode integer key fields in the frozen domain.
     pub fn upload_host_keys<Raw: cuda_core::DeviceCopy, Row: gpu_datalog_runtime::ScalarTuple>(
         &self,
         rows: &[Raw],
@@ -354,19 +379,17 @@ impl<'a> Loader<'a> {
             if offset.checked_add(8).is_none_or(|end| end > std::mem::size_of::<Raw>()) {
                 return Err("host key upload field is outside its tuple".into());
             }
-            let domain = self.domains.get(id as usize).and_then(|domain| *domain)
+            let domain = self.domains.get(id as usize).and_then(Option::as_ref)
                 .ok_or("host key upload requires a frozen base domain")?;
             let source = NativeView {
                 data: unsafe { raw.ptr().cast::<u8>().add(offset) },
                 element: gpu_device_columns::ELEMENT_I64,
             };
-            let mut column = unsafe {
-                gpu_device_columns::native::load_strided(
+            let column = unsafe {
+                domain.encode_native(
                     self.pool.clone(), source, rows.len(), std::mem::size_of::<Raw>(),
-                    None, BaseLayout::For,
                 )?
             };
-            column.normalize_key(domain)?;
             columns.push(Arc::new(column));
         }
         let views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
@@ -381,7 +404,11 @@ impl<'a> Loader<'a> {
             bounds,
             statuses: Vec::new(),
         };
+        drop(raw);
+        self.report_memory();
         self.pool.stream().synchronize()?;
+        self.pool.release_unused()?;
+        self.report_memory();
         report(|report| {
             report.domain_ms += ms(started);
             report.columns += fields.len();
@@ -443,6 +470,13 @@ impl<'a> Loader<'a> {
         let relation = self.manifest.relations.get(table).ok_or("missing table")?;
         if relation.rows >= u32::MAX as usize {
             return Err("relation exceeds device row-ID domain".into());
+        }
+        for name in names {
+            if crate::key_domains::id(table, name).is_some()
+                && !self.tables.get(table).is_some_and(|resident| resident.columns.contains_key(*name))
+            {
+                return Err(format!("key column {table}.{name} was not included in frozen query domain preparation").into());
+            }
         }
         let mut resident = self.tables.remove(table).unwrap_or_default();
         let cached = resident.projections.iter().find(|projection| {
@@ -706,13 +740,7 @@ impl<'a> Loader<'a> {
     }
 
     fn report_memory(&self) {
-        let stats = self.pool.memory_stats();
-        report(|report| {
-            report.peak_device_bytes = report.peak_device_bytes.max(stats.peak_bytes);
-            report.peak_reserved_device_bytes = report.peak_reserved_device_bytes.max(stats.reserved_bytes);
-            report.device_bytes_after_load = stats.current_bytes;
-            report.reserved_device_bytes_after_load = stats.reserved_bytes;
-        });
+        finish_load(&self.pool);
     }
 }
 
@@ -721,7 +749,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn query_bound_members_share_minimum_without_loading_unbound_columns() -> Result<()> {
+    fn query_bound_member_union_ranks_without_loading_unbound_columns() -> Result<()> {
         let root = std::env::temp_dir().join(format!("cq-key-domain-load-{}", std::process::id()));
         fs::create_dir_all(&root)?;
         fs::write(root.join("orders.bin"), [-3i64, 9].into_iter().flat_map(i64::to_le_bytes).collect::<Vec<_>>())?;
@@ -742,24 +770,30 @@ mod tests {
         let pool = Pool::new(0, 0, 0)?;
         let mut loader = Loader::new(&manifest, pool.clone());
         loader.prepare(&[("orders", &["o_orderkey"]), ("lineitem", &["l_orderkey"])])?;
-        let domain = loader.domains()[0].unwrap();
-        assert_eq!((domain.minimum, domain.bound, domain.bits), (-8, 18, 5));
-        assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?, [(5,), (17,)]);
-        assert_eq!(loader.bind::<(u32,)>("lineitem", &["l_orderkey"])?.to_host()?, [(0,), (17,)]);
+        let domain = loader.domains()[0].take().unwrap();
+        assert_eq!((domain.minimum, domain.bound, domain.bits), (-8, 3, 2));
+        assert!(domain.is_rank());
+        assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?, [(1,), (2,)]);
+        assert_eq!(loader.bind::<(u32,)>("lineitem", &["l_orderkey"])?.to_host()?, [(0,), (2,)]);
         let uploaded = loader.upload_host_keys::<(i64,), (u32,)>(
             &[(9,), (-8,)], &[(std::mem::offset_of!((i64,), 0), 0)],
         )?;
-        assert_eq!(uploaded.to_host()?, [(17,), (0,)]);
+        assert_eq!(uploaded.to_host()?, [(2,), (0,)]);
         let error = loader.upload_host_keys::<(i64,), (u32,)>(
             &[(-9,)], &[(std::mem::offset_of!((i64,), 0), 0)],
         ).err().expect("host key outside its frozen base domain");
         assert!(error.to_string().contains("key domain 0"));
         assert!(error.to_string().contains("outside recorded range [-8, 10)"));
+        let missing = loader.upload_host_keys::<(i64,), (u32,)>(
+            &[(0,)], &[(std::mem::offset_of!((i64,), 0), 0)],
+        ).err().expect("host key in a frozen rank hole");
+        assert!(missing.to_string().contains("frozen membership"));
         drop(loader);
+        assert_eq!((domain.value(0), domain.value(1), domain.value(2)), (-8, -3, 9));
         fs::remove_file(root.join("lines.bin"))?;
         let mut loader = Loader::new(&manifest, pool);
         loader.prepare(&[("orders", &["o_orderkey"])])?;
-        assert_eq!(loader.domains()[0].unwrap().minimum, -3);
+        assert_eq!(loader.domains()[0].as_ref().unwrap().minimum, -3);
         drop(loader);
         fs::remove_dir_all(root)?;
         Ok(())

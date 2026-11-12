@@ -383,6 +383,20 @@ impl Rows {
         structure_analysis: &cq_lang_structures::Analysis,
         analysis: &Analysis,
     ) -> syn::Result<Self> {
+        Self::with_capture_bindings(physical, structures, program, structure_analysis, analysis, None)
+    }
+
+    pub fn with_capture_bindings(
+        physical: &cq_lang_structures::physical::Program,
+        structures: &cq_lang_structures::Program,
+        program: &Program,
+        structure_analysis: &cq_lang_structures::Analysis,
+        analysis: &Analysis,
+        device_bindings: Option<&crate::DeviceCaptureBindings>,
+    ) -> syn::Result<Self> {
+        if let Some(bindings) = device_bindings {
+            bindings.check(&analysis.gpu_bindings.realization.captures.captures)?;
+        }
         crate::bindings::check(physical, structures, program, structure_analysis, analysis, &analysis.gpu_bindings)?;
         let provider_layouts = analysis.gpu_bindings.providers.clone();
         let definitions: BTreeMap<_, _> = physical
@@ -437,7 +451,7 @@ impl Rows {
         // Source: doc/formal/CONFORMANCE.md BE-RustRepresentation and GPU-Capture.
         // DO NOT admit encoded row reads to opaque Rust or infer identity from a scalar Rust type.
         // Encoded predicates belong to `where`; unsupported Rust placement stays at host, not rewritten.
-        let captures = crate::capture::print(&realization.captures.captures);
+        let captures = crate::capture::print(&realization.captures.captures, device_bindings);
         let capture_count = realization.captures.captures.len();
         let mut type_witnesses = captures.rust_functions;
         let mut parameter_witnesses: BTreeMap<_, _> = type_witnesses.iter()
@@ -901,6 +915,13 @@ impl Rows {
                     let owner = format_ident!("__cq_sequence_provider_{}", name);
                     let view = format_ident!("__cq_sequence_provider_view_{}", name);
                     let items = format_ident!("__cq_sequence_provider_items_{}", name);
+                    let memory_report = lanes.is_empty().then(|| quote! {
+                        if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
+                            ::cq_gpu_sequence_runtime::index_bytes::record(
+                                "membership", #owner.allocated_bytes(), #owner.live_bytes(),
+                            );
+                        }
+                    });
                     build.extend(quote! {
                         let #owner: #ty = ::cq_gpu_sequence_runtime::radix_layout::<
                             (#(#key_types,)*), (#(#lanes,)*), #word, #offset,
@@ -916,6 +937,7 @@ impl Rows {
                             (#selection).as_ref(),
                             __cq_auxiliary.selection,
                         )?;
+                        #memory_report
                     });
                     // GPU-Smallest ChoiceCarrier::PositionTag: a side's key
                     // slots and candidate ordinals fit the tag's low bits.

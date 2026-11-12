@@ -108,6 +108,7 @@ pub fn group(
     geometry: &BlockGeometry,
     rows: &crate::rows::Rows,
     bounds: &std::collections::BTreeMap<String, cq_lang_sequence::gpu::bindings::ColumnBounds>,
+    computed_inputs: &BTreeSet<(String, usize)>,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let threads = proc_macro2::Literal::u32_unsuffixed(geometry.block_threads);
     let shared = proc_macro2::Literal::u32_unsuffixed(geometry.shared_bytes);
@@ -135,7 +136,9 @@ pub fn group(
     let mut columns = group.keys.iter().map(symbol_name).collect::<Vec<_>>();
     let keys = columns.len();
     let domain_keys: Vec<_> = columns.iter().map(|column| {
-        matches!(bounds.get(column), Some(cq_lang_sequence::gpu::bindings::ColumnBounds::Resident { .. }))
+        matches!(bounds.get(column),
+            Some(cq_lang_sequence::gpu::bindings::ColumnBounds::Resident { sources })
+                if sources.iter().any(|source| !computed_inputs.contains(source)))
     }).collect();
     let fold = match (keys, provider) {
         (0, None) => quote!(::cq_gpu_sequence_runtime::group::fold),

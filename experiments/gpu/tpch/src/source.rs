@@ -182,6 +182,41 @@ impl Kernel {
             .map(|origin| (origin, syn::parse_quote!(u32))).collect()
     }
 
+    /// Producer origin and consumer residency are independent facts.
+    pub fn computed_publication_inputs(&self) -> Result<std::collections::BTreeSet<(String, usize)>> {
+        let computed = self.published_origins.iter().flat_map(|(name, origins)| {
+            origins.iter().enumerate().filter_map(move |(slot, origin)| {
+                origin.is_none().then(|| (name.clone(), slot))
+            })
+        }).collect();
+        self.check_computed_publication_inputs(&computed)?;
+        Ok(computed)
+    }
+
+    pub fn check_computed_publication_inputs(
+        &self,
+        computed: &std::collections::BTreeSet<(String, usize)>,
+    ) -> Result<()> {
+        for input in &self.published {
+            let origins = self.published_origins.get(&input.name.to_string())
+                .ok_or("published input lacks producer origin records")?;
+            if origins.len() != input.columns.len() {
+                return Err("published input origin arity differs from its schema".into());
+            }
+            for (slot, origin) in origins.iter().enumerate() {
+                if computed.contains(&(input.name.to_string(), slot)) != origin.is_none() {
+                    return Err(format!("publication origin mismatch for {} column {slot}: computed and domain origins cannot be interchanged", input.name).into());
+                }
+            }
+        }
+        if computed.iter().any(|(name, slot)| {
+            !self.published.iter().any(|input| input.name == name.as_str() && *slot < input.columns.len())
+        }) {
+            return Err("computed origin names an absent publication column".into());
+        }
+        Ok(())
+    }
+
     /// A declared scalar codec can replace relational reads, never opaque Rust.
     pub fn scalar_codec_types(&self, manifest: &Manifest) -> Result<BTreeMap<Origin, syn::Type>> {
         let variables = self.variable_origins()?;
@@ -398,10 +433,10 @@ fn restore_key_body(
             if !storage.contains_key(origin) || (!reads.opaque && !reads.names.contains(name)) { continue; }
             let Some(id) = crate::key_domains::id(&origin.0, &origin.1) else { continue; };
             let variable = quote::format_ident!("{name}");
-            let minimum = quote::format_ident!("__tpch_minimum_{id}");
+            let view = quote::format_ident!("__tpch_domain_{id}");
             let logical: syn::Type = if matches!(id, 4 | 5 | 8) { syn::parse_quote!(i32) } else { syn::parse_quote!(i64) };
             // DECODE R: only authored opaque Rust reads restore integer keys.
-            inverses.extend(quote!(let #variable = &((i64::from(*#variable) + #minimum) as #logical);));
+            inverses.extend(quote!(let #variable = &((unsafe { #view.value(*#variable) }) as #logical);));
         }
         if !inverses.is_empty() {
             *expression = syn::parse_quote!({ #inverses #expression });
@@ -640,6 +675,21 @@ mod tests {
     }
 
     #[test]
+    fn publication_origin_policy_rejects_both_misclassifications() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        let kernel = kernels(&authored("h15"), &manifest).remove(1);
+        let origins = kernel.computed_publication_inputs().unwrap();
+        assert!(origins.contains(&("Revenue".into(), 1)));
+        assert!(!origins.contains(&("Revenue".into(), 0)));
+        let mut swapped = origins.clone();
+        swapped.insert(("Revenue".into(), 0));
+        assert!(kernel.check_computed_publication_inputs(&swapped).is_err());
+        let mut omitted = origins;
+        omitted.remove(&("Revenue".into(), 1));
+        assert!(kernel.check_computed_publication_inputs(&omitted).is_err());
+    }
+
+    #[test]
     fn integer_members_use_shared_captures_and_restore_only_rust_reads() {
         let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
         for (name, _) in SOURCES {
@@ -665,9 +715,10 @@ mod tests {
         let kernel = kernels(&authored("h20"), &manifest).remove(1);
         let mut storage = kernel.scalar_codec_types(&manifest).unwrap();
         storage.extend(kernel.integer_key_types());
-        let encoded = kernel.encoded_query_with_types(&manifest, &storage).unwrap().to_string();
-        assert!(encoded.contains("__tpch_minimum_7"), "available quantity Rust read needs its inverse");
-        assert!(!encoded.contains("__tpch_minimum_0"), "unused order key needs no inverse");
+        let encoded: cq_lang_cq::Program = syn::parse2(kernel.encoded_query_with_types(&manifest, &storage).unwrap()).unwrap();
+        let reads: Vec<_> = encoded.query.body.iter().filter_map(|item| item.rust_step()).collect();
+        assert!(reads.iter().any(|step| step.free_variables.names.contains("__tpch_domain_7")));
+        assert!(!reads.iter().any(|step| step.free_variables.names.contains("__tpch_domain_0")));
     }
 
     #[test]

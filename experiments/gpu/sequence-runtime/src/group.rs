@@ -224,6 +224,7 @@ impl<F> GroupedRows<F> {
     }
     /// Publish a nonnullable grouped result as resident input columns.
     ///
+    /// Supplied bounds size the encoder; table bounds are measured logical extrema.
     /// # Safety
     /// `slots` must describe `Row` in the physical key/aggregate column layout
     /// and select no nullable aggregate. The decoder is not applied: the grouped
@@ -279,12 +280,13 @@ impl<F> GroupedRows<F> {
             .iter()
             .map(|column| unsafe { column.view() })
             .collect();
+        let measured_bounds = columns.iter().map(|column| column.bounds()).collect();
         let table = Table {
             columns,
             views: Arc::new(Buffer::from_host(pool.clone(), &views)?),
             metadata: output.metadata,
             capacity: rows,
-            bounds: bounds.to_vec(),
+            bounds: measured_bounds,
             statuses: output.statuses,
         };
         Ok(unsafe { DeviceColumns::from_parts(table, Arc::new(Dictionary::default()), pool) })
@@ -596,6 +598,10 @@ pub unsafe fn fold(
     for buffer in [count] {
         release(stream, buffer)?;
     }
+    if crate::index_bytes::enabled() {
+        let bytes = values.bytes() + valid.bytes() + metadata.bytes();
+        crate::index_bytes::record("group", bytes, bytes);
+    }
     Ok(GroupedOutput {
         values,
         valid,
@@ -694,6 +700,10 @@ impl GlobalFold {
                 valid.ptr(),
                 self.error(),
             )?;
+        }
+        if crate::index_bytes::enabled() {
+            let bytes = values.bytes() + valid.bytes() + self.metadata.bytes();
+            crate::index_bytes::record("group", bytes, bytes);
         }
         Ok(GroupedOutput {
             values,

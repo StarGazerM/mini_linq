@@ -2,8 +2,9 @@
 //! once; headers, unified transposition, delta and bit-packing run on the GPU.
 //! Alternatively the loader FOR-packs on the host into the same layout
 //! (`host_pack`) and uploads only packed words.
-//! Query-output encoding never reads metadata back. All allocations retain the
-//! rccl-memory pool and CUDA stream that own them.
+//! Query-output encoding publishes exact logical extrema from transient
+//! encode-time summaries. Only the final scalar pair is downloaded; allocations
+//! retain the rccl-memory pool and CUDA stream that own them.
 mod device;
 mod domain;
 mod encoding;
@@ -11,17 +12,33 @@ mod host;
 mod host_pack;
 mod kernels;
 mod memory;
+pub mod rank;
 pub mod native;
 pub mod unique;
 pub mod scan;
 pub mod tile;
 use cuda_core::{CudaContext, DeviceCopy, LaunchConfig1D};
 pub use device::*;
-pub use domain::KeyDomain;
+pub use domain::{Domain, DomainView, KeyDomain, RANK_SPARSITY_THRESHOLD};
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
 pub use host_pack::{check_packed_layout, pack_for};
 pub use memory::{Buffer, MemoryResource, Pool, PoolMemoryStats};
+
+/// A host-owned handle with an explicitly declared plain device carrier.
+/// Device views do not implement this trait and cannot stand in for an owner.
+pub trait HostDeviceHandle {
+    type Device: cuda_core::DeviceCopy + Copy;
+    fn device(&self) -> Self::Device;
+}
+impl<T: HostDeviceHandle + ?Sized> HostDeviceHandle for &T {
+    type Device = T::Device;
+    fn device(&self) -> Self::Device { T::device(*self) }
+}
+impl HostDeviceHandle for Domain {
+    type Device = DomainView;
+    fn device(&self) -> Self::Device { self.view() }
+}
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -52,6 +69,7 @@ pub fn release_cached_kernels() {
     MODULE.with(|cache| cache.borrow_mut().take());
     scan::release_cached_kernels();
     native::release_cached_kernels();
+    rank::release_cached_kernels();
     unique::release_cached_kernels();
 }
 fn config(items: usize) -> LaunchConfig1D {
@@ -257,6 +275,7 @@ impl EncodedColumn {
             values.len(),
             std::ptr::null(),
             codec,
+            std::ptr::null_mut(),
         )?;
         let words = usize::try_from(extent.to_host()?[0])?;
         let data = unsafe { Buffer::uninitialized(pool, words)? };
@@ -267,6 +286,7 @@ impl EncodedColumn {
             L::ELEMENT,
             values.len(),
             std::ptr::null(),
+            std::ptr::null_mut(),
         )?;
         Ok(Self {
             headers: Some(headers),
@@ -383,8 +403,9 @@ impl EncodedColumn {
         }
     }
 
-    /// Encode a device result, retaining logical count on the device. No data
-    /// or metadata is downloaded. Only the live row prefix is encoded.
+    /// Encode a device result, retaining logical count on the device. Only the
+    /// live prefix is encoded; one exact logical-extrema pair is downloaded.
+    /// Supplied bounds size storage; [`Self::bounds`] reports measured values.
     ///
     /// # Safety
     /// Input and count must be ready on pool.stream. The live input prefix must
@@ -402,8 +423,12 @@ impl EncodedColumn {
     ) -> Result<Self> {
         let count = count_pointer(&pool, &count_owner, count_offset)?;
         let input = input as *const u8;
-        let (headers, extent) =
-            Self::make_headers(pool.clone(), input, L::ELEMENT, capacity, count, codec)?;
+        let summaries = unsafe {
+            Buffer::<i64>::uninitialized(pool.clone(), capacity.div_ceil(1024) * 2)?
+        };
+        let (headers, extent) = Self::make_headers(
+            pool.clone(), input, L::ELEMENT, capacity, count, codec, summaries.ptr(),
+        )?;
         let width = if codec == Codec::Plain || codec == Codec::Delta {
             64
         } else {
@@ -420,7 +445,11 @@ impl EncodedColumn {
             .checked_mul(per_vector)
             .ok_or("device encoded capacity overflow")?;
         let data = unsafe { Buffer::uninitialized(pool, words)? };
-        Self::pack(&headers, &data, input, L::ELEMENT, capacity, count)?;
+        Self::pack(
+            &headers, &data, input, L::ELEMENT, capacity, count,
+            if codec == Codec::Plain { summaries.ptr() } else { std::ptr::null_mut() },
+        )?;
+        let bounds = Self::publication_bounds(&summaries, capacity, count)?;
         Ok(Self {
             headers: Some(headers),
             data: ColumnData::Packed(data),
@@ -433,16 +462,18 @@ impl EncodedColumn {
         })
     }
 
-    /// Gather `source[order[i]]` for every `i < rows` and FOR-pack the result
-    /// in one device pass, without materializing the gathered column.
+    /// Gather `source[order[i]]` over the count-gated prefix of `rows` and
+    /// FOR-pack in one device pass without materializing the gathered column.
     ///
     /// Each 1024-row vector keeps its own base and width but occupies a fixed
     /// slot sized by `bounds`, so no offset scan or extent readback is needed.
+    /// Exact logical extrema are reduced from that same pass and published.
     /// Supports native `u32`, `i32`, and `i64` lanes without narrowing.
     ///
     /// # Safety
-    /// `order` must hold `rows` indices into `source`'s live rows, ready on
-    /// pool.stream. `bounds` must enclose every gathered value.
+    /// `order` must hold initialized indices into `source`'s live rows for the
+    /// count-gated prefix, ready on pool.stream. Count must remain unchanged,
+    /// and `bounds` must enclose every gathered value.
     // DECODE I: gather wrapper reconstructs then FOR-reencodes a permutation; avoidable reorganization, P4 keep index runs plain.
     pub unsafe fn from_gather<T: DeviceCopy + 'static, L: Lane>(
         pool: Arc<Pool>,
@@ -472,9 +503,9 @@ impl EncodedColumn {
     ///
     /// # Safety
     /// The source storage and nonnull `order` must remain live on the pool stream.
-    /// Every selected index (or every row in the identity prefix) must address
-    /// an initialized source row, and `bounds` must enclose every gathered value,
-    /// which must fit the declared lane type.
+    /// Every selected index (or every row in the count-gated identity prefix)
+    /// must address an initialized source row, and `bounds` must enclose every
+    /// gathered value, which must fit the declared lane type. Count is immutable.
     // DECODE I: source gather recomputes frames after value reconstruction; avoidable reorganization, P4 prefer plain indexes.
     pub unsafe fn from_gather_source<T: DeviceCopy + 'static, L: Lane>(
         pool: Arc<Pool>,
@@ -499,6 +530,7 @@ impl EncodedColumn {
         let headers =
             unsafe { Buffer::<VectorHeader>::uninitialized(pool.clone(), vectors.max(1))? };
         let data = unsafe { Buffer::<u64>::uninitialized(pool.clone(), words.max(1))? };
+        let summaries = unsafe { Buffer::<i64>::uninitialized(pool.clone(), vectors * 2)? };
         if vectors > 0 {
             let module = module(&pool)?;
             let launch = module.prepare_gather_encode(LaunchConfig1D::new(
@@ -518,13 +550,16 @@ impl EncodedColumn {
                     source,
                     order,
                     rows as u64,
+                    count,
                     slot_width,
                     L::ELEMENT,
                     headers.ptr(),
                     data.ptr(),
+                    summaries.ptr(),
                 )?;
             }
         }
+        let bounds = Self::publication_bounds(&summaries, rows, count)?;
         Ok(Self {
             headers: Some(headers),
             data: ColumnData::Packed(data),
@@ -537,6 +572,29 @@ impl EncodedColumn {
         })
     }
 
+    /// Read scalar metadata only, never encoded values or unused vector suffixes.
+    fn publication_bounds(
+        summaries: &Buffer<i64>,
+        capacity: usize,
+        count: *const u64,
+    ) -> Result<Bounds> {
+        let pool = summaries.pool();
+        let extrema = unsafe { Buffer::<i64>::uninitialized(pool.clone(), 2)? };
+        let module = module(pool)?;
+        let launch = module.prepare_publication_bounds(LaunchConfig1D::new(1, 256, 4096))?;
+        unsafe {
+            module.publication_bounds(
+                pool.stream(), &launch, summaries.ptr(), capacity as u64, count, extrema.ptr(),
+            )?;
+        }
+        let values = extrema.to_host()?;
+        Ok(if values[0] > values[1] {
+            Bounds::Empty
+        } else {
+            Bounds::Inclusive { min: values[0], max: values[1] }
+        })
+    }
+
     fn make_headers(
         pool: Arc<Pool>,
         input: *const u8,
@@ -544,6 +602,7 @@ impl EncodedColumn {
         capacity: usize,
         count: *const u64,
         codec: Codec,
+        summaries: *mut i64,
     ) -> Result<(Buffer<VectorHeader>, Buffer<u64>)> {
         let vectors = capacity.div_ceil(1024);
         // Only the live prefix is written and all kernel readers are count-gated.
@@ -560,6 +619,7 @@ impl EncodedColumn {
                 count,
                 codec as u32,
                 headers.ptr(),
+                summaries,
             )?;
         }
         let extent = Self::make_offsets(&headers, capacity, count)?;
@@ -643,13 +703,15 @@ impl EncodedColumn {
         element: u32,
         capacity: usize,
         count: *const u64,
+        summaries: *mut i64,
     ) -> Result<()> {
         if headers.is_empty() {
             return Ok(());
         }
         let pool = data.pool();
         let module = module(pool)?;
-        let launch = module.prepare_encode(config(headers.len() * 16))?;
+        let lanes = if summaries.is_null() { 16 } else { 32 };
+        let launch = module.prepare_encode(config(headers.len() * lanes))?;
         unsafe {
             module.encode(
                 pool.stream(),
@@ -660,6 +722,7 @@ impl EncodedColumn {
                 capacity as u64,
                 count,
                 data.ptr(),
+                summaries,
             )?;
         }
         Ok(())
@@ -812,5 +875,108 @@ pub fn detect_integer_codec(values: &[i64]) -> Codec {
         Codec::Delta
     } else {
         Codec::For
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    const FULL: Bounds = Bounds::Inclusive { min: i64::MIN, max: i64::MAX };
+
+    fn values() -> Vec<Vec<i64>> {
+        vec![
+            vec![],
+            vec![i64::MIN],
+            vec![i64::MAX],
+            vec![-97, -91, -104, -98],
+            vec![i64::MIN, 0, i64::MAX, -1],
+            (0..2051).map(|i| -10_000 + i * 3).collect(),
+            // Delta lane bases participate, independently of residual extrema.
+            (0..1025).map(|i| if i % 64 == 0 { -900 } else { -899 }).collect(),
+        ]
+    }
+
+    #[test]
+    fn device_publication_measures_logical_bounds_for_every_codec() {
+        let pool = Pool::new(0, 1 << 20, 256 << 20).unwrap();
+        for values in values() {
+            for codec in [Codec::For, Codec::Plain, Codec::Delta, Codec::Dictionary] {
+                for capacity in [values.len(), values.len() + 2050] {
+                    let input = unsafe { Buffer::<i64>::uninitialized(pool.clone(), capacity) }.unwrap();
+                    unsafe { input.write_async(&values) }.unwrap();
+                    let count = Arc::new(Buffer::from_host(pool.clone(), &[
+                        OutputCount { rows: values.len() as u64, error: 73, padding: 0 },
+                    ]).unwrap());
+                    let owner = Arc::downgrade(&count);
+                    let column = unsafe {
+                        EncodedColumn::from_device(
+                            pool.clone(), input.ptr(), capacity, count.clone(), 0, codec, FULL,
+                        )
+                    }.unwrap();
+                    assert_eq!(count.to_host().unwrap()[0].error, 73);
+                    drop(count);
+                    drop(input);
+                    assert!(owner.upgrade().is_some());
+                    assert_eq!(column.bounds(), Bounds::from_values(&values));
+                    assert_eq!(column.to_host().unwrap(), values);
+                    drop(column);
+                    assert!(owner.upgrade().is_none());
+                }
+            }
+        }
+        release_cached_kernels();
+    }
+
+    #[test]
+    fn gathered_publication_ignores_uninitialized_count_gated_suffixes() {
+        let pool = Pool::new(0, 1 << 20, 256 << 20).unwrap();
+        for values in values() {
+            let capacity = values.len() + 2050;
+            let input = unsafe { Buffer::<i64>::uninitialized(pool.clone(), capacity) }.unwrap();
+            unsafe { input.write_async(&values) }.unwrap();
+            let order = unsafe { Buffer::<u32>::uninitialized(pool.clone(), capacity) }.unwrap();
+            let positions: Vec<u32> = (0..values.len() as u32).rev().collect();
+            unsafe { order.write_async(&positions) }.unwrap();
+            let count = Arc::new(Buffer::from_host(pool.clone(), &[values.len() as u64]).unwrap());
+            let source = ColumnView {
+                headers: std::ptr::null(),
+                data: input.ptr().cast(),
+                len: capacity as u64,
+                count: count.ptr(),
+                codec: Codec::Plain as u32,
+            };
+            let column = unsafe {
+                EncodedColumn::from_gather::<_, i64>(
+                    pool.clone(), source, order.ptr(), capacity, count, 0, FULL,
+                )
+            }.unwrap();
+            drop(order);
+            drop(input);
+            assert_eq!(column.bounds(), Bounds::from_values(&values));
+            assert_eq!(column.to_host().unwrap(), values.into_iter().rev().collect::<Vec<_>>());
+        }
+        release_cached_kernels();
+    }
+
+    #[test]
+    fn publication_clamps_counts_and_rejects_bad_count_offsets() {
+        let pool = Pool::new(0, 1 << 20, 256 << 20).unwrap();
+        let input = Buffer::from_host(pool.clone(), &[-8i64, -4, -6]).unwrap();
+        let count = Arc::new(Buffer::from_host(pool.clone(), &[17u64, u64::MAX]).unwrap());
+        let column = unsafe {
+            EncodedColumn::from_device(
+                pool.clone(), input.ptr(), input.len(), count.clone(), 8, Codec::For, FULL,
+            )
+        }.unwrap();
+        assert_eq!(column.bounds(), Bounds::Inclusive { min: -8, max: -4 });
+        assert_eq!(column.to_host().unwrap(), [-8, -4, -6]);
+        assert!(unsafe {
+            EncodedColumn::from_device(
+                pool, input.ptr(), input.len(), count.clone(), 1, Codec::For, FULL,
+            )
+        }.is_err());
+        assert_eq!(count.to_host().unwrap(), [17, u64::MAX]);
+        release_cached_kernels();
     }
 }

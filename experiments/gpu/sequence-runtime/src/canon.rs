@@ -2,35 +2,13 @@
 
 use crate::{Auxiliary, Geometry, Result};
 use cq_gpu_runtime::{Bounds, Buffer, DeviceColumns, Dictionary, EncodedColumn, Pool, RowCodec};
-use cuda_core::{CudaContext, DeviceCopy};
+use cuda_core::DeviceCopy;
 use gpu_datalog_runtime::{
     radix_run::{EncodedRow, PackedRow},
     RadixLayout,
 };
-use gpu_device_columns::{ColumnView, OutputCount, Table};
-use std::{cell::RefCell, rc::Rc, sync::Arc};
-
-thread_local! {
-    static CACHED_KERNELS: RefCell<Option<(Arc<CudaContext>, Rc<canon_kernels::LoadedModule>)>> =
-        const { RefCell::new(None) };
-}
-
-pub(crate) fn release_query_cache() {
-    CACHED_KERNELS.with(|cache| cache.borrow_mut().take());
-}
-
-fn module(pool: &Pool) -> Result<Rc<canon_kernels::LoadedModule>> {
-    CACHED_KERNELS.with(|cache| {
-        if let Some((context, module)) = cache.borrow().as_ref() {
-            if Arc::ptr_eq(context, pool.context()) {
-                return Ok(module.clone());
-            }
-        }
-        let module = Rc::new(unsafe { canon_kernels::load(pool.context())? });
-        *cache.borrow_mut() = Some((pool.context().clone(), module.clone()));
-        Ok(module)
-    })
-}
+use gpu_device_columns::{Codec, ColumnView, OutputCount, SourceView, Table};
+use std::sync::Arc;
 
 /// One recorded field in a packed key. Its decoded value is
 /// `base + ((key >> shift) & ((1 << bits) - 1))`.
@@ -63,7 +41,7 @@ impl PackedField {
 /// or distinctness claim. The initialized prefix must be ready on the keys'
 /// pool stream. Dictionary-valued fields must use the supplied dictionary's
 /// encoding, and statuses must retain all consumed ancestor failures.
-// DECODE V: packed_rows wrapper eagerly expands into device columns before consumers; P6 retain packed resident fields.
+// DECODE V: packed_rows wrapper reconstructs fields during FOR re-encoding; P6 retain original packed fields.
 pub fn packed_columns<'data, Row: RowCodec<'data>>(
     keys: Buffer<u64>,
     rows: usize,
@@ -73,7 +51,7 @@ pub fn packed_columns<'data, Row: RowCodec<'data>>(
     geometry: Geometry,
 ) -> Result<DeviceColumns<'data, Row>> {
     PackedColumnsAdapter::new(keys.pool().clone(), fields.len(), geometry)?
-        // DECODE V: packed_rows wrapper dispatches device expansion before publication; P6 defer logical inversion.
+        // DECODE V: packed_rows dispatches fused reconstruction/re-encoding before publication.
         .packed_columns(keys, rows, fields, dictionary, statuses)
 }
 
@@ -86,36 +64,32 @@ fn field_lanes(fields: &[PackedField]) -> Result<usize> {
     RadixLayout::<EncodedRow, (), PackedRow, u64, ()>::key_lanes(bits)
 }
 
-/// Setup-time unpacking resources for one output width and runtime pool.
+/// Setup-time publication resources for one output width and runtime pool.
 ///
-/// Construction warms the canon module and reserves count/view buffers.
+/// Construction warms the shared column encoder and reserves count/view buffers.
 /// Uploads reuse those buffers only while their Arcs are unique; published
 /// outputs retain immutable storage even across later calls or adapter drop.
-/// Generated programs can retain this adapter outside their timed dispatch.
-/// Unpacking launches with the recorded `canon` family geometry.
+/// Packed fields are gathered directly into FOR storage, measuring exact
+/// logical bounds during encoding without an unpacked intermediate.
 pub struct PackedColumnsAdapter {
     pool: Arc<Pool>,
-    module: Rc<canon_kernels::LoadedModule>,
     metadata: Arc<Buffer<OutputCount>>,
     views: Arc<Buffer<ColumnView>>,
     host_views: Vec<ColumnView>,
-    geometry: Geometry,
 }
 
 impl PackedColumnsAdapter {
     pub fn new(pool: Arc<Pool>, width: usize, geometry: Geometry) -> Result<Self> {
         geometry.check("canon", Auxiliary::SUPPORTED.canon)?;
-        let module = module(&pool)?;
+        gpu_device_columns::prepare_kernels(&pool)?;
         // These private buffers are initialized by upload before publication.
         let metadata = Arc::new(unsafe { Buffer::uninitialized(pool.clone(), 1)? });
         let views = Arc::new(unsafe { Buffer::uninitialized(pool.clone(), width)? });
         Ok(Self {
             pool,
-            module,
             metadata,
             views,
             host_views: Vec::with_capacity(width),
-            geometry,
         })
     }
 
@@ -126,7 +100,7 @@ impl PackedColumnsAdapter {
     /// Adapt a live prefix without changing its order or multiplicity.
     /// Dictionary-valued fields use the supplied dictionary's encoding;
     /// statuses retain all consumed ancestor failures.
-    // DECODE V: packed adapter expands the live prefix before possible chained relations; P6 keep its encoded view.
+    // DECODE V: packed adapter reconstructs during FOR re-encoding before possible chaining.
     pub fn packed_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: Buffer<u64>,
@@ -150,8 +124,8 @@ impl PackedColumnsAdapter {
                 padding: 0,
             }],
         )?;
-        // DECODE V: packed_columns expands every field into device buffers; P6 defer inversion until logical reads.
-        self.decode_columns(
+        // DECODE V: packed fields are reconstructed only inside the fused FOR encoder.
+        self.encode_columns(
             &keys,
             lanes,
             self.metadata.clone(),
@@ -162,9 +136,9 @@ impl PackedColumnsAdapter {
         )
     }
 
-    /// Unpack canonical keys without downloading their device-resident count.
-    /// The result owns its columns and retains the original count and statuses.
-    // DECODE V: canonical output adapter expands packed values before possible chained relations; P6 retain encoded fields.
+    /// Encode canonical keys without downloading their device-resident count.
+    /// Only measured scalar extrema are read; original count/status owners remain.
+    // DECODE V: canonical output reconstructs packed fields during FOR re-encoding before possible chaining.
     pub fn unpack_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: RadixLayout<EncodedRow, (), PackedRow, u64, ()>,
@@ -173,8 +147,8 @@ impl PackedColumnsAdapter {
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
         let capacity = keys.capacity();
-        // DECODE V: canonical unpack delegates eager device expansion; P6 publish a packed resident view.
-        self.decode_columns(
+        // DECODE V: canonical publication delegates fused field reconstruction/re-encoding.
+        self.encode_columns(
             keys.keys(),
             keys.lanes(),
             keys.metadata().clone(),
@@ -185,8 +159,8 @@ impl PackedColumnsAdapter {
         )
     }
 
-    // DECODE V: output adapter materializes full i64 columns before their consumers; P6 keep packed values resident.
-    fn decode_columns<'data, Row: RowCodec<'data>>(
+    // DECODE V: fused encoding reconstructs fields without a full i64 intermediate.
+    fn encode_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: &Buffer<u64>,
         lanes: usize,
@@ -208,7 +182,7 @@ impl PackedColumnsAdapter {
         {
             return Err("packed output ancestor statuses must share the output pool".into());
         }
-        let bounds = fields
+        let supplied_bounds = fields
             .iter()
             .map(|field| field.bounds())
             .collect::<Result<Vec<_>>>()?;
@@ -219,40 +193,34 @@ impl PackedColumnsAdapter {
             return Err("packed field exceeds the stored key width".into());
         }
         let mut columns = Vec::with_capacity(fields.len());
-        let prepared = if capacity != 0 && !fields.is_empty() {
-            let shape = self.module.prepare_unpack_field(self.geometry.config(1))?;
-            let grid = self.geometry.grid(shape.function(), capacity)?;
-            Some(
-                self.module
-                    .prepare_unpack_field(self.geometry.config(grid))?,
-            )
-        } else {
-            None
-        };
-        for (field, &bound) in fields.iter().zip(&bounds) {
-            let column = unsafe { Buffer::<i64>::uninitialized(self.pool.clone(), capacity)? };
-            if let Some(prepared) = &prepared {
-                // DECODE V: per-field unpack launch expands all live rows before chaining; P6 decode only at the allowed consumer.
-                self.module.unpack_field(
-                    self.pool.stream(),
-                    prepared,
-                    keys.ptr(),
-                    lanes as u32,
-                    metadata.ptr().cast(),
-                    capacity as u64,
-                    field.shift,
-                    field.bits,
-                    field.base,
-                    column.ptr(),
-                )?;
-            }
-            columns.push(Arc::new(EncodedColumn::from_plain_buffer(
-                column,
-                metadata.clone(),
-                0,
-                bound,
-            )?));
+        for (field, &bound) in fields.iter().zip(&supplied_bounds) {
+            let source = SourceView {
+                column: ColumnView {
+                    headers: std::ptr::null(),
+                    data: keys.ptr(),
+                    len: capacity as u64,
+                    count: metadata.ptr().cast(),
+                    codec: Codec::Plain as u32,
+                },
+                stride: lanes as u64,
+                packed: 1,
+                shift: field.shift,
+                mask: if field.bits == 64 { u64::MAX } else { (1u64 << field.bits) - 1 },
+                base: field.base,
+            };
+            columns.push(Arc::new(unsafe {
+                EncodedColumn::from_gather_source::<_, i64>(
+                    self.pool.clone(),
+                    source,
+                    std::ptr::null(),
+                    capacity,
+                    metadata.clone(),
+                    0,
+                    bound,
+                )?
+            }));
         }
+        let bounds = columns.iter().map(|column| column.bounds()).collect();
         self.host_views.clear();
         self.host_views
             .extend(columns.iter().map(|column| unsafe { column.view() }));
@@ -282,50 +250,86 @@ fn upload_unique<T: DeviceCopy>(slot: &mut Arc<Buffer<T>>, values: &[T]) -> Resu
     Ok(())
 }
 
-#[cuda_device::cuda_module]
-mod canon_kernels {
-    use cuda_device::{kernel, launch_bounds, launch_contract, thread};
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
 
-    /// Unpack only initialized packed rows, leaving spare capacity unread.
-    #[kernel]
-    #[launch_bounds(256)]
-    #[launch_contract(domain = 1, block = (256, 1, 1))]
-    // DECODE V: unpack_field constructs device logical columns before possible relational consumers; P6 preserve packed fields.
-    pub fn unpack_field(
-        keys: *const u64,
-        lanes: u32,
-        count: *const u64,
-        capacity: u64,
-        shift: u32,
-        bits: u32,
-        base: i64,
-        output: *mut i64,
-    ) {
-        let live = unsafe { *count }.min(capacity);
-        let mask = if bits == 64 {
-            u64::MAX
-        } else {
-            (1_u64 << bits) - 1
-        };
-        let mut row = thread::index_1d().get() as u64;
-        let stride = thread::gridDim_x() as u64 * 256;
-        while row < live {
-            let offset = if bits == 0 {
-                0
-            } else {
-                let index = row as usize * lanes as usize + (shift / 64) as usize;
-                let local = shift % 64;
-                let mut value = unsafe { *keys.add(index) } >> local;
-                if local + bits > 64 {
-                    value |= unsafe { *keys.add(index + 1) } << (64 - local);
-                }
-                value & mask
-            };
-            // Host validation proves base + offset fits i64. Wrapping also
-            // handles a full-width unsigned offset above i64::MAX correctly.
-            // DECODE V: packed FOR base-plus-offset inversion precedes host publication and may feed chaining; P6 delay reconstruction.
-            unsafe { *output.add(row as usize) = base.wrapping_add(offset as i64) };
-            row += stride;
+    #[test]
+    fn packed_publication_measures_fields_and_keeps_error_owners() -> Result<()> {
+        let pool = Pool::new(0, 1 << 20, 256 << 20)?;
+        let fields = [
+            PackedField { shift: 0, bits: 64, base: i64::MIN },
+            PackedField { shift: 64, bits: 8, base: -100 },
+            PackedField { shift: 72, bits: 0, base: -7 },
+        ];
+        let dictionary = Arc::new(Dictionary::default());
+        let mut adapter = PackedColumnsAdapter::new(pool.clone(), 3, Auxiliary::SUPPORTED.canon)?;
+        for values in [vec![], vec![-9, -5, -9], vec![i64::MIN, i64::MAX]] {
+            let capacity = values.len() + 2048;
+            let words: Vec<u64> = values.iter().enumerate().flat_map(|(row, &value)| {
+                [(value as u64).wrapping_sub(i64::MIN as u64), row as u64 + 3]
+            }).collect();
+            let keys = unsafe { Buffer::<u64>::uninitialized(pool.clone(), capacity * 2)? };
+            unsafe { keys.write_async(&words)? };
+            let metadata = Arc::new(Buffer::from_host(pool.clone(), &[
+                OutputCount { rows: values.len() as u64, error: 0, padding: 0 },
+            ])?);
+            let output = adapter.encode_columns::<(i64, i64, i64)>(
+                &keys, 2, metadata.clone(), capacity, &fields, dictionary.clone(), vec![],
+            )?;
+            let expected: Vec<_> = values.iter().enumerate()
+                .map(|(row, &value)| (value, row as i64 - 97, -7)).collect();
+            assert_eq!(output.to_host()?, expected);
+            let bounds = vec![
+                Bounds::from_values(&values),
+                if values.is_empty() { Bounds::Empty } else {
+                    Bounds::Inclusive { min: -97, max: values.len() as i64 - 98 }
+                },
+                if values.is_empty() { Bounds::Empty } else { Bounds::singleton(-7) },
+            ];
+            assert_eq!(output.storage().bounds, bounds);
+            assert_eq!(
+                output.storage().columns.iter().map(|column| column.bounds()).collect::<Vec<_>>(),
+                bounds,
+            );
+            let failed = Arc::new(Buffer::from_host(pool.clone(), &[
+                OutputCount { rows: 0, error: 73, padding: 0 },
+            ])?);
+            let failed_owner = Arc::downgrade(&failed);
+            let failure = adapter.encode_columns::<(i64, i64, i64)>(
+                &keys, 2, metadata.clone(), capacity, &fields, dictionary.clone(), vec![failed],
+            )?;
+            drop(keys);
+            assert!(failed_owner.upgrade().is_some());
+            assert!(failure.to_host().is_err());
+            assert!(Arc::ptr_eq(&failure.storage().metadata, &metadata));
+            assert_eq!(failure.storage().bounds, bounds);
+            drop(failure);
+            assert!(failed_owner.upgrade().is_none());
         }
+        gpu_device_columns::release_cached_kernels();
+        Ok(())
+    }
+
+    #[test]
+    fn packed_publications_remain_exact_after_adapter_reuse_and_drop() -> Result<()> {
+        let pool = Pool::new(0, 1 << 20, 256 << 20)?;
+        let field = [PackedField { shift: 0, bits: 8, base: -100 }];
+        let dictionary = Arc::new(Dictionary::default());
+        let mut adapter = PackedColumnsAdapter::new(pool.clone(), 1, Auxiliary::SUPPORTED.canon)?;
+        let first = adapter.packed_columns::<(i64,)>(
+            Buffer::from_host(pool.clone(), &[7u64, 3, 7])?,
+            3, &field, dictionary.clone(), vec![],
+        )?;
+        let empty = adapter.packed_columns::<(i64,)>(
+            Buffer::from_host(pool, &[] as &[u64])?, 0, &field, dictionary, vec![],
+        )?;
+        drop(adapter);
+        assert_eq!(first.storage().bounds, [Bounds::Inclusive { min: -97, max: -93 }]);
+        assert_eq!(first.to_host()?, [(-93,), (-97,), (-93,)]);
+        assert_eq!(empty.storage().bounds, [Bounds::Empty]);
+        assert!(empty.to_host()?.is_empty());
+        gpu_device_columns::release_cached_kernels();
+        Ok(())
     }
 }
