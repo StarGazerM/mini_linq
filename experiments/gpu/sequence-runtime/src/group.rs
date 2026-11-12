@@ -598,7 +598,7 @@ pub unsafe fn fold(
     for buffer in [count] {
         release(stream, buffer)?;
     }
-    if crate::index_bytes::enabled() {
+    if keys != 0 && crate::index_bytes::enabled() {
         let bytes = values.bytes() + valid.bytes() + metadata.bytes();
         crate::index_bytes::record("group", bytes, bytes);
     }
@@ -700,10 +700,6 @@ impl GlobalFold {
                 valid.ptr(),
                 self.error(),
             )?;
-        }
-        if crate::index_bytes::enabled() {
-            let bytes = values.bytes() + valid.bytes() + self.metadata.bytes();
-            crate::index_bytes::record("group", bytes, bytes);
         }
         Ok(GroupedOutput {
             values,

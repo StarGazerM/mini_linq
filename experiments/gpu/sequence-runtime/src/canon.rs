@@ -51,7 +51,7 @@ pub fn packed_columns<'data, Row: RowCodec<'data>>(
     geometry: Geometry,
 ) -> Result<DeviceColumns<'data, Row>> {
     PackedColumnsAdapter::new(keys.pool().clone(), fields.len(), geometry)?
-        // DECODE V: packed_rows dispatches fused reconstruction/re-encoding before publication.
+        // DECODE V: P6 packed_rows dispatches fused reconstruction/re-encoding before publication.
         .packed_columns(keys, rows, fields, dictionary, statuses)
 }
 
@@ -100,7 +100,7 @@ impl PackedColumnsAdapter {
     /// Adapt a live prefix without changing its order or multiplicity.
     /// Dictionary-valued fields use the supplied dictionary's encoding;
     /// statuses retain all consumed ancestor failures.
-    // DECODE V: packed adapter reconstructs during FOR re-encoding before possible chaining.
+    // DECODE V: P6 packed adapter reconstructs during FOR re-encoding before possible chaining.
     pub fn packed_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: Buffer<u64>,
@@ -124,7 +124,7 @@ impl PackedColumnsAdapter {
                 padding: 0,
             }],
         )?;
-        // DECODE V: packed fields are reconstructed only inside the fused FOR encoder.
+        // DECODE V: P6 packed fields are reconstructed only inside the fused FOR encoder.
         self.encode_columns(
             &keys,
             lanes,
@@ -138,7 +138,7 @@ impl PackedColumnsAdapter {
 
     /// Encode canonical keys without downloading their device-resident count.
     /// Only measured scalar extrema are read; original count/status owners remain.
-    // DECODE V: canonical output reconstructs packed fields during FOR re-encoding before possible chaining.
+    // DECODE V: P6 canonical output reconstructs packed fields during FOR re-encoding before possible chaining.
     pub fn unpack_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: RadixLayout<EncodedRow, (), PackedRow, u64, ()>,
@@ -147,7 +147,7 @@ impl PackedColumnsAdapter {
         statuses: Vec<Arc<Buffer<OutputCount>>>,
     ) -> Result<DeviceColumns<'data, Row>> {
         let capacity = keys.capacity();
-        // DECODE V: canonical publication delegates fused field reconstruction/re-encoding.
+        // DECODE V: P6 canonical publication delegates fused field reconstruction/re-encoding.
         self.encode_columns(
             keys.keys(),
             keys.lanes(),
@@ -159,7 +159,7 @@ impl PackedColumnsAdapter {
         )
     }
 
-    // DECODE V: fused encoding reconstructs fields without a full i64 intermediate.
+    // DECODE V: P6 fused encoding reconstructs fields without a full i64 intermediate.
     fn encode_columns<'data, Row: RowCodec<'data>>(
         &mut self,
         keys: &Buffer<u64>,

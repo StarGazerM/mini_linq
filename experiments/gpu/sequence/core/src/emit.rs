@@ -3957,7 +3957,9 @@ fn translate_with_metadata(
                 abi_argument(format_ident!("__partials"), partials_pointer),
                 abi_argument(format_ident!("__blocks"), quote!(__cq_grid)),
             ]].concat())?;
-        let record_flat = (!final_output && matches!(&record.storage, PublicationStorage::FlatRows(_))).then(|| {
+        let record_flat = (!final_output
+            && (virtual_range.is_some() || structure_analysis.retained.contains_key(dispatch_result))
+            && matches!(&record.storage, PublicationStorage::FlatRows(_))).then(|| {
             let meta_bytes = if resident { quote!(0usize) } else { quote!(#store_meta.bytes()) };
             quote! {
                 if ::cq_gpu_sequence_runtime::index_bytes::enabled() {

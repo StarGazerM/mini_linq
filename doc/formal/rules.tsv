@@ -426,7 +426,7 @@ DR-Target	implementation	experiments/gpu/tpch/build_stages.rs	/// Formal rule DR
 DR-StageSource	implementation	experiments/gpu/tpch/src/stages.rs	/// Formal rule DR-StageSource:	Check explicit stage/input/publication records, schema interfaces, domain identity and projection bounds without recovering semantics from embedded Rust.
 DR-Publication	implementation	experiments/gpu/tpch/build.rs	/// Formal rule DR-Publication:	Record semantic nullable columns and explicit placement before generation; reject unsupported nullable device publication.
 DR-ProjectedSet	implementation	experiments/gpu/compress-host/src/lib.rs	/// Formal rule DR-ProjectedSet:	Select one representative of each complete projected tuple before device upload.
-DR-HostSet	implementation	experiments/gpu/tpch/build.rs	// Formal rule DR-HostSet:	Typed host relation loads canonicalize complete rows before query execution.
+DR-HostSet	abstract	-	-	Typed host relation set contract; the former TPC-H build.rs typed host loader was removed by device-domain loading. Prepared host producers retain DR-PreparedSet.
 DR-PreparedSet	implementation	experiments/gpu/tpch/src/stages.rs	// Formal rule DR-PreparedSet:	Adapted host stage inputs canonicalize complete rows before becoming compiler inputs.
 DR-ProjectionReuse	implementation	experiments/gpu/tpch/src/loader.rs	// Formal rule DR-ProjectionReuse:	Reuse immutable base columns and exact projected tables; an actually checked distinct subprojection proves a wider projection distinct.
 IO-GpuVerifiedKey	implementation	experiments/gpu/tpch/src/loader.rs	// Formal rule IO-GpuVerifiedKey:	Only projected hash-matched verified key columns authorize omitting IO deduplication.

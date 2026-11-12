@@ -950,8 +950,7 @@ fn compile_stage(
         let row = &row_types[index];
         if host {
             input_types.push(quote!(Vec<#row>));
-            // DECODE V: host-stage inputs retain stored key codes; other scalar
-            // fields follow the existing typed host publication boundary.
+            // DECODE V: P6 host-stage inputs retain stored key codes; other scalar fields follow the existing typed host publication boundary.
             bindings.push(quote!(loader.bind::<#row>(#table, #names)?.to_host()?));
             sequential_bindings.push(quote!(let #field = &data.#field;));
         } else {

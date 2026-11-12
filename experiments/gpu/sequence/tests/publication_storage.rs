@@ -3,17 +3,27 @@ use cq_gpu_sequence_runtime::Result;
 
 #[test]
 fn recorded_for_order_survives_packed_flat_and_terminal_publications() -> Result<()> {
+    publication_cases(i32::MIN as i64, i32::MAX as i64)
+}
+
+#[test]
+#[should_panic(expected = "GPU domain key field exceeds 32 bits")]
+fn packed_publication_rejects_wide_domain_key() {
+    publication_cases(i64::MIN, i64::MAX).unwrap();
+}
+
+fn publication_cases(minimum: i64, maximum: i64) -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
     for raw in [
         vec![],
         vec![(-1i64, u32::MAX); 5],
         vec![
-            (i64::MIN, 0),
-            (i64::MAX, u32::MAX),
+            (minimum, 0),
+            (maximum, u32::MAX),
             (-7, 2),
             (-7, 2),
             (0, 1),
-            (i64::MIN, u32::MAX),
+            (minimum, u32::MAX),
         ],
     ] {
         let data = DeviceColumns::from_rows(

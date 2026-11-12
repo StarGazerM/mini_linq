@@ -985,10 +985,18 @@ impl Rows {
                     let (positions, length) = if interval.is_some() {
                         let selected = format_ident!("__cq_sequence_selected_{}", name);
                         let param = format_ident!("__cq_sequence_selected_rows_{}", name);
+                        let memory_report = structure_analysis.retained.contains_key(name).then(|| quote! {
+                            if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
+                                ::cq_gpu_sequence_runtime::index_bytes::record(
+                                    "retained positions", #selected.bytes(), #selected.len() * ::core::mem::size_of::<u32>(),
+                                );
+                            }
+                        });
                         build.extend(quote! {
                             let #selected = ::cq_gpu_sequence_runtime::select(
                                 __cq_pool.clone(), &(#selection).expect("recorded selection"),
                                 __cq_auxiliary.selection)?;
+                            #memory_report
                         });
                         parameters.push((
                             param.clone(),
@@ -1148,10 +1156,18 @@ impl Rows {
                     if matches!(realization.access, SourceAccess::Positions(_)) {
                         let selected = format_ident!("__cq_sequence_selected_{}", name);
                         let param = format_ident!("__cq_sequence_selected_rows_{}", name);
+                        let memory_report = structure_analysis.retained.contains_key(name).then(|| quote! {
+                            if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
+                                ::cq_gpu_sequence_runtime::index_bytes::record(
+                                    "retained positions", #selected.bytes(), #selected.len() * ::core::mem::size_of::<u32>(),
+                                );
+                            }
+                        });
                         build.extend(quote! {
                             let #selected = ::cq_gpu_sequence_runtime::select(
                                 __cq_pool.clone(), &(#selection).expect("recorded selection"),
                                 __cq_auxiliary.selection)?;
+                            #memory_report
                         });
                         parameters.push((
                             param.clone(),

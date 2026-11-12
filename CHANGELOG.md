@@ -13,6 +13,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU TPC-H records shared Offset/Rank key domains at load, preserves codes
+  through relational operators, and restores logical keys at Rust/output
+  boundaries. Publications carry measured bounds separately from computed
+  origins. First-warmup index accounting distinguishes retained allocations
+  from temporary/global-fold output and selected-row capacity from live bytes.
+
 - Fix: CPU TPC-H `aggregate!` kernels (Q06 default/par) failed to build since
   `fadeecc5` (`expected struct`): the evidence adapter parsed a core struct
   header before aggregate/correlated expansion. Evidence now attaches as the
