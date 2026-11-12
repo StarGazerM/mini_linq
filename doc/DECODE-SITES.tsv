@@ -520,3 +520,4 @@ experiments/gpu/doop/src/lib.rs	// DECODE P: bulk DOOP output restores handles u
 experiments/gpu/datalog/facade/tests/domains.rs	// DECODE P: the fixture publishes a whole logical handle column in one call.	P	the fixture publishes a whole logical handle column in one call.
 experiments/gpu/datalog/facade/tests/domains.rs	// DECODE P: diagnostic scalar publication records calls to the non-bulk inverse.	P	diagnostic scalar publication records calls to the non-bulk inverse.
 experiments/gpu/datalog-runtime/tests/runtime_widths.rs	// DECODE P: resident-source publication compares complete runtime-width logical rows.	P	resident-source publication compares complete runtime-width logical rows.
+experiments/gpu/datalog-runtime/tests/domain_admission.rs	// DECODE P: diagnostic domain admission publishes its permuted field codes.	P	diagnostic domain admission publishes its permuted field codes.

@@ -125,6 +125,27 @@ pub struct DomainCatalog {
     entries: Vec<Entry>,
 }
 
+/// Packed candidates whose domain validation is pending on their pool stream.
+/// Only admission/sort can expose a published batch: its existing count readback
+/// consumes the validation flag, so repacking adds no query-time synchronization.
+pub struct DomainBatch<W: Word> {
+    pub(crate) words: Buffer<W>,
+    pub(crate) validation: Option<Buffer<u64>>,
+    pub(crate) packing: Packing,
+}
+
+impl<W: Word> DomainBatch<W> {
+    pub fn len(&self) -> usize { self.words.len() }
+    pub fn is_empty(&self) -> bool { self.words.is_empty() }
+
+    /// Reorder fields without discarding the original validation dependency.
+    pub fn permuted(self, order: &[usize], block_threads: u32) -> Result<Self> {
+        let words = self.packing.permute_device(&self.words, self.len(), order, block_threads)?;
+        let packing = self.packing.permute(order)?;
+        Ok(Self { words, validation: self.validation, packing })
+    }
+}
+
 impl DomainCatalog {
     pub fn new(pool: Arc<Pool>, inputs: Vec<DomainInput>) -> Result<Self> {
         if inputs.len() > u32::MAX as usize {
@@ -206,16 +227,24 @@ impl DomainCatalog {
     /// must be ordered on this catalog's pool stream. One error word, never rows,
     /// is read back before returning an initialized result.
     pub fn remap<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32]) -> Result<Buffer<W>> {
-        self.repack(input, source, components, false)
+        let batch = self.repack(input, source, components, false)?;
+        if let Some(validation) = &batch.validation {
+            let result = validation.to_host()?;
+            crate::record_readback();
+            if result[1] != 0 {
+                return Err("uploaded value is outside its recorded equality component".into());
+            }
+        }
+        Ok(batch.words)
     }
 
     /// Seal already-domain-coded candidate rows at their recorded field widths.
     /// This preserves codes; it does not look up or reconstruct global symbols.
-    pub fn repack_codes<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32]) -> Result<Buffer<W>> {
+    pub fn repack_codes<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32]) -> Result<DomainBatch<W>> {
         self.repack(input, source, components, true)
     }
 
-    fn repack<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32], dense: bool) -> Result<Buffer<W>> {
+    fn repack<W: Word>(&self, input: &Buffer<W>, source: &Packing, components: &[u32], dense: bool) -> Result<DomainBatch<W>> {
         let target = self.packing(components)?;
         if source.len() != components.len() {
             return Err("component count differs from source packing arity".into());
@@ -253,21 +282,25 @@ impl DomainCatalog {
                 }
             }
         }
-        let output = unsafe { Buffer::uninitialized(self.pool.clone(), input.len())? };
-        if input.is_empty() {
-            return Ok(output);
+        let output = if components.is_empty() {
+            Buffer::zeroed(self.pool.clone(), input.len())?
+        } else {
+            unsafe { Buffer::uninitialized(self.pool.clone(), input.len())? }
+        };
+        if input.is_empty() || components.is_empty() {
+            return Ok(DomainBatch { words: output, validation: None, packing: target });
         }
         let descriptors = Buffer::from_host_async(self.pool.clone(), &descriptors)?;
-        let error = Buffer::from_host_async(self.pool.clone(), &[0_u32])?;
+        // Slot zero receives the unique count at the existing admission barrier.
+        // Slot one is the sticky error flag; all eight bytes start initialized.
+        let validation = Buffer::<u64>::zeroed(self.pool.clone(), 2)?;
+        let error = unsafe { validation.ptr().add(1).cast::<u32>() };
         let module = &self.module;
         let initial = module.prepare_remap::<W>(LaunchConfig1D::new(1, 256, 0))?;
         let grid = cq_gpu_runtime::launch_grid_for_kernel(initial.function(), input.len().div_ceil(256), 256, 0)?;
         let launch = module.prepare_remap::<W>(LaunchConfig1D::new(grid, 256, 0))?;
-        module.remap::<W>(self.pool.stream(), &launch, input.ptr().cast(), output.ptr().cast(), input.len() as u64, descriptors.ptr(), components.len() as u32, error.ptr())?;
-        if error.to_host()?[0] != 0 {
-            return Err("uploaded value is outside its recorded equality component".into());
-        }
-        Ok(output)
+        module.remap::<W>(self.pool.stream(), &launch, input.ptr().cast(), output.ptr().cast(), input.len() as u64, descriptors.ptr(), components.len() as u32, error)?;
+        Ok(DomainBatch { words: output, validation: Some(validation), packing: target })
     }
 }
 

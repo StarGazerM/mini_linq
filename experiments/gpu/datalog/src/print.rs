@@ -86,6 +86,7 @@ fn admission(
     index: usize,
     candidates: &Ident,
     fresh: &Ident,
+    pending: bool,
 ) -> TokenStream {
     let canonical = context.relations[index].providers.canonical;
     let threads = device(program).layouts[canonical].permutation_threads;
@@ -95,14 +96,22 @@ fn admission(
     let order = &record.admitted_orders[0].columns;
     let ordered = match record.candidate_order.to_string().as_str() {
         "canonical" => quote!(),
+        "permutation" if pending => quote!(
+            let #candidates = #candidates.permuted(&[#(#order),*], #threads)?;
+        ),
         "permutation" => quote!(
             let #candidates = #packing.permute_device(&#candidates, #candidates.len(), &[#(#order),*], #threads)?;
         ),
         _ => unreachable!("checked candidate order certificate"),
     };
+    let fresh_call = if pending {
+        quote!(#state.fresh_codes(#candidates)?)
+    } else {
+        quote!(#state.fresh(&#candidates, #candidates.len())?)
+    };
     quote!(#ordered
         // SAFETY: declared packing initializes exactly the recorded codec bit window.
-        let #fresh = unsafe { #state.fresh(&#candidates, #candidates.len())? };
+        let #fresh = unsafe { #fresh_call };
     )
 }
 
@@ -199,7 +208,7 @@ fn admit_publish(
     let fresh = local("fresh", i);
     let buffer = format_ident!("__cq_gpu_candidate_rows");
     let concatenate = concatenate(program, i, None, word, quote!(&#packing), quote!(&#candidates))?;
-    let admit = admission(program, context, i, &buffer, &fresh);
+    let admit = admission(program, context, i, &buffer, &fresh, crate::storage::uses_domains(&program.storage));
     let orders = admitted_orders(program, i, &fresh);
     let relation_name = relation.declaration.name.to_string();
     let canonical = local("layout", relation.providers.canonical);
@@ -654,7 +663,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         let source_packing = if domains.is_some() { quote!(__cq_gpu_source_packing) } else { quote!(#packing) };
         let upload = format_ident!("__cq_gpu_upload");
         let fresh = local("fresh", index);
-        let admit = admission(program, context, index, &upload, &fresh);
+        let admit = admission(program, context, index, &upload, &fresh, false);
         let orders = admitted_orders(program, index, &fresh);
         let layouts = context
             .layouts
@@ -725,6 +734,11 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             let invocation = &holes[key.hole];
             let concatenate = concatenate(program, key.relation, Some(&key.columns),
                 word, quote!(&packing), quote!(&[batch]))?;
+            let sort = if domains.is_some() {
+                quote!(state.sort_codes(buffer)?)
+            } else {
+                quote!(state.sort_unique(&buffer, buffer.len())?)
+            };
             keys.push(quote!(let #name: #ty = {
                 let mut arena: #arena_ty = #arena_init;
                 let __cq_gpu_arena = &mut arena;
@@ -733,7 +747,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 let buffer = #concatenate;
                 let state: #state_ty = #state_init;
                 // SAFETY: candidate concatenation used this checked projected packing.
-                let run = unsafe { state.sort_unique(&buffer, buffer.len())? };
+                let run = unsafe { #sort };
                 <#ty>::from_sorted(__cq_gpu_pool.clone(), packing, state.params(), run, state.active_bits())?
             };));
         }
@@ -999,7 +1013,7 @@ fn phase(
                     .unwrap_or_else(|| format!("{}/{}", head_name, program.holes[hole].cq.name));
                 let rows = format_ident!("__cq_expansion_candidates");
                 let fresh = format_ident!("__cq_expansion_fresh");
-                let admit = admission(program, context, rule.head, &rows, &fresh);
+                let admit = admission(program, context, rule.head, &rows, &fresh, crate::storage::uses_domains(&program.storage));
                 let concatenate = concatenate(program, rule.head, None, word, quote!(&#packing),
                     quote!(::core::slice::from_ref(&__cq_gpu_batch)))?;
                 Some(quote! {

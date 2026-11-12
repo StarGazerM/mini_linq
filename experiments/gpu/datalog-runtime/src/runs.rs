@@ -116,13 +116,16 @@ pub(crate) struct SetOps<'a> {
 impl SetOps<'_> {
     /// Formal rule DL-SortKnownUnique: certified injective full-key permutations
     /// skip unique compaction and count readback, but never skip sorting.
-    pub(crate) fn sort<W: Word>(&self, input: &Buffer<W>, rows: usize, known_unique: bool) -> Result<SortedBatch<W>> {
+    pub(crate) fn sort<W: Word>(&self, input: &Buffer<W>, rows: usize, known_unique: bool, validation: Option<&Buffer<u64>>) -> Result<SortedBatch<W>> {
         if !self.pool.shares_memory(input.pool()) || rows > input.len() || rows > u32::MAX as usize
         {
             return Err("invalid sort input pool or live length".into());
         }
         if self.active_bits > W::BITS {
             return Err("sort active bits exceed the key word".into());
+        }
+        if validation.is_some() && (known_unique || rows == 0 || self.active_bits == 0) {
+            return Err("pending domain validation requires the existing unique-count barrier".into());
         }
         crate::stats::record_sort(
             if known_unique { crate::stats::SortKind::Layout } else { crate::stats::SortKind::Canonical },
@@ -162,7 +165,7 @@ impl SetOps<'_> {
                     rows,
                     compact,
                 )?;
-                let rows = read_count(&self.pool, count.get())?;
+                let rows = read_count_validated(&self.pool, count.get(), validation)?;
                 return unsafe { SortedBatch::from_sorted(output, rows) };
             }
             // Adopt the actual sorted buffer: no post-sort copy or spare output.
@@ -220,7 +223,7 @@ impl SetOps<'_> {
             }
         }
         let rows = if let Some((count, _)) = &compaction {
-            read_count(&self.pool, count.get())?
+            read_count_validated(&self.pool, count.get(), validation)?
         } else {
             rows
         };
@@ -577,6 +580,28 @@ pub(crate) fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usiz
     crate::record_readback();
     pool.stream().synchronize()?;
     Ok(usize::try_from(count)?)
+}
+
+/// Consume a pending domain error beside the count in one existing transfer.
+/// The ordinary path keeps its original one-word readback unchanged.
+fn read_count_validated(pool: &Pool, count: &DeviceBuffer<u64>, validation: Option<&Buffer<u64>>) -> Result<usize> {
+    let Some(validation) = validation else { return read_count(pool, count); };
+    let mut result = [0u64; 2];
+    // SAFETY: both initialized control words share this ordered stream.
+    unsafe {
+        cuda_core::simt::memory::memcpy_dtod_async(
+            validation.cu_deviceptr(), count.cu_deviceptr(), 8, pool.stream().cu_stream(),
+        )?;
+        cuda_core::simt::memory::memcpy_dtoh_async(
+            result.as_mut_ptr(), validation.cu_deviceptr(), 16, pool.stream().cu_stream(),
+        )?;
+    }
+    crate::record_readback();
+    pool.stream().synchronize()?;
+    if result[1] != 0 {
+        return Err("candidate value is outside its recorded equality component".into());
+    }
+    Ok(usize::try_from(result[0])?)
 }
 
 /// The stable sorting permutation of an initialized packed-word prefix.

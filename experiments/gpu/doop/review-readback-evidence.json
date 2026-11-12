@@ -1,0 +1,35 @@
+{
+  "base_revision": "e4e08c99d00d818cf68859ee76861a2ae1e1b3a2",
+  "workload": "/data/doop-bench/doop-data/xalan",
+  "features": [
+    "gpu-datalog-runtime/radix-counters"
+  ],
+  "round_records": 324,
+  "base_reads": 4689,
+  "before_fix_reads": 5874,
+  "after_fix_reads": 4689,
+  "all_rounds_equal_base": true,
+  "removed_readbacks": 1185,
+  "comparison": "exact full-tuple sets, all 26 outputs",
+  "timings_valid": false,
+  "reason": "Foreign VLLM compute tenants; structural counter/exactness runs only.",
+  "base_binary_sha256": "8ddce3aaca404628c488acac5aacc1d5dc32f1a43d3635a8048bb7419fdd1a58",
+  "after_binary_sha256": "bff3f8f41d5b0acf8a88cbae7a3444976e164ce7f26281bf9089de546209dfa9",
+  "native_source_grouping": "runtime_widths counter test confirms one grouping readback and unchanged native sort window",
+  "strategy": "Pending DomainBatch validation flag survives permutations and is read with the existing unique count; initial upload validation stays in setup.",
+  "raw_logs": {
+    "base": "target/review-base-readbacks-run-authorized.log",
+    "before": "artifact://1812",
+    "after": "artifact://1872"
+  },
+  "counter_lines_after": [
+    "gpu_datalog_work\tstage=setup\tkind=canonical\tsorts=33\tpasses=247\tradix_bits=1866\tbytes=718731728",
+    "gpu_datalog_work\tstage=setup\tkind=layout\tsorts=4\tpasses=18\tradix_bits=128\tbytes=17121632",
+    "gpu_datalog_work\tstage=setup\tkind=occurrence\tsorts=0\tpasses=0\tradix_bits=0\tbytes=0",
+    "gpu_datalog_work\tstage=setup\tkind=metadata\tmerges=0\tgrouping_readbacks=0\tdescriptor_materializations=363\tdescriptor_bytes=6264\toffset_materializations=0\toffset_bytes=0",
+    "gpu_datalog_work\tstage=fixpoint\tkind=canonical\tsorts=1187\tpasses=5801\tradix_bits=40960\tbytes=2017490096",
+    "gpu_datalog_work\tstage=fixpoint\tkind=layout\tsorts=425\tpasses=2462\tradix_bits=17823\tbytes=852431568",
+    "gpu_datalog_work\tstage=fixpoint\tkind=occurrence\tsorts=0\tpasses=0\tradix_bits=0\tbytes=0",
+    "gpu_datalog_work\tstage=fixpoint\tkind=metadata\tmerges=1735\tgrouping_readbacks=0\tdescriptor_materializations=4286\tdescriptor_bytes=380872\toffset_materializations=0\toffset_bytes=0"
+  ]
+}

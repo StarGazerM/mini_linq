@@ -1588,6 +1588,11 @@ by derived relations. Numeric components without an EDB member use checked
 declared scalar bounds; those with EDB members retain observed bounds (or
 typed empty bounds), not a type-width fallback. Derived values outside a
 frozen observed range are rejected explicitly.
+Candidate sealing returns a pending \code{DomainBatch}: its validation flag
+travels with its packed words, including through permutations. Canonical
+sorting combines that flag with its existing unique-count download before
+publishing a sorted batch. This adds no fixpoint metadata synchronization.
+Initial uploads may validate separately during setup.
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad
