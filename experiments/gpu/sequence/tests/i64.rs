@@ -84,13 +84,23 @@ fn triangle_retains_i64_payloads_and_its_recorded_plan() {
 }
 
 #[test]
-fn two_key_membership_preserves_full_width_last_key() -> cq_gpu_sequence_runtime::Result<()> {
+fn two_key_membership_preserves_narrow_signed_last_key() -> cq_gpu_sequence_runtime::Result<()> {
+    membership_case(1i64 << 16)
+}
+
+#[test]
+#[should_panic(expected = "GPU domain key field exceeds 32 bits")]
+fn two_key_membership_rejects_wide_domain_key() {
+    membership_case(1i64 << 32).unwrap();
+}
+
+fn membership_case(span: i64) -> cq_gpu_sequence_runtime::Result<()> {
     use cq_gpu_runtime::{Codec, DeviceColumns, Dictionary, Pool};
     let pool = Pool::new(0, 0, 0)?;
     let raw = vec![
         (0i64, 7i64),
-        (0, (1i64 << 32) + 7),
-        (0, -(1i64 << 32) + 7),
+        (0, span + 7),
+        (0, -span + 7),
         (0, 8),
         (1, 7),
     ];

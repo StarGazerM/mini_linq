@@ -11,7 +11,8 @@
 
 pub use cq_gpu_sequence_core::runs::record_representation;
 pub use cq_gpu_sequence_core::{
-    bind_structures, catalog, machine, providers, translate, translate_arena,
+    bind_structures, catalog, machine, providers, translate, translate_arena, translate_with_origins,
+    CaptureHandle, DeviceCaptureBindings,
 };
 pub use cq_gpu_sequence_macros::{
     bind_runs, capture_constants, decompose, machine_grade, select_catalog, stage, translate,

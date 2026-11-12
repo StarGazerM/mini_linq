@@ -149,14 +149,14 @@ pub fn fixture(name: &str) -> StructuresStack {
         },
         "wide_scan" => syn::parse_quote! {
             physical {
-                relation Edge(x:i64,y:i64) = (&edge);
+                relation Edge(a:i32,b:i32,c:i32,d:i32) = (&edge);
                 consumer canonical;
-                e = pipe rename Edge {x -> x,y -> y};
-                result = pipe project e keep {x,y};
-                return result as answer(x,y);
+                e = pipe rename Edge {a -> a,b -> b,c -> c,d -> d};
+                result = pipe project e keep {a,b,c,d};
+                return result as answer(a,b,c,d);
             }
             structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; }
-                e host scan = @radix_relation input { keys 2; columns [i64 => i64, i64 => i64] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i64,i64),(),u128,u64,()> [];
+                e host scan = @radix_relation input { keys 4; columns [i32 => i32, i32 => i32, i32 => i32, i32 => i32] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32,i32,i32),(),u128,u64,()> [];
             }
         },
         "capture" => syn::parse_quote! {
@@ -187,26 +187,39 @@ pub fn fixture(name: &str) -> StructuresStack {
         },
         "wide3_scan" => syn::parse_quote! {
             physical {
-                relation Edge(x:i64,y:i32,z:i64) = (&edge);
+                relation Edge(a:i32,b:i32,c:i32,d:i32,e:i32,f:i32) = (&edge);
                 consumer canonical;
-                e = pipe rename Edge {x -> x,y -> y,z -> z};
-                result = pipe project e keep {x,y,z};
-                return result as answer(x,y,z);
+                input = pipe rename Edge {a -> a,b -> b,c -> c,d -> d,e -> e,f -> f};
+                result = pipe project input keep {a,b,c,d,e,f};
+                return result as answer(a,b,c,d,e,f);
             }
             structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; }
-                e host scan = @radix_relation input { keys 3; columns [i64 => i64, i32 => i32, i64 => i64] } radix { word [u64;3]; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i64,i32,i64),(),[u64;3],u64,()> [];
+                input host scan = @radix_relation input { keys 6; columns [i32 => i32, i32 => i32, i32 => i32, i32 => i32, i32 => i32, i32 => i32] } radix { word [u64;3]; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32,i32,i32,i32,i32),(),[u64;3],u64,()> [];
             }
         },
         "wide4_scan" => syn::parse_quote! {
             physical {
-                relation Edge(a:i64,b:i32,c:i64,d:i32,e:i32) = (&edge);
+                relation Edge(a:i32,b:i32,c:i32,d:i32,e:i32,f:i32,g:i32,h:i32) = (&edge);
                 consumer canonical;
-                input = pipe rename Edge {a -> a,b -> b,c -> c,d -> d,e -> e};
-                result = pipe project input keep {a,b,c,d,e};
-                return result as answer(a,b,c,d,e);
+                input = pipe rename Edge {a -> a,b -> b,c -> c,d -> d,e -> e,f -> f,g -> g,h -> h};
+                result = pipe project input keep {a,b,c,d,e,f,g,h};
+                return result as answer(a,b,c,d,e,f,g,h);
             }
             structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; }
-                input host scan = @radix_relation input { keys 5; columns [i64 => i64, i32 => i32, i64 => i64, i32 => i32, i32 => i32] } radix { word [u64;4]; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i64,i32,i64,i32,i32),(),[u64;4],u64,()> [];
+                input host scan = @radix_relation input { keys 8; columns [i32 => i32, i32 => i32, i32 => i32, i32 => i32, i32 => i32, i32 => i32, i32 => i32, i32 => i32] } radix { word [u64;4]; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32,i32,i32,i32,i32,i32,i32),(),[u64;4],u64,()> [];
+            }
+        },
+        "wide_computed" => syn::parse_quote! {
+            physical {
+                relation Edge(x:u32) = (&edge);
+                consumer canonical;
+                e = pipe rename Edge {x -> x};
+                computed = pipe bind e with value:i64 = (*x as i64 + 1125899906842624i64);
+                result = pipe project computed keep {x,value};
+                return result as answer(x,value);
+            }
+            structures { providers { radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation }; }
+                e host scan = @radix_relation input { keys 1; columns [u32 => u32] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(u32,),(),u64,u64,()> [];
             }
         },
         _ => panic!("unknown run hole {name}"),

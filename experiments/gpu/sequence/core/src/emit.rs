@@ -107,8 +107,127 @@ fn packing_bounds(bounds: &FieldBounds) -> TokenStream {
     }
 }
 
-fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident) -> TokenStream {
-    let bounds = packing_bounds(&field.bounds);
+/// Bounds variants describe availability, not origin: a host-loaded domain can
+/// have Scalar bounds until its upload, and a computed input can be Resident.
+struct PackingSources<'a> {
+    physical: &'a cq_lang_structures::physical::Program,
+    structures: &'a cq_lang_structures::Analysis,
+    analysis: &'a Analysis,
+    computed_inputs: &'a BTreeSet<(String, usize)>,
+    uploads: BTreeSet<String>,
+}
+
+impl<'a> PackingSources<'a> {
+    fn new(
+        physical: &'a cq_lang_structures::physical::Program,
+        structures: &'a cq_lang_structures::Analysis,
+        analysis: &'a Analysis,
+        computed_inputs: &'a BTreeSet<(String, usize)>,
+    ) -> Self {
+        use cq_lang_sequence::gpu::realization::SourceOrigin;
+        let uploads = analysis.gpu_bindings.realization.sources.iter()
+            .filter_map(|(name, source)| matches!(source.origin, SourceOrigin::Uploaded { .. })
+                .then(|| name.clone()))
+            .collect();
+        Self { physical, structures, analysis, computed_inputs, uploads }
+    }
+
+    fn computed(&self, column: &str) -> bool {
+        let mut computed = self.structures.physical.rows.values()
+            .any(|row| row.computed.contains(column))
+            || self.physical.program.captures.names().contains(column);
+        for (result, mapping) in &self.structures.physical.renames {
+            let Some(original) = mapping.get(column) else { continue };
+            let host = &self.structures.physical.hosts[result];
+            let input = self.physical.inputs().find(|input| symbol_name(&input.name) == *host)
+                .expect("checked rename input");
+            let slot = input.columns.iter().position(|field| symbol_name(&field.name) == *original)
+                .expect("checked rename column");
+            if !self.computed_inputs.contains(&(host.clone(), slot)) {
+                return false;
+            }
+            computed = true;
+        }
+        computed
+    }
+
+    /// Walk value provenance only as far as an already measured publication.
+    /// Never borrow a later upload or another union arm's narrower interval.
+    fn measured(&self, result: &str, column: &str) -> Option<TokenStream> {
+        use cq_lang_sequence::gpu::bindings::{UploadAdapter, UploadBounds};
+        if self.uploads.contains(result) {
+            let index = self.structures.layouts[result].iter().position(|name| name == column)?;
+            if let UploadAdapter::NumericColumns { columns, .. } = &self.analysis.gpu_bindings.uploads[result]
+                && columns[index].bounds == UploadBounds::Measure
+            {
+                let host = format_ident!("__cq_sequence_uploaded_{result}");
+                return Some(quote!(#host.storage().bounds[#index]));
+            }
+        }
+        let definition = self.physical.program.definitions.iter()
+            .find(|definition| symbol_name(&definition.name) == result)?;
+        if let Operator::Rename(rename) = &definition.operator {
+            let host = symbol_name(&rename.relation);
+            let original = self.structures.physical.renames[result].get(column)?;
+            // Download records cover resident scans even when they are read
+            // only by host Rust and therefore have no device source record.
+            // Native radix inputs have a different ABI, not column metadata.
+            if !self.analysis.gpu_bindings.relation_inputs.contains_key(&host)
+                && self.structures.physical.hosts.iter().any(|(name, input)|
+                    *input == host && self.analysis.gpu_bindings.downloads.contains_key(name))
+            {
+                let index = self.structures.host_layouts[&host].iter().position(|name| name == original)?;
+                let host = format_ident!("__cq_sequence_host_{host}");
+                return Some(quote!(#host.storage().bounds[#index]));
+            }
+            return None;
+        }
+        // A Bind or aggregate creates a new value even if an input column has
+        // the same name. Only an upload of the result can measure that value.
+        // Semi/anti retain only the left row; right-side bounds cannot cover it.
+        let operands = match &definition.operator {
+            Operator::Bind(bind) if cq_lang_structures::syntax::rust::bindings(&bind.pattern)
+                .iter().any(|name| symbol_name(name) == column) => return None,
+            Operator::Group(group) if group.aggregates.iter()
+                .any(|aggregate| symbol_name(&aggregate.name) == column) => return None,
+            Operator::Semi(_, keyed) | Operator::Anti(_, keyed) => vec![&keyed.left],
+            operator => operator.operands(),
+        };
+        let mut sources = operands.into_iter()
+            .map(symbol_name)
+            .filter(|input| self.structures.physical.rows[input].types.contains_key(column))
+            .map(|input| self.measured(&input, column))
+            .collect::<Option<Vec<_>>>()?;
+        if sources.len() <= 1 { return sources.pop(); }
+        Some(quote! {
+            [#(#sources),*].into_iter().fold(::cq_gpu_runtime::Bounds::Empty, |a,b| match (a,b) {
+                (::cq_gpu_runtime::Bounds::Empty, x) | (x, ::cq_gpu_runtime::Bounds::Empty) => x,
+                (::cq_gpu_runtime::Bounds::Inclusive { min:a, max:b }, ::cq_gpu_runtime::Bounds::Inclusive { min:c, max:d }) =>
+                    ::cq_gpu_runtime::Bounds::Inclusive { min:a.min(c), max:b.max(d) },
+            })
+        })
+    }
+
+    fn field(&self, result: &str, field: &KeyField) -> (TokenStream, bool) {
+        match &field.bounds {
+            // Scalar-fold ranges describe a new value, not its input column.
+            FieldBounds::Inclusive { .. } => (packing_bounds(&field.bounds), true),
+            FieldBounds::Column(ColumnBounds::Resident { .. }) =>
+                (packing_bounds(&field.bounds), self.computed(&field.column)),
+            FieldBounds::Column(ColumnBounds::Scalar { .. }) => (
+                self.measured(result, &field.column).unwrap_or_else(|| packing_bounds(&field.bounds)),
+                self.computed(&field.column),
+            ),
+        }
+    }
+}
+
+fn packing_field(bounds: TokenStream, base: &syn::Ident, shift: &syn::Ident, computed: bool) -> TokenStream {
+    let check_domain = (!computed).then(|| quote! {
+        if __cq_width > 32 {
+            return Err("GPU domain key field exceeds 32 bits".into());
+        }
+    });
     quote! {
         let (#base, __cq_width) = match (#bounds) {
             ::cq_gpu_runtime::Bounds::Empty => (0i64, 0u32),
@@ -116,6 +235,7 @@ fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident) -> Tok
                 (min, 64 - ((max as i128 - min as i128) as u64).leading_zeros())
             }
         };
+        #check_domain
         let #shift = __cq_key_bits;
         __cq_key_bits = __cq_key_bits.checked_add(__cq_width).ok_or("packed Sequence key width overflow")?;
         __cq_fields.push(::cq_gpu_sequence_runtime::canon::PackedField {
@@ -124,16 +244,18 @@ fn packing_field(field: &KeyField, base: &syn::Ident, shift: &syn::Ident) -> Tok
     }
 }
 
-fn packing_fields(codec: &KeyCodec) -> Vec<TokenStream> {
+fn packing_fields(codec: &KeyCodec, mut source: impl FnMut(&KeyField) -> (TokenStream, bool)) -> Vec<TokenStream> {
     match codec {
         KeyCodec::FrameOfReference { fields } => fields
             .iter()
             .enumerate()
             .map(|(i, field)| {
+                let (bounds, computed) = source(field);
                 packing_field(
-                    field,
+                    bounds,
                     &format_ident!("__cq_pack_base_{i}"),
                     &format_ident!("__cq_pack_shift_{i}"),
+                    computed,
                 )
             })
             .collect(),
@@ -2172,6 +2294,28 @@ pub fn translate(
     translate_impl(physical, structures, program, analysis, None)
 }
 
+/// Carry checked producer-origin facts independently of resident measured bounds.
+pub fn translate_with_origins(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+    computed_inputs: &BTreeSet<(String, usize)>,
+    device_captures: &crate::DeviceCaptureBindings,
+) -> syn::Result<syn::Expr> {
+    for (name, slot) in computed_inputs {
+        let input = physical.inputs().find(|input| input.name == name.as_str())
+            .ok_or_else(|| error("GPU publication origin names an absent input"))?;
+        if *slot >= input.columns.len() || input.columns[*slot].domain.is_some() {
+            return Err(error("GPU computed publication origin conflicts with its input domain"));
+        }
+    }
+    translate_with_metadata(
+        physical, structures, program, analysis, None,
+        std::env::var_os("CQ_EXPANSION_COUNTERS").is_some(), computed_inputs, Some(device_captures),
+    )
+}
+
 pub(crate) fn translate_impl(
     physical: &cq_lang_structures::physical::Program,
     structures: &cq_lang_structures::Program,
@@ -2197,6 +2341,19 @@ fn translate_observed(
     arena: Option<&syn::Expr>,
     expansion_counters: bool,
 ) -> syn::Result<syn::Expr> {
+    translate_with_metadata(physical, structures, program, analysis, arena, expansion_counters, &BTreeSet::new(), None)
+}
+
+fn translate_with_metadata(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    analysis: &Analysis,
+    arena: Option<&syn::Expr>,
+    expansion_counters: bool,
+    computed_inputs: &BTreeSet<(String, usize)>,
+    device_captures: Option<&crate::DeviceCaptureBindings>,
+) -> syn::Result<syn::Expr> {
     if program
         .graded
         .as_ref()
@@ -2207,6 +2364,7 @@ fn translate_observed(
         ));
     }
     let structure_analysis = &cq_lang_structures::contract::check(physical, structures)?;
+    let mut packing_sources = PackingSources::new(physical, structure_analysis, analysis, computed_inputs);
     // The target-owned Structures stage and terminal enforce the same boundary.
     crate::check_structures(physical, structures, structure_analysis)?;
     cq_lang_sequence::gpu::publication::check(physical, program, structure_analysis, analysis, &analysis.gpu_publications)?;
@@ -2236,7 +2394,10 @@ fn translate_observed(
             ))
         })?;
     }
-    let rows = Rows::new(physical, structures, program, structure_analysis, analysis)?;
+    let rows = match device_captures {
+        Some(bindings) => Rows::with_capture_bindings(physical, structures, program, structure_analysis, analysis, Some(bindings))?,
+        None => Rows::new(physical, structures, program, structure_analysis, analysis)?,
+    };
     let codecs =
         crate::runs::Codecs::check(physical, structures, &structure_analysis.physical.rows)?;
     let mut compiler = Compiler {
@@ -2390,6 +2551,7 @@ fn translate_observed(
                     // Only the numeric grouped-fold representation runs on device.
                     if let Some(evaluation) = upload {
                         publish_host(&mut compiler, input, evaluation, &mut launches, &codecs)?;
+                        packing_sources.uploads.insert(input.clone());
                     }
                     chain.source = input.clone();
                     chain.result = input.clone();
@@ -2604,6 +2766,8 @@ fn translate_observed(
                         &compiler.rows.query_captures,
                         geometry,
                         &compiler.rows,
+                        &analysis.gpu_bindings.bounds,
+                        computed_inputs,
                     )?
                 }
                 GroupCompletion::GridPartials {
@@ -2807,7 +2971,8 @@ fn translate_observed(
                         let base = format_ident!("base_{field}");
                         let shift = format_ident!("shift_{field}");
                         let slot = flat_slot(staging, &recipe.column);
-                        fields.push(packing_field(recipe, &base, &shift));
+                        let (bounds, computed) = packing_sources.field(result, recipe);
+                        fields.push(packing_field(bounds, &base, &shift, computed));
                         params.extend([abi_parameter(base.clone(), syn::parse_quote!(i64)), abi_parameter(shift.clone(), syn::parse_quote!(u32))]);
                         args.extend([abi_argument(base.clone(), quote!(#base)), abi_argument(shift.clone(), quote!(#shift))]);
                         parts.push(quote! {
@@ -2870,6 +3035,7 @@ fn translate_observed(
                     let canonicalize = quote! {
                         let #owner = unsafe { <#provider>::build_set(
                             &__cq_pool, &#keys, #store_length, __cq_key_bits, #set_params)? };
+                        ::cq_gpu_sequence_runtime::index_bytes::canonical(&#owner);
                     };
                     if final_output {
                         output = Some(if canonical {
@@ -2915,6 +3081,7 @@ fn translate_observed(
                     .get(&publication)
                     .ok_or_else(|| error("GPU-Realization: upload lacks its checked result"))?;
                 publish_host(&mut compiler, result, evaluation, &mut launches, &codecs)?;
+                packing_sources.uploads.insert(result.clone());
             } else if !matches!(step, Step::Host) {
                 return Err(error(
                     "GPU-Realization: step contradicts the checked dispatches",
@@ -3064,7 +3231,7 @@ fn translate_observed(
             .storage
             .codec()
             .filter(|_| !(arena.is_some() && final_output))
-            .map(packing_fields)
+            .map(|codec| packing_fields(codec, |field| packing_sources.field(dispatch_result, field)))
             .unwrap_or_default();
         let kernel_name = format_ident!("__cq_sequence_dispatch_{index}_{module_name}");
         compiler.rows.begin_abi_uses();
@@ -3900,6 +4067,19 @@ fn translate_observed(
                 abi_argument(format_ident!("__partials"), partials_pointer),
                 abi_argument(format_ident!("__blocks"), quote!(__cq_grid)),
             ]].concat())?;
+        let record_flat = (!final_output
+            && (virtual_range.is_some() || structure_analysis.retained.contains_key(dispatch_result))
+            && matches!(&record.storage, PublicationStorage::FlatRows(_))).then(|| {
+            let meta_bytes = if resident { quote!(0usize) } else { quote!(#store_meta.bytes()) };
+            quote! {
+                if ::cq_gpu_sequence_runtime::index_bytes::enabled() {
+                    ::cq_gpu_sequence_runtime::index_bytes::record_allocated(
+                        "flat publication",
+                        #store_rows.bytes() + #store_begin.bytes() + #store_offsets.bytes() + #meta_bytes,
+                    );
+                }
+            }
+        });
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
@@ -3929,6 +4109,7 @@ fn translate_observed(
                 break (#stores #output_keys,#meta_value,__cq_logical);
             };
             #remember_count
+            #record_flat
         });
         if final_output {
             output = Some(if arena.is_some() {
@@ -3939,6 +4120,7 @@ fn translate_observed(
                 quote! {
                     let __cq_keys=unsafe {<#provider>::build_set(
                         &__cq_pool, &#output_keys, #store_length, __cq_key_bits, #set_params)?};
+                    ::cq_gpu_sequence_runtime::index_bytes::canonical(&__cq_keys);
                     // DECODE V: P6 canonical output adapter reconstructs device i64 columns before final host publication.
                     let __cq_result=__cq_output_adapter.borrow_mut().unpack_columns(__cq_keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
                 }
@@ -3956,6 +4138,7 @@ fn translate_observed(
             launches.push(quote! {
                 let #canonical_owner=unsafe {<#provider>::build_set(
                     &__cq_pool, &#output_keys, #store_length, __cq_key_bits, #set_params)?};
+                ::cq_gpu_sequence_runtime::index_bytes::canonical(&#canonical_owner);
                 let #store_length=#canonical_owner.logical_count()?;
                 let #fields=__cq_fields;
                 drop(#output_keys);
@@ -4020,7 +4203,7 @@ fn translate_observed(
                 .storage
                 .codec()
                 .ok_or_else(|| error("GPU-PublicationStorage: host output lacks recorded keys"))?;
-            let packing = packing_fields(codec);
+            let packing = packing_fields(codec, |field| packing_sources.field(source, field));
             for i in 0..codec.fields().len() {
                 let base = format_ident!("__cq_pack_base_{i}");
                 let shift = format_ident!("__cq_pack_shift_{i}");
@@ -4097,6 +4280,7 @@ fn translate_observed(
                     let keys = unsafe { <#provider>::build_set(
                         &__cq_pool, &__cq_host_output_keys, __cq_host_output_length,
                         __cq_key_bits, #set_params)? };
+                    ::cq_gpu_sequence_runtime::index_bytes::canonical(&keys);
                     // DECODE V: P6 host-origin canonical output is reuploaded then expanded on device, rather than decoded at host publication.
                     let __cq_result = __cq_output_adapter.borrow_mut().unpack_columns(
                         keys,&__cq_fields,__cq_dictionary,__cq_statuses)?;
@@ -5130,9 +5314,78 @@ mod tests {
                 },
             ],
         };
-        let packing = packing_fields(&codec);
+        let packing = packing_fields(&codec, |field| (packing_bounds(&field.bounds), false));
         assert!(idents(packing[0].clone()).contains("__cq_pack_base_0"));
         assert!(idents(packing[1].clone()).contains("__cq_sequence_host_s"));
+    }
+
+    #[test]
+    fn canonical_loaded_scalar_fields_use_measured_domain_bounds() {
+        let Stack { physical, structures, program } = uploaded_host_program(false);
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let computed_inputs = BTreeSet::new();
+        let mut sources = PackingSources::new(&physical, &structure_analysis, &analysis, &computed_inputs);
+        let field = KeyField {
+            column: "a".into(),
+            bounds: FieldBounds::Column(ColumnBounds::Scalar { ty: syn::parse_quote!(i64) }),
+        };
+        sources.uploads.clear();
+        let (bounds, computed) = sources.field("resident", &field);
+        assert!(!computed);
+        assert!(idents(bounds.clone()).contains("__cq_sequence_host_Resident"));
+        assert!(!idents(bounds.clone()).contains("Scalar"));
+        let tokens = packing_field(bounds, &format_ident!("base"), &format_ident!("shift"), computed);
+        assert!(tokens.to_string().contains("GPU domain key field exceeds 32 bits"));
+
+        // A host-loaded field is not computed merely because its static recipe
+        // is Scalar. Its upload has already measured the codes before packing.
+        sources.uploads.insert("host".into());
+        let (bounds, computed) = sources.field("host", &field);
+        assert!(!computed);
+        assert!(idents(bounds.clone()).contains("__cq_sequence_uploaded_host"));
+        assert!(!idents(bounds).contains("Scalar"));
+
+        // An explicitly recorded resident domain is immutable, even when a
+        // narrower filtered upload happens to be available for this column.
+        let resident = KeyField {
+            column: "a".into(),
+            bounds: FieldBounds::Column(ColumnBounds::Resident { sources: vec![("Resident".into(), 0)] }),
+        };
+        assert_eq!(sources.field("host", &resident).0.to_string(), packing_bounds(&resident.bounds).to_string());
+    }
+
+    #[test]
+    fn canonical_computed_fields_use_only_already_published_measurements() {
+        let Stack { physical, structures, program } = uploaded_host_program(false);
+        let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
+        let computed_inputs = BTreeSet::from([("Resident".into(), 0), ("Host".into(), 0)]);
+        let mut sources = PackingSources::new(&physical, &structure_analysis, &analysis, &computed_inputs);
+        let field = KeyField {
+            column: "a".into(),
+            bounds: FieldBounds::Column(ColumnBounds::Scalar { ty: syn::parse_quote!(i64) }),
+        };
+        sources.uploads.clear();
+        let (bounds, computed) = sources.field("host", &field);
+        assert!(computed);
+        // The semi's right resident input cannot narrow its left output.
+        assert!(idents(bounds.clone()).contains("Scalar"));
+        let tokens = packing_field(bounds, &format_ident!("base"), &format_ident!("shift"), computed);
+        assert!(!tokens.to_string().contains("GPU domain key field exceeds 32 bits"));
+        sources.uploads.insert("host".into());
+        let (bounds, computed) = sources.field("host", &field);
+        assert!(computed);
+        assert!(idents(bounds.clone()).contains("__cq_sequence_uploaded_host"));
+        assert!(!idents(bounds).contains("Scalar"));
+
+        let fold = KeyField {
+            column: "a".into(),
+            bounds: FieldBounds::Inclusive { min: i64::MIN, max: i64::MAX },
+        };
+        let (bounds, computed) = sources.field("host", &fold);
+        assert!(computed);
+        assert_eq!(bounds.to_string(), packing_bounds(&fold.bounds).to_string());
     }
 
     #[test]
@@ -5358,14 +5611,14 @@ mod tests {
                 quote!(host_scan = ::core::iter::Map<_, _> { reads [], build typed };),
             ),
             (
-                quote!(@radix_relation input { keys 2; columns [i64 => i64, i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec TestCodec] } radix { word u128; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
-                    (i64, ::gpu_datalog_runtime::Symbol<i32, TestCodec>), (), u128, u64, ()>),
+                quote!(@radix_relation input { keys 2; columns [u32 => u32, i32 => ::gpu_datalog_runtime::Symbol<i32, TestCodec> codec TestCodec] } radix { word u64; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<
+                    (u32, ::gpu_datalog_runtime::Symbol<i32, TestCodec>), (), u64, u64, ()>),
                 quote!(radix_relation = ::gpu_datalog_runtime::RadixLayout<_, (), _, u64, ()> { reads [exact, range, membership, resident, distinct], build typed, abi radix_relation };),
             ),
         ] {
             let Stack { physical, structures, program } = syn::parse2(quote! {
                 physical {
-                    relation R(id:i64,raw:i32) = (&data.r);
+                    relation R(id:u32,raw:i32) = (&data.r);
                     r = pipe rename R {id -> id,raw -> raw};
                     bound = pipe bind r with value:i64 = (*raw as i64);
                     valuation = let canon project bound keep {id,raw,value};
@@ -5388,6 +5641,30 @@ mod tests {
             let program = crate::runs::record_representation(&physical, &structures, &program).unwrap();
             let analysis = cq_lang_sequence::check_grading(&physical, &structures, &program, &crate::machine()).unwrap();
             assert!(analysis.gpu_bindings.uploads.contains_key("valuation"));
+            let structure_analysis = cq_lang_structures::contract::check(&physical, &structures).unwrap();
+            let computed_inputs = BTreeSet::new();
+            let mut sources = PackingSources::new(&physical, &structure_analysis, &analysis, &computed_inputs);
+            sources.uploads.clear();
+            let value = KeyField {
+                column: "value".into(),
+                bounds: FieldBounds::Column(analysis.gpu_bindings.bounds["value"].clone()),
+            };
+            let (bounds, computed) = sources.field("valuation", &value);
+            assert!(computed);
+            assert!(idents(bounds).contains("Scalar"));
+            sources.uploads.insert("valuation".into());
+            let (bounds, computed) = sources.field("valuation", &value);
+            assert!(computed);
+            assert!(idents(bounds).contains("__cq_sequence_uploaded_valuation"));
+            // A new aggregate after that publication still has no measured
+            // bounds. Its wide scalar range remains a computed exemption.
+            let total = KeyField {
+                column: "total".into(),
+                bounds: FieldBounds::Column(analysis.gpu_bindings.bounds["total"].clone()),
+            };
+            let (bounds, computed) = sources.field("grouped", &total);
+            assert!(computed);
+            assert!(idents(bounds).contains("Scalar"));
             let expression = translate(&physical, &structures, &program, &analysis).unwrap();
             let generated = expression.to_token_stream().to_string();
             // Calls in source order: host upload adapters, then folds.

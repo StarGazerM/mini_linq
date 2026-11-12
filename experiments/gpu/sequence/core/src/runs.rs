@@ -459,6 +459,38 @@ mod tests {
     }
 
     #[test]
+    fn genuinely_encoded_rust_read_still_requires_identity() {
+        let Stack { physical, structures, program } = syn::parse_quote! {
+            physical {
+                relation R(a:u32) = (&data.r);
+                r = pipe rename R {a -> x};
+                selected = pipe guard r if (*x > 0);
+                result = let canon project selected keep {x};
+                return result as answer(x);
+            }
+            structures { providers {
+                device_columns = ::cq_gpu_runtime::DeviceColumns<_> { reads [], build typed, abi columns, bounds resident_columns };
+                radix_set = ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()> { reads [distinct, resident], build inferred };
+            }
+                r host scan = @device_columns input { keys 0; columns [u32 => u32] } as ::cq_gpu_runtime::DeviceColumns<'static,(u32,)> [];
+                result rows = @radix_set as ::gpu_datalog_runtime::RadixLayout<::gpu_datalog_runtime::radix_run::EncodedRow, (), ::gpu_datalog_runtime::radix_run::PackedRow, u64, ()>;
+                result canon = rows;
+            }
+            sequence {
+                input = store rows r;
+                result_rows = store canon map result map selected flatten tile 256 input;
+                output count;
+            }
+            graded gpu { input at host; result_rows at host.device; }
+        };
+        let mut recorded = record_representation(&physical, &structures, &program).unwrap();
+        cq_lang_sequence::check_grading(&physical, &structures, &recorded, &crate::machine()).unwrap();
+        recorded.representation.identity.remove("x");
+        recorded.representation.encoded.insert("x".into());
+        assert!(cq_lang_sequence::check_grading(&physical, &structures, &recorded, &crate::machine()).is_err());
+    }
+
+    #[test]
     fn schema_and_codecs_do_not_depend_on_provider_spelling() {
         let provider: cq_lang_structures::Provider = syn::parse_quote! {
             @custom input {

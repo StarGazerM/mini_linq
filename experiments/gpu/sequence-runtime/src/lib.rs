@@ -3,6 +3,7 @@
 pub mod canon;
 pub mod device;
 pub mod group;
+pub mod index_bytes;
 mod kernels;
 pub mod offsets;
 pub mod selected;
@@ -252,7 +253,6 @@ impl Drop for QueryScope {
         RADIX_WORKSPACES.with(|cache| cache.borrow_mut().clear());
         TEMP_U32.with(|cache| cache.borrow_mut().take());
         TEMP_U64.with(|cache| cache.borrow_mut().take());
-        canon::release_query_cache();
         gpu_datalog_runtime::radix_run::release_set_scratch();
         BUILD_MODULE.with(|cache| cache.borrow_mut().take());
         gpu_device_columns::release_cached_kernels();
@@ -354,7 +354,7 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
             // metadata retains its exact count; no compact-extent readback
             // is needed in a timed provider build.
             unsafe {
-                EncodedColumn::from_device(
+                EncodedColumn::from_device_pending(
                     pool.clone(),
                     input.ptr(),
                     rows,
@@ -363,10 +363,10 @@ fn upload_numeric_lanes<Row: gpu_datalog_runtime::ScalarTuple>(
                     codec,
                     bounds,
                 )
-                .map(Arc::new)
             }
         })
         .collect::<Result<Vec<_>>>()?;
+    let columns = gpu_device_columns::PendingColumn::publish(columns)?;
     let bounds = columns.iter().map(|column| column.bounds()).collect();
     let host_views: Vec<_> = columns
         .iter()
@@ -605,8 +605,8 @@ fn source_bounds(
     Ok(Bounds::Inclusive { min, max })
 }
 
-/// One dense u32 key level, in lexicographic order. Signed values are translated
-/// by `min(0, column.bounds().min)` before indexing; payload values stay unchanged.
+/// One dense u32 key level, in lexicographic order. Values are translated by
+/// the recorded column minimum before indexing; payload values stay unchanged.
 #[derive(Clone)]
 pub struct KeyDescriptor {
     pub column: ColumnDescriptor,
@@ -616,7 +616,7 @@ pub struct KeyDescriptor {
 fn key_base(bounds: Bounds) -> i64 {
     match bounds {
         Bounds::Empty => 0,
-        Bounds::Inclusive { min, .. } => min.min(0),
+        Bounds::Inclusive { min, .. } => min,
     }
 }
 
@@ -640,12 +640,23 @@ mod dense_key_tests {
     use super::{dense_key_domain, key_base, Bounds};
 
     #[test]
-    fn signed_domains_translate_from_their_negative_base() {
+    fn radix_fields_use_recorded_value_bits_not_carrier_widths() {
+        use gpu_datalog_runtime::Column;
+        assert_eq!(super::radix_source_field(Bounds::Inclusive { min: 3, max: 127 }, Column::U32).unwrap(), (7, false));
+        assert_eq!(super::radix_source_field(Bounds::Inclusive { min: -128, max: 127 }, Column::I32).unwrap(), (8, true));
+        assert_eq!(super::radix_source_field(Bounds::Inclusive { min: -1, max: 0 }, Column::I32).unwrap(), (1, true));
+        assert_eq!(super::radix_source_field(Bounds::Empty, Column::U32).unwrap(), (1, false));
+        assert!(super::radix_source_field(Bounds::Inclusive { min: -1, max: 4 }, Column::U32).is_err());
+        assert!(super::radix_source_field(Bounds::Inclusive { min: 0, max: 1i64 << 40 }, Column::I64).is_err());
+    }
+
+    #[test]
+    fn domains_translate_from_their_recorded_minimum() {
         for (min, max, base, size) in [
             (-3, -1, -3, 3),
             (-3, 2, -3, 6),
             (i64::MIN, i64::MIN, i64::MIN, 1),
-            (7, 100, 0, 101),
+            (7, 100, 7, 94),
         ] {
             let bounds = Bounds::Inclusive { min, max };
             assert_eq!(key_base(bounds), base);
@@ -794,6 +805,27 @@ impl RangeDescriptor {
     }
 }
 
+fn radix_source_field(bounds: Bounds, column: gpu_datalog_runtime::Column) -> Result<(u32, bool)> {
+    let signed = column.is_signed();
+    let bits = match bounds {
+        Bounds::Empty => 1,
+        Bounds::Inclusive { min, max } if min <= max => {
+            if signed {
+                let negative = if min < 0 { (!min) as u64 } else { 0 };
+                1 + (64 - negative.max(max.max(0) as u64).leading_zeros())
+            } else {
+                if min < 0 { return Err("unsigned radix key has negative recorded bounds".into()); }
+                (64 - (max as u64).leading_zeros()).max(1)
+            }
+        }
+        _ => return Err("radix key has invalid recorded bounds".into()),
+    };
+    if bits > 32 || bits > column.bits() {
+        return Err("recorded radix key exceeds its <=32-bit code carrier".into());
+    }
+    Ok((bits, signed))
+}
+
 /// Formal rule GPU-RadixSourceBuild over resident CQ sources: one radix
 /// publication of the key and value descriptor columns, restricted to the
 /// recorded half-open selection when present. Every column shares `pool`
@@ -836,6 +868,13 @@ where
         Some(selected) => (selected.ptr(), selected.len()),
         None => (std::ptr::null(), rows),
     };
+    if keys.len() != K::COLUMNS.len() {
+        return Err("radix key descriptors differ from the carrier schema".into());
+    }
+    let fields = keys.iter().zip(K::COLUMNS).map(|(key, &column)| {
+        radix_source_field(key.bounds(), column)
+    }).collect::<Result<Vec<_>>>()?;
+    let packing = gpu_datalog_runtime::RadixLayout::<K, V, W, O, C>::derive_packing_with_fields(&fields)?;
     let keys = keys.iter().map(ColumnDescriptor::view).collect::<Vec<_>>();
     let values = values
         .iter()
@@ -845,9 +884,10 @@ where
     // `pool`'s stream (ColumnDescriptor contract); selected positions are
     // produced on the same stream and index that prefix.
     unsafe {
-        gpu_datalog_runtime::RadixLayout::from_sources(
+        gpu_datalog_runtime::RadixLayout::from_sources_with_packing(
             pool.clone(),
             params,
+            packing,
             &keys,
             &values,
             positions,
@@ -1454,14 +1494,19 @@ fn finish(
         unsafe { workspace.payload_views.write_async(views)? };
     }
     let payload_views = workspace.payload_views.clone();
-    Ok(RangeProvider {
+    let provider = RangeProvider {
         offsets,
         payload,
         payload_views,
         domain: domain as u32,
         base,
         len: len as u32,
-    })
+    };
+    if index_bytes::enabled() {
+        let bytes = provider.bytes();
+        index_bytes::record("range", bytes, bytes);
+    }
+    Ok(provider)
 }
 // DECODE I: payload packing reconstructs source values then emits new FOR frames; avoidable reorganization, P4 keep index runs plain.
 unsafe fn pack_payload(

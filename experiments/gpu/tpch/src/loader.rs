@@ -88,7 +88,8 @@ struct LoadReport {
     pack_ms: f64,
     upload_encode_ms: f64,
     cache_write_ms: f64,
-    catalog_ms: f64,
+    domain_ms: f64,
+    domains: Vec<Value>,
 }
 
 thread_local! {
@@ -123,40 +124,26 @@ pub fn take_load_report() -> Value {
         "verify_ms": report.verify_ms,
         "pack_ms": report.pack_ms,
         "upload_encode_ms": report.upload_encode_ms,
-        "catalog_ms": report.catalog_ms,
+        "domain_ms": report.domain_ms,
+        "domains": report.domains,
+        "rank_span_distinct_threshold": gpu_device_columns::RANK_SPARSITY_THRESHOLD,
         "cache_write_ms": report.cache_write_ms,
-        "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed; unprojected = full source columns (cacheable); source_bytes = native stored bytes read (catalog: i64 input bytes); read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; catalog_ms = whole tpch_domains Catalog build",
+        "scope": "base columns built for one query, outside query timings; columns/resident_bytes = encoded source and selected columns constructed, with domain normalization replacing source bytes rather than counting another column; domains[].bytes = retained Rank bitmap/per-word-prefix metadata (Offset retains none); unprojected = full source columns (cacheable); source_bytes = native stored bytes read; read_ms = file I/O into reusable pinned staging, or HostFor/cache reads; verify_ms = exact device projected-set deduplication over encoded columns including synchronization; upload_encode_ms = staging/H2D/device bounds and encoding, excluding overlapped file I/O (includes optional key SHA); domain_ms = device union bitmap/prefix construction, Offset header normalization or Rank translation/FOR encoding, plus frozen Rank-membership/Offset-range validation and normalization of pre-existing opaque host inputs; pack_ms = HostFor host packing only; peak_device_bytes/peak_reserved_device_bytes = pool live/reserved high-water marks observed during loading, excluding external CUB control buffers and CUDA context; domain publication mirrors are lazy and reported separately",
     })
 }
 
-/// Generated `tpch_domains` loads: read the complete manifest source.
-pub fn load_source(root: &Path) -> Result<gpu_compress::Source> {
-    let started = Instant::now();
-    let source = gpu_compress::Source::load_manifest(root)?;
-    report(|report| report.read_ms += ms(started));
-    Ok(source)
+/// Refresh the post-load snapshot after temporary loader owners and scratch
+/// have been dropped and the pool trimmed, before any query executes.
+pub fn finish_load(pool: &Pool) {
+    let stats = pool.memory_stats();
+    report(|report| {
+        report.peak_device_bytes = report.peak_device_bytes.max(stats.peak_bytes);
+        report.peak_reserved_device_bytes = report.peak_reserved_device_bytes.max(stats.reserved_bytes);
+        report.device_bytes_after_load = stats.current_bytes;
+        report.reserved_device_bytes_after_load = stats.reserved_bytes;
+    });
 }
 
-/// Generated `tpch_domains` loads: build the catalog in the selected layout.
-pub fn compress_catalog(
-    pool: &Arc<Pool>,
-    source: &gpu_compress::Source,
-    schema: &gpu_compress_host::Schema,
-) -> Result<gpu_compress::Catalog> {
-    let started = Instant::now();
-    let catalog = gpu_compress::Catalog::compress_with(pool, source, schema, base_layout())?;
-    pool.stream().synchronize()?;
-    let elapsed = ms(started);
-    report(|report| {
-        for (_, table) in catalog.tables() {
-            report.columns += table.columns.len();
-            report.source_bytes += table.columns.len() * table.rows * 8;
-        }
-        report.resident_bytes += catalog.bytes();
-        report.catalog_ms += elapsed;
-    });
-    Ok(catalog)
-}
 
 /// One manifest-driven loader for every query. Only referenced columns are read;
 /// aliases of the same complete projection share immutable resident tables.
@@ -165,6 +152,7 @@ pub struct Loader<'a> {
     pool: Arc<Pool>,
     tables: BTreeMap<String, CachedTable>,
     staging: RefCell<NativeStaging>,
+    domains: [Option<gpu_device_columns::Domain>; crate::key_domains::COUNT],
 }
 
 #[derive(Default)]
@@ -305,7 +293,128 @@ impl<'a> Loader<'a> {
             staging: RefCell::new(NativeStaging::new(pool.clone())),
             pool,
             tables: BTreeMap::new(),
+            domains: std::array::from_fn(|_| None),
         }
+    }
+
+    /// Prepare the query-wide bound projection before any stage can publish a
+    /// view. Only projected members contribute to each shared domain.
+    pub fn prepare(&mut self, projections: &[(&str, &[&str])]) -> Result<()> {
+        if !self.tables.is_empty() {
+            return Err("key domains must be prepared before binding any input".into());
+        }
+        if !matches!(base_layout(), BaseLayout::For | BaseLayout::HostFor)
+            && projections.iter().any(|(table, names)| names.iter().any(|name| crate::key_domains::id(table, name).is_some()))
+        {
+            return Err("TPC-H key-domain normalization requires --base-codec for or hostfor; delta/plain64/native cannot normalize key headers".into());
+        }
+        for &(table, names) in projections {
+            let mut resident = self.tables.remove(table).unwrap_or_default();
+            let relation = self.manifest.relations.get(table).ok_or("missing table")?;
+            let checked = |name: &str| relation.verified_keys.iter().any(|key| {
+                key.set == "verified" && key.rows == relation.rows
+                    && key.columns.contains_key(name)
+                    && key.columns.keys().all(|column| names.contains(&column.as_str()))
+            });
+            self.load_columns(table, names, &mut resident, &checked)?;
+            self.tables.insert(table.to_owned(), resident);
+        }
+        let started = Instant::now();
+        for id in 0..crate::key_domains::COUNT as u32 {
+            let members: Vec<_> = self.tables.iter().flat_map(|(table, resident)| {
+                resident.columns.iter().filter_map(move |(name, column)| {
+                    (crate::key_domains::id(table, name) == Some(id)).then_some(column.as_ref())
+                })
+            }).collect();
+            if members.is_empty() { continue; }
+            let domain = gpu_device_columns::Domain::record(self.pool.clone(), id, &members)?;
+            for (table, resident) in &mut self.tables {
+                for (name, column) in &mut resident.columns {
+                    if crate::key_domains::id(table, name) == Some(id) {
+                        let column = Arc::get_mut(column).ok_or("key normalization cannot mutate a published column")?;
+                        let previous_bytes = column.bytes();
+                        domain.normalize(column)?;
+                        report(|report| {
+                            report.resident_bytes = report.resident_bytes - previous_bytes + column.bytes();
+                        });
+                    }
+                }
+            }
+            report(|report| report.domains.push(json!({
+                "id": domain.id, "minimum": domain.minimum, "bound": domain.bound, "bits": domain.bits,
+                "mapping": if domain.is_rank() { "rank" } else { "offset" },
+                "span": domain.span(), "distinct": domain.distinct(), "bytes": domain.bytes(),
+            })));
+            self.domains[id as usize] = Some(domain);
+        }
+        self.report_memory();
+        self.pool.stream().synchronize()?;
+        self.pool.release_unused()?;
+        self.report_memory();
+        report(|report| report.domain_ms += ms(started));
+        Ok(())
+    }
+
+    /// Cloning the catalog retains domain allocations beyond the loader.
+    pub fn domains(&self) -> [Option<gpu_device_columns::Domain>; crate::key_domains::COUNT] {
+        self.domains.clone()
+    }
+
+    /// Upload an authored logical host tuple once, then validate Rank membership
+    /// or the Offset range and encode integer key fields in the frozen domain.
+    pub fn upload_host_keys<Raw: cuda_core::DeviceCopy, Row: gpu_datalog_runtime::ScalarTuple>(
+        &self,
+        rows: &[Raw],
+        fields: &[(usize, u32)],
+    ) -> Result<DeviceColumns<'static, Row>> {
+        if fields.len() != Row::COLUMNS.len() {
+            return Err("host key upload schema differs from its recorded fields".into());
+        }
+        let started = Instant::now();
+        let raw = Buffer::from_host(self.pool.clone(), rows)?;
+        let mut columns = Vec::with_capacity(fields.len());
+        for &(offset, id) in fields {
+            if offset.checked_add(8).is_none_or(|end| end > std::mem::size_of::<Raw>()) {
+                return Err("host key upload field is outside its tuple".into());
+            }
+            let domain = self.domains.get(id as usize).and_then(Option::as_ref)
+                .ok_or("host key upload requires a frozen base domain")?;
+            let source = NativeView {
+                data: unsafe { raw.ptr().cast::<u8>().add(offset) },
+                element: gpu_device_columns::ELEMENT_I64,
+            };
+            let column = unsafe {
+                domain.encode_native(
+                    self.pool.clone(), source, rows.len(), std::mem::size_of::<Raw>(),
+                )?
+            };
+            columns.push(Arc::new(column));
+        }
+        let views: Vec<_> = columns.iter().map(|column| unsafe { column.view() }).collect();
+        let bounds = columns.iter().map(|column| column.bounds()).collect();
+        let storage = Table {
+            columns,
+            views: Arc::new(Buffer::from_host(self.pool.clone(), &views)?),
+            metadata: Arc::new(Buffer::from_host(self.pool.clone(), &[OutputCount {
+                rows: rows.len() as u64, error: 0, padding: 0,
+            }])?),
+            capacity: rows.len(),
+            bounds,
+            statuses: Vec::new(),
+        };
+        drop(raw);
+        self.report_memory();
+        self.pool.stream().synchronize()?;
+        self.pool.release_unused()?;
+        self.report_memory();
+        report(|report| {
+            report.domain_ms += ms(started);
+            report.columns += fields.len();
+            report.resident_bytes += storage.columns.iter().map(|column| column.bytes()).sum::<usize>();
+        });
+        Ok(unsafe {
+            DeviceColumns::from_parts(storage, Arc::new(Dictionary::default()), self.pool.clone())
+        })
     }
 
     fn read_raw(&self, table: &str, name: &str, check_key: bool) -> Result<RawColumn> {
@@ -360,6 +469,13 @@ impl<'a> Loader<'a> {
         if relation.rows >= u32::MAX as usize {
             return Err("relation exceeds device row-ID domain".into());
         }
+        for name in names {
+            if crate::key_domains::id(table, name).is_some()
+                && !self.tables.get(table).is_some_and(|resident| resident.columns.contains_key(*name))
+            {
+                return Err(format!("key column {table}.{name} was not included in frozen query domain preparation").into());
+            }
+        }
         let mut resident = self.tables.remove(table).unwrap_or_default();
         let cached = resident.projections.iter().find(|projection| {
             projection
@@ -388,48 +504,19 @@ impl<'a> Loader<'a> {
         })
     }
 
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "DeviceColumns/Table require Arc owners for stream-affine allocations; Rc cannot implement that API"
-    )]
-    fn build(&self, table: &str, names: &[&str], resident: &mut CachedTable) -> Result<Table> {
+    fn load_columns<'n>(
+        &self,
+        table: &str,
+        distinct: &[&'n str],
+        resident: &mut CachedTable,
+        key_column: &impl Fn(&str) -> bool,
+    ) -> Result<Vec<&'n str>> {
         let relation = &self.manifest.relations[table];
         let layout = base_layout();
-        // Formal rule DR-ProjectionReuse: an actually distinct cached subset proves its supersets distinct.
-        let proven_set = resident.projections.iter().any(|projection| {
-            projection.storage.capacity == relation.rows
-                && projection
-                    .names
-                    .iter()
-                    .all(|name| names.contains(&name.as_str()))
-        });
-        let keys: Vec<_> = relation
-            .verified_keys
-            .iter()
-            .filter(|key| {
-                key.set == "verified"
-                    && !key.columns.is_empty()
-                    && key.rows == relation.rows
-                    && key.columns.keys().all(|name| {
-                        names.contains(&name.as_str())
-                            && self.manifest.column(table, name).is_ok_and(|column| {
-                                column.encoding == "plain"
-                                    && key.types.get(name) == Some(&column.ty)
-                            })
-                    })
-            })
-            .collect();
-        let key_column = |name: &str| keys.iter().any(|key| key.columns.contains_key(name));
-        let distinct: Vec<&str> = names
-            .iter()
-            .enumerate()
-            .filter(|(index, name)| !names[..*index].contains(name))
-            .map(|(_, name)| *name)
-            .collect();
         // Keep only one native upload alive at a time. Full encoded columns
         // are the immutable source snapshot for both verification and reuse.
         let mut inserted = Vec::with_capacity(distinct.len());
-        for &name in &distinct {
+        for &name in distinct {
             if resident.columns.contains_key(name) {
                 continue;
             }
@@ -521,6 +608,49 @@ impl<'a> Loader<'a> {
             // `raw` is dropped here, before the next file allocates a device
             // buffer; no complete native relation ever exists on the device.
         }
+
+        Ok(inserted)
+    }
+
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "DeviceColumns/Table require Arc owners for stream-affine allocations; Rc cannot implement that API"
+    )]
+    fn build(&self, table: &str, names: &[&str], resident: &mut CachedTable) -> Result<Table> {
+        let relation = &self.manifest.relations[table];
+        let layout = base_layout();
+        // Formal rule DR-ProjectionReuse: an actually distinct cached subset proves its supersets distinct.
+        let proven_set = resident.projections.iter().any(|projection| {
+            projection.storage.capacity == relation.rows
+                && projection
+                    .names
+                    .iter()
+                    .all(|name| names.contains(&name.as_str()))
+        });
+        let keys: Vec<_> = relation
+            .verified_keys
+            .iter()
+            .filter(|key| {
+                key.set == "verified"
+                    && !key.columns.is_empty()
+                    && key.rows == relation.rows
+                    && key.columns.keys().all(|name| {
+                        names.contains(&name.as_str())
+                            && self.manifest.column(table, name).is_ok_and(|column| {
+                                column.encoding == "plain"
+                                    && key.types.get(name) == Some(&column.ty)
+                            })
+                    })
+            })
+            .collect();
+        let key_column = |name: &str| keys.iter().any(|key| key.columns.contains_key(name));
+        let distinct: Vec<&str> = names
+            .iter()
+            .enumerate()
+            .filter(|(index, name)| !names[..*index].contains(name))
+            .map(|(_, name)| *name)
+            .collect();
+        let inserted = self.load_columns(table, &distinct, resident, &key_column)?;
         // Allocate publication descriptors before sort scratch so these tiny
         // long-lived buffers cannot pin otherwise wholly unused sort chunks.
         let device_views = unsafe { Buffer::<ColumnView>::uninitialized(self.pool.clone(), names.len())? };
@@ -608,19 +738,125 @@ impl<'a> Loader<'a> {
     }
 
     fn report_memory(&self) {
-        let stats = self.pool.memory_stats();
-        report(|report| {
-            report.peak_device_bytes = report.peak_device_bytes.max(stats.peak_bytes);
-            report.peak_reserved_device_bytes = report.peak_reserved_device_bytes.max(stats.reserved_bytes);
-            report.device_bytes_after_load = stats.current_bytes;
-            report.reserved_device_bytes_after_load = stats.reserved_bytes;
-        });
+        finish_load(&self.pool);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_bound_member_union_ranks_without_loading_unbound_columns() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("cq-key-domain-load-{}", std::process::id()));
+        fs::create_dir_all(&root)?;
+        fs::write(root.join("orders.bin"), [-3i64, 9].into_iter().flat_map(i64::to_le_bytes).collect::<Vec<_>>())?;
+        fs::write(root.join("lines.bin"), [-8i64, 9].into_iter().flat_map(i64::to_le_bytes).collect::<Vec<_>>())?;
+        let mut manifest: Manifest = serde_json::from_value(json!({
+            "schema_version": 1, "sf": 1, "byte_order": "little",
+            "relations": {
+                "orders": {"rows": 2, "columns": [
+                    {"name":"o_orderkey","type":"i64","logical_type":"integer","encoding":"plain","file":"orders.bin"},
+                    {"name":"o_custkey","type":"i64","logical_type":"integer","encoding":"plain","file":"must-not-read.bin"}
+                ]},
+                "lineitem": {"rows": 2, "columns": [
+                    {"name":"l_orderkey","type":"i64","logical_type":"integer","encoding":"plain","file":"lines.bin"}
+                ]}
+            }
+        }))?;
+        manifest.root = root.clone();
+        let pool = Pool::new(0, 0, 0)?;
+        let mut loader = Loader::new(&manifest, pool.clone());
+        take_load_report();
+        loader.prepare(&[("orders", &["o_orderkey"]), ("lineitem", &["l_orderkey"])])?;
+        let domain = loader.domains()[0].take().unwrap();
+        assert_eq!((domain.minimum, domain.bound, domain.bits), (-8, 3, 2));
+        assert!(domain.is_rank());
+        let report = take_load_report();
+        assert_eq!(report["columns"], 2);
+        assert_eq!(report["unprojected"], 2);
+        let retained_bytes: usize = loader.tables.values()
+            .flat_map(|table| table.columns.values()).map(|column| column.bytes()).sum();
+        assert_eq!(report["resident_bytes"], retained_bytes);
+        assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?, [(1,), (2,)]);
+        assert_eq!(loader.bind::<(u32,)>("lineitem", &["l_orderkey"])?.to_host()?, [(0,), (2,)]);
+        let uploaded = loader.upload_host_keys::<(i64,), (u32,)>(
+            &[(9,), (-8,)], &[(std::mem::offset_of!((i64,), 0), 0)],
+        )?;
+        assert_eq!(uploaded.to_host()?, [(2,), (0,)]);
+        let error = loader.upload_host_keys::<(i64,), (u32,)>(
+            &[(-9,)], &[(std::mem::offset_of!((i64,), 0), 0)],
+        ).err().expect("host key outside its frozen base domain");
+        assert!(error.to_string().contains("key domain 0"));
+        assert!(error.to_string().contains("outside recorded range [-8, 10)"));
+        let missing = loader.upload_host_keys::<(i64,), (u32,)>(
+            &[(0,)], &[(std::mem::offset_of!((i64,), 0), 0)],
+        ).err().expect("host key in a frozen rank hole");
+        assert!(missing.to_string().contains("frozen membership"));
+        drop(loader);
+        assert_eq!((domain.value(0), domain.value(1), domain.value(2)), (-8, -3, 9));
+        fs::remove_file(root.join("lines.bin"))?;
+        let mut loader = Loader::new(&manifest, pool);
+        loader.prepare(&[("orders", &["o_orderkey"])])?;
+        assert_eq!(loader.domains()[0].as_ref().unwrap().minimum, -3);
+        drop(loader);
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn hostfor_offset_normalization_survives_cache_hit() -> Result<()> {
+        const CHILD: &str = "CQ_TEST_HOSTFOR_OFFSET_CACHE";
+        // Loader options are process-wide OnceLocks; isolate this codec from
+        // the default-device loader tests rather than mutating shared state.
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe()?)
+                .arg("hostfor_offset_normalization_survives_cache_hit")
+                .arg("--nocapture")
+                .env(CHILD, "1")
+                .status()?;
+            assert!(status.success());
+            return Ok(());
+        }
+        let root = std::env::temp_dir().join(format!("cq-offset-cache-{}", std::process::id()));
+        fs::create_dir_all(&root)?;
+        let values = [-7i64, -6, -5, -4];
+        fs::write(root.join("orders.bin"), values.into_iter().flat_map(i64::to_le_bytes).collect::<Vec<_>>())?;
+        let mut manifest: Manifest = serde_json::from_value(json!({
+            "schema_version": 1, "sf": 1, "byte_order": "little",
+            "relations": {"orders": {"rows": 4, "columns": [
+                {"name":"o_orderkey","type":"i64","logical_type":"integer","encoding":"plain","file":"orders.bin"}
+            ]}}
+        }))?;
+        manifest.root = root.clone();
+        set_base_layout(BaseLayout::HostFor)?;
+        set_base_cache(root.join("cache"))?;
+        check_options()?;
+        let pool = Pool::new(0, 0, 0)?;
+        for cache_hit in [false, true] {
+            take_load_report();
+            let mut loader = Loader::new(&manifest, pool.clone());
+            loader.prepare(&[("orders", &["o_orderkey"])])?;
+            let domain = loader.domains()[0].take().unwrap();
+            assert!(!domain.is_rank());
+            assert_eq!((domain.minimum, domain.bound, domain.bits), (-7, 4, 2));
+            assert_eq!(domain.bytes(), 0);
+            let report = take_load_report();
+            assert_eq!(report["columns"], 1);
+            assert_eq!(report["cache_hits"], usize::from(cache_hit));
+            assert_eq!(report["raw_reads"], usize::from(!cache_hit));
+            assert_eq!(report["resident_bytes"], loader.tables["orders"].columns["o_orderkey"].bytes());
+            assert_eq!(loader.bind::<(u32,)>("orders", &["o_orderkey"])?.to_host()?,
+                [(0,), (1,), (2,), (3,)]);
+            assert_eq!((domain.value(0), domain.value(3)), (-7, -4));
+            let uploaded = loader.upload_host_keys::<(i64,), (u32,)>(
+                &[(-7,), (-4,)], &[(std::mem::offset_of!((i64,), 0), 0)],
+            )?;
+            assert_eq!(uploaded.to_host()?, [(0,), (3,)]);
+        }
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
 
     #[test]
     fn native_projection_dedup_reuse_and_dictionary_validation() -> Result<()> {

@@ -1156,13 +1156,11 @@ recognized by the frontend. The synthetic String-guard regression checks the
 declared dictionary producer and closed-operand boundary against Sequential
 and explicit expected keys.
 
-H05 uses the explicit `tpch_domains` loader profile in **both** modes: the shared
-`gpu_compress_host::tpch::schema`/`gpu_compress::Catalog` stores join keys as dense u32 domain IDs
-and the date/Region dictionary code as i32, exactly as the authored benchmark.
-The authored query's representation is adapted to that schema;
+All generated TPC-H queries, including H05 in both modes, use the shared
+runtime Offset/Rank domain loader. Integer-key membership is static schema
+data; minima, significant bits and sparse Rank mappings are frozen at load.
 GPU and Sequential outputs are decoded back to source keys before comparison.
-The loader profile is recorded in the pipeline artifact, not selected by the
-planner. H05's advised pipeline records Region → Nation → Customer → Orders →
+H05 has no separate catalog/profile path. Its advised pipeline records Region → Nation → Customer → Orders →
 Lineitem → Supplier, retains the Customer prefix, and uses the R schedule:
 one 256-row input partition and 1024-row/items-4 segmented Orders and Lineitem
 expansions. Its unchanged fully-bound Supplier probe receives the checked
@@ -1191,10 +1189,9 @@ identity-copy device dispatch. Rebuilding a row-oriented native provider
 continues to require descendant row work.
 
 `--base-codec for|plain64|native|hostfor|delta` selects the resident layout
-of base columns, for the projection loader and for the `tpch_domains` catalog
-(STORAGE §§12.5–12.6). The default is `for`; the other layouts are measurement
-options, not defaults. Generated code is identical for every layout because
-device readers dispatch on each column's recorded codec. `--base-cache DIR`
+of base columns. Domain-normalized integer keys currently require `for` or
+`hostfor`; incompatible modes are rejected explicitly. The default is `for`.
+Device readers dispatch on each column's recorded codec. `--base-cache DIR`
 (only with `hostfor`) persists and reuses host-packed loader columns. Each
 file is bound to its source column's path, length, mtime and stored-byte
 SHA-256, and key columns are rehashed before they certify a set. Each

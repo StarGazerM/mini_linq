@@ -22,6 +22,10 @@ impl SelectedRows {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+    /// Allocated row-ID storage, including the unused suffix.
+    pub fn bytes(&self) -> usize {
+        self.rows().len() * std::mem::size_of::<u32>()
+    }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
     }
