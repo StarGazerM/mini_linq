@@ -1123,6 +1123,10 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
             return Err("set admission requires a full-key set constructor".into());
         }
         let unique = unsafe { self.sort_unique(candidates, rows)? };
+        self.subtract_accepted(unique)
+    }
+
+    fn subtract_accepted(&self, unique: runs::SortedBatch<W>) -> Result<runs::SortedBatch<W>> {
         if unique.is_empty() || self.is_empty() {
             return Ok(unique);
         }
@@ -1137,7 +1141,7 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
     /// The initialized input prefix is ready on this stream, with zero padding
     /// above `active_bits()`. No input alias may mutate it until sorting finishes.
     pub unsafe fn sort_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
-        self.set_ops().sort(input, rows, false)
+        self.set_ops().sort(input, rows, false, None)
     }
 
     /// Sort an injective permutation without compaction or count readback.
@@ -1145,7 +1149,29 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
     /// The initialized input prefix must contain pairwise distinct keys, with
     /// zero padding above `active_bits()`, ready and immutable during this sort.
     pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
-        self.set_ops().sort(input, rows, true)
+        self.set_ops().sort(input, rows, true, None)
+    }
+
+    /// Sort domain-coded candidates, consuming validation at the unique-count barrier.
+    /// # Safety
+    /// The batch is ready on this stream and uses the same heading/domain packing
+    /// as the state. This does not authorize comparing distinct code domains.
+    pub unsafe fn sort_codes(&self, input: crate::DomainBatch<W>) -> Result<runs::SortedBatch<W>> {
+        if input.packing.bits() > self.active_bits {
+            return Err("domain batch packing exceeds the state's sort window".into());
+        }
+        self.set_ops().sort(&input.words, input.len(), false, input.validation.as_ref())
+    }
+
+    /// Admit a domain-coded batch without an extra validation synchronization.
+    /// # Safety
+    /// The stream, heading and code-domain obligations are those of [`Self::sort_codes`].
+    pub unsafe fn fresh_codes(&self, input: crate::DomainBatch<W>) -> Result<runs::SortedBatch<W>> {
+        if !self.full_key_set {
+            return Err("set admission requires a full-key set constructor".into());
+        }
+        let unique = unsafe { self.sort_codes(input)? };
+        self.subtract_accepted(unique)
     }
 
     fn set_segment(&self, batch: runs::SortedBatch<W>) -> Result<Segment<W, O, ()>> {

@@ -29,10 +29,10 @@ pub struct Prepared {
 
 pub fn load(directory: &std::path::Path) -> gpu_datalog_runtime::Result<Prepared> {
     use doop_shared::{IStr, interner::sym};
-    let (schema, required) = doop_shared::doop_query!(cq_gpu_datalog::domain_schema;
+    let (schema, types, required) = doop_shared::doop_query!(cq_gpu_datalog::domain_schema;
         symbols(IStr => [0] crate::DoopSymbols);
     );
-    let (facts, mut memberships) = doop_shared::Facts::load_with_domains(directory, schema)?;
+    let (facts, mut memberships) = doop_shared::Facts::load_with_domains(directory, schema, types)?;
     for (component, handle) in required() {
         let Some(doop_shared::DomainValues::Symbols(values)) = memberships.get_mut(component as usize) else {
             return Err("creating symbol head has no dictionary component".into());
@@ -48,14 +48,12 @@ pub fn load(directory: &std::path::Path) -> gpu_datalog_runtime::Result<Prepared
     }).collect();
     let domains = std::sync::Arc::new(gpu_datalog_runtime::DomainCatalog::new(
         gpu_datalog_runtime::thread_pool()?, inputs)?);
-    if std::env::var_os("GPU_DATALOG_DOMAINS").is_some() {
-        eprintln!("domain_relation\trelation\tbefore_bits\tcarrier_bytes\tused_bits\tcompact_lane_bytes");
-        for &(relation, components) in schema {
-            let before_bits = components.len() * 32;
-            let bits = domains.total_bits(components)?;
-            eprintln!("domain_relation\t{relation}\t{before_bits}\t{}\t{bits}\t{}",
-                before_bits.div_ceil(64).max(1) * 8, bits.div_ceil(64).max(1) * 8);
-        }
+    eprintln!("domain_relation\trelation\tbefore_bits\tcarrier_bytes\tused_bits\tcompact_lane_bytes");
+    for &(relation, components) in schema {
+        let before_bits = components.len() * 32;
+        let bits = domains.total_bits(components)?;
+        eprintln!("domain_relation\t{relation}\t{before_bits}\t{}\t{bits}\t{}",
+            before_bits.div_ceil(64).max(1) * 8, bits.div_ceil(64).max(1) * 8);
     }
     Ok(Prepared { facts, domains })
 }

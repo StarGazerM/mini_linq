@@ -1568,6 +1568,9 @@ Absent filter constants map to the reserved missing code; creating-head
 constants must enter their component before freezing, and later absent
 created symbols are rejected.  Only free variables consumed by opaque Rust
 are inverted at R; output fields are inverted at P.
+R restoration binds inverse-valued shadows around the unchanged user expression.
+It does not substitute identifiers inside closure bodies, local bindings, or
+macro token streams; Rust itself resolves any inner shadowing.
 The P adapter gathers one complete output column at a time, resolving its
 component inverse table once and passing an owned code vector to
 \code{SymbolCodec::decode\_many}. DOOP restores that vector to global handles
@@ -1580,6 +1583,23 @@ domain mode the static word is an upper bound: candidate codes are sealed
 on device before sorting, while fixed-carrier allocated bytes are reported
 separately from useful bits.  Domain preparation and device global-to-dense
 translation perform no additional host row pass.
+The preparation schema types every component, including components used only
+by derived relations. Numeric components without an EDB member use checked
+declared scalar bounds; those with EDB members retain observed bounds (or
+typed empty bounds), not a type-width fallback. Derived values outside a
+frozen observed range are rejected explicitly.
+Candidate sealing returns a pending \code{DomainBatch}: its validation flag
+travels with its packed words, including through permutations. Canonical
+sorting combines that flag with its existing unique-count download before
+publishing a sorted batch. This adds no fixpoint metadata synchronization.
+Initial uploads may validate separately during setup.
+The catalog-free generic entry remains available in this slice, selected by
+\code{uses\_domains}; it does not promise dense component codes. Its remaining
+cutover requires a generated preparation object for arbitrary inputs,
+device-built per-component membership and inverse tables, numeric summaries,
+and encoding before \code{run}. The explicit DOOP preparation entry already
+provides that seam for its host-resident dictionary. This limitation is
+separate from the retained upper-bound word carriers.
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad

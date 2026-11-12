@@ -511,13 +511,16 @@ experiments/gpu/datalog-runtime/src/domains.rs	// DECODE ?: component view inver
 experiments/gpu/datalog-runtime/src/domains.rs	// DECODE I: rebase a 32-bit sign ordinal between runtime field widths.	I	rebase a 32-bit sign ordinal between runtime field widths.
 experiments/gpu/datalog-runtime/src/domains.rs	// DECODE P: test publication exposes the original global handle.	P	test publication exposes the original global handle.
 experiments/gpu/datalog-runtime/src/domains.rs	// DECODE P: test numeric publication preserves native values.	P	test numeric publication preserves native values.
-experiments/gpu/datalog/src/encode.rs	// DECODE R: only free symbol variables actually read by opaque Rust are reconstructed.	R	only free symbol variables actually read by opaque Rust are reconstructed.
+experiments/gpu/datalog/src/encode.rs	// DECODE R: restore free rule-variable reads outside unchanged opaque Rust.	R	restore free rule-variable reads outside unchanged opaque Rust.
 experiments/gpu/datalog-runtime/tests/runtime_widths.rs	// DECODE P: final integration-test publication compares all logical rows.	P	final integration-test publication compares all logical rows.
 experiments/gpu/datalog-runtime/src/lib.rs	// DECODE P: the bulk publication adapter restores a complete output column.	P	the bulk publication adapter restores a complete output column.
 experiments/gpu/doop/src/lib.rs	// DECODE P: bulk DOOP output restores handles using one dictionary bounds snapshot.	P	bulk DOOP output restores handles using one dictionary bounds snapshot.
 experiments/gpu/datalog/facade/tests/domains.rs	// DECODE P: the fixture publishes a whole logical handle column in one call.	P	the fixture publishes a whole logical handle column in one call.
 experiments/gpu/datalog/facade/tests/domains.rs	// DECODE P: diagnostic scalar publication records calls to the non-bulk inverse.	P	diagnostic scalar publication records calls to the non-bulk inverse.
 experiments/gpu/datalog-runtime/tests/runtime_widths.rs	// DECODE P: resident-source publication compares complete runtime-width logical rows.	P	resident-source publication compares complete runtime-width logical rows.
+experiments/gpu/datalog-runtime/tests/domain_admission.rs	// DECODE P: diagnostic domain admission publishes its permuted field codes.	P	diagnostic domain admission publishes its permuted field codes.
+experiments/gpu/datalog/facade/tests/domain_boundaries.rs	// DECODE P: final boundary-test answers restore logical handles for assertions.	P	final boundary-test answers restore logical handles for assertions.
+experiments/gpu/datalog/facade/tests/domain_endpoints.rs	// DECODE P: endpoint-test publication restores final logical handles.	P	endpoint-test publication restores final logical handles.
 experiments/gpu/device-columns/src/domain.rs	// DECODE ?: recorded Offset/Rank inverse requires a caller Rust-read or publication boundary.	?	recorded Offset/Rank inverse requires a caller Rust-read or publication boundary.
 experiments/gpu/device-columns/src/rank.rs	// DECODE ?: lazy host domain inverse serves checked Rust reads and final answer publication.	?	lazy host domain inverse serves checked Rust reads and final answer publication.
 experiments/gpu/device-columns/src/rank_kernels.rs	// DECODE I: load-time extraction constructs shared domain membership and immediately re-encodes keys.	I	load-time extraction constructs shared domain membership and immediately re-encodes keys.
