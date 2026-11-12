@@ -603,14 +603,15 @@ fn permutation_against_cpu<W: Word>(packing: Packing) -> Result {
 fn native_permutation_retains_every_lane() -> Result {
     use gpu_datalog_runtime::pack::Column;
     permutation_against_cpu::<u64>(Packing::new(&[1, 31, 32])?)?;
-    permutation_against_cpu::<u64>(Packing::new(&[64])?)?;
+    permutation_against_cpu::<u64>(Packing::new(&[32, 32])?)?;
     permutation_against_cpu::<u64>(Packing::new(&[])?)?;
-    for widths in [&[40, 40, 16][..], &[63, 1, 64], &[64, 64], &[1; 128], &[]] {
+    for widths in [&[32, 32, 16, 16][..], &[31, 1, 32, 32, 32], &[32; 4], &[1; 128], &[]] {
         permutation_against_cpu::<u128>(Packing::new(widths)?)?;
     }
     permutation_against_cpu::<u128>(Packing::with_columns(&[
         Column::I8,
-        Column::U64,
+        Column::U32,
+        Column::U32,
         Column::I16,
         Column::U32,
     ])?)
@@ -619,18 +620,21 @@ fn native_permutation_retains_every_lane() -> Result {
 #[test]
 fn wide_permutation_retains_lanes_and_u32_metadata() -> Result {
     use gpu_datalog_runtime::pack::Column;
-    permutation_against_cpu::<[u64; 2]>(Packing::new(&[40, 40, 16])?)?;
-    permutation_against_cpu::<[u64; 3]>(Packing::new(&[63, 64, 64])?)?;
-    permutation_against_cpu::<[u64; 5]>(Packing::new(&[7, 64, 64, 64, 57])?)?;
+    permutation_against_cpu::<[u64; 2]>(Packing::new(&[32, 32, 16, 16])?)?;
+    permutation_against_cpu::<[u64; 3]>(Packing::new(&[31, 32, 32, 32, 32, 32])?)?;
+    permutation_against_cpu::<[u64; 5]>(Packing::new(&[7, 32, 32, 32, 32, 32, 32, 32, 25])?)?;
     // Exercise shifts and column counts beyond u8, as well as all five lanes.
-    permutation_against_cpu::<[u64; 5]>(Packing::new(&[64; 5])?)?;
+    permutation_against_cpu::<[u64; 5]>(Packing::new(&[32; 10])?)?;
     permutation_against_cpu::<[u64; 5]>(Packing::new(&[1; 257])?)?;
     permutation_against_cpu::<[u64; 5]>(Packing::new(&[])?)?;
     permutation_against_cpu::<[u64; 5]>(Packing::with_columns(&[
-        Column::I64,
+        Column::I32,
+        Column::I32,
         Column::U8,
-        Column::I64,
-        Column::U64,
+        Column::I32,
+        Column::I32,
+        Column::U32,
+        Column::U32,
         Column::I16,
     ])?)
 }
@@ -648,15 +652,15 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
         let mut values = Vec::new();
         for _ in 0..513 {
             let row = [
-                (1i128 << 35) + (random.next() % 17) as i128,
-                (1i128 << 36) + (random.next() % 13) as i128,
+                (1i128 << 29) + (random.next() % 17) as i128,
+                (1i128 << 30) + (random.next() % 13) as i128,
                 (random.next() % 7) as i128,
             ];
             values.push(packing.pack::<W>(&row)?);
             rows.insert(row);
         }
         if batch == 0 {
-            for row in [[0, 0, 0], [(1i128 << 40) - 1, (1i128 << 40) - 1, 65_535]] {
+            for row in [[0, 0, 0], [u32::MAX as i128, u32::MAX as i128, 65_535]] {
                 values.push(packing.pack::<W>(&row)?);
                 rows.insert(row);
             }
@@ -698,18 +702,18 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
         vec![],
         vec![0, 0, 0],
         vec![65_535],
-        vec![65_535, (1i128 << 40) - 1, (1i128 << 40) - 1],
+        vec![65_535, u32::MAX as i128, u32::MAX as i128],
     ];
     for first in 0..9 {
         prefixes.push(vec![first]);
         for second in [
-            1i128 << 35,
-            (1i128 << 35) + 8,
-            (1i128 << 35) + 16,
-            (1i128 << 35) + 17,
+            1i128 << 29,
+            (1i128 << 29) + 8,
+            (1i128 << 29) + 16,
+            (1i128 << 29) + 17,
         ] {
             prefixes.push(vec![first, second]);
-            prefixes.push(vec![first, second, (1i128 << 36) + 6]);
+            prefixes.push(vec![first, second, (1i128 << 30) + 6]);
         }
     }
     let mut bounds = Vec::with_capacity(prefixes.len() * 2);
@@ -758,13 +762,13 @@ fn permuted_layout_prefix_lookup<W: Word>(widths: &[u32]) -> Result {
 
 #[test]
 fn permuted_layout_prefix_lookup_matches_cpu() -> Result {
-    permuted_layout_prefix_lookup::<u128>(&[40, 40, 16])
+    permuted_layout_prefix_lookup::<u128>(&[32, 32, 16])
 }
 
 #[test]
 fn permuted_wide_layout_prefix_lookup_matches_cpu() -> Result {
-    permuted_layout_prefix_lookup::<[u64; 3]>(&[64, 64, 16])?;
-    permuted_layout_prefix_lookup::<[u64; 4]>(&[64, 64, 64])
+    permuted_layout_prefix_lookup::<[u64; 3]>(&[32, 32, 16])?;
+    permuted_layout_prefix_lookup::<[u64; 4]>(&[32, 32, 32])
 }
 
 #[test]
@@ -800,7 +804,7 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
     for radix_bits in [0, 4] {
         let pool = pool()?;
         let params = RadixRunParams { radix_bits, ..PARAMS };
-        let packing = Packing::with_columns(&[gpu_datalog_runtime::Column::U64])?;
+        let packing = Packing::with_columns(&[gpu_datalog_runtime::Column::U32])?;
         let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), params, <u64 as Word>::BITS)?;
         for values in [(0..64).collect::<Vec<_>>(), vec![100, 101, 102, 103]] {
             let input = Buffer::from_host(pool.clone(), &values)?;
@@ -810,7 +814,7 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
             assert_eq!(gpu_datalog_runtime::readback_count(), before);
         }
         assert_eq!(state.run_count(), 2);
-        let old = RadixLayout::<(u64,), (), u64, u64, ()>::publish(&state, packing.clone())?;
+        let old = RadixLayout::<(u32,), (), u64, u64, ()>::publish(&state, packing.clone())?;
         let original = old.to_host()?;
         let snapshot = state.snapshot()?;
         let input = Buffer::from_host(pool.clone(), &[103, 7, 200, 200, 101, 201, 7])?;
@@ -821,7 +825,7 @@ fn full_key_admission_is_read_only_across_runs_and_adopts_shared_batches() -> Re
         assert_eq!(input.to_host()?, vec![103, 7, 200, 200, 101, 201, 7]);
         let retained_bytes = batch.allocated_bytes();
         let before = gpu_datalog_runtime::readback_count();
-        let delta = RadixLayout::<(u64,), (), u64, u64, ()>::from_sorted(
+        let delta = RadixLayout::<(u32,), (), u64, u64, ()>::from_sorted(
             pool.clone(), packing.clone(), params, batch.clone(), state.active_bits(),
         )?;
         assert_eq!(gpu_datalog_runtime::readback_count(), before);
@@ -869,7 +873,7 @@ fn empty_heading_and_projection_have_their_own_unique_admission() -> Result {
 #[test]
 fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -> Result {
     use gpu_datalog_runtime::{Column, RadixLayout};
-    type Layout = RadixLayout<(u64,), (), u64, u64, ()>;
+    type Layout = RadixLayout<(u32,), (), u64, u64, ()>;
     let pool = pool()?;
     let packing = Layout::derive_packing()?;
     let input = Buffer::from_host(pool.clone(), &[7u64, 7, 9])?;
@@ -877,16 +881,16 @@ fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -
         pool.clone(), PARAMS, &input, &(), 3,
     )?;
     let occurrences = Layout::publish(&state, packing.clone())?;
-    assert!(occurrences.validate(&[Column::U64]).is_err());
-    assert!(occurrences.permuted_provider::<(u64,)>(&pool, &[0], PARAMS, 256, 64).is_err());
+    assert!(occurrences.validate(&[Column::U32]).is_err());
+    assert!(occurrences.permuted_provider::<(u32,)>(&pool, &[0], PARAMS, 256, 64).is_err());
     let batch = unsafe { state.sort_unique(&input, 3) }?;
     assert!(unsafe { state.append_sorted(batch.clone()) }.is_err());
     assert!(state.replace_sorted(batch.clone()).is_err());
     let mut state = DeviceRadixRun::<u64, u64, ()>::new_set(pool.clone(), PARAMS, packing.bits())?;
     state.replace_sorted(batch.clone())?;
     let set = Layout::publish(&state, packing)?;
-    set.validate(&[Column::U64])?;
-    assert!(occurrences.validate(&[Column::U64]).is_err());
+    set.validate(&[Column::U32])?;
+    assert!(occurrences.validate(&[Column::U32]).is_err());
     let before = gpu_datalog_runtime::readback_count();
     let same = set.with_sorted(batch.clone(), PARAMS)?;
     assert_eq!(same.snapshot_id(), set.snapshot_id());
@@ -894,7 +898,7 @@ fn full_key_readers_reject_occurrence_publications_and_delta_reuses_metadata() -
     let replacement = occurrences.with_sorted(batch.clone(), PARAMS)?;
     assert_ne!(replacement.snapshot_id(), occurrences.snapshot_id());
     assert_eq!(replacement.fields_ptr(), occurrences.fields_ptr());
-    replacement.validate(&[Column::U64])?;
+    replacement.validate(&[Column::U32])?;
     let empty = unsafe { state.sort_unique(&input, 0) }?;
     let cleared = replacement.with_sorted(empty.clone(), PARAMS)?;
     assert!(cleared.is_empty());
@@ -976,14 +980,14 @@ fn active_window<W: Word>(bits: u32) -> Result {
 
 #[test]
 fn declared_active_windows_preserve_scalar_and_physical_wide_words() -> Result {
-    for bits in [0, 1, 32, 64] {
+    for bits in [0, 1, 7, 19, 31, 32, 64] {
         active_window::<u64>(bits)?;
         active_window::<[u64; 1]>(bits)?;
     }
-    for bits in [0, 1, 32, 65, 96, 128] {
+    for bits in [0, 1, 7, 19, 31, 32, 65, 96, 128] {
         active_window::<u128>(bits)?;
     }
-    for bits in [0, 1, 32, 65, 96, 129, 160, 192] {
+    for bits in [0, 1, 7, 19, 31, 32, 65, 96, 129, 160, 192] {
         active_window::<[u64; 3]>(bits)?;
         active_window::<[u64; 5]>(bits)?;
     }

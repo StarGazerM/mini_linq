@@ -10,26 +10,26 @@ use gpu_datalog_runtime::{radix_run::RadixRunParams, DeviceRadixRun, Packing, Ra
 use gpu_device_columns::{Buffer, Codec, ColumnView, Pool, SourceView};
 
 type Result<T = (), E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
-type Lookup = RadixLayout<(i64,), (i64, u32), u64, u32, (Buffer<i64>, Buffer<u32>)>;
-type Side = RadixLayout<(i64, i64), (i64,), u128, u32, Buffer<i64>>;
+type Lookup = RadixLayout<(i32,), (i64, u32), u64, u32, (Buffer<i64>, Buffer<u32>)>;
+type Side = RadixLayout<(i32, i32), (i64,), u128, u32, Buffer<i64>>;
 
-/// Full-domain signed values: extremes, both signs and wide magnitudes.
+/// Full-domain i32 keys in the i64 probe/source ABI; payloads remain i64.
 const DOMAIN: [i64; 12] = [
-    i64::MIN,
-    i64::MIN + 1,
-    -(1 << 40),
+    i32::MIN as i64,
+    i32::MIN as i64 + 1,
+    -(1 << 30),
     -5,
     -1,
     0,
     1,
     2,
     7,
-    1 << 40,
-    i64::MAX - 1,
-    i64::MAX,
+    1 << 30,
+    i32::MAX as i64 - 1,
+    i32::MAX as i64,
 ];
 /// Values in no relation: absent prefixes and candidates.
-const ABSENT: [i64; 3] = [3, -2, (1 << 40) + 1];
+const ABSENT: [i64; 3] = [3, -2, (1 << 30) + 1];
 
 struct Random(u64);
 
@@ -576,7 +576,12 @@ fn duplicate_heavy_lookup_matches_cpu_radix_run() -> Result {
             } else {
                 random.value()
             };
-            (key, (random.value(), serial))
+            let payload = match serial % 3 {
+                0 => i64::MIN,
+                1 => i64::MAX,
+                _ => random.next() as i64,
+            };
+            (key, (payload, serial))
         })
         .collect();
     // Multi-run: decreasing batches, unmerged under ratio 2.
@@ -617,7 +622,13 @@ fn source_build_selects_and_groups_resident_columns() -> Result {
     let mut random = Random(0x5eed_3000);
     let rows = 2500;
     let keys: Vec<i64> = (0..rows).map(|_| DOMAIN[random.below(4) * 3]).collect();
-    let serials: Vec<i64> = (0..rows).map(|_| random.value()).collect();
+    let serials: Vec<i64> = (0..rows)
+        .map(|row| match row % 3 {
+            0 => i64::MIN,
+            1 => i64::MAX,
+            _ => random.next() as i64,
+        })
+        .collect();
     let tags: Vec<i64> = (0..rows as i64).collect();
     let key_column = Buffer::from_host(pool.clone(), &bits(&keys))?;
     let serial_column = Buffer::from_host(pool.clone(), &bits(&serials))?;
