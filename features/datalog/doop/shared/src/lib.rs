@@ -11,7 +11,7 @@ mod manifest;
 pub mod mini_engine;
 
 pub use interner::IStr;
-pub use domains::DomainValues;
+pub use domains::{DomainType, DomainValues};
 use std::{io, path::Path};
 
 /// The 32 raw input relations and dataset-precomputed method descriptors.
@@ -66,16 +66,19 @@ impl Facts {
 
     /// Load facts and equality-component memberships in the existing parsing pass.
     ///
-    /// Schema names are facts field names; each column contains its component ID.
-    /// The returned vector is indexed by that ID. Missing files still initialize
-    /// typed empty domains; unreferenced ID gaps are empty symbol domains.
+    /// EDB schema names are facts field names; each relation column contains its
+    /// component ID. IDB relation names need not correspond to facts fields.
+    /// Component types cover every inferred ID, including IDB-only components.
+    /// Missing EDB files retain typed empty domains. IDB-only numeric components
+    /// use checked declared bounds; components with EDB members use observed bounds.
     /// Symbol memberships contain distinct global codes, sorted without revisiting rows.
     pub fn load_with_domains(
         directory: &Path,
         schema: &[(&str, &[u32])],
+        types: &[DomainType],
     ) -> io::Result<(Self, Vec<DomainValues>)> {
         let path = std::env::var_os("DOOP_SET_MANIFEST").map(std::path::PathBuf::from);
-        let mut domains = domains::Domains::new(schema);
+        let mut domains = domains::Domains::new(schema, types)?;
         let facts = Self::load_inner(directory, path.as_deref(), Some(&mut domains))?;
         Ok((facts, domains.finish()))
     }

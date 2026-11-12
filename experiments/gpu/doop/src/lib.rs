@@ -29,10 +29,10 @@ pub struct Prepared {
 
 pub fn load(directory: &std::path::Path) -> gpu_datalog_runtime::Result<Prepared> {
     use doop_shared::{IStr, interner::sym};
-    let (schema, required) = doop_shared::doop_query!(cq_gpu_datalog::domain_schema;
+    let (schema, types, required) = doop_shared::doop_query!(cq_gpu_datalog::domain_schema;
         symbols(IStr => [0] crate::DoopSymbols);
     );
-    let (facts, mut memberships) = doop_shared::Facts::load_with_domains(directory, schema)?;
+    let (facts, mut memberships) = doop_shared::Facts::load_with_domains(directory, schema, types)?;
     for (component, handle) in required() {
         let Some(doop_shared::DomainValues::Symbols(values)) = memberships.get_mut(component as usize) else {
             return Err("creating symbol head has no dictionary component".into());

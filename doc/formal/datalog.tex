@@ -1583,6 +1583,11 @@ domain mode the static word is an upper bound: candidate codes are sealed
 on device before sorting, while fixed-carrier allocated bytes are reported
 separately from useful bits.  Domain preparation and device global-to-dense
 translation perform no additional host row pass.
+The preparation schema types every component, including components used only
+by derived relations. Numeric components without an EDB member use checked
+declared scalar bounds; those with EDB members retain observed bounds (or
+typed empty bounds), not a type-width fallback. Derived values outside a
+frozen observed range are rejected explicitly.
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad

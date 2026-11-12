@@ -4,7 +4,10 @@ use cq_syntax::{rust, symbol_name};
 use std::collections::BTreeMap;
 use quote::quote;
 
-/// Emit load-time relation membership assignments and creating-head constants.
+/// Emit relation memberships, typed component bounds, and creating-head constants.
+/// Component metadata is `(declared_numeric_bounds, has_edb_member)`, indexed by
+/// every inferred ID. Numeric bounds come from `Scalar`, including Rust aliases;
+/// loaders use them only for components without EDB members.
 /// The same source rules feed execution and this schema callback.
 pub fn schema(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     struct Input { symbols: crate::storage::Symbols, source: Program }
@@ -35,6 +38,29 @@ pub fn schema(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::Token
         symbol.logical_type_id = column.logical_type_id;
     }
     let components = DomainComponents::infer(&source)?;
+    let mut metadata = vec![None; components.count];
+    let mut has_edb = vec![false; components.count];
+    for (relation, ids) in source.declarations.iter().zip(&components.columns) {
+        for (column, &id) in relation.columns.iter().zip(ids) {
+            let id = id as usize;
+            has_edb[id] |= relation.value.is_some();
+            metadata[id].get_or_insert_with(|| {
+                if symbols.codec(column.logical_type_id).is_some() {
+                    quote!(::core::option::Option::None)
+                } else {
+                    let ty = &column.ty;
+                    quote!(::core::option::Option::Some((
+                        <#ty as ::gpu_datalog_runtime::Scalar>::MIN,
+                        <#ty as ::gpu_datalog_runtime::Scalar>::MAX,
+                    )))
+                }
+            });
+        }
+    }
+    let metadata = metadata.into_iter().zip(has_edb).map(|(bounds, edb)| {
+        let bounds = bounds.expect("every inferred component has a declaration");
+        quote!((#bounds, #edb))
+    });
     let entries = source.declarations.iter().enumerate().map(|(index, relation)| {
         let name = symbol_name(&relation.name);
         let ids = &components.columns[index];
@@ -55,7 +81,11 @@ pub fn schema(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::Token
             }
         }
     }
-    Ok(quote!((&[#(#entries),*] as &[(&str, &[u32])], || ::std::vec![#(#required),*])))
+    Ok(quote!((
+        &[#(#entries),*] as &[(&str, &[u32])],
+        &[#(#metadata),*] as &[(::core::option::Option<(i128, i128)>, bool)],
+        || -> ::std::vec::Vec<(u32, u32)> { ::std::vec![#(#required),*] },
+    )))
 }
 
 /// One component for every declaration column, including native numeric fields.

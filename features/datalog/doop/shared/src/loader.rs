@@ -171,7 +171,7 @@ mod tests {
             ("directsuperclass", &[0, 0]),
             ("mainclass", &[0]),
         ];
-        let mut domains = Domains::new(schema);
+        let mut domains = Domains::new(schema, &[(None, true)]).unwrap();
         let columns = domains.columns("directsuperclass", <(IStr, IStr)>::TYPES).unwrap().unwrap();
         <(IStr, IStr)>::parse("domain-left\tdomain-right", Some((columns, &mut domains))).unwrap();
         <(IStr, IStr)>::parse("domain-left\tdomain-left", Some((columns, &mut domains))).unwrap();
@@ -191,6 +191,9 @@ mod tests {
         let (facts, domains) = crate::Facts::load_with_domains(&directory, &[
             ("formalparam", &[0, 1, 1]),
             ("method_descriptor", &[1, 2]),
+        ], &[
+            (Some((i32::MIN as i128, i32::MAX as i128)), true),
+            (None, true), (None, true),
         ]).unwrap();
         assert!(facts.formalparam.is_empty());
         assert!(facts.method_descriptor.is_empty());
@@ -203,7 +206,9 @@ mod tests {
 
     #[test]
     fn numeric_components_accumulate_inclusive_bounds() {
-        let mut domains = Domains::new(&[("numbers", &[0, 0])]);
+        let mut domains = Domains::new(&[("numbers", &[0, 0])], &[
+            (Some((i32::MIN as i128, i32::MAX as i128)), true),
+        ]).unwrap();
         let columns = domains.columns("numbers", <(i32, i32)>::TYPES).unwrap().unwrap();
         <(i32, i32)>::parse("-7\t3", Some((columns, &mut domains))).unwrap();
         <(i32, i32)>::parse("-2147483648\t2147483647", Some((columns, &mut domains))).unwrap();
@@ -214,11 +219,37 @@ mod tests {
     }
 
     #[test]
+    fn loading_retains_observed_widths_and_all_derived_component_bounds() {
+        let directory = std::env::temp_dir()
+            .join(format!("doop-domain-derived-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("FormalParam.facts"), "-2\tx\tx\n3\tx\tx\n").unwrap();
+        let (_, values) = crate::Facts::load_with_domains(&directory, &[
+            ("derived_first", &[0]), ("formalparam", &[1, 2, 2]),
+            ("derived_last", &[3]),
+        ], &[
+            (Some((-100, 100)), false),
+            (Some((i32::MIN as i128, i32::MAX as i128)), true),
+            (None, true),
+            (Some((i32::MIN as i128, i32::MAX as i128)), false),
+        ]).unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        assert_eq!(values, [
+            crate::DomainValues::Integers(Some((-100, 100))),
+            crate::DomainValues::Integers(Some((-2, 3))),
+            crate::DomainValues::Symbols(vec![sym("x").code()]),
+            crate::DomainValues::Integers(Some((i32::MIN, i32::MAX))),
+        ]);
+    }
+
+    #[test]
     fn computed_descriptors_contribute_domain_membership() {
         let method = sym("domain-method");
         let unused = sym("");
         let methods = [(method, unused, sym("int"), unused, sym("void"), unused, 0)];
-        let mut domains = Domains::new(&[("method_descriptor", &[0, 1])]);
+        let mut domains = Domains::new(&[("method_descriptor", &[0, 1])], &[
+            (None, true), (None, true),
+        ]).unwrap();
         let descriptors = method_descriptors(&methods, Some(&mut domains)).unwrap();
         assert_eq!(descriptors, [(method, sym("void(int)"))]);
         assert_eq!(domains.finish(), [
