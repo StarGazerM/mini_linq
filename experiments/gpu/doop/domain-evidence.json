@@ -1,0 +1,167 @@
+{
+  "base": "e4e08c99",
+  "scope": "GPU DOOP equality-component domains; no core IR or Sequence source changes",
+  "answers": {
+    "cassandra": {
+      "comparison": "exact full-tuple sets, all 26 outputs",
+      "setup_seconds": 0.091268,
+      "fixpoint_seconds": 0.624475,
+      "output_seconds": 0.112135,
+      "load_seconds": 1.407272,
+      "evaluation_seconds": 0.831123,
+      "execution_wall_seconds": 6.48
+    },
+    "xalan": {
+      "comparison": "exact full-tuple sets, all 26 outputs",
+      "setup_seconds": 0.165898,
+      "fixpoint_seconds": 0.700711,
+      "output_seconds": 0.196576,
+      "load_seconds": 3.643625,
+      "evaluation_seconds": 1.066808,
+      "execution_wall_seconds": 16.29
+    }
+  },
+  "xalan_census": {
+    "relations": 103,
+    "static_carrier_bytes_saved": 0,
+    "runtime_lane_potential_canonical_row_bytes_saved": 35061544,
+    "relations_dropping_lanes": {
+      "16->8": 13,
+      "24->16": 11,
+      "32->16": 1
+    },
+    "table": "domain-census-xalan.tsv",
+    "accounting": "canonical logical row payload bytes; excludes metadata, capacity slack, aliases, maps, old snapshots and peak scratch"
+  },
+  "runtime_lane_cutover": "CandidateBatch currently uses runtime lane storage but compiler arena writes Scalar::COLUMN widths. Direct runtime-width candidate emission and DeviceRadixRun typed W/state/provider/snapshot ABI must move to runtime-lane PackedRow or runtime dispatch. Current slice seals candidates on device before sorting and retains static upper-bound W, so active bits fall but carrier allocation does not.",
+  "production_code_revision": "cadeee77a072ef141468b891b3f4b1908f8e8c19",
+  "baseline_xalan": {
+    "revision": "e4e08c99d00d818cf68859ee76861a2ae1e1b3a2",
+    "source": "/data/mini_linq-wt/comp-doop/target/compression-base-src/experiments/gpu",
+    "cargo_target_dir": "/data/mini_linq-wt/comp-doop/target/compression-base-doop-target",
+    "binary": "/data/mini_linq-wt/comp-doop/target/compression-base-doop-target/release/doop-gpu",
+    "binary_sha256": "7d6e89f288d337dba7266649dbe257eac939ebae4e041585c0fa992b6c60e344",
+    "build_command": "source /dev/shm/gpu-env.sh && flock -s /tmp/mini_linq-timing.lock timeout 100 /usr/bin/time -p env CARGO_TARGET_DIR=/data/mini_linq-wt/comp-doop/target/compression-base-doop-target cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release -p doop-gpu",
+    "build_attempt_wall_seconds": [
+      100.0,
+      100.0,
+      88.94
+    ],
+    "build_notes": "First two build units reached the 100s deadline; third completed. Earlier invalid CLI placement of -p failed in 0.02s without building. Successful build /usr/bin/time real=88.93s.",
+    "dataset": "/data/doop-bench/doop-data/xalan",
+    "execution_lock": "/tmp/mini_linq-gpu.lock",
+    "compute_apps_before": [],
+    "environment": {
+      "GPU_DATALOG_PHASES": "1",
+      "trace_variables": "all exported names containing TRACE unset",
+      "BENCH_CHECK_variables": "unset"
+    },
+    "setup_seconds": 0.210369,
+    "fixpoint_seconds": 0.753628,
+    "output_seconds": 0.428677,
+    "load_seconds": null,
+    "load_note": "Exact base does not print fact-load timing; excluded from GPU evaluation.",
+    "gpu_evaluation_seconds": 1.395978,
+    "mini_evaluation_seconds": 11.451123,
+    "execution_wall_seconds": 21.53,
+    "tool_wall_seconds": 21.57,
+    "comparison": "exact full-tuple sets, all 26 outputs",
+    "output_sizes": {
+      "MainClass": 1,
+      "Method_SimpleName": 101877,
+      "Method_DeclaringType": 101877,
+      "Method_Modifier": 131778,
+      "Method_ParamTypes": 101877,
+      "Method_ReturnType": 101877,
+      "Method_Descriptor": 101877,
+      "MethodLookup": 433153,
+      "MethodImplemented": 93196,
+      "DirectSubclass": 9693,
+      "Subclass": 19732,
+      "Superclass": 19732,
+      "Superinterface": 16524,
+      "SubtypeOf": 53066,
+      "SupertypeOf": 53066,
+      "SubtypeOfDifferent": 41419,
+      "MainMethodDeclaration": 1,
+      "ClassInitializer": 2101,
+      "InitializedClass": 974,
+      "Assign": 44536,
+      "VarPointsTo": 2741586,
+      "InstanceFieldPointsTo": 1435800,
+      "StaticFieldPointsTo": 2296,
+      "CallGraphEdge": 20370,
+      "ArrayIndexPointsTo": 24852,
+      "Reachable": 4425
+    },
+    "nsys": {
+      "available": true,
+      "path": "/opt/nvidia/hpc_sdk/Linux_x86_64/25.5/compilers/bin/nsys",
+      "version": "2025.3.1.90-253135822126v0",
+      "profile_run": false
+    }
+  },
+  "pre_bulk_untraced_xalan": {
+    "setup_seconds": 0.17992,
+    "fixpoint_seconds": 0.689438,
+    "output_seconds": 0.493052,
+    "load_seconds": 3.597106,
+    "evaluation_seconds": 1.365629,
+    "comparison": "exact full-tuple sets, all 26 outputs"
+  },
+  "traced_xalan_diagnostic": {
+    "comparison": "exact full-tuple sets, all 26 outputs",
+    "load_seconds": 8.96898,
+    "fixpoint_seconds": 2.87864,
+    "evaluation_seconds": 4.044351,
+    "memory_trace_enabled": true,
+    "gpu_compute_apps_before_run": []
+  },
+  "timing_caveat": "Unpaired fresh-process sanity runs with GPU_DATALOG_PHASES=1, trace variables unset and no compute app listed before execution. CPU/build load varied. No statistical speedup claim; Main owns paired timing. The earlier memory-traced result is diagnostic only.",
+  "publication": {
+    "packed_key_download": "once per output relation, preserving canonical order",
+    "inverse": "one hoisted inverse-table gather per symbol output column",
+    "logical_handles": "one global interner bounds snapshot per column; owned code allocation reused as IStr vector, asserted by unit test",
+    "tuple_assembly": "consumes decoded column vectors; no dictionary lookup or interner lock per tuple field",
+    "new_logical_row_allocations": "no Vec<i128> allocation per output row in domain mode"
+  },
+  "load_host_work": {
+    "preexisting": [
+      "input parse and global string interning",
+      "optional uncertified full-row sorting/deduplication",
+      "method descriptor construction and its existing projected join",
+      "one EDB upload packing pass"
+    ],
+    "added_in_existing_parse_loop": [
+      "per-component distinct symbol membership insertion",
+      "numeric min/max updates"
+    ],
+    "added_over_dictionaries_only": [
+      "sort distinct global handles",
+      "register creating-head constants",
+      "build host inverse and base-trimmed device forward tables"
+    ],
+    "added_host_row_passes": 0,
+    "device_setup": "global-to-dense EDB remap; included in explicit setup, excluded from fixpoint"
+  },
+  "ordering": "Dense dictionary codes preserve ascending process-global IStr handle order, not lexical string order. No DOOP rule requires ordered symbol comparison.",
+  "opaque_symbol_reads": "No per-row symbol Rust reads in DOOP rules after existing method_descriptors load precomputation. Closed sym operands use CodeDomain captures; creating java.lang.String head is registered before freeze.",
+  "source_api": {
+    "commits": [
+      "c6227ce7",
+      "ebb9559b"
+    ],
+    "native_grouping_readbacks": 1,
+    "native_active_bits_for_u32_in_u64": 64,
+    "native_digit_equivalents": 8,
+    "runtime_19_plus_7_active_bits": 26,
+    "runtime_digit_equivalents": 4,
+    "runtime_grouping_readbacks": 1,
+    "validation": "narrow overflow flag shares the existing group-count transfer; native fields skip validation"
+  },
+  "generated_code": {
+    "tpch": "tpch-generated-byte-census.json: 52/52 query-scale modules exactly byte-identical; plans differ only in generation_seconds",
+    "doop": "doop-rule-hole-census.json/.tsv: 148 named holes, 6 inline rules, 1 key module; 155 modules and 164 kernels in both; 830 named-hole symbol inputs adapt to u32; 15 closed captures; zero logical inverses inside branch holes",
+    "remaining_scratch": "expanded __code_* machine temporaries remain i64; no Sequence/core edits in this slice"
+  }
+}

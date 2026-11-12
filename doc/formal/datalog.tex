@@ -1549,6 +1549,37 @@ Fixed-width scalar eligibility, including type aliases, is checked by Rust's
  {\mathrm{codecId}(\ell)=D(\ell).\mathrm{codecId}\quad
   \mathrm{deviceType}(\ell)=\mathrm{Symbol}\langle D(\ell).\mathrm{logical},D(\ell).\mathrm{codec}\rangle\text{ for }\ell\in\mathrm{dom}(D)}
 \end{mathpar}
+For \code{domain\_storage}, \textsc{DL-DeviceSymbols} additionally permits a
+checked representation adapter.  Let $E$ be the connected components of
+column positions equated by rule variables, relational comparisons and
+head/body occurrences.  An independent graph check validates the inferred
+component table.  The loader records one immutable dense numbering $d_E$
+per symbol component, preserving the order of the global handles supplied by
+$C$, with inverse $d_E^{-1}$ and measured width
+$w_E=\max(1,\lceil\log_2 \max(1,|\mathrm{dom}(d_E)|)\rceil)$.
+The stored input's \code{u32} carrier has no pending symbol codec; its packing
+expression records the component IDs in field order.  The GPU-owned hole
+surface adapter and binding packet agree on \code{u32 in (D_E)} declarations,
+and re-intern logical-type IDs at that representation boundary.
+The original Round hole and user-facing Datalog source remain unchanged.
+Thus the ordinary CQ domain checker and host-once \code{CodeDomain} captures
+apply, without relaxing the core one-codec-per-logical-type invariant.
+Absent filter constants map to the reserved missing code; creating-head
+constants must enter their component before freezing, and later absent
+created symbols are rejected.  Only free variables consumed by opaque Rust
+are inverted at R; output fields are inverted at P.
+The P adapter gathers one complete output column at a time, resolving its
+component inverse table once and passing an owned code vector to
+\code{SymbolCodec::decode\_many}. DOOP restores that vector to global handles
+using one interner-bounds snapshot per column; final tuple assembly performs
+no dictionary lookup and preserves the canonical row order.
+Runtime widths and signs, not scalar type widths, determine packed shifts and
+the significant sort window.  Each GPU key field is at most 32 bits and fits
+its scalar carrier; generic payload packing may remain 64-bit.  In this
+domain mode the static word is an upper bound: candidate codes are sealed
+on device before sorting, while fixed-carrier allocated bytes are reported
+separately from useful bits.  Domain preparation and device global-to-dense
+translation perform no additional host row pass.
 \begin{mathpar}
 \Rule{CK-DL-DeviceStorage}{\mathrm{WF}_{\mathrm{Storage}}(s)\quad
  \mathrm{WF}_{\mathrm{Storage}}(t)\quad

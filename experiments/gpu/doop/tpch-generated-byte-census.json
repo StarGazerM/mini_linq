@@ -1,0 +1,918 @@
+{
+  "schema_version": 1,
+  "baseline_revision": "e4e08c99",
+  "baseline_source": "target/compression-base-src",
+  "branch_source": "/data/mini_linq-wt/comp-doop",
+  "purpose": "Exact generated TPC-H query-module byte comparison; not a completed library-build or GPU-execution result.",
+  "configuration": {
+    "data_root": "/data/tpch-gpu",
+    "scales": [
+      1,
+      10
+    ],
+    "query_filter": null,
+    "query_count": 26,
+    "queries": [
+      "h01",
+      "h02",
+      "h06",
+      "h11",
+      "h13",
+      "h15",
+      "h18",
+      "h20",
+      "h10",
+      "h12",
+      "h19",
+      "h03",
+      "h04",
+      "h04_not_exists",
+      "h05",
+      "h07",
+      "h07_block",
+      "h08",
+      "h09",
+      "h16",
+      "h22",
+      "h21_positive",
+      "d19",
+      "d27",
+      "d72_inner",
+      "d85"
+    ],
+    "CQ_GPU_TPCH_AUTOMATIC": "unset",
+    "modes": [
+      "advised"
+    ],
+    "TPCH_GPU_ADVICE": "unset",
+    "toolchain": "1.99.1",
+    "architecture": "sm_89",
+    "materialize_cubin": true,
+    "profile": "release",
+    "package": "cq-gpu-tpch",
+    "target_kind": "lib",
+    "gpu_execution": false
+  },
+  "input_manifests": [
+    {
+      "path": "/data/tpch-gpu/sf1/manifest.json",
+      "bytes": 45111,
+      "sha256": "228e213f7d412f3cec4f6146a7656c97b9b95e3d4d71bb7917da97607ec86ed9",
+      "sf": 1
+    },
+    {
+      "path": "/data/tpch-gpu/sf10/manifest.json",
+      "bytes": 45145,
+      "sha256": "9497e59506418151a8aba460e0bae3e5c954a06587759693e5e70c79555fbccd",
+      "sf": 10
+    }
+  ],
+  "build_attempts": [
+    {
+      "label": "branch",
+      "cwd": "/data/mini_linq-wt/comp-doop",
+      "target": "/data/mini_linq-wt/comp-doop/target/compression-census-branch",
+      "command": "source /dev/shm/gpu-env.sh && unset CQ_GPU_TPCH_AUTOMATIC CQ_GPU_TPCH_QUERIES TPCH_GPU_ADVICE && export TPCH_GPU_DATA_ROOT=/data/tpch-gpu CARGO_TARGET_DIR=/data/mini_linq-wt/comp-doop/target/compression-census-branch && flock -s /tmp/mini_linq-timing.lock timeout 100 cargo +1.99.1 oxide build --lib -p cq-gpu-tpch --arch sm_89 --materialize-cubin -- --release",
+      "log": "/data/mini_linq-wt/comp-doop/target/tpch-census-branch-build-1.log",
+      "exit_code": 2,
+      "wall_seconds": 0.0565805189544335
+    },
+    {
+      "label": "branch",
+      "cwd": "/data/mini_linq-wt/comp-doop",
+      "target": "/data/mini_linq-wt/comp-doop/target/compression-census-branch",
+      "command": "source /dev/shm/gpu-env.sh && unset CQ_GPU_TPCH_AUTOMATIC CQ_GPU_TPCH_QUERIES TPCH_GPU_ADVICE && export TPCH_GPU_DATA_ROOT=/data/tpch-gpu CARGO_TARGET_DIR=/data/mini_linq-wt/comp-doop/target/compression-census-branch && flock -s /tmp/mini_linq-timing.lock timeout 100 cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release --lib -p cq-gpu-tpch",
+      "log": "/data/mini_linq-wt/comp-doop/target/tpch-census-branch-build-2.log",
+      "exit_code": 101,
+      "wall_seconds": 1.3356888809939846
+    },
+    {
+      "label": "branch",
+      "cwd": "/data/mini_linq-wt/comp-doop/experiments/gpu/tpch",
+      "target": "/data/mini_linq-wt/comp-doop/target/compression-census-branch",
+      "command": "source /dev/shm/gpu-env.sh && unset CQ_GPU_TPCH_AUTOMATIC CQ_GPU_TPCH_QUERIES TPCH_GPU_ADVICE && export TPCH_GPU_DATA_ROOT=/data/tpch-gpu CARGO_TARGET_DIR=/data/mini_linq-wt/comp-doop/target/compression-census-branch && flock -s /tmp/mini_linq-timing.lock timeout 100 cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release --lib -p cq-gpu-tpch",
+      "log": "/data/mini_linq-wt/comp-doop/target/tpch-census-branch-build-3.log",
+      "exit_code": 124,
+      "wall_seconds": 100.0058979530586
+    },
+    {
+      "label": "base",
+      "cwd": "/data/mini_linq-wt/comp-doop/target/compression-base-src/experiments/gpu/tpch",
+      "target": "/data/mini_linq-wt/comp-doop/target/compression-census-base",
+      "command": "source /dev/shm/gpu-env.sh && unset CQ_GPU_TPCH_AUTOMATIC CQ_GPU_TPCH_QUERIES TPCH_GPU_ADVICE && export TPCH_GPU_DATA_ROOT=/data/tpch-gpu CARGO_TARGET_DIR=/data/mini_linq-wt/comp-doop/target/compression-census-base && flock -s /tmp/mini_linq-timing.lock timeout 100 cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release --lib -p cq-gpu-tpch",
+      "log": "/data/mini_linq-wt/comp-doop/target/tpch-census-base-build-1.log",
+      "exit_code": 124,
+      "wall_seconds": 100.00552791601513
+    },
+    {
+      "label": "branch",
+      "cwd": "/data/mini_linq-wt/comp-doop/experiments/gpu/tpch",
+      "target": "/data/mini_linq-wt/comp-doop/target/compression-census-branch",
+      "command": "source /dev/shm/gpu-env.sh && unset CQ_GPU_TPCH_AUTOMATIC CQ_GPU_TPCH_QUERIES TPCH_GPU_ADVICE && export TPCH_GPU_DATA_ROOT=/data/tpch-gpu CARGO_TARGET_DIR=/data/mini_linq-wt/comp-doop/target/compression-census-branch && flock -s /tmp/mini_linq-timing.lock timeout 100 cargo +1.99.1 oxide build --arch sm_89 --materialize-cubin -- --release --lib -p cq-gpu-tpch",
+      "log": "/data/mini_linq-wt/comp-doop/target/tpch-census-branch-build-4.log",
+      "exit_code": 124,
+      "wall_seconds": 100.00556012196466
+    }
+  ],
+  "build_outcome": {
+    "base": "timeout (exit 124) after complete build-script outputs; full library build not completed",
+    "branch": "timeout (exit 124) after complete build-script outputs; full library build not completed",
+    "base_valid_build_invocation_wall_seconds": 100.00552791601513,
+    "branch_valid_build_invocation_wall_seconds": 200.01145807502326,
+    "notes": [
+      "Initial branch invocation rejected --lib before the oxide cargo-argument separator; corrected before compilation.",
+      "Second branch invocation used workspace root, where package is excluded; corrected to experiments/gpu/tpch.",
+      "First correctly scoped branch attempt timed out during dependencies without generated outputs; one continuation produced complete outputs.",
+      "No whole-library retry after complete generated outputs appeared.",
+      "The build-created branch experiments/gpu/tpch/.oxide-artifacts directory was removed after generation."
+    ]
+  },
+  "summary": {
+    "expected_query_scale_mode_modules": 52,
+    "base_modules": 52,
+    "branch_modules": 52,
+    "byte_identical_modules": 52,
+    "all_query_modules_exact_bytes_equal": true,
+    "base_accepted_plans": 52,
+    "branch_accepted_plans": 52,
+    "plans_exact_bytes_equal": false,
+    "plans_equal_excluding_generation_seconds": true,
+    "plan_differences": 52
+  },
+  "module_extraction": "Exact UTF-8 file byte slices from top-level #[allow(non_snake_case)] immediately before mod <query>_sf<1|10>_<mode> through its prettyplease unindented closing brace and newline; no normalization. Discovered names must equal all 26 authored queries x two scales x advised mode.",
+  "modules": [
+    {
+      "module": "d19_sf10_advised",
+      "base_bytes": 170753,
+      "branch_bytes": 170753,
+      "base_sha256": "f5a5b63a76d420a5b05b34bc9ba3b90cb6f9775bf221ea6aa25b50e9a2c22f0d",
+      "branch_sha256": "f5a5b63a76d420a5b05b34bc9ba3b90cb6f9775bf221ea6aa25b50e9a2c22f0d",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "d19_sf1_advised",
+      "base_bytes": 170751,
+      "branch_bytes": 170751,
+      "base_sha256": "3c77c307b4c98d60b794d84b6c864765e24f4932ade0470ec748d50c999c0471",
+      "branch_sha256": "3c77c307b4c98d60b794d84b6c864765e24f4932ade0470ec748d50c999c0471",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "d27_sf10_advised",
+      "base_bytes": 219792,
+      "branch_bytes": 219792,
+      "base_sha256": "64d6c6afaa09162fc7832fb1f567a4093134137a7d1a3fe61c7e9a30b400ef46",
+      "branch_sha256": "64d6c6afaa09162fc7832fb1f567a4093134137a7d1a3fe61c7e9a30b400ef46",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "d27_sf1_advised",
+      "base_bytes": 219790,
+      "branch_bytes": 219790,
+      "base_sha256": "710fd4f97b5bcb2d5a7b9d68dbb5c058d91d46f80921ece8860b190826c070fa",
+      "branch_sha256": "710fd4f97b5bcb2d5a7b9d68dbb5c058d91d46f80921ece8860b190826c070fa",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "d72_inner_sf10_advised",
+      "base_bytes": 245739,
+      "branch_bytes": 245739,
+      "base_sha256": "bda852ce270f737e485d83fa9d4c9ab0ca598e75acad990d9f4a62540192030c",
+      "branch_sha256": "bda852ce270f737e485d83fa9d4c9ab0ca598e75acad990d9f4a62540192030c",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "d72_inner_sf1_advised",
+      "base_bytes": 245737,
+      "branch_bytes": 245737,
+      "base_sha256": "d5e7e3586a6b263a9803c3ef6388321ce2b5d117eca64eba275bcac08cdbc446",
+      "branch_sha256": "d5e7e3586a6b263a9803c3ef6388321ce2b5d117eca64eba275bcac08cdbc446",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "d85_sf10_advised",
+      "base_bytes": 250983,
+      "branch_bytes": 250983,
+      "base_sha256": "37865f94616e9f37ecdd1e19886a08da602ef0072d0fcc5156f147cd5481bcc1",
+      "branch_sha256": "37865f94616e9f37ecdd1e19886a08da602ef0072d0fcc5156f147cd5481bcc1",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "d85_sf1_advised",
+      "base_bytes": 250981,
+      "branch_bytes": 250981,
+      "base_sha256": "0bfae30a69282d5a12afe1cbe2d2133dcbe0de66b2ef087c853f777e20d552f6",
+      "branch_sha256": "0bfae30a69282d5a12afe1cbe2d2133dcbe0de66b2ef087c853f777e20d552f6",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h01_sf10_advised",
+      "base_bytes": 48886,
+      "branch_bytes": 48886,
+      "base_sha256": "4c867cd9aa65b47020f680a764ef06e5b3972071ee99ac2eaab1bdc95989291f",
+      "branch_sha256": "4c867cd9aa65b47020f680a764ef06e5b3972071ee99ac2eaab1bdc95989291f",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h01_sf1_advised",
+      "base_bytes": 48878,
+      "branch_bytes": 48878,
+      "base_sha256": "0f8cd5cbc417ddb5c02771d84c850bca2949f0f4a185f2ef26729810deadd7de",
+      "branch_sha256": "0f8cd5cbc417ddb5c02771d84c850bca2949f0f4a185f2ef26729810deadd7de",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h02_sf10_advised",
+      "base_bytes": 411342,
+      "branch_bytes": 411342,
+      "base_sha256": "b0989c73168a366159195f23ba0d544c467de386f2e928704f91ab17a6321c93",
+      "branch_sha256": "b0989c73168a366159195f23ba0d544c467de386f2e928704f91ab17a6321c93",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h02_sf1_advised",
+      "base_bytes": 411318,
+      "branch_bytes": 411318,
+      "base_sha256": "70bf7a836875118ca0eedc1308932de91880436c9f321725f2aae0493b482439",
+      "branch_sha256": "70bf7a836875118ca0eedc1308932de91880436c9f321725f2aae0493b482439",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h03_sf10_advised",
+      "base_bytes": 127348,
+      "branch_bytes": 127348,
+      "base_sha256": "ffd588b2fa1c73c209ebb0205429d39464e2c6f8ee34a647587b23447cc75563",
+      "branch_sha256": "ffd588b2fa1c73c209ebb0205429d39464e2c6f8ee34a647587b23447cc75563",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h03_sf1_advised",
+      "base_bytes": 127347,
+      "branch_bytes": 127347,
+      "base_sha256": "b825ebb1144fea49436081fc71e49a7bb95e1eceb390c33ee26f87fdcd550945",
+      "branch_sha256": "b825ebb1144fea49436081fc71e49a7bb95e1eceb390c33ee26f87fdcd550945",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h04_not_exists_sf10_advised",
+      "base_bytes": 61315,
+      "branch_bytes": 61315,
+      "base_sha256": "d0ab4ad79bc4627c6854c90e312bfa77d66ab5b7c02850852b04c66c296cc33c",
+      "branch_sha256": "d0ab4ad79bc4627c6854c90e312bfa77d66ab5b7c02850852b04c66c296cc33c",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h04_not_exists_sf1_advised",
+      "base_bytes": 61315,
+      "branch_bytes": 61315,
+      "base_sha256": "03b3d4f005547032983070e997a7cb6311b38e6fa945aada32d72cb7065e7b78",
+      "branch_sha256": "03b3d4f005547032983070e997a7cb6311b38e6fa945aada32d72cb7065e7b78",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h04_sf10_advised",
+      "base_bytes": 60822,
+      "branch_bytes": 60822,
+      "base_sha256": "cabf024f73213f028e3d9d08ea6d84ee81d0611af99c4fd1241a1c539e6848f5",
+      "branch_sha256": "cabf024f73213f028e3d9d08ea6d84ee81d0611af99c4fd1241a1c539e6848f5",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h04_sf1_advised",
+      "base_bytes": 60821,
+      "branch_bytes": 60821,
+      "base_sha256": "b212c936eac2369f42ac5dc29f39bcff3281903ac1ebbbb72aa009d6651e5315",
+      "branch_sha256": "b212c936eac2369f42ac5dc29f39bcff3281903ac1ebbbb72aa009d6651e5315",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h05_sf10_advised",
+      "base_bytes": 176607,
+      "branch_bytes": 176607,
+      "base_sha256": "630c104a044fe287ca420349dbb2fde12519608111e9b5955ef7379e1f5b4b28",
+      "branch_sha256": "630c104a044fe287ca420349dbb2fde12519608111e9b5955ef7379e1f5b4b28",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h05_sf1_advised",
+      "base_bytes": 176607,
+      "branch_bytes": 176607,
+      "base_sha256": "1e941bcc77ebaa1735d8194d8349f74095207bfdbc3989b9dd16e84b0f1595e0",
+      "branch_sha256": "1e941bcc77ebaa1735d8194d8349f74095207bfdbc3989b9dd16e84b0f1595e0",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h06_sf10_advised",
+      "base_bytes": 46920,
+      "branch_bytes": 46920,
+      "base_sha256": "75798eb9ec712f4762a3be43f436e781492f24c2856a006a20ddc2f5c76b5bec",
+      "branch_sha256": "75798eb9ec712f4762a3be43f436e781492f24c2856a006a20ddc2f5c76b5bec",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h06_sf1_advised",
+      "base_bytes": 46911,
+      "branch_bytes": 46911,
+      "base_sha256": "46631dcdccc85373816beccc5426ae9bca47d2e9ed1f82f7d57ef3cde4e56848",
+      "branch_sha256": "46631dcdccc85373816beccc5426ae9bca47d2e9ed1f82f7d57ef3cde4e56848",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h07_block_sf10_advised",
+      "base_bytes": 236012,
+      "branch_bytes": 236012,
+      "base_sha256": "3e0fd4c7a9afedce17832dece946bbbd95143bc721fd1fabd4e3dc234057d573",
+      "branch_sha256": "3e0fd4c7a9afedce17832dece946bbbd95143bc721fd1fabd4e3dc234057d573",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h07_block_sf1_advised",
+      "base_bytes": 236012,
+      "branch_bytes": 236012,
+      "base_sha256": "cb2fbbe9bcabdaee014e4a4156d33bab7f3e4e060f2da895128188957f79c187",
+      "branch_sha256": "cb2fbbe9bcabdaee014e4a4156d33bab7f3e4e060f2da895128188957f79c187",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h07_sf10_advised",
+      "base_bytes": 226838,
+      "branch_bytes": 226838,
+      "base_sha256": "abf144ee15194eabe41ee9c3ab5c411ef4e84af2682e48267ebbbf3951988a7d",
+      "branch_sha256": "abf144ee15194eabe41ee9c3ab5c411ef4e84af2682e48267ebbbf3951988a7d",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h07_sf1_advised",
+      "base_bytes": 226838,
+      "branch_bytes": 226838,
+      "base_sha256": "1f03db2f95a1efebd883035c28a862b256dadac92257b89ffd612c0214ff4284",
+      "branch_sha256": "1f03db2f95a1efebd883035c28a862b256dadac92257b89ffd612c0214ff4284",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h08_sf10_advised",
+      "base_bytes": 220021,
+      "branch_bytes": 220021,
+      "base_sha256": "e77abfe8863658d3b387a77d8daefb11aa8e86a4068fc25e4553bc48fb1d0e26",
+      "branch_sha256": "e77abfe8863658d3b387a77d8daefb11aa8e86a4068fc25e4553bc48fb1d0e26",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h08_sf1_advised",
+      "base_bytes": 220021,
+      "branch_bytes": 220021,
+      "base_sha256": "62e8b071715bb4ad0e101cd1ecd8984efa279eb7df0b914c91fccd8aa777c68e",
+      "branch_sha256": "62e8b071715bb4ad0e101cd1ecd8984efa279eb7df0b914c91fccd8aa777c68e",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h09_sf10_advised",
+      "base_bytes": 151092,
+      "branch_bytes": 151092,
+      "base_sha256": "788dca3457bab83420de44a4997c595d06053ddc11de81cf935f05d60afec96c",
+      "branch_sha256": "788dca3457bab83420de44a4997c595d06053ddc11de81cf935f05d60afec96c",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h09_sf1_advised",
+      "base_bytes": 151092,
+      "branch_bytes": 151092,
+      "base_sha256": "6145654e909a55019a2d211c24657e9c639c041266f44b03fa12bf0019946b1a",
+      "branch_sha256": "6145654e909a55019a2d211c24657e9c639c041266f44b03fa12bf0019946b1a",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h10_sf10_advised",
+      "base_bytes": 188089,
+      "branch_bytes": 188089,
+      "base_sha256": "b3b2c4dbb448ae5cf92d0dcc078cbe9d41f815663ac37cee2bec8d7d14c6265b",
+      "branch_sha256": "b3b2c4dbb448ae5cf92d0dcc078cbe9d41f815663ac37cee2bec8d7d14c6265b",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h10_sf1_advised",
+      "base_bytes": 188088,
+      "branch_bytes": 188088,
+      "base_sha256": "6aff0d27049bc75a96989be6e652b5d9381d7679dee1bd2d4b3300c31c91d787",
+      "branch_sha256": "6aff0d27049bc75a96989be6e652b5d9381d7679dee1bd2d4b3300c31c91d787",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h11_sf10_advised",
+      "base_bytes": 246105,
+      "branch_bytes": 246105,
+      "base_sha256": "2e8ec62e3cb3d39de8b6233f4cf3061ede7c390353c2d57d79fe6119d67df58b",
+      "branch_sha256": "2e8ec62e3cb3d39de8b6233f4cf3061ede7c390353c2d57d79fe6119d67df58b",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h11_sf1_advised",
+      "base_bytes": 246072,
+      "branch_bytes": 246072,
+      "base_sha256": "2c0d01cefaff9833e2b081b7a172fd50c893b079f91ffd3f014aa91074d621d0",
+      "branch_sha256": "2c0d01cefaff9833e2b081b7a172fd50c893b079f91ffd3f014aa91074d621d0",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h12_sf10_advised",
+      "base_bytes": 367504,
+      "branch_bytes": 367504,
+      "base_sha256": "60013f127e333fbc768ca7c5430ba5fcee5d5f121ce64aee6c808ef6ce721599",
+      "branch_sha256": "60013f127e333fbc768ca7c5430ba5fcee5d5f121ce64aee6c808ef6ce721599",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h12_sf1_advised",
+      "base_bytes": 367498,
+      "branch_bytes": 367498,
+      "base_sha256": "9e1ba21038f7b3f47284b20a107ca63f3a6de04e086e7bb5a64c31cc18c765d5",
+      "branch_sha256": "9e1ba21038f7b3f47284b20a107ca63f3a6de04e086e7bb5a64c31cc18c765d5",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h13_sf10_advised",
+      "base_bytes": 122243,
+      "branch_bytes": 122243,
+      "base_sha256": "c3404ca2832d449d800160c835bfce560fcc1aa618b6298fdf9a9d53e197e7f0",
+      "branch_sha256": "c3404ca2832d449d800160c835bfce560fcc1aa618b6298fdf9a9d53e197e7f0",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h13_sf1_advised",
+      "base_bytes": 122220,
+      "branch_bytes": 122220,
+      "base_sha256": "4c6acab2c9e3313cd58e87e3b3da56c58f3bbe9e3786e70f548346027e218385",
+      "branch_sha256": "4c6acab2c9e3313cd58e87e3b3da56c58f3bbe9e3786e70f548346027e218385",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h15_sf10_advised",
+      "base_bytes": 162818,
+      "branch_bytes": 162818,
+      "base_sha256": "bda5e58ad3188c8f98517d2f0144ddb770ef8063925aa44f4c8fef71aa21b88a",
+      "branch_sha256": "bda5e58ad3188c8f98517d2f0144ddb770ef8063925aa44f4c8fef71aa21b88a",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h15_sf1_advised",
+      "base_bytes": 162820,
+      "branch_bytes": 162820,
+      "base_sha256": "654486fb4cdc89749d9e21490098cb1d6674e6b45f2868ef22f373a8b338d239",
+      "branch_sha256": "654486fb4cdc89749d9e21490098cb1d6674e6b45f2868ef22f373a8b338d239",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h16_sf10_advised",
+      "base_bytes": 159393,
+      "branch_bytes": 159393,
+      "base_sha256": "664e3459a794217a5cf43d721383d1f55e7374fd28a8614952f69b3c68c70921",
+      "branch_sha256": "664e3459a794217a5cf43d721383d1f55e7374fd28a8614952f69b3c68c70921",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h16_sf1_advised",
+      "base_bytes": 159392,
+      "branch_bytes": 159392,
+      "base_sha256": "ff98bf08c54e93a2ff6ca511edf4eaf6bb1aa0b347f507aa96c7ebb7e5ccce54",
+      "branch_sha256": "ff98bf08c54e93a2ff6ca511edf4eaf6bb1aa0b347f507aa96c7ebb7e5ccce54",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h18_sf10_advised",
+      "base_bytes": 153443,
+      "branch_bytes": 153443,
+      "base_sha256": "2b576052c0a3dd6558107fbeddc6afe3c33223f611afa7933c8c9dd52ed12819",
+      "branch_sha256": "2b576052c0a3dd6558107fbeddc6afe3c33223f611afa7933c8c9dd52ed12819",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h18_sf1_advised",
+      "base_bytes": 153444,
+      "branch_bytes": 153444,
+      "base_sha256": "7fc93f37d2ff336b841baf7ceb131ebb922eb80a52db40ba8053fe55ab8f7960",
+      "branch_sha256": "7fc93f37d2ff336b841baf7ceb131ebb922eb80a52db40ba8053fe55ab8f7960",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h19_sf10_advised",
+      "base_bytes": 202091,
+      "branch_bytes": 202091,
+      "base_sha256": "9cbee47af8bec7e9df30bf12d28aa1140276249d23cc90a246a63abf5983cb08",
+      "branch_sha256": "9cbee47af8bec7e9df30bf12d28aa1140276249d23cc90a246a63abf5983cb08",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h19_sf1_advised",
+      "base_bytes": 202089,
+      "branch_bytes": 202089,
+      "base_sha256": "1b5fb74f5f9e83abf61791bec22b9769a03ffd635a464a45cfbe174cbab69f97",
+      "branch_sha256": "1b5fb74f5f9e83abf61791bec22b9769a03ffd635a464a45cfbe174cbab69f97",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h20_sf10_advised",
+      "base_bytes": 202537,
+      "branch_bytes": 202537,
+      "base_sha256": "eee04a848039befaca364c3d07c7e45a708f52af97c3de2349807ea306a3b5af",
+      "branch_sha256": "eee04a848039befaca364c3d07c7e45a708f52af97c3de2349807ea306a3b5af",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h20_sf1_advised",
+      "base_bytes": 202537,
+      "branch_bytes": 202537,
+      "base_sha256": "71d3129b04090da264a0af4433e1cef49b8f573c459393c34ca03329c1b3ac60",
+      "branch_sha256": "71d3129b04090da264a0af4433e1cef49b8f573c459393c34ca03329c1b3ac60",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h21_positive_sf10_advised",
+      "base_bytes": 236837,
+      "branch_bytes": 236837,
+      "base_sha256": "4e1c0f82d6a77fb670858b66bf45de4c3179353870eda053932b9f5089145836",
+      "branch_sha256": "4e1c0f82d6a77fb670858b66bf45de4c3179353870eda053932b9f5089145836",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h21_positive_sf1_advised",
+      "base_bytes": 236835,
+      "branch_bytes": 236835,
+      "base_sha256": "10d228dfb22a6e9be624bcfbc9afc3dd9b6a860af5164e77c191425b7cc4e373",
+      "branch_sha256": "10d228dfb22a6e9be624bcfbc9afc3dd9b6a860af5164e77c191425b7cc4e373",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h22_sf10_advised",
+      "base_bytes": 67477,
+      "branch_bytes": 67477,
+      "base_sha256": "e448a6b845f6e3176ca96f1d223d5d94d9b56352a2d2d663770ff419627d5e90",
+      "branch_sha256": "e448a6b845f6e3176ca96f1d223d5d94d9b56352a2d2d663770ff419627d5e90",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    },
+    {
+      "module": "h22_sf1_advised",
+      "base_bytes": 67475,
+      "branch_bytes": 67475,
+      "base_sha256": "a02b86c1d2595754d5376a4775555c201221f2d30c26f05b4b18794bd8647086",
+      "branch_sha256": "a02b86c1d2595754d5376a4775555c201221f2d30c26f05b4b18794bd8647086",
+      "exact_bytes_equal": true,
+      "first_difference": null
+    }
+  ],
+  "generated_files": {
+    "queries.rs": {
+      "base_path": "/data/mini_linq-wt/comp-doop/target/compression-census-base/release/build/cq-gpu-tpch-ab68e1060956413a/out/queries.rs",
+      "branch_path": "/data/mini_linq-wt/comp-doop/target/compression-census-branch/release/build/cq-gpu-tpch-785a34ef49ba66ee/out/queries.rs",
+      "base_bytes": 9677980,
+      "branch_bytes": 9677990,
+      "base_sha256": "0978fe4ebb1a52b2a07e10b0a2fe311793c1b276a21417b1ba6cceb5ffb5d69a",
+      "branch_sha256": "5b93ec35ca6553a3c2d81fdf83244a6bd181f1a7c615d7c8d0a3c908f2d940f7",
+      "exact_bytes_equal": false,
+      "first_difference": {
+        "byte_offset_zero_based": 9534850,
+        "base_line_one_based": 146325,
+        "base_context": "::cuda_device::cuda_module]\n                mod __cq_sequence_kernels_6e35c17f555a5386_80 {\n                    use super::*;\n                    use ::cuda_device::{kernel, launch_bounds, launch_contract};\n             ",
+        "branch_context": "::cuda_device::cuda_module]\n                mod __cq_sequence_kernels_c4538398ee5292e8_80 {\n                    use super::*;\n                    use ::cuda_device::{kernel, launch_bounds, launch_contract};\n             "
+      }
+    },
+    "plans.json": {
+      "base_path": "/data/mini_linq-wt/comp-doop/target/compression-census-base/release/build/cq-gpu-tpch-ab68e1060956413a/out/plans.json",
+      "branch_path": "/data/mini_linq-wt/comp-doop/target/compression-census-branch/release/build/cq-gpu-tpch-785a34ef49ba66ee/out/plans.json",
+      "base_bytes": 1222278,
+      "branch_bytes": 1222279,
+      "base_sha256": "f277d4e63c25689e9334372656a8174988315611c881d92f271dceb9fe0e0b8d",
+      "branch_sha256": "8361d6c65744b2c4b92dd60761119806e0c93b44a6d41374b470e04ad943e76f",
+      "exact_bytes_equal": false,
+      "first_difference": {
+        "byte_offset_zero_based": 35,
+        "base_line_one_based": 3,
+        "base_context": "[\n  {\n    \"generation_seconds\": 0.050491288,\n    \"mode\": \"advised\",\n    \"pipeline\": {\n      \"complete\": false,\n      \"physical\": [],\n      \"plan\": \"no_reduce, order(Lineitem)\",\n      \"p",
+        "branch_context": "[\n  {\n    \"generation_seconds\": 0.048170685,\n    \"mode\": \"advised\",\n    \"pipeline\": {\n      \"complete\": false,\n      \"physical\": [],\n      \"plan\": \"no_reduce, order(Lineitem)\",\n      \"p"
+      }
+    }
+  },
+  "plans_comparison": {
+    "exact_bytes_equal": false,
+    "differences": [
+      {
+        "path": "/0/generation_seconds",
+        "base": 0.050491288,
+        "branch": 0.048170685
+      },
+      {
+        "path": "/1/generation_seconds",
+        "base": 0.339153878,
+        "branch": 0.333956641
+      },
+      {
+        "path": "/2/generation_seconds",
+        "base": 0.045157041,
+        "branch": 0.045107687
+      },
+      {
+        "path": "/3/generation_seconds",
+        "base": 0.208200851,
+        "branch": 0.206186567
+      },
+      {
+        "path": "/4/generation_seconds",
+        "base": 0.092332999,
+        "branch": 0.091762178
+      },
+      {
+        "path": "/5/generation_seconds",
+        "base": 0.14008993,
+        "branch": 0.139707731
+      },
+      {
+        "path": "/6/generation_seconds",
+        "base": 0.110811676,
+        "branch": 0.110106978
+      },
+      {
+        "path": "/7/generation_seconds",
+        "base": 0.16710028,
+        "branch": 0.166942772
+      },
+      {
+        "path": "/8/generation_seconds",
+        "base": 0.1388942,
+        "branch": 0.138378445
+      },
+      {
+        "path": "/9/generation_seconds",
+        "base": 0.241694479,
+        "branch": 0.241351207
+      },
+      {
+        "path": "/10/generation_seconds",
+        "base": 0.139443552,
+        "branch": 0.139836398
+      },
+      {
+        "path": "/11/generation_seconds",
+        "base": 0.089552613,
+        "branch": 0.092903424
+      },
+      {
+        "path": "/12/generation_seconds",
+        "base": 0.047496743,
+        "branch": 0.048961149
+      },
+      {
+        "path": "/13/generation_seconds",
+        "base": 0.044644148,
+        "branch": 0.046395905
+      },
+      {
+        "path": "/14/generation_seconds",
+        "base": 0.145612519,
+        "branch": 0.153120805
+      },
+      {
+        "path": "/15/generation_seconds",
+        "base": 0.158343055,
+        "branch": 0.16284356
+      },
+      {
+        "path": "/16/generation_seconds",
+        "base": 0.218539124,
+        "branch": 0.220911865
+      },
+      {
+        "path": "/17/generation_seconds",
+        "base": 0.192798787,
+        "branch": 0.190822055
+      },
+      {
+        "path": "/18/generation_seconds",
+        "base": 0.139676589,
+        "branch": 0.132987688
+      },
+      {
+        "path": "/19/generation_seconds",
+        "base": 0.118975815,
+        "branch": 0.116858862
+      },
+      {
+        "path": "/20/generation_seconds",
+        "base": 0.052410816,
+        "branch": 0.0519426
+      },
+      {
+        "path": "/21/generation_seconds",
+        "base": 0.18439569,
+        "branch": 0.190066127
+      },
+      {
+        "path": "/22/generation_seconds",
+        "base": 0.145567884,
+        "branch": 0.145169614
+      },
+      {
+        "path": "/23/generation_seconds",
+        "base": 0.181605045,
+        "branch": 0.179130279
+      },
+      {
+        "path": "/24/generation_seconds",
+        "base": 0.187858554,
+        "branch": 0.186614384
+      },
+      {
+        "path": "/25/generation_seconds",
+        "base": 0.210478374,
+        "branch": 0.209509833
+      },
+      {
+        "path": "/26/generation_seconds",
+        "base": 0.046643228,
+        "branch": 0.046561863
+      },
+      {
+        "path": "/27/generation_seconds",
+        "base": 0.333262363,
+        "branch": 0.330125021
+      },
+      {
+        "path": "/28/generation_seconds",
+        "base": 0.045405085,
+        "branch": 0.044760543
+      },
+      {
+        "path": "/29/generation_seconds",
+        "base": 0.209316107,
+        "branch": 0.206013456
+      },
+      {
+        "path": "/30/generation_seconds",
+        "base": 0.092344401,
+        "branch": 0.091329069
+      },
+      {
+        "path": "/31/generation_seconds",
+        "base": 0.139710092,
+        "branch": 0.138290086
+      },
+      {
+        "path": "/32/generation_seconds",
+        "base": 0.109941269,
+        "branch": 0.109583997
+      },
+      {
+        "path": "/33/generation_seconds",
+        "base": 0.167645284,
+        "branch": 0.166871887
+      },
+      {
+        "path": "/34/generation_seconds",
+        "base": 0.139918863,
+        "branch": 0.138884344
+      },
+      {
+        "path": "/35/generation_seconds",
+        "base": 0.243521539,
+        "branch": 0.242256743
+      },
+      {
+        "path": "/36/generation_seconds",
+        "base": 0.138851618,
+        "branch": 0.137628007
+      },
+      {
+        "path": "/37/generation_seconds",
+        "base": 0.090403904,
+        "branch": 0.088846934
+      },
+      {
+        "path": "/38/generation_seconds",
+        "base": 0.048008452,
+        "branch": 0.04753689
+      },
+      {
+        "path": "/39/generation_seconds",
+        "base": 0.045258766,
+        "branch": 0.044891192
+      },
+      {
+        "path": "/40/generation_seconds",
+        "base": 0.145702571,
+        "branch": 0.144893826
+      },
+      {
+        "path": "/41/generation_seconds",
+        "base": 0.158924288,
+        "branch": 0.158973767
+      },
+      {
+        "path": "/42/generation_seconds",
+        "base": 0.216822656,
+        "branch": 0.21799139
+      },
+      {
+        "path": "/43/generation_seconds",
+        "base": 0.192796693,
+        "branch": 0.192909945
+      },
+      {
+        "path": "/44/generation_seconds",
+        "base": 0.134827329,
+        "branch": 0.135243289
+      },
+      {
+        "path": "/45/generation_seconds",
+        "base": 0.119298974,
+        "branch": 0.118045766
+      },
+      {
+        "path": "/46/generation_seconds",
+        "base": 0.053322993,
+        "branch": 0.053073997
+      },
+      {
+        "path": "/47/generation_seconds",
+        "base": 0.184835123,
+        "branch": 0.183084032
+      },
+      {
+        "path": "/48/generation_seconds",
+        "base": 0.146112637,
+        "branch": 0.144427974
+      },
+      {
+        "path": "/49/generation_seconds",
+        "base": 0.18322057,
+        "branch": 0.180202653
+      },
+      {
+        "path": "/50/generation_seconds",
+        "base": 0.187507611,
+        "branch": 0.187873256
+      },
+      {
+        "path": "/51/generation_seconds",
+        "base": 0.211054036,
+        "branch": 0.209832541
+      }
+    ],
+    "ignored_fields_for_additional_comparison": [
+      "/<plan-index>/generation_seconds"
+    ],
+    "equal_excluding_generation_seconds": true,
+    "normalization": "Remove only each top-level plan generation_seconds field, then JSON serialize with sort_keys=True and separators=(comma,colon).",
+    "base_without_generation_seconds_sha256": "016cc6c30dded1fb3919caf6b76473f7c92c2748ca8abcf5a8494aafc4296896",
+    "branch_without_generation_seconds_sha256": "016cc6c30dded1fb3919caf6b76473f7c92c2748ca8abcf5a8494aafc4296896"
+  },
+  "whole_queries_note": "Whole queries.rs is not byte-identical: it also contains generated cfg(test) regression fixtures beyond the 52 query modules. The first mismatch is a generated __cq_sequence_kernels identifier in that regression region. Query module bytes are compared without stripping or normalizing identifiers."
+}

@@ -1719,7 +1719,8 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  v_i\in\mathrm{dom}(f_i)}
  {[\ell,h]=[\mathsf{enc}(v)\cdot 0^{*},\ \mathsf{enc}(v)\cdot 1^{*}]\text{ formed once; whole-word compares, no }h{+}1}
 \Rule{GPU-RadixSourceBuild}{S_K,S_V\text{ resident sources of }K,V\quad
- \pi\text{ recorded selection or identity}}
+ \pi\text{ recorded selection or identity}\quad
+ \forall i.\ 1\le w_i\le \min(32,\mathsf{carrierBits}(K_i))}
  {\mathsf{fromSources}=\mathsf{publish}(\mathsf{pack}_K(S_K\circ\pi),\ \mathsf{lanes}_V(S_V\circ\pi))}
 \Rule{GPU-Smallest}{\mathsf{probe\ smallest}\text{ with sides }(T_j,\mathit{pre}_j)_{j<k}\text{ over }c\quad
  \mathrm{radix}(T_j)\ni(\mathit{pre}_j,\mathrm{Candidates}\ c)}
@@ -1736,6 +1737,11 @@ and encoded relational operands follow \textsc{GPU-Capture}.
  \text{each field names its bounds provenance}}
  {\mathsf{publish}_{\rm gpu}\text{ consumes }(S,C)\text{ without selecting storage, codec or canonicality}}
 \end{mathpar}
+Runtime-width source construction detects values outside these fields on device
+and refuses publication using the existing group-count transfer, carrying the
+validation flag beside the count. Native-width construction omits validation
+and retains its original full-word sort window. The runtime-width entry point
+sorts exactly the significant sum $\sum_i w_i$.
 Native run and column Host scans require an input schema whose arity and
 recorded logical-type ids match the source relation's ordered declaration;
 catalog templates may omit it. Contiguous ranges require the range ABI and range read capability;
