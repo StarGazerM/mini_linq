@@ -521,3 +521,5 @@ experiments/gpu/datalog/facade/tests/domains.rs	// DECODE P: the fixture publish
 experiments/gpu/datalog/facade/tests/domains.rs	// DECODE P: diagnostic scalar publication records calls to the non-bulk inverse.	P	diagnostic scalar publication records calls to the non-bulk inverse.
 experiments/gpu/datalog-runtime/tests/runtime_widths.rs	// DECODE P: resident-source publication compares complete runtime-width logical rows.	P	resident-source publication compares complete runtime-width logical rows.
 experiments/gpu/datalog-runtime/tests/domain_admission.rs	// DECODE P: diagnostic domain admission publishes its permuted field codes.	P	diagnostic domain admission publishes its permuted field codes.
+experiments/gpu/datalog/facade/tests/domain_boundaries.rs	// DECODE P: final boundary-test answers restore logical handles for assertions.	P	final boundary-test answers restore logical handles for assertions.
+experiments/gpu/datalog/facade/tests/domain_endpoints.rs	// DECODE P: endpoint-test publication restores final logical handles.	P	endpoint-test publication restores final logical handles.
