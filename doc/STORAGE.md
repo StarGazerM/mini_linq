@@ -66,6 +66,43 @@ Terminal text publication consumes the recorded domain and projection slots.
 Rust `.literal`, `.publish`, `dictionary_where` or `date` spellings establish
 none of these representation facts (DR-StageSource).
 
+### TPC-H runtime key domains
+
+TPC-H's loader freezes a shared runtime domain table before projecting inputs.
+Each record owns its minimum, exclusive code bound and significant bit width.
+Offset subtracts the shared minimum; sparse domains use order-preserving Rank
+when span is at least twice distinct membership (`RANK_SPARSITY_THRESHOLD = 2`).
+Membership and rank directories are built on device. Relational storage keeps
+u32 codes, not logical i64 keys. Device Rust reads use the domain descriptor's
+inverse; final host publication uses a lazy inverse mirror. The independent
+Sequential oracle uses the owning host inverse, never device pointers.
+
+Newly computed publications collect exact extrema during encode/gather, then
+reduce all fields in one device launch and one blocking bounds download.
+The descriptor upload is asynchronous. Internal index payload permutations and
+subsets retain source bounds; filtering may make those bounds conservative,
+never tighter without proof. Positions/directories retain proven row/domain
+bounds. Numeric uploads reuse bounds measured before encoding. These paths do
+not allocate publication summaries or reduce/read bounds again. Arithmetic
+does not inherit source bounds. Adoption through `from_plain_buffer` or
+`from_packed_parts` likewise retains supplied bounds. Origin is tracked
+separately: GPU domain key fields must fit 32 bits; computed fields without a
+domain origin and measures/accumulators are exempt. Segmented sorting uses u32
+scratch for measured narrow ranges and u64 only for wide computed ranges.
+
+Known exceptions remain: h04_not_exists and h13 retain host-produced inputs;
+some head copies still pack codes at 32 bits rather than significant width.
+Their authored host preprocessing remains before execution. Host-input upload,
+validation and normalization are load-side and reported as
+`host_input_upload_ms`, separate from base `domain_ms`; e4e08c99 instead charged
+the upload/encoding to execute. Their query index builds remain timed.
+The `experiments/gpu/tpch/compression-*.tsv` files record these gaps, generated
+code and Rust placement, and census-vs-branch index bytes. Their timings are
+single-run sanity observations, not paired performance claims.
+
+Radix indexes remain stricter than the group/canonical computed-field exemption:
+they reject key fields wider than 32 bits, including computed fields.
+
 ## 2. Runtime data structures
 
 One **logical layout and byte layout** shared by every reader (CPU, CUDA,

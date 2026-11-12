@@ -1,6 +1,6 @@
 {
   "h05": {
-    "storage": "tpch_domains",
+    "storage": "tpch_dictionary",
     "plan": "no_reduce, order(Region, Nation, Customer, Orders, Lineitem, Supplier)"
   }
 }

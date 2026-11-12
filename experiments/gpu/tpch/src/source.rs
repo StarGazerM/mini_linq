@@ -174,6 +174,49 @@ impl Kernel {
         Ok(storage)
     }
 
+    pub fn integer_key_types(&self) -> BTreeMap<Origin, syn::Type> {
+        self.relations.iter().flat_map(|relation| {
+            relation.columns.iter().map(|(column, _)| (relation.table.to_string(), column.to_string()))
+        }).chain(self.published_origins.values().flatten().filter_map(Clone::clone))
+            .filter(|(table, column)| crate::key_domains::id(table, column).is_some())
+            .map(|origin| (origin, syn::parse_quote!(u32))).collect()
+    }
+
+    /// Producer origin and consumer residency are independent facts.
+    pub fn computed_publication_inputs(&self) -> Result<std::collections::BTreeSet<(String, usize)>> {
+        let computed = self.published_origins.iter().flat_map(|(name, origins)| {
+            origins.iter().enumerate().filter_map(move |(slot, origin)| {
+                origin.is_none().then(|| (name.clone(), slot))
+            })
+        }).collect();
+        self.check_computed_publication_inputs(&computed)?;
+        Ok(computed)
+    }
+
+    pub fn check_computed_publication_inputs(
+        &self,
+        computed: &std::collections::BTreeSet<(String, usize)>,
+    ) -> Result<()> {
+        for input in &self.published {
+            let origins = self.published_origins.get(&input.name.to_string())
+                .ok_or("published input lacks producer origin records")?;
+            if origins.len() != input.columns.len() {
+                return Err("published input origin arity differs from its schema".into());
+            }
+            for (slot, origin) in origins.iter().enumerate() {
+                if computed.contains(&(input.name.to_string(), slot)) != origin.is_none() {
+                    return Err(format!("publication origin mismatch for {} column {slot}: computed and domain origins cannot be interchanged", input.name).into());
+                }
+            }
+        }
+        if computed.iter().any(|(name, slot)| {
+            !self.published.iter().any(|input| input.name == name.as_str() && *slot < input.columns.len())
+        }) {
+            return Err("computed origin names an absent publication column".into());
+        }
+        Ok(())
+    }
+
     /// A declared scalar codec can replace relational reads, never opaque Rust.
     pub fn scalar_codec_types(&self, manifest: &Manifest) -> Result<BTreeMap<Origin, syn::Type>> {
         let variables = self.variable_origins()?;
@@ -260,7 +303,9 @@ impl Kernel {
     ) -> Result<TokenStream> {
         let mut program = self.program.clone();
         let origins = self.variable_origins()?;
+        self.check_key_expressions(storage, &origins)?;
         encode_scalar_body(&mut program.query.body, manifest, storage, &origins)?;
+        restore_key_body(&mut program.query.body, storage, &origins);
         let output_origins = self.answer_columns()?;
         let output_name = program.query.head.relation.clone();
         // Declaration order is a recorded loader ABI: table inputs, then
@@ -293,6 +338,12 @@ impl Kernel {
                     .and_then(|origin| storage.get(origin))
                     .unwrap_or(&relation.columns[index].1)
                     .clone();
+                if let Some(id) = origin.as_ref().filter(|origin| storage.contains_key(*origin))
+                    .and_then(|(table, column)| crate::key_domains::id(table, column))
+                {
+                    let domain = quote::format_ident!("__tpch_domain_{id}");
+                    column.domain = Some(syn::parse2(quote!(in (#domain)))?);
+                }
                 if let Some(domain) = origin.as_ref().and_then(|origin| {
                     self.domains.iter().find(|domain| {
                         domain.table == origin.0.as_str() && domain.column == origin.1.as_str()
@@ -320,8 +371,64 @@ impl Kernel {
             return Err("output schema differs from query head".into());
         }
         declarations.push(output);
+        // This is a new representation-level declaration boundary. The same
+        // authored i64 identity can now describe u32 keys and i64 measures;
+        // carrying that old ID forward would conflate their device carriers.
+        for column in declarations.iter_mut().flat_map(|declaration| &mut declaration.columns) {
+            column.logical_type_id = None;
+        }
+        cq_lang_cq::syntax::intern_logical_types(&mut declarations)?;
         program.declarations = declarations;
         Ok(program.to_token_stream())
+    }
+
+    fn check_key_expressions(
+        &self,
+        storage: &BTreeMap<Origin, syn::Type>,
+        origins: &BTreeMap<String, Origin>,
+    ) -> Result<()> {
+        for item in cq_lang_cq::blocks::walk(&self.program.query.body) {
+            let cq_lang_cq::BodyItem::Aggregate(aggregate) = item else { continue; };
+            let relation = self.relations.iter().find(|relation| relation.name == aggregate.atom.relation);
+            for (slot, argument) in aggregate.atom.args.iter().enumerate() {
+                let origin = relation.and_then(|relation| relation.columns.get(slot).map(|(column, _)|
+                    (relation.table.to_string(), column.to_string())))
+                    .or_else(|| self.published_origins.get(&aggregate.atom.relation.to_string())
+                        .and_then(|columns| columns.get(slot)).cloned().flatten());
+                let Some(origin) = origin else { continue; };
+                if !storage.contains_key(&origin) || crate::key_domains::id(&origin.0, &origin.1).is_none() {
+                    continue;
+                }
+                if let Some(name) = projected_variable(argument) {
+                    if aggregate.arguments.iter().any(|argument| argument == name) {
+                        return Err(format!("unsupported domain-key read `{name}` in aggregate item; restore the logical key in an explicit let binding before aggregation").into());
+                    }
+                }
+            }
+        }
+        for (name, origin) in origins {
+            if !storage.contains_key(origin) || crate::key_domains::id(&origin.0, &origin.1).is_none() {
+                continue;
+            }
+            for argument in &self.program.query.head.args {
+                if projected_variable(argument).is_some_and(|variable| variable == name.as_str()) {
+                    continue;
+                }
+                if !closed_to(argument, name) {
+                    return Err(format!("unsupported domain-key read `{name}` in head expression; restore the logical key in an explicit let binding before projection or aggregation").into());
+                }
+            }
+            for item in cq_lang_cq::blocks::walk(&self.program.query.body) {
+                if let cq_lang_cq::BodyItem::Aggregate(aggregate) = item {
+                    if aggregate.arguments.iter().any(|argument| argument == name.as_str())
+                        || mentions(aggregate.aggregator.to_token_stream(), &quote::format_ident!("{name}"))
+                    {
+                        return Err(format!("unsupported domain-key read `{name}` in aggregate item; restore the logical key in an explicit let binding before aggregation").into());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn answer_columns(&self) -> Result<Vec<Option<Origin>>> {
@@ -333,16 +440,57 @@ impl Kernel {
             .args
             .iter()
             .map(|argument| {
-                if let syn::Expr::Path(path) = argument {
-                    path.path
-                        .get_ident()
-                        .and_then(|name| variables.get(&name.to_string()))
-                        .cloned()
+                if let Some(name) = projected_variable(argument) {
+                    variables.get(&name.to_string()).cloned()
                 } else {
                     None
                 }
             })
             .collect())
+    }
+}
+
+fn projected_variable(expression: &syn::Expr) -> Option<&Ident> {
+    match expression {
+        syn::Expr::Path(path) => path.path.get_ident(),
+        syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+            if let syn::Expr::Path(path) = &*unary.expr { path.path.get_ident() } else { None }
+        }
+        _ => None,
+    }
+}
+
+fn restore_key_body(
+    body: &mut cq_lang_cq::CommaList<cq_lang_cq::BodyItem>,
+    storage: &BTreeMap<Origin, syn::Type>,
+    origins: &BTreeMap<String, Origin>,
+) {
+    use cq_lang_cq::BodyItem;
+    for item in body {
+        if let BodyItem::Block(block) = item {
+            for branch in &mut block.branches { restore_key_body(&mut branch.body, storage, origins); }
+            continue;
+        }
+        let expression = match item {
+            BodyItem::Filter(filter) => &mut filter.condition,
+            BodyItem::Let(binding) => &mut binding.expression,
+            BodyItem::For(binding) => &mut binding.expression,
+            _ => continue,
+        };
+        let reads = cq_lang_cq::rust::free_variables(expression);
+        let mut inverses = TokenStream::new();
+        for (name, origin) in origins {
+            if !storage.contains_key(origin) || (!reads.opaque && !reads.names.contains(name)) { continue; }
+            let Some(id) = crate::key_domains::id(&origin.0, &origin.1) else { continue; };
+            let variable = quote::format_ident!("{name}");
+            let view = quote::format_ident!("__tpch_domain_{id}");
+            let logical: syn::Type = if matches!(id, 4 | 5 | 8) { syn::parse_quote!(i32) } else { syn::parse_quote!(i64) };
+            // DECODE R: only authored opaque Rust reads restore integer keys.
+            inverses.extend(quote!(let #variable = &((unsafe { #view.value(*#variable) }) as #logical);));
+        }
+        if !inverses.is_empty() {
+            *expression = syn::parse_quote!({ #inverses #expression });
+        }
     }
 }
 
@@ -574,6 +722,75 @@ mod tests {
             kernels.push(kernel);
         }
         kernels
+    }
+
+    #[test]
+    fn rejects_domain_keys_in_head_expressions_and_aggregates() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        for clause in [
+            "answer(i64::from(*key)) :- Orders(key)",
+            "answer(max(key)) :- Orders(key)",
+            "answer(value) :- agg value = max(key) in Orders(key)",
+        ] {
+            let mut kernel = authored("h05").kernel(0, &BTreeMap::new()).unwrap();
+            kernel.program = syn::parse_str(&format!(
+                "struct Refusal; relation Orders(key:i64); relation answer(value:i64); {clause};"
+            )).unwrap();
+            kernel.relations = vec![Relation {
+                name: syn::parse_quote!(Orders),
+                table: syn::parse_quote!(orders),
+                columns: vec![(syn::parse_quote!(o_orderkey), syn::parse_quote!(i64))],
+            }];
+            let error = kernel.encoded_query_with_types(&manifest, &kernel.integer_key_types()).unwrap_err();
+            assert!(error.to_string().contains("unsupported domain-key read `key`"), "{error}");
+        }
+    }
+
+    #[test]
+    fn publication_origin_policy_rejects_both_misclassifications() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        let kernel = kernels(&authored("h15"), &manifest).remove(1);
+        let origins = kernel.computed_publication_inputs().unwrap();
+        assert!(origins.contains(&("Revenue".into(), 1)));
+        assert!(!origins.contains(&("Revenue".into(), 0)));
+        let mut swapped = origins.clone();
+        swapped.insert(("Revenue".into(), 0));
+        assert!(kernel.check_computed_publication_inputs(&swapped).is_err());
+        let mut omitted = origins;
+        omitted.remove(&("Revenue".into(), 1));
+        assert!(kernel.check_computed_publication_inputs(&omitted).is_err());
+    }
+
+    #[test]
+    fn integer_members_use_shared_captures_and_restore_only_rust_reads() {
+        let manifest = Manifest::load(&crate::data_root().join("sf1")).unwrap();
+        for (name, _) in SOURCES {
+            for kernel in kernels(&authored(name), &manifest) {
+                let mut storage = kernel.scalar_codec_types(&manifest).unwrap();
+                storage.extend(kernel.dictionary_types(&manifest).unwrap());
+                storage.extend(kernel.integer_key_types());
+                let encoded: cq_lang_cq::Program = syn::parse2(
+                    kernel.encoded_query_with_types(&manifest, &storage).unwrap(),
+                ).unwrap();
+                for relation in &kernel.relations {
+                    let declaration = encoded.inputs().find(|input| input.name == relation.name).unwrap();
+                    for ((column, _), actual) in relation.columns.iter().zip(&declaration.columns) {
+                        if let Some(id) = crate::key_domains::id(&relation.table.to_string(), &column.to_string()) {
+                            assert_eq!(actual.ty, syn::parse_quote!(u32), "{name}:{column}");
+                            let expected = quote::format_ident!("__tpch_domain_{id}");
+                            assert!(mentions(actual.domain.as_ref().unwrap().to_token_stream(), &expected));
+                        }
+                    }
+                }
+            }
+        }
+        let kernel = kernels(&authored("h20"), &manifest).remove(1);
+        let mut storage = kernel.scalar_codec_types(&manifest).unwrap();
+        storage.extend(kernel.integer_key_types());
+        let encoded: cq_lang_cq::Program = syn::parse2(kernel.encoded_query_with_types(&manifest, &storage).unwrap()).unwrap();
+        let reads: Vec<_> = encoded.query.body.iter().filter_map(|item| item.rust_step()).collect();
+        assert!(reads.iter().any(|step| step.free_variables.names.contains("__tpch_domain_7")));
+        assert!(!reads.iter().any(|step| step.free_variables.names.contains("__tpch_domain_0")));
     }
 
     #[test]

@@ -110,7 +110,8 @@ def tpch(bundle, scale, out, checker, registered, pair):
         reference = f'tpch:{report["data_root"]}:{scale}:{query}:tsv-v1'
         if reference not in registered:
             oracle = Path(report['data_root']) / scale / f'answer.retail_{query}.tsv'
-            checker.register_files(reference, {query: oracle})
+            # DuckDB quotes oracle fields containing `#`; the witness holds the text.
+            checker.register_files(reference, {query: oracle}, format='tsv-quoted')
             registered.add(reference)
         key = bundle.key('cq-gpu-tpch', f'{scale}:{query}:advised') + (':warmup' if pair < 0 else '')
         checks = []

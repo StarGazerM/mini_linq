@@ -4,6 +4,9 @@ version = "0.1.0"
 edition.workspace = true
 workspace = ".."
 
+[features]
+publication-counters = []
+
 [dependencies]
 cq-load = { path = "../../../io/cq-load" }
 cq-storage = { path = "../../../runtime/cq-storage" }

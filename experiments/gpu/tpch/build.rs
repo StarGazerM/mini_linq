@@ -1,6 +1,8 @@
 #[path = "src/advice.rs"]
 mod advice;
 mod build_stages;
+#[path = "src/key_domains.rs"]
+mod key_domains;
 #[path = "src/manifest.rs"]
 #[allow(dead_code)]
 mod manifest;
@@ -296,9 +298,8 @@ fn compile_stage(
 ) -> CompileResult<(TokenStream, serde_json::Value)> {
     let cpu_source = kernel.cpu_query();
     let host = matches!(pipeline.target, advice::Target::Host);
-    let storage_schema = match pipeline.storage.as_str() {
-        "" | "tpch_dictionary" => None,
-        "tpch_domains" => Some(gpu_compress_host::tpch::schema()),
+    match pipeline.storage.as_str() {
+        "" | "tpch_dictionary" => {}
         other => {
             return Err(Rejected {
                 phase: "loader profile",
@@ -314,44 +315,11 @@ fn compile_stage(
             error: error.to_string(),
             term: cpu_source.to_string(),
         })?;
-    let mut domains = std::collections::BTreeMap::new();
-    if let Some(schema) = &storage_schema {
-        for relation in &kernel.relations {
-            let columns = schema
-                .tables
-                .iter()
-                .find(|(name, _)| name == &relation.table.to_string())
-                .map(|(_, columns)| columns)
-                .ok_or_else(|| Rejected {
-                    phase: "loader profile",
-                    error: format!("storage profile has no table {}", relation.table),
-                    term: cpu_source.to_string(),
-                })?;
-            if columns.len() != relation.columns.len()
-                || columns
-                    .iter()
-                    .zip(&relation.columns)
-                    .any(|((name, _), (column, _))| name != &column.to_string())
-            {
-                return Err(Rejected {
-                    phase: "loader profile",
-                    error: format!("storage profile projection differs for {}", relation.table),
-                    term: cpu_source.to_string(),
-                });
-            }
-            for (column, kind) in columns {
-                let key = (relation.table.to_string(), column.clone());
-                let ty = match kind {
-                    gpu_compress_host::Kind::Id(domain) => {
-                        domains.insert(key.clone(), domain.clone());
-                        syn::parse_quote!(u32)
-                    }
-                    gpu_compress_host::Kind::I32 => syn::parse_quote!(i32),
-                };
-                stored_types.insert(key, ty);
-            }
-        }
-    }
+    let integer_types = kernel.integer_key_types();
+    let domains: std::collections::BTreeMap<_, _> = integer_types.keys()
+        .map(|origin| (origin.clone(), key_domains::id(&origin.0, &origin.1).unwrap() as usize))
+        .collect();
+    stored_types.extend(integer_types);
     // Dictionary IDs are an input representation, independent of the schedule
     // or whether the authored query contains opaque Rust reads.
     stored_types.extend(
@@ -395,13 +363,20 @@ fn compile_stage(
     }
     let normal = checked("CQ normalize", &cq, cq_lang_cq::normal::normalize(&cq))?;
     let captures = &normal.query.captures;
-    let setup_bindings = kernel
+    let mut setup_bindings = kernel
         .setup_bindings(manifest, &quote!(#captures))
         .map_err(|error| Rejected {
             phase: "loader captures",
             error: error.to_string(),
             term: cpu_source.to_string(),
         })?;
+    let domain_handles = domains.values().copied().collect::<std::collections::BTreeSet<_>>()
+        .into_iter().map(|id| cq_gpu_sequence::CaptureHandle {
+            name: format_ident!("__tpch_domain_{id}"),
+            host_type: syn::parse_quote!(&gpu_device_columns::Domain),
+            host_value: syn::parse_quote!(data.domains[#id].as_ref().ok_or("missing loaded key domain")?),
+            device_type: syn::parse_quote!(gpu_device_columns::DomainView),
+        }).collect();
     let mut publication = checked(
         "publication contract",
         &normal,
@@ -452,7 +427,7 @@ fn compile_stage(
         .into_iter()
         .map(|origin| {
             origin.filter(|(table, column)| {
-                manifest
+                key_domains::id(table, column).is_some() || manifest
                     .column(table, column)
                     .is_ok_and(|metadata| metadata.encoding == "dictionary")
             })
@@ -696,11 +671,14 @@ fn compile_stage(
                 error: error.to_string(),
                 term: cpu_source.to_string(),
             })?;
-        if domains.contains_key(&origin)
-            || (matches!(
-                metadata.encoding.as_str(),
-                "scaled_integer" | "days_since_epoch"
-            ) && stored_types.contains_key(&origin))
+        if domains.contains_key(&origin) {
+            // The adapted declaration is a code. Its Rust reads explicitly
+            // invert the recorded domain, so the input carrier is identity.
+            sequence.representation.identity.insert(variable);
+        } else if matches!(
+            metadata.encoding.as_str(),
+            "scaled_integer" | "days_since_epoch"
+        ) && stored_types.contains_key(&origin)
         {
             sequence.representation.encoded.insert(variable);
         } else {
@@ -720,7 +698,9 @@ fn compile_stage(
                     if let syn::Expr::Path(path) = argument
                         && let Some(name) = path.path.get_ident()
                     {
-                        sequence.representation.identity.insert(name.to_string());
+                        if !sequence.representation.encoded.contains(&name.to_string()) {
+                            sequence.representation.identity.insert(name.to_string());
+                        }
                     }
                 }
             }
@@ -830,6 +810,72 @@ fn compile_stage(
         &planned.program,
         cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine),
     )?;
+    let device_captures = checked(
+        "device handle bindings", &planned.program,
+        cq_gpu_sequence::DeviceCaptureBindings::bind(
+            &analysis.gpu_bindings.realization.captures.captures, domain_handles,
+        ),
+    )?;
+    setup_bindings.extend(checked("host handle bindings", &planned.program, device_captures.host_setup())?);
+    let host_setup_bindings = setup_bindings.clone();
+    let computed_inputs = kernel.computed_publication_inputs().map_err(|error| Rejected {
+        phase: "publication origin check", error: error.to_string(), term: cpu_source.to_string(),
+    })?;
+    artifact["computed_publication_inputs"] = json!(computed_inputs);
+    let publication_origins = checked(
+        "publication field origins", &planned.structures,
+        cq_lang_structures::contract::check(&planned.physical, &planned.structures),
+    )?;
+    let computed_field = |column: &str| {
+        let mut renamed = false;
+        for (result, mapping) in &publication_origins.physical.renames {
+            let Some(source) = mapping.get(column) else { continue; };
+            renamed = true;
+            let host = &publication_origins.physical.hosts[result];
+            let Some(input) = planned.physical.inputs().find(|input| input.name == host.as_str()) else {
+                return false;
+            };
+            let Some(slot) = input.columns.iter().position(|field| field.name == source.as_str()) else {
+                return false;
+            };
+            if !computed_inputs.contains(&(host.clone(), slot)) { return false; }
+        }
+        renamed || publication_origins.physical.rows.values().any(|row| row.computed.contains(column))
+    };
+    let mut computed_fields: std::collections::BTreeMap<String, std::collections::BTreeSet<&str>> =
+        std::collections::BTreeMap::new();
+    for record in analysis.gpu_publications.values() {
+        match &record.storage {
+            cq_lang_sequence::gpu::publication::PublicationStorage::FlatRows(rows) => {
+                for column in &rows.columns {
+                    if computed_field(column) {
+                        computed_fields.entry(column.clone()).or_default().insert("payload");
+                    }
+                }
+            }
+            cq_lang_sequence::gpu::publication::PublicationStorage::PackedKeys(keys) => {
+                for field in keys.codec.fields() {
+                    if computed_field(&field.column) {
+                        computed_fields.entry(field.column.clone()).or_default().insert("canonical identity");
+                    }
+                }
+            }
+        }
+    }
+    for definition in &planned.physical.program.definitions {
+        if let cq_lang_structures::physical::Operator::Group(group) = &definition.operator {
+            for key in &group.keys {
+                let column = cq_lang_structures::physical::symbol_name(key);
+                if computed_field(&column) {
+                    computed_fields.entry(column).or_default().insert("group key");
+                }
+            }
+        }
+    }
+    artifact["computed_fields"] = json!(computed_fields.into_iter().map(|(column, uses)| {
+        let ty = analysis.gpu_bindings.carriers[&column].to_token_stream().to_string();
+        json!({"field": column, "type": ty, "uses": uses})
+    }).collect::<Vec<_>>());
     // The checked GPU publication records (storage layout, union staging, set
     // build, arena), printed as recorded.
     artifact["gpu_publications"] = json!(analysis
@@ -847,7 +893,7 @@ fn compile_stage(
         checked(
             "translate",
             &planned.program,
-            cq_gpu_sequence::translate(&planned.physical, &planned.structures, &planned.program, &analysis),
+            cq_gpu_sequence::translate_with_origins(&planned.physical, &planned.structures, &planned.program, &analysis, &computed_inputs, &device_captures),
         )?
     };
 
@@ -918,36 +964,13 @@ fn compile_stage(
         let row = &row_types[index];
         if host {
             input_types.push(quote!(Vec<#row>));
-            let columns: Vec<_> = relation
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(index, _)| format_ident!("column_{index}"))
-                .collect();
-            // DECODE ?: typed host-input loading may reconstruct Date/Decimal/String; actual opaque-Rust demand is required per column.
-            let reads = relation.columns.iter().zip(&columns).enumerate().map(|(column_index, (column, variable))| {
-                let name = kernel.relations[index].columns[column_index].0.to_string();
-                let ty = &column.ty;
-                quote!(let mut #variable = <#ty as crate::manifest::HostValue>::read(manifest, #table, #name)?.into_iter();)
-            });
-            // Formal rule DR-HostSet: canonicalize complete typed tuples before host execution.
-            bindings.push(quote!({
-                #(#reads)*
-                let mut rows: Vec<#row> = (0..manifest.relations[#table].rows)
-                    .map(|_| (#(#columns.next().expect("validated manifest row count"),)*))
-                    .collect();
-                cq_load::canonicalize(&mut rows);
-                rows
-            }));
+            // DECODE V: P6 host-stage inputs retain stored key codes; other scalar fields follow the existing typed host publication boundary.
+            bindings.push(quote!(loader.bind::<#row>(#table, #names)?.to_host()?));
             sequential_bindings.push(quote!(let #field = &data.#field;));
         } else {
             input_types
                 .push(quote!(cq_gpu_runtime::DeviceColumns<'static, #row, cq_gpu_runtime::For>));
-            bindings.push(if storage_schema.is_some() {
-                quote!(catalog.device_columns::<#row>(#table)?)
-            } else {
-                quote!(loader.bind::<#row>(#table, #names)?)
-            });
+            bindings.push(quote!(loader.bind::<#row>(#table, #names)?));
             // DECODE ?: independent Sequential oracle downloads logical inputs; this diagnostic path is not final GPU answer publication.
             sequential_bindings.push(quote!(let #field = data.#field.to_host()?;));
         }
@@ -971,8 +994,8 @@ fn compile_stage(
         });
         if let Some(domain) = column.as_ref().and_then(|column| domains.get(column)) {
             let decoder = format_ident!("domain_{index}");
-            decode_bindings.push(quote!(let #decoder = data.catalog.domain(#domain)?;));
-            // DECODE P: final answer formatting inverts dense source-key domains on the host.
+            decode_bindings.push(quote!(let #decoder = data.domains[#domain].as_ref().ok_or("missing loaded key domain")?;));
+            // DECODE P: final answer formatting restores keys through their recorded Offset/Rank inverse.
             owned_outputs.push(quote!(#decoder.value(*value).to_string()));
         } else if column.as_ref().is_some_and(|origin| {
             stored_types.contains_key(origin)
@@ -995,21 +1018,73 @@ fn compile_stage(
             owned_outputs.push(quote!(value.to_string()));
         }
     }
-    let (catalog_field, catalog_init, load_setup) = if storage_schema.is_some() {
-        (
-            quote!(catalog: gpu_compress::Catalog,),
-            quote!(catalog,),
-            quote! {
-                let source = crate::loader::load_source(&manifest.root)?;
-                let catalog = crate::loader::compress_catalog(&pool, &source, &gpu_compress_host::tpch::schema())?;
-            },
-        )
-    } else {
-        (
-            quote!(),
-            quote!(),
-            quote!(let mut loader = crate::loader::Loader::new(manifest, pool.clone());),
-        )
+    let catalog_field = quote!(domains: [Option<gpu_device_columns::Domain>; crate::key_domains::COUNT],);
+    let catalog_init = quote!(domains: loader.domains(),);
+    // Keep A-Domain provenance intact through every checker and planner.
+    // Only the final Rust realization reads the prepared scalar instead.
+    let mut prepared_fields = Vec::new();
+    let mut prepared_types = Vec::new();
+    let mut prepared_values = Vec::new();
+    let mut prepare_captures = TokenStream::new();
+    let mut replacements = Vec::new();
+    let mut needed_names = std::collections::BTreeSet::new();
+    let mut needed_captures = std::collections::BTreeSet::new();
+    let mut opaque_dependency = false;
+    for (index, capture) in normal.query.captures.items.iter().enumerate().rev() {
+        if matches!(capture, cq_syntax::Capture::Domain(_)) || opaque_dependency
+            || capture.binders().iter().any(|name| needed_names.contains(&name.to_string()))
+        {
+            needed_captures.insert(index);
+            for expression in capture.expressions() {
+                let reads = cq_syntax::rust::free_variables(expression);
+                needed_names.extend(reads.names);
+                opaque_dependency |= reads.opaque;
+            }
+        }
+    }
+    for (index, capture) in normal.query.captures.items.iter().enumerate() {
+        if !needed_captures.contains(&index) { continue; }
+        if let Some(binding) = capture.binding() {
+            let value = format_ident!("__tpch_prepared_{index}");
+            let pattern = &binding.pattern;
+            let annotation = &binding.annotation;
+            let expression = &binding.expression;
+            prepare_captures.extend(quote! {
+                let #value #annotation = #expression;
+                let #pattern = &#value;
+            });
+            if let cq_syntax::Capture::Domain(domain) = capture {
+                prepared_fields.push(value.clone());
+                prepared_types.push(domain.ty.clone());
+                prepared_values.push(quote!(#value));
+                replacements.push((expression.clone(), syn::parse_quote!(data.#value)));
+            }
+        }
+    }
+    struct PreparedReads<'a>(&'a [(syn::Expr, syn::Expr)]);
+    impl syn::visit_mut::VisitMut for PreparedReads<'_> {
+        fn visit_expr_mut(&mut self, expression: &mut syn::Expr) {
+            if let Some((_, replacement)) = self.0.iter().find(|(source, _)| source == expression) {
+                *expression = replacement.clone();
+            } else {
+                syn::visit_mut::visit_expr_mut(self, expression);
+            }
+        }
+    }
+    let prepared_query = |tokens: TokenStream| -> std::result::Result<TokenStream, Rejected> {
+        let mut expression: syn::Expr = checked("prepared capture Rust", &tokens, syn::parse2(tokens.clone()))?;
+        syn::visit_mut::VisitMut::visit_expr_mut(&mut PreparedReads(&replacements), &mut expression);
+        Ok(quote!(#expression))
+    };
+    let gpu = prepared_query(quote!(#gpu))?;
+    let cpu = prepared_query(quote!(#cpu))?;
+    let load_setup = if prepared_fields.is_empty() { quote!() } else {
+        quote! {
+            struct DomainInputs { #catalog_field }
+            let data = DomainInputs { #catalog_init };
+            #host_setup_bindings
+            #prepare_captures
+        }
     };
     {
         let names: Vec<_> = kernel.published.iter().map(|r| &r.name).collect();
@@ -1112,10 +1187,15 @@ fn compile_stage(
             } else {
                 quote!(output)
             };
+            let record_bounds = resident.then(|| quote! {
+                cq_gpu_sequence_runtime::index_bytes::publication(module_path!(), &result.storage().bounds);
+            });
             quote! {
                 #(let #fields = &data.#fields;)*
                 let output = #gpu;
-                Ok(#publish)
+                let result = #publish;
+                #record_bounds
+                Ok(result)
             }
         };
         let mut artifact = artifact;
@@ -1134,11 +1214,11 @@ fn compile_stage(
                 type Decimal = cq_load::Decimal<2>;
                 pub(super) type Answer = (#(#answer_types,)*);
                 pub(super) type Output = #output_type;
-                pub(super) struct Inputs { #(#fields: #input_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
-                pub(super) fn load(manifest: &crate::manifest::Manifest, pool: ::std::sync::Arc<cq_gpu_runtime::Pool>) -> crate::manifest::Result<Inputs> {
+                pub(super) struct Inputs { #(#fields: #input_types,)* #(#prepared_fields: #prepared_types,)* #catalog_field pool: ::std::sync::Arc<cq_gpu_runtime::Pool> }
+                pub(super) fn load(manifest: &crate::manifest::Manifest, pool: ::std::sync::Arc<cq_gpu_runtime::Pool>, loader: &mut crate::loader::Loader<'_>) -> crate::manifest::Result<Inputs> {
                     #load_setup
                     #(let #fields: #input_types = #bindings;)*
-                    Ok(Inputs { #(#fields,)* #catalog_init pool })
+                    Ok(Inputs { #(#fields,)* #(#prepared_fields: #prepared_values,)* #catalog_init pool })
                 }
                 #[inline(never)]
                 pub(super) fn execute(data: &Inputs, #(#names: &#inputs),*) -> crate::manifest::Result<Output> {
@@ -1147,7 +1227,7 @@ fn compile_stage(
                 }
                 #[inline(never)]
                 pub(super) fn sequential(data: &Inputs, #(#names: &Vec<#rows>),*) -> crate::manifest::Result<Vec<Answer>> {
-                    #setup_bindings
+                    #host_setup_bindings
                     #(#sequential_bindings)*
                     Ok((#cpu).map(|row| #own_row).collect())
                 }
@@ -1172,6 +1252,7 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         ("keys.bin", [1_i32, 2, 3, 1]),
         ("names.bin", [0_i32, 1, 0, 0]),
         ("unique-keys.bin", [1_i32, 2, 3, 4]),
+        ("sparse-keys.bin", [1_i32, 100, 1000, 1]),
     ] {
         fs::write(
             directory.join(name),
@@ -1193,7 +1274,11 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         serde_json::to_vec(&json!({
             "schema_version": 2, "sf": 1, "byte_order": "little",
             "relations": {
-                "keys": {"rows": 4, "columns": [key("key")]},
+                "partsupp": {"rows": 4, "columns": [key("ps_partkey")]},
+                "orders": {"rows": 4, "columns": [{
+                    "name": "o_orderkey", "type": "i32", "logical_type": "Integer",
+                    "encoding": "plain", "file": "sparse-keys.bin"
+                }]},
                 "unique_rows": {"rows": 4, "columns": [
                     {
                         "name": "id", "type": "i32", "logical_type": "Integer",
@@ -1215,7 +1300,7 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
         r#"
         program string_guard {
             domain Names = dictionary(part.p_name);
-            input Keys(key: i32) = table(keys);
+            input Keys(ps_partkey: i32) = table(partsupp);
             input Part(p_partkey: i32, p_name: StringCode in Names) = table(part);
             input GreenNames(code: StringCode in Names) = dictionary(Names)
                 where { |value: &str| value.contains("green") };
@@ -1228,7 +1313,7 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 evidence {}
                 cq {
                     struct Query;
-                    relation Keys(key: i32);
+                    relation Keys(ps_partkey: i32);
                     relation Part(p_partkey: i32, p_name: StringCode);
                     relation GreenNames(code: StringCode);
                     relation answer(key: i32, name: StringCode);
@@ -1260,8 +1345,159 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
     )
     .map_err(|error| format!("Host set regression {}: {}", error.phase, error.error))?;
     let preprocessing = program.preprocessing_tokens()?;
+    let publication_program = stages::Program::import(r#"
+        program publication_origins {
+            input Orders(o_orderkey: i64) = table(orders);
+            stage s0 {
+                inputs { Orders = Orders; }
+                captures [];
+                evidence {}
+                cq {
+                    struct Producer;
+                    relation Orders(o_orderkey:i64);
+                    relation answer(key:i64, narrow:i64, wide:i64);
+                    answer(key, sum(narrow), sum(wide)) :- Orders(key),
+                        let narrow:i64 = *key,
+                        let wide:i64 = *key * 1099511627776i64;
+                }
+            }
+            publish Produced = s0 owned;
+            stage s1 {
+                inputs { Produced = Produced; }
+                captures [];
+                evidence {}
+                cq {
+                    struct Consumer;
+                    relation Produced(key:i64,narrow:i64,wide:i64);
+                    relation answer(key:i64,narrow:i64,wide:i64);
+                    answer(key,narrow,wide) :- Produced(key,narrow,wide);
+                }
+            }
+            stage s2 {
+                inputs { Produced = Produced; }
+                captures [];
+                evidence {}
+                cq {
+                    struct MissingConstant;
+                    relation Produced(key:i64,narrow:i64,wide:i64);
+                    relation answer(key:i64,narrow:i64,wide:i64);
+                    answer(key,narrow,wide) :- Produced(key,narrow,wide), where key == 999;
+                }
+            }
+            stage s3 {
+                inputs { Produced = Produced; }
+                captures [];
+                evidence {}
+                cq {
+                    struct EdgeConstant;
+                    relation Produced(key:i64,narrow:i64,wide:i64);
+                    relation answer(key:i64,narrow:i64,wide:i64);
+                    answer(key,narrow,wide) :- Produced(key,narrow,wide), where key == 1000;
+                }
+            }
+            terminal {
+                from s1 project [column(0),column(1),column(2)] dictionaries [];
+                from s2 project [column(0),column(1),column(2)] dictionaries [];
+                from s3 project [column(0),column(1),column(2)] dictionaries [];
+            }
+        }
+    "#)?;
+    let mut publication_pipeline = advice::Pipeline::baseline();
+    publication_pipeline.publication = advice::Placement::Device;
+    let (publication_code, _) = build_stages::compile(
+        &publication_program, "publication_origins", &manifest, "advised",
+        Some(&publication_pipeline),
+    ).map_err(|error| format!("Publication origin regression {}: {}", error.phase, error.error))?;
+    publication_pipeline.target = advice::Target::Host;
+    publication_pipeline.publication = advice::Placement::Host;
+    let (host_publication_code, _) = build_stages::compile(
+        &publication_program, "publication_origins", &manifest, "advised",
+        Some(&publication_pipeline),
+    ).map_err(|error| format!("Host publication origin regression {}: {}", error.phase, error.error))?;
+    let mut rank_source = String::from("program rank_constants { input Orders(o_orderkey:i64) = table(orders);");
+    let mut rank_checks = TokenStream::new();
+    let mut rank_terminals = String::new();
+    let mut index = 0;
+    for comparison in ["==", "<", "<=", ">", ">="] {
+        for constant in [100i64, 99, 0, 1001] {
+            rank_source.push_str(&format!(
+                "stage s{index} {{ inputs {{ Orders = Orders; }} captures []; evidence {{}} cq {{
+                    struct RankConstant{index}; relation Orders(key:i64); relation answer(key:i64);
+                    answer(key) :- Orders(key), where key {comparison} {constant};
+                }} }}"
+            ));
+            rank_terminals.push_str(&format!("from s{index} project [column(0)] dictionaries [];"));
+            let module = format_ident!("stage_{index}");
+            let mut expected = [1i64, 100, 1000].into_iter().filter(|key| match comparison {
+                "==" => *key == constant,
+                "<" => *key < constant,
+                "<=" => *key <= constant,
+                ">" => *key > constant,
+                ">=" => *key >= constant,
+                _ => unreachable!(),
+            }).map(|key| key.to_string()).collect::<Vec<_>>();
+            expected.sort();
+            rank_checks.extend(quote! {
+                {
+                    let data = #module::load(&manifest, pool.clone(), &mut loader)?;
+                    for _ in 0..2 {
+                        let result = #module::execute(&data)?;
+                        let mut actual = #module::decode(&data, &manifest, result)?;
+                        actual.sort();
+                        let expected: Vec<Vec<String>> = vec![#(vec![#expected.to_owned()]),*];
+                        assert_eq!(actual, expected, "{} {}", #comparison, #constant);
+                        let mut reference = #module::decode(&data, &manifest, #module::sequential(&data)?)?;
+                        reference.sort();
+                        assert_eq!(reference, expected);
+                    }
+                }
+            });
+            index += 1;
+        }
+    }
+    rank_source.push_str(&format!("terminal {{ {rank_terminals} }} }}"));
+    let rank_program = stages::Program::import(&rank_source)?;
+    let mut rank_pipeline = advice::Pipeline::baseline();
+    rank_pipeline.publication = advice::Placement::Host;
+    let (rank_code, _) = build_stages::compile(
+        &rank_program, "rank_constants", &manifest, "advised", Some(&rank_pipeline),
+    ).map_err(|error| format!("Rank constants regression {}: {}", error.phase, error.error))?;
+    rank_pipeline.target = advice::Target::Host;
+    let (rank_host_code, _) = build_stages::compile(
+        &rank_program, "rank_constants", &manifest, "advised", Some(&rank_pipeline),
+    ).map_err(|error| format!("Host Rank constants regression {}: {}", error.phase, error.error))?;
     let directory = directory.to_string_lossy();
     Ok(quote! {
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod rank_constant_regression {
+            #rank_code
+            #[test]
+            fn rank_comparisons_prepare_once() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                assert!(loader.domains()[0].as_ref().unwrap().is_rank());
+                #rank_checks
+                Ok(())
+            }
+        }
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod rank_host_constant_regression {
+            #rank_host_code
+            #[test]
+            fn rank_comparisons_prepare_once() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                assert!(loader.domains()[0].as_ref().unwrap().is_rank());
+                #rank_checks
+                Ok(())
+            }
+        }
         #[cfg(test)]
         #[allow(non_snake_case, dead_code)]
         mod string_guard_regression {
@@ -1273,7 +1509,9 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 #preprocessing
                 assert_eq!(__cq_prepared_DuplicatedNames, vec![(0_u32,)]);
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0).unwrap();
-                let data = stage_0::load(&manifest, pool).unwrap();
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("partsupp", &["ps_partkey"]), ("part", &["p_partkey", "p_name"])])?;
+                let data = stage_0::load(&manifest, pool, &mut loader).unwrap();
                 let result = stage_0::execute(&data, &__cq_prepared_DuplicatedNames).unwrap();
                 let mut actual = stage_0::decode(&data, &manifest, result).unwrap();
                 actual.sort();
@@ -1292,8 +1530,9 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
                 let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
-                let full = loader.bind::<(i32, i32)>("part", &["p_partkey", "p_name"])?;
-                assert_eq!(full.to_host()?, vec![(1, 0), (2, 1), (3, 0)]);
+                loader.prepare(&[("part", &["p_partkey", "p_name"])])?;
+                let full = loader.bind::<(u32, i32)>("part", &["p_partkey", "p_name"])?;
+                assert_eq!(full.to_host()?, vec![(0, 0), (1, 1), (2, 0)]);
                 let projected = loader.bind::<(i32,)>("part", &["p_name"])?;
                 assert_eq!(projected.to_host()?, vec![(0,), (1,)]);
                 let alias = loader.bind::<(i32,)>("part", &["p_name"])?;
@@ -1394,7 +1633,9 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                 #preprocessing
                 assert_eq!(__cq_prepared_DuplicatedNames, vec![(0_u32,)]);
                 let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
-                let data = stage_0::load(&manifest, pool)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("partsupp", &["ps_partkey"]), ("part", &["p_partkey", "p_name"])])?;
+                let data = stage_0::load(&manifest, pool, &mut loader)?;
                 let result = stage_0::execute(&data, &__cq_prepared_DuplicatedNames)?;
                 let mut actual = stage_0::decode(&data, &manifest, result)?;
                 actual.sort();
@@ -1402,6 +1643,73 @@ fn string_guard_regression(out: &Path) -> Result<TokenStream> {
                     vec!["1".to_owned(), "green part".to_owned()],
                     vec!["3".to_owned(), "green part".to_owned()],
                 ]);
+                Ok(())
+            }
+        }
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod publication_origin_regression {
+            #publication_code
+            #[test]
+            fn staged_narrow_computed_wide_computed_and_domain_keys_are_exact() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                assert!(loader.domains()[0].as_ref().unwrap().is_rank());
+                let producer = stage_0::load(&manifest, pool.clone(), &mut loader)?;
+                let consumer = stage_1::load(&manifest, pool.clone(), &mut loader)?;
+                let missing = stage_2::load(&manifest, pool.clone(), &mut loader)?;
+                let edge = stage_3::load(&manifest, pool, &mut loader)?;
+                gpu_device_columns::rank::take_host_inverse_report();
+                let rows = stage_0::execute(&producer)?;
+                assert_eq!(gpu_device_columns::rank::take_host_inverse_report().0, 0,
+                    "device Rust must not initialize a host inverse mirror");
+                assert_eq!(rows.storage().bounds, vec![
+                    gpu_device_columns::Bounds::Inclusive { min: 0, max: 2 },
+                    gpu_device_columns::Bounds::Inclusive { min: 1, max: 1000 },
+                    gpu_device_columns::Bounds::Inclusive { min: 1i64 << 40, max: 1000i64 << 40 },
+                ]);
+                let answer = stage_1::execute(&consumer, &rows)?;
+                let mut actual = stage_1::decode(&consumer, &manifest, answer.to_host()?)?;
+                actual.sort();
+                assert_eq!(actual, [1i64, 100, 1000].into_iter().map(|key| vec![
+                    key.to_string(), key.to_string(), (key << 40).to_string(),
+                ]).collect::<Vec<_>>());
+                let reference = stage_0::sequential(&producer)?;
+                let reference = stage_1::sequential(&consumer, &reference)?;
+                let mut reference = stage_1::decode(&consumer, &manifest, reference)?;
+                reference.sort();
+                assert_eq!(actual, reference);
+                assert!(stage_2::execute(&missing, &rows)?.to_host()?.is_empty());
+                let edge_rows = stage_3::execute(&edge, &rows)?.to_host()?;
+                assert_eq!(stage_3::decode(&edge, &manifest, edge_rows)?, vec![vec![
+                    "1000".to_owned(), "1000".to_owned(), (1000i64 << 40).to_string(),
+                ]]);
+                Ok(())
+            }
+        }
+        #[cfg(test)]
+        #[allow(non_snake_case, dead_code)]
+        mod publication_host_origin_regression {
+            #host_publication_code
+            #[test]
+            fn staged_host_rank_rust_read_uses_owning_handle() -> crate::manifest::Result<()> {
+                let manifest = crate::manifest::Manifest::load(::std::path::Path::new(#directory))?;
+                let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
+                let mut loader = crate::loader::Loader::new(&manifest, pool.clone());
+                loader.prepare(&[("orders", &["o_orderkey"])])?;
+                let bytes = loader.domains()[0].as_ref().unwrap().bytes();
+                let producer = stage_0::load(&manifest, pool, &mut loader)?;
+                gpu_device_columns::rank::take_host_inverse_report();
+                let rows = stage_0::execute(&producer)?;
+                assert_eq!(gpu_device_columns::rank::take_host_inverse_report().0, bytes);
+                let mut actual = stage_0::decode(&producer, &manifest, rows)?;
+                actual.sort();
+                assert_eq!(actual, [1i64, 100, 1000].into_iter().map(|key| vec![
+                    key.to_string(), key.to_string(), (key << 40).to_string(),
+                ]).collect::<Vec<_>>());
+                assert_eq!(gpu_device_columns::rank::take_host_inverse_report().0, 0);
                 Ok(())
             }
         }
@@ -1498,10 +1806,6 @@ fn main() -> Result<()> {
                     // choice must not replace the existing accepted GPU baseline.
                     advice::Pipeline::baseline()
                 };
-                // Storage is a loader decision shared by both competing schedules.
-                if name == "h05" && pipeline.storage.is_empty() {
-                    pipeline.storage = "tpch_domains".into();
-                }
                 let mut report = json!({"query": name, "sf": sf, "mode": mode,
                     "stage_source": staged.to_token_stream().to_string(), "pipeline": pipeline});
                 let generation_started = std::time::Instant::now();

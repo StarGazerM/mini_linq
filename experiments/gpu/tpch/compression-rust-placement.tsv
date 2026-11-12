@@ -1,0 +1,63 @@
+query	sf	stage	consumer	key_variables	base_definition	base_grade	candidate_definition	candidate_grade	result
+d19	1								no integer-domain Rust consumer
+d19	10								no integer-domain Rust consumer
+d27	1								no integer-domain Rust consumer
+d27	10								no integer-domain Rust consumer
+d72_inner	1								no integer-domain Rust consumer
+d72_inner	10								no integer-domain Rust consumer
+d85	1								no integer-domain Rust consumer
+d85	10								no integer-domain Rust consumer
+h01	1								no integer-domain Rust consumer
+h01	10								no integer-domain Rust consumer
+h02	1								no integer-domain Rust consumer
+h02	10								no integer-domain Rust consumer
+h03	1								no integer-domain Rust consumer
+h03	10								no integer-domain Rust consumer
+h04	1								no integer-domain Rust consumer
+h04	10								no integer-domain Rust consumer
+h04_not_exists	1								no integer-domain Rust consumer
+h04_not_exists	10								no integer-domain Rust consumer
+h05	1								no integer-domain Rust consumer
+h05	10								no integer-domain Rust consumer
+h06	1								no integer-domain Rust consumer
+h06	10								no integer-domain Rust consumer
+h07	1								no integer-domain Rust consumer
+h07	10								no integer-domain Rust consumer
+h07_block	1								no integer-domain Rust consumer
+h07_block	10								no integer-domain Rust consumer
+h08	1								no integer-domain Rust consumer
+h08	10								no integer-domain Rust consumer
+h09	1								no integer-domain Rust consumer
+h09	10								no integer-domain Rust consumer
+h10	1								no integer-domain Rust consumer
+h10	10								no integer-domain Rust consumer
+h11	1	0	Bind	supplier_key	r4	host.device.block	r4	host.device.block	no host migration
+h11	1	0	Bind	part_key	r8	host.device.block	r8	host.device.block	no host migration
+h11	1	0	Bind	quantity	r9	host.device.block	r9	host.device.block	no host migration
+h11	1	1	Bind	quantity	r1	host	r1	host	no host migration
+h11	1	2	Bind	quantity	r1	host	r1	host	no host migration
+h11	1	3	Bind	part_key	r4	host.device.block	r4	host.device.block	no host migration
+h11	10	0	Bind	supplier_key	r4	host.device.block	r4	host.device.block	no host migration
+h11	10	0	Bind	part_key	r8	host.device.block	r8	host.device.block	no host migration
+h11	10	0	Bind	quantity	r9	host.device.block	r9	host.device.block	no host migration
+h11	10	1	Bind	quantity	r1	host	r1	host	no host migration
+h11	10	2	Bind	quantity	r1	host	r1	host	no host migration
+h11	10	3	Bind	part_key	r4	host.device.block	r4	host.device.block	no host migration
+h12	1								no integer-domain Rust consumer
+h12	10								no integer-domain Rust consumer
+h13	1								no integer-domain Rust consumer
+h13	10								no integer-domain Rust consumer
+h15	1								no integer-domain Rust consumer
+h15	10								no integer-domain Rust consumer
+h16	1	1	Guard	size	r2	host.device.block	r2	host.device.block	no host migration
+h16	10	1	Guard	size	r2	host.device.block	r2	host.device.block	no host migration
+h18	1								no integer-domain Rust consumer
+h18	10								no integer-domain Rust consumer
+h19	1								no integer-domain Rust consumer
+h19	10								no integer-domain Rust consumer
+h20	1	1	Guard	available	r7	host.device.block	r7	host.device.block	no host migration
+h20	10	1	Guard	available	r7	host.device.block	r7	host.device.block	no host migration
+h21_positive	1								no integer-domain Rust consumer
+h21_positive	10								no integer-domain Rust consumer
+h22	1								no integer-domain Rust consumer
+h22	10								no integer-domain Rust consumer

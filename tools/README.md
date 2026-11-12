@@ -755,10 +755,13 @@ lines whose filenames are relative to the dataset root:
 * `tpch-gpu/{sf1,sf10,synthetic}/...`
 * `doop-bench/doop-data/{cassandra,xalan,batik}/...`
 
-The initial private dataset is `ysun67/mini-linq-gpu-data`, pinned at
-`c2e07f9a10a37fe0c6984c66e9eec6080a82110e` (829 repository files including
-SHA256SUMS). Supply that commit to `seed_volume.sh`; use a new immutable revision
-and regenerate the trusted manifest when dataset contents change.
+The private dataset is `ysun67/mini-linq-gpu-data`, pinned at
+`e29e21fd12b9d3d3c8e96994f9563cc1bdb20aaa` (829 repository files including
+SHA256SUMS). Its SHA256SUMS equals the trusted local copy
+`/data/hf-stage/mini-linq-gpu-data/SHA256SUMS`; the previous commit
+`c2e07f9a…` holds an interleaved, invalid SHA256SUMS and fails seeding. Supply
+the pinned commit to `seed_volume.sh`; use a new immutable revision and
+regenerate the trusted manifest when dataset contents change.
 
 `seed_volume.sh REPO REVISION TRUSTED_SHA256SUMS [DATA_ROOT]` uses `hf download
 --repo-type dataset --revision REVISION --local-dir /workspace/data`. The revision
@@ -795,7 +798,7 @@ wt=/data/mini_linq-wt/remote-gpu
 bash "$wt/tools/remote_gpu/session.sh" \
   --volume dp2a7xuy9t --data-center US-WA-1 \
   --gpu-ids 'NVIDIA RTX 6000 Ada Generation' \
-  --revision c2e07f9a10a37fe0c6984c66e9eec6080a82110e \
+  --revision e29e21fd12b9d3d3c8e96994f9563cc1bdb20aaa \
   --data-manifest /data/hf-stage/mini-linq-gpu-data/SHA256SUMS \
   --ssh-key "$HOME/.ssh/id_ed25519" \
   --bench 'cq-gpu-tpch {results}/h06-sf10.json --query h06 --scale sf10 --mode advised' \

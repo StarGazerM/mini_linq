@@ -32,6 +32,7 @@ pub(crate) const ELEMENT_ENCODED: u32 = u32::MAX;
 pub(crate) struct Input {
     pub column: ColumnView,
     pub element: u32,
+    pub stride: usize,
 }
 unsafe impl DeviceCopy for Input {}
 
@@ -105,10 +106,77 @@ fn download_facts(facts: &Buffer<Facts>, extent: Option<&Buffer<u64>>) -> Result
     Ok((host, usize::try_from(words)?))
 }
 
+/// Merge only scalar member summaries on device; no rows cross the host.
+pub fn record_domain(pool: Arc<Pool>, id: u32, members: &[Bounds]) -> Result<crate::KeyDomain> {
+    let members: Vec<_> = members.iter().map(|bounds| match *bounds {
+        Bounds::Empty => Facts { min: 0, max: 0, codec: 0, invalid: 1 },
+        Bounds::Inclusive { min, max } => Facts { min, max, codec: 0, invalid: 0 },
+    }).collect();
+    let source = Buffer::from_host(pool.clone(), &members)?;
+    let result = unsafe { Buffer::<Facts>::uninitialized(pool.clone(), 1)? };
+    let module = module(&pool)?;
+    let launch = module.prepare_domain_bounds(crate::config(1))?;
+    unsafe { module.domain_bounds(pool.stream(), &launch, source.ptr(), members.len(), result.ptr())?; }
+    let (facts, _) = download_facts(&result, None)?;
+    crate::KeyDomain::from_bounds(id, if facts.codec != 0 { Bounds::Empty } else {
+        Bounds::Inclusive { min: facts.min, max: facts.max }
+    })
+}
+
+impl EncodedColumn {
+    /// Normalize an exclusively owned FOR column by changing header bases only.
+    /// Packing, offsets and payload remain byte-for-byte unchanged.
+    pub fn normalize_key(&mut self, domain: crate::KeyDomain) -> Result<()> {
+        if self.codec != Codec::For {
+            return Err("key-domain normalization requires FOR headers; delta/plain64/native key layouts are unsupported".into());
+        }
+        let bounds = match self.bounds {
+            Bounds::Empty => Bounds::Empty,
+            Bounds::Inclusive { min, max } => {
+                let low = domain.exact(min);
+                let high = domain.exact(max);
+                if low == u32::MAX || high == u32::MAX {
+                    return Err(format!("key domain {}: column range [{min}, {max}] outside recorded range [{}, {})",
+                        domain.id, domain.minimum, i128::from(domain.minimum) + i128::from(domain.bound)).into());
+                }
+                Bounds::Inclusive { min: i64::from(low), max: i64::from(high) }
+            }
+        };
+        if self.capacity != 0 && domain.minimum != 0 {
+            let pool = self.pool();
+            let module = module(pool)?;
+            let headers = self.headers.as_ref().ok_or("key-domain normalization requires FOR headers")?;
+            let launch = module.prepare_domain_rebase(crate::config(headers.len()))?;
+            unsafe {
+                module.domain_rebase(pool.stream(), &launch, headers.ptr(), headers.len(), domain.minimum)?;
+            }
+        }
+        self.bounds = bounds;
+        Ok(())
+    }
+}
+
 pub(crate) unsafe fn load(
     pool: Arc<Pool>,
     source: NativeView,
     source_rows: usize,
+    positions: Option<&Buffer<u32>>,
+    layout: BaseLayout,
+) -> Result<EncodedColumn> {
+    let stride = if source.element == ELEMENT_I64 { 8 } else { 4 };
+    unsafe { load_strided(pool, source, source_rows, stride, positions, layout) }
+}
+
+/// Encode a native field directly from uploaded row storage.
+///
+/// # Safety
+/// `source.data + row * stride` must identify a valid lane for every source
+/// row, and the source must remain alive until this stream finishes encoding.
+pub unsafe fn load_strided(
+    pool: Arc<Pool>,
+    source: NativeView,
+    source_rows: usize,
+    stride: usize,
     positions: Option<&Buffer<u32>>,
     layout: BaseLayout,
 ) -> Result<EncodedColumn> {
@@ -130,6 +198,7 @@ pub(crate) unsafe fn load(
             codec: Codec::Plain as u32,
         },
         element: source.element,
+        stride,
     };
     unsafe { encode(pool, input, source_rows, positions, layout) }
 }
@@ -150,7 +219,7 @@ pub(crate) fn selected(
     // The borrow retains source/count ownership through submission. Both input
     // owners free on this same stream, after every consuming kernel, even if
     // the caller drops them immediately after this function returns.
-    let input = Input { column: unsafe { source.view() }, element: ELEMENT_ENCODED };
+    let input = Input { column: unsafe { source.view() }, element: ELEMENT_ENCODED, stride: 0 };
     // DECODE I: selected encoded rows are reconstructed only to gather and re-encode resident storage.
     unsafe { encode(pool, input, source.capacity(), Some(positions), layout) }
 }
@@ -235,4 +304,32 @@ unsafe fn encode(
         count: std::ptr::null(), codec,
         bounds: Bounds::Inclusive { min: host.min, max: host.max },
     })
+}
+
+#[cfg(test)]
+mod domain_tests {
+    use super::*;
+
+    #[test]
+    fn shared_device_minimum_rebases_headers_without_touching_payload() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let mut left = EncodedColumn::from_host(pool.clone(), &[-8i64, 2, 4], Codec::For)?;
+        let mut right = EncodedColumn::from_host(pool.clone(), &[-3i64, 9], Codec::For)?;
+        let payload = match &right.data {
+            ColumnData::Packed(data) => data.to_host()?,
+            _ => unreachable!(),
+        };
+        let domain = record_domain(pool.clone(), 7, &[left.bounds(), Bounds::Empty, right.bounds()])?;
+        assert_eq!((domain.minimum, domain.bound, domain.bits), (-8, 18, 5));
+        left.normalize_key(domain)?;
+        right.normalize_key(domain)?;
+        assert_eq!(left.to_host()?, [0, 10, 12]);
+        assert_eq!(right.to_host()?, [5, 17]);
+        match &right.data {
+            ColumnData::Packed(data) => assert_eq!(data.to_host()?, payload),
+            _ => unreachable!(),
+        }
+        assert_eq!(record_domain(pool, 8, &[Bounds::Empty])?.bounds(), Bounds::Empty);
+        Ok(())
+    }
 }

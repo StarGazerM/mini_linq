@@ -10,9 +10,8 @@ pub(crate) mod codecs {
     // DESIGN contract8-vector-summaries
     // Owns encode-time vector metadata (contract 8, STR-Repr enclosure and preserved-op laws).
     // Sources: doc/STORAGE.md §§2,6,12; FastLanes §§1-2.4; Shanbhag binpack_kernel.cuh/q11r.cu.
-    // Known deviation: extrema choose base/width then max is dropped; no retained skip summary (Plan P6).
-    // DO NOT mistake delta-residual extrema for enclosing logical-value bounds.
-    // Keep summaries with payload when implemented; fuse tile decode/predicates, not whole-column decode.
+    // Publication extrema are transient logical-value summaries, reduced once
+    // and released after publication; delta residual bounds stay codec-local.
     // DO NOT claim TPC-H load-order skip wins or codec wins without per-target §12 measurements.
     #[kernel]
     #[launch_bounds(256)]
@@ -24,6 +23,7 @@ pub(crate) mod codecs {
         count: *const u64,
         codec: u32,
         output: *mut VectorHeader,
+        summaries: *mut i64,
     ) {
         let len = if count.is_null() {
             capacity
@@ -41,11 +41,24 @@ pub(crate) mod codecs {
             let rows = len.saturating_sub(begin).min(1024) as usize;
             let mut low = i64::MAX;
             let mut high = i64::MIN;
+            let mut logical_low = i64::MAX;
+            let mut logical_high = i64::MIN;
             if codec != Codec::Plain as u32 {
                 let mut i = lane;
                 while i < rows {
+                    let value = if codec != Codec::Delta as u32
+                        || i % 64 != 0
+                        || !summaries.is_null()
+                    {
+                        unsafe { load_element(input, element, begin as usize + i) }
+                    } else {
+                        0
+                    };
+                    if !summaries.is_null() && codec == Codec::Delta as u32 {
+                        logical_low = logical_low.min(value);
+                        logical_high = logical_high.max(value);
+                    }
                     if codec != Codec::Delta as u32 || i % 64 != 0 {
-                        let value = unsafe { load_element(input, element, begin as usize + i) };
                         let value = if codec == Codec::Delta as u32 {
                             value.wrapping_sub(unsafe {
                                 load_element(input, element, begin as usize + i - 1)
@@ -63,6 +76,14 @@ pub(crate) mod codecs {
                     low = low.min(cuda_device::warp::shuffle_xor_u64(low as u64, distance) as i64);
                     high =
                         high.max(cuda_device::warp::shuffle_xor_u64(high as u64, distance) as i64);
+                    if !summaries.is_null() && codec == Codec::Delta as u32 {
+                        logical_low = logical_low.min(
+                            warp::shuffle_xor_u64(logical_low as u64, distance) as i64,
+                        );
+                        logical_high = logical_high.max(
+                            warp::shuffle_xor_u64(logical_high as u64, distance) as i64,
+                        );
+                    }
                     distance /= 2;
                 }
             }
@@ -85,6 +106,15 @@ pub(crate) mod codecs {
                         rows: rows as u32,
                         padding: 0,
                     });
+                    if !summaries.is_null() && codec != Codec::Plain as u32 {
+                        let (min, max) = if codec == Codec::Delta as u32 {
+                            (logical_low, logical_high)
+                        } else {
+                            (low, high)
+                        };
+                        summaries.add(vector as usize * 2).write(min);
+                        summaries.add(vector as usize * 2 + 1).write(max);
+                    }
                 }
             }
             vector += stride;
@@ -243,6 +273,7 @@ pub(crate) mod codecs {
         capacity: u64,
         count: *const u64,
         output: *mut u64,
+        summaries: *mut i64,
     ) {
         let len = if count.is_null() {
             capacity
@@ -252,14 +283,18 @@ pub(crate) mod codecs {
         let vectors = len.div_ceil(1024) as usize;
         // Sixteen independent T=64 lanes per vector. Each lane owns all its
         // packed words: no bitwise atomics or cross-lane carry is required.
-        let lane = thread::threadIdx_x() as usize % 16;
-        let mut vector = thread::blockIdx_x() as usize * 16 + thread::threadIdx_x() as usize / 16;
-        let stride = thread::gridDim_x() as usize * 16;
+        // Plain publication uses a full warp so its summary shuffles never
+        // name an inactive half-warp at the last odd vector.
+        let lanes = if summaries.is_null() { 16 } else { 32 };
+        let lane = thread::threadIdx_x() as usize % lanes;
+        let mut vector = thread::blockIdx_x() as usize * (256 / lanes)
+            + thread::threadIdx_x() as usize / lanes;
+        let stride = thread::gridDim_x() as usize * (256 / lanes);
         while vector < vectors {
             let h = unsafe { headers.add(vector).read() };
             let is_delta = h.codec == Codec::Delta as u32;
             let data = unsafe { output.add(h.offset as usize) };
-            if is_delta {
+            if is_delta && lane < 16 {
                 let row = lane * 64;
                 let base = if row < h.rows as usize {
                     unsafe { load_element(input, element, vector * 1024 + row) }
@@ -272,7 +307,12 @@ pub(crate) mod codecs {
             }
             let data = unsafe { data.add(if is_delta { 16 } else { 0 }) };
             let width = h.width as usize;
-            if width != 0 {
+            // Plain headers do not inspect rows. Measure logical extrema during
+            // their existing transpose/encode work, never in a separate scan.
+            let measure = !summaries.is_null() && h.codec == Codec::Plain as u32;
+            let mut low = i64::MAX;
+            let mut high = i64::MIN;
+            if width != 0 && lane < 16 {
                 let mut word = 0u64;
                 let mut occupied = 0usize;
                 let mut word_index = lane;
@@ -282,6 +322,10 @@ pub(crate) mod codecs {
                     let mut residual = 0u64;
                     if row < h.rows as usize && (!is_delta || row % 64 != 0) {
                         let value = unsafe { load_element(input, element, vector * 1024 + row) };
+                        if measure {
+                            low = low.min(value);
+                            high = high.max(value);
+                        }
                         let value = if is_delta {
                             value.wrapping_sub(unsafe {
                                 load_element(input, element, vector * 1024 + row - 1)
@@ -310,6 +354,20 @@ pub(crate) mod codecs {
                     slot += 1;
                 }
             }
+            if measure {
+                let mut distance = 16;
+                while distance != 0 {
+                    low = low.min(warp::shuffle_xor_u64(low as u64, distance) as i64);
+                    high = high.max(warp::shuffle_xor_u64(high as u64, distance) as i64);
+                    distance /= 2;
+                }
+                if lane == 0 {
+                    unsafe {
+                        summaries.add(vector * 2).write(low);
+                        summaries.add(vector * 2 + 1).write(high);
+                    }
+                }
+            }
             vector += stride;
         }
     }
@@ -327,11 +385,14 @@ pub(crate) mod codecs {
         source: SourceView,
         order: *const u32,
         rows: u64,
+        count: *const u64,
         slot_width: u32,
         element: u32,
         headers: *mut VectorHeader,
         output: *mut u64,
+        summaries: *mut i64,
     ) {
+        let rows = unsafe { count.read() }.min(rows);
         let warp_index = thread::threadIdx_x() as usize / 32;
         let lane = thread::threadIdx_x() as usize % 32;
         let element_bytes = if element == ELEMENT_I64 { 8 } else { 4 };
@@ -386,6 +447,10 @@ pub(crate) mod codecs {
                         rows: count as u32,
                         padding: 0,
                     });
+                    if !summaries.is_null() {
+                        summaries.add(vector as usize * 2).write(low);
+                        summaries.add(vector as usize * 2 + 1).write(high);
+                    }
                 }
             }
             // Sixteen independent T=64 lanes, as in `encode`.
@@ -423,6 +488,56 @@ pub(crate) mod codecs {
             }
             warp::sync_mask(u32::MAX);
             vector += stride;
+        }
+    }
+
+    /// Reduce only initialized vector summaries; an empty prefix uses min > max.
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1), dynamic_shared_range = (4096, 4096))]
+    pub unsafe fn publication_bounds(
+        fields: *const crate::PublicationSummary,
+        output: *mut i64,
+    ) {
+        let field = unsafe { fields.add(thread::blockIdx_x() as usize).read() };
+        let (summaries, capacity, count) = (field.summaries, field.capacity, field.count);
+        let output = unsafe { output.add(thread::blockIdx_x() as usize * 2) };
+        let len = unsafe { count.read() }.min(capacity);
+        let lane = thread::threadIdx_x() as usize;
+        let mut vector = lane as u64;
+        let mut low = i64::MAX;
+        let mut high = i64::MIN;
+        while vector < len.div_ceil(1024) {
+            unsafe {
+                low = low.min(summaries.add(vector as usize * 2).read());
+                high = high.max(summaries.add(vector as usize * 2 + 1).read());
+            }
+            vector += 256;
+        }
+        let shared = DynamicSharedArray::<u8>::get_raw() as *mut i64;
+        unsafe {
+            shared.add(lane * 2).write(low);
+            shared.add(lane * 2 + 1).write(high);
+        }
+        thread::sync_threads();
+        let mut distance = 128;
+        while distance != 0 {
+            if lane < distance {
+                unsafe {
+                    low = low.min(shared.add((lane + distance) * 2).read());
+                    high = high.max(shared.add((lane + distance) * 2 + 1).read());
+                    shared.add(lane * 2).write(low);
+                    shared.add(lane * 2 + 1).write(high);
+                }
+            }
+            thread::sync_threads();
+            distance /= 2;
+        }
+        if lane == 0 {
+            unsafe {
+                output.write(low);
+                output.add(1).write(high);
+            }
         }
     }
 

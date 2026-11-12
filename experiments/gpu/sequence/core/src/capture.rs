@@ -72,7 +72,7 @@ fn host_value(
 }
 
 /// Print recorded captures in parameter order.
-pub(crate) fn print(records: &[Capture]) -> Printed {
+pub(crate) fn print(records: &[Capture], device_bindings: Option<&crate::DeviceCaptureBindings>) -> Printed {
     let mut printed = Printed {
         setup: TokenStream::new(),
         parameters: Vec::new(),
@@ -106,6 +106,8 @@ pub(crate) fn print(records: &[Capture]) -> Printed {
                 body,
             } => {
                 let closed = closed.iter().enumerate().map(|(at, expression)| {
+                    let expression = device_bindings.and_then(|bindings| bindings.operand(index, at))
+                        .unwrap_or_else(|| expression.to_token_stream());
                     let name = format_ident!("__cq_closed_{at}");
                     // A disabled witness only fixes the Rust type; MaybeUninit
                     // carries no discriminant (cuda-oxide rejects 128-bit ones).
@@ -1152,7 +1154,7 @@ mod tests {
             Some("x"),
             &codecs,
         );
-        let printed = print(&captures.records);
+        let printed = print(&captures.records, None);
         assert_eq!(printed.parameters[0].1, syn::parse_quote!(u32));
         assert!(
             printed.parameters[0]
@@ -1309,7 +1311,7 @@ mod tests {
             "result",
             &crate::runs::Codecs::default(),
         );
-        let printed = print(&captures.records);
+        let printed = print(&captures.records, None);
         let setup = printed.setup.to_string();
         assert!(setup.contains("opaque (* x)"), "{setup}");
         assert!(

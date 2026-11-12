@@ -64,6 +64,8 @@ fn query_scope_releases_each_hook_once_on_return_and_unwind() {
 fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()> {
     use cq_gpu_sequence_runtime::upload_numeric_columns;
     let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    #[cfg(feature = "publication-counters")]
+    let readbacks = gpu_device_columns::publication_bounds_readbacks();
     let values = upload_numeric_columns::<(i64, u32, bool), _>(
         pool.clone(),
         |columns| {
@@ -75,18 +77,25 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
         &[MEASURE; 3],
         AUX.bounds,
     )?;
+    assert_eq!(
+        values.storage().bounds,
+        [
+            Bounds::Inclusive { min: i64::MIN, max: 7 },
+            Bounds::Inclusive { min: 3, max: u32::MAX as i64 },
+            Bounds::Inclusive { min: 0, max: 1 },
+        ]
+    );
     // DECODE P: diagnostic typed numeric upload round trip publishes logical host values for exact assertions.
     assert_eq!(
         values.to_host()?,
         [(i64::MIN, u32::MAX, false), (7, 3, true), (7, 3, true)]
     );
     // Reusing capacity must not reuse old rows, even when the new input is empty.
+    let empty =
+        upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()), &[MEASURE], AUX.bounds)?;
+    assert_eq!(empty.storage().bounds, [Bounds::Empty]);
     // DECODE P: diagnostic empty reused upload publishes logical host values for exact assertions.
-    assert!(
-        upload_numeric_columns::<(i64,), _>(pool.clone(), |_| Ok(()), &[MEASURE], AUX.bounds)?
-            .to_host()?
-            .is_empty()
-    );
+    assert!(empty.to_host()?.is_empty());
     let changed = upload_numeric_columns::<(i64,), _>(
         pool.clone(),
         |columns| {
@@ -118,7 +127,7 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
     );
     // DECODE P: diagnostic large signed maximum publishes logical host values for exact assertions.
     assert_eq!(large.to_host()?[300_002], (i64::MAX,));
-    // Scalar bounds take the lane type's full range instead of measuring.
+    // Scalar bounds remain a proven enclosure; publication does not remeasure them.
     let scalar = upload_numeric_columns::<(i32, u8), _>(
         pool.clone(),
         |columns| {
@@ -174,6 +183,8 @@ fn numeric_host_columns_preserve_values_duplicates_and_empty_rows() -> Result<()
         ..AUX.bounds
     };
     assert!(upload_numeric_columns::<(i64,), _>(pool, fill, &[MEASURE], wide).is_err());
+    #[cfg(feature = "publication-counters")]
+    assert_eq!(gpu_device_columns::publication_bounds_readbacks(), readbacks);
     Ok(())
 }
 
@@ -276,6 +287,10 @@ fn packed_canon_deduplicates_wide_keys_and_cross_lane_fields() -> Result<()> {
     })?;
     // DECODE P: diagnostic gathered wide payload publishes logical host values for exact assertions.
     assert_eq!(gathered.payload()[0].to_host()?, [3, 3, 1i64 << 35]);
+    assert_eq!(
+        gathered.payload()[0].bounds(),
+        Bounds::Inclusive { min: 0, max: (1i64 << 40) - 1 }
+    );
     let dictionary = Arc::new(cq_gpu_runtime::Dictionary::default());
     // DECODE P: diagnostic canonical tuple adapter reconstructs packed fields solely for the following host oracle.
     let output = adapter.unpack_columns::<(i64, i64)>(keys, &fields, dictionary.clone(), vec![])?;
@@ -428,6 +443,9 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     assert_eq!(selected.offsets().to_host()?, [0, 2, 3, 3]);
     // DECODE P: diagnostic selected payload values publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [11, 13, 12]);
+    assert_eq!(selected.offsets().bounds(), Bounds::Inclusive { min: 0, max: 3 });
+    // Filtering removes both source extrema, but preserves their enclosure.
+    assert_eq!(selected.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
 
     let positions = cq_gpu_sequence_runtime::select(pool.clone(), &selection, AUX.selection)?;
     assert_eq!(positions.len(), 3);
@@ -445,6 +463,8 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0]);
     // DECODE P: diagnostic empty selected payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
+    assert_eq!(empty.offsets().bounds(), Bounds::singleton(0));
+    assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
 
     let keys = Buffer::from_host(pool.clone(), &[7u64, 2, 7, 1, 2])?;
     let mut adapter = PackedColumnsAdapter::new(pool.clone(), 1, AUX.canon)?;
@@ -484,6 +504,9 @@ fn providers_preserve_ranges_duplicate_rows_and_canonical_support() -> Result<()
     assert_eq!(retained.offsets().to_host()?, [0, 2, 3, 3]);
     // DECODE P: diagnostic new workspace directory publishes logical host values for exact assertions.
     assert_eq!(newer.offsets().to_host()?, [0, 1, 1, 1]);
+    assert_eq!(retained.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
+    assert_eq!(newer.payload()[0].bounds(), Bounds::Inclusive { min: 10, max: 14 });
+    assert_eq!(newer.offsets().bounds(), Bounds::Inclusive { min: 0, max: 1 });
     drop((retained, newer));
     let reused = builder.build_with_workspace(&descriptor, &mut workspace)?;
     // DECODE P: diagnostic reused workspace payload publishes logical host values for exact assertions.
@@ -569,6 +592,7 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
         let result = builder.build(&descriptor)?;
         // DECODE P: diagnostic codec-sweep gathered payload publishes logical host values for exact assertions.
         assert_eq!(result.payload()[0].to_host()?, expected);
+        assert_eq!(result.payload()[0].bounds(), payload.bounds());
         // DECODE P: diagnostic codec-sweep gathered directory publishes logical host values for exact assertions.
         assert_eq!(result.offsets().to_host()?, [0, 684, 1368, 2051, 2051]);
         descriptor.selection = Some(RangeSelection {
@@ -581,6 +605,8 @@ fn i64_payloads_preserve_full_width_values_and_partial_vectors() -> Result<()> {
         assert!(empty.payload()[0].to_host()?.is_empty());
         // DECODE P: diagnostic codec-sweep empty directory publishes logical host values for exact assertions.
         assert_eq!(empty.offsets().to_host()?, [0, 0, 0, 0, 0]);
+        assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
+        assert_eq!(empty.offsets().bounds(), Bounds::singleton(0));
     }
     Ok(())
 }
@@ -646,6 +672,11 @@ fn stored_sources_retain_strided_rows_and_packed_fields() -> Result<()> {
     assert_eq!(negative.offsets().to_host()?, [0, 1, 2, 2]);
     // DECODE P: diagnostic negative-only payload publishes logical host values for exact assertions.
     assert_eq!(negative.payload()[0].to_host()?, [i64::MIN, -4_294_967_297]);
+    assert_eq!(negative.payload()[0].bounds(), retained.payload()[0].bounds());
+    assert_eq!(
+        negative.payload()[0].bounds(),
+        Bounds::Inclusive { min: i64::MIN, max: i64::MAX }
+    );
     let selection = descriptor.selection.as_ref().unwrap();
     assert_eq!(
         cq_gpu_sequence_runtime::select(pool.clone(), selection, AUX.selection)?.len(),
@@ -799,6 +830,8 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     assert!(complete.offsets().to_host()?.is_empty());
     // DECODE P: diagnostic keyless complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
+    assert_eq!(complete.offsets().bounds(), Bounds::Empty);
+    assert_eq!(complete.payload()[0].bounds(), Bounds::Inclusive { min: 2, max: 7 });
     descriptor.selection = Some(RangeSelection {
         column: values,
         start: 4,
@@ -807,6 +840,7 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     let selected = builder.build_with_workspace(&descriptor, &mut workspace)?;
     // DECODE P: diagnostic keyless selected payload publishes logical host values for exact assertions.
     assert_eq!(selected.payload()[0].to_host()?, [7, 7, 4]);
+    assert_eq!(selected.payload()[0].bounds(), Bounds::Inclusive { min: 2, max: 7 });
     descriptor.selection.as_mut().unwrap().start = 9;
     descriptor.selection.as_mut().unwrap().end = 10;
     let empty = builder.build_with_workspace(&descriptor, &mut workspace)?;
@@ -815,7 +849,81 @@ fn keyless_provider_preserves_one_complete_segment() -> Result<()> {
     assert!(empty.offsets().to_host()?.is_empty());
     // DECODE P: diagnostic keyless empty payload publishes logical host values for exact assertions.
     assert!(empty.payload()[0].to_host()?.is_empty());
+    assert_eq!(empty.offsets().bounds(), Bounds::Empty);
+    assert_eq!(empty.payload()[0].bounds(), Bounds::Empty);
     // DECODE P: diagnostic keyless retained complete payload publishes logical host values for exact assertions.
     assert_eq!(complete.payload()[0].to_host()?, [7, 2, 7, 4]);
+    Ok(())
+}
+
+#[cfg(feature = "publication-counters")]
+#[test]
+fn h02_shaped_ranges_reuse_bounds_without_publication_readbacks() -> Result<()> {
+    let pool = Pool::new(0, 1 << 20, 128 << 20)?;
+    let key = column(&pool, &[1, 0, 1, 0, 1])?;
+    let sources = (0..6)
+        .map(|slot| {
+            let base = 10 + slot * 10;
+            column(&pool, &[base, base + 1, base + 2, base + 3, base + 4])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let builder = RangeBuilder::new(&pool, &AUX)?;
+    let initial_readbacks = gpu_device_columns::publication_bounds_readbacks();
+    // Match h02's eight providers, including its two key-only directories.
+    for (provider, payload_count) in [1, 1, 2, 2, 0, 0, 2, 6].into_iter().enumerate() {
+        let mut descriptor = RangeDescriptor {
+            directory_entries: 4,
+            key: vec![KeyDescriptor { column: key.clone(), domain_size: 3 }],
+            selection: None,
+            payload: sources[..payload_count]
+                .iter()
+                .enumerate()
+                .map(|(slot, column)| PayloadDescriptor {
+                    column: column.clone(),
+                    kind: [PayloadKind::U32, PayloadKind::I32, PayloadKind::I64][slot % 3],
+                })
+                .collect(),
+        };
+        let mut workspace = RangeWorkspace::new(pool.clone(), &descriptor)?;
+        for (selection, order, offsets) in [
+            (None, vec![1usize, 3, 0, 2, 4], [0i64, 2, 5, 5]),
+            (Some((11, 14)), vec![1, 3, 2], [0, 2, 3, 3]),
+            (Some((20, 30)), vec![], [0, 0, 0, 0]),
+        ] {
+            descriptor.selection = selection.map(|(start, end)| RangeSelection {
+                column: sources[0].clone(),
+                start,
+                end,
+            });
+            let before = gpu_device_columns::publication_bounds_readbacks();
+            let range = builder.build_with_workspace(&descriptor, &mut workspace)?;
+            assert_eq!(
+                gpu_device_columns::publication_bounds_readbacks(),
+                before,
+                "provider {provider} with {payload_count} payloads must reuse known bounds"
+            );
+            assert_eq!(range.len(), order.len());
+            assert_eq!(range.payload().len(), payload_count);
+            assert_eq!(
+                range.offsets().bounds(),
+                Bounds::Inclusive { min: 0, max: order.len() as i64 }
+            );
+            // DECODE P: diagnostic h02-shaped directory publishes offsets to its host oracle.
+            assert_eq!(range.offsets().to_host()?, offsets);
+            for (slot, payload) in range.payload().iter().enumerate() {
+                assert_eq!(
+                    payload.bounds(),
+                    if order.is_empty() { Bounds::Empty } else { sources[slot].bounds() }
+                );
+                let expected = order.iter()
+                    .map(|&row| 10 + slot as i64 * 10 + row as i64)
+                    .collect::<Vec<_>>();
+                // DECODE P: diagnostic h02-shaped payload publishes selected rows to its host oracle.
+                assert_eq!(payload.to_host()?, expected);
+                assert_eq!(gpu_device_columns::publication_bounds_readbacks(), before);
+            }
+        }
+    }
+    assert_eq!(gpu_device_columns::publication_bounds_readbacks(), initial_readbacks);
     Ok(())
 }

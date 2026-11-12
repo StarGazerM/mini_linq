@@ -89,7 +89,24 @@ pub fn run<T: Ord>(
     let reference_started = Instant::now();
     let expected: BTreeSet<_> = answer(manifest, query)?.into_iter().collect();
     let reference_seconds = reference_seconds + reference_started.elapsed().as_secs_f64();
+    cq_gpu_sequence_runtime::index_bytes::begin();
     let (mut warmup, boundary) = execute()?;
+    let index_bytes: Vec<_> = cq_gpu_sequence_runtime::index_bytes::finish()
+        .into_iter().enumerate().map(|(ordinal, record)| json!({
+            "ordinal": ordinal, "kind": record.kind,
+            "allocated_bytes": record.allocated, "live_bytes": record.live,
+        })).collect();
+    let publication_bounds: Vec<_> = cq_gpu_sequence_runtime::index_bytes::take_publications()
+        .into_iter().map(|(producer, bounds)| json!({
+            "producer": producer,
+            "columns": bounds.into_iter().map(|bounds| match bounds {
+                gpu_device_columns::Bounds::Empty => Value::Null,
+                gpu_device_columns::Bounds::Inclusive { min, max } => json!({
+                    "minimum": min, "maximum": max,
+                    "bits": 64 - ((i128::from(max) - i128::from(min)) as u64).leading_zeros(),
+                }),
+            }).collect::<Vec<_>>(),
+        })).collect();
     let warmup_started = Instant::now();
     warmup.sort_unstable();
     warmup.dedup();
@@ -156,6 +173,8 @@ pub fn run<T: Ord>(
     };
     Ok(
         json!({"status": "ran", "exact": conformance_only || full_samples == MEASURED_RUNS, "validated": true,
+        "index_bytes": index_bytes,
+        "publication_bounds": publication_bounds,
         "validation": {"policy": if conformance_only || full_samples == MEASURED_RUNS { "full" } else if full_samples > 0 { "full_then_sampled" } else { "sampled" },
             "full_samples": full_samples, "warmup": warmup_check, "seconds": validation_seconds,
             "reference_seconds": reference_seconds},
@@ -245,6 +264,24 @@ mod tests {
         assert_eq!(intermediate.timings.download_ms, 0.0);
         assert_eq!(intermediate.boundary.intermediate_downloads_included, 1);
         assert_eq!(intermediate.timings.wall_ms, final_stage.timings.wall_ms);
+    }
+
+    #[test]
+    fn host_built_input_queries_disclose_load_side_upload_boundary() -> Result<()> {
+        // Inspect the selected executors, as the conformance fixtures do.
+        for report in crate::plans()?.iter().filter(|report| {
+            matches!(report["query"].as_str(), Some("h13" | "h04_not_exists"))
+        }) {
+            assert_eq!(report["status"], "accepted", "{}", report["error"]);
+            let note = report["timing"].as_str().expect("stage timing metadata");
+            assert!(note.contains("NOTE: host-built input upload/normalization is load-side"));
+            assert!(note.contains("host_input_upload_ms, separate from base domain_ms"));
+            assert!(note.contains("unlike base e4e08c99"));
+            assert!(note.contains("upload occurred in execute"));
+            assert!(note.contains("authored host preprocessing remains load-side"));
+            assert!(note.contains("indexes remain timed"));
+        }
+        Ok(())
     }
 
     #[test]
