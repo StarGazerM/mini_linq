@@ -13,6 +13,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU runtimes allocate every CUB/Thrust scratch buffer (radix controls, merge
+  partitions, counts, scans, ranges) and DOOP native scratch from the RCCL pool
+  (RCCL `a74cb59f`, allocator-aware workspace constructors). Radix controls are
+  grow-only and reused across sorts. On xalan, synchronous `cuMemAlloc` calls
+  fall from 1,977 to 9 (pool growth only) and `cuMemAllocAsync` calls from 5,504
+  to 0.
 - GPU TPC-H records shared Offset/Rank key domains at load, preserves codes
   through relational operators, and restores logical keys at Rust/output
   boundaries. Publications carry measured bounds separately from computed

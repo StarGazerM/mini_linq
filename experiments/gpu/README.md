@@ -51,10 +51,11 @@ values acquires the shared device-0 thread pool for its recorded GPU publication
 ## Build and run
 
 The workspace pins the StarGazerM cuda-oxide and RCCL forks by commit.
-The pool-workspace integration temporarily overrides RCCL with
-`/data/rccl-wt/pool-workspaces` in [`Cargo.toml`](Cargo.toml); replace that patch
-with the pushed RCCL revision and update [`Cargo.lock`](Cargo.lock) together.
-cuda-oxide remains pinned to `57eacecc081fe1809a815ae4ca32643884dce15b`.
+RCCL is pinned to `a74cb59fb86ad0b78cf7cb4e1b76cf6cd21a858c` (branch
+`mini-linq/pool-workspaces`): radix, merge, count, scan and range scratch take
+an allocator, and the runtime passes its RCCL pool so no CUB/Thrust scratch is
+allocated outside the pool. cuda-oxide remains pinned to
+`57eacecc081fe1809a815ae4ca32643884dce15b`.
 It uses cuda-oxide's Rust **1.99.1** SIMT toolchain, with `RUSTC_BOOTSTRAP=1`
 configured for the compiler backend. Build the backend and install `cargo-oxide`
 from that pinned fork's nested `cuda-oxide/` workspace; the backend path is
