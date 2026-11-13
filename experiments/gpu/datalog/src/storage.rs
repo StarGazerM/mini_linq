@@ -250,9 +250,28 @@ impl Symbols {
     }
 }
 
-/// Emit the native packed word from recorded scalar metadata. Rustc resolves
-/// aliases and selects the arena's scalar or most-significant-first lane ABI.
+/// Carry a compact, deterministic name through the checked IR. The printer
+/// defines it once from the same column tuple; rustc still derives the width
+/// from `Scalar`, including user type aliases and codec storage types.
 pub fn word_type<'a>(types: impl IntoIterator<Item = &'a Type>) -> syn::Result<Type> {
+    Ok(alias_type("word", types))
+}
+
+fn alias_type<'a>(kind: &str, types: impl IntoIterator<Item = &'a Type>) -> Type {
+    let types = types.into_iter();
+    // Quoting parsed types normalizes whitespace; tuple punctuation preserves
+    // column boundaries and order. Fixed FNV-1a avoids process/toolchain seeds.
+    let text = quote!((#(#types,)* )).to_string();
+    let hash = text.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    let name = quote::format_ident!("__cq_gpu_{kind}_{hash:016x}");
+    syn::parse_quote!(#name)
+}
+
+/// Define the native word only at the final printer boundary. Rustc resolves
+/// scalar metadata and selects the scalar or most-significant-first lane ABI.
+pub(crate) fn word_definition<'a>(types: impl IntoIterator<Item = &'a Type>) -> syn::Result<Type> {
     let types: Vec<_> = types.into_iter().collect();
     let lanes = quote!({
         let bits = 0usize #(+ <#types as ::gpu_datalog_runtime::Scalar>::COLUMN.bits() as usize)*;
@@ -266,6 +285,11 @@ pub fn word_type<'a>(types: impl IntoIterator<Item = &'a Type>) -> syn::Result<T
 
 /// Ordinary complete-row key index in its recorded physical column order.
 pub fn layout_type(types: &[&Type]) -> Type {
+    alias_type("layout_type", types.iter().copied())
+}
+
+/// Layout aliases also keep repeated providers and initializers compact.
+pub(crate) fn layout_definition(types: &[&Type]) -> Type {
     let word = word_type(types.iter().copied()).expect("scalar word quotation");
     syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>)
 }
@@ -791,9 +815,7 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
             "relation delta has no certified relation-order input",
         )?;
         if declaration.value.is_none() {
-            let word = &relation.word;
-            let ty: Type = syn::parse_quote!(
-                ::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>);
+            let ty = layout_type(&types);
             let init = empty_view(&ty, advice.ratio, 0, 32, 256);
             ensure(
                 providers.delta.token == RADIX_RELATION
@@ -940,8 +962,7 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
     let (ratio, merge_tile_rows, block_threads) =
         (record.ratio, record.merge_tile_rows, record.block_threads);
     ensure(
-        *provider
-            == syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(#(#types,)*), (), #word, u64, ()>)
+        *provider == layout_type(&types)
             && *word == word_type(types.iter().copied())?
             && *state == syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
             && record.packing == syn::parse_quote!(<#provider>::derive_packing()?)
@@ -1276,8 +1297,7 @@ mod tests {
         assert!(check(&source, &changed).is_err());
         assert!(check_device(&changed).is_err());
         let mut changed = target.clone();
-        changed.layouts[0].provider.ty =
-            syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(u32, u32,), (), #word, u64, ()>);
+        changed.layouts[0].provider.ty = layout_type(&[&syn::parse_quote!(u32), &syn::parse_quote!(u32)]);
         assert!(check(&source, &changed).is_err());
     }
 
@@ -1304,7 +1324,7 @@ mod tests {
             .iter()
             .map(|column| schema.device_type(column))
             .collect::<Vec<_>>();
-        let word = word_type(&types).unwrap();
+        let word = word_definition(&types).unwrap();
         assert_eq!(quote!(#word).to_string().matches("Scalar").count(), 10);
         check_device(&target).unwrap();
     }
@@ -1380,7 +1400,7 @@ mod tests {
     #[test]
     fn scalar_aliases_are_resolved_by_rustc() {
         let ty: Type = syn::parse_quote!(MyScalar);
-        let word = word_type([&ty]).unwrap();
+        let word = word_definition([&ty]).unwrap();
         let text = quote!(#word).to_string();
         assert!(text.contains("< MyScalar as :: gpu_datalog_runtime :: Scalar > :: COLUMN"));
         assert!(text.contains("NativeWord"));
@@ -1394,11 +1414,11 @@ mod tests {
         let types: Vec<_> = types.iter().collect();
         let word = word_type(types.iter().copied()).unwrap();
         assert_eq!(
-            layout_type(&types),
+            layout_definition(&types),
             syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(i16, u32,), (), #word, u64, ()>)
         );
         assert_eq!(
-            layout_type(&[]),
+            layout_definition(&[]),
             syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(), (), #empty, u64, ()>)
         );
     }
@@ -1422,7 +1442,8 @@ mod tests {
         let word = word_type([&ty, &ty]).unwrap();
         // EDB relations keep the defaults of their unused IDB fields.
         assert_eq!(target.providers[0], source.providers[0]);
-        let view: Provider = syn::parse_quote!(@radix_relation as ::gpu_datalog_runtime::RadixLayout<(i32, i32,), (), #word, u64, ()>);
+        let layout = layout_type(&[&ty, &ty]);
+        let view: Provider = syn::parse_quote!(@radix_relation as #layout);
         let idb = &target.providers[2];
         assert_eq!(
             (&idb.delta, &idb.next, idb.canonical),
@@ -1437,11 +1458,7 @@ mod tests {
         assert_eq!(device.layouts.len(), target.layouts.len());
         assert_eq!(device.delta_layouts.len(), target.delta_layouts.len());
         assert_eq!(device.negations.len(), target.negations.len());
-        let negative_word = word_type([&ty]).unwrap();
-        assert_eq!(
-            device.negations[0].provider,
-            syn::parse_quote!(::gpu_datalog_runtime::RadixLayout<(i32,), (), #negative_word, u64, ()>)
-        );
+        assert_eq!(device.negations[0].provider, layout_type(&[&ty]));
         for state in device
             .layouts
             .iter()
@@ -1838,9 +1855,10 @@ mod tests {
             syn::parse_quote!(::gpu_datalog_runtime::DeviceRadixRun<#word, u64, ()>)
         );
         assert_eq!(device.layouts[target.providers[2].canonical].word, word);
+        let layout = layout_type(&[&ty, &ty]);
         assert_eq!(
             target.layouts[0].provider,
-            syn::parse_quote!(@radix_relation as ::gpu_datalog_runtime::RadixLayout<(i64, i64,), (), #word, u64, ()>)
+            syn::parse_quote!(@radix_relation as #layout)
         );
         check(&source, &target).unwrap();
     }

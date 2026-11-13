@@ -64,6 +64,81 @@ fn program_with_orders(
 }
 
 #[test]
+fn packed_word_names_are_stable_and_distinguish_column_tuples() {
+    let mut names = std::collections::BTreeSet::new();
+    // DOOP mixes symbol IDs and integer columns at several arities.
+    for text in [
+        "()", "(u32,)", "(u32,u32)", "(u32,u32,u32)",
+        "(u32,u32,u32,u32)", "(u32,u32,u32,u32,u32)",
+        "(i32,)", "(i32,u32)", "(u32,i32)", "(u32,i32,u32)",
+        "(u32,u32,i32)",
+    ] {
+        let tuple: syn::TypeTuple = syn::parse_str(text).unwrap();
+        let first = storage::word_type(&tuple.elems).unwrap();
+        let reparsed: syn::TypeTuple = syn::parse2(tuple.to_token_stream()).unwrap();
+        assert_eq!(first, storage::word_type(&reparsed.elems).unwrap());
+        assert!(names.insert(first.to_token_stream().to_string()));
+        let types = tuple.elems.iter().collect::<Vec<_>>();
+        assert!(names.insert(storage::layout_type(&types).to_token_stream().to_string()));
+    }
+    let compact: syn::Type = syn::parse_str("types::Symbol<u32>").unwrap();
+    let spaced: syn::Type = syn::parse_str("types :: Symbol < u32 >").unwrap();
+    assert_eq!(storage::word_type([&compact]).unwrap(), storage::word_type([&spaced]).unwrap());
+}
+
+#[test]
+fn printer_defines_each_packed_type_once_before_holes() {
+    let program = program();
+    let printed = print::compile(&program).unwrap();
+    let syn::Expr::Block(block) = &printed else { panic!("expected generated block") };
+    let mut names = std::collections::BTreeSet::new();
+    let mut layout_definitions = 0;
+    let mut saw_hole = false;
+    for statement in &block.block.stmts {
+        match statement {
+            syn::Stmt::Item(syn::Item::Type(item)) => {
+                assert!(!saw_hole, "aliases must be visible to every hole");
+                assert!(names.insert(item.ident.to_string()), "duplicate alias");
+                if item.ident.to_string().starts_with("__cq_gpu_layout_type_") {
+                    assert!(item.ty.to_token_stream().to_string().contains("RadixLayout"));
+                    layout_definitions += 1;
+                }
+            }
+            syn::Stmt::Item(syn::Item::Fn(_)) => saw_hole = true,
+            _ => {}
+        }
+    }
+    let device = program.storage.device.as_ref().unwrap();
+    for word in device.relations.iter().map(|record| &record.word).chain(
+        device.layouts.iter().chain(&device.delta_layouts).chain(&device.negations)
+            .map(|record| &record.word),
+    ) {
+        assert!(names.contains(&word.to_token_stream().to_string()));
+    }
+    assert!(saw_hole);
+    let text = printed.to_token_stream().to_string();
+    let words = names.iter().filter(|name| name.starts_with("__cq_gpu_word_")).count();
+    assert_eq!(text.matches("WordWidth").count(), words);
+    assert_eq!(layout_definitions, names.len() - words);
+}
+
+#[test]
+fn printer_rejects_undefined_word_aliases_in_records_and_holes() {
+    let mut changed = program();
+    changed.storage.device.as_mut().unwrap().relations[0].word =
+        syn::parse_quote!(__cq_gpu_word_undefined);
+    assert!(print::compile(&changed).unwrap_err().to_string().contains("undefined GPU packed-type alias"));
+
+    let mut changed = program();
+    changed.holes[0].pipeline.passes[0].arguments = quote!((__cq_gpu_word_undefined));
+    assert!(print::compile(&changed).unwrap_err().to_string().contains("undefined GPU packed-type alias"));
+
+    let mut changed = program();
+    changed.holes[0].pipeline.passes[0].arguments = quote!((__cq_gpu_layout_type_undefined));
+    assert!(print::compile(&changed).unwrap_err().to_string().contains("undefined GPU packed-type alias"));
+}
+
+#[test]
 fn physical_full_states_keep_logical_hosts_without_duplicate_backing_locals() {
     let program = program();
     let states = storage::FullStates::build(&program.storage).unwrap();
@@ -494,13 +569,14 @@ fn device_bindings_preserve_scan_and_keyed_readers() {
     );
     let scalar = syn::parse_quote!(i32);
     let word = storage::word_type([&scalar, &scalar]).unwrap();
+    let layout = storage::layout_type(&[&scalar, &scalar]);
     let target = crate::bind_inputs(
         &physical,
         &source,
         quote! {
             providers { #declaration }
-            Delta => @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word #word; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32,),(),#word,u64,()> ;
-            Edge => @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word #word; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as ::gpu_datalog_runtime::RadixLayout<(i32,i32,),(),#word,u64,()> ;
+            Delta => @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word #word; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as #layout ;
+            Edge => @radix_relation input { keys 2; columns [i32 => i32, i32 => i32] } radix { word #word; offset u64; ratio 4; radix_bits 0; merge_tile 32 } as #layout ;
         },
     )
     .unwrap();

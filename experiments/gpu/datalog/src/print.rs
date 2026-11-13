@@ -1,6 +1,9 @@
 //! GPU interpretation of checked Round/Schedule records on one ordered stream.
 //! Providers, initializers, backing states and scratch lifetimes come from the
 //! recorded device Storage; this printer composes their fixed operations.
+//! Packed-word and layout aliases are defined once in the generated block,
+//! before hole functions. Their schemas, collision checks and use checks stay
+//! printer-local: no alias definitions travel through the whole-program IR.
 use cq_datalog_support::ensure;
 use crate::storage::FullStates;
 use cq_lang_datalog_round::{
@@ -23,6 +26,79 @@ fn device(program: &Program) -> &storage::DeviceStorage {
 }
 fn admitted_name(relation: usize, order: usize) -> Ident {
     format_ident!("__cq_gpu_admitted_{}_{}", relation, order)
+}
+
+/// A name must denote exactly one normalized column tuple, even if the stable
+/// hash collides. Keep the tuple, rather than trusting the hash as identity.
+#[derive(Default)]
+struct PackedAliases(BTreeMap<String, (Type, Type)>);
+
+impl PackedAliases {
+    fn insert(
+        &mut self,
+        name: &Type,
+        types: &[&Type],
+        definition: impl FnOnce() -> syn::Result<Type>,
+    ) -> syn::Result<()> {
+        let key = name.to_token_stream().to_string();
+        let tuple: Type = syn::parse_quote!((#(#types,)*));
+        if let Some((previous, _)) = self.0.get(&key) {
+            ensure(
+                *previous == tuple,
+                name,
+                &format!("GPU packed-type alias collision for `{key}`: different column tuples"),
+            )?;
+        } else {
+            self.0.insert(key, (tuple, definition()?));
+        }
+        Ok(())
+    }
+
+    fn check_uses(&self, tokens: TokenStream) -> syn::Result<()> {
+        for token in tokens {
+            match token {
+                proc_macro2::TokenTree::Group(group) => self.check_uses(group.stream())?,
+                proc_macro2::TokenTree::Ident(name) => {
+                    let key = name.to_string();
+                    if (key.starts_with("__cq_gpu_word_") || key.starts_with("__cq_gpu_layout_type_"))
+                        && !self.0.contains_key(&key)
+                    {
+                        return Err(syn::Error::new_spanned(
+                            name,
+                            format!("undefined GPU packed-type alias `{key}`"),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn definitions(program: &Program) -> syn::Result<TokenStream> {
+        let device = program.storage.device.as_ref().ok_or_else(|| {
+            syn::Error::new_spanned(program, "missing device storage advice")
+        })?;
+        let mut aliases = Self::default();
+        for input in device.relations.iter().map(|record| &record.input).chain(
+            device.layouts.iter().chain(&device.delta_layouts).chain(&device.negations)
+                .map(|record| &record.input),
+        ) {
+            let types = input.columns.iter().map(|column| &column.storage).collect::<Vec<_>>();
+            aliases.insert(&crate::storage::word_type(types.iter().copied())?, &types, || {
+                crate::storage::word_definition(types.iter().copied())
+            })?;
+            aliases.insert(&crate::storage::layout_type(&types), &types, || {
+                Ok(crate::storage::layout_definition(&types))
+            })?;
+        }
+        aliases.check_uses(program.to_token_stream())?;
+        let definitions = aliases.0.iter().map(|(name, (_, definition))| {
+            let name = Ident::new(name, proc_macro2::Span::call_site());
+            quote!(#[allow(non_camel_case_types)] type #name = #definition;)
+        });
+        Ok(quote!(#(#definitions)*))
+    }
 }
 
 /// The Storage negative projection a component's key set realizes.
@@ -364,6 +440,7 @@ struct HoleCall {
 /// Constructors consume recorded merge tiles and auxiliary geometry; worker
 /// arenas use the same recorded initializers and scratch release as the caller.
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
+    let packed_aliases = PackedAliases::definitions(program)?;
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
     crate::bindings::check(program)?;
@@ -822,6 +899,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         quote!(#host.trace_full_state(#relation, #index, #owner);)
     });
     syn::parse2(quote!({
+        #packed_aliases
         #(#hole_items)*
         (|| -> ::gpu_datalog_runtime::Result<_> {
             let __cq_gpu_pool = ::gpu_datalog_runtime::thread_pool()?;
@@ -1098,4 +1176,21 @@ fn phase(
         }
         __cq_gpu_round += 1;
     ))
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+
+    #[test]
+    fn colliding_packed_aliases_are_rejected() {
+        let mut aliases = PackedAliases::default();
+        let ty: Type = syn::parse_quote!(u32);
+        let other: Type = syn::parse_quote!(u64);
+        let name = crate::storage::word_type([&ty]).unwrap();
+        aliases.insert(&name, &[&ty], || crate::storage::word_definition([&ty])).unwrap();
+        aliases.insert(&name, &[&ty], || panic!("duplicate definition")).unwrap();
+        let error = aliases.insert(&name, &[&other], || panic!("colliding definition")).unwrap_err();
+        assert!(error.to_string().contains("alias collision"));
+    }
 }
