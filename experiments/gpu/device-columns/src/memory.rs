@@ -12,8 +12,8 @@ use std::{
 
 pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
 
-/// Host-side accounting for this runtime pool, excluding native CUDA scratch
-/// allocated outside it. Allocated bytes include CUDA allocation alignment.
+/// Host-side accounting for this runtime pool, including pooled library scratch.
+/// Allocated bytes include CUDA allocation alignment.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PoolMemoryStats {
     pub current_bytes: usize,

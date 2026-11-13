@@ -50,12 +50,11 @@ values acquires the shared device-0 thread pool for its recorded GPU publication
 
 ## Build and run
 
-The workspace pins the StarGazerM cuda-oxide and RCCL forks by commit, without
-local dependency patches. [`Cargo.toml`](Cargo.toml) declares cuda-oxide
-`57eacecc081fe1809a815ae4ca32643884dce15b` and RCCL
-`a776d01cb29b77c031e693993d059a062ad680af`; [`Cargo.lock`](Cargo.lock) records the
-resolved sources. These pins do not establish the state of local fork checkouts
-or remote branch heads. Do not add path patches: update git pins and lockfile together.
+The workspace pins the StarGazerM cuda-oxide and RCCL forks by commit.
+The pool-workspace integration temporarily overrides RCCL with
+`/data/rccl-wt/pool-workspaces` in [`Cargo.toml`](Cargo.toml); replace that patch
+with the pushed RCCL revision and update [`Cargo.lock`](Cargo.lock) together.
+cuda-oxide remains pinned to `57eacecc081fe1809a815ae4ca32643884dce15b`.
 It uses cuda-oxide's Rust **1.99.1** SIMT toolchain, with `RUSTC_BOOTSTRAP=1`
 configured for the compiler backend. Build the backend and install `cargo-oxide`
 from that pinned fork's nested `cuda-oxide/` workspace; the backend path is
@@ -639,7 +638,8 @@ admission counts and layout canonicalization counts, not final row downloads.
 reserved/cached bytes, per-relation accepted/layout/arena ownership footprints,
 and each hole's candidate rows and retry capacities. Layout footprints include
 shared backing allocations and must not be summed as physical pool usage.
-Native CUDA library scratch outside the pool is not included in pool counters.
+Radix controls, merge partitions, selection counts and native runtime scratch
+allocate through the same RCCL pool and are included in its counters.
 Enable the `gpu-datalog-runtime/radix-counters` Cargo feature to emit separate
 setup/fixpoint counters for canonical, layout and occurrence sorts, merges,
 grouping readbacks, descriptors and offset materialization. With the feature
@@ -1662,6 +1662,20 @@ Per-thread/pool sort, permutation, compaction and count scratch is reused on the
 pool stream; immutable publications own separate keys and metadata. Smaller
 calls sort only their live prefix. `QueryScope` releases cached scratch without
 a host wait; direct runtime callers can call `radix_run::release_set_scratch`.
+Radix controls use grow-only reuse per thread, pool and key/pair policy; their
+allocator and stream remain owned until scratch release. Sequence and reference
+runtime temporaries, generated group flags, and lexicographic-sort scratch also
+use the execution pool rather than CUDA's separate async allocator.
+
+Allocation acceptance on xalan (`doop-gpu ... --gpu-only`, GDB breakpoints at
+`cuMemAlloc_v2` and `cuMemAllocAsync`, each recording size and `bt 8`):
+base `2f3588aa` made 1,977 synchronous calls (1,968 radix-control allocations
+and nine pool-growth calls) and 5,504 async calls (5,482 Datalog native scratch,
+22 Sequence scratch). The pooled implementation made nine synchronous calls,
+all RCCL pool growth at 1, 2, 4, 8, 16, 32, 64, 128 and 256 MiB, and zero async
+calls. Full-mode cassandra and xalan comparisons matched all 26 full-tuple
+output sets. The GPU had a foreign tenant; these are allocation and exactness
+results, not performance measurements.
 
 ## Historical device-store and i64 acceptance
 

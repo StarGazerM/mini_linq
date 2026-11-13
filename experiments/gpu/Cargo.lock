@@ -1750,7 +1750,6 @@ dependencies = [
 [[package]]
 name = "rccl-cub"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=a776d01cb29b77c031e693993d059a062ad680af#a776d01cb29b77c031e693993d059a062ad680af"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1761,7 +1760,6 @@ dependencies = [
 [[package]]
 name = "rccl-memory"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=a776d01cb29b77c031e693993d059a062ad680af#a776d01cb29b77c031e693993d059a062ad680af"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1771,7 +1769,6 @@ dependencies = [
 [[package]]
 name = "rccl-thrust"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=a776d01cb29b77c031e693993d059a062ad680af#a776d01cb29b77c031e693993d059a062ad680af"
 dependencies = [
  "cuda-core",
  "cuda-device",

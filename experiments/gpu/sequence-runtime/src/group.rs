@@ -4,7 +4,7 @@
 use crate::{pointer, release, temporary, Auxiliary, Geometry, Result};
 use cq_gpu_runtime::{Buffer, Pool};
 use gpu_device_columns::OutputCount;
-use rccl_thrust::{arithmetic_range, select_flagged, DeviceBufferExt};
+use rccl_thrust::{arithmetic_range, select_flagged};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 // RCCL programs borrow a context, but own their module handles. Keep that
@@ -150,22 +150,18 @@ mod representation_tests {
             })?;
             Ok(addresses)
         };
-        let small = controls(10_000, true)?;
+        controls(10_000, true)?;
         let large = controls(20_000, true)?;
         let range = controls(10_000, false)?;
-        assert_ne!(small, large);
-        assert_ne!(small, range);
-        assert_eq!(small, controls(10_000, true)?);
+        assert_ne!(large, range);
+        assert_eq!(large, controls(10_000, true)?);
         assert_eq!(large, controls(20_000, true)?);
         assert_eq!(range, controls(10_000, false)?);
-        for rows in 30_000..30_000 + 2 * crate::RADIX_WORKSPACE_CACHE_LIMIT {
-            controls(rows, true)?;
-            // A hot stage survives misses, but cold recursive sizes do not
-            // accumulate for the lifetime of a stratum.
-            assert_eq!(small, controls(10_000, true)?);
-            assert!(crate::RADIX_WORKSPACES.with(|cache| {
-                cache.borrow().len() <= crate::RADIX_WORKSPACE_CACHE_LIMIT
-            }));
+        for rows in 30_000..30_016 {
+            let grown = controls(rows, true)?;
+            assert_eq!(grown, controls(10_000, true)?);
+            assert_eq!(range, controls(10_000, false)?);
+            assert!(crate::RADIX_WORKSPACES.with(|cache| cache.borrow().len() <= 2));
         }
         crate::release_cached_scratch(&pool);
         assert!(crate::RADIX_WORKSPACES.with(|cache| cache.borrow().is_empty()));
@@ -324,7 +320,7 @@ impl SegmentedGroup {
     pub unsafe fn fold(
         pool: Arc<Pool>,
         input: &Buffer<i64>,
-        live: Option<&cuda_core::DeviceBuffer<u32>>,
+        live: Option<&Buffer<u32>>,
         rows: usize,
         domain_keys: &[bool],
         aggregates: &[Aggregate],
@@ -348,7 +344,7 @@ impl SegmentedGroup {
 pub unsafe fn fold(
     pool: Arc<Pool>,
     input: &Buffer<i64>,
-    live: Option<&cuda_core::DeviceBuffer<u32>>,
+    live: Option<&Buffer<u32>>,
     rows: usize,
     domain_keys: &[bool],
     aggregates: &[Aggregate],
@@ -374,24 +370,27 @@ pub unsafe fn fold(
     let module = &programs.module;
     let exec = programs.thrust.par_in(stream, pool.resource())?;
     let launch = programs.cub.on(stream)?;
-    let mut order = temporary::<u32>(stream, rows)?;
+    let mut order = temporary::<u32>(&pool, rows)?;
     let rows = if let Some(live) = live {
-        let mut count = temporary::<u64>(stream, 1)?;
+        let mut count = temporary::<u64>(&pool, 1)?;
         if rows != 0 {
-            select_flagged(
-                &exec,
-                arithmetic_range(0u32, 1, rows),
-                live.view(),
-                order.view_mut(),
-                &mut count,
+            let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(
+                pool.resource(), &launch, rows,
+            )?;
+            rccl_cub::thrust_integration::device_select_flagged(
+                &launch,
+                rccl_cub::DeviceArithmeticRange::new(0_u32, 1_u32),
+                rccl_cub::DeviceSliceRead::new(live.ptr() as *const u32),
+                rccl_cub::DeviceSliceWrite::new(order.cu_deviceptr() as *mut u32),
+                &mut count, rows, &mut workspace,
             )?;
         }
         let selected = if rows == 0 {
             0
         } else {
-            count.to_host_vec(stream)?[0] as usize
+            count.to_host_vec()?[0] as usize
         };
-        let selected_order = temporary::<u32>(stream, selected)?;
+        let selected_order = temporary::<u32>(&pool, selected)?;
         if selected != 0 {
             unsafe {
                 cuda_core::simt::memory::memcpy_dtod_async(
@@ -409,10 +408,10 @@ pub unsafe fn fold(
     } else {
         rows
     };
-    let mut alternate_order = temporary::<u32>(stream, rows)?;
-    let mut offsets = temporary::<u32>(stream, rows.max(1))?;
-    let flags = temporary::<u32>(stream, rows)?;
-    let mut count = temporary::<u64>(stream, 1)?;
+    let mut alternate_order = temporary::<u32>(&pool, rows)?;
+    let mut offsets = temporary::<u32>(&pool, rows.max(1))?;
+    let flags = temporary::<u32>(&pool, rows)?;
+    let mut count = temporary::<u64>(&pool, 1)?;
     let mut key_domains = if rows == 0 {
         vec![GroupKeyDomain { minimum: 0, bound: 0, bits: 0 }; keys]
     } else {
@@ -465,10 +464,10 @@ pub unsafe fn fold(
         }
         let narrow_rows = if key_domains.iter().any(|domain| domain.bits <= 32) { rows } else { 0 };
         let wide_rows = if key_domains.iter().any(|domain| domain.bits > 32) { rows } else { 0 };
-        let mut sort_keys = temporary::<u32>(stream, narrow_rows)?;
-        let mut alternate_keys = temporary::<u32>(stream, narrow_rows)?;
-        let mut wide_keys = temporary::<u64>(stream, wide_rows)?;
-        let mut alternate_wide = temporary::<u64>(stream, wide_rows)?;
+        let mut sort_keys = temporary::<u32>(&pool, narrow_rows)?;
+        let mut alternate_keys = temporary::<u32>(&pool, narrow_rows)?;
+        let mut wide_keys = temporary::<u64>(&pool, wide_rows)?;
+        let mut alternate_wide = temporary::<u64>(&pool, wide_rows)?;
         // Stable least-significant-field passes produce lexicographic group order.
         for key in (0..keys).rev() {
             if key_domains[key].bits > 32 {
@@ -543,15 +542,15 @@ pub unsafe fn fold(
         select_flagged(
             &exec,
             arithmetic_range(0u32, 1, rows),
-            flags.view(),
-            offsets.view_mut(),
+            &flags,
+            &mut offsets,
             &mut count,
         )?;
     }
     let groups = if rows == 0 {
         usize::from(keys == 0)
     } else {
-        count.to_host_vec(stream)?[0] as usize
+        count.to_host_vec()?[0] as usize
     };
     let values = Buffer::<i64>::zeroed(pool.clone(), groups * width)?;
     let valid = Buffer::<u8>::zeroed(pool.clone(), groups * width)?;

@@ -1,6 +1,6 @@
 use crate::{Result, Word};
-use cuda_core::{DeviceBuffer, DeviceCopy, LaunchConfig1D};
-use gpu_device_columns::{Buffer, Pool};
+use cuda_core::{DeviceCopy, LaunchConfig1D};
+use gpu_device_columns::{Buffer, MemoryResource, Pool};
 use rccl_cub::{DeviceSliceRead, DeviceSliceWrite};
 use std::sync::Arc;
 
@@ -334,55 +334,88 @@ impl SetOps<'_> {
     }
 }
 
-// Native RCCL count/control buffers need stream-ordered destruction too.
+type DeviceBuffer<T> = rccl_memory::DeviceBuffer<'static, T, &'static MemoryResource>;
+type RadixWorkspace = rccl_cub::DeviceRadixSortBufferWorkspace<
+    DeviceBuffer<u64>, DeviceBuffer<i32>, DeviceBuffer<i32>,
+>;
+
+// Borrowed RCCL storage drops before its retained, stable-address pool.
 pub(crate) struct Native<T: DeviceCopy> {
-    buffer: Option<DeviceBuffer<T>>,
-    pool: Arc<Pool>,
+    buffer: DeviceBuffer<T>,
+    _pool: Arc<Pool>,
 }
 impl<T: DeviceCopy> Native<T> {
     pub(crate) fn new(pool: &Arc<Pool>, rows: usize) -> Result<Self> {
-        // SAFETY: every consumer initializes scratch before reading it.
+        let owner = pool.clone();
+        // SAFETY: the Arc retains both allocator and stream until buffer drops.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&owner) };
         Ok(Self {
-            buffer: Some(unsafe { DeviceBuffer::uninitialized_async(pool.stream(), rows)? }),
-            pool: pool.clone(),
+            buffer: DeviceBuffer::zeroed_in(retained.resource(), retained.stream(), rows)?,
+            _pool: owner,
         })
     }
     pub(crate) fn get(&self) -> &DeviceBuffer<T> {
-        self.buffer.as_ref().unwrap()
+        &self.buffer
     }
     pub(crate) fn get_mut(&mut self) -> &mut DeviceBuffer<T> {
-        self.buffer.as_mut().unwrap()
+        &mut self.buffer
     }
 }
-impl<T: DeviceCopy> Drop for Native<T> {
-    fn drop(&mut self) {
-        if let Some(buffer) = self.buffer.take() {
-            // SAFETY: all accesses were enqueued on this pool stream.
-            if let Err(error) = unsafe { buffer.drop_async(self.pool.stream()) } {
-                self.pool.context().record_err::<()>(Err(error));
-            }
-        }
-    }
+thread_local! {
+    static RADIX_CONTROLS: std::cell::RefCell<Vec<(bool, usize, RadixWorkspace, Arc<Pool>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn release_radix_controls() {
+    RADIX_CONTROLS.with(|cache| cache.borrow_mut().clear());
 }
 struct RadixScratch {
-    workspace: rccl_cub::DeviceRadixSortBufferWorkspace,
-    pool: Arc<Pool>,
+    workspace: Option<RadixWorkspace>,
+    rows: usize,
+    pairs: bool,
+    _pool: Arc<Pool>,
 }
 impl Drop for RadixScratch {
     fn drop(&mut self) {
-        fn release<T: DeviceCopy>(pool: &Pool, buffer: &mut DeviceBuffer<T>) {
-            // SAFETY: zero-length replacement owns no allocation; old uses are stream ordered.
-            let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }
-                .expect("empty allocation");
-            let old = std::mem::replace(buffer, empty);
-            if let Err(error) = unsafe { old.drop_async(pool.stream()) } {
-                pool.context().record_err::<()>(Err(error));
+        let Some(workspace) = self.workspace.take() else { return };
+        let entry = (self.pairs, self.rows, workspace, self._pool.clone());
+        let _ = RADIX_CONTROLS.try_with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache.retain(|entry| Arc::ptr_eq(&entry.3, &self._pool));
+            if let Some(index) = cache.iter().position(|entry| entry.0 == self.pairs) {
+                if cache[index].1 >= self.rows { return; }
+                cache.remove(index);
             }
+            cache.push(entry);
+        });
+    }
+}
+impl RadixScratch {
+    fn new(pool: &Arc<Pool>, launch: &rccl_cub::cuda::Launch<'_, '_>, rows: usize, pairs: bool) -> Result<Self> {
+        if let Some((_, capacity, workspace, owner)) = RADIX_CONTROLS.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache.retain(|entry| Arc::ptr_eq(&entry.3, pool));
+            cache.iter().position(|entry| entry.0 == pairs && entry.1 >= rows)
+                .map(|index| cache.remove(index))
+        }) {
+            return Ok(Self { workspace: Some(workspace), rows: capacity, pairs, _pool: owner });
         }
-        let (bins, lookback, counters) = self.workspace.__parts_mut();
-        release(&self.pool, bins);
-        release(&self.pool, lookback);
-        release(&self.pool, counters);
+        let owner = pool.clone();
+        assert!(std::ptr::eq(launch.stream(), pool.stream().as_ref()));
+        // SAFETY: the Arc retains the allocator and this exact stream until
+        // workspace destruction. The program lifetime is not extended.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&owner) };
+        let launch: rccl_cub::cuda::Launch<'static, '_> = unsafe { std::mem::transmute(*launch) };
+        let workspace = if pairs {
+            rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u64, u32, _>(
+                retained.resource(), &launch, rows,
+            )?
+        } else {
+            rccl_cub::device_radix_sort_keys_buffer_workspace_in::<u64, _>(
+                retained.resource(), &launch, rows,
+            )?
+        };
+        Ok(Self { workspace: Some(workspace), rows, pairs, _pool: owner })
     }
 }
 
@@ -434,10 +467,7 @@ impl KeySortScratch {
         Ok(Self {
             first: Native::new(pool, rows)?,
             alternate: Native::new(pool, rows)?,
-            controls: RadixScratch {
-                workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, rows)?,
-                pool: pool.clone(),
-            },
+            controls: RadixScratch::new(pool, launch, rows, false)?,
         })
     }
     pub(crate) fn capacity(&self) -> usize {
@@ -468,7 +498,7 @@ impl KeySortScratch {
             launch,
             &mut buffers,
             0..bits,
-            &mut self.controls.workspace,
+            self.controls.workspace.as_mut().unwrap(),
         )?;
         Ok(buffers.current().ptr() as *const u64)
     }
@@ -492,12 +522,7 @@ impl RowSortScratch {
             alternate: Native::new(pool, rows)?,
             indices: Native::new(pool, rows)?,
             alternate_indices: Native::new(pool, rows)?,
-            controls: RadixScratch {
-                workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u64, u32>(
-                    launch, rows,
-                )?,
-                pool: pool.clone(),
-            },
+            controls: RadixScratch::new(pool, launch, rows, true)?,
         })
     }
     pub(crate) fn capacity(&self) -> usize {
@@ -557,7 +582,7 @@ impl RowSortScratch {
                 launch,
                 &mut buffers,
                 0..(bits - lane * 64).min(64),
-                &mut self.controls.workspace,
+                self.controls.workspace.as_mut().unwrap(),
             )?;
         }
         Ok(buffers.current().1.ptr() as *const u32)
@@ -672,15 +697,12 @@ fn stable_keys<W: Word>(
             pool.stream().cu_stream(),
         )?;
     }
-    let mut controls = RadixScratch {
-        workspace: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, rows)?,
-        pool: pool.clone(),
-    };
+    let mut controls = RadixScratch::new(pool, launch, rows, false)?;
     let first_is_current = {
         let mut buffers = rccl_cub::DoubleBuffer::new(&mut first, &mut alternate)
             .ok_or("unequal scalar radix buffers")?;
         rccl_cub::device_radix_sort_keys_buffer(
-            launch, &mut buffers, 0..bits, &mut controls.workspace,
+            launch, &mut buffers, 0..bits, controls.workspace.as_mut().unwrap(),
         )?;
         buffers.current_is_first()
     };

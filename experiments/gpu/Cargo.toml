@@ -29,3 +29,8 @@ opt-level = 3
 
 [profile.dev.build-override]
 opt-level = 3
+
+[patch."https://github.com/StarGazerM/rccl.git"]
+rccl-memory = { path = "/data/rccl-wt/pool-workspaces/rccl-memory" }
+rccl-cub = { path = "/data/rccl-wt/pool-workspaces/rccl-cub" }
+rccl-thrust = { path = "/data/rccl-wt/pool-workspaces/rccl-thrust" }

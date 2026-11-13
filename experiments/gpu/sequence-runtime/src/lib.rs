@@ -10,12 +10,12 @@ pub mod selected;
 pub use selected::{select, SelectedRows};
 
 pub use cq_gpu_runtime::{Bounds, Buffer, Codec, ColumnView, DeviceColumns, EncodedColumn, Pool};
-use cuda_core::{CudaContext, CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
+use cuda_core::{CudaContext, CudaStream, DeviceCopy, LaunchConfig1D};
+type DeviceBuffer<T> = rccl_memory::DeviceBuffer<'static, T, &'static MemoryResource>;
 use gpu_compress::{Catalog, Domain};
 use gpu_compress_host::Kind;
 pub use gpu_device_columns::{MemoryResource, OutputCount};
 use rccl_cub::DoubleBuffer;
-use rccl_thrust::prelude::*;
 use rccl_thrust::{
     arithmetic_range, gather, lower_bound, select_flagged, sort_columns_lexicographic,
 };
@@ -991,7 +991,7 @@ thread_local! {
 /// Call after dropping stratum-local providers, before [`Pool::release_unused`].
 /// Published results and checked-out providers retain their own allocations.
 /// Frees follow prior uses on the matching pool's stream; this does not wait
-/// for completion. Native CUDA scratch is not included in pool memory stats.
+/// for completion. Pooled library scratch is included in pool memory stats.
 pub fn release_cached_scratch(pool: &Arc<Pool>) {
     RADIX_WORKSPACES.with(|cache| {
         cache.borrow_mut().retain(|scratch| !Arc::ptr_eq(&scratch.pool, pool));
@@ -1012,50 +1012,33 @@ pub(crate) fn build_module(pool: &Pool) -> Result<kernels::build::LoadedModule> 
     })
 }
 
+type PooledRadixWorkspace = rccl_cub::DeviceRadixSortBufferWorkspace<
+    rccl_memory::DeviceBuffer<'static, u64, &'static MemoryResource>,
+    rccl_memory::DeviceBuffer<'static, i32, &'static MemoryResource>,
+    rccl_memory::DeviceBuffer<'static, i32, &'static MemoryResource>,
+>;
 struct RadixWorkspace {
     rows: usize,
     wide_keys: bool,
-    workspace: rccl_cub::DeviceRadixSortBufferWorkspace,
+    workspace: PooledRadixWorkspace,
     pool: Arc<Pool>,
 }
-impl Drop for RadixWorkspace {
-    fn drop(&mut self) {
-        // Match CanonScratch: consuming these controls is not exposed by RCCL.
-        // Empty replacements allocate nothing; real frees stay stream ordered.
-        fn release<T: DeviceCopy>(pool: &Pool, buffer: &mut DeviceBuffer<T>) {
-            let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }
-                .expect("zero-length device buffer needs no allocation");
-            let buffer = std::mem::replace(buffer, empty);
-            pool.context()
-                .record_err(unsafe { buffer.drop_async(pool.stream()) });
-        }
-        let (bins, lookback, counters) = self.workspace.__parts_mut();
-        release(&self.pool, bins);
-        release(&self.pool, lookback);
-        release(&self.pool, counters);
-    }
-}
 
-// Bound native scratch across changing recursive relation cardinalities, while
-// retaining the working set of range/group stages in a query. This limits the
-// number of owners, not the size or initialization policy of any workspace.
-const RADIX_WORKSPACE_CACHE_LIMIT: usize = 8;
-
-/// Retain a bounded LRU of exact-size controls for the active pool. RCCL clears
-/// controls before each sort; sharing is safe only on this pool's stream.
+/// Retain grow-only controls for each key width on the active pool.
+/// RCCL clears controls before each sort; sharing is stream ordered.
 /// Published results never borrow this scratch.
 fn with_radix_workspace(
     pool: &Arc<Pool>,
     launch: &rccl_cub::cuda::Launch<'_, '_>,
     rows: usize,
     wide_keys: bool,
-    sort: impl FnOnce(&mut rccl_cub::DeviceRadixSortBufferWorkspace) -> Result<()>,
+    sort: impl FnOnce(&mut PooledRadixWorkspace) -> Result<()>,
 ) -> Result<()> {
     RADIX_WORKSPACES.with(|cache| {
         let mut cache = cache.borrow_mut();
         cache.retain(|scratch| Arc::ptr_eq(&scratch.pool, pool));
         let index = match cache.iter().position(|scratch| {
-            scratch.rows == rows && scratch.wide_keys == wide_keys
+            scratch.rows >= rows && scratch.wide_keys == wide_keys
         }) {
             Some(index) => {
                 let scratch = cache.remove(index);
@@ -1063,14 +1046,17 @@ fn with_radix_workspace(
                 cache.len() - 1
             }
             None => {
-                if cache.len() == RADIX_WORKSPACE_CACHE_LIMIT {
-                    drop(cache.remove(0));
-                }
+                cache.retain(|scratch| scratch.wide_keys != wide_keys);
                 pool.context().bind_to_thread()?;
+                // SAFETY: workspace drops before its retained stable-address pool.
+                let retained: &'static Pool = unsafe { &*Arc::as_ptr(pool) };
+                assert!(std::ptr::eq(launch.stream(), retained.stream().as_ref()));
+                let launch: rccl_cub::cuda::Launch<'static, '_> =
+                    unsafe { std::mem::transmute(*launch) };
                 let workspace = if wide_keys {
-                    rccl_cub::device_radix_sort_pairs_buffer_workspace::<u64, u32>(launch, rows)?
+                    rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u64, u32, _>(retained.resource(), &launch, rows)?
                 } else {
-                    rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(launch, rows)?
+                    rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u32, u32, _>(retained.resource(), &launch, rows)?
                 };
                 cache.push(RadixWorkspace {
                     rows,
@@ -1216,7 +1202,7 @@ impl<'pool> RangeBuilder<'pool> {
         let module = &self.module;
         let (rows, selected) = match &descriptor.selection {
             Some(selection) if base_rows > 0 => {
-                let flags = temporary::<u32>(stream, base_rows)?;
+                let flags = temporary::<u32>(pool, base_rows)?;
                 let shape = module.prepare_range_flags(self.selection.config(1))?;
                 let blocks = self.selection.grid(shape.function(), base_rows)?;
                 // DECODE V: index selection launch reconstructs values before range comparison; P6 translate predicates to codes.
@@ -1229,16 +1215,16 @@ impl<'pool> RangeBuilder<'pool> {
                     selection.end,
                     pointer(&flags),
                 )?;
-                let mut selected = temporary::<u32>(stream, base_rows)?;
-                let mut count = temporary::<u64>(stream, 1)?;
+                let mut selected = temporary::<u32>(pool, base_rows)?;
+                let mut count = temporary::<u64>(pool, 1)?;
                 select_flagged(
                     &exec,
                     arithmetic_range(0_u32, 1, base_rows),
-                    flags.view(),
-                    selected.view_mut(),
+                    &flags,
+                    &mut selected,
                     &mut count,
                 )?;
-                let rows = count.to_host_vec(stream)?[0] as usize;
+                let rows = count.to_host_vec()?[0] as usize;
                 release(stream, flags)?;
                 release(stream, count)?;
                 (rows, Some(selected))
@@ -1321,8 +1307,8 @@ impl<'pool> RangeBuilder<'pool> {
                 workspace,
             );
         }
-        let mut keys = temporary::<u32>(stream, rows)?;
-        let mut order = temporary::<u32>(stream, rows)?;
+        let mut keys = temporary::<u32>(pool, rows)?;
+        let mut order = temporary::<u32>(pool, rows)?;
         let source = selected
             .as_ref()
             .map_or(std::ptr::null(), |selected| pointer(selected) as *const u32);
@@ -1338,7 +1324,7 @@ impl<'pool> RangeBuilder<'pool> {
                 .key
                 .iter()
                 .map(|key| {
-                    let out = temporary::<u32>(stream, rows)?;
+                    let out = temporary::<u32>(pool, rows)?;
                     // DECODE V: multi-key index build launches full column reconstruction before sorting; P6 sort retained encoded fields.
                     module.sequence_decode_column(
                         stream,
@@ -1357,7 +1343,7 @@ impl<'pool> RangeBuilder<'pool> {
                 .iter()
                 .map(|key| key_bits(key.domain_size))
                 .collect::<Vec<_>>();
-            let mut permutation = temporary::<u32>(stream, rows)?;
+            let mut permutation = temporary::<u32>(pool, rows)?;
             sort_columns_lexicographic(
                 &exec,
                 &plain.iter().collect::<Vec<_>>(),
@@ -1367,12 +1353,12 @@ impl<'pool> RangeBuilder<'pool> {
             )?;
             let base_order = match &selected {
                 Some(selected) => {
-                    let mut mapped = temporary::<u32>(stream, rows)?;
+                    let mut mapped = temporary::<u32>(pool, rows)?;
                     gather(
                         &exec,
-                        selected.view(),
-                        permutation.view(),
-                        mapped.view_mut(),
+                        selected,
+                        &permutation,
+                        &mut mapped,
                     )?;
                     release(stream, permutation)?;
                     mapped
@@ -1407,8 +1393,8 @@ impl<'pool> RangeBuilder<'pool> {
             )?;
             let bits = key_bits(first.domain_size);
             if rows > 1 && bits > 0 {
-                let mut alternate_keys = temporary::<u32>(stream, rows)?;
-                let mut alternate_order = temporary::<u32>(stream, rows)?;
+                let mut alternate_keys = temporary::<u32>(pool, rows)?;
+                let mut alternate_order = temporary::<u32>(pool, rows)?;
                 let mut pairs = DoubleBuffer::paired(
                     (&mut keys, &mut order),
                     (&mut alternate_keys, &mut alternate_order),
@@ -1433,12 +1419,12 @@ impl<'pool> RangeBuilder<'pool> {
                 release(stream, alternate_order)?;
             }
         }
-        let mut offsets = temporary::<u64>(stream, entries)?;
+        let mut offsets = temporary::<u64>(pool, entries)?;
         lower_bound(
             &exec,
-            keys.view(),
+            &keys,
             arithmetic_range(0_u32, 1, entries),
-            offsets.view_mut(),
+            &mut offsets,
         )?;
         let payload = descriptor
             .payload
@@ -1569,17 +1555,8 @@ fn key_bits(domain: usize) -> u32 {
     }
 }
 struct TemporaryCache<T: DeviceCopy> {
-    stream: Arc<CudaStream>,
     buffers: Vec<DeviceBuffer<T>>,
-}
-impl<T: DeviceCopy> Drop for TemporaryCache<T> {
-    fn drop(&mut self) {
-        for buffer in self.buffers.drain(..) {
-            self.stream
-                .context()
-                .record_err(unsafe { buffer.drop_async(&self.stream) });
-        }
-    }
+    pool: Arc<Pool>,
 }
 thread_local! {
     static TEMP_U32: RefCell<Option<TemporaryCache<u32>>> = const { RefCell::new(None) };
@@ -1598,24 +1575,27 @@ impl TemporaryElement for u64 {
         &TEMP_U64
     }
 }
-fn temporary<T: TemporaryElement>(stream: &Arc<CudaStream>, len: usize) -> Result<DeviceBuffer<T>> {
+fn temporary<T: TemporaryElement>(pool: &Arc<Pool>, len: usize) -> Result<DeviceBuffer<T>> {
     T::cache().with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache
             .as_ref()
-            .is_none_or(|cache| !Arc::ptr_eq(&cache.stream, stream))
+            .is_none_or(|cache| !Arc::ptr_eq(&cache.pool, pool))
         {
             *cache = Some(TemporaryCache {
-                stream: stream.clone(),
+                pool: pool.clone(),
                 buffers: Vec::new(),
             });
-            stream.context().bind_to_thread()?;
+            pool.context().bind_to_thread()?;
         }
         let buffers = &mut cache.as_mut().unwrap().buffers;
         if let Some(index) = buffers.iter().position(|buffer| buffer.len() == len) {
             return Ok(buffers.swap_remove(index));
         }
-        Ok(unsafe { DeviceBuffer::uninitialized_async(stream, len)? })
+        // SAFETY: all private callers retain this pool until returned scratch
+        // drops or is returned to this cache. Published SelectedRows retains it.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(pool) };
+        Ok(DeviceBuffer::zeroed_in(retained.resource(), retained.stream(), len)?)
     })
 }
 fn pointer<T: DeviceCopy>(buffer: &DeviceBuffer<T>) -> *mut T {
@@ -1625,14 +1605,14 @@ fn release<T: TemporaryElement>(stream: &CudaStream, buffer: DeviceBuffer<T>) ->
     T::cache().with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(cache) = cache.as_mut() {
-            if cache.stream.cu_stream() == stream.cu_stream()
-                && Arc::ptr_eq(cache.stream.context(), stream.context())
+            if cache.pool.stream().cu_stream() == stream.cu_stream()
+                && Arc::ptr_eq(cache.pool.context(), stream.context())
             {
                 cache.buffers.push(buffer);
                 return Ok(());
             }
         }
-        unsafe { buffer.drop_async(stream)? };
+        drop(buffer);
         Ok(())
     })
 }

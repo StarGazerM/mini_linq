@@ -8,7 +8,7 @@
 //! Stable flagged selection restores original row order. Only one scalar count
 //! crosses back to the host; values, hashes and positions remain on the device.
 use crate::{Buffer, ColumnView, Pool, Result};
-use cuda_core::{CudaContext, DeviceBuffer, DeviceCopy};
+use cuda_core::{CudaContext, DeviceCopy};
 use rccl_cub::{DeviceArithmeticRange, DeviceSliceRead, DeviceSliceWrite};
 use std::{cell::RefCell, mem::size_of, rc::Rc, sync::Arc};
 
@@ -18,7 +18,17 @@ mod kernels;
 struct Modules {
     rows: kernels::rows::LoadedModule,
     cub: rccl_cub::cuda::Program<'static>,
+    controls: RefCell<Option<Controls>>,
     context: Arc<CudaContext>,
+}
+
+type ControlBuffer<T> = rccl_memory::DeviceBuffer<'static, T, &'static crate::MemoryResource>;
+struct Controls {
+    workspace: rccl_cub::DeviceRadixSortBufferWorkspace<
+        ControlBuffer<u64>, ControlBuffer<i32>, ControlBuffer<i32>,
+    >,
+    rows: usize,
+    pool: Arc<Pool>,
 }
 thread_local! {
     static MODULES: RefCell<Option<Rc<Modules>>> = const { RefCell::new(None) };
@@ -39,7 +49,7 @@ fn modules(pool: &Pool) -> Result<Rc<Modules>> {
         let cub = unsafe {
             std::mem::transmute::<rccl_cub::cuda::Program<'_>, rccl_cub::cuda::Program<'static>>(cub)
         };
-        let modules = Rc::new(Modules { rows, cub, context });
+        let modules = Rc::new(Modules { rows, cub, controls: RefCell::new(None), context });
         *cache.borrow_mut() = Some(modules.clone());
         Ok(modules)
     })
@@ -70,37 +80,6 @@ unsafe impl<T: DeviceCopy> cuda_host::KernelSliceArg for SortBuffer<T> {
 }
 unsafe impl<T: DeviceCopy> cuda_host::KernelSliceArgMut for SortBuffer<T> {}
 
-// CUB's control-buffer interfaces require native DeviceBuffers. Like the
-// datalog radix runtime, release these on the same stream, including on errors.
-struct Count {
-    buffer: Option<DeviceBuffer<u64>>,
-    pool: Arc<Pool>,
-}
-impl Drop for Count {
-    fn drop(&mut self) {
-        if let Some(buffer) = self.buffer.take() {
-            self.pool.context().record_err(unsafe { buffer.drop_async(self.pool.stream()) });
-        }
-    }
-}
-struct RadixScratch {
-    workspace: rccl_cub::DeviceRadixSortBufferWorkspace,
-    pool: Arc<Pool>,
-}
-impl Drop for RadixScratch {
-    fn drop(&mut self) {
-        fn release<T: DeviceCopy>(pool: &Pool, buffer: &mut DeviceBuffer<T>) {
-            let empty = unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 0) }
-                .expect("empty allocation");
-            let old = std::mem::replace(buffer, empty);
-            pool.context().record_err(unsafe { old.drop_async(pool.stream()) });
-        }
-        let (bins, lookback, counters) = self.workspace.__parts_mut();
-        release(&self.pool, bins);
-        release(&self.pool, lookback);
-        release(&self.pool, counters);
-    }
-}
 
 /// Return first-occurrence row positions, in original input order, or `None`
 /// exactly when the projected tuples are already distinct.
@@ -148,10 +127,17 @@ pub unsafe fn unique_rows(
         hashes.0.ptr(),
         order.0.ptr(),
     )?;
-    let mut scratch = RadixScratch {
-        workspace: rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(&launch, rows)?,
-        pool: pool.clone(),
-    };
+    let mut scratch = modules.controls.borrow_mut();
+    if scratch.as_ref().is_none_or(|cached| cached.rows < rows || !Arc::ptr_eq(&cached.pool, &pool)) {
+        drop(scratch.take());
+        let owner = pool.clone();
+        // SAFETY: Controls drops its workspace before the stable-address owner.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(&owner) };
+        let workspace = rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u32, u32, _>(
+            retained.resource(), &modules.cub.on(retained.stream())?, rows,
+        )?;
+        *scratch = Some(Controls { workspace, rows, pool: owner });
+    }
     let flags;
     {
         let mut buffers = rccl_cub::DoubleBuffer::paired(
@@ -162,10 +148,9 @@ pub unsafe fn unique_rows(
             &launch,
             &mut buffers,
             0..32,
-            &mut scratch.workspace,
+            &mut scratch.as_mut().unwrap().workspace,
         )?;
-        // Sort workspace is no longer needed; flags only serve verification
-        // and the subsequent stable selection.
+        // Release the borrow; retain controls for the next sort on this pool.
         drop(scratch);
         flags = unsafe { Buffer::<u32>::uninitialized(pool.clone(), rows)? };
         let (hashes, order) = buffers.current();
@@ -188,10 +173,9 @@ pub unsafe fn unique_rows(
     drop(alternate_order);
     drop(descriptors);
     let positions = unsafe { Buffer::<u32>::uninitialized(pool.clone(), rows)? };
-    let mut count = Count {
-        buffer: Some(unsafe { DeviceBuffer::uninitialized_async(pool.stream(), 1)? }),
-        pool: pool.clone(),
-    };
+    let mut count = rccl_memory::DeviceBuffer::<u64, _>::zeroed_in(
+        pool.resource(), pool.stream(), 1,
+    )?;
     let mut workspace = rccl_cub::thrust_integration::compaction_workspace_in(
         pool.resource(), &launch, rows,
     )?;
@@ -200,7 +184,7 @@ pub unsafe fn unique_rows(
         DeviceArithmeticRange::new(0_u32, 1_u32),
         DeviceSliceRead::new(flags.ptr() as *const u32),
         DeviceSliceWrite::new(positions.ptr()),
-        count.buffer.as_mut().unwrap(),
+        &mut count,
         rows,
         &mut workspace,
     )?;
@@ -208,7 +192,7 @@ pub unsafe fn unique_rows(
     unsafe {
         cuda_core::simt::memory::memcpy_dtoh_async(
             &mut distinct as *mut u64,
-            count.buffer.as_ref().unwrap().cu_deviceptr(),
+            count.cu_deviceptr(),
             size_of::<u64>(),
             pool.stream().cu_stream(),
         )?;

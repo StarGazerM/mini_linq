@@ -35,7 +35,7 @@ fn segmented_integer_monoids_and_empty_global_identity() -> Result<()> {
             (vec![2, 1, -7, -7, -7], vec![1; 5])
         ]
     );
-    let live = cuda_core::DeviceBuffer::from_host(pool.stream(), &[0u32, 1, 0])?;
+    let live = Buffer::from_host(pool.clone(), &[0u32, 1, 0])?;
     let selected = unsafe {
         SegmentedGroup::fold(
             pool.clone(),
@@ -140,7 +140,7 @@ fn masked_multiblock_multikey_fold_refuses_wide_domains_but_sorts_computed_keys(
     // Dead rows carry a wide first key: their extrema must not affect either
     // the domain refusal decision or the recorded narrow-key range.
     let data = Buffer::from_host(pool.clone(), &data)?;
-    let live = cuda_core::DeviceBuffer::from_host(pool.stream(), &live)?;
+    let live = Buffer::from_host(pool.clone(), &live)?;
     let error = unsafe {
         group::fold(
             pool.clone(), &data, Some(&live), ROWS, &[true, true],

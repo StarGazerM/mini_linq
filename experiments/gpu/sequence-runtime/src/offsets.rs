@@ -154,7 +154,7 @@ fn scan_cached(
     let input_bytes = bytes - std::mem::size_of::<u32>();
     let stream = cached.pool.stream();
     let launch = cached.cub.on(stream)?;
-    let mut scratch = temporary::<u32>(stream, entries)?;
+    let mut scratch = temporary::<u32>(&cached.pool, entries)?;
     // Only the live lengths are initialized. Initialize the extra scan input
     // explicitly instead of reading an uninitialized sentinel or capacity.
     unsafe {

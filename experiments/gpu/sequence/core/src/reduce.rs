@@ -296,13 +296,9 @@ pub fn group(
     };
     let live_write = filtered.then(|| quote!(*live.add(position)=__live as u32;));
     let live_buffer = filtered.then(|| quote! {
-        let __cq_group_live=unsafe {::cuda_core::DeviceBuffer::<u32>::uninitialized_async(__cq_pool.stream(),#length)?};
+        let __cq_group_live=unsafe {::cq_gpu_sequence_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(),#length)?};
     });
-    let release_live = filtered.then(|| {
-        quote!(unsafe {
-            __cq_group_live.drop_async(__cq_pool.stream())?;
-        })
-    });
+    let release_live = filtered.then(|| quote!(drop(__cq_group_live);));
     let abi = crate::emit::CheckedKernel::lower(kernel, quote! {
         #[kernel]
         #[launch_bounds(#threads)]

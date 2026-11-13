@@ -16,13 +16,14 @@
 //! Usage: h05-reference DATA_DIR [RESULTS_JSON] [--capacity N] [--repeat N]
 mod kernels;
 
-use cuda_core::{CudaStream, DeviceBuffer, DeviceCopy, LaunchConfig1D};
+use cuda_core::{CudaStream, DeviceCopy, LaunchConfig1D};
 use gpu_compress::{Catalog, Domain, Source};
 use gpu_compress_host::tpch::schema;
 use gpu_device_columns::{Bounds, Buffer, Codec, ColumnView, EncodedColumn, MemoryResource, Pool};
 use kernels::*;
-use rccl_cub::{cuda::Launch, DeviceRadixSortBufferWorkspace, DoubleBuffer};
-use rccl_thrust::prelude::*;
+use rccl_cub::{cuda::Launch, DoubleBuffer};
+type DeviceBuffer<T> = rccl_memory::DeviceBuffer<'static, T, &'static MemoryResource>;
+type DeviceRadixSortBufferWorkspace = rccl_cub::DeviceRadixSortBufferWorkspace<DeviceBuffer<u64>, DeviceBuffer<i32>, DeviceBuffer<i32>>;
 use rccl_thrust::{
     arithmetic_range, gather, lower_bound, select_flagged, sort_columns_lexicographic,
     unique_copy_by,
@@ -117,14 +118,15 @@ impl BuiltIndex {
     }
 }
 
-/// Stream-ordered temporary; released with `release`, never by implicit drop
-/// (which synchronizes the whole context).
-fn temporary<T: DeviceCopy>(stream: &Arc<CudaStream>, len: usize) -> Result<DeviceBuffer<T>> {
-    Ok(unsafe { DeviceBuffer::uninitialized_async(stream, len)? })
+// Private temporaries never escape the main pool owner.
+fn temporary<T: DeviceCopy>(pool: &Arc<Pool>, len: usize) -> Result<DeviceBuffer<T>> {
+    // SAFETY: every caller retains pool until scratch is released.
+    let retained: &'static Pool = unsafe { &*Arc::as_ptr(pool) };
+    Ok(DeviceBuffer::zeroed_in(retained.resource(), retained.stream(), len)?)
 }
 
-fn release<T: DeviceCopy>(stream: &CudaStream, buffer: DeviceBuffer<T>) -> Result<()> {
-    unsafe { buffer.drop_async(stream)? };
+fn release<T: DeviceCopy>(_stream: &CudaStream, buffer: DeviceBuffer<T>) -> Result<()> {
+    drop(buffer);
     Ok(())
 }
 
@@ -166,7 +168,7 @@ fn build_index(
     let (rows, selected) = match &spec.selection {
         None => (base_rows, None),
         Some(selection) => {
-            let flags = temporary::<u32>(stream, base_rows)?;
+            let flags = temporary::<u32>(pool, base_rows)?;
             // DECODE V: reference selection launches decode-before-range filtering; P6 translate predicates to the encoded domain.
             module.range_flags(
                 stream,
@@ -177,16 +179,16 @@ fn build_index(
                 selection.end,
                 pointer(&flags),
             )?;
-            let mut selected = temporary::<u32>(stream, base_rows)?;
-            let mut count = temporary::<u64>(stream, 1)?;
+            let mut selected = temporary::<u32>(pool, base_rows)?;
+            let mut count = temporary::<u64>(pool, 1)?;
             select_flagged(
                 exec,
                 arithmetic_range(0_u32, 1, base_rows),
-                flags.view(),
-                selected.view_mut(),
+            &flags,
+            &mut selected,
                 &mut count,
             )?;
-            let rows = count.to_host_vec(stream)?[0] as usize;
+            let rows = count.to_host_vec()?[0] as usize;
             release(stream, flags)?;
             release(stream, count)?;
             (rows, Some(selected))
@@ -197,10 +199,10 @@ fn build_index(
         _ => Arc::new(Buffer::from_host(pool.clone(), &[rows as u64])?),
     };
 
-    let mut keys = temporary::<u32>(stream, rows)?;
-    let mut order = temporary::<u32>(stream, rows)?;
-    let mut alternate_keys = temporary::<u32>(stream, rows)?;
-    let mut alternate_order = temporary::<u32>(stream, rows)?;
+    let mut keys = temporary::<u32>(pool, rows)?;
+    let mut order = temporary::<u32>(pool, rows)?;
+    let mut alternate_keys = temporary::<u32>(pool, rows)?;
+    let mut alternate_order = temporary::<u32>(pool, rows)?;
     let launch_keys = strided(rows);
     let (key_ptr, order_ptr) = (pointer(&keys), pointer(&order));
     // (key, row) pairs of one column, for all rows in order or through a
@@ -242,7 +244,7 @@ fn build_index(
         let plain = columns
             .iter()
             .map(|(column, _)| {
-                let out = temporary::<u32>(stream, rows)?;
+                let out = temporary::<u32>(pool, rows)?;
                 // DECODE V: index builder launches whole-key decode before lexicographic sort; P6 retain encoded keys.
                 module.decode_column(
                     stream,
@@ -259,7 +261,7 @@ fn build_index(
             .iter()
             .map(|(_, domain)| key_bits(*domain))
             .collect();
-        let mut permutation = temporary::<u32>(stream, rows)?;
+        let mut permutation = temporary::<u32>(pool, rows)?;
         sort_columns_lexicographic(
             exec,
             &plain.iter().collect::<Vec<_>>(),
@@ -270,8 +272,8 @@ fn build_index(
         // Sorted positions index the selected rows; map them to base rows.
         let base_order = match &selected {
             Some(selected) => {
-                let mut mapped = temporary::<u32>(stream, rows)?;
-                gather(exec, selected.view(), permutation.view(), mapped.view_mut())?;
+                let mut mapped = temporary::<u32>(pool, rows)?;
+                gather(exec, selected, &permutation, &mut mapped)?;
                 release(stream, permutation)?;
                 mapped
             }
@@ -286,7 +288,7 @@ fn build_index(
     }
     let bits = key_bits(columns[0].1);
     let entries = spec.key.entries();
-    let mut offsets = temporary::<u64>(stream, entries)?;
+    let mut offsets = temporary::<u64>(pool, entries)?;
     let payload = {
         let mut pairs = DoubleBuffer::paired(
             (&mut keys, &mut order),
@@ -299,9 +301,9 @@ fn build_index(
         let (sorted_keys, sorted_order) = pairs.current();
         lower_bound(
             exec,
-            sorted_keys.view(),
+            &**sorted_keys,
             arithmetic_range(0_u32, 1, entries),
-            offsets.view_mut(),
+            &mut offsets,
         )?;
         let sorted = sorted_order.cu_deviceptr() as *const u32;
         spec.payload
@@ -358,6 +360,7 @@ struct Workspace {
     /// Reusable RCCL radix controls for the answer keys at this capacity.
     sort: DeviceRadixSortBufferWorkspace,
     capacity: usize,
+    _pool: Arc<Pool>,
 }
 
 impl Workspace {
@@ -372,6 +375,10 @@ impl Workspace {
             return Err("output capacity exceeds the u32 bound".into());
         }
         let column = |n: usize| Buffer::<u32>::zeroed(pool.clone(), n);
+        // SAFETY: sort drops before the retained pool owner.
+        let retained: &'static Pool = unsafe { &*Arc::as_ptr(pool) };
+        assert!(std::ptr::eq(launch.stream(), retained.stream().as_ref()));
+        let launch: Launch<'static, '_> = unsafe { std::mem::transmute(*launch) };
         Ok(Self {
             meta: Buffer::zeroed(pool.clone(), META_WORDS)?,
             segment_begin: column(segment_capacity)?,
@@ -379,8 +386,9 @@ impl Workspace {
             segment_offsets: column(segment_capacity + 1)?,
             segment_capacity: segment_capacity as u32,
             answers: Buffer::zeroed(pool.clone(), capacity)?,
-            sort: rccl_cub::device_radix_sort_keys_buffer_workspace::<u64>(launch, capacity)?,
+            sort: rccl_cub::device_radix_sort_keys_buffer_workspace_in::<u64, _>(retained.resource(), &launch, capacity)?,
             capacity,
+            _pool: pool.clone(),
         })
     }
 }
@@ -573,12 +581,15 @@ fn main() -> Result<()> {
     let stream = pool.stream();
     let exec: Exec<'_> = thrust.par_in(stream, pool.resource())?;
     let launch = cub.on(stream)?;
+    // SAFETY: sorts are destroyed before the retained main pool.
+    let retained: &'static Pool = unsafe { &*Arc::as_ptr(&pool) };
+    let retained_launch = cub.on(retained.stream())?;
     // Setup: RCCL's reusable radix controls, one per index.
     let mut sorts = specs
         .iter()
         .map(|spec| {
-            rccl_cub::device_radix_sort_pairs_buffer_workspace::<u32, u32>(
-                &launch,
+            rccl_cub::device_radix_sort_pairs_buffer_workspace_in::<u32, u32, _>(
+                retained.resource(), &retained_launch,
                 base.rows(spec.key.column()),
             )
         })
@@ -661,8 +672,8 @@ fn main() -> Result<()> {
             continue;
         }
         let rows = emitted as usize;
-        let mut keys = temporary::<u64>(stream, rows)?;
-        let mut alternate = temporary::<u64>(stream, rows)?;
+        let mut keys = temporary::<u64>(&pool, rows)?;
+        let mut alternate = temporary::<u64>(&pool, rows)?;
         if rows > 0 {
             unsafe {
                 cuda_core::simt::memory::memcpy_dtod_async(
@@ -673,8 +684,8 @@ fn main() -> Result<()> {
                 )?;
             }
         }
-        let mut unique = temporary::<u64>(stream, rows)?;
-        let mut selected = temporary::<u64>(stream, 1)?;
+        let mut unique = temporary::<u64>(&pool, rows)?;
+        let mut selected = temporary::<u64>(&pool, 1)?;
         {
             let mut buffers = DoubleBuffer::new(&mut keys, &mut alternate)
                 .ok_or("radix double buffer extents differ")?;
@@ -686,14 +697,14 @@ fn main() -> Result<()> {
             )?;
             unique_copy_by(
                 &exec,
-                buffers.current().view(),
-                unique.view_mut(),
+                &**buffers.current(),
+                &mut unique,
                 &mut selected,
                 |a: u64, b: u64| a == b,
             )?;
         }
         let finished = stream.record_event(timing)?;
-        let unique_count = selected.to_host_vec(stream)?[0];
+        let unique_count = selected.to_host_vec()?[0];
         let wall_ms = wall.elapsed().as_secs_f64() * 1000.0;
 
         let built_event = index_events.last().unwrap();
@@ -715,7 +726,7 @@ fn main() -> Result<()> {
             index_bytes: built.iter().map(BuiltIndex::bytes).sum(),
         };
         if !checked {
-            let words = unique.to_host_vec(stream)?;
+            let words = unique.to_host_vec()?;
             let supplier_mask = (1u64 << supplier_bits) - 1;
             let nation_mask = (1u64 << nation_bits) - 1;
             let order_shift = supplier_bits + nation_bits;

@@ -1573,6 +1573,7 @@ thread_local! {
 /// Frees are ordered after the last use on each retained pool's stream.
 pub fn release_set_scratch() {
     SET_SCRATCH.with(|cache| cache.borrow_mut().clear());
+    runs::release_radix_controls();
 }
 
 // As in Sequence's scan cache, the final Arc keeps RCCL's borrowed resource
