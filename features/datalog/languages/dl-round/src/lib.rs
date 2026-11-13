@@ -719,6 +719,11 @@ impl Text for InputSource {
 /// sole owner. Neither certificate permits arbitrary CQ or context edits.
 pub fn erase(program: &Program) -> syn::Result<Program> {
     let mut erased = program.clone();
+    // Names are reserved only against new execution bindings; without a
+    // certificate there is nothing to erase and nothing to compare them with.
+    if program.execution.is_empty() {
+        return Ok(erased);
+    }
     let mut used = BTreeSet::new();
     let mut names = BTreeSet::new();
     collect_names(program.storage.to_token_stream(), &mut names);
