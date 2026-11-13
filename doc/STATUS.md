@@ -8,6 +8,22 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Batch gates (2026-11-13, pooled CUB/Thrust scratch `75ae1b4e` vs
+`7abd4f14`):** RCCL `a74cb59f` adds allocator-aware workspace constructors;
+the GPU runtimes take all CUB/Thrust and DOOP native scratch from the RCCL pool
+and reuse radix controls. xalan allocation calls (gdb): synchronous
+`cuMemAlloc` 1,977 → 9 (pool growth only), `cuMemAllocAsync` 5,504 → 0.
+- GPU gate on RunPod RTX 6000 Ada **PASS** (crates, radix-counters, H05 SF10
+  8.423 ms, Cassandra 26/26).
+- Paired query time, 5 alternating pairs, every sample exact
+  ([raw](../experiments/gpu/compare/cub-pool-2026-11-13.pod-bench.json)):
+  doop-gpu xalan fixpoint **0.923 [0.882, 0.951]** (setup 0.946, output 1.016);
+  GPU TPC-H SF1 geomean **0.965 [0.928, 0.984]**, SF10 **0.973 [0.957, 0.977]**.
+  CIs above 1 are at most 1.010 (h07 SF10); h15 0.765/0.829, d72_inner
+  0.857/0.843, d85 0.859/0.899.
+- The base here is the Phase 1a tip, whose xalan fixpoint measured 1.049× of
+  `e4e08c99` in a separate session; the two ratios are from different sessions.
+
 **Batch gates (2026-11-12, compression Phase 1a: GPU TPC-H key domains
 `7abd4f14` vs `e4e08c99`):** keys become u32 codes in shared load-recorded
 Offset/Rank domains (CHANGELOG, STORAGE). Only `experiments/gpu`, `testkit`,
