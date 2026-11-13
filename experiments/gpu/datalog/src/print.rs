@@ -2,6 +2,7 @@
 //! Providers, initializers, backing states and scratch lifetimes come from the
 //! recorded device Storage; this printer composes their fixed operations.
 use cq_datalog_support::ensure;
+use crate::storage::FullStates;
 use cq_lang_datalog_round::{
     self as round, HoleInterface, InputSource, KeySet, Program, RoundContext, storage,
 };
@@ -42,6 +43,7 @@ pub(crate) fn negation(program: &Program, component: usize, key: &KeySet) -> syn
 
 fn memory_snapshot(
     context: &RoundContext,
+    full_states: &FullStates,
     indices: &[usize],
     arenas: &[usize],
     stage: &str,
@@ -59,6 +61,9 @@ fn memory_snapshot(
         let layouts = context
             .layouts
             .iter()
+            .enumerate()
+            .filter(|(index, _)| full_states.owner(*index) == *index)
+            .map(|(_, layout)| layout)
             .chain(&context.delta_layouts)
             .filter(|layout| layout.relation == index)
             .map(|layout| &layout.host)
@@ -131,16 +136,22 @@ fn admitted_orders(program: &Program, index: usize, fresh: &Ident) -> TokenStrea
     quote!(#(#orders)*)
 }
 
-/// Bulk `full_layouts` maintenance: append the fresh rows to each layout's
-/// recorded radix state in its own order, then republish its immutable view.
-/// Unchanged snapshots and field descriptors are shared.
+/// Append and publish once per checked physical full state, then refresh all
+/// logical prefix-read hosts with Arc-backed clones of that publication.
 fn full_layouts(
     program: &Program,
+    full_states: &FullStates,
     context: &RoundContext,
     index: usize,
     layouts: &[usize],
-) -> TokenStream {
-    let updates = layouts.iter().map(|&j| {
+) -> syn::Result<TokenStream> {
+    for &layout in layouts {
+        ensure(
+            layouts.contains(&full_states.owner(layout)), program,
+            "full-state publication must include every referenced owner",
+        )?;
+    }
+    let updates = layouts.iter().filter(|&&j| full_states.owner(j) == j).map(|&j| {
         let layout = &context.layouts[j];
         let state = local("layout", j);
         let host = &layout.host;
@@ -153,12 +164,18 @@ fn full_layouts(
             #host = #host.republish(&#state)?;
         })
     });
-    quote!(#(#updates)*)
+    let aliases = layouts.iter().filter(|&&j| full_states.owner(j) != j).map(|&j| {
+        let source = &context.layouts[full_states.owner(j)].host;
+        let host = &context.layouts[j].host;
+        quote!(#host = #source.clone();)
+    });
+    Ok(quote!(#(#updates)* #(#aliases)*))
 }
 
 /// One member's admission and recorded publication transaction.
 fn admit_publish(
     program: &Program,
+    full_states: &FullStates,
     index_in_stratum: usize,
     transaction: &round::Publication,
     phase: &str,
@@ -179,7 +196,7 @@ fn admit_publish(
     let mut operations = Vec::new();
     for operation in &transaction.operations {
         operations.push(match operation.kind.to_string().as_str() {
-            "full_layouts" => full_layouts(program, context, i, &operation.layouts),
+            "full_layouts" => full_layouts(program, full_states, context, i, &operation.layouts)?,
             "delta_swap" => {
                 let delta = relation.delta_host.as_ref().expect("checked delta");
                 let next = &relation.next;
@@ -350,6 +367,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
     crate::bindings::check(program)?;
+    let full_states = FullStates::build(&program.storage)?;
     crate::lanes::check(program)?;
     ensure(
         program.context.observer.is_none(),
@@ -519,6 +537,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     };
     let mut initialize = Vec::new();
     for (index, (layout, record)) in context.layouts.iter().zip(&device.layouts).enumerate() {
+        if full_states.owner(index) != index {
+            continue;
+        }
         let (state, packing, host) = (
             local("layout", index),
             local("layout_packing", index),
@@ -540,6 +561,15 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 Ok((__cq_gpu_packing, __cq_gpu_state, __cq_gpu_view))
             })?;
         ));
+    }
+    // Owners are initialized first: a canonical owner may occur after its alias.
+    for (index, layout) in context.layouts.iter().enumerate() {
+        let owner = full_states.owner(index);
+        if owner != index {
+            let host = &layout.host;
+            let source = &context.layouts[owner].host;
+            initialize.push(quote!(let mut #host = #source.clone();));
+        }
     }
     for (index, (layout, record)) in context
         .delta_layouts
@@ -618,7 +648,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             .filter(|(_, layout)| layout.relation == index)
             .map(|(j, _)| j)
             .collect::<Vec<_>>();
-        let publish = full_layouts(program, context, index, &layouts);
+        let publish = full_layouts(program, &full_states, context, index, &layouts)?;
         let runner = program_runner();
         initialize.push(quote!(
             #runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> {
@@ -696,9 +726,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
         };
         let (stratum_runner, seed_runner, step_runner) = (runner(0), runner(1), runner(2));
-        let seed = phase(program, index, round::schedule::SEED, &holes, &calls)?;
+        let seed = phase(program, &full_states, index, round::schedule::SEED, &holes, &calls)?;
         let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
-        let step = phase(program, index, round::schedule::STEP, &holes, &calls)?;
+        let step = phase(program, &full_states, index, round::schedule::STEP, &holes, &calls)?;
         let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
         let lengths = stratum
             .termination
@@ -730,6 +760,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
         });
         let released = memory_snapshot(
             context,
+            &full_states,
             &stratum.members,
             &[],
             &format!("stratum={index}/released"),
@@ -781,9 +812,15 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     };
     let relation_count = context.relations.len();
     let indices = (0..relation_count).collect::<Vec<_>>();
-    let initialized = memory_snapshot(context, &indices, &[], "initialized");
+    let initialized = memory_snapshot(context, &full_states, &indices, &[], "initialized");
     let initialized_runner = program_runner();
     let initialized = quote!(#initialized_runner(#[inline] || { #initialized }););
+    let census = context.layouts.iter().enumerate().map(|(index, layout)| {
+        let host = &layout.host;
+        let owner = full_states.owner(index);
+        let relation = context.relations[layout.relation].declaration.name.to_string();
+        quote!(#host.trace_full_state(#relation, #index, #owner);)
+    });
     syn::parse2(quote!({
         #(#hole_items)*
         (|| -> ::gpu_datalog_runtime::Result<_> {
@@ -802,6 +839,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             ::gpu_datalog_runtime::trace_work("setup");
             ::gpu_datalog_runtime::reset_work_counters();
             #(#strata)*
+            if __cq_gpu_trace_memory { #(#census)* }
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "fixpoint")?;
             ::gpu_datalog_runtime::trace_work("fixpoint");
             let __cq_gpu_result = #result;
@@ -813,6 +851,7 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
 
 fn phase(
     program: &Program,
+    full_states: &FullStates,
     index: usize,
     phase: &str,
     holes: &[TokenStream],
@@ -1015,7 +1054,7 @@ fn phase(
         for transaction in &stratum.publication {
             if after(transaction.relation) == Some(global) {
                 published.insert(transaction.relation);
-                steps.push(admit_publish(program, index, transaction, phase)?);
+                steps.push(admit_publish(program, full_states, index, transaction, phase)?);
             }
         }
     }
@@ -1026,17 +1065,19 @@ fn phase(
                 schedule,
                 "publication placement names a wave outside its phase",
             )?;
-            steps.push(admit_publish(program, index, transaction, phase)?);
+            steps.push(admit_publish(program, full_states, index, transaction, phase)?);
         }
     }
     let before = memory_snapshot(
         context,
+        full_states,
         &[],
         &[],
         &format!("stratum={index}/{phase}/before"),
     );
     let after = memory_snapshot(
         context,
+        full_states,
         &stratum.members,
         &stratum.members,
         &format!("stratum={index}/{phase}/after"),

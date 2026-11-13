@@ -64,6 +64,28 @@ fn program_with_orders(
 }
 
 #[test]
+fn physical_full_states_keep_logical_hosts_without_duplicate_backing_locals() {
+    let program = program();
+    let states = storage::FullStates::build(&program.storage).unwrap();
+    let printed = print::compile(&program).unwrap().to_token_stream().to_string();
+    let mut aliases = 0;
+    for (index, layout) in program.context.layouts.iter().enumerate() {
+        let owner = states.owner(index);
+        let state = format!("__cq_gpu_layout_{index}");
+        if owner == index {
+            assert!(printed.contains(&format!("mut {state} ,")));
+        } else {
+            aliases += 1;
+            assert!(!printed.split_whitespace().any(|token| token == state));
+            let source = &program.context.layouts[owner].host;
+            let host = &layout.host;
+            assert!(printed.contains(&quote!(#host = #source.clone()).to_string()));
+        }
+    }
+    assert!(aliases > 0, "fixture must exercise physical full-state sharing");
+}
+
+#[test]
 fn device_round_preserves_delta_driver_and_source_permutation_facts() {
     let round = program();
     assert_eq!(

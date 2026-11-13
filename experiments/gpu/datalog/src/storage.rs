@@ -1,4 +1,9 @@
 //! Device realizations of the existing checked Datalog storage records.
+//!
+//! At the printer boundary, `FullStates` records and independently checks
+//! physical full-state ownership. Logical prefix lengths remain in Storage
+//! and Round bindings; canonical layouts retain ownership. Only compatible
+//! full states coalesce, never delta or negative-projection lifetimes.
 use cq_datalog_support::ensure;
 use cq_lang_datalog_storage::{
     self as storage, DeviceAdmittedOrder, DeviceRelation, DeviceScratch, DeviceState, DeviceStorage, Hasher,
@@ -948,6 +953,125 @@ fn check_state(record: &DeviceState, advice_ratio: usize, program: &Program) -> 
         program,
         "device state ABI and initializers disagree with its recorded schema or parameters",
     )
+}
+
+/// GPU-only ownership side table, indexed by logical full-layout identity.
+///
+/// Logical prefix bindings and canonical identities are not rewritten. Only
+/// full layouts participate: delta publications have replacement lifetimes.
+/// Equal complete device records include payload ABI, codecs, packing, active
+/// window, initializers and maintenance parameters, not merely column order.
+#[derive(Clone, Debug)]
+pub(crate) struct FullStates {
+    owners: Vec<usize>,
+}
+
+impl FullStates {
+    pub(crate) fn build(program: &Program) -> syn::Result<Self> {
+        let device = program.device.as_ref().ok_or_else(|| {
+            syn::Error::new_spanned(program, "full-state sharing requires device storage")
+        })?;
+        let mut owners = Vec::with_capacity(program.layouts.len());
+        for (index, layout) in program.layouts.iter().enumerate() {
+            let compatible = |other: usize| {
+                let candidate = &program.layouts[other];
+                candidate.relation == layout.relation
+                    && candidate.columns == layout.columns
+                    && device.layouts[other] == device.layouts[index]
+            };
+            let owner = program.providers.iter().map(|provider| provider.canonical)
+                .find(|&canonical| compatible(canonical))
+                .or_else(|| (0..index).find(|&prior| compatible(prior)).map(|prior| owners[prior]))
+                .unwrap_or(index);
+            owners.push(owner);
+        }
+        let table = Self { owners };
+        table.check(program)?;
+        Ok(table)
+    }
+
+    pub(crate) fn owner(&self, layout: usize) -> usize {
+        self.owners[layout]
+    }
+
+    /// Check the supplied certificate, without replaying owner selection.
+    /// Alternative representatives are legal except that canonicals own themselves.
+    pub(crate) fn check(&self, program: &Program) -> syn::Result<()> {
+        let device = program.device.as_ref().ok_or_else(|| {
+            syn::Error::new_spanned(program, "full-state sharing requires device storage")
+        })?;
+        ensure(
+            self.owners.len() == program.layouts.len()
+                && device.layouts.len() == program.layouts.len(),
+            program, "full-state table must cover exactly the logical full layouts",
+        )?;
+        for (index, &owner) in self.owners.iter().enumerate() {
+            ensure(owner < self.owners.len(), program, "full-state owner is out of range")?;
+            ensure(self.owners[owner] == owner, program, "full-state owners must be roots")?;
+            let (logical, physical) = (&program.layouts[index], &program.layouts[owner]);
+            ensure(
+                logical.relation == physical.relation
+                    && logical.columns == physical.columns
+                    && device.layouts[index] == device.layouts[owner],
+                program, "shared full states require identical relation, order and device ABI",
+            )?;
+        }
+        for provider in &program.providers {
+            ensure(
+                self.owners.get(provider.canonical) == Some(&provider.canonical),
+                program, "canonical layouts must retain their physical state identity",
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod sharing_tests {
+    use super::*;
+
+    #[test]
+    fn full_states_share_prefix_layouts_but_not_incompatible_packing() {
+        let mut source = cq_datalog_storage::compile(&syn::parse_quote! {
+            struct Shared;
+            relation E(x:i32,y:i32) = (input);
+            output E;
+            strata {}
+            incremental { scheme seminaive_covering; }
+        }).unwrap();
+        let canonical = source.providers[0].canonical;
+        let mut prefix = source.layouts[canonical].clone();
+        prefix.key = 1;
+        let ty: Type = syn::parse_quote!(i32);
+        (prefix.provider, prefix.hasher, prefix.protocol) = default_layout(&[&ty, &ty], 1);
+        let alias = source.layouts.len();
+        source.layouts.push(prefix);
+        let target = compile(&source).unwrap();
+        let table = FullStates::build(&target).unwrap();
+        assert_eq!(table.owner(alias), canonical);
+        assert_eq!(table.owner(canonical), canonical);
+        assert_ne!(target.layouts[alias].key, target.layouts[canonical].key);
+
+        let mut incompatible = target.clone();
+        incompatible.device.as_mut().unwrap().layouts[alias].packing =
+            syn::parse_quote!(different_packing);
+        let separate = FullStates::build(&incompatible).unwrap();
+        assert_eq!(separate.owner(alias), alias);
+        assert!(table.check(&incompatible).is_err());
+        let mut parameters = target.clone();
+        parameters.device.as_mut().unwrap().layouts[alias].merge_tile_rows += 1;
+        assert_eq!(FullStates::build(&parameters).unwrap().owner(alias), alias);
+        assert!(table.check(&parameters).is_err());
+
+        let mut invalid = table.clone();
+        invalid.owners[alias] = target.layouts.len();
+        assert!(invalid.check(&target).is_err());
+        invalid.owners[alias] = canonical;
+        invalid.owners[canonical] = alias;
+        assert!(invalid.check(&target).is_err());
+        invalid.owners.pop();
+        assert!(invalid.check(&target).is_err());
+    }
 }
 
 #[cfg(test)]

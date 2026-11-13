@@ -2327,6 +2327,25 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             + self.publication.fields.allocated_bytes()
     }
 
+    /// Device allocation identities for the generated full-state ownership census.
+    /// Called only at fixpoint completion when memory tracing is enabled.
+    pub fn trace_full_state(&self, relation: &str, layout: usize, owner: usize) {
+        let snapshot = self.snapshot();
+        eprintln!(
+            "gpu_datalog_full_state\trelation={relation}\tlayout={layout}\towner={owner}\tpublication={:p}\tdescriptors={}\tcolumns={}\tcount={}\tfields={}",
+            Arc::as_ptr(&self.publication), snapshot.descriptors.ptr() as usize,
+            snapshot.columns.ptr() as usize, snapshot.count.ptr() as usize,
+            self.publication.fields.ptr() as usize,
+        );
+        for (index, run) in snapshot.runs.iter().enumerate() {
+            eprintln!(
+                "gpu_datalog_full_run\tlayout={layout}\trun={index}\tkeys={}\tkey_bytes={}\tdirectory={}\tdirectory_bytes={}",
+                run.keys.ptr() as usize, run.keys.allocated_bytes(),
+                run.directory.ptr() as usize, run.directory.allocated_bytes(),
+            );
+        }
+    }
+
     /// Bijective full-heading permutation: unique input still requires sorting.
     pub fn permuted_provider<P: ScalarTuple>(
         &self, pool: &Arc<Pool>, order: &[usize], params: RadixRunParams,
