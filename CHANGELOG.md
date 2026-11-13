@@ -13,6 +13,17 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog compile time. Packed word and layout types are spelled once as
+  printer-local aliases instead of an inline width expression in every device
+  record (the DOOP program carried between stages shrinks about 3.5×);
+  provider-token lookups parse one declaration instead of the whole table
+  (8,832 + 8,000 table parses per DOOP crate before); Round `erase` skips name
+  collection when there are no execution certificates. DOOP crate macro
+  expansion 32.4 s → about 10–11 s; generated DOOP device code and GPU TPC-H
+  modules are unchanged by the last two.
+- GPU Datalog full states that lower to the same physical order share one
+  state (checked ownership table). xalan device memory at the end of the
+  fixpoint 304.5 → 275.1 MB, peak 342.1 → 316.3 MB.
 - GPU runtimes allocate every CUB/Thrust scratch buffer (radix controls, merge
   partitions, counts, scans, ranges) and DOOP native scratch from the RCCL pool
   (RCCL `a74cb59f`, allocator-aware workspace constructors). Radix controls are

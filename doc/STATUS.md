@@ -8,6 +8,34 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Batch gates (2026-11-13, GPU Datalog state sharing and compile time
+`9c71e59f` vs `75ae1b4e`):** four commits; no IR grammar (`check_ir_scope`
+PASS for both IR crates at base `fd94ace0`).
+- `c92caa90`: full states lowering to one physical order share one state
+  (checked ownership table). xalan RCCL memory at the end of the fixpoint
+  304.5 → 275.1 MB, peak 342.1 → 316.3 MB.
+- `d2c61034`: packed word and layout types are printer-local aliases instead
+  of an inline width expression repeated in every device record (introduced by
+  `0124315f`); 11 distinct expressions were repeated up to 7,010 times and made
+  up 54–58% of the program text carried between stage macros.
+- `f490b91c`: provider-token lookup parses one declaration, not the whole
+  table (8,832 + 8,000 table parses, 5.1 s per DOOP crate expansion before).
+- `9c71e59f`: Round `erase` skips name collection without execution
+  certificates (it ran four times per Round stage).
+- DOOP crate macro expansion (`-Ztime-passes`): 32.4 s → 15.5 s → about
+  11 s; the last step was measured on a loaded machine (per-stage: `bind_round!`
+  1.61 → 0.94 s, `lanes!` 1.49 → 0.77 s). Rebuild after touching the DOOP
+  crate: 75.9 s → 57.7 s after the alias commit; not re-timed quiet after the
+  other two. The remainder is type checking (about 12 s), the device pipeline
+  (about 11 s) and host LLVM plus link (about 20 s).
+- GPU gate on RunPod RTX 6000 Ada **PASS** at `d2c61034` and at `9c71e59f`
+  (H05 SF10 8.417 ms, Cassandra 26/26). xalan fixpoint at `d2c61034`, 7 pairs:
+  **0.977 [0.951, 1.045]** (setup 0.996, output 0.988). The DOOP device code of
+  `9c71e59f` is byte-identical to `d2c61034`; GPU TPC-H generated modules equal
+  `fd94ace0` up to kernel-name hashes and a fixture's worktree path.
+- CPU: `cargo xtask compile-tpch` builds all 29 kernels; CPU DOOP Cassandra
+  two-engine comparison passes; `cq-lang-structures` 107 and `dl-round` 5 tests.
+
 **Batch gates (2026-11-13, pooled CUB/Thrust scratch `75ae1b4e` vs
 `7abd4f14`):** RCCL `a74cb59f` adds allocator-aware workspace constructors;
 the GPU runtimes take all CUB/Thrust and DOOP native scratch from the RCCL pool
