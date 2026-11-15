@@ -893,3 +893,79 @@ flock /tmp/mini_linq-timing-gate.lock true &&
   flock -s /tmp/mini_linq-timing.lock \
   python3 tools/remote_gpu/test_remote_gpu.py
 ```
+
+### Three-engine default DOOP comparison
+
+`experiments/gpu/compare/doop_pod.py` compares the default 40-relation
+program, never the factored variant: compiler-written orders, cost-oracle
+orders (`default-query,advice-cost`), and SRDatalog's default program.
+Build all GPU artifacts locally for sm_89; the rented pod only loads binaries
+and shared libraries. Cost advice is consumed verbatim, and an unsupported
+directive is a build failure, not permission to omit that directive.
+
+Each dataset uses rotating, interleaved fresh processes (three repetitions by
+default). Only the synchronized fixpoint phase is compared; input loading,
+library initialization and output counting remain outside that timer. Results
+retain process wall time, peak RSS, exit status and every derived-relation count.
+Count agreement is explicitly count-only validation, not tuple-set equivalence.
+Prepared inputs and dataset-specialized SRDatalog libraries are distributed as
+a zstd archive, extracted once into a content-addressed volume cache, and reused
+on later runs. No CUDA compiler or SRDatalog Python installation is needed on
+the pod.
+
+Build the two binaries separately (the builder keeps their feature sets and
+hashes), then package SRDatalog and prepared inputs:
+
+Regenerate `experiments/gpu/srd-doop/src/advice_cost.dl` with the ignored
+`cq-cost --test doop_order` oracle (`DOOP_PREPARED` selects bloat and
+`DOOP_ORACLE_ADVICE` names that absolute output path). Its text is wrapped
+verbatim in `engine!` by the crate build script. Retain the oracle report with
+the campaign artifacts; regenerating advice requires rebuilding the advised
+binary.
+
+```sh
+python3 experiments/gpu/compare/doop_bundle.py --build written
+python3 experiments/gpu/compare/doop_bundle.py --build advised
+python3 experiments/gpu/compare/doop_package.py --command-timeout 0
+python3 experiments/gpu/compare/doop_bundle.py \
+  --assets target/remote-gpu/doop --output target/remote-gpu/doop-compare.tar.zst
+```
+
+Run the full release artifact builds as background jobs; the zero timeout is
+reserved for this approved packaging workflow, not interactive development.
+Use `doop_package.py --reuse-builds` to restage already verified SRDatalog
+libraries without recompilation (metadata/source/library hashes must match).
+
+The self-contained archive works without a new dataset upload. For repeated
+campaigns, upload `target/remote-gpu/doop/prepared.tar.zst` once to
+`ysun67/mini-linq-gpu-data` as `doop-prepared/default-six.tar.zst`, pin the
+returned immutable HF revision in `session.sh`, and build with
+`--omit-prepared`. Add `--prepared-archive
+/workspace/data/doop-prepared/default-six.tar.zst` to the benchmark command.
+The existing HF seed downloads that extra archive; the DOOP driver verifies its
+separate SHA256 from the bundled DOOP manifest before extraction. The existing
+six-root `SHA256SUMS` stays unchanged: it does not certify this extra archive.
+
+The six-dataset archive was uploaded at immutable HF revision
+`ed0b788ddd6d8d49e4d3311336fec8c138beef12`; its SHA256 is
+`938163b6c9fb9e42754172eca24666180227a013f0abb5642dab34b68ca3b582`.
+For this reusable seed, assemble with `--omit-prepared` and run:
+
+```sh
+bash tools/remote_gpu/session.sh \
+  --volume dp2a7xuy9t --data-center US-WA-1 \
+  --gpu-ids 'NVIDIA RTX 6000 Ada Generation' \
+  --repo ysun67/mini-linq-gpu-data \
+  --revision ed0b788ddd6d8d49e4d3311336fec8c138beef12 \
+  --data-manifest /data/hf-stage/mini-linq-gpu-data/SHA256SUMS \
+  --ssh-key "$HOME/.ssh/id_ed25519" --gate-bundles none \
+  --bench 'python3 source/experiments/gpu/compare/doop_pod.py --results {results} --repetitions 3 --timeout 300 --budget 2700 --prepared-archive /workspace/data/doop-prepared/default-six.tar.zst' \
+  target/remote-gpu/doop-compare.tar.zst
+```
+
+Use `--gate-bundles none` and
+`--bench 'python3 source/experiments/gpu/compare/doop_pod.py --results {results}'`
+with the resulting bundle. No provisioning command is part of the builder.
+Local correctness-only checks may explicitly use `--allow-contaminated` when
+another GPU tenant exists; those timings must never be reported as isolated
+benchmark measurements.

@@ -13,6 +13,138 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- `cq_cost::cost::variables` plans a rule hole as a variable order
+  (PLANNING-REDESIGN, "Variable-order planning"): `plan(input, hole,
+  degrees)` reads the changing occurrence in full first, costs an order by
+  the bindings of its prefixes with degrees from a `Degrees` source
+  (distinct counts, degree sequences joined by value, optionally through
+  the rows the changing occurrence reaches and no younger than them), and
+  lowers it to full reads in the order occurrences first propose, without
+  binds or lookups; `lower` does the same for a given order. No body order
+  is read. `advice::datalog_plans_for` turns valuations chosen outside a
+  report into directives. The DOOP oracle plans every variant from the
+  exact degrees of its run and counts it (`vars`, `vars_hand` with
+  `DOOP_HAND_ORDERS=<SRDatalog rules.txt>`, `<out>.vars`), and with
+  `DOOP_VARS_ADVICE=<prefix>` writes both sets as advice production
+  accepts; `DOOP_SCRAMBLE=reverse|shuffle:<seed>` plans a text with every
+  rule body permuted. Bloat: 6.598e8 frames planned, 6.659e8 written
+  delta-first. CPU engine, single thread, outputs identical: planned
+  equals the written orders on bloat, eclipse and xalan (13.6/13.4,
+  33.2/33.1, 62.7/63.0 s; eclipse and xalan with bloat's plans), and stays
+  there on three scrambled texts, where the compiler's delta-first orders
+  take 47.7 s on bloat for one shuffle and exceed 300 s for the other two.
+  Not wired into `advise`; production has no such statistics yet.
+- `cq_cost::export::compile_datalog_with_driver` compiles under a declared
+  incremental driver (`DeltaFirst` as `srd-doop-gpu` runs), so the costed
+  incumbent is the order the target runs; `compile_datalog` keeps the written
+  order. The DOOP oracle takes `DOOP_DRIVER=delta_first`, and judges chain
+  models of step frames (average group, largest group, measured pair, and
+  pair with two-binder keys and round visibility) and guarded choices beside
+  the estimate, writing per-plan totals and per-step ratios to
+  `<out>.models`. `doop_pod.py --profile` sets `GPU_DATALOG_PROFILE=1`; the
+  generated-code timing it reports is not part of this change.
+  Investigation only (PLANNING-REDESIGN, "Why, and which model is
+  correct"): on bloat the delta-first orders the GPU runs are within 1.1%
+  of the frame optimum, and GPU hole time is 59% per-launch.
+- Evidence records each column's heavy values (more than four times the
+  average group, at most 32, with exact row counts) and, for integer columns,
+  the row counts of at most 64 equal-width ranges, one fact per column; `cq-load` collects
+  both. `DatasetEvidence` gains `constants`, the values of closed constants
+  by field name. `cq-cost` estimates read them (PLANNING-REDESIGN, Filter
+  selectivity): a constant column keeps its value's share of the rows, and a
+  predicate comparing a variable with a value keeps its share of the frames
+  once its variables are bound, from the heavy values and ranges; anything
+  else keeps 1. Joined filtered views (`restrict R@i where P`) and semijoin
+  reductions are no longer unknown: a view is charged a scan and a build,
+  `(1 + h) * |R@i|`, a reduction `(1 + h) * (|R@i| + |S@j|)`, per invocation
+  in every candidate. The DOOP oracle applies every predicate over one atom's
+  variables as a free restriction where its variables are bound, and
+  `DOOP_SPLIT` splits one rule on a column's heavy values. On bloat: written
+  1.34e9 frames, advised 0.51e9 (was 0.64e9), optimal 0.45e9, all
+  certificates hold; splitting `VPT_LoadArray` on 12 heavy types raises its
+  optimum from 7.0e6 to 1.86e7. Tests: the restricted-view test now checks
+  the per-invocation charge.
+- `cq-cost` candidates are valuations instead of atom orders (PLANNING-REDESIGN,
+  static costing): each occurrence is expanded, looked up then expanded, or
+  bound variable by variable then expanded, the forms WF-VO-Subatoms and CK-Le
+  admit; an atom order is the all-expand case. Lookups are certified as
+  semijoins with a support cap `min(U_P, D_R(K)*M_P(K))`; binds are generated
+  and charged by distinct keys only under the declared realization
+  `--partial-reads distinct` (default `rows`, sound for every target). The
+  searched space is declared and recorded (`--phased N`, default 1 occurrence
+  read in phases; spaces nest). Advice is emitted as `R@k(cols)` steps;
+  incumbents with lookup or bind phases are costed instead of unknown. A
+  Datalog valuation is advised only if Storage provisions every index it
+  demands, else the best atom order is advised and the reason names the gap.
+  `analyze_with`/`enumerate_under` take a `Space`; `Read` gains `partial`;
+  the report gains `space` when not default. No compiler or pass changes.
+  Tests: 22 bound (exhaustive lookup/bind soundness on 352 bag pairs), 22
+  enumeration, 14 advice (lookup advice accepted by production Storage; bind
+  advice for CQ; unprovisioned Datalog valuation falls back); calibration
+  workflow 7/7.
+- `cq-cost bound` certifies structural upper bounds for derived Datalog
+  relations from the rules and exact input facts (PLANNING-REDESIGN, static
+  costing): size-bound adornments (Fattebert et al., PODS 2026) in a factored
+  form, with degree-keyed input lookups. Per derived relation it reports the
+  cover form, a row bound, per-column distinct bounds and the cited input
+  facts; a computed head value or a missing fact is unknown, never zero.
+  Soundness is tested against naive
+  fixpoints on every small database of six programs. On the DOOP default
+  program over 21 prepared datasets (819 relation counts) no bound is below
+  the recorded count; the geometric-mean bound/count is 1 to 1e5 for
+  non-recursive relations and 4 to 7e7 for recursive ones.
+- `cq-cost profile` and `advise --profile` add an estimate tier for derived
+  relations the evidence does not bind: this dataset's structural bound
+  times the median observed/bound ratio of example runs of the same program,
+  else the structural bound alone. Estimated facts are cited `estimate:`,
+  holes that read them have `basis = predicted`. A predicted steady variant
+  defaults to the delta-first atom order with the least predicted cost;
+  another order replaces it only for a cyclic rule body or at a predicted
+  whole-run ratio of at least 2. An observation above
+  the certified bound of its dataset is rejected. Recursive holes that were
+  unknown now get a predicted certificate. The report gains `profile` and,
+  per hole, `basis`, both omitted when absent.
+- The cost tool's tests check its choice against the optimal order
+  (`tests/optimal_order.rs`): a reference semi-naive evaluator counts the
+  exact frames of every candidate valuation of every rule variant. On a
+  generated points-to workload (4,550 points-to rows, 12 rounds) every
+  certificate holds when its facts are exact; the order ranked first costs
+  201,201 frames against 192,235 optimal and 240,663 written under `rows`
+  (optimal 179,591 under `distinct`). These counts are join frames only;
+  index maintenance, which the model also charges, is not counted, so they
+  overstate the model's regret where orders need different indexes. The
+  delta-first default is within an eighth of the best fixed orders there
+  and below the written orders. No engine ran these plans.
+- `cq-cost advise` ranks valuations by an estimate and finds the least one by
+  dynamic programming instead of listing every valuation (PLANNING-REDESIGN,
+  Ranking and Search). The estimate is the containment estimate of System R
+  and DuckDB over the reads a prefix made. A relation meeting one partner on
+  several variables divides by the largest of their counts, not the product.
+  It is charged per step as certificates are, with index maintenance. The
+  search memoizes the least completion per state, exact below 10,000 states
+  and greedy above. Certificates are computed for the incumbent and the
+  winner only and reported beside the estimates; the decision rests on the
+  estimates, with the 1.05 review screen. The delta-first default for
+  predicted steady variants is removed, and with it `ProfileUse::
+  minimum_ratio`, `Candidate::delta_first`/`cyclic` and `Decision::Crossing`.
+  All advice is compiled once per pass, and that compilation is both the
+  provisioning check and the validation of the printed advice. A gap under
+  step advice rules out partial reads for that hole; a gap in an atom order
+  excludes that index. Report: `HoleAdvice::candidates` holds the incumbent
+  and the winner; `CandidateRecord` gains `estimate`; `HoleAdvice` gains
+  `search` (omitted when exact); `standalone_upper` becomes
+  `standalone_estimate`. `cost::listed` lists every valuation with its
+  estimate and per-step estimates, for oracles. Measured: planning the 115
+  holes of DOOP xalan takes 0.08 s; the whole command takes 12.1 s, against
+  85.7 s before. The DOOP oracle (`tests/doop_order.rs`, ignored by
+  default) has its own stage-labelled semi-naive evaluator, whose 40 relation
+  counts on bloat equal the engine's, and counts every valuation exactly. On
+  bloat: written orders 1.33e9 frames, advised 0.64e9, optimal 0.44e9 (110 of
+  113 variants counted completely). Under the previous certificate ranking
+  the advised orders cost 5.67e9. On the generated points-to workload the
+  advised orders cost 203,281 against 251,709 written and 202,838 optimal.
+  Tests: cost 7 + enumeration 22 + optimal order 8 (including search equals
+  listing minimum) + advice 15; calibration workflow 7/7.
 - GPU Datalog compile time. Packed word and layout types are spelled once as
   printer-local aliases instead of an inline width expression in every device
   record (the DOOP program carried between stages shrinks about 3.5×);

@@ -12,7 +12,8 @@ fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let Some(command) = args.next() else { return Err(USAGE.into()); };
     if command == "--help" || command == "-h" {
-        println!("{USAGE}\n\ncq-cost check --plans plans.json\ncq-cost advise --plans plans.json --evidence evidence.json --target cpu|cpu-par|gpu --out costs.json --advice orders.dl");
+        println!("{USAGE}\n\ncq-cost check --plans plans.json\ncq-cost advise --plans plans.json --evidence evidence.json --target cpu|cpu-par|gpu --out costs.json --advice orders.dl\n  [--partial-reads rows|distinct]                      (default rows: a sub-atom read visits one frame per row;\n                                                         distinct declares that the adopting target enumerates each key once)\n  [--phased N]                                         (default 1: the most occurrences a candidate reads in phases;\n                                                         0 searches atom orders only)\ncq-cost bound --plans plans.json --evidence evidence.json --out bounds.json\n  Structural upper bounds of every derived Datalog relation from exact input facts; a worst case, not an estimate.");
+        println!("cq-cost profile --plans plans.json --evidence evidence.json --observed observed.json --out profile.json [--into profile0.json]\n  Add one example to a profile: what a completed run produced, beside the structural bounds of the same dataset.\ncq-cost advise ... --profile profile.json\n  Read derived relations the evidence does not bind through estimates: this dataset's structural bound times the\n  profile's median observed/bound ratio. Decisions that rest on an estimate are marked predicted.");
         #[cfg(feature = "planner-calibration")]
         println!("cq-cost review --plans plans.json --evidence facts.json --costs costs.json --report calibration.report.json --out review.json [--vo-out plans-review.json]\nReassess saved observations only; no workload execution or fan-out inference.");
         return Ok(());
@@ -30,9 +31,11 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if command == "advise" { return advise(args); }
+    if command == "bound" { return bound(args); }
+    if command == "profile" { return profile(args); }
     #[cfg(feature = "planner-calibration")]
     if command == "review" { return review(args); }
-    if command != "export" { return Err(format!("expected export, check or advise\n{USAGE}").into()); }
+    if command != "export" { return Err(format!("expected export, check, advise, bound or profile\n{USAGE}").into()); }
     let mut flags = BTreeMap::new();
     let mut vos = Vec::new();
     let mut cqs = Vec::new();
@@ -111,7 +114,7 @@ fn run() -> Result<()> {
 fn advise(mut args: impl Iterator<Item = String>) -> Result<()> {
     let mut flags = BTreeMap::new();
     while let Some(flag) = args.next() {
-        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--target" | "--out" | "--advice" | "--expected-input-hash") {
+        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--target" | "--out" | "--advice" | "--expected-input-hash" | "--partial-reads" | "--phased" | "--profile") {
             return Err(format!("unknown advise option {flag}").into());
         }
         let value = args.next().ok_or_else(|| format!("missing value for {flag}"))?;
@@ -140,14 +143,81 @@ fn advise(mut args: impl Iterator<Item = String>) -> Result<()> {
             return Err("advice output would overwrite an input".into());
         }
     }
-    let report = cq_cost::cost::analyze(&input, &evidence, required("--target")?)?;
+    let mut space = cq_cost::cost::Space::default();
+    if let Some(policy) = flags.get("--partial-reads") { space.partial_reads = policy.parse()?; }
+    if let Some(bound) = flags.get("--phased") {
+        space.phased = bound.parse().map_err(|_| "--phased takes a count of occurrences")?;
+    }
+    let report = match flags.get("--profile") {
+        Some(path) => {
+            let profile: cq_cost::cost::estimate::Profile = serde_json::from_slice(&std::fs::read(path)?)?;
+            cq_cost::cost::analyze_predicted(&input, &evidence, required("--target")?, space, &profile)?
+        }
+        None => cq_cost::cost::analyze_with(&input, &evidence, required("--target")?, space)?,
+    };
     let json = serde_json::to_vec_pretty(&report)?;
     publish(output, &json)?;
     publish(advice, report.advice.as_bytes())?;
     let changed = report.holes.iter().filter(|hole| hole.decision == cq_cost::cost::Decision::Changed).count();
     let unknown = report.holes.iter().filter(|hole| hole.decision == cq_cost::cost::Decision::Unknown).count();
-    let crossing = report.holes.iter().filter(|hole| hole.decision == cq_cost::cost::Decision::Crossing).count();
-    println!("dataset={} holes={} changed={changed} unknown={unknown} crossing={crossing}", report.dataset_hash, report.holes.len());
+    let predicted = report.holes.iter().filter(|hole| hole.basis == cq_cost::cost::Basis::Predicted).count();
+    println!("dataset={} holes={} changed={changed} unknown={unknown} predicted={predicted}", report.dataset_hash, report.holes.len());
+    Ok(())
+}
+
+fn bound(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let mut flags = BTreeMap::new();
+    while let Some(flag) = args.next() {
+        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--out") {
+            return Err(format!("unknown bound option {flag}").into());
+        }
+        let value = args.next().ok_or_else(|| format!("missing value for {flag}"))?;
+        if flags.insert(flag.clone(), value).is_some() { return Err(format!("duplicate {flag}").into()); }
+    }
+    let required = |flag: &str| -> Result<&str> {
+        flags.get(flag).map(String::as_str).ok_or_else(|| format!("missing {flag}").into())
+    };
+    let input: export::PlannerInput = serde_json::from_str(&std::fs::read_to_string(required("--plans")?)?)?;
+    let evidence = cq_evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
+    let output = Path::new(required("--out")?);
+    for flag in ["--plans", "--evidence"] {
+        if output.exists() && output.canonicalize()? == Path::new(required(flag)?).canonicalize()? {
+            return Err("bound output would overwrite an input".into());
+        }
+    }
+    let report = cq_cost::cost::inferred::analyze(&input, &evidence)?;
+    publish(output, &serde_json::to_vec_pretty(&report)?)?;
+    let unknown = report.relations.iter().filter(|relation| relation.rows.is_none()).count();
+    println!("dataset={} derived={} unknown={unknown}", report.dataset_hash, report.relations.len());
+    Ok(())
+}
+
+fn profile(mut args: impl Iterator<Item = String>) -> Result<()> {
+    use cq_cost::cost::estimate;
+    let mut flags = BTreeMap::new();
+    while let Some(flag) = args.next() {
+        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--observed" | "--out" | "--into") {
+            return Err(format!("unknown profile option {flag}").into());
+        }
+        let value = args.next().ok_or_else(|| format!("missing value for {flag}"))?;
+        if flags.insert(flag.clone(), value).is_some() { return Err(format!("duplicate {flag}").into()); }
+    }
+    let required = |flag: &str| -> Result<&str> {
+        flags.get(flag).map(String::as_str).ok_or_else(|| format!("missing {flag}").into())
+    };
+    let input: export::PlannerInput = serde_json::from_str(&std::fs::read_to_string(required("--plans")?)?)?;
+    let evidence = cq_evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
+    let observed: estimate::Observed = serde_json::from_slice(&std::fs::read(required("--observed")?)?)?;
+    let mut profile = match flags.get("--into") {
+        Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
+        None => estimate::Profile::new(input.identity.program_hash.clone()),
+    };
+    if profile.program_hash != input.identity.program_hash { return Err("the profile is of another program".into()); }
+    let example = estimate::example(&input, &evidence, &observed)?;
+    let relations = example.relations.len();
+    profile.add(example);
+    publish(Path::new(required("--out")?), &serde_json::to_vec_pretty(&profile)?)?;
+    println!("dataset={} relations={relations} examples={}", evidence.dataset.hash, profile.examples.len());
     Ok(())
 }
 

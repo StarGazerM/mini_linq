@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use cq_evidence::{
-    Claim, ColumnEvidence, Fact, KeySetEvidence, Provenance, RelationEvidence,
+    Claim, ColumnEvidence, Fact, HeavyValue, KeySetEvidence, Provenance, Ranges, RelationEvidence,
     RelationScope, RelationSemantics, Scalar, ScalarDomain, Source, Unit,
 };
 use serde::{Deserialize, Serialize};
@@ -325,7 +325,16 @@ struct ColumnSummary {
     frequencies: FrequencySummary,
     min: Option<Scalar>,
     max: Option<Scalar>,
+    heavy: Vec<(Scalar, u64)>,
+    ranges: Option<Ranges>,
 }
+
+/// At most this many heavy values per column.
+const HEAVY_VALUES: usize = 32;
+/// A value is heavy above this many times the average group.
+const HEAVY_FACTOR: u128 = 4;
+/// Equal-width ranges per integer column.
+const RANGES: i128 = 64;
 
 struct FrequencySummary {
     distinct: u64,
@@ -472,11 +481,31 @@ impl RelationAccumulator {
             };
             let min = extrema(false);
             let max = extrema(true);
+            let rows = u128::from(state.frequencies.iter().sum::<u64>());
+            let distinct = state.values.len() as u128;
+            let mut heavy: Vec<(usize, u64)> = state.frequencies.iter().copied().enumerate()
+                .filter(|&(_, count)| u128::from(count) * distinct > HEAVY_FACTOR * rows).collect();
+            heavy.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| state.values[a.0].cmp(&state.values[b.0])));
+            heavy.truncate(HEAVY_VALUES);
+            let heavy = heavy.into_iter().map(|(id, count)| (state.values[id].scalar(&spec.domain), count)).collect();
+            let ranges = match (&spec.domain, state.values.iter().min(), state.values.iter().max()) {
+                (ScalarDomain::SignedInteger, Some(Value::Signed(lo)), Some(Value::Signed(hi))) => {
+                    let (start, end) = (i128::from(*lo), i128::from(*hi));
+                    let width = (end - start + 1 + RANGES - 1) / RANGES;
+                    let mut counts = vec![0u64; ((end - start) / width + 1) as usize];
+                    for (value, count) in state.values.iter().zip(&state.frequencies) {
+                        let Value::Signed(value) = value else { continue };
+                        counts[((i128::from(*value) - start) / width) as usize] += count;
+                    }
+                    Some(Ranges { lo: *lo, width: width as u64, rows: counts })
+                }
+                _ => None,
+            };
             columns.push(ColumnSummary {
                 frequencies: FrequencySummary::new(
                     state.values.len(), state.frequencies.iter().copied().max().unwrap_or(0), state.hll,
                 )?,
-                min, max,
+                min, max, heavy, ranges,
             });
         }
         let keys = self.keys.into_iter().map(|state| {
@@ -505,6 +534,9 @@ impl RelationSummary {
                 min: summary.min.map(|v| facts.fact(&format!("{prefix}:min"), Unit::Scalar, v)),
                 max: summary.max.map(|v| facts.fact(&format!("{prefix}:max"), Unit::Scalar, v)),
                 max_degree: Some(facts.fact(&format!("{prefix}:max_degree"), Unit::Degree, summary.frequencies.max_degree)),
+                heavy: (!summary.heavy.is_empty()).then(|| facts.fact(&format!("{prefix}:heavy"), Unit::Rows,
+                    summary.heavy.into_iter().map(|(value, rows)| HeavyValue { value, rows }).collect())),
+                ranges: summary.ranges.map(|ranges| facts.fact(&format!("{prefix}:ranges"), Unit::Rows, ranges)),
             });
         }
         let mut key_sets = Vec::with_capacity(self.keys.len());

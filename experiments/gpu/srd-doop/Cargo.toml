@@ -12,6 +12,8 @@ advice-aipt = []
 advice-load = []
 advice-fieldflow = []
 advice-dispatch = []
+# Verbatim cost-oracle directives for the default formulation.
+advice-cost = ["default-query"]
 
 [dependencies]
 srd-doop-shared = { path = "../../../features/datalog/doop/srd" }

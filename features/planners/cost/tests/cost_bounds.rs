@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use cq_cost::cost::{bounds::{self, BoundModel}, Candidate, Comparison, CostStep,
-    IndexDemand, IndexVersion, LinearCost, Read, ReadColumn};
+    IndexDemand, IndexVersion, LinearCost, PartialReads, Read, ReadColumn};
 use cq_cost::export::{self, CheckedIr, ClauseKind, Configuration, DatasetIdentity,
     Evidence, EvidenceBinding, EvidenceColumn, EvidenceView, Hole, Identity,
     Layout, Origin, PlannerInput, Scope, Target, Version};
@@ -106,24 +106,36 @@ fn rule(seed: bool) -> Origin {
         head_relation: 0, original_delta: (!seed).then_some(0), driver: "recorded".into(), permutation: vec![],
         authored: false, admission: "recorded insert-only-set".into(), fanout: vec![] }
 }
-fn fixture(evidence: &DatasetEvidence, reads: &[(&str, &[&str], Version)], origin: Origin) -> (PlannerInput, Candidate) {
+/// One read of a valuation: its occurrence, dataset relation, the
+/// `(column, variable)` pairs it retains, and whether it drops columns.
+struct Sub<'a> { occurrence: usize, relation: &'a str, retained: &'a [(usize, &'a str)], partial: bool, version: Version }
+fn full<'a>(occurrence: usize, relation: &'a str, retained: &'a [(usize, &'a str)]) -> Sub<'a> {
+    Sub { occurrence, relation, retained, partial: false, version: Version::Full }
+}
+fn part<'a>(occurrence: usize, relation: &'a str, retained: &'a [(usize, &'a str)]) -> Sub<'a> {
+    Sub { occurrence, relation, retained, partial: true, version: Version::Full }
+}
+fn valuation(evidence: &DatasetEvidence, reads: &[Sub<'_>], origin: Origin) -> (PlannerInput, Candidate) {
     let mut bound = BTreeSet::new();
     let mut bindings = Vec::new();
     let mut steps = Vec::new();
-    for (index, (relation, vars, version)) in reads.iter().enumerate() {
+    let mut order = Vec::new();
+    for (index, read) in reads.iter().enumerate() {
         let input_relation = format!("explicit_physical_alias_{index}");
-        let columns: Vec<_> = vars.iter().enumerate().map(|(c, var)| ReadColumn { source_column: c,
+        let columns: Vec<_> = read.retained.iter().map(|(c, var)| ReadColumn { source_column: *c,
             input_column: format!("physical_column_{c}"), variable: Some((*var).into()) }).collect();
-        bindings.push(EvidenceBinding { input_relation: input_relation.clone(), dataset_relation: (*relation).into(),
-            view: if *version == Version::Delta { EvidenceView::Delta } else { EvidenceView::Full },
+        bindings.push(EvidenceBinding { input_relation: input_relation.clone(), dataset_relation: read.relation.into(),
+            view: if read.version == Version::Delta { EvidenceView::Delta } else { EvidenceView::Full },
             columns: columns.iter().map(|c| EvidenceColumn { input_column: c.input_column.clone(), dataset_column: format!("c{}", c.source_column) }).collect() });
-        let provides: Vec<_> = vars.iter().filter(|v| !bound.contains(**v)).map(|v| (*v).to_string()).collect();
-        steps.push(CostStep { clause: index, kind: ClauseKind::Atom,
-            read: Some(Read { source_occurrence: index, normalized_clause: index,
-                logical_relation: format!("source_{relation}"), input_relation, version: *version, columns }),
-            required: vars.iter().filter(|v| bound.contains(**v)).map(|v| (*v).into()).collect(),
+        let vars = read.retained.iter().map(|(_, var)| *var);
+        let provides: Vec<_> = vars.clone().filter(|v| !bound.contains(*v)).map(str::to_string).collect();
+        steps.push(CostStep { clause: read.occurrence, kind: ClauseKind::Atom,
+            read: Some(Read { source_occurrence: read.occurrence, normalized_clause: read.occurrence,
+                logical_relation: format!("source_{}", read.relation), input_relation, version: read.version, columns, partial: read.partial }),
+            required: vars.filter(|v| bound.contains(*v)).map(Into::into).collect(),
             provides: provides.clone(), bound_before: bound.iter().cloned().collect(), introduces: !provides.is_empty() });
         bound.extend(provides);
+        if !order.contains(&read.occurrence) { order.push(read.occurrence); }
     }
     let scope = Scope { clauses: vec![], positive_clauses: vec![], steps: vec![] };
     let canonical = evidence.canonical_json().unwrap();
@@ -136,7 +148,20 @@ fn fixture(evidence: &DatasetEvidence, reads: &[(&str, &[&str], Version)], origi
         dataset: DatasetIdentity::Bound { dataset_hash: evidence.dataset.hash.clone(), schema_hash: evidence.dataset.schema_hash.clone(), evidence_hash: export::sha256(canonical) } },
         configuration: Configuration { compiler_hash: HASH.into(), target: Target::Cpu, invocation: "isolated mathematical fixture".into() },
         source: String::new(), checked_ir: CheckedIr::Cq {}, holes: vec![hole], layouts: vec![], input_hash: HASH.into() };
-    (input, Candidate { order: (0..reads.len()).collect(), steps, demands: BTreeSet::new(), current: true, unbounded: vec![] })
+    (input, Candidate { order, steps, demands: BTreeSet::new(), current: true, unbounded: vec![] })
+}
+fn fixture(evidence: &DatasetEvidence, reads: &[(&str, &[&str], Version)], origin: Origin) -> (PlannerInput, Candidate) {
+    let retained: Vec<Vec<(usize, &str)>> = reads.iter().map(|(_, vars, _)| vars.iter().copied().enumerate().collect()).collect();
+    let reads: Vec<_> = reads.iter().zip(&retained).enumerate().map(|(occurrence, ((relation, _, version), retained))|
+        Sub { occurrence, relation, retained, partial: false, version: *version }).collect();
+    valuation(evidence, &reads, origin)
+}
+fn cost_under(input: &PlannerInput, candidate: &Candidate, evidence: &DatasetEvidence, policy: PartialReads) -> cq_cost::cost::CandidateCost {
+    BoundModel::new(input, evidence, "cpu").unwrap().with_partial_reads(policy)
+        .cost(&input.holes[0], candidate, &BTreeSet::new()).unwrap()
+}
+fn outputs(cost: &cq_cost::cost::CandidateCost) -> Vec<BigRational> {
+    cost.steps.iter().map(|step| step.output.as_ref().unwrap().constant.exact().unwrap()).collect()
 }
 fn cost(input: &PlannerInput, candidate: &Candidate, evidence: &DatasetEvidence) -> cq_cost::cost::CandidateCost {
     bounds::cost_candidate(input, &input.holes[0], candidate, evidence, "cpu", &BTreeSet::new()).unwrap()
@@ -302,7 +327,7 @@ fn constant_work_is_charged_per_round_and_delta_indexes_per_consumed_row() {
     // but it is a single valid affine and its complete sum includes h*delta.
     assert!(per_round.coefficient.exact().unwrap() >= number(1));
     let whole = c.whole_run.as_ref().unwrap();
-    let expected = per_round.coefficient.exact().unwrap() * number(3) + per_round.constant.exact().unwrap() * number(7);
+    let expected = per_round.coefficient.exact().unwrap() * number(3) + per_round.constant.exact().unwrap() * number(7) + per_round.once.exact().unwrap();
     assert_eq!(bounds::upper(whole, &e).unwrap().unwrap().exact().unwrap(), expected);
     assert!(whole.terms.contains_key("rounds:s0"));
 }
@@ -471,10 +496,13 @@ fn selected_affine_is_valid_for_every_delta_size_not_a_coefficientwise_minimum()
     let c = cost(&input, &candidate, &e);
     let affine = c.per_round.as_ref().unwrap();
     for delta in 0..=10 {
-        let declared = affine.coefficient.exact().unwrap() * number(delta) + affine.constant.exact().unwrap();
+        // The whole-run part bounds the sum over rounds, so also any one round.
+        let declared = affine.coefficient.exact().unwrap() * number(delta) + affine.constant.exact().unwrap() + affine.once.exact().unwrap();
         let exact_work = number(2 + 2 * delta); // S root scan plus the exact join.
         assert!(declared >= exact_work);
     }
+    // The run's certificate is at least the work of all deltas together.
+    assert!(whole(&input, &candidate, &e) >= number(2 * 5 + 2 * 10));
 }
 
 #[test]
@@ -526,4 +554,98 @@ fn absent_binding_is_unknown_but_invalid_explicit_binding_is_an_error() {
     input.holes[0].evidence.as_mut().unwrap().bindings[0].dataset_relation = "R".into();
     input.holes[0].evidence.as_mut().unwrap().bindings[0].columns[0].dataset_column = "C0".into();
     assert!(bounds::cost_candidate(&input, &input.holes[0], &candidate, &e, "cpu", &BTreeSet::new()).is_err());
+}
+
+#[test]
+fn lookup_and_bind_certificates_never_underestimate_exact_frames() {
+    // Every pair of bags over a skewed support, duplicates and empties included.
+    let support = [vec![0, 0], vec![0, 0], vec![0, 1], vec![1, 1], vec![2, 0]];
+    let pick = |mask: u32| -> Vec<Vec<i64>> {
+        support.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, row)| row.clone()).collect()
+    };
+    for mask_r in 0..32_u32 { for mask_s in (0..32_u32).step_by(3) {
+        let (r, s) = (pick(mask_r), pick(mask_s));
+        let e = catalog(&[("R", r.clone()), ("S", s.clone())]);
+        let matches = |x: i64| s.iter().filter(|row| row[0] == x).count() as u64;
+        let group = |x: i64| r.iter().filter(|row| row[0] == x).count() as u64;
+        let keys: BTreeSet<i64> = r.iter().map(|row| row[0]).collect();
+        let join: u64 = r.iter().map(|row| matches(row[0])).sum();
+        let check = |cost: &cq_cost::cost::CandidateCost, exact: &[u64], what: &str| {
+            for (bound, exact) in outputs(cost).iter().zip(exact) {
+                assert!(*bound >= number(*exact), "{what}: {r:?}, {s:?}: {bound} < {exact}");
+            }
+        };
+        // R, lookup S on x, expand S.
+        let (input, lookup) = valuation(&e, &[full(0, "R", &[(0, "x"), (1, "y")]),
+            part(1, "S", &[(0, "x")]), full(1, "S", &[(0, "x"), (1, "z")])], Origin::Cq {});
+        let surviving = r.iter().filter(|row| matches(row[0]) > 0).count() as u64;
+        check(&cost(&input, &lookup, &e), &[r.len() as u64, surviving, join], "lookup");
+        // Bind x of R, expand S, expand R.
+        let (input, bind) = valuation(&e, &[part(0, "R", &[(0, "x")]),
+            full(1, "S", &[(0, "x"), (1, "z")]), full(0, "R", &[(0, "x"), (1, "y")])], Origin::Cq {});
+        let per_key: u64 = keys.iter().map(|&x| matches(x)).sum();
+        check(&cost_under(&input, &bind, &e, PartialReads::Distinct), &[keys.len() as u64, per_key, join], "distinct bind");
+        // Under `rows` the bind repeats a key once per row and the expansion
+        // multiplies the rows again.
+        let squared: u64 = keys.iter().map(|&x| group(x) * group(x) * matches(x)).sum();
+        check(&cost_under(&input, &bind, &e, PartialReads::Rows), &[r.len() as u64, join, squared], "rows bind");
+    } }
+}
+
+#[test]
+fn a_lookup_caps_the_prefix_by_the_looked_up_support() {
+    // Ten keys in R, one of them in S; T fans out by four before S expands.
+    let r: Vec<Vec<i64>> = (0..10).flat_map(|x| (0..5).map(move |y| vec![x, y])).collect();
+    let s: Vec<Vec<i64>> = (0..3).map(|z| vec![0, z]).collect();
+    let t: Vec<Vec<i64>> = (0..5).flat_map(|y| (0..4).map(move |u| vec![y, u])).collect();
+    let e = catalog(&[("R", r), ("S", s), ("T", t)]);
+    let (atoms_input, atoms) = valuation(&e, &[full(0, "R", &[(0, "x"), (1, "y")]),
+        full(1, "T", &[(0, "y"), (1, "u")]), full(2, "S", &[(0, "x"), (1, "z")])], Origin::Cq {});
+    let coarse = cost(&atoms_input, &atoms, &e);
+    assert_eq!(outputs(&coarse), [number(50), number(200), number(60)]);
+    let (input, lookup) = valuation(&e, &[full(0, "R", &[(0, "x"), (1, "y")]), part(2, "S", &[(0, "x")]),
+        full(1, "T", &[(0, "y"), (1, "u")]), full(2, "S", &[(0, "x"), (1, "z")])], Origin::Cq {});
+    let c = cost(&input, &lookup, &e);
+    // Five rows of R hold the one key of S: the bound is the exact count,
+    // and T expands those five instead of all fifty.
+    assert_eq!(outputs(&c), [number(50), number(5), number(20), number(60)]);
+    assert_eq!(c.steps[1].work.as_ref().unwrap().constant, rat(50), "every input frame is probed");
+    assert!(c.steps[1].inequality.contains("support cap"));
+    assert!(c.steps[1].citations.iter().any(|id| id == "S.c0.distinct"));
+    let total = |cost: &cq_cost::cost::CandidateCost| bounds::upper(cost.whole_run.as_ref().unwrap(), &e).unwrap().unwrap().exact().unwrap();
+    assert!(total(&c) < total(&coarse));
+}
+
+#[test]
+fn a_distinct_bind_of_the_delta_is_charged_keys_per_round_and_rows_once() {
+    // T(k, v): two keys, fifty values each. The rest of the body joins on k only.
+    let t: Vec<Vec<i64>> = (0..2).flat_map(|k| (0..50).map(move |v| vec![k, v])).collect();
+    let s: Vec<Vec<i64>> = (0..2).flat_map(|k| (0..10).map(move |w| vec![k, w])).collect();
+    let u: Vec<Vec<i64>> = (0..10).map(|w| vec![w]).collect();
+    let mut e = catalog(&[("T", t), ("S", s), ("U", u)]);
+    recursive(&mut e, "T", 4, true);
+    let delta = |retained, partial| Sub { occurrence: 0, relation: "T", retained, partial, version: Version::Delta };
+    let rest = [full(1, "S", &[(0, "k"), (1, "w")]), full(2, "U", &[(0, "w")])];
+    let (input, rows_first) = valuation(&e, &[delta(&[(0, "k"), (1, "v")], false),
+        full(1, "S", &[(0, "k"), (1, "w")]), full(2, "U", &[(0, "w")])], rule(false));
+    let upper = |cost: &cq_cost::cost::CandidateCost| bounds::upper(cost.whole_run.as_ref().unwrap(), &e).unwrap().unwrap().exact().unwrap();
+    // Every delta row drives the join: 21 frames per row, F = 100 rows.
+    assert_eq!(upper(&cost(&input, &rows_first, &e)), number(2100));
+    let [expand_s, check_u] = rest;
+    let (input, key_first) = valuation(&e, &[delta(&[(0, "k")], true), expand_s, check_u,
+        delta(&[(0, "k"), (1, "v")], false)], rule(false));
+    // Distinct keys drive the join: 2 + 20 + 20 frames per round. The final
+    // expansion joins a prefix of at most 20 rows, each of whose keys meets
+    // at most 50 rows of T over the whole run: 1,000 once, which equals 10
+    // per delta row at the declared F of 100.
+    let distinct = cost_under(&input, &key_first, &e, PartialReads::Distinct);
+    let per_round = distinct.per_round.as_ref().unwrap();
+    assert_eq!((per_round.coefficient.clone(), per_round.constant.clone(), per_round.once.clone()), (rat(0), rat(42), rat(1000)));
+    assert_eq!(distinct.whole_run.as_ref().unwrap(), &linear(&[("rounds:s0", 42)], 1000));
+    assert_eq!(upper(&distinct), number(42 * 4 + 10 * 100));
+    assert!(distinct.steps[3].inequality.contains("whole run"));
+    assert!(distinct.steps[0].inequality.contains("D_R(C)"));
+    // The same valuation on a target that visits rows is far worse than the
+    // atom order, so the policy must be declared, not assumed.
+    assert!(upper(&cost_under(&input, &key_first, &e, PartialReads::Rows)) > number(2100));
 }

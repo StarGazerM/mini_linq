@@ -106,11 +106,14 @@ pub fn assess_bounds(report: &CalibrationReport, advice: &AdviceReport, plans: &
         let mut steps = Vec::new();
         for (index, step) in proposed.plan.steps.iter().enumerate() {
             let same = current.plan.steps.get(..=index) == proposed.plan.steps.get(..=index);
+            // An observation names a clause, not one of its reads: a clause
+            // read in phases gets no count transfer.
+            let once = proposed.plan.steps.iter().filter(|other| other.clause == step.clause).count() == 1;
             let unrestricted_root = first_read == Some(index) && !preprocessed
-                && step.read.as_ref().is_some_and(|read| !read.columns.is_empty()
+                && step.read.as_ref().is_some_and(|read| !read.partial && !read.columns.is_empty()
                     && read.columns.iter().all(|column| column.variable.as_ref()
                         .is_some_and(|variable| !step.bound_before.contains(variable))));
-            let compared = if same {
+            let compared = if same && once {
                 looseness(observations.iter().copied().filter(|observation| {
                     let measured = &observation.measured;
                     if measured.vo_steps.len() != 1 { return false; }

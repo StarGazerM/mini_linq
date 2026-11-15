@@ -657,13 +657,19 @@ pub fn compile_cq(source: &str, options: &cq_planning::PlanOptions, configuratio
     let (normal, plan) = cq_planning::prefix_valuation(&parsed, options)?;
     export_cq(source, &normal, &plan, configuration)
 }
-/// Compile the common CPU DL-Source route exactly once. Custom pass queues
-/// should supply their actual Round and VOs to `export_datalog` instead.
+/// Compile the common CPU DL-Source route exactly once, in written order.
+/// Custom pass queues should supply their actual Round and VOs to
+/// `export_datalog` instead.
 pub fn compile_datalog(source: &str, configuration: Configuration) -> Result<PlannerInput> {
+    compile_datalog_with_driver(source, configuration, cq_datalog_incremental::DriverPolicy::WrittenOrder)
+}
+/// The same route under the target's incremental driver, so the costed
+/// incumbent is the order the target runs.
+pub fn compile_datalog_with_driver(source: &str, configuration: Configuration, driver: cq_datalog_incremental::DriverPolicy) -> Result<PlannerInput> {
     require(configuration.target == Target::Cpu, "compile_datalog constructs only the CPU route; supply consumed target Round/VO records")?;
     let parsed: round::incremental::source::Program = syn::parse_str(source)?;
     let strata = cq_datalog_stratify::compile(&parsed)?;
-    let incremental = cq_datalog_incremental::compile(&strata)?;
+    let incremental = cq_datalog_incremental::compile_with_driver(&strata, driver)?;
     let storage = cq_datalog_storage::compile(&incremental)?;
     let round = cq_datalog_fork::compile(&storage)?;
     let mut plans = Vec::with_capacity(round.holes.len());

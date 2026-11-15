@@ -98,7 +98,7 @@ fn finish_checked(spec: &RelationSpec, accumulator: RelationAccumulator, source:
             schema_hash: manifest.schema_hash().unwrap(), formulation: manifest.formulation.clone(), manifest,
         },
         relations: BTreeMap::from([(spec.name.clone(), relation.clone())]),
-        premises: Vec::new(), relative: Vec::new(), targets: BTreeMap::new(), observations: Default::default(),
+        premises: Vec::new(), relative: Vec::new(), targets: BTreeMap::new(), observations: Default::default(), constants: BTreeMap::new(),
     };
     document.check().unwrap();
     assert_eq!(cq_evidence::parse_json(&document.canonical_json().unwrap()).unwrap(), document);
@@ -348,7 +348,7 @@ fn every_numeric_fact_carries_unique_identity_source_and_provenance() {
     }
     let mut ids = BTreeSet::new();
     inspect(&json, &mut ids, dataset_hash, &origin);
-    assert_eq!(ids.len(), 11); // rows + four facts per column + two per key set
+    assert_eq!(ids.len(), 12); // rows + four facts per column + the integer column's ranges + two per key set
     assert!(relation.keys.is_empty());
 }
 

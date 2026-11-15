@@ -1,0 +1,287 @@
+// static advice; dataset sha256:0769a46e1c0209e0f4d3791a98a1cde11c443ce1442de1b0fc81274469752e68
+// input sha256:109079432a192ef79fd7c64874dd8d101e96b95ebeea25970b514f3b7428adfd; evidence sha256:28ae1ef7c2a27d0cf9bb9d91e0516666459fccfaf15355d9b90fbab4da055bc1; target cpu
+// declared unit cost cpu.h: Some(Rational { numerator: "1", denominator: "1" }); provenance explicit h=m=1 row work
+// declared unit cost cpu.m: Some(Rational { numerator: "1", denominator: "1" }); provenance explicit h=m=1 row work
+// hole 0 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:9:ClassType:rows
+// hole 1 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:9:ArrayType:rows
+// hole 2 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:13:InterfaceType:rows
+// hole 3 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:16:ApplicationClass:rows
+// hole 4 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:9:ClassType:rows
+// hole 5 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:9:ArrayType:rows
+// hole 6 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:13:InterfaceType:rows
+// hole 7 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:16:ApplicationClass:rows
+// hole 8 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:9:ClassType:rows
+// hole 9 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:9:ArrayType:rows
+// hole 10 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:13:InterfaceType:rows
+// hole 11 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:16:DirectSuperclass:rows
+// hole 12 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:20:DirectSuperinterface:rows
+// hole 13 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_superinterface:c1:max_degree, estimate:r_superinterface:rounds, estimate:r_superinterface:rows, stats:20:DirectSuperinterface:rows, structural:r_superinterface:delta_subset
+// hole 14 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_superinterface:c1:max_degree, estimate:r_superinterface:rounds, estimate:r_superinterface:rows, stats:16:DirectSuperclass:rows, structural:r_superinterface:delta_subset
+// hole 15 Retained: the incumbent has the least estimate; candidates=1
+// citations: compiler:DL-Round:key-build-once, compiler:DL-Round:key_scope=component, cpu.h, cpu.m, stats:15:Method_Modifier:column:0:max_degree, stats:15:Method_Modifier:rows
+// hole 16 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:17:Method_Descriptor:column:0:max_degree, stats:17:Method_Descriptor:rows, stats:17:Method_SimpleName:column:0:max_degree, stats:17:Method_SimpleName:rows, stats:20:Method_DeclaringType:column:0:max_degree, stats:20:Method_DeclaringType:rows
+// hole 17 Retained: least estimated whole-run work; production rejects the change: production rejects its reads: advice selector __cq_datalog_layout_10@2 does not name that top-level positive atom; candidates=2
+// citations: cpu.h, cpu.m, stats:15:Method_Modifier:rows, stats:17:Method_Descriptor:column:0:max_degree, stats:17:Method_Descriptor:rows, stats:17:Method_SimpleName:column:0:max_degree, stats:17:Method_SimpleName:rows, stats:20:Method_DeclaringType:column:0:max_degree, stats:20:Method_DeclaringType:column:1:max_degree, stats:20:Method_DeclaringType:rows, stats:9:MainClass:rows
+// hole 18 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:28:VirtualMethodInvocation_Base:rows
+// hole 19 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:28:SpecialMethodInvocation_Base:rows
+// hole 20 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_directsubclass:rows
+// hole 21 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_directsubclass:c0:max_degree, estimate:r_directsubclass:rows, estimate:r_subclass:rounds, estimate:r_subclass:rows, structural:r_subclass:delta_subset
+// hole 22 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_subclass:rows
+// hole 23 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isclasstype_idb:rows
+// hole 24 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_istype:rows
+// hole 25 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isinterfacetype_idb:rows
+// hole 26 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_subclass:rows
+// hole 27 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isclasstype_idb:c0:max_degree, estimate:r_isclasstype_idb:rows, estimate:r_superinterface:rows
+// hole 28 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isinterfacetype_idb:c0:max_degree, estimate:r_isinterfacetype_idb:rows, estimate:r_superinterface:rows
+// hole 29 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isinterfacetype_idb:rows
+// hole 30 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isarraytype_idb:rows
+// hole 31 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isreferencetype:rows, estimate:r_subtypeof:c0:max_degree, estimate:r_subtypeof:rounds, estimate:r_subtypeof:rows, stats:13:ComponentType:column:1:max_degree, stats:13:ComponentType:rows, structural:r_subtypeof:delta_subset
+// hole 32 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isarraytype_idb:rows
+// hole 33 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_isarraytype_idb:rows
+// hole 34 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_subtypeof:rows
+// hole 35 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_subtypeof:rows
+// hole 36 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_methodimplemented:rows
+// hole 37 Retained: the incumbent has the least estimate; candidates=1
+// citations: compiler:DL-Round:key-build-once, compiler:DL-Round:key_scope=component, cpu.h, cpu.m, estimate:r_methodimplemented:rows
+// hole 38 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_methodlookup:c2:max_degree, estimate:r_methodlookup:rounds, estimate:r_methodlookup:rows, stats:16:DirectSuperclass:rows, structural:r_methodlookup:delta_subset
+// hole 39 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_methodlookup:c2:max_degree, estimate:r_methodlookup:rounds, estimate:r_methodlookup:rows, stats:20:DirectSuperinterface:rows, structural:r_methodlookup:delta_subset
+// hole 40 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_methodimplemented:c1:max_degree, estimate:r_methodimplemented:rows
+// hole 41 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_supertypeof:c1:max_degree, estimate:r_supertypeof:rows
+// hole 42 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:19:HeapAllocation_Type:column:1:max_degree, stats:19:HeapAllocation_Type:rows
+// hole 43 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_supertypeof:c1:max_degree, estimate:r_supertypeof:rows, stats:10:AssignCast:column:0:max_degree, stats:10:AssignCast:rows, stats:19:HeapAllocation_Type:rows
+// hole 44 Retained: suppressed sub-1.05 estimate ratio under declared review policy; retain incumbent; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_iscastabletostring:rows, estimate:r_isstringheap:rows, stats:10:AssignCast:column:0:max_degree, stats:10:AssignCast:rows
+// hole 45 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:45:admission-held-fixed, cpu.h, cpu.m, estimate:r_methodlookup:c2:max_degree, estimate:r_methodlookup:rows, stats:19:HeapAllocation_Type:rows, stats:7:ThisVar:column:0:max_degree, stats:7:ThisVar:rows
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 46 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_methodlookup:c2:max_degree, estimate:r_methodlookup:rows, stats:19:HeapAllocation_Type:rows
+// hole 47 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:28:VirtualMethodInvocation_Base:column:0:max_degree, stats:28:VirtualMethodInvocation_Base:rows, stats:34:VirtualMethodInvocation_Descriptor:column:0:max_degree, stats:34:VirtualMethodInvocation_Descriptor:rows, stats:34:VirtualMethodInvocation_SimpleName:column:0:max_degree, stats:34:VirtualMethodInvocation_SimpleName:rows
+// hole 48 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:48:admission-held-fixed, cpu.h, cpu.m, estimate:r_supertypeof:c0:max_degree, estimate:r_supertypeof:c1:max_degree, estimate:r_supertypeof:rows, stats:13:ComponentType:column:0:max_degree, stats:13:ComponentType:column:1:max_degree, stats:13:ComponentType:rows, stats:19:HeapAllocation_Type:column:1:max_degree, stats:19:HeapAllocation_Type:rows
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 49 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:19:HeapAllocation_Type:column:1:max_degree, stats:19:HeapAllocation_Type:rows
+// hole 50 Retained: least estimated whole-run work; production rejects the change: production rejects its reads: advice selector __cq_datalog_layout_32@2 does not name that top-level positive atom; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_supertypeof:c1:max_degree, estimate:r_supertypeof:rows, stats:13:ComponentType:column:0:max_degree, stats:13:ComponentType:rows, stats:19:HeapAllocation_Type:rows
+// hole 51 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, stats:19:HeapAllocation_Type:column:1:max_degree, stats:19:HeapAllocation_Type:rows
+// hole 52 Retained: least estimated whole-run work; production rejects the change: production rejects its reads: advice selector __cq_datalog_layout_32@2 does not name that top-level positive atom; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_supertypeof:c1:max_degree, estimate:r_supertypeof:rows, stats:13:ComponentType:column:0:max_degree, stats:13:ComponentType:rows, stats:19:HeapAllocation_Type:rows
+// hole 53 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:53:admission-held-fixed, cpu.h, cpu.m, estimate:r_supertypeof:c1:max_degree, stats:13:ComponentType:column:0:max_degree, stats:13:ComponentType:column:1:max_degree, stats:13:ComponentType:rows, stats:19:HeapAllocation_Type:rows
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 54 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:c0:max_degree, estimate:r_initializedclass:rounds, estimate:r_initializedclass:rows, stats:16:DirectSuperclass:column:0:max_degree, stats:16:DirectSuperclass:rows, structural:r_initializedclass:delta_subset
+// hole 55 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:c0:max_degree, estimate:r_initializedclass:rounds, estimate:r_initializedclass:rows, stats:20:DirectSuperinterface:rows, structural:r_initializedclass:delta_subset
+// hole 56 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_mainmethoddeclaration:rows, stats:20:Method_DeclaringType:column:0:max_degree
+// hole 57 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:19:HeapAllocation_Type:column:0:max_degree, stats:19:HeapAllocation_Type:rows, stats:20:AssignHeapAllocation:rows, structural:r_reachable:delta_subset
+// hole 58 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:18:Instruction_Method:column:0:max_degree, stats:18:Instruction_Method:rows, stats:20:Method_DeclaringType:column:0:max_degree, stats:23:MethodInvocation_Method:column:0:max_degree, stats:29:isStaticMethodInvocation_Insn:rows, structural:r_reachable:delta_subset
+// hole 59 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:16:StoreStaticField:rows, stats:19:Field_DeclaringType:column:0:max_degree, structural:r_reachable:delta_subset
+// hole 60 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:15:LoadStaticField:rows, stats:19:Field_DeclaringType:column:0:max_degree, stats:19:Field_DeclaringType:rows, structural:r_reachable:delta_subset
+// hole 61 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_classinitializer:c0:max_degree, estimate:r_classinitializer:rows, estimate:r_initializedclass:c0:max_degree, estimate:r_initializedclass:rounds, estimate:r_initializedclass:rows, structural:r_initializedclass:delta_subset
+// hole 62 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_mainmethoddeclaration:rows
+// hole 63 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:22:StaticMethodInvocation:rows, structural:r_reachable:delta_subset
+// hole 64 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:22:StaticMethodInvocation:rows, structural:r_reachable:delta_subset
+// hole 65 Retained: suppressed sub-1.05 estimate ratio under declared review policy; retain incumbent; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_callgraphedge:rows, estimate:r_initializedclass:rounds, stats:11:ActualParam:column:1:max_degree, stats:11:ActualParam:rows, stats:11:FormalParam:column:1:max_degree, stats:11:FormalParam:rows, structural:r_callgraphedge:delta_subset
+// hole 66 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:66:admission-held-fixed, cpu.h, cpu.m, estimate:r_callgraphedge:rows, estimate:r_initializedclass:rounds, stats:17:AssignReturnValue:column:0:max_degree, stats:17:AssignReturnValue:rows, stats:9:ReturnVar:column:1:max_degree, stats:9:ReturnVar:rows, structural:r_callgraphedge:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 67 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:67:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:20:AssignHeapAllocation:rows, structural:r_reachable:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 68 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_assign:rows, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, structural:r_assign:delta_subset
+// hole 69 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:69:admission-held-fixed, cpu.h, cpu.m, estimate:r_assign:rows, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 70 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:rows, stats:11:AssignLocal:column:0:max_degree, stats:11:AssignLocal:rows, structural:r_reachable:delta_subset
+// hole 71 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:rows, stats:11:AssignLocal:column:0:max_degree, stats:11:AssignLocal:rows
+// hole 72 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_castto:rows, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:rows, structural:r_reachable:delta_subset
+// hole 73 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:73:admission-held-fixed, cpu.h, cpu.m, estimate:r_castto:c3:max_degree, estimate:r_castto:rows, estimate:r_initializedclass:rounds, estimate:r_reachable:rows, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 74 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:17:LoadInstanceField:rows, structural:r_reachable:delta_subset
+// hole 75 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_instancefieldpointsto:c2:max_degree, estimate:r_reachableloadinstancefield:rows, estimate:r_varpointsto:c1:max_degree, structural:r_reachableloadinstancefield:delta_subset
+// hole 76 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_instancefieldpointsto:c2:max_degree, estimate:r_instancefieldpointsto:rows, estimate:r_reachableloadinstancefield:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// hole 77 Retained: least estimated whole-run work; production rejects the change: Storage provisions no index on r_instancefieldpointsto Delta [1] for step advice; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_instancefieldpointsto:c2:max_degree, estimate:r_instancefieldpointsto:rows, estimate:r_reachableloadinstancefield:rows, estimate:r_varpointsto:c1:max_degree, structural:r_instancefieldpointsto:delta_subset
+// hole 78 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_staticfieldpointsto:c1:max_degree, estimate:r_staticfieldpointsto:rows, stats:15:LoadStaticField:rows, structural:r_reachable:delta_subset
+// hole 79 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:79:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_staticfieldpointsto:rows, stats:15:LoadStaticField:column:0:max_degree, stats:15:LoadStaticField:rows, structural:r_staticfieldpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 80 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:80:admission-held-fixed, cpu.h, cpu.m, estimate:r_arrayindexpointsto:rows, estimate:r_arraytypecompat:c0:max_degree, estimate:r_arraytypecompat:c1:max_degree, estimate:r_arraytypecompat:rows, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:14:LoadArrayIndex:column:1:max_degree, stats:14:LoadArrayIndex:rows, stats:8:Var_Type:column:0:max_degree, structural:r_reachable:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 81 Retained: least estimated whole-run work; production rejects the change: Storage provisions no index on r_arraytypecompat Full [1] for step advice; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_arrayindexpointsto:c0:max_degree, estimate:r_arrayindexpointsto:rows, estimate:r_arraytypecompat:rows, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:14:LoadArrayIndex:column:1:max_degree, stats:14:LoadArrayIndex:rows, stats:8:Var_Type:column:0:max_degree, stats:8:Var_Type:rows, structural:r_varpointsto:delta_subset
+// hole 82 Retained: least estimated whole-run work; production rejects the change: Storage provisions no index on r_arraytypecompat Full [] for step advice; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_arrayindexpointsto:rows, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:c0:max_degree, estimate:r_varpointsto:c1:max_degree, stats:14:LoadArrayIndex:column:0:max_degree, stats:14:LoadArrayIndex:rows, stats:8:Var_Type:column:0:max_degree, structural:r_arrayindexpointsto:delta_subset
+// hole 83 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:18:Instruction_Method:rows, structural:r_reachable:delta_subset
+// hole 84 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_heaphelper:c4:max_degree, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_virtualmethodinvocation:c0:max_degree, estimate:r_virtualmethodinvocation:rows, structural:r_reachableinstruction:delta_subset
+// hole 85 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:85:admission-held-fixed, cpu.h, cpu.m, estimate:r_heaphelper:c4:max_degree, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, estimate:r_virtualmethodinvocation:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 86 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_heaphelper:c4:max_degree, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_virtualmethodinvocation:c0:max_degree, estimate:r_virtualmethodinvocation:rows, structural:r_reachableinstruction:delta_subset
+// hole 87 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:87:admission-held-fixed, cpu.h, cpu.m, estimate:r_heaphelper:c4:max_degree, estimate:r_heaphelper:rows, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, estimate:r_virtualmethodinvocation:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 88 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_heaphelper:c4:max_degree, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_virtualmethodinvocation:c0:max_degree, estimate:r_virtualmethodinvocation:rows, structural:r_reachableinstruction:delta_subset
+// hole 89 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:89:admission-held-fixed, cpu.h, cpu.m, estimate:r_heaphelper:c4:max_degree, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, estimate:r_virtualmethodinvocation:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 90 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_heaphelpernothis:c3:max_degree, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_virtualmethodinvocation:c0:max_degree, estimate:r_virtualmethodinvocation:rows, structural:r_reachableinstruction:delta_subset
+// hole 91 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:91:admission-held-fixed, cpu.h, cpu.m, estimate:r_heaphelpernothis:c3:max_degree, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, estimate:r_virtualmethodinvocation:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 92 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_heaphelpernothis:c3:max_degree, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_virtualmethodinvocation:c0:max_degree, estimate:r_virtualmethodinvocation:rows, structural:r_reachableinstruction:delta_subset
+// hole 93 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:93:admission-held-fixed, cpu.h, cpu.m, estimate:r_heaphelpernothis:c3:max_degree, estimate:r_heaphelpernothis:rows, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, estimate:r_virtualmethodinvocation:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 94 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:94:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, stats:23:MethodInvocation_Method:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:rows, stats:7:ThisVar:column:0:max_degree, structural:r_reachableinstruction:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 95 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:95:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:23:MethodInvocation_Method:column:0:max_degree, stats:23:MethodInvocation_Method:rows, stats:28:SpecialMethodInvocation_Base:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:rows, stats:7:ThisVar:column:0:max_degree, stats:7:ThisVar:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 96 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:96:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, stats:23:MethodInvocation_Method:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:rows, stats:7:ThisVar:column:0:max_degree, structural:r_reachableinstruction:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 97 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:97:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:23:MethodInvocation_Method:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:rows, stats:7:ThisVar:column:0:max_degree, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 98 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:98:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachableinstruction:c0:max_degree, estimate:r_reachableinstruction:rows, estimate:r_varpointsto:c1:max_degree, stats:23:MethodInvocation_Method:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:rows, stats:7:ThisVar:column:0:max_degree, structural:r_reachableinstruction:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 99 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:99:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:23:MethodInvocation_Method:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:column:0:max_degree, stats:28:SpecialMethodInvocation_Base:rows, stats:7:ThisVar:column:0:max_degree, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 100 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:18:StoreInstanceField:column:0:max_degree, stats:18:StoreInstanceField:rows, structural:r_reachable:delta_subset
+// hole 101 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:18:StoreInstanceField:column:0:max_degree, stats:18:StoreInstanceField:rows, structural:r_varpointsto:delta_subset
+// hole 102 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:102:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:18:StoreInstanceField:column:0:max_degree, stats:18:StoreInstanceField:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 103 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, estimate:r_varpointsto:c1:max_degree, stats:16:StoreStaticField:rows, structural:r_reachable:delta_subset
+// hole 104 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:104:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, stats:16:StoreStaticField:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 105 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachable:c0:max_degree, estimate:r_reachable:rows, stats:15:StoreArrayIndex:rows, structural:r_reachable:delta_subset
+// hole 106 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c1:max_degree, structural:r_reachablesortedindex:delta_subset
+// hole 107 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// hole 108 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:108:admission-held-fixed, cpu.h, cpu.m, estimate:r_eligibleobjectarrayheap:rows, estimate:r_initializedclass:rounds, estimate:r_isobjectarrayheap:rows, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 109 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:109:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_nonstringheapallocsupertype:rows, estimate:r_reachablesortedindex:c0:max_degree, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c0:max_degree, estimate:r_varpointsto:c1:max_degree, structural:r_reachablesortedindex:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 110 Retained: least estimated whole-run work; production rejects the change: Storage provisions no index on r_nonstringheapallocsupertype Full [0] for step advice; candidates=2
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_nonstringheapallocsupertype:rows, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// hole 111 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:111:admission-held-fixed, cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_nonstringheapallocsupertype:rows, estimate:r_reachablesortedindex:c0:max_degree, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c0:max_degree, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// hole 112 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c1:max_degree, structural:r_reachablesortedindex:delta_subset
+// hole 113 Retained: the incumbent has the least estimate; candidates=1
+// citations: cpu.h, cpu.m, estimate:r_initializedclass:rounds, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// hole 114 Changed: least estimated whole-run work; candidates=2
+// citations: compiler:hole:114:admission-held-fixed, cpu.h, cpu.m, estimate:r_eligiblestringarrayheap:rows, estimate:r_initializedclass:rounds, estimate:r_isstringarrayheap:rows, estimate:r_reachablesortedindex:rows, estimate:r_varpointsto:c1:max_degree, estimate:r_varpointsto:rows, structural:r_varpointsto:delta_subset
+// admission held fixed: Admit; hint Admit; not compared: a different owner may be cheaper, but is not a static-order choice
+// Complete replacement for existing authored directives; never append duplicate rule/variant advice.
+plan (Precompute1 , order (r_thisvar @ 2 , r_methodlookup @ 0 , r_heapallocation_type @ 1) , known (admit)) ;
+plan (HeapAllocHelper , order (r_componenttype @ 2 , r_heapallocation_type @ 1 , r_supertypeof @ 3 , r_heapallocation_type @ 0) , known (admit)) ;
+plan (ArrayTypeCompatPrecompute , order (r_componenttype @ 1 , r_supertypeof @ 2 , r_heapallocation_type @ 0) , known (admit)) ;
+plan (Assign_Return , delta (r_callgraphedge @ 0) , order (r_callgraphedge @ 0 , r_assignreturnvalue @ 2 , r_returnvar @ 1) , known (admit)) ;
+plan (VPT_HeapAlloc , delta (r_reachable @ 1) , order (r_reachable @ 1 , r_assignheapallocation @ 0) , known (admit)) ;
+plan (VPT_Assign , delta (r_varpointsto @ 1) , order (r_varpointsto @ 1 , r_assign @ 0) , known (admit)) ;
+plan (VPT_Cast , delta (r_varpointsto @ 2) , order (r_varpointsto @ 2 , r_castto @ 1 , r_reachable @ 0) , known (admit)) ;
+plan (VPT_LoadStatic , delta (r_staticfieldpointsto @ 2) , order (r_staticfieldpointsto @ 2 , r_loadstaticfield @ 1 , r_reachable @ 0) , known (admit)) ;
+plan (VPT_LoadArray , delta (r_reachable @ 0) , order (r_reachable @ 0 , r_loadarrayindex @ 1 , r_var_type @ 4 , r_arraytypecompat @ 5 , r_varpointsto @ 2 , r_arrayindexpointsto @ 3) , known (admit)) ;
+plan (VirtualDispatch_MultiHead_0 , delta (r_varpointsto @ 2) , order (r_varpointsto @ 2 , r_virtualmethodinvocation @ 1 , r_reachableinstruction @ 0 , r_heaphelper @ 3) , known (admit)) ;
+plan (VirtualDispatch_MultiHead_1 , delta (r_varpointsto @ 2) , order (r_virtualmethodinvocation @ 1 , r_reachableinstruction @ 0 , r_varpointsto @ 2 , r_heaphelper @ 3) , known (admit)) ;
+plan (VirtualDispatch_MultiHead_2 , delta (r_varpointsto @ 2) , order (r_varpointsto @ 2 , r_virtualmethodinvocation @ 1 , r_reachableinstruction @ 0 , r_heaphelper @ 3) , known (admit)) ;
+plan (Reachable_CGE_Virtual_0 , delta (r_varpointsto @ 2) , order (r_varpointsto @ 2 , r_virtualmethodinvocation @ 1 , r_reachableinstruction @ 0 , r_heaphelpernothis @ 3) , known (admit)) ;
+plan (Reachable_CGE_Virtual_1 , delta (r_varpointsto @ 2) , order (r_virtualmethodinvocation @ 1 , r_reachableinstruction @ 0 , r_varpointsto @ 2 , r_heaphelpernothis @ 3) , known (admit)) ;
+plan (SpecialDispatch_MultiHead_0 , delta (r_reachableinstruction @ 0) , order (r_reachableinstruction @ 0 , r_specialmethodinvocation_base @ 1 , r_methodinvocation_method @ 3 , r_thisvar @ 4 , r_varpointsto @ 2) , known (admit)) ;
+plan (SpecialDispatch_MultiHead_0 , delta (r_varpointsto @ 2) , order (r_specialmethodinvocation_base @ 1 , r_reachableinstruction @ 0 , r_varpointsto @ 2 (v_base) , r_methodinvocation_method @ 3 , r_thisvar @ 4 , r_varpointsto @ 2) , known (admit)) ;
+plan (SpecialDispatch_MultiHead_1 , delta (r_reachableinstruction @ 0) , order (r_reachableinstruction @ 0 , r_specialmethodinvocation_base @ 1 , r_methodinvocation_method @ 3 , r_thisvar @ 4 , r_varpointsto @ 2) , known (admit)) ;
+plan (SpecialDispatch_MultiHead_1 , delta (r_varpointsto @ 2) , order (r_specialmethodinvocation_base @ 1 , r_reachableinstruction @ 0 , r_varpointsto @ 2 (v_base) , r_methodinvocation_method @ 3 , r_thisvar @ 4 , r_varpointsto @ 2) , known (admit)) ;
+plan (SpecialDispatch_MultiHead_2 , delta (r_reachableinstruction @ 0) , order (r_reachableinstruction @ 0 , r_specialmethodinvocation_base @ 1 , r_methodinvocation_method @ 3 , r_thisvar @ 4 , r_varpointsto @ 2) , known (admit)) ;
+plan (SpecialDispatch_MultiHead_2 , delta (r_varpointsto @ 2) , order (r_specialmethodinvocation_base @ 1 , r_reachableinstruction @ 0 , r_varpointsto @ 2 (v_base) , r_methodinvocation_method @ 3 , r_thisvar @ 4 , r_varpointsto @ 2) , known (admit)) ;
+plan (IFPT_Store , delta (r_varpointsto @ 3) , order (r_reachable @ 0 , r_storeinstancefield @ 1 , r_varpointsto @ 3 , r_varpointsto @ 2) , known (admit)) ;
+plan (SFPT_Store , delta (r_varpointsto @ 2) , order (r_storestaticfield @ 1 , r_reachable @ 0 , r_varpointsto @ 2) , known (admit)) ;
+plan (AIPT_Store_ObjectArray , delta (r_varpointsto @ 3) , order (r_reachablesortedindex @ 0 , r_varpointsto @ 3 (v_frm) , r_varpointsto @ 1 , r_isobjectarrayheap @ 2 , r_varpointsto @ 3 , r_eligibleobjectarrayheap @ 4) , known (admit)) ;
+plan (AIPT_Store , delta (r_reachablesortedindex @ 0) , order (r_reachablesortedindex @ 0 , r_varpointsto @ 2 , r_nonstringheapallocsupertype @ 3 , r_varpointsto @ 1) , known (admit)) ;
+plan (AIPT_Store , delta (r_varpointsto @ 2) , order (r_reachablesortedindex @ 0 , r_varpointsto @ 2 , r_nonstringheapallocsupertype @ 3 , r_varpointsto @ 1) , known (admit)) ;
+plan (AIPT_Store_StringArray , delta (r_varpointsto @ 3) , order (r_reachablesortedindex @ 0 , r_varpointsto @ 3 (v_frm) , r_varpointsto @ 1 , r_isstringarrayheap @ 2 , r_varpointsto @ 3 , r_eligiblestringarrayheap @ 4) , known (admit)) ;

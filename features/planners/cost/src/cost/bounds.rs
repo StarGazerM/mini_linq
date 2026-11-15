@@ -10,7 +10,7 @@ use num_rational::BigRational as Q;
 use num_traits::{One, Zero};
 
 use super::{Candidate, CandidateCost, Comparison, DeltaCost, IndexDemand,
-    IndexVersion, LinearCost, Read, StepBound};
+    IndexVersion, LinearCost, PartialReads, Read, StepBound};
 use crate::export::{self, ClauseKind, DatasetIdentity, EvidenceBinding,
     EvidenceView, ExportError, Hole, Origin, PlannerInput, Target, Version};
 
@@ -21,7 +21,7 @@ fn rational(value: &Q) -> Rational {
     Rational { numerator: value.numer().to_string(), denominator: value.denom().to_string() }
 }
 fn exact(value: &Rational) -> Result<Q> { value.exact().map_err(|e| error(e.to_string())) }
-fn safe_upper<T>(fact: &Fact<T>) -> Option<&T> {
+pub(crate) fn safe_upper<T>(fact: &Fact<T>) -> Option<&T> {
     if fact.source == Source::Hll { return None; }
     match fact.claim { Claim::Equal | Claim::Upper => fact.value.as_ref(),
         Claim::Interval => fact.upper.as_ref(), _ => None }
@@ -32,16 +32,9 @@ fn safe_lower(fact: &CountFact) -> Q {
         Claim::Interval => fact.lower, _ => None }.map(q).unwrap_or_else(Q::zero)
 }
 
-/// Check the declared target and run identities without recompiling checked IR.
-/// The caller owns `PlannerInput::check`; missing optional statistics stay unknown.
-pub fn validate_context(input: &PlannerInput, evidence: &DatasetEvidence, target: &str) -> Result<()> {
+/// Check that the evidence is the dataset the compiler input is bound to.
+pub(crate) fn validate_dataset(input: &PlannerInput, evidence: &DatasetEvidence) -> Result<()> {
     evidence.check().map_err(|e| error(e.to_string()))?;
-    let expected = match input.configuration.target { Target::Cpu => "cpu", Target::CpuPar => "cpu-par", Target::Gpu => "gpu" };
-    if target != expected { return Err(error("requested target differs from checked compiler target")); }
-    let profile = evidence.targets.get(target).ok_or_else(|| error(format!("missing required target h/m constants: {target}")))?;
-    if profile.configuration_hash != input.identity.configuration_hash {
-        return Err(error("target configuration differs from checked compiler configuration"));
-    }
     if let DatasetIdentity::Bound { dataset_hash, schema_hash, evidence_hash } = &input.identity.dataset {
         if dataset_hash != &evidence.dataset.hash || schema_hash != &evidence.dataset.schema_hash {
             return Err(error("evidence dataset/schema differs from checked compiler input"));
@@ -58,6 +51,19 @@ pub fn validate_context(input: &PlannerInput, evidence: &DatasetEvidence, target
                 return Err(error("cost planning facts differ from checked compiler attachment"));
             }
         }
+    }
+    Ok(())
+}
+
+/// Check the declared target and run identities without recompiling checked IR.
+/// The caller owns `PlannerInput::check`; missing optional statistics stay unknown.
+pub fn validate_context(input: &PlannerInput, evidence: &DatasetEvidence, target: &str) -> Result<()> {
+    validate_dataset(input, evidence)?;
+    let expected = match input.configuration.target { Target::Cpu => "cpu", Target::CpuPar => "cpu-par", Target::Gpu => "gpu" };
+    if target != expected { return Err(error("requested target differs from checked compiler target")); }
+    let profile = evidence.targets.get(target).ok_or_else(|| error(format!("missing required target h/m constants: {target}")))?;
+    if profile.configuration_hash != input.identity.configuration_hash {
+        return Err(error("target configuration differs from checked compiler configuration"));
     }
     let run = |run: &ev::RunIdentity| -> Result<()> {
         if run.program_hash != input.identity.program_hash || run.configuration_hash != input.identity.configuration_hash {
@@ -90,45 +96,58 @@ pub fn validate_context(input: &PlannerInput, evidence: &DatasetEvidence, target
     Ok(())
 }
 
+/// `a*|delta_r| + b` per round, plus `c` over the whole run: the run costs at
+/// most `a*F + b*N + c`. Only a steady variant produces `a` or `c`.
 #[derive(Clone)]
-struct Bound { a: Q, b: Q, citations: BTreeSet<String>, proof: String }
+struct Bound { a: Q, b: Q, c: Q, citations: BTreeSet<String>, proof: String }
 impl Bound {
     fn constant(n: Q, proof: impl Into<String>) -> Self {
-        Self { a: Q::zero(), b: n, citations: BTreeSet::new(), proof: proof.into() }
+        Self { a: Q::zero(), b: n, c: Q::zero(), citations: BTreeSet::new(), proof: proof.into() }
     }
     fn fact(fact: &CountFact) -> Option<Self> {
         safe_upper(fact).map(|&n| { let mut b = Self::constant(q(n), format!("upper({})", fact.id)); b.citations.insert(fact.id.clone()); b })
     }
-    fn delta() -> Self { Self { a: Q::one(), b: Q::zero(), citations: BTreeSet::new(), proof: "current changing occurrence rows = delta".into() } }
-    fn wire(&self) -> DeltaCost { DeltaCost { coefficient: rational(&self.a), constant: rational(&self.b) } }
+    fn delta() -> Self { Self { a: Q::one(), b: Q::zero(), c: Q::zero(), citations: BTreeSet::new(), proof: "current changing occurrence rows = delta".into() } }
+    fn wire(&self) -> DeltaCost { DeltaCost { coefficient: rational(&self.a), constant: rational(&self.b), once: rational(&self.c) } }
+    /// Whether the bound depends on the round: a delta term or a whole-run part.
+    fn varies(&self) -> bool { !self.a.is_zero() || !self.c.is_zero() }
     fn add(&self, other: &Self) -> Self {
-        Self { a: &self.a + &other.a, b: &self.b + &other.b,
+        Self { a: &self.a + &other.a, b: &self.b + &other.b, c: &self.c + &other.c,
             citations: self.citations.union(&other.citations).cloned().collect(),
             proof: "sum of selected work certificates".into() }
     }
     fn multiply(&self, other: &Self, inequality: &str) -> Option<Self> {
-        if !self.a.is_zero() && !other.a.is_zero() { return None; }
-        Some(Self { a: &self.a * &other.b + &self.b * &other.a, b: &self.b * &other.b,
+        // Only a round-independent factor keeps the product affine.
+        if self.varies() && other.varies() { return None; }
+        Some(Self { a: &self.a * &other.b + &self.b * &other.a, b: &self.b * &other.b, c: &self.c * &other.b + &self.b * &other.c,
             citations: self.citations.union(&other.citations).cloned().collect(),
             proof: format!("{inequality}; premises: ({}), ({})", self.proof, other.proof) })
     }
+    /// The round-independent bound as a bound on the sum over all rounds.
+    fn over_run(mut self) -> Self {
+        debug_assert!(!self.varies());
+        self.c = std::mem::take(&mut self.b);
+        self.annotate("whole run: from the full read of the changing occurrence on, each frame holds one delta row and deltas are disjoint, so frames of different rounds differ, and all of them lie in the step's output over the final relations, which this round-independent bound from final facts bounds")
+    }
     fn annotate(mut self, proof: &str) -> Self { self.proof = format!("{proof}; {}", self.proof); self }
 }
-fn pick(bounds: impl IntoIterator<Item = Bound>, delta_anchor: Option<&Q>) -> Option<Bound> {
+/// The declared endpoints of a steady variant: upper F and upper N.
+type Anchor = (Q, Q);
+fn pick(bounds: impl IntoIterator<Item = Bound>, anchor: Option<&Anchor>) -> Option<Bound> {
     // Comparing values merely chooses ONE globally valid witness. It does not
     // assert that this witness is pointwise best throughout the interval. The
     // fallback one is a deterministic witness tie policy, not a cardinality fact.
-    let one = Q::one();
-    let x = delta_anchor.unwrap_or(&one);
+    let unit = (Q::one(), Q::one());
+    let (f, n) = anchor.unwrap_or(&unit);
     bounds.into_iter().min_by(|l, r| {
-        (&l.a * x + &l.b).cmp(&(&r.a * x + &r.b))
-            .then_with(|| l.a.cmp(&r.a)).then_with(|| l.b.cmp(&r.b))
+        (&l.a * f + &l.b * n + &l.c).cmp(&(&r.a * f + &r.b * n + &r.c))
+            .then_with(|| l.a.cmp(&r.a)).then_with(|| l.c.cmp(&r.c)).then_with(|| l.b.cmp(&r.b))
             .then_with(|| l.proof.cmp(&r.proof))
     })
 }
 fn product(left: Option<&Bound>, right: Option<&Bound>, proof: &str) -> Option<Bound> {
     // Zero annihilates even an unknown finite relation bound.
-    if let Some(zero) = left.into_iter().chain(right).find(|b| b.a.is_zero() && b.b.is_zero()) {
+    if let Some(zero) = left.into_iter().chain(right).find(|b| b.a.is_zero() && b.b.is_zero() && b.c.is_zero()) {
         return Some(zero.clone().annotate(proof));
     }
     left?.multiply(right?, proof)
@@ -145,8 +164,25 @@ fn subset_premises(evidence: &DatasetEvidence, relation: &str) -> BTreeSet<Strin
     }).collect()
 }
 struct Relation<'a> { name: &'a str, facts: &'a RelationEvidence, columns: BTreeMap<usize, &'a str>, premises: BTreeSet<String> }
-fn relation<'a>(hole: &'a Hole, read: &Read, evidence: &'a DatasetEvidence) -> Result<Option<Relation<'a>>> {
-    let Some(binding) = binding(hole, read) else { return Ok(None); };
+/// The facts of a read: through the hole's explicit binding, else through a
+/// relation synthesized for its declared relation (`derived`).
+fn relation<'a>(hole: &'a Hole, read: &Read, evidence: &'a DatasetEvidence, derived: &BTreeMap<String, String>) -> Result<Option<Relation<'a>>> {
+    let Some(binding) = binding(hole, read) else {
+        let Some(held) = derived.get(&read.logical_relation) else { return Ok(None); };
+        let (name, facts) = evidence.relations.get_key_value(held).ok_or_else(|| error("synthesized relation is absent from its evidence"))?;
+        let mut columns = BTreeMap::new();
+        for column in &read.columns {
+            let (held, _) = facts.columns.get_key_value(&format!("c{}", column.source_column))
+                .ok_or_else(|| error("synthesized relation lacks a read column"))?;
+            columns.insert(column.source_column, held.as_str());
+        }
+        let premises = if read.version == Version::Delta {
+            let premises = subset_premises(evidence, name);
+            if premises.is_empty() { return Ok(None); }
+            premises
+        } else { BTreeSet::new() };
+        return Ok(Some(Relation { name, facts, columns, premises }));
+    };
     let facts = evidence.relations.get(&binding.dataset_relation).ok_or_else(|| error("explicit evidence binding names an absent dataset relation"))?;
     if facts.scope == RelationScope::RecursiveFinal
         && !facts.recursive.as_ref().is_some_and(|r| r.run.admission == ev::Admission::InsertOnlySet) {
@@ -242,11 +278,11 @@ struct Prefix<'a> {
     ranges: Vec<(String, &'a ev::ColumnEvidence, BTreeSet<String>)>,
 }
 impl Prefix<'_> {
-    fn degree(&self, key: &BTreeSet<String>, delta_upper: Option<&Q>) -> Option<Bound> {
+    fn degree(&self, key: &BTreeSet<String>, delta_upper: Option<&Anchor>) -> Option<Bound> {
         pick(self.rows.iter().cloned().map(|b| b.annotate("M_P(K) <= U_P")).chain(
             self.degrees.iter().filter(|(k, _)| k.is_subset(key)).map(|(_, b)| b.clone())), delta_upper)
     }
-    fn distinct(&self, key: &BTreeSet<String>, delta_upper: Option<&Q>) -> Option<Bound> {
+    fn distinct(&self, key: &BTreeSet<String>, delta_upper: Option<&Anchor>) -> Option<Bound> {
         pick(self.rows.iter().cloned().chain(self.supports.iter().filter(|(k, _)| key.is_subset(k)).map(|(_, b)| b.clone())), delta_upper)
     }
     fn disjoint(&self, read: &Read, relation: &Relation<'_>) -> Option<Bound> {
@@ -301,6 +337,9 @@ pub struct BoundModel<'a> {
     target: &'a str,
     h: Q,
     m: Q,
+    partial_reads: PartialReads,
+    /// Declared relation name to its synthesized evidence relation.
+    derived: BTreeMap<String, String>,
 }
 impl<'a> BoundModel<'a> {
     pub fn new(input: &'a PlannerInput, evidence: &'a DatasetEvidence, target: &'a str) -> Result<Self> {
@@ -308,10 +347,24 @@ impl<'a> BoundModel<'a> {
         let profile = &evidence.targets[target];
         let h = exact(profile.build_per_row_h.value.as_ref().ok_or_else(|| error("missing h"))?)?;
         let m = exact(profile.merge_per_row_m.value.as_ref().ok_or_else(|| error("missing m"))?)?;
-        Ok(Self { input, evidence, target, h, m })
+        Ok(Self { input, evidence, target, h, m, partial_reads: PartialReads::Rows, derived: BTreeMap::new() })
+    }
+    /// A model over evidence extended with synthesized derived relations.
+    /// The caller has validated the unextended evidence against the input.
+    pub(crate) fn synthesized(input: &'a PlannerInput, evidence: &'a DatasetEvidence, target: &'a str, derived: BTreeMap<String, String>) -> Result<Self> {
+        let profile = evidence.targets.get(target).ok_or_else(|| error(format!("missing required target h/m constants: {target}")))?;
+        let h = exact(profile.build_per_row_h.value.as_ref().ok_or_else(|| error("missing h"))?)?;
+        let m = exact(profile.merge_per_row_m.value.as_ref().ok_or_else(|| error("missing m"))?)?;
+        Ok(Self { input, evidence, target, h, m, partial_reads: PartialReads::Rows, derived })
+    }
+    /// Charge variable-introducing partial reads under a declared realization
+    /// policy; the default `rows` is sound for every realization.
+    pub fn with_partial_reads(mut self, partial_reads: PartialReads) -> Self {
+        self.partial_reads = partial_reads;
+        self
     }
     pub fn cost(&self, hole: &Hole, candidate: &Candidate, shared: &BTreeSet<IndexDemand>) -> Result<CandidateCost> {
-        cost_checked(self.input, hole, candidate, self.evidence, self.target, shared, &self.h, &self.m)
+        cost_checked(self.input, hole, candidate, self.evidence, self.target, shared, &self.h, &self.m, self.partial_reads, &self.derived)
     }
     pub fn upper(&self, cost: &LinearCost) -> Result<Option<Rational>> { upper_checked(cost, self.evidence) }
     /// Evaluate only a singleton declared domain, never divide unrelated upper bounds.
@@ -326,6 +379,81 @@ impl<'a> BoundModel<'a> {
     pub fn compare(&self, left: &LinearCost, right: &LinearCost) -> Result<Comparison> {
         compare_checked(left, right, self.evidence)
     }
+    /// The row and distinct-count values of one occurrence's relation, for
+    /// the estimate that ranks valuations; `None` where it has no row fact.
+    pub(crate) fn occurrence_facts(&self, hole: &Hole, read: &Read) -> Result<Option<OccurrenceFacts>> {
+        let Some(rel) = relation(hole, read, self.evidence, &self.derived)? else { return Ok(None); };
+        let value = |fact: &CountFact| safe_upper(fact).map(|&n| n as f64);
+        let rows = if rel.facts.scope == RelationScope::RecursiveFinal { rel.facts.recursive.as_ref().map(|r| &r.final_rows) } else { rel.facts.rows.as_ref() };
+        let Some(rows) = rows.and_then(value) else { return Ok(None); };
+        let distinct = rel.columns.iter()
+            .map(|(&column, name)| (column, rel.facts.columns[*name].distinct.as_ref().and_then(value).map_or(rows, |d| d.min(rows))))
+            .collect();
+        let sets = rel.facts.key_sets.iter().filter_map(|set| {
+            let columns: BTreeSet<usize> = rel.columns.iter().filter(|(_, name)| set.columns.iter().any(|c| c == **name)).map(|(&c, _)| c).collect();
+            if columns.len() != set.columns.len() { return None; }
+            Some((columns, set.distinct.as_ref().and_then(value)?))
+        }).collect();
+        let recursive = rel.facts.recursive.as_ref().and_then(|r| Some((value(&r.final_rows)?, value(&r.rounds)?)));
+        let integer = |scalar: &ev::Scalar| match scalar { ev::Scalar::SignedInteger { value } => Some(*value), _ => None };
+        let values = rel.columns.iter().map(|(&column, name)| {
+            let facts = &rel.facts.columns[*name];
+            (column, ColumnValues {
+                heavy: facts.heavy.iter().flat_map(|fact| fact.value.iter().flatten())
+                    .filter_map(|heavy| Some((integer(&heavy.value)?, heavy.rows as f64))).collect(),
+                ranges: facts.ranges.iter().filter_map(|fact| fact.value.as_ref()).flat_map(|ranges| ranges.rows.iter().enumerate().filter(|(_, rows)| **rows > 0).map(|(at, &rows)| {
+                    let start = ranges.lo.saturating_add((ranges.width as i64).saturating_mul(at as i64));
+                    (start, start.saturating_add(ranges.width as i64 - 1), rows as f64)
+                })).collect(),
+            })
+        }).collect();
+        Ok(Some(OccurrenceFacts { rows, distinct, sets, recursive, values }))
+    }
+    /// The value of a closed constant the evidence binds.
+    pub(crate) fn constant(&self, name: &str) -> Option<i64> {
+        match self.evidence.constants.get(name)?.value.as_ref()? { ev::Scalar::SignedInteger { value } => Some(*value), _ => None }
+    }
+    /// The maintenance of `demand` at the facts' values, for the estimate;
+    /// `None` where it has no recorded policy or bound.
+    pub(crate) fn maintenance_estimate(&self, hole: &Hole, read: &Read, delta: Option<&Read>, demand: &IndexDemand) -> Result<Option<f64>> {
+        let mut cost = LinearCost { constant: rational(&Q::zero()), terms: BTreeMap::new() };
+        if !maintenance(self.input, hole, read, delta, demand, self.evidence, &self.derived, &self.h, &self.m, &mut cost, &mut BTreeSet::new())? {
+            return Ok(None);
+        }
+        let number = |value: &Rational| -> Option<f64> { Some(value.numerator.parse::<f64>().ok()? / value.denominator.parse::<f64>().ok()?) };
+        let mut total = number(&cost.constant).ok_or_else(|| error("unreadable maintenance constant"))?;
+        for (term, coefficient) in &cost.terms {
+            let fact = match term.split_once(':') {
+                Some(("final_rows", name)) => self.evidence.relations.get(name).and_then(|r| r.recursive.as_ref()).map(|r| &r.final_rows),
+                Some(("rounds", stratum)) => self.evidence.relations.values().filter_map(|r| r.recursive.as_ref()).find(|r| r.stratum == stratum).map(|r| &r.rounds),
+                _ => None,
+            };
+            let Some(&value) = fact.and_then(safe_upper) else { return Ok(None); };
+            total += number(coefficient).ok_or_else(|| error("unreadable maintenance coefficient"))? * value as f64;
+        }
+        Ok(Some(total))
+    }
+}
+
+/// What the estimate reads of one occurrence's relation.
+pub(crate) struct OccurrenceFacts {
+    pub(crate) rows: f64,
+    /// Distinct values per source column, at most the rows.
+    pub(crate) distinct: BTreeMap<usize, f64>,
+    /// Distinct values of a set of source columns with a key-set fact.
+    pub(crate) sets: Vec<(BTreeSet<usize>, f64)>,
+    /// Final rows and rounds of a recursive relation.
+    pub(crate) recursive: Option<(f64, f64)>,
+    /// Heavy values and ranges of each integer source column.
+    pub(crate) values: BTreeMap<usize, ColumnValues>,
+}
+
+/// The heavy values of a column with their rows, and its ranges `lo..=hi`
+/// with their rows; both empty where the evidence has none.
+#[derive(Default)]
+pub(crate) struct ColumnValues {
+    pub(crate) heavy: Vec<(i64, f64)>,
+    pub(crate) ranges: Vec<(i64, i64, f64)>,
 }
 
 /// Cost one complete candidate, preserving unknown work rather than favorable
@@ -343,7 +471,7 @@ pub(crate) fn input_rows(hole: &Hole, read: &Read, evidence: &DatasetEvidence) -
     let bound = if read.version == Version::Delta && matches!(hole.origin, Origin::Rule { seed: false, .. }) {
         Some(Bound::delta())
     } else {
-        relation(hole, read, evidence)?.as_ref().and_then(Relation::rows)
+        relation(hole, read, evidence, &BTreeMap::new())?.as_ref().and_then(Relation::rows)
     };
     Ok(StepBound {
         clause: read.normalized_clause,
@@ -355,31 +483,44 @@ pub(crate) fn input_rows(hole: &Hole, read: &Read, evidence: &DatasetEvidence) -
     })
 }
 fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
-    evidence: &DatasetEvidence, target: &str, shared: &BTreeSet<IndexDemand>, h: &Q, m: &Q) -> Result<CandidateCost> {
+    evidence: &DatasetEvidence, target: &str, shared: &BTreeSet<IndexDemand>, h: &Q, m: &Q,
+    partial_reads: PartialReads, derived: &BTreeMap<String, String>) -> Result<CandidateCost> {
     let profile = &evidence.targets[target];
     let mut citations = BTreeSet::from([profile.build_per_row_h.id.clone(), profile.merge_per_row_m.id.clone()]);
     let mut unknown = candidate.unbounded.clone();
-    let preprocessing = preprocessing(hole, candidate, evidence)?;
+    let preprocessing = preprocessing(hole, candidate, evidence, derived, h)?;
     unknown.extend(preprocessing.unknown.iter().cloned());
     for step in &preprocessing.steps { citations.extend(step.bound.citations.iter().cloned()); }
     let steady = matches!(hole.origin, Origin::Rule { seed: false, .. });
     let delta_read = candidate.steps.iter().filter_map(|s| s.read.as_ref()).find(|r| r.version == Version::Delta);
-    if candidate.steps.iter().filter_map(|s| s.read.as_ref()).filter(|r| r.version == Version::Delta).count() > 1 {
+    // A lookup or bind and its expansion read the same changing occurrence.
+    if candidate.steps.iter().filter_map(|s| s.read.as_ref()).filter(|r| r.version == Version::Delta)
+        .map(|r| r.source_occurrence).collect::<BTreeSet<_>>().len() > 1 {
         return Err(error("an affine candidate may have only one changing occurrence"));
     }
-    let delta_relation = delta_read.map(|r| relation(hole, r, evidence)).transpose()?.flatten();
+    let delta_relation = delta_read.map(|r| relation(hole, r, evidence, derived)).transpose()?.flatten();
     // With declared endpoints choose each affine witness by a*upper(F)+
     // b*upper(N), not by per-round work at delta=F. The chosen expression
     // remains valid for every delta; this never treats a pointwise min as affine.
     let delta_anchor = delta_relation.as_ref().and_then(|r| {
         let rows = r.rows()?.b;
         let rounds = safe_upper(&r.facts.recursive.as_ref()?.rounds).copied()?;
-        (rounds != 0).then(|| rows / q(rounds))
+        (rounds != 0).then(|| (rows, q(rounds)))
     });
     let mut prefix = Prefix { rows: Some(Bound::constant(Q::one(), "unit initial prefix")), ..Prefix::default() };
     let mut total = preprocessing.work;
     let mut steps = Vec::new();
     let mut first_atom = true;
+    // Whether the changing occurrence has been read in full: from then on
+    // every frame holds a delta row, so frames of different rounds differ.
+    let mut delta_seen = false;
+    // A round-independent bound of a step's output comes from final facts
+    // alone. Once frames of different rounds differ, it bounds the sum over
+    // the whole run: every round's frames lie inside the frames the step
+    // would produce over the final relations.
+    let over_run = |alternatives: Vec<Bound>| -> Vec<Bound> {
+        alternatives.into_iter().map(|bound| if bound.varies() { bound } else { bound.over_run() }).collect()
+    };
     for step in &candidate.steps {
         let mut missing = Vec::new();
         let work;
@@ -397,18 +538,62 @@ fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
             // filters also cost at most one operation per input row.
             work = prefix.rows.clone();
             proof = "scalar let/equality: output <= input; scalar work <= input; no row multiplication".into();
-        } else if step.read.is_none() || !step.introduces {
+        } else if step.read.is_none() {
             work = prefix.rows.clone();
             proof = "filter/membership/negation: output <= input; probe work <= input".into();
+        } else if !step.introduces {
+            // A lookup, or a fully bound atom: a semijoin on every retained
+            // column. Each input frame is probed once; survivors hold a
+            // key value of R, at most M_P(K) frames each.
+            let read = step.read.as_ref().unwrap();
+            let rel = relation(hole, read, evidence, derived)?;
+            let key: BTreeSet<_> = read.columns.iter().map(|c| c.source_column).collect();
+            let vars = variables(read, &key);
+            work = prefix.rows.clone();
+            let mut supports: Vec<Bound> = rel.as_ref().and_then(|r| r.distinct(&key)).into_iter().collect();
+            if steady && read.version == Version::Delta && !key.is_empty() {
+                supports.push(Bound::delta().annotate("D_delta(K) <= |delta|"));
+            }
+            let mp = prefix.degree(&vars, delta_anchor.as_ref());
+            let mut alternatives: Vec<Bound> = prefix.rows.iter().cloned()
+                .map(|b| b.annotate("|P semijoin_K R| <= U_P")).collect();
+            for support in &supports {
+                alternatives.extend(product(Some(support), mp.as_ref(), "|P semijoin_K R| <= D_R(K) M_P(K) (support cap)"));
+            }
+            if steady && delta_seen { alternatives = over_run(alternatives); }
+            if prefix.rows.is_some() { prefix.rows = pick(alternatives, delta_anchor.as_ref()); }
+            for support in supports {
+                prefix.supports.push((vars.clone(), support.annotate("membership in R caps the prefix support on K")));
+            }
+            proof = format!("{}: probe work <= input; {}",
+                if read.partial { "lookup" } else { "membership" },
+                prefix.rows.as_ref().map_or("no output certificate", |b| b.proof.as_str()));
         } else {
             let read = step.read.as_ref().unwrap();
-            let rel = relation(hole, read, evidence)?;
+            let rel = relation(hole, read, evidence, derived)?;
             let changing = steady && read.version == Version::Delta;
-            let rows = if changing { Some(Bound::delta()) } else { rel.as_ref().and_then(Relation::rows) };
             let key: BTreeSet<_> = read.columns.iter().filter(|c| c.variable.as_ref().is_none_or(|v| step.bound_before.contains(v)))
                 .map(|c| c.source_column).collect();
             let vars = variables(read, &key);
-            let mr = if key.is_empty() { rows.clone() } else { rel.as_ref().and_then(|r| r.degree(&key)) };
+            // Under `distinct` a bind joins the prefix with the set pi_C(R);
+            // under `rows` every matching row of R is visited, as for a full read.
+            let projected = read.partial && partial_reads == PartialReads::Distinct;
+            let retained: BTreeSet<_> = read.columns.iter().map(|c| c.source_column).collect();
+            let rows = if projected {
+                let mut caps: Vec<Bound> = rel.as_ref().and_then(|r| r.distinct(&retained))
+                    .map(|b| b.annotate("U_{pi_C R} <= D_R(C)")).into_iter().collect();
+                if changing { caps.push(Bound::delta().annotate("U_{pi_C delta} <= |delta|")); }
+                pick(caps, delta_anchor.as_ref())
+            } else if changing { Some(Bound::delta()) } else { rel.as_ref().and_then(Relation::rows) };
+            let degree = |key: &BTreeSet<usize>| -> Option<Bound> {
+                let rel = rel.as_ref()?;
+                if !projected { return rel.degree(key); }
+                let rest: BTreeSet<_> = retained.difference(key).copied().collect();
+                if rest.is_empty() { return Some(Bound::constant(Q::one(), "pi_C(R) is a set: all of C is a key")); }
+                pick(rel.degree(key).map(|b| b.annotate("M_{pi_C R}(K) <= M_R(K)")).into_iter()
+                    .chain(rel.distinct(&rest).map(|b| b.annotate("M_{pi_C R}(K) <= D_R(C \\ K)"))), None)
+            };
+            let mr = if key.is_empty() { rows.clone() } else { degree(&key) };
             let mp = prefix.degree(&vars, delta_anchor.as_ref());
             let dr = rel.as_ref().and_then(|r| r.distinct(&key));
             let dp = prefix.distinct(&vars, delta_anchor.as_ref());
@@ -421,6 +606,10 @@ fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
                 alternatives.extend(product(support, degrees.as_ref(), "|P join_K R| <= D(K) M_P(K) M_R(K) (support-distinct cap)"));
             }
             if let Some(rel) = &rel { alternatives.extend(prefix.disjoint(read, rel)); }
+            // At the full read of the changing occurrence, and after it. A
+            // projected bind of it is excluded: one key recurs across rounds.
+            if (changing && !projected) || (steady && delta_seen) { alternatives = over_run(alternatives); }
+            if changing && !projected { delta_seen = true; }
             let output = pick(alternatives, delta_anchor.as_ref());
             proof = output.as_ref().map(|b| b.proof.clone()).unwrap_or_else(|| "join lacks all valid upper certificates".into());
             if output.is_none() { missing.push(format!("clause {}: rows/degree/support for explicit binding {} and prefix", step.clause, read.input_relation)); }
@@ -435,10 +624,12 @@ fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
                         prefix.ranges.push((variable.clone(), &rel.facts.columns[rel.columns[&column.source_column]], rel.premises.clone()));
                     }
                 }
-                for key in rel.known_keys() {
+                let mut keys = rel.known_keys();
+                if projected && !keys.contains(&retained) { keys.push(retained.clone()); }
+                for key in keys {
                     let vars = variables(read, &key);
-                    let degree = rel.degree(&key);
-                    if let Some(d) = product(degree.as_ref(), mp.as_ref(), "M_new(K_R) <= M_R(K_R) M_P(join_key)") {
+                    let key_degree = degree(&key);
+                    if let Some(d) = product(key_degree.as_ref(), mp.as_ref(), "M_new(K_R) <= M_R(K_R) M_P(join_key)") {
                         prefix.degrees.push((vars.clone(), d));
                     }
                     if let Some(d) = rel.distinct(&key) { prefix.supports.push((vars, d.annotate("retained base-domain support bounds prefix support"))); }
@@ -472,7 +663,7 @@ fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
     }
     if !unknown.is_empty() { total = None; }
     let mut per_round = total.as_ref().map(Bound::wire);
-    let mut whole = total.as_ref().map(|b| LinearCost { constant: rational(&b.b), terms: BTreeMap::new() });
+    let mut whole = total.as_ref().map(|b| LinearCost { constant: rational(&(&b.b + &b.c)), terms: BTreeMap::new() });
     if steady {
         whole = None;
         if let (Some(total), Some(rel)) = (&total, &delta_relation) {
@@ -487,7 +678,7 @@ fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
                     if let Some(id) = partition { citations.insert(id.clone()); }
                     citations.insert(recursive.final_rows.id.clone());
                     citations.insert(recursive.rounds.id.clone());
-                    let mut cost = LinearCost { constant: rational(&Q::zero()), terms: BTreeMap::new() };
+                    let mut cost = LinearCost { constant: rational(&total.c), terms: BTreeMap::new() };
                     add_term(&mut cost, format!("final_rows:{}", rel.name), &total.a)?;
                     add_term(&mut cost, format!("rounds:{}", recursive.stratum), &total.b)?;
                     whole = Some(cost);
@@ -520,7 +711,10 @@ fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
             }
         }
         if let Some(cost) = &mut whole {
-            if !maintenance(input, hole, candidate, demand, evidence, h, m, cost, &mut citations)? {
+            let version = match demand.version { IndexVersion::Full => Version::Full, IndexVersion::Delta => Version::Delta };
+            let read = candidate.steps.iter().filter_map(|s| s.read.as_ref()).find(|r| r.logical_relation == demand.logical_relation && r.version == version);
+            let charged = match read { Some(read) => maintenance(input, hole, read, delta_read, demand, evidence, derived, h, m, cost, &mut citations)?, None => false };
+            if !charged {
                 whole = None;
                 unknown.push(format!("index maintenance policy/bound: {} {:?} {:?}", demand.logical_relation, demand.version, demand.key));
             } else {
@@ -553,11 +747,12 @@ fn recorded_policy<'a>(input: &'a PlannerInput, demand: &IndexDemand) -> Option<
         layouts.iter().all(|l| l.maintenance == first.maintenance).then_some(first.maintenance.as_str())
     })
 }
-fn maintenance(input: &PlannerInput, hole: &Hole, candidate: &Candidate, demand: &IndexDemand,
-    evidence: &DatasetEvidence, h: &Q, m: &Q, cost: &mut LinearCost, citations: &mut BTreeSet<String>) -> Result<bool> {
+/// The maintenance of `demand`, read by `read`; `delta` is the variant's
+/// changing occurrence, if any.
+fn maintenance(input: &PlannerInput, hole: &Hole, read: &Read, delta: Option<&Read>, demand: &IndexDemand,
+    evidence: &DatasetEvidence, derived: &BTreeMap<String, String>, h: &Q, m: &Q, cost: &mut LinearCost, citations: &mut BTreeSet<String>) -> Result<bool> {
     let version = match demand.version { IndexVersion::Full => Version::Full, IndexVersion::Delta => Version::Delta };
-    let Some(read) = candidate.steps.iter().filter_map(|s| s.read.as_ref()).find(|r| r.logical_relation == demand.logical_relation && r.version == version) else { return Ok(false); };
-    let Some(rel) = relation(hole, read, evidence)? else { return Ok(false); };
+    let Some(rel) = relation(hole, read, evidence, derived)? else { return Ok(false); };
     citations.extend(rel.premises.iter().cloned());
     if matches!(hole.origin, Origin::Cq {}) {
         let Some(rows) = rel.rows() else { return Ok(false); };
@@ -571,8 +766,8 @@ fn maintenance(input: &PlannerInput, hole: &Hole, candidate: &Candidate, demand:
         let Some(rows) = rel.rows() else { return Ok(false); };
         citations.extend(rows.citations);
         if policy == Some("replace_each_run") && matches!(hole.origin, Origin::Rule { seed: false, .. }) {
-            let Some(delta) = candidate.steps.iter().filter_map(|s| s.read.as_ref()).find(|r| r.version == Version::Delta) else { return Ok(false); };
-            let Some(delta) = relation(hole, delta, evidence)? else { return Ok(false); };
+            let Some(delta) = delta else { return Ok(false); };
+            let Some(delta) = relation(hole, delta, evidence, derived)? else { return Ok(false); };
             let Some(recursive) = &delta.facts.recursive else { return Ok(false); };
             citations.insert(recursive.rounds.id.clone());
             add_term(cost, format!("rounds:{}", recursive.stratum), &(h * rows.b))?;
@@ -768,16 +963,11 @@ struct Preprocessing {
     unknown: Vec<String>,
 }
 
-fn preprocessing(hole: &Hole, candidate: &Candidate, evidence: &DatasetEvidence) -> Result<Preprocessing> {
+fn preprocessing(hole: &Hole, candidate: &Candidate, evidence: &DatasetEvidence, derived: &BTreeMap<String, String>, h: &Q) -> Result<Preprocessing> {
     let mut result = Preprocessing {
         work: Some(Bound::constant(Q::zero(), "no preprocessing work")),
         absorbed: BTreeSet::new(), steps: Vec::new(), unknown: Vec::new(),
     };
-    if candidate.unbounded.iter().any(|reason| reason == super::RESTRICTED_VIEW_GAP) {
-        result.work = None;
-        result.unknown.push(super::RESTRICTED_VIEW_GAP.into());
-        return Ok(result);
-    }
     if !hole.candidate.steps.iter().any(|step| step.preprocessing) { return Ok(result); }
     let actual = hole.candidate.steps.iter().map(|step|
         syn::parse_str::<cq_lang_vo::Step>(&step.ir)).collect::<syn::Result<Vec<_>>>()?;
@@ -785,12 +975,23 @@ fn preprocessing(hole: &Hole, candidate: &Candidate, evidence: &DatasetEvidence)
         cq_lang_vo::Step::Restrict(restriction, _) => Some((index, restriction)),
         _ => None,
     }).collect::<Vec<_>>();
-    if restrictions.is_empty() { return Ok(result); }
-    if hole.candidate.positive_clauses.len() > 1 {
-        result.work = None;
-        result.unknown.push(super::RESTRICTED_VIEW_GAP.into());
-        return Ok(result);
-    }
+    let reductions = actual.iter().enumerate().filter_map(|(index, step)| match step {
+        cq_lang_vo::Step::Reduce(reduce, _) => Some((index, reduce)),
+        _ => None,
+    }).collect::<Vec<_>>();
+    if restrictions.is_empty() && reductions.is_empty() { return Ok(result); }
+    // The rows of an occurrence per invocation: its delta, or its relation.
+    let source_rows = |clause: usize| -> Result<Option<Bound>> {
+        let read = candidate.steps.iter().filter_map(|step| step.read.as_ref()).find(|read| read.normalized_clause == clause);
+        Ok(match read {
+            Some(read) if read.version == Version::Delta && matches!(hole.origin, Origin::Rule { seed: false, .. }) => Some(Bound::delta()),
+            Some(read) => relation(hole, read, evidence, derived)?.as_ref().and_then(Relation::rows),
+            None => None,
+        })
+    };
+    // A joined filtered view may be materialized per invocation: a scan of
+    // its occurrence and a build of the rows that pass, at most h each.
+    let joined = hole.candidate.positive_clauses.len() > 1;
     for step in &candidate.steps {
         if step.introduces || !matches!(step.kind, ClauseKind::Constraint | ClauseKind::Equality) { continue; }
         let reference: cq_lang_vo::Step = syn::parse_str(&hole.candidate_reference.steps[step.clause].ir)?;
@@ -802,22 +1003,42 @@ fn preprocessing(hole: &Hole, candidate: &Candidate, evidence: &DatasetEvidence)
         }
     }
     for (index, restriction) in restrictions {
-        let read = candidate.steps.iter().filter_map(|step| step.read.as_ref())
-            .find(|read| read.normalized_clause == restriction.clause());
-        let bound = match read {
-            Some(read) if read.version == Version::Delta && matches!(hole.origin, Origin::Rule { seed: false, .. }) => Some(Bound::delta()),
-            Some(read) => relation(hole, read, evidence)?.as_ref().and_then(Relation::rows),
-            None => None,
-        };
-        let unknown = if bound.is_none() { vec![format!("Restrict step {index} lacks its source row cap")] } else { Vec::new() };
+        let bound = source_rows(restriction.clause())?;
+        let work = if joined {
+            bound.as_ref().and_then(|bound| bound.multiply(&Bound::constant(Q::one() + h, "scan plus build h per row"), "filtered view per invocation <= (1 + h) * source rows"))
+        } else { bound.clone() };
+        let unknown = if work.is_none() { vec![format!("Restrict step {index} lacks its source row cap")] } else { Vec::new() };
         result.unknown.extend(unknown.iter().cloned());
-        result.work = match (result.work, &bound) { (Some(sum), Some(bound)) => Some(sum.add(bound)), _ => None };
+        result.work = match (result.work, &work) { (Some(sum), Some(work)) => Some(sum.add(work)), _ => None };
         result.steps.push(super::RecordedStepBound {
             vo_step: index,
             bound: StepBound {
-                clause: restriction.clause(), output: bound.as_ref().map(Bound::wire), work: bound.as_ref().map(Bound::wire),
-                inequality: "single-read occurrence restriction: filtered output <= source rows; predicate work <= source rows".into(),
+                clause: restriction.clause(), output: bound.as_ref().map(Bound::wire), work: work.as_ref().map(Bound::wire),
+                inequality: if joined {
+                    "joined occurrence restriction: per invocation a scan of the source rows and a build of the rows that pass, at most (1 + h) * source rows; later reads of the view are certified over the source".into()
+                } else {
+                    "single-read occurrence restriction: filtered output <= source rows; predicate work <= source rows".into()
+                },
                 citations: bound.as_ref().map(|bound| bound.citations.clone()).unwrap_or_default(), unknown,
+            },
+        });
+    }
+    // A semijoin reduction scans its occurrence and its support and builds
+    // the support's keys and the rows that pass: at most (1 + h) times both.
+    for (index, reduce) in reductions {
+        let cq_lang_vo::Reduction::With(_, support) = &reduce.reduction;
+        let output = source_rows(reduce.clause())?;
+        let inputs = match (&output, source_rows(support.clause())?) { (Some(reduced), Some(support)) => Some(reduced.add(&support)), _ => None };
+        let work = inputs.as_ref().and_then(|inputs| inputs.multiply(&Bound::constant(Q::one() + h, "scan plus build h per row"), "reduction per invocation <= (1 + h) * (reduced rows + support rows)"));
+        let unknown = if work.is_none() { vec![format!("Reduce step {index} lacks its source row caps")] } else { Vec::new() };
+        result.unknown.extend(unknown.iter().cloned());
+        result.work = match (result.work, &work) { (Some(sum), Some(work)) => Some(sum.add(work)), _ => None };
+        result.steps.push(super::RecordedStepBound {
+            vo_step: index,
+            bound: StepBound {
+                clause: reduce.clause(), output: output.as_ref().map(Bound::wire), work: work.as_ref().map(Bound::wire),
+                inequality: "semijoin reduction: per invocation a scan of the reduced occurrence and its support and a build of the support keys and the rows that pass, at most (1 + h) * (reduced rows + support rows); output <= reduced rows; later reads are certified over the source".into(),
+                citations: work.as_ref().map(|work| work.citations.clone()).unwrap_or_default(), unknown,
             },
         });
     }

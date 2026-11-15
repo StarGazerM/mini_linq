@@ -85,7 +85,7 @@ pub(super) fn finish(
         dataset: ev::DatasetIdentity { name: baseline.dataset.name.clone(), hash: dataset_hash.clone(), date: request.date.clone(), schema_hash,
             formulation: baseline.dataset.formulation.clone(), manifest },
         relations: BTreeMap::new(), premises: Vec::new(), relative: Vec::new(),
-        targets: baseline.targets.clone(), observations: ev::Observations::default(),
+        targets: baseline.targets.clone(), observations: ev::Observations::default(), constants: baseline.constants.clone(),
     };
     for input in captured.inputs.values_mut() {
         let mut provenance = provenance(run, input.path.clone(), "typed-row-stream-v1 over the bound input set; exact column/key frequencies over its rows; repeated complete rows rejected; checked against the engine's stored row count");
@@ -109,7 +109,7 @@ pub(super) fn finish(
                 unconsumed_final_delta_rows: Some(count(format!("{id}:unconsumed_delta"), tail, ev::Unit::Rows, &dataset_hash, run, &locator)),
             });
             let columns = evidence.dataset.manifest.schema[name].columns.iter().map(|(name, domain)| (name.clone(), ev::ColumnEvidence {
-                domain: domain.clone(), distinct: None, min: None, max: None, max_degree: None,
+                domain: domain.clone(), distinct: None, min: None, max: None, max_degree: None, heavy: None, ranges: None,
             })).collect();
             evidence.relations.insert(name.clone(), ev::RelationEvidence {
                 semantics: ev::RelationSemantics::Set,

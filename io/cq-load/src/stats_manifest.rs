@@ -182,7 +182,7 @@ impl DatasetRequest {
             dataset: DatasetIdentity { name: self.name.clone(), hash: dataset_hash, date: self.date.clone(),
                 schema_hash, formulation: self.formulation.clone(), manifest },
             relations, premises: Vec::new(), relative: Vec::new(), targets: BTreeMap::new(),
-            observations: Observations::default(),
+            observations: Observations::default(), constants: BTreeMap::new(),
         };
         evidence.check().map_err(evidence_error)?;
         Ok(evidence)

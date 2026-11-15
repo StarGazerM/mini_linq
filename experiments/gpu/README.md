@@ -209,6 +209,27 @@ For timing, omit `CQ_EXPANSION_COUNTERS`, set `GPU_DATALOG_PHASES=1`, and use th
 Counter builds are separate; relation counts must match all 40 reference
 relations on every run (the factored program also exposes three helper outputs).
 
+#### Cost-oracle default-program comparison
+
+The `advice-cost` feature is combined with `default-query` and is mutually
+exclusive with every authored advice feature. Its generated directives are
+applied without filtering or fallback. Regenerate advice from the cost oracle
+on the selected prepared corpus before building the advised binary.
+`compare/doop_pod.py` compares that binary with a separately built
+`default-query` binary and prebuilt SRDatalog default-program libraries.
+All three must expose exactly the same 40 derived relations and equal counts.
+Samples are fresh processes, interleaved in rotating engine order, reporting
+synchronized fixpoint seconds separately from process wall time and peak RSS.
+This workflow checks counts, not full tuple equality.
+The oracle's declared row-work cost model is retained in the generated file;
+these are cost-advised orders applied to the GPU, not a claim that the cost
+model measures GPU time. The written-order label denotes this GPU compiler's
+existing `driver(delta_first)` pipeline without extra directives, not a change
+to literal source-body order. `--profile` runs our two binaries with
+`GPU_DATALOG_PROFILE=1` and keeps each sample's `stderr.log`; its fixpoint
+seconds are no timing sample. The generated code that prints the per-phase
+records is not in the tree yet, so the flag records nothing now.
+
 #### P3.3 evidence ordering and grading (2026-10-31)
 
 Historical acceptance snapshot; “treatment” below means the measured P3.3

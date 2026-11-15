@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use cq_cost::cost::{Candidate, IndexVersion};
-use cq_cost::cost::enumerate::enumerate;
+use cq_cost::cost::{Candidate, IndexVersion, PartialReads, Space};
+use cq_cost::cost::enumerate::{enumerate, enumerate_under};
 use cq_cost::export::{self, ClauseKind, Configuration, Origin, PlannerInput, Target, Version};
 use cq_syntax::symbol_name;
 
@@ -15,13 +15,45 @@ fn cq(source: &str) -> PlannerInput {
 fn candidates(input: &PlannerInput) -> Vec<Candidate> {
     enumerate(input, &input.holes[0]).unwrap()
 }
+/// Every valuation, with no bound on the occurrences read in phases.
+fn unbounded(input: &PlannerInput, partial_reads: PartialReads) -> Vec<Candidate> {
+    enumerate_under(input, &input.holes[0], Space { partial_reads, phased: usize::MAX }).unwrap()
+}
+/// The occurrences a valuation reads more than once.
+fn phased(candidate: &Candidate) -> usize {
+    let mut reads = BTreeMap::<usize, usize>::new();
+    for step in candidate.steps.iter().filter(|step| step.read.is_some()) { *reads.entry(step.clause).or_default() += 1; }
+    reads.values().filter(|count| **count > 1).count()
+}
 fn orders(candidates: &[Candidate]) -> BTreeSet<Vec<usize>> {
     candidates.iter().map(|candidate| candidate.order.clone()).collect()
+}
+/// The valuations whose occurrences are all expanded at once.
+fn atom_orders(candidates: &[Candidate]) -> Vec<Candidate> {
+    candidates.iter().filter(|candidate| candidate.is_atom_order()).cloned().collect()
 }
 fn one_current(candidates: &[Candidate]) -> &Candidate {
     let current: Vec<_> = candidates.iter().filter(|candidate| candidate.current).collect();
     assert_eq!(current.len(), 1, "exactly the checked incumbent must be marked");
     current[0]
+}
+/// The reads of a valuation as authored selectors over the normalized body.
+fn advice(candidate: &Candidate) -> String {
+    let reads = candidate.steps.iter().filter_map(|step| step.read.as_ref()).map(|read| {
+        let columns = read.partial.then(|| format!("({})", read.columns.iter()
+            .filter_map(|column| column.variable.clone()).collect::<Vec<_>>().join(",")));
+        format!("{}@{}{}", read.input_relation, read.normalized_clause, columns.unwrap_or_default())
+    }).collect::<Vec<_>>().join(",");
+    format!("order({reads})")
+}
+/// Production planning and the VO contract accept the valuation as advice.
+fn realize(input: &PlannerInput, candidate: &Candidate) -> cq_lang_vo::Program {
+    let normal: cq_lang_cq::Program = syn::parse_str(&input.holes[0].normalized_cq).unwrap();
+    let options = syn::parse_str(&advice(candidate)).unwrap();
+    let (normal, realized) = cq_planning::prefix_valuation(&normal, &options)
+        .unwrap_or_else(|error| panic!("{}: {error}", advice(candidate)));
+    cq_lang_vo::contract::check(&normal, &realized).unwrap();
+    realized
 }
 
 // An independent oracle: generate EVERY permutation first, then reject I2/I3
@@ -78,21 +110,16 @@ fn complete_small_candidate_sets_equal_independent_permutations() {
     ] {
         let input = cq(&atom_query(&atoms));
         let actual = candidates(&input);
-        assert_eq!(orders(&actual), oracle(&atoms), "{atoms:?}");
-        assert_eq!(actual.len(), orders(&actual).len(), "no factorial filter duplicates");
+        let coarse = atom_orders(&actual);
+        assert_eq!(orders(&coarse), oracle(&atoms), "{atoms:?}");
+        assert_eq!(coarse.len(), orders(&coarse).len(), "no factorial filter duplicates");
+        let distinct: BTreeSet<_> = actual.iter().map(advice).collect();
+        assert_eq!(distinct.len(), actual.len(), "no valuation is generated twice");
         one_current(&actual);
         for candidate in actual {
             assert!(candidate.unbounded.is_empty());
             // Final legality belongs to production, not the enumeration oracle.
-            let normal: cq_lang_cq::Program = syn::parse_str(&input.holes[0].normalized_cq).unwrap();
-            let selectors = candidate.order.iter().map(|source| {
-                let read = candidate.steps.iter().filter_map(|step| step.read.as_ref())
-                    .find(|read| read.source_occurrence == *source).unwrap();
-                format!("{}@{}", read.input_relation, read.normalized_clause)
-            }).collect::<Vec<_>>().join(",");
-            let options = syn::parse_str(&format!("order({selectors})")).unwrap();
-            let (normal, realized) = cq_planning::prefix_valuation(&normal, &options).unwrap();
-            cq_lang_vo::contract::check(&normal, &realized).unwrap();
+            realize(&input, &candidate);
         }
     }
 }
@@ -101,9 +128,10 @@ fn complete_small_candidate_sets_equal_independent_permutations() {
 fn field_flow_like_triangle_has_all_six_orders_and_new_key_demands() {
     let input = cq(&atom_query(&[vec!["a", "b"], vec!["b", "c"], vec!["a", "c"]]));
     let actual = candidates(&input);
-    assert_eq!(orders(&actual), permutations(3).into_iter().collect());
-    assert_eq!(actual.len(), 6);
-    let reverse = actual.iter().find(|candidate| candidate.order == [2, 1, 0]).unwrap();
+    let coarse = atom_orders(&actual);
+    assert_eq!(orders(&coarse), permutations(3).into_iter().collect());
+    assert_eq!(coarse.len(), 6);
+    let reverse = coarse.iter().find(|candidate| candidate.order == [2, 1, 0]).unwrap();
     assert!(reverse.demands.iter().any(|demand| demand.logical_relation == "R1" && demand.key == [1]));
     assert!(reverse.demands.iter().any(|demand| demand.logical_relation == "R0" && demand.key == [0, 1]));
 }
@@ -285,7 +313,7 @@ fn auxiliary_negative_key_holes_are_exportable_without_a_rule_label() {
 }
 
 #[test]
-fn actual_partial_read_incumbent_is_not_replaced_by_a_coarse_skeleton() {
+fn a_checked_lookup_schedule_is_the_generated_valuation_with_its_reads() {
     let source = r#"
         struct Q;
         relation Seed(x:i32) = (seed);
@@ -297,14 +325,117 @@ fn actual_partial_read_incumbent_is_not_replaced_by_a_coarse_skeleton() {
     let input = export::compile_cq(source, &options, configuration()).unwrap();
     let actual = candidates(&input);
     let current = one_current(&actual);
-    assert!(current.unbounded.iter().any(|reason| reason.contains("partial-read")));
+    // Both lookups precede both expansions: a generated valuation, costed
+    // like every other candidate instead of kept as an unknown.
+    assert!(current.unbounded.is_empty());
+    assert!(!current.is_atom_order());
     assert_eq!(current.steps.iter().filter_map(|step| step.read.as_ref()).map(|read| read.source_occurrence).collect::<Vec<_>>(), [0, 1, 2, 1, 2]);
+    let partial: Vec<_> = current.steps.iter().map(|step| step.read.as_ref().unwrap().partial).collect();
+    assert_eq!(partial, [false, true, true, false, false]);
     assert_eq!(current.steps[1].read.as_ref().unwrap().columns.len(), 1);
     assert_eq!(current.steps[3].read.as_ref().unwrap().columns.len(), 2);
     assert_eq!(current.steps[1].bound_before, ["x"]);
     assert!(!current.steps[1].introduces);
     assert!(current.steps[3].introduces);
-    assert!(actual.iter().filter(|candidate| !candidate.current).all(|candidate| candidate.steps.len() == 3));
+    // The lookup key is the expansion's key: one demand per relation.
+    assert_eq!(current.demands.iter().filter(|demand| demand.logical_relation == "R").count(), 1);
+    // The atom orders remain candidates of the same space.
+    assert!(atom_orders(&actual).iter().all(|candidate| candidate.steps.len() == 3));
+    assert!(!atom_orders(&actual).is_empty());
+}
+
+#[test]
+fn lookups_are_pushed_down_once_and_never_directly_expanded() {
+    // R0(a,b), R1(b,c), R2(c,d), R3(d,a): every non-root occurrence can be
+    // looked up when its first variable is bound.
+    let input = cq(&atom_query(&[vec!["a", "b"], vec!["b", "c"], vec!["c", "d"], vec!["d", "a"]]));
+    let actual = unbounded(&input, PartialReads::Rows);
+    assert!(actual.iter().any(|candidate| phased(candidate) > 1));
+    assert!(actual.iter().any(|candidate| !candidate.is_atom_order()));
+    for candidate in &actual {
+        let reads: Vec<_> = candidate.steps.iter().filter(|step| step.read.is_some()).collect();
+        for (index, step) in reads.iter().enumerate() {
+            let read = step.read.as_ref().unwrap();
+            if !read.partial { continue; }
+            // A lookup under `rows`: it retains bound variables only.
+            assert!(!step.introduces, "{}", advice(candidate));
+            assert!(read.columns.iter().all(|column| column.variable.as_ref()
+                .is_some_and(|name| step.bound_before.contains(name))));
+            // Its key holds a variable the previous introduction bound.
+            let previous = reads[..index].iter().rev().find(|step| step.introduces).unwrap();
+            assert!(read.columns.iter().any(|column| column.variable.as_ref()
+                .is_some_and(|name| !previous.bound_before.contains(name))), "{}", advice(candidate));
+            // One lookup per occurrence, completed later but not at once.
+            assert_eq!(reads.iter().filter(|other| other.clause == step.clause).count(), 2);
+            assert_ne!(reads[index + 1].clause, step.clause, "{}", advice(candidate));
+        }
+        realize(&input, candidate);
+    }
+}
+
+#[test]
+fn binds_are_generated_only_under_the_distinct_policy_and_are_legal_advice() {
+    let input = cq(&atom_query(&[vec!["k", "v"], vec!["k", "w"], vec!["w", "u"]]));
+    let rows = unbounded(&input, PartialReads::Rows);
+    assert!(rows.iter().flat_map(|candidate| &candidate.steps)
+        .all(|step| step.read.as_ref().is_none_or(|read| !read.partial || !step.introduces)));
+    let distinct = unbounded(&input, PartialReads::Distinct);
+    // Every `rows` valuation remains; binds are added.
+    let advised: BTreeSet<_> = distinct.iter().map(advice).collect();
+    assert_eq!(advised.len(), distinct.len());
+    assert!(rows.iter().all(|candidate| advised.contains(&advice(candidate))));
+    // The key of R0 first, its other variable last: the shape that reads a
+    // delta's join key before its payload.
+    assert!(advised.contains("order(R0@0(k),R1@1,R2@2,R0@0)"), "{advised:?}");
+    for candidate in &distinct {
+        for (index, step) in candidate.steps.iter().enumerate() {
+            let Some(read) = &step.read else { continue; };
+            if read.partial && step.introduces {
+                // A bind introduces exactly one variable and is completed later.
+                let new: Vec<_> = read.columns.iter().filter_map(|column| column.variable.as_ref())
+                    .filter(|name| !step.bound_before.contains(name)).collect();
+                assert_eq!(new.len(), 1, "{}", advice(candidate));
+                // Only a variable another clause reads is worth binding early.
+                assert!(["k", "w"].contains(&new[0].as_str()), "{}", advice(candidate));
+                assert!(candidate.steps[index + 1..].iter().any(|later| later.clause == step.clause
+                    && later.read.as_ref().is_some_and(|read| !read.partial)));
+            }
+        }
+        realize(&input, candidate);
+    }
+    one_current(&distinct);
+}
+
+#[test]
+fn the_declared_bound_on_phased_occurrences_nests_the_spaces() {
+    let input = cq(&atom_query(&[vec!["a", "b"], vec!["a", "c"], vec!["a", "d"], vec!["a", "e"]]));
+    for partial_reads in [PartialReads::Rows, PartialReads::Distinct] {
+        let space = |phased| -> BTreeSet<String> {
+            let found = enumerate_under(&input, &input.holes[0], Space { partial_reads, phased }).unwrap();
+            assert!(found.iter().all(|candidate| self::phased(candidate) <= phased));
+            found.iter().map(advice).collect()
+        };
+        let everything: BTreeSet<String> = unbounded(&input, partial_reads).iter().map(advice).collect();
+        // No phases: exactly the atom orders.
+        let coarse = space(0);
+        assert_eq!(coarse.len(), 24);
+        let mut previous = coarse;
+        for bound in 1..=4 {
+            let next = space(bound);
+            // A larger bound keeps every candidate, and the bound selects
+            // exactly the valuations of the full space within it.
+            assert!(previous.is_subset(&next), "{bound}");
+            assert!(bound > 1 || previous.len() < next.len());
+            let within: BTreeSet<String> = unbounded(&input, partial_reads).iter()
+                .filter(|candidate| phased(candidate) <= bound).map(advice).collect();
+            assert_eq!(next, within, "{bound}");
+            previous = next;
+        }
+        assert_eq!(previous, everything);
+    }
+    // The default space reads at most one occurrence in phases.
+    assert_eq!(Space::default(), Space { partial_reads: PartialReads::Rows, phased: 1 });
+    assert!(candidates(&input).iter().all(|candidate| phased(candidate) <= 1));
 }
 
 #[test]
@@ -436,8 +567,9 @@ fn current_marker_follows_checked_advice_not_written_source_order() {
     let options = syn::parse_str("order(R2,R1,R0)").unwrap();
     let input = export::compile_cq(&source, &options, configuration()).unwrap();
     let actual = candidates(&input);
-    assert_eq!(actual.len(), 6);
+    assert_eq!(atom_orders(&actual).len(), 6);
     assert_eq!(one_current(&actual).order, [2, 1, 0]);
+    assert!(one_current(&actual).is_atom_order());
 }
 
 #[test]

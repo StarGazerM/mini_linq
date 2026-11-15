@@ -435,6 +435,81 @@ read as the stream, with column introductions checked by WF-VO. WF-VO checks
 every read and dependency. Without advice the default path is unchanged;
 advice does not infer Rust types or expressions.
 
+`cq-cost advise` searches the same step form (PLANNING-REDESIGN, static
+costing): its candidates are valuations, with atom orders the all-expand
+case, emitted as `R@k(cols)` step advice after the production checkers
+accept it. It ranks them by a containment estimate (DuckDB-style, composite
+keys between one pair taken at the larger single count) and finds the least
+by dynamic programming over read states; the incumbent and the winner carry
+exact-rational certificates beside their estimates. The space is declared
+(`--phased N`, default 1; `--partial-reads rows|distinct`, default `rows`).
+Limits as built: (a) Datalog Storage provisions a variant's layouts from its
+atom permutation, which step advice leaves at the written order, so a
+valuation that needs another index is not advised and the hole is searched
+again over atom orders; (b) no engine enumerates distinct keys for a partial
+read, so `distinct` describes no current target; (c) estimates assume
+uniform keys, and DOOP keys are skewed (see below).
+
+`cq-cost bound` gives every derived relation a certified structural bound
+(rows and per-column distinct values) from the rules and exact input facts.
+On the DOOP default program, 21 prepared datasets (2026-11-11, results in
+`/data/doop-bench/corpus-20261110/structural-bounds-20261111/`): all 40
+derived relations are bounded and no bound is below a recorded count (819
+counts). Geometric-mean bound/count: 1 to 1e5 for the 25 non-recursive
+relations; 4 to 27 for the reachability relations; 700 to 3,400 for the type
+hierarchy; 5e3 (`VarPointsTo`) to 7e7 (`InstanceFieldPointsTo`) for the
+points-to family. Across datasets the points-to ratios vary by a geometric
+standard deviation of 3.2 to 5.1 (largest/smallest 155 to 1,940); they follow
+the reachable fraction (`VarPointsTo` ratio against `Reachable` ratio:
+correlation 0.95 in logs, slope 2.3).
+
+`advise --profile` reads unbound derived relations through estimates
+(structural bound times the median observed/bound ratio of example runs)
+and marks such holes `predicted`. The choice is checked against the optimal
+order inside the cost tool: an independent evaluator counts the exact
+frames, with index maintenance, of every valuation. On the generated
+points-to workload of `tests/optimal_order.rs`: written orders 251,709,
+advised 203,281, optimal 202,838. On DOOP bloat (`tests/doop_order.rs`,
+2026-11-12, own-run profile, 110 of 113 rule variants counted), with
+filtered views and reductions costed and filter selectivity from heavy
+values and ranges: written 1.34e9, advised 0.51e9, optimal 0.45e9; all
+certificates hold. Planning the 115 holes of xalan takes 0.08 s; the whole
+command took 12 s before this change, mostly the record check (4 s) and the
+production compilation of the advice (3.3 s per pass); bloat's planning in
+the oracle grew from about 30 s to 175 s through per-hole recompilation
+after three advice rejections. On a Runpod RTX 6000 Ada (DOOP default
+program, six datasets, median fixpoint) the written orders beat SRDatalog
+on all six (bloat 0.77 s against 1.16 s, soot 8.66 s against 13.79 s), and
+the advised orders are slower than the written ones on five of six (3% to
+22%). Investigated (PLANNING-REDESIGN, "Why, and which model is correct"):
+the tool compared against text orders while the GPU runs delta-first orders
+already within 1.1% of the frame optimum; a step's frames follow the keys
+the prefix probes (measured pair statistics: whole-plan p90 q-error 1.7
+against 172 for the current estimate); GPU hole time is 59% per-launch, 13%
+frames. A per-heavy-value split of
+`VPT_LoadArray` raises its optimum from 7.0e6 to 1.86e7 frames.
+
+Variable-order planning (PLANNING-REDESIGN, "Variable-order planning"):
+`cq_cost::cost::variables` plans a rule variant as an order of its
+variables, the changing occurrence first, by the Tributary Join cost over
+degree sequences matched by value, and lowers it to full reads (no bind:
+production reads a partial read's rows, and three advised binds took the
+CPU run from 13.2 s to 35.7 s); it reads no body order (a permuted body
+plans alike). Bloat, from exact degrees of the run: 6.598e8 oracle frames
+against 6.659e8 for the written delta-first orders and 6.769e8 for
+SRDatalog's hand orders under the same lowering; compiled through
+production as advice (110 of 112 variants) and run on the single-thread
+CPU engine, 12.59 s planned, 12.53 s written, 12.77 s hand orders, outputs
+identical: planned equals written, no gain. With every rule body permuted
+(three scrambled texts) the planner gives the same reads and the same
+time on bloat, eclipse and xalan (the last two from bloat's statistics:
+33.2 and 62.7 s against 33.1 and 63.0 s written), while the compiler's
+delta-first orders over the scrambled texts take 3.6 times longer on
+bloat for one shuffle and exceed 300 s for the other two. Not built: the
+statistics in production (degree sequences of derived relations with
+each row's round, from a profile run), the planner as `cq-cost`'s
+candidate generator; no GPU run; one program.
+
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`
 + HashMap witnesses are excluded by the existing accepted-domain policy and

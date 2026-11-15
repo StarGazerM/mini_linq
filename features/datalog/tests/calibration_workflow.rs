@@ -99,10 +99,17 @@ fn complete_run_emits_exact_input_round_physical_and_recosted_evidence() {
     let report = result.report.render(&result.evidence);
     assert!(report.contains("fused; counted once") && report.contains("No runtime advice adoption"));
     // Review an alternative without executing it: changed prefix/key scopes
-    // must not acquire incumbent row counts or invented fan-out maxima.
+    // must not acquire incumbent row counts or invented fan-out maxima. The
+    // report keeps only the valuations a decision weighed, so the
+    // alternative comes from the listing of every valuation.
     let mut alternative = result.advice.clone();
-    let hole = alternative.holes.iter_mut().find(|hole| hole.candidates.len() > 1).unwrap();
-    hole.selected = hole.candidates.iter().position(|candidate| !candidate.plan.current).unwrap();
+    let listings = cq_cost::cost::listed(&result.plans, &result.evidence, &alternative.target, alternative.space, None).unwrap();
+    let (at, plan) = listings.iter().enumerate().find_map(|(at, listing)| listing.valuations.iter()
+        .find(|valued| !valued.plan.current).map(|valued| (at, valued.plan.clone()))).unwrap();
+    let hole = &mut alternative.holes[at];
+    let cost = cq_cost::cost::bounds::cost_candidate(&result.plans, &result.plans.holes[at], &plan, &result.evidence, &result.advice.target, &hole.shared_before).unwrap();
+    hole.candidates.push(cq_cost::cost::CandidateRecord { plan, cost, estimate: None });
+    hole.selected = hole.candidates.len() - 1;
     hole.decision = cq_cost::cost::Decision::Changed;
     hole.noise_screen = None;
     let reviews = calibration::assess_bounds(&result.report, &alternative, &result.plans, &result.evidence).unwrap();

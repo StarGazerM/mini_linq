@@ -256,6 +256,14 @@ cargo run -p cq-cost -- export --language cq --source query.cq \
   --compiler-hash sha256:HEX --cq normal.cq --vo checked.vo --out plans.json
 ```
 
+The incumbent the tool costs and advises against is the order the target
+actually runs. Datalog compilation takes the target's incremental driver:
+`compile_datalog` keeps the written order (the CPU default), and
+`compile_datalog_with_driver(.., DeltaFirst)` compiles as `srd-doop-gpu`'s
+`driver(delta_first)` does. Variants without a directive keep that driver,
+so advice changes only the variants it names and leaves the rest to the
+automatic order.
+
 The library accepts a separate normalized CQ and checked VO, or Round plus
 every checked hole's `(CQ, VO)` pair; the CLI can consume those records or
 invoke the production compiler once. For consumed records, each `--cq`
@@ -288,10 +296,129 @@ cq-cost advise --plans plans.json --evidence evidence.json --target cpu \
 The evidence must supply the selected target's declared rational `h`/`m` and
 matching configuration identity; there are no guessed defaults. A deliberately
 authored `h=m=1` reference policy is normalized row work, not hardware timing.
-The tool enumerates the complete I1–I3-legal positive-prefix orders, drains
-ready checks before every introduction, retains original occurrences/delta
-positions, and records every candidate and per-step inequality/citation.
-Bindings come from the checked export, never from lowercasing relation names.
+Candidates are **valuations**, the object VO itself orders: a sequence of
+reads over the reorderable positive prefix, each naming an occurrence and the
+variables it retains. An occurrence takes exactly one of the three forms the
+production checkers admit (WF-VO-Subatoms, CK-Le):
+
+- *expand*: one full read;
+- *lookup, expand*: one partial read retaining only variables already bound,
+  which introduces nothing, and later the full read;
+- *bind, ..., expand*: partial reads that each introduce one variable, and
+  later the full read.
+
+An atom order is the valuation whose occurrences all take the first form, so
+a binary plan is a point of this space, not a separate planner. The tool
+enumerates the space by moves, after draining ready checks before every
+introduction (I2) and keeping connected growth (I3) as before:
+
+- `expand(o)`: a ready connected occurrence that still introduces, or the
+  completion of a partially read one;
+- `lookup(o)`: an untouched occurrence with some but not all variables bound,
+  offered only at the first choice point where that holds (Lookup & Expand's
+  rule that lookups are pushed down), and not directly followed by its own
+  expansion, which `expand(o)` dominates;
+- `bind(o, x)`: an untouched or binding occurrence with at least two unbound
+  variables, one of them `x`, where `x` occurs in another clause. A variable
+  of one clause only joins nothing: binding it ahead of the expansion adds
+  frames and enables no other read.
+
+It retains original occurrences/delta positions. Bindings come from the
+checked export, never from lowercasing relation names.
+
+The space searched is declared and recorded in the report
+(`space = {partial_reads, phased}`), never truncated silently.
+
+- `phased` (default 1, `--phased N`) is the most occurrences one valuation
+  reads in phases, i.e. in the second or third form. Zero is exactly the atom
+  orders. The spaces nest: a larger bound adds candidates and loses none, so
+  the least estimate is monotone in it. Unbounded, a six-atom star has
+  18,576 valuations under `rows` against 720 atom orders, and six three-column
+  atoms have 2.4 million under `distinct`; the default keeps the space within
+  about one factor of the atom count of the atom orders (3,600 for that star).
+- `partial_reads` (default `rows`, `--partial-reads rows|distinct`) is the
+  **realization policy**: how the adopting target executes a
+  variable-introducing partial read. Under `rows`, sound for every
+  realization, such a read visits every matching row, so each retained value
+  repeats once per row and the later expansion multiplies the rows again;
+  `bind` is then dominated by `expand` and is not generated. Under `distinct`
+  the read enumerates each distinct retained value once. A lookup introduces
+  nothing and is a membership probe under either policy. The policy is a
+  declaration about the target, never inferred from its name.
+
+**Ranking: estimates, not bounds.** Certified bounds are worst cases: products
+of maximum degrees and row counts that hold for every database with the same
+facts. On DOOP bloat they exceed the exact work of a step by four to five
+orders of magnitude, and by different factors for different orders, so the
+least bound is not the least work: in `VPT_LoadField` the order with the
+least bound (6.1e11) did 2.9e9 frames against the written order's 2.5e7
+(bound 8.2e11). The tool therefore ranks valuations by an **estimate** of
+their work, as DuckDB does (`EstimateCardinality` and `CostModel`, cost
+`C_out`), and certifies only what it reports.
+
+The estimate of a prefix is a function of the reads it made, not of their
+order. Each occurrence contributes one relation: `R` itself once expanded,
+`pi_C(R)` while it is bound on columns `C`, `pi_K(R)` while only looked up
+on `K`. A relation's rows are its row fact, divided by the distinct count of
+each column a constant fixes; the rows of `pi_C(R)` are the distinct count
+of `C` (the key-set fact if one names `C`, else the least of the rows and
+the product of the column counts). A variable's distinct count in a relation
+is its column's, at most the relation's rows. The prefix estimate is the
+product of the rows divided, per shared variable, by the distinct counts of
+every relation holding it but the one with the fewest values: the
+containment assumption of System R and DuckDB. Where one relation meets the
+same partner on several variables, their composite count lies between the
+largest single count and the product; the estimate divides by the largest,
+the end that predicts more frames. Different partners still multiply. The
+product assumes independent columns, and DOOP joins on correlated ones: on
+bloat the orders it favored in the virtual-dispatch rules, which join a
+method's name and descriptor, did 80 times the written order's work. DuckDB
+caps such composite keys by the smaller relation's rows for the same reason.
+Checks keep the estimate (selectivity one). The changing
+occurrence of a steady variant contributes `delta` rows, a projection of it
+`D(C) * delta / F`, and its distinct counts are the final relation's, so a
+prefix estimate is `k * delta` once the changing occurrence is read and `k`
+before. A step is charged as its certificate is: an introducing read its
+output frames, any other step its input frames. Over the run a step at `k *
+delta` costs `k * F` and a step at `k` costs `k * N`; a seed or CQ step costs
+`k` once, and the first read of a CQ nothing. A read's index demand adds its
+maintenance at the same `F` and `N`, unless an earlier hole already demands
+it. `F`, `N` and every fact are the evidence's values, or the profile's for a
+derived relation; a read without facts leaves the hole unestimated, and it
+retains its incumbent.
+
+**Search: dynamic programming over read states.** The tool does not list
+valuations. The state after a prefix of moves is what determines both the
+estimate and the moves still allowed: the occurrences read in full, each
+partial read's retained columns, the bound variables, and the few facts the
+move rules look back on (the last partially read occurrence, the last
+lookup at this choice point, the variables of the last introduction). A
+move's work depends only on its state, so the least estimated completion of
+a state is the least, over its moves, of the move's work plus the least
+completion of the state it leads to. The tool computes it top-down and
+memoizes it per state: Selinger's recursion, restricted to left-deep
+sequences, since a valuation pipelines frames and has no materialized bushy
+operand (DPccp/DPhyp enumerate bushy csg-cmp pairs, which do not arise).
+Below a budget of 10,000 states the search is exact, as DPhyp is below
+DuckDB's 10,000 pairs and Neumann and Radke's 10,000 connected subgraphs
+(SIGMOD 2018); above it the tool takes the move of least work from each state
+(greedy, as GOO), and the report records which search ran. The exhaustive
+listing remains the test oracle: the least estimate over every enumerated
+valuation equals the search's result.
+
+The report keeps the incumbent and, unless it is the incumbent, the
+search's winner, each with its estimate and its certificate; certificates
+are computed for these alone. The decision rests on the estimates: Changed
+when the winner's estimate is below the incumbent's, Retained otherwise, and
+Unknown when either lacks an estimate. A sub-1.05 estimate ratio retains the
+incumbent under the declared review policy. A certificate is reported beside
+the estimate and is not required to undercut the incumbent's. `basis`
+records whether a read rests on profiled facts (`predicted`) or only on the
+evidence (`certified`). Steady variants are ranked like every other hole:
+an earlier default to delta-first atom orders was dropped (2026-11-12)
+because it cost more than ranking on both checked workloads (DOOP bloat:
+0.82e9 against 0.75e9 frames; generated points-to: 224,523 against
+214,022), and always reading the delta first cost 3.67e9 on bloat.
 
 Bounds use cardinalities, maximum degrees, declared keys and support caps:
 `|P join R| <= min(U_P*M_R, U_R*M_P, min(D_P,D_R)*M_P*M_R, U_P*U_R)`.
@@ -302,24 +429,486 @@ model charges each processed scalar/guard/expansion frame, including generated
 head-copy lets; these do not multiply rows. It is not a bound on arbitrary
 opaque Rust instruction time.
 
+A read of occurrence `R` retaining columns `C`, with `K` the retained columns
+bound before it, is certified as follows.
+
+- Lookup (`C = K`): `|P semijoin_K R| <= min(U_P, D_R(K)*M_P(K))`, probe work
+  at most `U_P`, and `D_R(K)` becomes a support cap of the prefix on `K`.
+- Bind under `distinct`: the join inequality above against the set
+  `pi_C(R)`, whose rows are at most `D_R(C)` and whose degree on `K` is at
+  most `min(M_R(K), D_R(C \ K))`; all of `C` is a key of it. At the root of a
+  steady variant this gives the two affine witnesses `|delta|` and `D_R(C)`.
+- Bind under `rows`: the join inequality against `R` itself.
+- Expand: the join inequality with `K` the columns bound at that point,
+  whether or not the occurrence was read before.
+
+Each read with a nonempty key demands the index on that key; a lookup and its
+expansion share one demand when nothing binds a further column in between.
+A checked incumbent that already has lookup or bind phases is costed by the
+same rules instead of being kept as an unknown, whatever the declared space.
+
+A valuation becomes Datalog advice only where production provisions its
+reads. All holes are searched first; the advice is then compiled once through
+Incremental, Storage, Fork and the VO contract, and every index a Changed
+hole demands must exist in the resulting Storage. That one compilation also
+validates the printed advice. Storage derives a variant's layouts from its
+atom permutation, which step advice leaves at the written order: a lookup
+valuation whose expansions follow the written order is provisioned, and a
+valuation that expands an occurrence on a key the written order never uses
+(a bind of the outer occurrence, a lookup plan with another root) is not. So
+a gap in a winner with partial reads rules out partial reads for that hole,
+and a gap in an atom order excludes that index; the hole is searched again
+and the program compiled again until every advised index is provisioned.
+Each pass only excludes, so this ends. The reason names the gap. A CQ hole
+has no Storage; its demands are realized by the adopting target.
+
+**Derived relations: structural bounds** (`cq-cost bound`). A derived
+relation has no profiled fact before a run. Its size, and the support of any
+of its column sets, is bounded from the rules and the exact input facts
+alone. The construction is the size-bound adornment of Fattebert, Jiang,
+Koch, Pichler and Wang (PODS 2026) in a factored form.
+
+For a derived relation `q` and a nonempty set `C` of its columns, a *cover
+form* `F(q, C)` is a set of terms. A term partitions `C` into blocks, and
+each block carries a set of sources. A source is `e[j..]`, columns of an
+input relation `e` aligned with the block, or a constant. A tuple `t` over
+`C` satisfies a term when, for every block `B`, `t[B]` occurs in the
+projection of one of the block's sources. The invariant, on every database:
+each tuple of `pi_C(q)` satisfies some term of `F(q, C)`.
+
+The transfer of a rule `q(h..) :- body` drops negation, constraints and every
+non-head variable, each of which only relaxes. The rule's *cover* assigns
+each head variable at `C` to one positive body atom that holds it: the atom
+holding the most unassigned head variables first, an input before a derived
+relation, then body order. The cover depends on the program only.
+
+- An input atom contributes one block, with that atom's columns as its one
+  source. If the atom also holds head variables assigned earlier, they are
+  the block's *key*: the block's value occurs among the rows of the input
+  that carry the key's value (a degree constraint).
+- A derived atom `p` contributes each term of `F(p, C')`, for the columns
+  `C'` of `p` assigned to it, carried to the head columns. Its degree is
+  not known, so it takes no key.
+- A constant head argument is a block whose source is a constant.
+
+The rule's terms are the combinations of one term per derived atom. Terms
+with the same blocks and keys merge by blockwise union of their sources,
+which only relaxes: `(A x B) u (A' x B')` is inside `(A u A') x (B u B')`.
+A key names columns of blocks assigned earlier, so the dependency among the
+blocks of a term is acyclic. The forms are the least fixpoint of the
+transfers; the lattice is finite, and union is idempotent, so a copy rule
+such as `VarPointsTo(to, h) :- Assign(to, from), VarPointsTo(from, h)` adds
+no source for `h`. Soundness is by induction on derivations. A head argument
+computed from query variables, or a head variable no positive atom holds,
+makes the form *unknown*, and unknown propagates to every form that reads it.
+
+The certified bounds, with `D_e(j..)` the support of an input projection
+(the exact distinct count for one column, else `min(U_e, prod_j D_e(j))`,
+and 1 for a constant), and for a keyed source also `M_e(k)` for each key
+column `k`, the most values one key value admits:
+
+- `D_q(C) <= sum_terms prod_blocks sum_sources min(D_e(j..), M_e(k)..)`,
+  and also `D_q(C) <= prod_{c in C} D_q({c})`;
+- rows are `D_q` of all columns, and `M_q(K) <= D_q(columns \ K)`.
+
+The factored form is coarser than the paper's union of adornments: it forgets
+which sources of different blocks occur together, and in exchange never
+enumerates one adornment per combination of body adornments. Like the
+paper's bound it is a worst case over all databases with these input facts,
+not an estimate: the quadratic bound on a points-to relation is attained by
+some input. `cq-cost bound --plans P --evidence E --out B` writes, per
+derived relation, the form, the bounds and the cited input facts.
+
+**Derived relations: estimates** (`cq-cost profile`, `advise --profile`). A
+structural bound is too loose to rank plans over derived relations (DOOP:
+10^3 to 10^8 above the count for the points-to relations). An *estimate*
+scales the bound of this dataset by what a completed run of the same program
+showed on example datasets. It is a prediction, never a certificate, and is
+labelled wherever it is used.
+
+- An *observation* (`cq.observed-relations.v1`) states, for one program hash
+  and one dataset hash, what a completed run produced: per derived relation
+  its rows, optionally its steady rounds, and per column the distinct values
+  and the largest group. The tool cannot check it against a run; it does
+  reject an observation above the certified bound of the same dataset.
+- A *profile* (`cq.inferred-profile.v1`) holds, per example dataset and per
+  fact, the pair (observed, structural bound). `cq-cost profile --plans P
+  --evidence E --observed O --out F [--into F0]` adds one example.
+- For a derived relation the evidence does not bind, `advise --profile F`
+  synthesizes each fact in this order of preference:
+  1. the *estimate*: this dataset's structural bound times the median over
+     examples of observed/bound (an exact rational; rounded up, at least 1
+     when the bound is, never above the bound), cited as `estimate:R:fact`;
+     rounds carry over as the median of the observed rounds;
+  2. the structural bound alone, cited as `structural:R:fact`; rounds are
+     then at most one more than the rows of the relation's component;
+  3. nothing: the read stays unknown.
+  A relation the evidence binds keeps its evidence; a completed calibration
+  of this dataset therefore replaces every estimate of it.
+- A recursive relation is synthesized as an insert-only set: its deltas are
+  disjoint subsets of the final relation, so consumed delta rows sum to at
+  most `F`.
+- A hole that reads a relation with an `estimate:` fact has
+  `basis = predicted`. The report records the profile's hash, its example
+  datasets and every synthesized fact.
+
+Advice from a predicted hole is still checked advice: every plan computes
+the same answers, and only its speed is predicted.
+
+**Check against the optimal order** (`tests/optimal_order.rs`). Before any
+plan is tried on an engine, the tool's choice is judged inside the cost tool
+by an oracle that shares no code with the cost model. A reference evaluator
+runs the program by stratified semi-naive evaluation and keeps every round.
+For each rule variant it then counts the exact frames of *every* candidate
+valuation: a read that introduces is charged its output frames, every other
+step its input frames, summed over the rounds of the changing relation, with
+a partial read counted per row or per distinct value as the declared policy
+says. Per hole this gives the exact work of the written order, of the
+advised order, of the order the estimates rank first, and of the optimal
+order. The tests assert, on a generated field-sensitive points-to workload:
+
+- with a profile of the planned dataset itself, so that every synthesized
+  fact is exact, every reported certificate is at least the exact frames;
+- for every hole and declared space, the search finds the least estimate of
+  the exhaustive listing;
+- with a profile of another dataset, the order ranked first is within 2% of
+  the optimal order in every hole under `rows` (15% under `distinct`, whose
+  optimum binds a delta's keys), within 1% (5%) over all holes, and below the
+  written orders; the advised orders are below the written order in every
+  hole and within 1% of the optimum overall.
+
+The check is exhaustive, so it is limited to data small enough to enumerate
+every candidate. It measures frames, the cost model's unit; whether frames
+predict time on a target is a separate question for that target's counters.
+
+**The same check on DOOP** (`tests/doop_order.rs`, ignored by default; run
+`DOOP_PREPARED=<prepared dataset> DOOP_ORACLE_OUT=<file.tsv>` with
+`--ignored`, optionally `DOOP_EXAMPLE=<dataset>` for the profile and
+`DOOP_ORACLE_HOLES=<labels>` for per-step detail). Its own semi-naive
+evaluator runs the DOOP default rules with a stage label per admitted tuple;
+on bloat its 40 derived relation counts equal the engine's. Every valuation
+of every rule variant is counted exactly per round from the labels,
+including index maintenance, with constant columns read through their
+index as the engine does, and with every predicate over one atom's
+variables applied as soon as its variables are bound: O-Restrict makes it a
+filtered view of that atom (`restrict R@i where P`) in every valuation,
+whether or not the valuation places a step for it. On bloat with the profile of its own run (113 rule
+variants; 110 counted completely; 2026-11-12, results in
+`/data/doop-bench/corpus-20261110/order-oracle-20261112/`, file
+`bloat-restrict-fixed.tsv`): written orders 1.33e9 frames, advised 0.64e9,
+optimal 0.44e9; every reported certificate holds. Four variants are advised
+above 1.2 times their written order;
+`VPT_LoadArray` alone costs 1.41e8 against 6.7e6. Its step detail from an
+earlier run (before the composite-key rule) shows the kind of error: the
+estimate put `Var_Type` joined by type at 1.9e7 frames and the run did
+1.45e9. Skewed keys like this are something no count of rows and distinct
+values expresses. Planning the 115 holes of xalan takes 0.08 s; the whole command
+takes 12 s, of which re-deriving the input record (`PlannerInput::check`,
+4 s) and the production compilations of the advice (3.3 s each, one per
+pass) are most.
+
+With filtered views and reductions costed and filter selectivity from
+heavy values and ranges (same dataset and profile, restrictions free in the
+oracle as in the engine; file `bloat-filters.tsv`): written 1.34e9, advised
+0.51e9, optimal 0.45e9; all 113 certificates hold; three variants are
+advised above 1.2 times their written order. `HeapAllocHelper` is now
+planned (0.29e6 against 1.05e6 written). Planning bloat in the oracle
+grew from about 30 s to 175 s: a production rejection of one hole's advice
+recompiles the program once per changed hole to attribute it, and three
+newly costed holes are rejected (`advice selector __cq_datalog_layout_N@k`).
+
+**Elephant split, measured.** Splitting `VPT_LoadArray` on the 12 heavy
+values of `ArrayTypeCompat`'s type column (one rule per value with the
+value substituted, the rule itself with `!=` each; `DOOP_SPLIT`; file
+`bloat-split-loadarray.tsv`) raises its optimal work from 7.0e6 to 1.86e7
+frames and the advised from 9.5e6 to 3.4e7: every specialized rule repeats
+the join of the residual's other atoms each round. The estimate does get
+better (its first choice 1.67e8 to 6.2e7). SRDatalog's splits pay because
+the specialized side joins small unary relations computed once
+(`IsStringHeap`, `IsObjectArrayHeap`), not the whole body again. A split
+must therefore be costed like any rewrite: residual plus every specialized
+rule against the original.
+
+**The advice on a GPU, measured** (2026-11-12, Runpod RTX 6000 Ada,
+isolated pod, 3 fresh processes per cell, median fixpoint seconds; the
+DOOP default program on all three engines; the bloat-profiled advice above
+compiled into `srd-doop-gpu --features advice-cost`; 40 derived counts
+equal across engines; results in
+`/data/doop-bench/corpus-20261110/pod-compare-20261112/`):
+
+| dataset | ours, written | ours, advised | SRDatalog |
+|---|---:|---:|---:|
+| bloat | 0.769 | 0.898 | 1.160 |
+| xalan | 0.913 | 1.116 | 1.337 |
+| batik | 1.609 | 1.845 | 2.310 |
+| soot | 8.656 | 8.928 | 13.788 |
+| javac | 1.643 | 1.585 | 1.980 |
+| jruby | 2.087 | 2.422 | 3.823 |
+
+The written orders beat SRDatalog on all six. The advice, 2.6 times fewer
+frames than the written orders on bloat by the oracle, is slower on five of
+six (3% to 22%). Frames under `h = m = 1` on the CPU compilation do not
+predict this engine's time.
+
+**Why, and which model is correct** (investigation 2026-11-13; full record
+in `/data/design-notes/datalog-variable-order-ce-design-2026-11-11.md` §11).
+
+- *Wrong incumbent.* The GPU compiles `driver(delta_first)`; the tool
+  compared against text orders. Compiled the same way
+  (`compile_datalog_with_driver`, oracle `DOOP_DRIVER=delta_first`), bloat's
+  delta-first orders cost 0.7229e9 exact frames and the optimum 0.7150e9:
+  1.1% to gain. The tool's estimate picks 3.70e9.
+- *SRDatalog's orders are three static rules* over sizes and conditional
+  largest degrees (delta atom first; join variables before private ones;
+  the join variable of least largest degree given the bound columns): 20 of
+  27 choices in its recursive rules, the rest free checks or near ties.
+- *A step's frames follow the key values the prefix probes.* Whole-plan
+  q-error on bloat's 110 written valuations, statistics of the same run:
+  the tool's uniform estimate median 1.55, p90 172; average group
+  (`|R|/groups`) p90 637; largest-group chain median 80; the measured pair
+  (`|S join R|/|S|` for the relation `S` that bound the key) p90 3.6; with
+  two-binder keys and round visibility p90 1.7, max 3.6.
+- *Choosing the least of an accurate model is still worse than the
+  incumbent* (0.748e9): the least is where its errors are. The incumbent
+  unless the model predicts 1.5 times less, by a valuation whose
+  largest-group chain is no worse: 0.7174e9, no variant above 1.2 times.
+- *The GPU charges launches.* One stream, profiled, bloat: per steady hole
+  `27.6 us * launches + 0.097 ns * frames + 1.92 ns * candidates`
+  (R2 0.81; 59%, 13%, 28% of hole time; holes are 61% of the fixpoint).
+  Candidates are the same in every order. An order can move about 8% of
+  the fixpoint; a step more per round costs as much as 15M frames.
+
+**Variable-order planning (decided 2026-11-13; `cq_cost::cost::variables`,
+checked in the DOOP oracle, not yet the tool's candidate generator).**
+The planning object of a rule variant is a *variable order*, as in
+worst-case optimal joins; an order of atoms is not a model of this work and
+the incumbent-and-guard planner sketched from the investigation is dropped.
+The written order of a rule body carries no information: variables are
+ranked by name and degree, occurrences by what they read, so any
+permutation of a body plans to the same order and the same reads.
+
+- **VP-Delta.** A steady variant reads its changing occurrence in full
+  first: all its variables are bound before any other. The delta's size is
+  not estimated: it changes from nothing to everything between rounds, so
+  it is taken as smaller than any full relation, and every cost is per
+  delta row.
+- **VP-Bind.** Binding a variable restricts it by every occurrence that
+  holds it, at once (an intersection). The expected values per binding of
+  the earlier variables are the least, over those occurrences, of the
+  variable's degree in the occurrence (VP-Degree); the occurrence of least
+  degree *proposes* the values.
+- **VP-Degree.** The statistic is the degree sequence of a variable given
+  bound variables of one relation, `deg_R(v | U)`. What an occurrence is
+  expected to hold for a binding depends on who bound `U`:
+  - the occurrence itself (it descends its own values): each key is met
+    once, the average degree `V(R, U + v) / V(R, U)`;
+  - another occurrence `B`: each key is met as often as rows of `B` hold
+    it, so the two degree sequences are matched *by value*:
+    `sum over rows b of B of deg_R(v | U = b.U) / |B|`. A key `R` lacks
+    counts zero and a heavy key met often counts often; the average degree
+    is wrong on both (it assumes every probe hits and no skew);
+  - the changing occurrence: the same sum over all its rows of the run,
+    each row meeting only the rows of `R` no younger than itself;
+  - an occurrence `B` that the changing occurrence reaches (it bound every
+    variable `B` did not bind itself): the sum over the pairs of a
+    changing row and a row of `B` it reaches, each meeting the rows of `R`
+    no younger than the changing row. The rows of `B` a delta reaches are
+    not a sample of `B` (reachable call sites call the popular methods),
+    and a row younger than the delta is not there yet;
+  - several binders: the least of the above, each over the variables that
+    binder bound;
+  - none: the distinct values of the variable.
+  A relation of the variant's own component, met through a binder the
+  changing occurrence does not reach, is scaled by the share of its rows a
+  round sees. Inputs get these from `cq-load`, derived relations from a
+  profile run that keeps each row's round (not built).
+- **VP-Cost.** An order costs the sum over its variables of the bindings of
+  that variable and all before it, each the previous times VP-Bind's
+  values: the cost model of Tributary Join (Chu, Balazinska, Suciu,
+  SIGMOD 2015), which Umbra adopts for its multiway joins, with VP-Degree's
+  degrees in place of its average degrees. The search is exhaustive with
+  branch and bound; a variable of one occurrence only moves late by its
+  cost, not by a rule.
+- **VP-Lower.** An order lowers to the occurrences in the order they
+  first propose a variable, each read in full there; an occurrence all of
+  whose variables are bound is read as a check. No bind: production
+  realizes a partial read by its rows, not its distinct values, so a
+  variable bound first repeats every later step once per row. Measured on
+  the CPU engine, bloat: three steady variants advised with a bind took
+  the run from 13.2 s to 35.7 s, and SRDatalog's orders with a bind in a
+  seed ran out of memory, while the oracle (which counts a bind's
+  distinct values) had the same plans below the written frames. No
+  lookup before an occurrence's own read either: a lookup is a step of
+  its own, charged its input frames, and on the GPU a launch per round
+  (about 15M frames on bloat).
+
+Checked on bloat in the DOOP oracle (`DOOP_DRIVER=delta_first`, exact
+degrees of the final relations with each row's round; 109 of 113 variants
+counted: three the oracle cannot execute under any plan, and one seed of
+19 written frames the planner does not plan). Frames are exact join
+frames; index rows are the rows written into every index the program's
+plans demand, each index once:
+
+| plans | frames | steps | index rows | CPU engine, s |
+|---|---|---|---|---|
+| written, delta first then text order | 6.659e8 | 504 | 6.66e7 | 12.53 |
+| least frames plus upkeep in the atom-step space | 6.588e8 | 505 | 6.74e7 | |
+| variable order, planned | 6.598e8 | 504 | 6.75e7 | 12.59 |
+| SRDatalog's hand orders, same lowering | 6.769e8 | 504 | 6.74e7 | 12.77 |
+
+No planned variant is above 1.2 times its written frames; seven are below
+0.8 (`Precompute1` 1.13e7 to 5.4e6). The hand orders lose frames under
+this lowering in seeds that bind a variable first (`Precompute1` 1.66e7).
+The planner does not weigh indexes: 103 against the written plans' 93.
+
+CPU engine: the three plan sets compiled through production as advice
+(`advice::datalog_plans_for`, the oracle's `DOOP_VARS_ADVICE`; 110 of 112
+variants each, two seeds over a compiler-made layout occurrence cannot be
+named by a selector and keep their written order) and run by the
+single-thread `srd-doop` engine on bloat, median evaluation of 5
+interleaved runs, all 40 outputs identical as sets. Planned and written
+do not differ (ranges 12.53-12.74 and 12.48-12.62); the hand orders are
+1.9% slower. So on bloat the planner recovers the written plans' time
+from no body order, and gains nothing over them.
+
+Scrambled text (2026-11-15). `DOOP_SCRAMBLE=reverse|shuffle:<seed>`
+permutes the positive atoms of every rule body; the planner, from bloat's
+statistics, gives each of the three scrambled texts the same 110 read
+sequences as the original text. The engines were built from each text
+with the compiler's own delta-first orders ("text") and with the planned
+advice, and run on bloat and, with the same bloat-derived plans, on
+eclipse and xalan (single-thread evaluation seconds, median of 3; the
+scrambled "text" runs once, bounded at 300 s, 600 s for shuffle 2 on
+bloat; output counts identical in every finished run):
+
+| text | plans | bloat | eclipse | xalan |
+|---|---|---|---|---|
+| original | text | 13.4 | 33.1 | 63.0 |
+| original | planned | 13.6 | 33.2 | 62.7 |
+| shuffle 1 | text | 47.7 | 156.4 | 67.1 |
+| shuffle 1 | planned | 13.0 | 34.0 | 63.0 |
+| reversed | text | > 300 | > 300 | > 300 |
+| reversed | planned | 13.3 | 33.7 | 62.2 |
+| shuffle 2 | text | > 600 | > 300 | > 300 |
+| shuffle 2 | planned | 13.4 | 33.1 | 63.4 |
+
+The planned run time does not depend on the text (within the run-to-run
+spread, up to 5% here), equals the original text's on all three datasets,
+and on eclipse and xalan it comes from another dataset's statistics. The
+compiler's delta-first order over a permuted text is 1.06 to 4.7 times
+slower for one shuffle and does not finish in 9 to 45 times the planned
+time for the two others. Open: no GPU run; production has none of the
+statistics (these came from the oracle's exact tables of bloat's run);
+three datasets, one program.
+
+Builds rejected on the way, same measure (each also differed in lowering):
+
+- average degrees (Tributary Join as published), a lookup by every other
+  holder after each binding: 3.83e9; `VPT_LoadArray` with the array delta
+  fans out through `Var_Type` by type, 2.98e9 for 8.2e6;
+- the row-weighted degree of one relation (second moment over first):
+  1.54e9; it overstates keys the binder never reaches;
+- a limit on the product of largest degrees (the chain bound's
+  l-infinity) as a risk guard, over degrees matched by value: 1.51e9
+  against 6.64e8 without it; it forbids the good order of `VPT_LoadArray`
+  and admits a worse one. It is not a rule;
+- lookups after each binding cost the hand orders 1.08e9 against 6.61e8
+  without;
+- degrees matched by value without the reach through the delta: 6.63e8,
+  the three virtual-dispatch variants of the reachable delta 19 times
+  their written frames (3.3e6 each): the call sites a delta reaches call
+  the popular methods, 47 values of the receiver's `this` per site.
+
+Related cost models, read 2026-11-13: Graphflow's i-cost (partial matches
+times the sizes of the intersected lists, cardinalities from a catalogue of
+sampled extension rates, re-chosen per prefix at run time); the Ring and
+Jena LTJ heuristic (a variable's selectivity is the least matching count
+over its patterns; most selective first, connected, lonely variables last);
+Free Join (the order is derived from a binary plan; "little is known about
+optimizing Generic Join"); Leapfrog Triejoin (the order is crucial and left
+open); FlowLog (structural cost by variables, no data statistics). The
+degree-sequence bounds (chain bound, DSB, LpBound) are stated over the same
+conditional degrees `deg_R(V | U)`, with other norms.
+
 For a steady variant, an affine certificate `a*|delta_r|+b` becomes
 `a*F+b*N` under the recorded complete partition, or a conservative upper bound
-under completed insert-only-set consumption. Seeds and recorded component-key
+under completed insert-only-set consumption.
+
+A certificate may also carry a *whole-run* part `c`: a bound on the sum over
+all rounds, charged once, so the run costs `a*F+b*N+c`. From the full read
+of the changing occurrence on, every frame holds one delta row and the deltas
+are disjoint, so the frames of different rounds differ; and all of them lie
+in what the step would produce over the final relations. A round-independent
+bound of such a step is built from final facts alone (`U_P*M_R(K)`,
+`U_R*M_P(K)`, `D(K)*M_P(K)*M_R(K)`, a support cap), so it bounds that final
+output and hence the sum over all rounds. This holds whichever side of the
+join the delta is on. A bind of the changing occurrence under `distinct` is
+excluded: one key recurs across many rounds' deltas.
+part multiplies by constants in later steps; a product of two parts that
+depend on the round (a delta term or a whole-run part on both sides) has no
+affine certificate and is dropped. Witnesses are chosen by
+`a*F+b*N+c` at the declared endpoints. A whole-run part has no per-round
+value, so a calibration comparison per round reports it unknown.
+Seeds and recorded component-key
 construction execute once. Persistent read-index maintenance is charged once
 across holes and strata, with its recorded policy; negative-key helpers retain
 their actual canonical provider rather than inventing a constant-key index.
 The greedy planning rank and every reused demand are printed.
 
-Incomplete/incomparable bounds retain the recorded incumbent. Crossings are
-reported, but no runtime guard or pair of alternative plans is emitted.
+A hole whose incumbent or winner lacks an estimate retains the recorded
+incumbent. No runtime guard or pair of alternative plans is emitted.
 Existing partial-read/nested work without finite model certificates remains
 explicitly unknown rather than being replaced by an uncosted coarse plan.
-The named `restricted-view-lifetime` gap also stays unknown: joined filtered
-views can introduce per-invocation materialization that the VO/Storage export
-does not record for each candidate. No such candidate gets a complete
-whole-run certificate or a new order. A single-read component key builder
-does have an explicit lifetime: its occurrence restrictions and key-set
-construction are charged once, not once per steady round.
+
+**Filtered views.** O-Restrict records each H-Local predicate as `restrict
+R@i where P` on its target occurrence whatever the order, and RL-Restrict
+selects that occurrence by `P` before it joins. The same restrictions
+therefore hold in every candidate of a hole. Whether the engine streams a
+filtered occurrence or materializes it per invocation, its work per
+invocation is at most one scan of `R@i` plus a build of the rows that pass:
+the certificate charges `(1 + h) * |R@i|` per invocation (every round for a
+steady variant, `(1 + h) * |delta|` for the changing occurrence), in every
+candidate alike; a single-read hole streams its restriction, `|R@i|`, as
+before. A semijoin reduction `reduce R@i with S@j` (cq-reduce Masks, ranked
+by the restrictions) is charged the same way, `(1 + h) * (|R@i| + |S@j|)`
+per invocation, with output at most `|R@i|`. Every later read is certified
+over the source relation, which only over-counts. So joined filtered views
+and reductions are no longer unknown.
+
+**Filter selectivity.** The estimate multiplies the frames after a prefix by
+the selectivity of every source predicate whose variables that prefix binds,
+whether a step of the candidate or absorbed into a filtered view. A
+predicate compares one variable with a constant (a literal, or a closed
+value the evidence binds); its variable takes the column of the occurrence
+that introduced it. With `H` the column's heavy values (below) and `D`
+its distinct values:
+
+- `x = c`: `rows(c) / |R|` when `c` is heavy; otherwise
+  `(|R| - sum H) / (D - |H|) / |R|`, the average of the other values;
+- `x != c`: one minus that;
+- `x < c` (and `<=`, `>`, `>=`): the share of rows in the column's ranges
+  below `c`, a range that straddles `c` counted in proportion to its width;
+- a conjunction multiplies, a disjunction adds, at most 1;
+- anything else, or a column without these facts: 1, no reduction.
+
+Selectivity changes only the estimate; certificates never assume a filter
+passes fewer rows than it reads.
+
+**Heavy values and ranges.** The evidence of an integer or symbol column
+records its *heavy values*: the values held by more than four times the
+average group (`|R| / D`), at most the 32 largest, each with its exact row
+count. An integer column also records its *ranges*: at most 64 equal-width
+ranges from its minimum to its maximum, as one origin, one width and the
+row count of each, so the ranges holding most rows are visible. Each is one
+fact per column; the evidence travels inside every compiled program, so
+its size is planning time. `cq-load` collects both with the
+other column facts. They serve the filter estimate above, and are the facts
+an elephant split and a compressed layout read: which values and which
+ranges hold most of a column. Derived relations have neither yet; their
+filters estimate 1. Closed constants (`constants.c`) have their values in
+the evidence's `constants` map, keyed by field name, from the dataset's
+declared constants file.
+
 The output is a complete replacement for existing authored directives:
 unchanged phase/intersection/admission advice is retained, and new whole orders
 use `plan(Label, delta(R@k), order(...))` (without `delta` for seeds).
@@ -454,9 +1043,10 @@ Synchronous CPU and CPU-par components are supported. Recorded
 `schedule.progress=relational` is rejected at setup: event-driven member
 batches need a distinct per-driver invocation-count model, not an invented
 shared N or observation barriers. Device calibration requires a device-counter
-producer and is not enabled by this host feature. The separate future
-restricted-view lifetime model must record actual candidate materialization/
-build ownership before those unknown costs can select an order.
+producer and is not enabled by this host feature. Filtered views and
+reductions are certified per invocation as a scan and a build (Filtered
+views, above); calibration does not yet observe which of them the engine
+materializes.
 
 
 

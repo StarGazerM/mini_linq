@@ -251,7 +251,7 @@ fn automatic_inplan_owner_is_held_fixed_when_the_new_order_would_choose_admit() 
 }
 
 #[test]
-fn joined_restricted_views_remain_unknown_without_materialization_lifetime_facts() {
+fn joined_restricted_views_are_charged_a_scan_and_a_build_per_invocation() {
     let files = Fixture::new();
     let evidence = evidence(&files);
     let original = program(&evidence);
@@ -259,9 +259,205 @@ fn joined_restricted_views_remain_unknown_without_materialization_lifetime_facts
     source.rules[0] = syn::parse_quote!(Out(*x,*z) :- R(x,y), S(y,z), where y >= 0;);
     let input = export::compile_datalog(&source.to_token_stream().to_string(), config()).unwrap();
     let report = cost::analyze(&input, &evidence, "cpu").unwrap();
-    assert_eq!(report.holes[0].decision, Decision::Unknown);
-    assert!(report.holes[0].candidates.iter().all(|candidate|
-        candidate.cost.whole_run.is_none()
-            && candidate.cost.unknown.iter().any(|reason| reason.starts_with("restricted-view-lifetime:"))));
-    assert!(syn::parse_str::<AdviceList>(&report.advice).unwrap().0.is_empty());
+    assert_ne!(report.holes[0].decision, Decision::Unknown);
+    let constant = |cost: &cost::DeltaCost| cost.constant.numerator.parse::<u64>().unwrap() / cost.constant.denominator.parse::<u64>().unwrap();
+    for candidate in &report.holes[0].candidates {
+        assert!(candidate.cost.whole_run.is_some() && candidate.cost.unknown.is_empty(), "{:?}", candidate.cost.unknown);
+        assert!(!candidate.cost.preprocessing.is_empty());
+        // h = 1: a scan and a build of every source row of the view.
+        for step in &candidate.cost.preprocessing {
+            assert_eq!(constant(step.bound.work.as_ref().unwrap()), 2 * constant(step.bound.output.as_ref().unwrap()));
+        }
+    }
+}
+
+/// Exact evidence over the given CSV relations (name, columns, rows).
+fn profiled(files: &Fixture, relations: &[(&str, usize, String)]) -> DatasetEvidence {
+    for (name, _, rows) in relations { std::fs::write(files.0.join(format!("{name}.csv")), rows).unwrap(); }
+    let request = DatasetRequest {
+        schema: REQUEST_SCHEMA.into(), name: "valuation-fixture".into(), date: "2026-11-11".into(), formulation: "cost-test".into(),
+        hash_mode: ev::HASH_MODE.into(), distinct: DistinctMode::Exact, metadata: Vec::new(),
+        relations: relations.iter().map(|(name, arity, _)| RelationInput {
+            relation: RelationSpec { name: (*name).into(), semantics: RelationSemantics::Set,
+                columns: (0..*arity).map(|c| ColumnSpec { name: format!("c{c}"), domain: ScalarDomain::SignedInteger }).collect(), key_sets: Vec::new() },
+            path: format!("{name}.csv"), options: SourceOptions::default(), missing_as_empty: false,
+        }).collect(),
+    };
+    let mut evidence = request.collect(&files.0).unwrap();
+    let unit = |id: &str| Fact {
+        id: id.into(), source: Source::Declared, claim: Claim::Equal,
+        value: Some(Rational { numerator: "1".into(), denominator: "1".into() }), lower: None, upper: None,
+        dataset_hash: evidence.dataset.hash.clone(), unit: Unit::DeclaredRowWork,
+        provenance: Provenance { producer: "test reference policy".into(), method: "explicit h=m=1 normalized row-work policy, not hardware calibration".into(), locator: "static_advice.rs".into(), run: None, artifact_hash: None },
+    };
+    evidence.targets.insert("cpu".into(), TargetEvidence {
+        unit: Unit::DeclaredRowWork, configuration_hash: export::sha256(serde_json::to_vec(&config()).unwrap()),
+        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"),
+    });
+    evidence.check().unwrap();
+    evidence
+}
+fn pairs(left: std::ops::Range<i64>, right: std::ops::Range<i64>) -> String {
+    left.flat_map(|a| right.clone().map(move |b| format!("{a},{b}\n"))).collect()
+}
+/// The advised reads of the only rule, as `Relation` or `Relation(columns)`.
+fn advised_reads(report: &cost::AdviceReport) -> Vec<String> {
+    let parsed: AdviceList = syn::parse_str(&report.advice).unwrap();
+    assert_eq!(parsed.0.len(), 1);
+    parsed.0[0].order.iter().map(|atom| match &atom.columns {
+        Some(columns) => format!("{}({})", atom.relation, columns.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")),
+        None => atom.relation.to_string(),
+    }).collect()
+}
+
+#[test]
+fn a_selective_lookup_is_advised_before_the_expansion_it_guards() {
+    // One of R's ten keys is in S, and S fans out by a hundred: the lookup
+    // prunes R before T multiplies it, and S expands last.
+    let files = Fixture::new();
+    let evidence = profiled(&files, &[("R", 2, pairs(0..10, 0..5)), ("S", 2, pairs(0..1, 0..100)), ("T", 2, pairs(0..50, 0..2))]);
+    let json = evidence.canonical_json().unwrap();
+    let source = quote! {
+        struct Late;
+        relation R(c0:i64,c1:i64) = (r);
+        relation S(c0:i64,c1:i64) = (s);
+        relation T(c0:i64,c1:i64) = (t);
+        relation Out(c0:i64,c1:i64,c2:i64);
+        declared_evidence #json {
+            R = "R" full [c0="c0",c1="c1"];
+            S = "S" full [c0="c0",c1="c1"];
+            T = "T" full [c0="c0",c1="c1"];
+        }
+        output Out;
+        Seed: Out(*x,*z,*u) :- R(x,y), S(x,z), T(y,u);
+    }.to_string();
+    let input = export::compile_datalog(&source, config()).unwrap();
+    let report = cost::analyze(&input, &evidence, "cpu").unwrap();
+    let choice = &report.holes[0];
+    assert_eq!(choice.decision, Decision::Changed, "{}", choice.reason);
+    let selected = &choice.candidates[choice.selected];
+    assert!(!selected.plan.is_atom_order());
+    assert_eq!(advised_reads(&report), ["R", "S(x)", "T", "S"]);
+    // The lookup's bound is the exact count of surviving R rows.
+    let lookup = selected.cost.steps.iter().find(|step| step.inequality.starts_with("lookup")).unwrap();
+    assert_eq!(lookup.output.as_ref().unwrap().constant, Rational { numerator: "5".into(), denominator: "1".into() });
+    // Production accepted the sub-atom advice, and the lookup and the
+    // expansion of S share the one index Storage provisions.
+    let parsed: AdviceList = syn::parse_str(&report.advice).unwrap();
+    let advised = cost::advice::check_datalog_advice(&input, &report, &parsed.0).unwrap();
+    let declarations = &advised.storage.incremental.strata.source.declarations;
+    assert_eq!(advised.context.layouts.iter().filter(|layout| declarations[layout.relation].name == "S").count(), 1);
+    assert_eq!(report.space, cost::Space::default());
+}
+
+/// R(k, v) has two keys with five hundred values each; only k joins S, and
+/// S has two thousand keys. Reading k first drives the join from two keys
+/// through the one index on S both of its occurrences need anyway.
+fn skewed(files: &Fixture) -> DatasetEvidence {
+    profiled(files, &[("R", 2, pairs(0..2, 0..500)), ("S", 2, pairs(0..2000, 0..10))])
+}
+
+#[test]
+fn a_key_first_valuation_is_advised_only_under_the_distinct_policy() {
+    let files = Fixture::new();
+    let evidence = skewed(&files);
+    let json = evidence.canonical_json().unwrap();
+    let source = quote! {
+        struct Keys;
+        declared_evidence #json {
+            R = "R" full [c0="c0",c1="c1"];
+            S = "S" full [c0="c0",c1="c1"];
+        }
+        relation R(c0:i64,c1:i64) = (r);
+        relation S(c0:i64,c1:i64) = (s);
+        Keys(v,w,t) :- R(k,v), S(k,w), S(w,t);
+    }.to_string();
+    let input = export::compile_cq(&source, &syn::parse_str("order(R, S@1, S@2)").unwrap(), config()).unwrap();
+    let flat = |report: &cost::AdviceReport| report.advice.split_whitespace().collect::<String>();
+    // A target that visits rows gains nothing from reading k first: no bind
+    // is generated and the written atom order stays.
+    let rows = cost::analyze(&input, &evidence, "cpu").unwrap();
+    assert!(rows.holes[0].candidates.iter().flat_map(|candidate| &candidate.plan.steps)
+        .all(|step| !step.introduces || step.read.as_ref().is_none_or(|read| !read.partial)));
+    assert_eq!(rows.holes[0].decision, Decision::Retained, "{}", rows.holes[0].reason);
+    // A target that enumerates distinct keys expands R's values last.
+    let keyed = cost::Space { partial_reads: cost::PartialReads::Distinct, ..Default::default() };
+    let distinct = cost::analyze_with(&input, &evidence, "cpu", keyed).unwrap();
+    assert_eq!(distinct.holes[0].decision, Decision::Changed, "{}", distinct.holes[0].reason);
+    assert!(flat(&distinct).contains("order(R@0(k),S@1,S@2,R@0)"), "{}", distinct.advice);
+    let upper = |report: &cost::AdviceReport| cost::bounds::upper(report.whole_run.as_ref().unwrap(), &evidence).unwrap().unwrap().exact().unwrap();
+    assert!(upper(&distinct) < upper(&rows));
+    // The declared space is part of the report and survives serialization.
+    assert_eq!(distinct.space, keyed);
+    let reread: cost::AdviceReport = serde_json::from_str(&serde_json::to_string(&distinct).unwrap()).unwrap();
+    assert_eq!(reread, distinct);
+    assert!(!serde_json::to_string(&rows).unwrap().contains("\"space\""));
+}
+
+#[test]
+fn a_valuation_storage_does_not_provision_yields_to_the_best_atom_order() {
+    // The same join as a Datalog rule. Step advice keeps the written atom
+    // permutation, from which Storage provisions indexes, so the expansion
+    // of R by k after its bind has no index: the search runs again over the
+    // atom orders, which production provisions.
+    let files = Fixture::new();
+    let evidence = skewed(&files);
+    let json = evidence.canonical_json().unwrap();
+    let source = quote! {
+        struct Keys;
+        relation R(c0:i64,c1:i64) = (r);
+        relation S(c0:i64,c1:i64) = (s);
+        relation Out(c0:i64,c1:i64,c2:i64);
+        declared_evidence #json {
+            R = "R" full [c0="c0",c1="c1"];
+            S = "S" full [c0="c0",c1="c1"];
+        }
+        output Out;
+        Seed: Out(*v,*w,*t) :- R(k,v), S(k,w), S(w,t);
+    }.to_string();
+    let input = export::compile_datalog(&source, config()).unwrap();
+    let keyed = cost::Space { partial_reads: cost::PartialReads::Distinct, ..Default::default() };
+    let report = cost::analyze_with(&input, &evidence, "cpu", keyed).unwrap();
+    let choice = &report.holes[0];
+    assert!(choice.reason.contains("valuations with partial reads are not advised: under step advice production provisions no index on R Full [0]"), "{}", choice.reason);
+    assert!(choice.candidates.iter().all(|candidate| candidate.plan.is_atom_order()));
+    // Whatever is emitted is advice production realizes.
+    let parsed: AdviceList = syn::parse_str(&report.advice).unwrap();
+    cost::advice::check_datalog_advice(&input, &report, &parsed.0).unwrap();
+}
+
+#[test]
+fn derived_relations_are_bounded_from_the_bound_input_facts() {
+    // Four edges over three sources and three targets; the program names the
+    // dataset's relation and columns differently, so only the attachment
+    // connects them.
+    let files = Fixture::new();
+    let evidence = profiled(&files, &[("E", 2, "0,1\n0,2\n1,2\n2,3\n".into())]);
+    let json = evidence.canonical_json().unwrap();
+    let source = quote! {
+        struct Paths;
+        relation Edge(src:i64,dst:i64) = (edges);
+        relation Reach(c0:i64,c1:i64);
+        relation Outgoing(c0:i64);
+        declared_evidence #json { Edge = "E" full [src="c0",dst="c1"]; }
+        output Reach, Outgoing;
+        Base: Reach(*x,*y) :- Edge(x,y);
+        Step: Reach(*x,*y) :- Reach(x,z), Edge(z,y);
+        Sources: Outgoing(*x) :- Reach(x,y);
+    }.to_string();
+    let input = export::compile_datalog(&source, config()).unwrap();
+    let report = cost::inferred::analyze(&input, &evidence).unwrap();
+    let [reach, outgoing] = &report.relations[..] else { panic!("{report:?}") };
+    // Six pairs are reachable; any three sources and three targets allow nine.
+    assert_eq!((reach.relation.as_str(), reach.recursive, reach.rows.as_deref()), ("Reach", true, Some("9")));
+    assert_eq!(reach.form, ["Edge(c0,_), Edge(_,c1)", "Edge(c0,c1)"]);
+    assert_eq!(reach.columns.iter().map(|column| column.distinct.as_deref()).collect::<Vec<_>>(), [Some("3"), Some("3")]);
+    // The bound cites the facts of the dataset columns the attachment names.
+    let cited = |column: &str| evidence.relations["E"].columns[column].distinct.as_ref().unwrap().id.clone();
+    assert_eq!(reach.citations, [cited("c0"), cited("c1")].into());
+    assert_eq!((outgoing.recursive, outgoing.rows.as_deref(), &outgoing.form[..]), (false, Some("3"), &["Edge(c0,_)".to_string()][..]));
+    assert_eq!(report.input_hash, input.input_hash);
+    // Facts of another dataset are not this input's facts.
+    let other = profiled(&Fixture::new(), &[("E", 2, "0,1\n".into())]);
+    assert!(cost::inferred::analyze(&input, &other).is_err());
 }

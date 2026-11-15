@@ -14,11 +14,18 @@ impl Bound {
         Self { value: None, citations: BTreeSet::new(), unknown: vec![reason.into()] }
     }
     pub fn unit() -> Self {
-        Self { value: Some(DeltaCost { coefficient: wire(Q::zero()), constant: wire(Q::one()) }),
+        Self { value: Some(DeltaCost { coefficient: wire(Q::zero()), constant: wire(Q::one()), once: wire(Q::zero()) }),
             citations: BTreeSet::from(["compiler:unit-or-empty-key-group-at-most-one-row".into()]), unknown: Vec::new() }
     }
+    /// A step's per-round output bound; a whole-run part has no per-round value.
     pub fn from_step(step: &StepBound) -> Self {
-        Self { value: step.output.clone(), citations: step.citations.clone(), unknown: step.unknown.clone() }
+        let mut unknown = step.unknown.clone();
+        let value = step.output.clone().filter(|output| {
+            let per_round = output.once.numerator == "0";
+            if !per_round { unknown.push("whole-run certificate: no per-round output bound".into()); }
+            per_round
+        });
+        Self { value, citations: step.citations.clone(), unknown }
     }
     pub fn sum(bounds: impl IntoIterator<Item = Self>) -> Result<Self> {
         let mut a = Q::zero(); let mut b = Q::zero();
@@ -33,7 +40,7 @@ impl Bound {
             } else { complete = false; }
         }
         if !complete && unknown.is_empty() { unknown.insert("one covered VO site lacks a finite row bound".into()); }
-        Ok(Self { value: complete.then(|| DeltaCost { coefficient: wire(a), constant: wire(b) }), citations, unknown: unknown.into_iter().collect() })
+        Ok(Self { value: complete.then(|| DeltaCost { coefficient: wire(a), constant: wire(b), once: wire(Q::zero()) }), citations, unknown: unknown.into_iter().collect() })
     }
     pub fn at(&self, delta: u64) -> Result<Option<ev::Rational>> {
         self.value.as_ref().map(|value| Ok(wire(value.coefficient.exact().map_err(evidence_error)? * Q::from_integer(delta.into())

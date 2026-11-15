@@ -50,6 +50,8 @@ pub struct DatasetEvidence {
     #[serde(default)] pub relative: Vec<RelativeFact>,
     #[serde(default)] pub targets: BTreeMap<String, TargetEvidence>,
     #[serde(default)] pub observations: Observations,
+    /// Values of the program's closed constants, keyed by field name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")] pub constants: BTreeMap<String, ScalarFact>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -162,6 +164,27 @@ pub struct ColumnEvidence {
     pub min: Option<ScalarFact>,
     pub max: Option<ScalarFact>,
     pub max_degree: Option<CountFact>,
+    /// The values held by more than four times the average group, largest
+    /// first (at most 32), each with its row count: one fact per column.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub heavy: Option<Fact<Vec<HeavyValue>>>,
+    /// The rows of each of at most 64 equal-width ranges from an integer
+    /// column's minimum to its maximum: one fact per column.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub ranges: Option<Fact<Ranges>>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeavyValue {
+    pub value: Scalar,
+    pub rows: u64,
+}
+/// Range `i` holds the values `lo + i * width ..= lo + (i + 1) * width - 1`
+/// and `rows[i]` rows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ranges {
+    pub lo: i64,
+    pub width: u64,
+    pub rows: Vec<u64>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -704,6 +727,35 @@ impl DatasetEvidence {
                     }
                 }
                 statistics.insert(BTreeSet::from([column_name.as_str()]), (distinct, interval(column.max_degree.as_ref())));
+                // Heavy values are distinct, each at most the largest group;
+                // they and the ranges hold at most the relation's rows.
+                if let Some(fact) = &column.heavy { checker.fact(fact, Unit::Rows)?; }
+                if let Some(fact) = &column.ranges { checker.fact(fact, Unit::Rows)?; }
+                for (claim, source, provenance) in column.heavy.iter().map(|f| (f.claim, f.source, &f.provenance)).chain(column.ranges.iter().map(|f| (f.claim, f.source, &f.provenance))) {
+                    ensure(claim == Claim::Equal && source != Source::Hll, "heavy values and ranges are exact row counts")?;
+                    if let Some(run) = run { ensure(provenance.run.as_ref() == Some(run), "fact run/admission scope mismatch")?; }
+                }
+                if let Some(heavy) = &column.heavy {
+                    let largest = interval(column.max_degree.as_ref()).hi;
+                    let mut values = BTreeSet::new();
+                    let mut held = 0u128;
+                    for value in heavy.value.as_deref().unwrap_or_default() {
+                        ensure(values.insert(scalar_value(&value.value, &column.domain)?), "repeated heavy value")?;
+                        ensure(value.rows <= largest, "heavy value above the largest group")?;
+                        held += u128::from(value.rows);
+                    }
+                    ensure(held <= u128::from(rows.hi), "heavy values hold more than the relation's rows")?;
+                }
+                if let Some(ranges) = &column.ranges {
+                    ensure(column.domain == ScalarDomain::SignedInteger, "ranges describe integer columns")?;
+                    if let Some(ranges) = &ranges.value {
+                        ensure(ranges.width > 0 && !ranges.rows.is_empty() && ranges.rows.len() <= 64, "ranges need a width and at most 64 counts")?;
+                        let last = i128::from(ranges.lo) + i128::from(ranges.width) * (ranges.rows.len() as i128 - 1);
+                        ensure(last <= i128::from(i64::MAX), "a range starts outside the integer domain")?;
+                        let held: u128 = ranges.rows.iter().map(|&rows| u128::from(rows)).sum();
+                        ensure(held <= u128::from(rows.hi), "ranges hold more than the relation's rows")?;
+                    }
+                }
             }
             let mut key_sets = BTreeSet::new();
             for set in &relation.key_sets {
@@ -780,6 +832,16 @@ impl DatasetEvidence {
         }
         let partitions = self.check_premises(&mut checker)?;
         self.check_relative(&mut checker, &mut row_ranges)?;
+        for (name, value) in &self.constants {
+            nonblank(name)?;
+            let domain = match value.value.as_ref().or(value.lower.as_ref()) {
+                Some(Scalar::SignedInteger { .. }) => ScalarDomain::SignedInteger,
+                Some(Scalar::Utf8 { .. }) => ScalarDomain::Utf8,
+                _ => return Err(EvidenceError(format!("constant {name} must be an integer or text value"))),
+            };
+            ensure(value.claim == Claim::Equal, "a constant is one exact value")?;
+            checker.scalar(value, &domain, None)?;
+        }
         for (target, costs) in &self.targets {
             ensure(matches!(target.as_str(), "cpu" | "cpu-par" | "gpu"), "unknown target")?;
             ensure(costs.unit == Unit::DeclaredRowWork, "target unit must be declared_row_work")?;
@@ -1064,6 +1126,7 @@ impl DatasetEvidence {
                 rounds: self.observations.rounds.clone(),
                 steps: Vec::new(), physical_steps: Vec::new(),
             },
+            constants: self.constants.clone(),
         }
     }
 }

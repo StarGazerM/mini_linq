@@ -160,7 +160,7 @@ fn load_document(
     };
     let relations = mappings.tables.into_iter().map(|(name, table)| {
         let columns = table.columns.into_values().map(|name| (name, evidence::ColumnEvidence {
-            domain: domain.clone(), distinct: None, min: None, max: None, max_degree: None,
+            domain: domain.clone(), distinct: None, min: None, max: None, max_degree: None, heavy: None, ranges: None,
         })).collect();
         let rows = Some(evidence::Fact {
             id: format!("{name}.rows"), source: evidence::Source::Exact,
@@ -185,7 +185,7 @@ fn load_document(
             formulation: mappings.formulation, manifest: identity,
         },
         relations, premises: Vec::new(), relative: Vec::new(),
-        targets: BTreeMap::new(), observations: evidence::Observations::default(),
+        targets: BTreeMap::new(), observations: evidence::Observations::default(), constants: BTreeMap::new(),
     };
     let declared = DeclaredEvidence { document: Arc::new(document), bindings };
     declared.check(declarations)?;

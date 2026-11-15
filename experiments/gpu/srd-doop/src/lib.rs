@@ -15,6 +15,15 @@
     ),
     all(feature = "advice-fieldflow", feature = "advice-dispatch"),
     all(
+        feature = "advice-cost",
+        any(
+            feature = "advice-aipt",
+            feature = "advice-load",
+            feature = "advice-fieldflow",
+            feature = "advice-dispatch"
+        )
+    ),
+    all(
         feature = "default-query",
         any(
             feature = "advice-aipt",
@@ -24,9 +33,9 @@
         )
     )
 ))]
-compile_error!("select at most one advice experiment, using the factored SRD query");
+compile_error!("select at most one advice experiment; authored advice requires the factored SRD query");
 
-// Baseline and individually authored P3.2 experiments share the same pipeline.
+// Baseline, authored experiments and generated cost advice share one pipeline.
 macro_rules! engine {
     ($($advice:tt)*) => {
 srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advice)*), pipeline {
@@ -59,9 +68,13 @@ srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advic
     feature = "advice-aipt",
     feature = "advice-load",
     feature = "advice-fieldflow",
-    feature = "advice-dispatch"
+    feature = "advice-dispatch",
+    feature = "advice-cost"
 )))]
 engine!();
+
+#[cfg(feature = "advice-cost")]
+include!(concat!(env!("OUT_DIR"), "/advice_cost.rs"));
 
 #[cfg(feature = "advice-aipt")]
 engine!(

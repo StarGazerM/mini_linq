@@ -1,6 +1,6 @@
 //! Static advice uses the same authored grammar and pre-Storage compiler entry.
 //! This module prints recorded selections; it never chooses an order.
-use super::{AdmissionHint, AdmissionOwner, AdviceReport, Decision, FixedAdmission, HoleAdvice, IndexDemand, IndexVersion};
+use super::{AdmissionHint, AdmissionOwner, AdviceReport, Candidate, Decision, FixedAdmission, HoleAdvice, IndexDemand, IndexVersion};
 use crate::export::{self, CheckedIr, Origin, PlannerInput, Result};
 use cq_datalog_incremental::{Known, OrderAtom, RulePlan};
 use cq_lang_datalog_round as round;
@@ -38,6 +38,30 @@ fn selector(query: &round::cq::Query, position: usize) -> Result<OrderAtom> {
         return Err(error("advice selector has no original positive source occurrence"));
     };
     Ok(OrderAtom { relation: atom.relation.clone(), occurrence: Some(position), columns: None })
+}
+/// A valuation as authored selectors. An atom order names each reorderable
+/// occurrence once; otherwise every read of one is named in step order, a
+/// lookup or bind with the source variables it retains.
+fn selectors(query: &round::cq::Query, plan: &Candidate) -> Result<Vec<OrderAtom>> {
+    if plan.is_atom_order() {
+        return plan.order.iter().map(|&position| selector(query, position)).collect();
+    }
+    let mut order = Vec::new();
+    for read in plan.steps.iter().filter_map(|step| step.read.as_ref()) {
+        if !plan.order.contains(&read.source_occurrence) { continue; }
+        let mut atom = selector(query, read.source_occurrence)?;
+        if read.partial {
+            let Some(round::cq::BodyItem::Positive { atom: source }) = query.body.iter().nth(read.source_occurrence) else {
+                return Err(error("advice selector has no original positive source occurrence"));
+            };
+            atom.columns = Some(read.columns.iter().filter(|column| column.variable.is_some()).map(|column| {
+                source.args.iter().nth(column.source_column).and_then(cq_syntax::rust::variable).cloned()
+                    .ok_or_else(|| error("a retained column is not a variable of its source occurrence"))
+            }).collect::<Result<Vec<_>>>()?);
+        }
+        order.push(atom);
+    }
+    Ok(order)
 }
 fn prefix(query: &round::cq::Query) -> std::ops::Range<usize> {
     let first = query.body.iter().position(|i| matches!(i, round::cq::BodyItem::Positive { .. })).unwrap_or(query.body.len());
@@ -149,53 +173,114 @@ pub fn datalog_plans(input: &PlannerInput, report: &AdviceReport) -> Result<Vec<
     datalog_plans_checked(input, report)
 }
 
-fn datalog_plans_checked(input: &PlannerInput, report: &AdviceReport) -> Result<Vec<RulePlan>> {
+/// The directive of one variant: a selected valuation with its admission
+/// constraint, or else the variant's own authored directives, if any.
+fn variant_plan(program: &round::Program, index: usize, replacement: Option<(&Candidate, Option<Known>)>) -> Result<Option<RulePlan>> {
+    let source = &program.storage.incremental.strata.source;
+    let variant = &program.storage.incremental.variants[index];
+    if replacement.is_none() && !variant.authored && variant.known.is_none() { return Ok(None); }
+    let label = source.labels[variant.rule].clone().ok_or_else(|| error("cost-changing advice requires a source rule label"))?;
+    if source.invariants.iter().any(|entry| entry.rule == variant.rule) {
+        return Err(error("authored advice cannot replace an invariant-hoisted rule"));
+    }
+    let query = &source.rules[variant.rule];
+    let mut order = Vec::new();
+    if let Some((plan, _)) = replacement {
+        // The valuation owns lookup and bind phases; intersection sites
+        // are a Physical decision this tool does not cost.
+        if !variant.smallest.is_empty() {
+            return Err(error("cost advice cannot discard authored intersection decisions"));
+        }
+        order = selectors(query, plan)?;
+    } else if !variant.steps.is_empty() {
+        for step in &variant.steps {
+            let mut atom = selector(query, step.occurrence)?;
+            atom.columns = step.columns.clone();
+            order.push(atom);
+        }
+    } else if variant.authored {
+        let allowed = prefix(query);
+        for &position in &variant.order {
+            if allowed.contains(&position) { order.push(selector(query, position)?); }
+        }
+    }
+    let smallest = variant.smallest.iter().map(|site| site.iter().map(|&position| selector(query, position)).collect())
+        .collect::<Result<Vec<Vec<_>>>>()?;
+    Ok(Some(RulePlan {
+        rule: label, delta: variant.delta.map(|position| selector(query, position)).transpose()?,
+        order, smallest, known: replacement.map_or(variant.known, |(_, known)| known),
+    }))
+}
+
+/// The directives of every variant, after the report's checks: `replace`
+/// names the valuation a variant's hole adopts, if any.
+fn plans_with<'a>(
+    input: &PlannerInput, report: &'a AdviceReport,
+    replace: impl Fn(&round::Program, &'a HoleAdvice) -> Result<Option<(&'a Candidate, Option<Known>)>>,
+) -> Result<Vec<RulePlan>> {
     check_report(input, report)?;
     let CheckedIr::Datalog { round: recorded } = &input.checked_ir else { return Err(error("Datalog advice needs a recorded Round")); };
     let program: round::Program = syn::parse_str(recorded)?;
     check_constraints(&program, report)?;
-    let source = &program.storage.incremental.strata.source;
     let choices = report.holes.iter().filter_map(|hole| match hole.origin {
         Origin::Rule { variant, .. } => Some((variant, hole)), _ => None,
     }).collect::<BTreeMap<_, _>>();
     let mut plans = Vec::new();
-    for (index, variant) in program.storage.incremental.variants.iter().enumerate() {
+    for index in 0..program.storage.incremental.variants.len() {
         let choice = choices.get(&index).ok_or_else(|| error("advice report lost an Incremental variant"))?;
-        let changed = choice.decision == Decision::Changed;
-        if !changed && !variant.authored && variant.known.is_none() { continue; }
-        let label = source.labels[variant.rule].clone().ok_or_else(|| error("cost-changing advice requires a source rule label"))?;
-        if source.invariants.iter().any(|entry| entry.rule == variant.rule) {
-            return Err(error("authored advice cannot replace an invariant-hoisted rule"));
-        }
-        let query = &source.rules[variant.rule];
-        let mut order = Vec::new();
-        if changed {
-            if !variant.steps.is_empty() || !variant.smallest.is_empty() {
-                return Err(error("whole-order cost advice cannot discard authored phase/intersection decisions"));
-            }
-            for &position in &choice.candidates[choice.selected].plan.order { order.push(selector(query, position)?); }
-        } else if !variant.steps.is_empty() {
-            for step in &variant.steps {
-                let mut atom = selector(query, step.occurrence)?;
-                atom.columns = step.columns.clone();
-                order.push(atom);
-            }
-        } else if variant.authored {
-            let allowed = prefix(query);
-            for &position in &variant.order {
-                if allowed.contains(&position) { order.push(selector(query, position)?); }
-            }
-        }
-        let smallest = variant.smallest.iter().map(|site| site.iter().map(|&position| selector(query, position)).collect())
-            .collect::<Result<Vec<Vec<_>>>>()?;
-        plans.push(RulePlan {
-            rule: label, delta: variant.delta.map(|position| selector(query, position)).transpose()?,
-            order, smallest, known: if changed {
-                Some(known(choice.admission.as_ref().ok_or_else(|| error("changed variant lacks its fixed admission constraint"))?.hint))
-            } else { variant.known },
-        });
+        plans.extend(variant_plan(&program, index, replace(&program, choice)?)?);
     }
     Ok(plans)
+}
+
+fn datalog_plans_checked(input: &PlannerInput, report: &AdviceReport) -> Result<Vec<RulePlan>> {
+    plans_with(input, report, |_, choice| {
+        if choice.decision != Decision::Changed { return Ok(None); }
+        let admission = choice.admission.as_ref().ok_or_else(|| error("changed variant lacks its fixed admission constraint"))?;
+        Ok(Some((&choice.candidates[choice.selected].plan, Some(known(admission.hint)))))
+    })
+}
+
+/// The directives that adopt the `chosen` valuations (by hole) in place of
+/// the report's choices: each with its variant's fixed admission constraint,
+/// every other variant keeping its own directives. For valuations planned
+/// outside the report (a variable order, a hand order).
+pub fn datalog_plans_for<'a>(input: &PlannerInput, report: &'a AdviceReport, chosen: &BTreeMap<usize, &'a Candidate>) -> Result<Vec<RulePlan>> {
+    input.check()?;
+    plans_with(input, report, |program, choice| match chosen.get(&choice.hole) {
+        Some(plan) => Ok(Some((*plan, Some(known(expected_admission(program, choice)?.hint))))),
+        None => Ok(None),
+    })
+}
+
+/// Whether production provisions the reads of a sub-atom valuation when it
+/// replaces the directives of `hole`'s variant: the advice must pass the
+/// production checkers and Storage must hold every index the valuation
+/// demands. `Err` names the gap; nothing is adopted on the tool's word alone.
+/// A CQ hole has no Storage and is realized by its adopting target.
+pub(crate) fn provisioned(input: &PlannerInput, hole: &export::Hole, plan: &Candidate) -> Result<std::result::Result<(), String>> {
+    let (CheckedIr::Datalog { round: recorded }, Origin::Rule { variant: target, .. }) = (&input.checked_ir, &hole.origin) else {
+        return Ok(Ok(()));
+    };
+    let program: round::Program = syn::parse_str(recorded)?;
+    let mut plans = Vec::new();
+    for index in 0..program.storage.incremental.variants.len() {
+        let replacement = (index == *target).then(|| (plan, program.storage.incremental.variants[index].known));
+        match variant_plan(&program, index, replacement) {
+            Ok(directive) => plans.extend(directive),
+            Err(gap) if index == *target => return Ok(Err(gap.0)),
+            Err(other) => return Err(other),
+        }
+    }
+    let planned = match compile_datalog_advice_checked(input, &plans) {
+        Ok(planned) => planned,
+        Err(rejection) => return Ok(Err(format!("production rejects its reads: {}", rejection.0))),
+    };
+    let actual = demanded(&planned);
+    Ok(match plan.demands.iter().find(|demand| !actual.contains(*demand)) {
+        Some(demand) => Err(format!("Storage provisions no index on {} {:?} {:?} for step advice", demand.logical_relation, demand.version, demand.key)),
+        None => Ok(()),
+    })
 }
 
 /// Compile advice before Storage, using the recorded logical driver and shared
@@ -251,6 +336,9 @@ fn check_compiled(report: &AdviceReport, planned: &round::Program) -> Result<()>
                 return Err(error("compiled admission owner differs from the costed hole's fixed constraint"));
             }
         }
+        // Only advice is checked: an unchanged hole keeps what production
+        // already compiled, whatever the tool predicted for its demands.
+        if hole.decision != Decision::Changed { continue; }
         for demand in &hole.candidates[hole.selected].plan.demands {
             if !actual.contains(demand) {
                 return Err(error(format!("hole {} {:?}: advised Storage does not realize recorded candidate demand {demand:?}", hole.hole, hole.origin)));
@@ -273,7 +361,26 @@ pub fn check_datalog_advice(input: &PlannerInput, report: &AdviceReport, plans: 
     Ok(planned)
 }
 
-pub(crate) fn validate_and_render(input: &PlannerInput, report: &AdviceReport) -> Result<(String, String)> {
+/// The emitted advice, parsed back through the compiler-owned RulePlan
+/// parser and compiled through the actual pre-Storage entry: `None` for a CQ,
+/// `Err` for production's rejection. One compilation both checks what
+/// Storage provisions and validates what is printed.
+pub(crate) type Compiled = (Vec<RulePlan>, round::Program);
+pub(crate) fn compile_report(input: &PlannerInput, report: &AdviceReport) -> Result<Option<std::result::Result<Compiled, String>>> {
+    let CheckedIr::Datalog { .. } = &input.checked_ir else { return Ok(None); };
+    let plans = datalog_plans_checked(input, report)?;
+    let reparsed: AdviceList = syn::parse2(AdviceList(plans).to_token_stream())?;
+    Ok(Some(match compile_datalog_advice_checked(input, &reparsed.0) {
+        Ok(planned) => Ok((reparsed.0, planned)),
+        Err(rejection) => Err(format!("production rejects its reads: {}", rejection.0)),
+    }))
+}
+
+/// The indexes a compiled program's Storage provisions.
+pub(crate) fn provisions(planned: &round::Program) -> BTreeSet<IndexDemand> { demanded(planned) }
+
+/// The advice text of a report, with the compilation of its Datalog advice.
+pub(crate) fn render(input: &PlannerInput, report: &AdviceReport, compiled: Option<&Compiled>) -> Result<(String, String)> {
     check_report(input, report)?;
     let mut text = format!("// static advice; dataset {}\n// input {}; evidence {}; target {}\n", report.dataset_hash, report.input_hash, report.evidence_hash, report.target);
     for fact in [&report.target_constants.build_per_row_h, &report.target_constants.merge_per_row_m] {
@@ -295,29 +402,25 @@ pub(crate) fn validate_and_render(input: &PlannerInput, report: &AdviceReport) -
             let choice = report.holes.first().ok_or_else(|| error("CQ report lacks its hole"))?;
             if choice.decision == Decision::Changed {
                 let source: round::cq::Program = syn::parse_str(&input.source)?;
-                let selectors = choice.candidates[choice.selected].plan.order.iter().map(|&position| selector(&source.query, position)).collect::<Result<Vec<_>>>()?;
+                let selectors = selectors(&source.query, &choice.candidates[choice.selected].plan)?;
+                let selected = selectors.iter().map(|atom| {
+                    let relation = &atom.relation;
+                    let position = syn::Index::from(atom.occurrence.expect("positional selector"));
+                    let columns = atom.columns.as_ref().map(|columns| quote!((#(#columns),*)));
+                    quote!(#relation @ #position #columns)
+                }).collect::<Vec<_>>();
                 let options = cq_planning::PlanOptions { order: Some(selectors), ..Default::default() };
                 let (normal, planned) = cq_planning::prefix_valuation(&source, &options)?;
                 cq_lang_vo::contract::check(&normal, &planned)?;
-                let selected = choice.candidates[choice.selected].plan.order.iter().map(|&position| {
-                    let round::cq::BodyItem::Positive { atom } = &source.query.body[position] else { unreachable!("checked selector") };
-                    let relation = &atom.relation; let position = syn::Index::from(position);
-                    quote!(#relation @ #position)
-                });
                 text.push_str(&quote!(plan(order(#(#selected),*));).to_string()); text.push('\n');
             }
             Ok((text, "shared production CQ planning and VO-Order; target realization required on adoption".into()))
         }
         CheckedIr::Datalog { .. } => {
-            let plans = datalog_plans_checked(input, report)?;
-            // Parse exactly the syntax the tool emits through the compiler-owned
-            // RulePlan parser, then exercise the actual pre-Storage entry.
-            let syntax = AdviceList(plans).to_token_stream();
-            let reparsed: AdviceList = syn::parse2(syntax.clone())?;
-            let planned = compile_datalog_advice_checked(input, &reparsed.0)?;
-            check_compiled(report, &planned)?;
+            let (plans, planned) = compiled.ok_or_else(|| error("Datalog advice is rendered from its compilation"))?;
+            check_compiled(report, planned)?;
             text.push_str("// Complete replacement for existing authored directives; never append duplicate rule/variant advice.\n");
-            for plan in reparsed.0 { text.push_str(&quote!(plan(#plan);).to_string()); text.push('\n'); }
+            for plan in plans { text.push_str(&quote!(plan(#plan);).to_string()); text.push('\n'); }
             Ok((text, "production Source/Incremental/Storage/Fork/CQ/VO-Order with recorded driver; target-specific realization required on adoption".into()))
         }
     }

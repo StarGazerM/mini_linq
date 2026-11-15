@@ -379,7 +379,7 @@ pub(super) fn build(input: &PlannerInput, baseline: &ev::DatasetEvidence, plans:
     let mut catalogs = BTreeMap::new();
     for &hole in traces.keys() {
         let old = current(before, hole)?;
-        let measured = CandidateRecord { plan: old.plan.clone(), cost: measured_model.cost(&plans.holes[hole], &old.plan, &BTreeSet::new())? };
+        let measured = CandidateRecord { plan: old.plan.clone(), cost: measured_model.cost(&plans.holes[hole], &old.plan, &BTreeSet::new())?, estimate: None };
         catalogs.insert(hole, (Catalog::new(&input.holes[hole], old, baseline)?, Catalog::new(&plans.holes[hole], &measured, evidence)?));
     }
     let old_ids = supplied_ids(baseline); let new_ids = supplied_ids(evidence);
