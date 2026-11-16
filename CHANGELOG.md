@@ -13,6 +13,94 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- A counted operator stream of a calibration session no longer reads
+  the clock (`cq_storage::counters::operators::OperatorStream`): a lookup
+  makes one stream per binding, each read the clock twice, and
+  calibration reads row counts only. 30% of an observed bloat run's
+  samples were in the clock; the run takes 21 s (28 s before, 12 s
+  plain) and a calibrated run 101 s (108 s). Outside a session the
+  `counters` feature times its streams as before. `Planned::read` is new:
+  the statistics a planned or lowered order read. The DOOP oracle's
+  `what_the_plans_need_of_degree_facts_on_doop` reports, of the facts
+  requested, those read and those valuing the chosen orders, and what
+  each kind is worth (PLANNING-REDESIGN, "What the plans need", "Why a
+  calibrated run is slow").
+
+- A run keeps its degree statistics in the runtime as it admits rows
+  (PLANNING-REDESIGN, PS-Admit, PS-Budget, PS-Device), no longer in a
+  copy of every row sorted afterwards. `cq_storage::statistics` is new:
+  `Sketch<M>` (HyperLogLog, Ertl's estimator) and `Degrees`, which takes
+  requests by relation position and every admitted row with its round
+  and keeps a sketch per distinct count and, for matched degrees, a sample
+  of keys chosen by hash, each with the round its values were admitted
+  (tables shared between requests, halved past a capacity, binder rows
+  counted in strides). `cq_load::stats::admitted_degrees` hands it the
+  evidence requests; the calibration capture forwards the hook's rows to
+  it. `DegreeCollector` stays as the exact reference of tests and of the
+  DOOP oracle, whose cost measurement now reports both, the error of each
+  admitted fact and what it costs the plans. Bloat, 699 requests, 33.4M
+  rows, one thread: 3.6 s admitted against 21.0 s exact (DuckDB's
+  `ANALYZE` of the same relations: 1.46 s, single columns only); the
+  admitted facts are off by 1% (distinct) to 63% (reached degrees) in the
+  mean and the plans cost the same by the exact facts. A calibrated bloat
+  run takes 108 s in all (202 s before this and the analysis changes
+  below) and its directives differ from the exact-fact run's in one of
+  115 holes. The facts from end-of-run scans of the relations were tried
+  and rejected: a structure keeps no round and staged degrees were off by
+  a factor of 18. Not built: the device counterpart; admission on several
+  threads.
+- `cq-cost` analysis over a recorded program: the evidence document a
+  program repeats in every hole is checked once per thread
+  (`DeclaredEvidence::check`), parsed from the raw literal token (a
+  `LitStr` unescapes its text when built) and its canonical JSON kept in
+  export. `cq-cost advise` over the calibrated bloat plans (2.7 GB, one
+  4.2 MB document 347 times): 37 s against 115 s, same directives.
+
+- `cq-cost advise` selects the planned variable order of every hole whose
+  degree facts the evidence holds (PLANNING-REDESIGN, PS-Decide): no
+  estimate ratio screens it, the hole's `basis` is the new `measured`, its
+  reason states the order and its VP-Cost beside the recorded order's
+  (`Planner::recorded`), and a hole production rejects or leaves without
+  an index keeps its recorded order. A calibrated run's advice therefore
+  comes from the facts it collected. `cq_syntax::declared_evidence` keeps
+  the last evidence literal parsed and the last document printed per
+  thread, so a document a program repeats in every hole is parsed and
+  escaped once and shared; `cq-cost` parses the recorded program once per
+  analysis and finds the holes production rejects alone on threads
+  (`advice::each_alone`, also behind `Planner::adopt`). `doop_order.rs`
+  writes the inputs of a calibrated engine run
+  (`the_calibration_inputs_of_doop`) and the oracle's degree facts
+  (`DOOP_DEGREES_OUT`). Bloat, CPU engine: the calibrated run collects the
+  oracle's 699 facts exactly and takes 202 s in all (its second analysis
+  had not finished in 30 minutes before the two changes); its advice
+  changes 45 of 115 holes, compiles into the engine and returns the same
+  counts, 8% slower than the written text (12.83 s against 11.86 s; 111
+  indexes against 97). The planner's cost has no index term.
+
+- The variable-order planner's statistics are evidence (PLANNING-REDESIGN,
+  "Planner statistics path"). `cq-evidence` gains `DegreeRequest`
+  (`distinct`, `joined`, `visible`; relations by program name, columns by
+  declared position) and `DatasetEvidence::degrees`, exact rationals
+  checked against their request. `cq_load::stats::DegreeCollector` computes
+  a request list from rows delivered with their round (sorted projections
+  shared by prefix, dropped after their last use, several threads);
+  `bind_degrees` turns the values into facts.
+  `cq_storage::counters::calibration::Observer::delta` receives the rows a
+  round admits to each stratum member (and the unconsumed tail), emitted by
+  the Datalog printer under `calibration_select!`; a calibrated run
+  (`cq_cost::calibration`) feeds the collector with admitted input rows and
+  delta rows and writes the facts into its measured evidence.
+  `cost::variables::Planner::new(input, evidence)` replaces the `Degrees`
+  trait: `requests()` lists the facts planning the program asks for,
+  `plan`/`lower` read facts only, `advise()`/`adopt()` return directives
+  production accepts with the rejected variants; `cq-cost orders --plans
+  --evidence [--advice] [--requests]` is the command.
+  `advice::datalog_plans_for` is gone. The DOOP oracle and
+  `optimal_order.rs` build evidence through the collector (their own
+  degree implementations are deleted); bloat's advice is byte-identical to
+  the earlier one. Collection on bloat (699 requests, 33.4M rows): 4.4 s on
+  24 threads, 21 s on one, 4.3 GB. Not run: a calibrated DOOP engine.
+
 - `cq_cost::cost::variables` plans a rule hole as a variable order
   (PLANNING-REDESIGN, "Variable-order planning"): `plan(input, hole,
   degrees)` reads the changing occurrence in full first, costs an order by

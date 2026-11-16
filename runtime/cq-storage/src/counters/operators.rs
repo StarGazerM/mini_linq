@@ -278,6 +278,7 @@ impl OperatorProgram {
             source: Some(source),
             state: self.0[index].clone(),
             started: None,
+            polled: false,
             count: 0,
         }
     }
@@ -533,14 +534,34 @@ pub struct OperatorStream<I> {
     source: Option<I>,
     state: Arc<State>,
     started: Option<Instant>,
+    polled: bool,
     count: u64,
 }
 impl<I> OperatorStream<I> {
+    /// A calibration session reads row counts only, and a stream is made
+    /// per binding: a clock pair on each was a third of an observed run.
+    #[inline]
+    fn timed(&self) -> bool {
+        crate::calibration_select! {
+            plain { true }
+            calibration { self.state.calibration.is_none() }
+        }
+    }
+    #[inline]
+    fn poll(&mut self) {
+        if !self.polled {
+            self.polled = true;
+            if self.timed() {
+                self.started = Some(Instant::now());
+            }
+        }
+    }
     fn finish(&mut self) {
-        let elapsed = self.started.take().map(|started| started.elapsed());
-        if elapsed.is_none() && self.count == 0 {
+        if !self.polled {
             return;
         }
+        self.polled = false;
+        let elapsed = self.started.take().map(|started| started.elapsed());
         self.state.update(|metrics| {
             crate::calibration_select! {
                 plain {}
@@ -559,9 +580,7 @@ impl<I: Iterator> Iterator for OperatorStream<I> {
     type Item = I::Item;
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.started.is_none() {
-            self.started = Some(Instant::now());
-        }
+        self.poll();
         let row = self.source.as_mut().expect("live iterator").next();
         if row.is_some() {
             #[cfg(feature = "counters")]
@@ -577,7 +596,7 @@ impl<I: Iterator> Iterator for OperatorStream<I> {
     where
         F: FnMut(B, Self::Item) -> B,
     {
-        self.started.get_or_insert_with(Instant::now);
+        self.poll();
         let source = self.source.take().expect("live iterator");
         source.fold(init, |acc, row| {
             #[cfg(feature = "counters")]

@@ -26,6 +26,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{Batch, Date, Decimal, Error, Result};
 
+mod degrees;
+pub use degrees::{DegreeCollector, RelationId, admitted_degrees, bind_degrees};
+
 #[cfg(feature = "planner-calibration")]
 mod canonical;
 #[cfg(feature = "planner-calibration")]

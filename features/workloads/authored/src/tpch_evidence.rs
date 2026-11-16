@@ -185,7 +185,7 @@ fn load_document(
             formulation: mappings.formulation, manifest: identity,
         },
         relations, premises: Vec::new(), relative: Vec::new(),
-        targets: BTreeMap::new(), observations: evidence::Observations::default(), constants: BTreeMap::new(),
+        targets: BTreeMap::new(), observations: evidence::Observations::default(), constants: BTreeMap::new(), degrees: Vec::new(),
     };
     let declared = DeclaredEvidence { document: Arc::new(document), bindings };
     declared.check(declarations)?;

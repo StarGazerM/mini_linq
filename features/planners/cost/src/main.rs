@@ -14,6 +14,7 @@ fn run() -> Result<()> {
     if command == "--help" || command == "-h" {
         println!("{USAGE}\n\ncq-cost check --plans plans.json\ncq-cost advise --plans plans.json --evidence evidence.json --target cpu|cpu-par|gpu --out costs.json --advice orders.dl\n  [--partial-reads rows|distinct]                      (default rows: a sub-atom read visits one frame per row;\n                                                         distinct declares that the adopting target enumerates each key once)\n  [--phased N]                                         (default 1: the most occurrences a candidate reads in phases;\n                                                         0 searches atom orders only)\ncq-cost bound --plans plans.json --evidence evidence.json --out bounds.json\n  Structural upper bounds of every derived Datalog relation from exact input facts; a worst case, not an estimate.");
         println!("cq-cost profile --plans plans.json --evidence evidence.json --observed observed.json --out profile.json [--into profile0.json]\n  Add one example to a profile: what a completed run produced, beside the structural bounds of the same dataset.\ncq-cost advise ... --profile profile.json\n  Read derived relations the evidence does not bind through estimates: this dataset's structural bound times the\n  profile's median observed/bound ratio. Decisions that rest on an estimate are marked predicted.");
+        println!("cq-cost orders --plans plans.json --evidence facts.json [--advice orders.dl] [--requests requests.json]\n  Plan every rule as a variable order from the evidence's degree facts and print the directives production accepts;\n  --requests lists the degree facts planning this program asks for (a calibrated run collects them).");
         #[cfg(feature = "planner-calibration")]
         println!("cq-cost review --plans plans.json --evidence facts.json --costs costs.json --report calibration.report.json --out review.json [--vo-out plans-review.json]\nReassess saved observations only; no workload execution or fan-out inference.");
         return Ok(());
@@ -33,9 +34,10 @@ fn run() -> Result<()> {
     if command == "advise" { return advise(args); }
     if command == "bound" { return bound(args); }
     if command == "profile" { return profile(args); }
+    if command == "orders" { return orders(args); }
     #[cfg(feature = "planner-calibration")]
     if command == "review" { return review(args); }
-    if command != "export" { return Err(format!("expected export, check, advise, bound or profile\n{USAGE}").into()); }
+    if command != "export" { return Err(format!("expected export, check, advise, orders, bound or profile\n{USAGE}").into()); }
     let mut flags = BTreeMap::new();
     let mut vos = Vec::new();
     let mut cqs = Vec::new();
@@ -161,7 +163,42 @@ fn advise(mut args: impl Iterator<Item = String>) -> Result<()> {
     let changed = report.holes.iter().filter(|hole| hole.decision == cq_cost::cost::Decision::Changed).count();
     let unknown = report.holes.iter().filter(|hole| hole.decision == cq_cost::cost::Decision::Unknown).count();
     let predicted = report.holes.iter().filter(|hole| hole.basis == cq_cost::cost::Basis::Predicted).count();
-    println!("dataset={} holes={} changed={changed} unknown={unknown} predicted={predicted}", report.dataset_hash, report.holes.len());
+    let measured = report.holes.iter().filter(|hole| hole.basis == cq_cost::cost::Basis::Measured).count();
+    println!("dataset={} holes={} changed={changed} unknown={unknown} predicted={predicted} measured={measured}", report.dataset_hash, report.holes.len());
+    Ok(())
+}
+
+/// `cq-cost orders`: plan every rule as a variable order from the degree
+/// facts of the evidence, or list the facts planning asks for.
+fn orders(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let mut flags = BTreeMap::new();
+    while let Some(flag) = args.next() {
+        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--advice" | "--requests") {
+            return Err(format!("unknown orders option {flag}").into());
+        }
+        let value = args.next().ok_or_else(|| format!("missing value for {flag}"))?;
+        if flags.insert(flag.clone(), value).is_some() { return Err(format!("duplicate {flag}").into()); }
+    }
+    let required = |flag: &str| -> Result<&str> {
+        flags.get(flag).map(String::as_str).ok_or_else(|| format!("missing {flag}").into())
+    };
+    let input: export::PlannerInput = serde_json::from_str(&std::fs::read_to_string(required("--plans")?)?)?;
+    let evidence = cq_evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
+    let planner = cq_cost::cost::variables::Planner::new(&input, &evidence)?;
+    if let Some(path) = flags.get("--requests") {
+        let requests = planner.requests()?;
+        publish(Path::new(path), &serde_json::to_vec_pretty(&requests)?)?;
+        println!("requests={}", requests.len());
+    }
+    if let Some(path) = flags.get("--advice") {
+        use quote::ToTokens;
+        let advised = planner.advise()?;
+        let text: String = advised.plans.iter().map(|plan| cq_cost::cost::advice::AdviceList(vec![plan.clone()]).to_token_stream().to_string() + "\n").collect();
+        publish(Path::new(path), text.as_bytes())?;
+        for (hole, reason) in &advised.rejected { eprintln!("hole {hole} keeps its own order: {reason}"); }
+        println!("dataset={} adopted={} rejected={}", evidence.dataset.hash, advised.adopted.len(), advised.rejected.len());
+    }
+    if !flags.contains_key("--requests") && !flags.contains_key("--advice") { return Err("orders needs --advice or --requests".into()); }
     Ok(())
 }
 

@@ -1,7 +1,43 @@
 use super::*;
 use cq_load::stats::{CanonicalAccumulator, RelationSummary};
-use cq_storage::counters::calibration::{CalibrationRow, Observer};
+use cq_storage::counters::calibration::{CalibrationRow, DeltaRows, Observer, ScalarValue};
+use std::collections::HashMap;
 use std::sync::Mutex;
+
+/// PS-Admit: the rows the run admits, forwarded with the round that
+/// admitted them to the runtime's degree accumulator.
+pub(super) struct DegreeCapture {
+    pub requests: Vec<ev::DegreeRequest>,
+    pub degrees: cq_storage::statistics::Degrees,
+    cells: Vec<i64>,
+    /// A code per text value: degrees compare values for equality only.
+    text: HashMap<String, i64>,
+}
+impl DegreeCapture {
+    /// `relations` are the program's relations in declaration order, each with its arity.
+    pub fn new(requests: Vec<ev::DegreeRequest>, relations: &[(String, usize)]) -> Result<Self> {
+        let named: Vec<(&str, usize)> = relations.iter().map(|(name, arity)| (name.as_str(), *arity)).collect();
+        let degrees = cq_load::stats::admitted_degrees(&requests, &named).map_err(|e| invalid(e.to_string()))?;
+        Ok(Self { requests, degrees, cells: Vec::new(), text: HashMap::new() })
+    }
+    fn admit(&mut self, relation: usize, round: u32, row: &dyn CalibrationRow) -> Result<()> {
+        self.cells.clear();
+        for index in 0..row.len() {
+            self.cells.push(match row.cell(index) {
+                ScalarValue::Signed(value) | ScalarValue::Date(value) | ScalarValue::Decimal { unscaled: value, .. } => value,
+                // The bits identify the value.
+                ScalarValue::Unsigned(value) | ScalarValue::Symbol(value) => value as i64,
+                ScalarValue::Utf8(text) => match self.text.get(text) {
+                    Some(code) => *code,
+                    None => { let code = self.text.len() as i64; self.text.insert(text.to_owned(), code); code }
+                },
+                ScalarValue::Unsupported(reason) => return Err(invalid(format!("degree statistics over an unsupported column: {reason}"))),
+            });
+        }
+        self.degrees.admit(relation, round, &self.cells);
+        Ok(())
+    }
+}
 
 pub(super) struct InputCapture {
     pub dataset_relation: String,
@@ -29,6 +65,7 @@ pub(super) struct Captured {
     pub begun: bool,
     pub completed: bool,
     pub failure: Option<String>,
+    pub degrees: DegreeCapture,
 }
 pub(super) struct Recorder(pub Mutex<Captured>);
 
@@ -107,10 +144,21 @@ impl Observer for Recorder {
     }
     fn input_admitted(&self, relation: usize, row: &dyn CalibrationRow) {
         self.update(|state| {
+            if state.degrees.degrees.wants(relation) { state.degrees.admit(relation, 0, row)?; }
             let input = input(state, relation)?;
             require(input.begun, "admission precedes input traversal")?;
             let row = MappedRow { row, mapping: &input.mapping };
             input.accumulator.as_mut().ok_or_else(|| invalid("admission after completed input"))?.admitted(&row).map_err(|e| invalid(e.to_string()))
+        });
+    }
+    fn delta(&self, stratum: usize, round: usize, relation: usize, rows: DeltaRows<'_>) {
+        self.update(|state| {
+            require(state.members.get(stratum).is_some_and(|members| members.contains(&relation)), "delta rows of a relation outside its stratum")?;
+            if !state.degrees.degrees.wants(relation) { return Ok(()); }
+            let round = u32::try_from(round).map_err(|_| invalid("round index exceeds u32"))?;
+            let mut failure = None;
+            rows(&mut |row| if failure.is_none() { failure = state.degrees.admit(relation, round, row).err(); });
+            failure.map_or(Ok(()), Err)
         });
     }
     fn input_end(&self, relation: usize, canonical_rows: usize) {

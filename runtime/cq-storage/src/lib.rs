@@ -326,6 +326,7 @@ pub mod fetch;
 pub mod positional;
 pub mod selection;
 pub mod stage;
+pub mod statistics;
 pub use adaptive::{
     AdaptiveKeySet, AdaptiveMembership, AdaptiveMembershipBuilder, AttachedDenseMembership,
     AttachedDenseMembershipBuilder, DenseMembership,

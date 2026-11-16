@@ -239,6 +239,9 @@ pub enum Basis {
     /// A read of a derived relation whose facts are estimates: the decision
     /// predicts, it does not prove.
     Predicted,
+    /// PS-Decide: the degree facts of one run chose the hole's variable
+    /// order. They observe that run and bound nothing.
+    Measured,
 }
 impl Basis {
     fn is_certified(&self) -> bool { *self == Self::Certified }
@@ -430,6 +433,15 @@ fn analyze_inner(
     let estimated: BTreeSet<&str> = synthesized.iter().flat_map(|extended| extended.facts.keys())
         .filter_map(|id| id.strip_prefix(estimate::ESTIMATE)).filter_map(|rest| rest.split(':').next()).collect();
     let prepared = input.holes.iter().map(|hole| enumerate::prepare(input, hole, space)).collect::<crate::export::Result<Vec<_>>>()?;
+    // PS-Decide: the variable order of every hole whose degree facts the
+    // evidence holds, with the VP-Cost of its recorded order.
+    let planned: Vec<Option<Measured>> = if evidence.degrees.is_empty() { vec![None; input.holes.len()] } else {
+        let planner = variables::Planner::new(input, evidence)?;
+        (0..input.holes.len()).map(|hole| Ok(match planner.plan(hole)? {
+            Some(order) => Some(Measured { recorded: planner.recorded(hole)?, order }),
+            None => None,
+        })).collect::<crate::export::Result<_>>()?
+    };
     let profile = match (profile, synthesized.as_ref()) {
         (Some(profile), Some(extended)) => Some(ProfileUse {
             hash: crate::export::sha256(serde_json::to_string(profile).map_err(|e| error(e.to_string()))?),
@@ -444,30 +456,36 @@ fn analyze_inner(
     // until every advised index is provisioned. That compilation also
     // validates the printed advice.
     let mut excluded = vec![Excluded::default(); input.holes.len()];
+    let recorded = match &input.checked_ir {
+        crate::export::CheckedIr::Datalog { .. } => Some(advice::recorded(input)?),
+        _ => None,
+    };
     let (mut report, compiled) = loop {
-        let (holes, shared) = plan_holes(input, evidence, &model, &prepared, &estimated, &excluded)?;
+        let (holes, shared) = plan_holes(input, evidence, &model, &prepared, &planned, &estimated, &excluded)?;
         let mut report = AdviceReport {
             schema: REPORT_SCHEMA.into(), input_hash: input.input_hash.clone(), identity: input.identity.clone(),
             evidence_hash: evidence_hash.clone(), dataset_hash: evidence.dataset.hash.clone(), target: target.into(),
             target_constants: evidence.targets[target].clone(), space, profile: profile.clone(),
             whole_run: sum_selected(&holes)?, holes, index_union: shared, advice: String::new(), validation: String::new(),
         };
-        advice::record_admission_constraints(input, &mut report)?;
+        advice::record_admission_constraints(input, recorded.as_ref(), &mut report)?;
+        let Some(program) = &recorded else { break (report, None) };
         let changed: Vec<usize> = (0..report.holes.len()).filter(|&at| report.holes[at].decision == Decision::Changed).collect();
-        let compiled = match advice::compile_report(input, &report) {
-            Ok(Some(Ok(compiled))) => compiled,
-            Ok(None) => break (report, None),
+        let compiled = match advice::compile_report(input, program, &report) {
+            Ok(Ok(compiled)) => compiled,
             outcome => {
                 // Attribute the rejection to the holes production rejects alone.
+                let alone = advice::each_alone(input, &changed, |program, &at|
+                    advice::provisioned(program, &input.holes[at], &report.holes[at].candidates[report.holes[at].selected].plan))?;
                 let mut attributed = false;
-                for &at in &changed {
-                    if let Err(reason) = advice::provisioned(input, &input.holes[at], &report.holes[at].candidates[report.holes[at].selected].plan)? {
+                for (&at, alone) in changed.iter().zip(alone) {
+                    if let Err(reason) = alone {
                         excluded[at].rejected = Some(reason);
                         attributed = true;
                     }
                 }
                 if !attributed {
-                    return Err(match outcome { Err(failure) => failure, Ok(Some(Err(rejection))) => error(rejection), Ok(_) => unreachable!() });
+                    return Err(match outcome { Err(failure) => failure, Ok(Err(rejection)) => error(rejection), Ok(Ok(_)) => unreachable!() });
                 }
                 continue;
             }
@@ -500,6 +518,10 @@ struct Excluded { indexes: BTreeSet<IndexDemand>, partial: Option<IndexDemand>, 
 /// The indexes the planned holes demand, per stratum.
 type IndexUnion = BTreeMap<usize, BTreeSet<IndexDemand>>;
 
+/// A hole's planned variable order and the VP-Cost of its recorded order.
+#[derive(Clone)]
+struct Measured { order: variables::Planned, recorded: Option<f64> }
+
 /// Plan every hole in the greedy stratum order, each with the indexes the
 /// holes before it already demand; returns the advice and the index union.
 fn plan_holes(
@@ -507,6 +529,7 @@ fn plan_holes(
     evidence: &cq_evidence::DatasetEvidence,
     model: &bounds::BoundModel<'_>,
     prepared: &[enumerate::Prepared],
+    planned: &[Option<Measured>],
     estimated: &BTreeSet<&str>,
     excluded: &[Excluded],
 ) -> crate::export::Result<(Vec<HoleAdvice>, IndexUnion)> {
@@ -553,7 +576,7 @@ fn plan_holes(
     let mut reports = vec![None; input.holes.len()];
     for (planning_rank, (index, component, standalone)) in rank.into_iter().enumerate() {
         let hole = &input.holes[index];
-        let mut advice = plan_hole(model, hole, &prepared[index], estimated, &known, &excluded[index])?;
+        let mut advice = plan_hole(model, hole, &prepared[index], planned[index].as_ref(), estimated, &known, &excluded[index])?;
         for fact in &evidence.relative {
             advice.citations.insert(fact.id.clone());
             advice.citations.insert(fact.factor.id.clone());
@@ -570,12 +593,14 @@ fn plan_holes(
     Ok((holes, shared))
 }
 
-/// Decide one hole by estimate: the incumbent against the search's winner,
-/// the only two that are certified.
+/// Decide one hole. With the hole's degree facts, its planned variable
+/// order (PS-Decide); else by estimate, the incumbent against the search's
+/// winner, the only two that are certified.
 fn plan_hole(
     model: &bounds::BoundModel<'_>,
     hole: &crate::export::Hole,
     prepared: &enumerate::Prepared,
+    planned: Option<&Measured>,
     estimated: &BTreeSet<&str>,
     known: &BTreeSet<IndexDemand>,
     excluded: &Excluded,
@@ -589,7 +614,25 @@ fn plan_hole(
     let mut noise_screen = None;
     let mut search = Search::Exact;
     let mut reason;
-    if !incumbent.unbounded.is_empty() {
+    if let Some(Measured { order, recorded }) = planned {
+        // The estimates are recorded beside the valuations; they decide nothing.
+        let mut estimator = rank::Estimator::new(model, hole, prepared.reads(), known, &excluded.indexes)?;
+        if let Some(estimator) = &mut estimator { kept[0].1 = estimator.total(&incumbent.steps)?; }
+        reason = format!("variable order [{}] planned from measured degree facts, VP-Cost {:.4}{}", order.order.join(", "), order.estimate,
+            recorded.map_or(String::new(), |recorded| format!(" against {recorded:.4} for the recorded order")));
+        if !excluded.indexes.is_empty() || excluded.partial.is_some() {
+            decision = Decision::Retained;
+            reason = format!("{reason}; retain the recorded order");
+        } else if enumerate::same(&order.candidate, incumbent) {
+            decision = Decision::Retained;
+            reason = format!("{reason}; the recorded order reads the same");
+        } else {
+            let work = match &mut estimator { Some(estimator) => estimator.total(&order.candidate.steps)?, None => None };
+            kept.push((order.candidate.clone(), work));
+            (selected, decision) = (1, Decision::Changed);
+        }
+        if let Some(estimator) = &mut estimator { estimator.take_failure()?; }
+    } else if !incumbent.unbounded.is_empty() {
         reason = format!("the incumbent has no finite model ({}); retain recorded structural order", incumbent.unbounded.join("; "));
     } else if let Some(mut estimator) = rank::Estimator::new(model, hole, prepared.reads(), known, &excluded.indexes)? {
         kept[0].1 = estimator.total(&incumbent.steps)?;
@@ -640,7 +683,8 @@ fn plan_hole(
     Ok(HoleAdvice {
         hole: hole.id, origin: hole.origin.clone(), planning_rank: 0, standalone_estimate: None, shared_before: BTreeSet::new(),
         citations: candidates[selected].cost.citations.clone(), candidates, selected, decision, reason,
-        admission: None, noise_screen, basis: if predicted { Basis::Predicted } else { Basis::Certified }, search,
+        admission: None, noise_screen, search,
+        basis: if planned.is_some() { Basis::Measured } else if predicted { Basis::Predicted } else { Basis::Certified },
     })
 }
 

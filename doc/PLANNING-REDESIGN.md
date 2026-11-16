@@ -679,7 +679,8 @@ in `/data/design-notes/datalog-variable-order-ce-design-2026-11-11.md` §11).
   the fixpoint; a step more per round costs as much as 15M frames.
 
 **Variable-order planning (decided 2026-11-13; `cq_cost::cost::variables`,
-checked in the DOOP oracle, not yet the tool's candidate generator).**
+`cq-cost orders`; `cq-cost advise` selects it where the evidence holds a
+hole's degree facts, PS-Decide; checked in the DOOP oracle).**
 The planning object of a rule variant is a *variable order*, as in
 worst-case optimal joins; an order of atoms is not a model of this work and
 the incumbent-and-guard planner sketched from the investigation is dropped.
@@ -720,8 +721,8 @@ permutation of a body plans to the same order and the same reads.
   - none: the distinct values of the variable.
   A relation of the variant's own component, met through a binder the
   changing occurrence does not reach, is scaled by the share of its rows a
-  round sees. Inputs get these from `cq-load`, derived relations from a
-  profile run that keeps each row's round (not built).
+  round sees. Every one of these is a degree fact of the evidence,
+  collected from rows (Planner statistics path, below).
 - **VP-Cost.** An order costs the sum over its variables of the bindings of
   that variable and all before it, each the previous times VP-Bind's
   values: the cost model of Tributary Join (Chu, Balazinska, Suciu,
@@ -797,9 +798,9 @@ spread, up to 5% here), equals the original text's on all three datasets,
 and on eclipse and xalan it comes from another dataset's statistics. The
 compiler's delta-first order over a permuted text is 1.06 to 4.7 times
 slower for one shuffle and does not finish in 9 to 45 times the planned
-time for the two others. Open: no GPU run; production has none of the
-statistics (these came from the oracle's exact tables of bloat's run);
-three datasets, one program.
+time for the two others. Open: no GPU run; the statistics of these runs
+came from the oracle's tables of bloat's run through the collector, not
+from a calibrated engine run; three datasets, one program.
 
 Builds rejected on the way, same measure (each also differed in lowering):
 
@@ -818,6 +819,324 @@ Builds rejected on the way, same measure (each also differed in lowering):
   the three virtual-dispatch variants of the reachable delta 19 times
   their written frames (3.3e6 each): the call sites a delta reaches call
   the popular methods, 47 values of the receiver's `this` per site.
+
+**Planner statistics path (decided 2026-11-16).** The variable-order
+planner's statistics were computed in two test files and reached it through
+a trait. They move onto the one path every other fact takes: rows are
+delivered, accumulated, recorded as evidence, and read by the planner.
+
+- **PS-Request.** A statistic is named by a `DegreeRequest`
+  (`cq-evidence`): relations by program name, columns by declared position,
+  constant columns by value. `distinct` counts the distinct values of a
+  column list over a selection of rows. `joined` is VP-Degree's matched
+  degree: per row of a binder selection, or per pair of a changing row and
+  the binder row it reaches, the distinct values of one column among the
+  read's rows that agree with the binder row on the bound columns, as a sum
+  and a count; `staged` counts only values no younger than the changing
+  row. `visible` is the share of a relation's rows a changing row sees.
+- **PS-Derive.** Only the planner knows which statistics a program can ask
+  for. `cost::variables::Planner::requests` lists them from the rule bodies: per
+  occurrence and variable, every key another single occurrence can bind.
+  The planner builds a lookup and a request from the same function, so it
+  never asks for a statistic the list lacks.
+- **PS-Fact.** A statistic is a `DegreeEvidence` in `DatasetEvidence`: its
+  request and an exact rational. `cq-evidence` declares and checks it and
+  computes nothing.
+- **PS-Collect.** The exact reference (`cq_load::stats::DegreeCollector`):
+  it is given the requests and then a copy of every row with its round,
+  and returns the exact rationals. It knows no rule and no plan. It keeps
+  only the columns a request names and sorts each projection once:
+  requests share it, a projection that starts a wider one is read off that
+  one, a distinct count reads any table that starts with its columns, and
+  a table is dropped after its last use. Requests are computed on several
+  threads. Tests and oracles use it; a run does not (PS-Admit).
+- **PS-Rows.** A calibrated host run passes input rows at admission and
+  the rows a round admits to each derived relation, one call per relation
+  and round, through `cq_storage::counters::calibration::Observer`; the
+  hook carries rows and computes nothing. `cq-cost`'s calibration capture
+  hands them to the runtime's accumulator (PS-Admit) and writes the facts
+  with the run's provenance.
+- **PS-Device.** No relation data leaves the GPU. The row hook is the CPU
+  engines' only: a GPU run that produces degree facts keeps PS-Admit's
+  sketches and sampled keys on the device as it merges each delta, and
+  hands the host two integers per request. Not built: until then a GPU
+  target is planned from the facts of a CPU run of the same program and
+  dataset (calibration refuses a GPU target; no GPU code calls the hook).
+- **PS-Read.** `cost::variables` reads `DatasetEvidence` only. A missing
+  fact leaves its hole unplanned. Tests build evidence through the
+  collector; no test implements a statistic.
+- **PS-Advise.** `Planner::advise` plans every rule hole and returns the
+  directives production accepts with the variants it rejects;
+  `cq-cost orders --plans P --evidence E [--advice OUT] [--requests OUT]`
+  is its command.
+- **PS-Decide.** Where the evidence holds the degree facts of a hole,
+  `cq-cost advise` selects its planned variable order. No estimate ratio
+  screens it: a screen would keep the recorded order when the two are
+  close, and the advice would then depend on the text. The decision's
+  basis is `measured` (the facts observe one run; they bound nothing), and
+  the report states the order and its VP-Cost beside the recorded
+  order's. Where production rejects the order, or does not provision an
+  index it reads, the hole keeps its recorded order. A hole without the
+  facts is decided as before.
+
+Built 2026-11-16. A calibrated run of the reachability fixture writes the
+facts and the planner plans from them (`calibration_workflow.rs`). The
+DOOP oracle builds its evidence through the collector; bloat's planned
+advice is byte-identical to that of 2026-11-13 (110 of 112 variants), and
+planning the 112 variants from the evidence takes 6 s. Collection on
+bloat, 699 requests over 33.4M rows, 12 cores and 24 threads:
+
+| collector | 1 thread | 24 threads | peak memory added |
+|---|---|---|---|
+| merge sort over a flat buffer, a table per column list | 62.7 s | 12.6 s | 7.1 GB |
+| standard unstable sort over array records | 31.8 s | 6.2 s | 6.3 GB |
+| shared prefixes, records built as arrays | 21.0 s | 4.4 s | 4.3 GB |
+
+The 699 requests need 243 sorted projections (467 before prefixes were
+shared), 94 narrowed ones and 152 sequences; five derived relations of
+2.5M to 11.2M rows took 97% of the projection time before the sharing.
+The table builds take 2.2 times longer in sum on 24 threads than on one,
+and in the last row 43% of the thread time waits for a table another
+thread is building; setting such requests aside instead gave 4.1 s with
+1.3 GB more, and was not kept. Exact input evidence
+(`DatasetRequest::collect`, 37 relations, 3.1M rows) takes 1.3 s on one
+thread: it hashes every cell for the content identity and copies each
+distinct row and key into a hash set.
+
+Calibrated DOOP run, 2026-11-16: bloat, `srd-doop-mini` with
+`planner-calibration` and the default program, one thread, inputs written
+by `doop_order.rs` (`the_calibration_inputs_of_doop`) over a copy of the
+dataset in the engine's bound order (the engine sorts an input its set
+manifest does not certify; the input identity hashes rows as bound). The
+run collects the 699 degree facts and each equals the oracle's. The
+calibration takes 202 s and 28.8 GB at its peak: first analysis 6 s, the
+run with its observers 33 s (the same engine without them 11.9 s),
+measured evidence with the degree facts 4 s, rebinding the plans 20 s,
+the report 9 s, second analysis 109 s, finishing and writing 21 s (the
+plans file is 2.7 GB). Before two changes the second analysis had not
+finished after 30 minutes. A program repeats its evidence document in its
+source and in every hole, and every occurrence was unescaped, parsed,
+checked, serialized and escaped again; `cq_syntax::declared_evidence`
+now keeps the last literal parsed and the last document printed per
+thread, and the occurrences share one allocation. And when production
+rejects the advice as a whole, each changed hole was compiled alone in
+sequence, parsing the recorded program twice per hole; `cq-cost` now
+parses it once per analysis and checks the holes on threads, one parse
+per thread (the peak memory is theirs).
+
+The second analysis decides 112 of the 115 holes from the facts
+(PS-Decide): 45 change, 65 keep an order that reads the same, 2 are
+rejected by production (`EligibleStringArrayHeap_rule`,
+`EligibleObjectArrayHeap_rule`: "advice selector `__cq_datalog_layout_N@2`
+does not name that top-level positive atom"; the first has VP-Cost 13.6
+against 125,664 recorded). `cq-cost advise` over the written
+`calibration.plans.json` and `calibration.facts.json` gives the same
+directives (106 s then; 37 s now, below). The CPU engine compiled with them returns the same
+counts and takes 12.83 s against 11.86 s for the written text, medians of
+six alternating runs: 8% slower. The advised program demands 111 indexes
+against 97 (33 new, 19 dropped), and by the atom-order estimator the
+frames of the changed holes fall from 7.05e8 to 4.89e8. VP-Cost counts
+bindings and no index, so the likely cause is the indexes the orders
+add; this is not isolated. The written text is SRDatalog's order under
+the written-order driver; under `driver(delta_first)` written and planned
+ran alike (above).
+Open: an index term in the planner's cost (the rows of every index an
+order adds that no decided hole provides); the two rejected selectors;
+the observers' 21 s is not split between the earlier ones and the delta
+hook; the loader computes no degree fact from inputs alone; no GPU run.
+
+Why the analysis is slow (measured 2026-11-16 on `cq-cost advise` over
+the calibrated bloat artifacts). The plans file is 2.7 GB for one 4.2 MB
+evidence document: the document is embedded 347 times as an escaped
+literal (the source, the recorded Round's 116 CQs, two CQ texts per
+hole) and twice more per hole as JSON. Every stage pays per copy. At
+115 s: 33% of the CPU time re-checked the document (`check_program`
+checks its attachment, once per hole per compilation), 13% unescaped
+the literal (`LitStr` unescapes when built), 17% copied and allocated,
+and the 45 changed holes were each compiled alone because production
+rejects the advice as a whole. With the document checked once per
+thread, parsed from the raw token, and its canonical JSON kept in
+export: 37 s, 138 s of CPU against 1,060 s, same directives. What is
+left is the file itself: 6 s to parse it, 8 s for `PlannerInput::check`
+to rebuild and compare the whole record, 6 s to write, and 27 GB at the
+peak (a parsed copy per thread). Open: one document per record,
+referenced by hash from the holes (a plans schema change).
+
+**The collector reads raw rows; that is to be replaced (decided
+2026-11-16).** `DegreeCollector` is given a copy of every row of every
+requested relation and sorts 243 projections of them after the run: 21 s
+of CPU and 4.3 GB on bloat, beside an engine that already holds each
+relation indexed by the keys its plans probe. Two rules from the user:
+statistics are derived from the structure that holds the data, each kind
+of structure in its own way (PS-Structure, below), and no relation data
+leaves the GPU (PS-Device).
+
+DuckDB, read for how it collects (`/data/codex/duckdb-src`, commit
+c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
+- Statistics are kept where the data enters its storage, as it enters:
+  `RowGroupCollection::Append` updates every column's distinct statistics
+  on the chunk it appends (`row_group_collection.cpp:731-734`), and the
+  append function of a column segment updates its minimum and maximum per
+  value (`fixed_size_uncompressed.cpp:212-240`). There is no pass over
+  stored data and no copy.
+- A distinct count is a sketch of a sample. `DistinctStatistics::UpdateSample`
+  takes 30% of a full vector of an integral type and 10% of another, at
+  positions drawn once (`distinct_statistics.cpp:21-30,109-136`,
+  `distinct_statistics.hpp:52-54`), hashes each sampled value and updates
+  one of 64 one-byte registers (`HyperLogLogP<6>`, `hyperloglog.hpp:42-58,155`;
+  error rate sqrt(pi/2)/8, about 16%). The count is extrapolated from the
+  sample by a Good-Turing estimate, capped by the rows
+  (`distinct_statistics.cpp:154-169`). Sketches merge
+  (`ColumnStatistics::Merge`), so threads keep their own.
+- Every source answers in its own way: the join orderer asks the scan's
+  table function for a column's statistics
+  (`relation_statistics_scan.cpp:113-123`), and takes the sketch's count,
+  else the span of minimum and maximum, else the cardinality (`:101-111`).
+- Only single columns of stored tables have statistics. Nothing is
+  collected from an intermediate or a recursive relation: a recursive
+  reference gets the anchor's statistics and a constant 1000 iterations
+  (reference note, section 4). Join sizes come from a formula over the
+  distinct counts, not from data.
+
+- **PS-Admit.** The runtime keeps the statistics of the relations it
+  stores, as it admits their rows and from the rows being admitted, where
+  DuckDB keeps its own: `cq_storage::statistics::Degrees`. It is given
+  the requests in the runtime's terms (relations by position) and then
+  every admitted row with its round, a relation's rows in round order. It
+  keeps sketches and samples, never a relation:
+  - `distinct`: the rows for a whole row; else a sketch of the column set
+    (HyperLogLog, 1,024 registers, about 3%);
+  - `joined`: over a sample of *keys* chosen by hash before any row is
+    seen. A binder row and a read row of one key fall in the sample
+    together, so a sampled key has its true degree, with the round each
+    of its values was first admitted (exactly up to 24 values, then a
+    256-register sketch that records the round of every register change).
+    The binder side keeps its rows per sampled key and round; a reach
+    keeps the changing rows per reach key and round, and the binder rows
+    per pair of a reach key and a read key, both sampled. A table of more
+    than 8,192 keys halves its share of the keys, and so does a read
+    table after every 2^20 rows it takes in while it holds more than
+    1,024 keys; a binder table past 2^16 counted rows counts every second
+    row for two, then every fourth for four. The fact is the ratio of the
+    two sums over the keys every side still holds. Requests that read the
+    same rows by the same key share a table;
+  - `visible`: exact, from the rows each relation gained by round.
+  The boundaries: the planner derives the requests and reads facts
+  (`cq-cost`); `cq-evidence` is their schema; `cq_load::stats` turns
+  evidence requests into the runtime's (`admitted_degrees`) and values
+  into facts (`bind_degrees`); the runtime owns what is kept per admitted
+  row, so that a GPU runtime can keep the same on the device (PS-Device).
+  An admitted fact is an observation of the run and says how it was made.
+  The exact collector (PS-Collect) stays as the reference of tests and
+  oracles; a run no longer uses it.
+
+  Rejected on the way: the same facts from the relations as the engine
+  holds them when the run completes (three scans of a relation: a sample
+  of binder rows, the rows a reach matches, the values of the sampled
+  keys). A structure keeps no round, so a staged degree was the unstaged
+  one times the `visible` share; on bloat the reached staged facts were
+  off by a factor of 18 in the mean, 13 of 20 by more than two (a delta's
+  keys have no rows yet in the relation it reads: 0.0 exact, 236
+  estimated). Staging needs the round of every value of a sampled key,
+  which only admission sees.
+- **PS-Budget (the user's, 2026-11-16).** On a CPU, collecting the
+  statistics of a run takes time of the grade DuckDB takes for its own on
+  the same relations; on a GPU, a magnitude less. Measured with DuckDB
+  1.5.6 in memory on bloat's 79 relations (39 input files and the 40
+  exported derived relations), 166 integer columns, 34.0M rows, 105.9M
+  values (`duckdb_stats.py`, archived with the calibration artifacts;
+  the first three rows the least of three runs, the others one run):
+
+  | DuckDB, bloat | 1 thread | 24 threads |
+  |---|---|---|
+  | scan every value (`max` of every column) | 0.09 s | 0.04 s |
+  | `ANALYZE`: every value hashed into the column's sketch | 1.46 s | 0.27 s |
+  | copy every table: append, with the sampled sketch and min/max | 0.71 s | 0.17 s |
+  | exact `count(DISTINCT)` of every column | 0.66 s | 0.67 s |
+  | exact distinct rows of every table | 2.96 s | 0.50 s |
+  | ours, exact: `DegreeCollector::finish`, 699 facts over 33.4M copied rows | 21.0 s | 4.4 s |
+  | ours, admitted: `Degrees::admit` of the 33.4M rows and `finish` | 3.6 s | (one thread) |
+
+  Its sketch counts differ from the exact ones by 3% to 26% on the four
+  largest relations (`CastTo` column 0: 8,821 for 6,992). The exact
+  collector is 14 and 16 times `ANALYZE`, and about 30 and 26 times a
+  whole DuckDB append with its statistics, before the copy through the
+  hook. The budget on bloat is therefore about 1.5 s of one thread, or
+  0.3 s on 24, and about 30 ms on a GPU.
+
+  Admitted (PS-Admit), same rows, one thread: 3.6 s and no copy, 2.4
+  times `ANALYZE`. Alone, the distinct sketches take 1.1 s (they are of
+  column sets, 9 to 17 a row on the 4-column relations, where DuckDB
+  keeps one per column), the direct degrees 2.0 s and the reached ones
+  1.3 s; admitting the rows to no request takes 0.15 to 0.36 s. Against
+  the exact facts: distinct counts within 1.2% in
+  the mean; direct degrees 16% (33 of 208 off by a quarter), staged ones
+  43%, reached ones 63% and 53% (a sample of keys is a cluster sample: a
+  heavy key is in or out). The plans do not notice: of 112 holes 10
+  orders differ, each a tie, and the admitted orders cost exactly what
+  the exact orders cost by the exact facts. Halving the capacities
+  (4,096 keys, a read table halved every 2^18 rows) takes 2.7 s and
+  costs the plans 2e-6 of their summed cost; counting binder keys per
+  round in 1,024 entries (about 34 keys of a 30-round relation) cost 9%.
+  Of the 699 facts 256 equal the exact ones; the directives of a
+  calibrated bloat run differ from the exact-fact run's in one hole of
+  115 (46 changed); the engine compiled with them returns the same counts
+  in 12.60 s against 11.71 s for the written text (three alternating
+  runs), as with the exact facts' advice.
+  Open: the tables of a relation are its own, so relations could be
+  admitted on separate threads; an update of a read or binder table costs
+  about 40 ns (1.65 s for 39.5M updates); the row hook passes each cell
+  through a dynamic call where the generated program could feed the
+  runtime directly; the device counterpart.
+
+- **What the plans need (measured 2026-11-17, bloat; oracle
+  `what_the_plans_need_of_degree_facts_on_doop`).** Of the 699 facts
+  requested the search reads 498 and the chosen orders are valued by 379
+  (distinct 374/280/201, joined 208/120/102, joined staged 18/18/18,
+  reached 58/44/22, reached staged 20/15/15, visible 21/21/21). Each kind
+  replaced by what a cheaper statistic gives, the orders then chosen
+  costed by the exact facts, a hole weighed by its changing relation's
+  rows:
+
+  | replaced | orders that differ (of 112) | over 1.1× | weighted cost |
+  |---|---|---|---|
+  | rounds: staged as unstaged, every row visible | 14 | 10 | 1.0003× |
+  | reach: reached as direct | 8 | 5 | 1.0002× |
+  | rounds and reach: what a stored relation gives | 11 | 8 | 1.0002× |
+  | matched degrees: a relation's average degree | 30 | 16 | 4.34× |
+
+  The worst hole without rounds or reach costs 1.29 times its best
+  (`VirtualDispatch_MultiHead`, 127,098 changing rows); without matched
+  degrees `VPT_LoadArray` costs 598 times. So on this dataset the plans
+  need the degree of one relation at the keys of another, and need
+  neither the round of a row nor the reach — although those facts
+  themselves are far from their unstaged values (PS-Admit). The measure
+  is VP-Cost, not frames, and the dataset is one. Not acted on: a
+  statistic that needs no round can be read from stored relations at any
+  time, without a hook in admission.
+
+- **Why a calibrated run is slow (measured 2026-11-17, bloat, 108 s).**
+  A calibration build is the engine with the `planner-calibration`
+  feature; without it the hooks are erased, and with it they do nothing
+  until an observer is installed. Its time, from a sampled timeline:
+  first analysis 7 s, the observed run 28 s, then 47 s on one thread
+  rebinding and reporting, 10 s of analysis on all cores, 16 s writing.
+  - The run (12 s plain). Every operator's rows are counted for the
+    report; the counted stream of a lookup is made per binding and read
+    the clock twice per stream, for an elapsed time calibration never
+    reads: 30% of the run's samples were in the clock. A stream of a
+    calibrated operator no longer reads it: the run takes 21 s and the
+    whole 101 s. The degree statistics are 3 s of it. The rest is the
+    row counters (a lock and a reference count per stream) and the
+    input profile; no order is decided from either.
+  - After the run. The outputs are 3.3 GB of JSON: the plans 2.76 GB,
+    the report 240 MB and 30 MB, the evidence 214 MB. A plan record
+    carries the whole attached document in each of its three texts, 347
+    times in all; the document is 3.8 MB (the delta series of every
+    round 2.4 MB, the relations 0.6 MB, the degree facts 0.7 MB), and
+    every copy is printed, escaped, hashed and parsed. Open: the
+    document once per plans file, named by its hash in the texts; the
+    degree facts out of the attachment, which no dialect reads.
 
 Related cost models, read 2026-11-13: Graphflow's i-cost (partial matches
 times the sizes of the intersected lists, cardinalities from a catalogue of

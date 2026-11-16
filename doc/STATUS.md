@@ -505,10 +505,21 @@ identical: planned equals written, no gain. With every rule body permuted
 time on bloat, eclipse and xalan (the last two from bloat's statistics:
 33.2 and 62.7 s against 33.1 and 63.0 s written), while the compiler's
 delta-first orders over the scrambled texts take 3.6 times longer on
-bloat for one shuffle and exceed 300 s for the other two. Not built: the
-statistics in production (degree sequences of derived relations with
-each row's round, from a profile run), the planner as `cq-cost`'s
-candidate generator; no GPU run; one program.
+bloat for one shuffle and exceed 300 s for the other two. The statistics
+are degree facts of the dataset evidence (PLANNING-REDESIGN, "Planner
+statistics path"): the planner lists the facts a program can ask for, the
+runtime keeps them as a calibrated run admits its rows
+(`cq_storage::statistics::Degrees`: sketches and a sample of keys, no copy
+of the rows; 3.6 s on bloat's 33.4M rows against 21 s for the exact
+reference and 1.46 s for DuckDB's `ANALYZE`; the plans cost the same by
+the exact facts), and `cq-cost orders` plans from the evidence. `cq-cost
+advise` selects the planned order of every hole whose facts the evidence
+holds (basis `measured`). A calibrated bloat run of the CPU engine takes
+108 s in all; its advice (46 of 115 holes changed, 2 rejected by
+production) compiles into the engine and gives the same counts; with the
+exact facts' advice the engine was 8% slower than the written text (12.83 s
+against 11.86 s; 111 indexes against 97, and the planner's cost has no
+index term). No GPU run and no device statistics; one program.
 
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`

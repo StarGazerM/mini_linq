@@ -98,7 +98,7 @@ fn finish_checked(spec: &RelationSpec, accumulator: RelationAccumulator, source:
             schema_hash: manifest.schema_hash().unwrap(), formulation: manifest.formulation.clone(), manifest,
         },
         relations: BTreeMap::from([(spec.name.clone(), relation.clone())]),
-        premises: Vec::new(), relative: Vec::new(), targets: BTreeMap::new(), observations: Default::default(), constants: BTreeMap::new(),
+        premises: Vec::new(), relative: Vec::new(), targets: BTreeMap::new(), observations: Default::default(), constants: BTreeMap::new(), degrees: Vec::new(),
     };
     document.check().unwrap();
     assert_eq!(cq_evidence::parse_json(&document.canonical_json().unwrap()).unwrap(), document);

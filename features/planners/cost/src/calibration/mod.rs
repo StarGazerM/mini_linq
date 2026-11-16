@@ -61,7 +61,9 @@ pub fn try_measure<T>(
     require(program.schedule.progress != "relational", "schedule.progress=relational has no synchronous SCC round count; per-driver invocation counts require a different recorded cost model")?;
     crate::cost::bounds::validate_context(input, baseline, target_name(input.configuration.target))?;
     let before = crate::cost::analyze(input, baseline, target_name(input.configuration.target))?;
-    let recorder = Arc::new(Recorder(std::sync::Mutex::new(prepare(&program, baseline, request)?)));
+    // PS-Derive: what the variable planner can ask for, at the baseline's constants.
+    let requests = crate::cost::variables::Planner::new(input, baseline)?.requests()?;
+    let recorder = Arc::new(Recorder(std::sync::Mutex::new(prepare(&program, baseline, request, requests)?)));
     let (value, operators, failures) = cq_storage::counters::TaskContext::default().run(|| {
         cq_storage::counters::calibration::with_observer(recorder.clone(), || {
             let value = run();
@@ -102,7 +104,7 @@ fn erased_round(mut program: round::Program) -> String {
     }
     program.to_token_stream().to_string()
 }
-fn prepare(program: &round::Program, baseline: &ev::DatasetEvidence, request: &DatasetRequest) -> Result<Captured> {
+fn prepare(program: &round::Program, baseline: &ev::DatasetEvidence, request: &DatasetRequest, requests: Vec<ev::DegreeRequest>) -> Result<Captured> {
     let source = &program.storage.incremental.strata.source;
     let attachment = source.declared_evidence.as_ref().ok_or_else(|| invalid("calibration requires explicit source-to-dataset bindings"))?;
     require(attachment.document.planning_facts() == baseline.planning_facts(), "baseline planning facts differ from the source's recorded evidence")?;
@@ -147,6 +149,7 @@ fn prepare(program: &round::Program, baseline: &ev::DatasetEvidence, request: &D
         members: program.context.strata.iter().map(|s| s.members.iter().copied().collect()).collect(),
         expected_round: erased_round(program.clone()), expected_metadata,
         metadata: BTreeSet::new(), begun: false, completed: false, failure: None,
+        degrees: capture::DegreeCapture::new(requests, &source.declarations.iter().map(|declaration| (declaration.name.to_string(), declaration.columns.len())).collect::<Vec<_>>())?,
     })
 }
 

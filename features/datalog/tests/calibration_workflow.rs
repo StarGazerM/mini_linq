@@ -98,6 +98,28 @@ fn complete_run_emits_exact_input_round_physical_and_recosted_evidence() {
     assert_eq!(result.advice.evidence_hash, export::sha256(result.evidence.canonical_json().unwrap()));
     let report = result.report.render(&result.evidence);
     assert!(report.contains("fused; counted once") && report.contains("No runtime advice adoption"));
+    // PS-Rows: the run collected the degree facts the variable planner asks
+    // for, from the bound inputs and every delta row. Reach = {0,1,2,3} and
+    // Edge maps 0, 1 and 2 on: three targets over four reached sources.
+    let degree = |id: &str| {
+        let fact = result.evidence.degrees.iter().find(|degree| degree.value.id == id)
+            .unwrap_or_else(|| panic!("no fact {id} among {:?}", result.evidence.degrees.iter().map(|degree| &degree.value.id).collect::<Vec<_>>()));
+        assert_eq!(fact.value.source, ev::Source::Calibrated);
+        let value = fact.value.value.as_ref().unwrap();
+        (value.numerator.parse::<u64>().unwrap(), value.denominator.parse::<u64>().unwrap())
+    };
+    assert_eq!(degree("degree:joined:Reach[0]~Edge[0]>1"), (3, 4));
+    assert_eq!(degree("degree:distinct:Edge[1]"), (3, 1));
+    assert_eq!(degree("degree:distinct:Seed[0]"), (1, 1));
+    // PS-Read: the planner plans every rule from that evidence alone.
+    let planner = cq_cost::cost::variables::Planner::new(&result.plans, &result.evidence).unwrap();
+    let planned: Vec<_> = (0..result.plans.holes.len()).filter_map(|hole| planner.plan(hole).unwrap()).collect();
+    assert_eq!(planned.len(), result.plans.holes.iter().filter(|hole| matches!(hole.origin, export::Origin::Rule { .. })).count());
+    assert!(planned.iter().any(|plan| plan.order == ["x", "y"]), "{:?}", planned.iter().map(|plan| &plan.order).collect::<Vec<_>>());
+    // PS-Decide: the advice of the calibrated run is decided from them.
+    for hole in result.advice.holes.iter().filter(|hole| matches!(hole.origin, export::Origin::Rule { .. })) {
+        assert_eq!(hole.basis, cq_cost::cost::Basis::Measured, "{}", hole.reason);
+    }
     // Review an alternative without executing it: changed prefix/key scopes
     // must not acquire incumbent row counts or invented fan-out maxima. The
     // report keeps only the valuations a decision weighed, so the

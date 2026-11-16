@@ -7,7 +7,7 @@ use crate::{RelationDecl, symbol_name};
 use cq_evidence as evidence;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{cell::RefCell, collections::BTreeSet, sync::Arc};
 use syn::{Ident, LitStr, Token, parse::{Parse, ParseStream}};
 
 pub mod kw {
@@ -110,7 +110,12 @@ impl DeclaredEvidence {
     /// Validate names and complete target-column coverage. Rust types remain
     /// opaque: this never invents a domain identity from a type spelling.
     pub fn check(&self, declarations: &[RelationDecl]) -> syn::Result<()> {
-        self.document.check().map_err(|error| syn::Error::new_spanned(self, error.to_string()))?;
+        // The document is immutable behind its `Arc`: one check serves
+        // every occurrence that shares it.
+        if !CHECKED.with(|checked| checked.borrow().as_ref().is_some_and(|document| Arc::ptr_eq(document, &self.document))) {
+            self.document.check().map_err(|error| syn::Error::new_spanned(self, error.to_string()))?;
+            CHECKED.with(|checked| *checked.borrow_mut() = Some(Arc::clone(&self.document)));
+        }
         let mut seen = BTreeSet::new();
         for binding in &self.bindings {
             let name = symbol_name(&binding.relation);
@@ -175,24 +180,53 @@ impl DeclaredEvidence {
         }))
     }
 }
+thread_local! {
+    // A program repeats one document in its source and in every hole. The
+    // last literal parsed, the last document checked and the last document
+    // printed on this thread are kept, so a repeated document is unescaped,
+    // parsed, checked, serialized and escaped once, and its parsed
+    // occurrences share one allocation (which also makes their comparison
+    // a pointer comparison).
+    static PARSED: RefCell<Option<(String, Arc<evidence::DatasetEvidence>)>> = const { RefCell::new(None) };
+    static CHECKED: RefCell<Option<Arc<evidence::DatasetEvidence>>> = const { RefCell::new(None) };
+    static PRINTED: RefCell<Option<(Arc<evidence::DatasetEvidence>, proc_macro2::Literal)>> = const { RefCell::new(None) };
+}
 impl Parse for DeclaredEvidence {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         input.parse::<kw::declared_evidence>()?;
-        let json: LitStr = input.parse()?;
+        // The raw token: a `LitStr` unescapes its whole text when it is built.
+        let json: proc_macro2::Literal = input.parse()?;
         let body;
         syn::braced!(body in input);
         let mut bindings = Vec::new();
         while !body.is_empty() {
             bindings.push(body.parse()?);
         }
-        Self::from_json(&json.value(), bindings).map_err(|error| syn::Error::new_spanned(json, error))
+        let source = json.to_string();
+        let parsed = PARSED.with(|parsed| parsed.borrow().as_ref().filter(|(text, _)| *text == source).map(|(_, document)| Arc::clone(document)));
+        let document = match parsed {
+            Some(document) => document,
+            None => {
+                let text: LitStr = syn::parse2(json.to_token_stream())?;
+                let document = Self::from_json(&text.value(), Vec::new()).map_err(|error| syn::Error::new_spanned(&json, error))?.document;
+                PARSED.with(|parsed| *parsed.borrow_mut() = Some((source, Arc::clone(&document))));
+                document
+            }
+        };
+        Ok(Self { document, bindings })
     }
 }
 impl ToTokens for DeclaredEvidence {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        // Serialization is total for this string/integer data model. Do not
-        // call check here: even malformed records must print in diagnostics.
-        let json = serde_json::to_string(self.document.as_ref()).expect("evidence is JSON-serializable");
+        let json = PRINTED.with(|printed| {
+            let mut printed = printed.borrow_mut();
+            if let Some((_, literal)) = printed.as_ref().filter(|(document, _)| Arc::ptr_eq(document, &self.document)) { return literal.clone(); }
+            // Serialization is total for this string/integer data model. Do not
+            // call check here: even malformed records must print in diagnostics.
+            let literal = proc_macro2::Literal::string(&serde_json::to_string(self.document.as_ref()).expect("evidence is JSON-serializable"));
+            *printed = Some((Arc::clone(&self.document), literal.clone()));
+            literal
+        });
         let bindings = &self.bindings;
         tokens.extend(quote!(declared_evidence #json { #(#bindings)* }));
     }

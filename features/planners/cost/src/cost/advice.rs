@@ -1,6 +1,6 @@
 //! Static advice uses the same authored grammar and pre-Storage compiler entry.
 //! This module prints recorded selections; it never chooses an order.
-use super::{AdmissionHint, AdmissionOwner, AdviceReport, Candidate, Decision, FixedAdmission, HoleAdvice, IndexDemand, IndexVersion};
+use super::{AdmissionHint, AdmissionOwner, AdviceReport, Candidate, Decision, FixedAdmission, IndexDemand, IndexVersion};
 use crate::export::{self, CheckedIr, Origin, PlannerInput, Result};
 use cq_datalog_incremental::{Known, OrderAtom, RulePlan};
 use cq_lang_datalog_round as round;
@@ -86,8 +86,8 @@ fn check_report(input: &PlannerInput, report: &AdviceReport) -> Result<()> {
     Ok(())
 }
 
-fn expected_admission(program: &round::Program, choice: &HoleAdvice) -> Result<FixedAdmission> {
-    let Origin::Rule { variant, admission, .. } = &choice.origin else {
+fn expected_admission(program: &round::Program, origin: &Origin) -> Result<FixedAdmission> {
+    let Origin::Rule { variant, admission, .. } = origin else {
         return Err(error("only a rule variant has an admission owner"));
     };
     let source = &program.storage.incremental.strata.source;
@@ -124,14 +124,14 @@ fn expected_admission(program: &round::Program, choice: &HoleAdvice) -> Result<F
 
 /// Produce an explicit constraint by copying the checked owner, never by
 /// selecting a cheaper alternative owner. This runs before text emission.
-pub(crate) fn record_admission_constraints(input: &PlannerInput, report: &mut AdviceReport) -> Result<()> {
+/// `program` is the input's recorded Round, parsed; `None` for a CQ.
+pub(crate) fn record_admission_constraints(input: &PlannerInput, program: Option<&round::Program>, report: &mut AdviceReport) -> Result<()> {
     check_report(input, report)?;
-    let CheckedIr::Datalog { round: recorded } = &input.checked_ir else { return Ok(()); };
+    let Some(program) = program else { return Ok(()); };
     if !report.holes.iter().any(|hole| hole.decision == Decision::Changed) { return Ok(()); }
-    let program: round::Program = syn::parse_str(recorded)?;
     for choice in &mut report.holes {
         if choice.decision == Decision::Changed && matches!(choice.origin, Origin::Rule { .. }) {
-            choice.admission = Some(expected_admission(&program, choice)?);
+            choice.admission = Some(expected_admission(program, &choice.origin)?);
             choice.citations.insert(format!("compiler:hole:{}:admission-held-fixed", choice.hole));
         }
     }
@@ -141,7 +141,7 @@ pub(crate) fn record_admission_constraints(input: &PlannerInput, report: &mut Ad
 fn check_constraints(program: &round::Program, report: &AdviceReport) -> Result<()> {
     for choice in &report.holes {
         let expected = if choice.decision == Decision::Changed && matches!(choice.origin, Origin::Rule { .. }) {
-            Some(expected_admission(program, choice)?)
+            Some(expected_admission(program, &choice.origin)?)
         } else { None };
         if choice.admission != expected {
             return Err(error(format!("hole {} admission constraint does not preserve its recorded owner/ready level", choice.hole)));
@@ -170,7 +170,7 @@ fn known(hint: AdmissionHint) -> Known {
 /// directive set, not something to append beside conflicting old advice.
 pub fn datalog_plans(input: &PlannerInput, report: &AdviceReport) -> Result<Vec<RulePlan>> {
     input.check()?;
-    datalog_plans_checked(input, report)
+    datalog_plans_checked(input, &recorded(input)?, report)
 }
 
 /// The directive of one variant: a selected valuation with its admission
@@ -212,45 +212,73 @@ fn variant_plan(program: &round::Program, index: usize, replacement: Option<(&Ca
     }))
 }
 
-/// The directives of every variant, after the report's checks: `replace`
-/// names the valuation a variant's hole adopts, if any.
-fn plans_with<'a>(
-    input: &PlannerInput, report: &'a AdviceReport,
-    replace: impl Fn(&round::Program, &'a HoleAdvice) -> Result<Option<(&'a Candidate, Option<Known>)>>,
-) -> Result<Vec<RulePlan>> {
-    check_report(input, report)?;
+/// The recorded Round program of a Datalog input.
+pub(crate) fn recorded(input: &PlannerInput) -> Result<round::Program> {
     let CheckedIr::Datalog { round: recorded } = &input.checked_ir else { return Err(error("Datalog advice needs a recorded Round")); };
-    let program: round::Program = syn::parse_str(recorded)?;
-    check_constraints(&program, report)?;
-    let choices = report.holes.iter().filter_map(|hole| match hole.origin {
-        Origin::Rule { variant, .. } => Some((variant, hole)), _ => None,
+    Ok(syn::parse_str(recorded)?)
+}
+
+/// `check` of every item, each alone, in the items' order: on threads, each
+/// with its own parse of the recorded program (a parsed program stays on
+/// its thread), parsed once per thread.
+pub(crate) fn each_alone<T: Sync, R: Send>(input: &PlannerInput, items: &[T], check: impl Fn(&round::Program, &T) -> Result<R> + Sync) -> Result<Vec<R>> {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(1, usize::from).min(items.len());
+    let mut done = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads).map(|_| scope.spawn(|| -> Result<Vec<(usize, R)>> {
+            let program = recorded(input)?;
+            let mut done = Vec::new();
+            loop {
+                let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(item) = items.get(at) else { break };
+                done.push((at, check(&program, item)?));
+            }
+            Ok(done)
+        })).collect();
+        workers.into_iter().map(|worker| worker.join().expect("an advice check panicked")).collect::<Result<Vec<_>>>()
+    })?.into_iter().flatten().collect::<Vec<_>>();
+    done.sort_by_key(|(at, _)| *at);
+    Ok(done.into_iter().map(|(_, result)| result).collect())
+}
+
+/// The directives of every variant: `replace` names the valuation the hole
+/// of a variant adopts, if any.
+fn plans_with<'a>(input: &PlannerInput, program: &round::Program, replace: impl Fn(usize) -> Result<Option<(&'a Candidate, Option<Known>)>>) -> Result<Vec<RulePlan>> {
+    let holes = input.holes.iter().enumerate().filter_map(|(at, hole)| match hole.origin {
+        Origin::Rule { variant, .. } => Some((variant, at)), _ => None,
     }).collect::<BTreeMap<_, _>>();
     let mut plans = Vec::new();
     for index in 0..program.storage.incremental.variants.len() {
-        let choice = choices.get(&index).ok_or_else(|| error("advice report lost an Incremental variant"))?;
-        plans.extend(variant_plan(&program, index, replace(&program, choice)?)?);
+        let hole = *holes.get(&index).ok_or_else(|| error("the checked input lost an Incremental variant"))?;
+        plans.extend(variant_plan(program, index, replace(hole)?)?);
     }
     Ok(plans)
 }
 
-fn datalog_plans_checked(input: &PlannerInput, report: &AdviceReport) -> Result<Vec<RulePlan>> {
-    plans_with(input, report, |_, choice| {
+fn datalog_plans_checked(input: &PlannerInput, program: &round::Program, report: &AdviceReport) -> Result<Vec<RulePlan>> {
+    check_report(input, report)?;
+    check_constraints(program, report)?;
+    let choices = report.holes.iter().map(|choice| (choice.hole, choice)).collect::<BTreeMap<_, _>>();
+    plans_with(input, program, |hole| {
+        let choice = choices[&hole];
         if choice.decision != Decision::Changed { return Ok(None); }
         let admission = choice.admission.as_ref().ok_or_else(|| error("changed variant lacks its fixed admission constraint"))?;
         Ok(Some((&choice.candidates[choice.selected].plan, Some(known(admission.hint)))))
     })
 }
 
-/// The directives that adopt the `chosen` valuations (by hole) in place of
-/// the report's choices: each with its variant's fixed admission constraint,
-/// every other variant keeping its own directives. For valuations planned
-/// outside the report (a variable order, a hand order).
-pub fn datalog_plans_for<'a>(input: &PlannerInput, report: &'a AdviceReport, chosen: &BTreeMap<usize, &'a Candidate>) -> Result<Vec<RulePlan>> {
-    input.check()?;
-    plans_with(input, report, |program, choice| match chosen.get(&choice.hole) {
-        Some(plan) => Ok(Some((*plan, Some(known(expected_admission(program, choice)?.hint))))),
+/// The directives that adopt the `chosen` valuations (by hole), each with
+/// its variant's fixed admission constraint, every other variant keeping
+/// its own directives, compiled through production: for valuations planned
+/// outside a report. The caller has checked the input and parsed `program`
+/// from it.
+pub(crate) fn compile_plans_for(input: &PlannerInput, program: &round::Program, chosen: &BTreeMap<usize, &Candidate>) -> Result<Vec<RulePlan>> {
+    let plans = plans_with(input, program, |hole| match chosen.get(&hole) {
+        Some(plan) => Ok(Some((*plan, Some(known(expected_admission(program, &input.holes[hole].origin)?.hint))))),
         None => Ok(None),
-    })
+    })?;
+    compile_datalog_advice_checked(program, &plans)?;
+    Ok(plans)
 }
 
 /// Whether production provisions the reads of a sub-atom valuation when it
@@ -258,21 +286,18 @@ pub fn datalog_plans_for<'a>(input: &PlannerInput, report: &'a AdviceReport, cho
 /// production checkers and Storage must hold every index the valuation
 /// demands. `Err` names the gap; nothing is adopted on the tool's word alone.
 /// A CQ hole has no Storage and is realized by its adopting target.
-pub(crate) fn provisioned(input: &PlannerInput, hole: &export::Hole, plan: &Candidate) -> Result<std::result::Result<(), String>> {
-    let (CheckedIr::Datalog { round: recorded }, Origin::Rule { variant: target, .. }) = (&input.checked_ir, &hole.origin) else {
-        return Ok(Ok(()));
-    };
-    let program: round::Program = syn::parse_str(recorded)?;
+pub(crate) fn provisioned(program: &round::Program, hole: &export::Hole, plan: &Candidate) -> Result<std::result::Result<(), String>> {
+    let Origin::Rule { variant: target, .. } = &hole.origin else { return Ok(Ok(())) };
     let mut plans = Vec::new();
     for index in 0..program.storage.incremental.variants.len() {
         let replacement = (index == *target).then(|| (plan, program.storage.incremental.variants[index].known));
-        match variant_plan(&program, index, replacement) {
+        match variant_plan(program, index, replacement) {
             Ok(directive) => plans.extend(directive),
             Err(gap) if index == *target => return Ok(Err(gap.0)),
             Err(other) => return Err(other),
         }
     }
-    let planned = match compile_datalog_advice_checked(input, &plans) {
+    let planned = match compile_datalog_advice_checked(program, &plans) {
         Ok(planned) => planned,
         Err(rejection) => return Ok(Err(format!("production rejects its reads: {}", rejection.0))),
     };
@@ -288,12 +313,10 @@ pub(crate) fn provisioned(input: &PlannerInput, hole: &export::Hole, plan: &Cand
 /// realization; those front ends consume the same directives on adoption.
 pub fn compile_datalog_advice(input: &PlannerInput, plans: &[RulePlan]) -> Result<round::Program> {
     input.check()?;
-    compile_datalog_advice_checked(input, plans)
+    compile_datalog_advice_checked(&recorded(input)?, plans)
 }
 
-fn compile_datalog_advice_checked(input: &PlannerInput, plans: &[RulePlan]) -> Result<round::Program> {
-    let CheckedIr::Datalog { round: recorded } = &input.checked_ir else { return Err(error("expected Datalog input")); };
-    let original: round::Program = syn::parse_str(recorded)?;
+fn compile_datalog_advice_checked(original: &round::Program, plans: &[RulePlan]) -> Result<round::Program> {
     let incremental = cq_datalog_incremental::compile_with_advice(
         &original.storage.incremental.strata, original.storage.incremental.driver, plans,
     )?;
@@ -352,28 +375,28 @@ fn check_compiled(report: &AdviceReport, planned: &round::Program) -> Result<()>
 /// Removing/changing a known constraint cannot silently select another owner.
 pub fn check_datalog_advice(input: &PlannerInput, report: &AdviceReport, plans: &[RulePlan]) -> Result<round::Program> {
     input.check()?;
-    let expected = datalog_plans_checked(input, report)?;
+    let program = recorded(input)?;
+    let expected = datalog_plans_checked(input, &program, report)?;
     if plans != expected {
         return Err(error("adopted advice differs from the recorded orders or fixed admission constraints"));
     }
-    let planned = compile_datalog_advice_checked(input, plans)?;
+    let planned = compile_datalog_advice_checked(&program, plans)?;
     check_compiled(report, &planned)?;
     Ok(planned)
 }
 
 /// The emitted advice, parsed back through the compiler-owned RulePlan
-/// parser and compiled through the actual pre-Storage entry: `None` for a CQ,
-/// `Err` for production's rejection. One compilation both checks what
-/// Storage provisions and validates what is printed.
+/// parser and compiled through the actual pre-Storage entry: `Err` for
+/// production's rejection. One compilation both checks what Storage
+/// provisions and validates what is printed.
 pub(crate) type Compiled = (Vec<RulePlan>, round::Program);
-pub(crate) fn compile_report(input: &PlannerInput, report: &AdviceReport) -> Result<Option<std::result::Result<Compiled, String>>> {
-    let CheckedIr::Datalog { .. } = &input.checked_ir else { return Ok(None); };
-    let plans = datalog_plans_checked(input, report)?;
+pub(crate) fn compile_report(input: &PlannerInput, program: &round::Program, report: &AdviceReport) -> Result<std::result::Result<Compiled, String>> {
+    let plans = datalog_plans_checked(input, program, report)?;
     let reparsed: AdviceList = syn::parse2(AdviceList(plans).to_token_stream())?;
-    Ok(Some(match compile_datalog_advice_checked(input, &reparsed.0) {
+    Ok(match compile_datalog_advice_checked(program, &reparsed.0) {
         Ok(planned) => Ok((reparsed.0, planned)),
         Err(rejection) => Err(format!("production rejects its reads: {}", rejection.0)),
-    }))
+    })
 }
 
 /// The indexes a compiled program's Storage provisions.

@@ -255,9 +255,23 @@ pub struct Step {
     pub branches: Vec<Scope>,
 }
 
+thread_local! {
+    // A program repeats one evidence document in every hole: the last
+    // document checked and serialized on this thread is kept.
+    static CANONICAL: std::cell::RefCell<Option<(std::sync::Arc<cq_evidence::DatasetEvidence>, String)>> = const { std::cell::RefCell::new(None) };
+}
+fn canonical(document: &std::sync::Arc<cq_evidence::DatasetEvidence>) -> Result<String> {
+    if let Some(json) = CANONICAL.with(|last| last.borrow().as_ref().filter(|(held, _)| std::sync::Arc::ptr_eq(held, document)).map(|(_, json)| json.clone())) {
+        return Ok(json);
+    }
+    let json = document.canonical_json().map_err(|e| ExportError(e.to_string()))?;
+    CANONICAL.with(|last| *last.borrow_mut() = Some((std::sync::Arc::clone(document), json.clone())));
+    Ok(json)
+}
+
 fn evidence(record: Option<&cq_syntax::declared_evidence::DeclaredEvidence>) -> Result<Option<Evidence>> {
     record.map(|record| Ok(Evidence {
-        canonical_json: record.document.canonical_json().map_err(|e| ExportError(e.to_string()))?,
+        canonical_json: canonical(&record.document)?,
         attachment_ir: text(record),
         bindings: record.bindings.iter().map(|binding| EvidenceBinding {
             input_relation: symbol_name(&binding.relation),
@@ -278,7 +292,7 @@ fn dataset(record: Option<&cq_syntax::declared_evidence::DeclaredEvidence>) -> R
     match record {
         None => Ok(DatasetIdentity::Unbound {}),
         Some(record) => {
-            let canonical = record.document.canonical_json().map_err(|e| ExportError(e.to_string()))?;
+            let canonical = canonical(&record.document)?;
             Ok(DatasetIdentity::Bound {
                 dataset_hash: record.document.dataset.hash.clone(),
                 schema_hash: record.document.dataset.schema_hash.clone(),

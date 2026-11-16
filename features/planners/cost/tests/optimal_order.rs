@@ -429,72 +429,23 @@ fn an_observation_of_another_run_is_rejected() {
     assert!(cost::analyze_predicted(&input, &evidence, "cpu", Space::default(), &foreign).is_err());
 }
 
-/// Exact degrees of a run for the variable planner: the final relations,
-/// with the round each row of a recursive relation appeared in.
-struct Degrees<'a> {
-    history: &'a History,
-    stage: BTreeMap<&'static str, HashMap<&'a Vec<i64>, usize>>,
-    /// The changing relation of the steady variant planned.
-    delta: Option<&'static str>,
-}
-impl<'a> Degrees<'a> {
-    fn new(history: &'a History, delta: Option<&'static str>) -> Self {
-        let stage = history.component.iter().map(|(name, component)| (*name, history.rounds[*component].iter().enumerate()
-            .flat_map(|(round, state)| state.delta[name].iter().map(move |row| (row, round))).collect())).collect();
-        Self { history, stage, delta }
+/// The evidence with the degree facts the variable planner requests,
+/// collected from a run's relations and the round each row appeared in
+/// (PLANNING-REDESIGN, PS-Collect).
+fn with_degrees(input: &PlannerInput, mut evidence: DatasetEvidence, history: &History) -> DatasetEvidence {
+    let requests = cost::variables::Planner::new(input, &evidence).unwrap().requests().unwrap();
+    let mut collector = cq_load::stats::DegreeCollector::new(requests);
+    for (name, rows) in &history.database {
+        let Some(relation) = collector.relation(name) else { continue };
+        // The round a derived row was in a delta; 0 for any other row.
+        let round: HashMap<&Vec<i64>, u32> = history.component.get(name).map_or(HashMap::new(), |component| history.rounds[*component].iter().enumerate()
+            .flat_map(|(round, state)| state.delta[name].iter().map(move |row| (row, round as u32))).collect());
+        for row in rows { collector.push(relation, round.get(row).copied().unwrap_or(0), row); }
     }
-    fn name(&self, read: &cost::Read) -> &'static str { self.history.database.keys().find(|name| **name == read.logical_relation).expect("declared relation") }
-    fn rows(&self, read: &cost::Read) -> impl Iterator<Item = (&'a Vec<i64>, usize)> + '_ {
-        assert!(read.columns.iter().all(|column| column.variable.is_some()), "the fixture reads no constant column");
-        let name = self.name(read);
-        self.history.database[name].iter().map(move |row| (row, self.stage.get(name).and_then(|stage| stage.get(row)).copied().unwrap_or(0)))
-    }
-    fn component(&self, name: &str) -> Option<usize> { self.history.component.get(name).copied() }
-}
-impl cost::variables::Degrees for Degrees<'_> {
-    fn distinct(&self, read: &cost::Read, columns: &[usize]) -> Option<f64> {
-        Some(self.rows(read).map(|(row, _)| columns.iter().map(|&column| row[column]).collect::<Vec<_>>()).collect::<BTreeSet<_>>().len() as f64)
-    }
-    fn joined(&self, reach: Option<cost::variables::Reach<'_>>, binder: &cost::Read, from: &[usize], read: &cost::Read, bound: &[usize], column: usize) -> Option<f64> {
-        let same = |left: &cost::Read, right: &cost::Read| self.component(self.name(left)).is_some_and(|own| self.component(self.name(right)) == Some(own));
-        let project = |row: &Vec<i64>, columns: &[usize]| columns.iter().map(|&at| row[at]).collect::<Vec<_>>();
-        // Per key, each value with the first round it appears in.
-        let mut values = HashMap::<Vec<i64>, BTreeMap<i64, usize>>::new();
-        for (row, stage) in self.rows(read) {
-            let first = values.entry(project(row, bound)).or_default().entry(row[column]).or_insert(stage);
-            *first = (*first).min(stage);
-        }
-        let met = |row: &Vec<i64>, stage: Option<usize>| values.get(&project(row, from))
-            .map_or(0, |values| values.values().filter(|&&first| stage.is_none_or(|stage| first <= stage)).count());
-        let (mut rows, mut total) = (0usize, 0usize);
-        match reach {
-            // Every pair of a changing row and a binder row it reaches.
-            Some(reach) => {
-                let mut reached = HashMap::<Vec<i64>, Vec<&Vec<i64>>>::new();
-                for (row, _) in self.rows(binder) { reached.entry(project(row, reach.binder)).or_default().push(row); }
-                let staged = same(reach.changing, read);
-                for (changing, stage) in self.rows(reach.changing) {
-                    for row in reached.get(&project(changing, reach.columns)).into_iter().flatten() { rows += 1; total += met(row, staged.then_some(stage)); }
-                }
-            }
-            None => {
-                let staged = binder.version == Version::Delta && same(binder, read);
-                for (row, stage) in self.rows(binder) { rows += 1; total += met(row, staged.then_some(stage)); }
-            }
-        }
-        Some(if rows == 0 { 0.0 } else { total as f64 / rows as f64 })
-    }
-    fn visible(&self, read: &cost::Read) -> f64 {
-        let (Some(delta), name) = (self.delta, self.name(read)) else { return 1.0 };
-        if self.component(delta) != self.component(name) || self.history.database[name].is_empty() || self.history.database[delta].is_empty() { return 1.0; }
-        // Rows per round, then the rows no younger than each round.
-        let rounds = self.history.rounds[self.component(delta).unwrap()].len().max(1);
-        let per_round = |relation: &str| { let mut rows = vec![0usize; rounds]; for row in &self.history.database[relation] { rows[self.stage[relation].get(row).copied().unwrap_or(0)] += 1; } rows };
-        let mut seen = per_round(name);
-        for round in 1..rounds { seen[round] += seen[round - 1]; }
-        let met: usize = per_round(delta).iter().zip(&seen).map(|(changing, seen)| changing * seen).sum();
-        met as f64 / (self.history.database[delta].len() * self.history.database[name].len()) as f64
-    }
+    let provenance = Provenance { producer: "test reference run".into(), method: "exact degrees of the semi-naive reference run".into(), locator: "optimal_order.rs".into(), run: None, artifact_hash: None };
+    evidence.degrees = cq_load::stats::bind_degrees(collector.finish(4).unwrap(), &evidence.dataset.hash, Source::Exact, Claim::Equal, provenance);
+    evidence.check().unwrap();
+    evidence
 }
 
 /// One rule hole planned by variable order: what identifies the variant
@@ -508,14 +459,13 @@ fn variable_plans(program: &Program, inputs: &Database, history: &History, refer
     let input = planned(program, &evidence);
     let atoms = Space { partial_reads: PartialReads::Rows, phased: 0 };
     let listings = reference.then(|| cost::listed(&input, &evidence, "cpu", atoms, Some(&profile(program, &[inputs]))).unwrap());
+    let evidence = with_degrees(&input, evidence, history);
+    let planner = cost::variables::Planner::new(&input, &evidence).unwrap();
     input.holes.iter().enumerate().map(|(at, hole)| {
         let Origin::Rule { source_label, seed, .. } = &hole.origin else { panic!("rule holes only") };
         let first = |plan: &Candidate| plan.steps.iter().find_map(|step| step.read.clone()).unwrap();
-        // The changing occurrence is the same under any degrees: plan once to find it.
-        let delta = Some(first(&cost::variables::plan(&input, hole, &Degrees::new(history, None)).unwrap().expect("every hole of the fixture plans").candidate))
-            .filter(|read| read.version == Version::Delta && !seed);
-        let name = delta.as_ref().map(|read| *history.database.keys().find(|name| **name == read.logical_relation).unwrap());
-        let planned = cost::variables::plan(&input, hole, &Degrees::new(history, name)).unwrap().unwrap();
+        let planned = planner.plan(at).unwrap().expect("every hole of the fixture plans");
+        let delta = Some(first(&planned.candidate)).filter(|read| read.version == Version::Delta && !seed);
         let atom_orders = listings.as_ref().map(|listings| {
             let work: Vec<u128> = listings[at].valuations.iter().filter(|valued| delta.as_ref().is_none_or(|delta| first(&valued.plan) == *delta))
                 .map(|valued| exact(&hole.origin, &valued.plan, history, atoms.partial_reads)).collect();
@@ -609,4 +559,39 @@ fn any_written_body_order_plans_the_same_variable_order() {
     for (name, program) in [("reversed", reversed), ("rotated", rotated)] {
         assert_eq!(plans(&program), written, "{name} bodies plan differently");
     }
+}
+
+/// PS-Decide: with the degree facts in the evidence, `analyze` advises the
+/// planned variable order of every variant, whatever the written order.
+#[test]
+fn advice_from_measured_degrees_does_not_depend_on_the_written_body_order() {
+    let shape = Shape { seed: 3, variables: 300, heaps: 15, news: 30, assigns: 600, stores: 120, loads: 120 };
+    let inputs = typed(&shape);
+    let history = typed_points_to().semi_naive(&inputs);
+    // Per variant (its rule and changing read): the reads advised, in order.
+    type Advised = BTreeMap<(String, Option<String>), Vec<String>>;
+    let advised = |program: &Program| -> (Advised, usize) {
+        let evidence = profiled(program, &inputs);
+        let evidence = with_degrees(&planned(program, &evidence), evidence, &history);
+        let input = planned(program, &evidence);
+        let report = cost::analyze(&input, &evidence, "cpu").unwrap();
+        let reads = report.holes.iter().map(|hole| {
+            let Origin::Rule { source_label, seed, .. } = &hole.origin else { panic!("rule holes only") };
+            assert_eq!(hole.basis, cost::Basis::Measured, "{}", hole.reason);
+            assert_ne!(hole.decision, cost::Decision::Unknown, "{}", hole.reason);
+            let reads: Vec<_> = hole.candidates[hole.selected].plan.steps.iter().filter_map(|step| step.read.as_ref()).collect();
+            let text = |read: &cost::Read| format!("{} {:?} {:?}", read.logical_relation, read.version,
+                read.columns.iter().map(|column| (column.source_column, column.variable.clone())).collect::<BTreeSet<_>>());
+            let changing = reads.first().filter(|read| read.version == Version::Delta && !seed).map(|read| text(read));
+            ((source_label.clone().unwrap(), changing), reads.iter().map(|read| text(read)).collect())
+        }).collect();
+        (reads, report.holes.iter().filter(|hole| hole.decision == cost::Decision::Changed).count())
+    };
+    let (written, _) = advised(&typed_points_to());
+    assert_eq!(written.len(), 6);
+    let mut reversed = typed_points_to();
+    for rule in &mut reversed.rules { rule.1.reverse(); }
+    let (reads, changed) = advised(&reversed);
+    assert_eq!(reads, written, "reversed bodies are advised differently");
+    assert!(changed > 0, "no reversed body was reordered");
 }

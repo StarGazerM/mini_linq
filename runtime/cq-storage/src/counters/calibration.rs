@@ -137,8 +137,15 @@ pub trait Observer: Send + Sync {
     fn stratum_begin(&self, _stratum: usize) {}
     fn seed_end(&self, _stratum: usize, _rows: &[(usize, usize)]) {}
     fn round_begin(&self, _stratum: usize, _round: usize, _deltas: &[(usize, usize)]) {}
+    /// The rows of one member's delta: the delta round `round` consumes, or,
+    /// with `round` equal to the stratum's rounds, its final unconsumed
+    /// delta. Every derived row is delivered once, in declaration order.
+    /// `rows` visits them; an observer that never calls it costs no pass.
+    fn delta(&self, _stratum: usize, _round: usize, _relation: usize, _rows: DeltaRows<'_>) {}
     fn stratum_end(&self, _stratum: usize, _rounds: usize, _relations: &[(usize, usize, usize)]) {}
 }
+/// A pass over a delta's rows: call it with the visitor of each row.
+pub type DeltaRows<'a> = &'a mut dyn FnMut(&mut dyn FnMut(&dyn CalibrationRow));
 struct Session {
     observer: Arc<dyn Observer>,
     failures: Mutex<Vec<String>>,
@@ -339,6 +346,9 @@ pub fn round_begin(stratum: usize, round: usize, deltas: &[(usize, usize)]) {
         context.round = Some(round);
     });
     notify(|observer| observer.round_begin(stratum, round, deltas));
+}
+pub fn delta(stratum: usize, round: usize, relation: usize, rows: DeltaRows<'_>) {
+    notify(|observer| observer.delta(stratum, round, relation, rows));
 }
 pub fn stratum_end(stratum: usize, rounds: usize, relations: &[(usize, usize, usize)]) {
     notify(|observer| observer.stratum_end(stratum, rounds, relations));

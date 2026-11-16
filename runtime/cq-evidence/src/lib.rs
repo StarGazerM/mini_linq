@@ -52,6 +52,100 @@ pub struct DatasetEvidence {
     #[serde(default)] pub observations: Observations,
     /// Values of the program's closed constants, keyed by field name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")] pub constants: BTreeMap<String, ScalarFact>,
+    /// Degree statistics a planner requested (PLANNING-REDESIGN, PS-Fact).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub degrees: Vec<DegreeEvidence>,
+}
+/// The rows of one relation whose `fixed` columns hold the given values.
+/// Relations are named as the program declares them, columns by declared
+/// position.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Selection {
+    pub relation: String,
+    /// Column and value, ascending by column.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")] pub fixed: Vec<(usize, i64)>,
+}
+/// How a changing row reaches a binder row: its `columns` equal the binder's
+/// `binder` columns, one for one.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reach {
+    pub changing: Selection,
+    pub columns: Vec<usize>,
+    pub binder: Vec<usize>,
+}
+/// A statistic over rows (PS-Request). Every value is a rational
+/// `numerator / denominator`; an empty denominator set is recorded `0/1`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DegreeRequest {
+    /// The distinct values of `columns` over `rows`, over 1.
+    Distinct { rows: Selection, columns: Vec<usize> },
+    /// Numerator: summed over the rows of `binder`, the distinct values of
+    /// `column` among the rows of `read` whose `bound` columns equal the
+    /// binder row's `from` columns (one for one). Denominator: the binder's
+    /// rows. With `reach`, both run over the pairs of a `reach.changing`
+    /// row and a binder row it reaches. `staged` counts a value only if
+    /// some row holding it is no younger than the changing row: the binder
+    /// row itself, or the reaching row.
+    Joined { reach: Option<Reach>, binder: Selection, from: Vec<usize>, read: Selection, bound: Vec<usize>, column: usize, staged: bool },
+    /// Numerator: the pairs of a row of `changing` and a row of `relation`
+    /// no younger than it. Denominator: all pairs of their rows.
+    Visible { changing: String, relation: String },
+}
+impl Selection {
+    fn id(&self) -> String {
+        let fixed: String = self.fixed.iter().map(|(column, value)| format!("{{{column}={value}}}")).collect();
+        format!("{}{fixed}", self.relation)
+    }
+}
+impl DegreeRequest {
+    /// The fact id of this request: unique per request, stable across runs.
+    pub fn id(&self) -> String {
+        let list = |columns: &[usize]| columns.iter().map(usize::to_string).collect::<Vec<_>>().join(",");
+        match self {
+            Self::Distinct { rows, columns } => format!("degree:distinct:{}[{}]", rows.id(), list(columns)),
+            Self::Joined { reach, binder, from, read, bound, column, staged } => {
+                let reach = reach.as_ref().map_or(String::new(), |reach| format!("{}[{}]=[{}]:", reach.changing.id(), list(&reach.columns), list(&reach.binder)));
+                format!("degree:joined:{reach}{}[{}]~{}[{}]>{column}{}", binder.id(), list(from), read.id(), list(bound), if *staged { "@staged" } else { "" })
+            }
+            Self::Visible { changing, relation } => format!("degree:visible:{changing}/{relation}"),
+        }
+    }
+    /// The unit of this request's fact.
+    pub fn unit(&self) -> Unit {
+        match self { Self::Distinct { .. } => Unit::Distinct, Self::Joined { .. } => Unit::Degree, Self::Visible { .. } => Unit::Ratio }
+    }
+    fn check(&self) -> Result<()> {
+        fn selection(rows: &Selection) -> Result<()> {
+            nonblank(&rows.relation)?;
+            ensure(rows.fixed.windows(2).all(|pair| pair[0].0 < pair[1].0), "selection columns must ascend without repeats")
+        }
+        fn distinct(columns: &[usize]) -> Result<()> {
+            let unique: BTreeSet<_> = columns.iter().collect();
+            ensure(unique.len() == columns.len(), "a degree request repeats a column")
+        }
+        match self {
+            Self::Distinct { rows, columns } => { selection(rows)?; distinct(columns) }
+            Self::Joined { reach, binder, from, read, bound, column, .. } => {
+                selection(binder)?; selection(read)?; distinct(from)?; distinct(bound)?;
+                ensure(from.len() == bound.len() && !bound.contains(column), "a joined degree needs one binder column per bound column and a free column")?;
+                if let Some(reach) = reach {
+                    selection(&reach.changing)?; distinct(&reach.columns)?; distinct(&reach.binder)?;
+                    ensure(!reach.columns.is_empty() && reach.columns.len() == reach.binder.len(), "a reach needs one changing column per binder column")?;
+                }
+                Ok(())
+            }
+            Self::Visible { changing, relation } => { nonblank(changing)?; nonblank(relation) }
+        }
+    }
+}
+/// A requested degree statistic and its exact value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DegreeEvidence {
+    pub request: DegreeRequest,
+    pub value: RationalFact,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -842,6 +936,14 @@ impl DatasetEvidence {
             ensure(value.claim == Claim::Equal, "a constant is one exact value")?;
             checker.scalar(value, &domain, None)?;
         }
+        let mut requested = BTreeSet::new();
+        for degree in &self.degrees {
+            degree.request.check()?;
+            ensure(requested.insert(&degree.request), "repeated degree request")?;
+            ensure(degree.value.id == degree.request.id(), "a degree fact is named by its request")?;
+            ensure(matches!(degree.value.claim, Claim::Equal | Claim::Observation), "a degree fact is one measured value")?;
+            checker.rational(&degree.value, degree.request.unit())?;
+        }
         for (target, costs) in &self.targets {
             ensure(matches!(target.as_str(), "cpu" | "cpu-par" | "gpu"), "unknown target")?;
             ensure(costs.unit == Unit::DeclaredRowWork, "target unit must be declared_row_work")?;
@@ -1126,7 +1228,7 @@ impl DatasetEvidence {
                 rounds: self.observations.rounds.clone(),
                 steps: Vec::new(), physical_steps: Vec::new(),
             },
-            constants: self.constants.clone(),
+            constants: self.constants.clone(), degrees: self.degrees.clone(),
         }
     }
 }

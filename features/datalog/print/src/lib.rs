@@ -415,10 +415,33 @@ fn render_admitted(
             let delta = relation.delta_host.as_ref().expect("checked IDB delta host");
             quote!((#index, #canonical.len(), #delta.len()))
         });
+        // The rows of every member's delta, for an observer that asks for
+        // them: at a round's begin the delta it consumes, at the stratum's
+        // end the last, unconsumed one.
+        let delta_rows: Vec<_> = stratum.members.iter().map(|&index| {
+            let relation = &context.relations[index];
+            let delta = relation.delta_host.as_ref().expect("checked IDB delta host");
+            let arity = relation.declaration.arity();
+            let cells = (0..arity).map(|column| {
+                let column = syn::Index::from(column);
+                quote!(::cq_storage::counters::calibration::Cell(&row.#column).scalar())
+            });
+            let dispatch_import = (arity != 0).then(|| {
+                quote!(use ::cq_storage::counters::calibration::ScalarCell as _;)
+            });
+            quote!(::cq_storage::counters::calibration::delta(#stratum_index, #round, #index, &mut |visit| {
+                #dispatch_import
+                for row in &#delta {
+                    let row: [::cq_storage::counters::calibration::ScalarValue<'_>; #arity] = [#(#cells),*];
+                    visit(&row);
+                }
+            });)
+        }).collect();
         let calibration_round = quote!(::cq_storage::calibration_select! {
             plain {}
             calibration {
                 ::cq_storage::counters::calibration::round_begin(#stratum_index, #round, &[#(#deltas),*]);
+                #(#delta_rows)*
             }
         });
         let loop_body = match stratum.loop_form.to_string().as_str() {
@@ -460,6 +483,7 @@ fn render_admitted(
                     ::cq_storage::calibration_select! {
                         plain {}
                         calibration {
+                            #(#delta_rows)*
                             ::cq_storage::counters::calibration::stratum_end(#stratum_index, #round, &[#(#final_rows),*]);
                         }
                     }

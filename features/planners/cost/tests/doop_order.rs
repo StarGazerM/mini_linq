@@ -25,7 +25,7 @@ use cq_cost::export::{self, Configuration, Origin, PlannerInput, Target, Version
 use cq_evidence::{self as ev, DatasetEvidence, RelationSemantics, ScalarDomain};
 use cq_lang_cq::BodyItem;
 use cq_lang_datalog_round::incremental::source as dl;
-use cq_load::{stats::{ColumnSpec, DistinctMode, RelationSpec}, stats_manifest::{DatasetRequest, RelationInput, REQUEST_SCHEMA}, stats_source::{SourceFormat, SourceOptions}};
+use cq_load::{stats::{ColumnSpec, DistinctMode, RelationSpec}, stats_manifest::{DatasetRequest, MetadataInput, RelationInput, REQUEST_SCHEMA}, stats_source::{SourceFormat, SourceOptions}};
 use cq_syntax::{constraint::{Comparison, Constraint, Term}, declared_evidence::{ColumnBinding, DeclaredEvidence, EvidenceView, RelationBinding}, rust, symbol_name};
 use quote::ToTokens;
 
@@ -411,11 +411,12 @@ impl Doop {
         }
         rows
     }
-    /// Exact evidence of the inputs and the checked compiler record bound to it.
-    fn planned(&self, dataset: &Path) -> (PlannerInput, DatasetEvidence) {
-        let request = DatasetRequest {
+    /// The statistics request of the prepared inputs and the constants file.
+    fn request(&self) -> DatasetRequest {
+        DatasetRequest {
             schema: REQUEST_SCHEMA.into(), name: "doop".into(), date: "2026-11-11".into(), formulation: "doop default".into(),
-            hash_mode: ev::HASH_MODE.into(), distinct: DistinctMode::Exact, metadata: Vec::new(),
+            hash_mode: ev::HASH_MODE.into(), distinct: DistinctMode::Exact,
+            metadata: vec![MetadataInput { path: "meta.json".into(), role: ev::FileRole::Constants }],
             relations: self.inputs.iter().map(|(name, input)| RelationInput {
                 relation: RelationSpec { name: name.clone(), semantics: RelationSemantics::Set, key_sets: Vec::new(),
                     columns: (0..input["arity"].as_u64().unwrap()).map(|c| ColumnSpec { name: format!("c{c}"), domain: ScalarDomain::SignedInteger }).collect() },
@@ -423,8 +424,14 @@ impl Doop {
                 options: SourceOptions { format: SourceFormat::LiteralTabs, delimiter: b'\t', headers: false, trailing_delimiter: false, ..Default::default() },
                 missing_as_empty: false,
             }).collect(),
-        };
+        }
+    }
+    /// Exact evidence of the inputs and the checked compiler record bound to it.
+    fn planned(&self, dataset: &Path) -> (PlannerInput, DatasetEvidence) {
+        let request = self.request();
+        let profiling = std::time::Instant::now();
         let mut evidence = request.collect(dataset).unwrap();
+        eprintln!("input evidence of {} relations collected in {:.2?}", request.relations.len(), profiling.elapsed());
         let configuration = Configuration { compiler_hash: export::sha256("doop optimal-order check"), target: Target::Cpu, invocation: "doop_order.rs".into() };
         let unit = |id: &str| ev::Fact { id: id.into(), source: ev::Source::Declared, claim: ev::Claim::Equal,
             value: Some(ev::Rational { numerator: "1".into(), denominator: "1".into() }), lower: None, upper: None, dataset_hash: evidence.dataset.hash.clone(),
@@ -614,7 +621,6 @@ fn work(ops: &[Op], tables: &[Table], members: &[usize], rounds: u32, steady: bo
 struct Pairs {
     memo: std::sync::Mutex<HashMap<String, (f64, f64, f64)>>,
     counts: std::sync::Mutex<HashMap<(usize, Vec<usize>), std::sync::Arc<HashMap<Row, u32, Fast>>>>,
-    sequences: std::sync::Mutex<HashMap<String, std::sync::Arc<HashMap<Row, Vec<u32>, Fast>>>>,
 }
 /// How much of a component's relations a round sees: of a relation read in
 /// full beside the changing occurrence, the share of its rows no younger
@@ -1005,117 +1011,6 @@ fn ops(candidate: &Candidate, hole: &export::Hole, model: &Model, slots: &mut BT
     for (at, cond) in absorbed { result.insert(at, Op::Restrict(cond)); }
     Some(result)
 }
-/// The constant columns of each occurrence of a hole, by normalized clause:
-/// literal and closed arguments, and variables an equality fixes.
-fn constants(hole: &export::Hole, model: &Model) -> BTreeMap<usize, Vec<(usize, i32)>> {
-    let Ok(normal) = syn::parse_str::<cq_lang_cq::Program>(&hole.normalized_cq) else { return BTreeMap::new() };
-    let mut slots = BTreeMap::new();
-    let fixed = fixed(hole, model, &mut slots);
-    let named: BTreeMap<String, i32> = slots.iter().filter_map(|(name, slot)| fixed.iter().find(|(known, _)| known == slot).map(|(_, value)| (name.clone(), *value))).collect();
-    let mut result = BTreeMap::new();
-    for (clause, item) in normal.query.body.iter().enumerate() {
-        let BodyItem::Positive { atom } = item else { continue };
-        let Some(occurrence) = hole.occurrences.iter().find(|occurrence| occurrence.normalized_path == [clause]) else { continue };
-        let mut columns = Vec::new();
-        for (argument, &source) in atom.args.iter().zip(&occurrence.columns) {
-            match rust::variable(argument) {
-                Some(name) => if let Some(&value) = named.get(&symbol_name(name)) { columns.push((source, value)); },
-                None if matches!(argument, syn::Expr::Infer(_)) => {}
-                None => columns.push((source, closed(argument, &model.constants))),
-            }
-        }
-        result.insert(clause, columns);
-    }
-    result
-}
-
-/// Exact degrees of the final relations, for `cost::variables`. `members`
-/// are the relations of a steady variant's component.
-struct TableDegrees<'a> { model: &'a Model, tables: &'a [Table], memo: &'a Pairs, constants: BTreeMap<usize, Vec<(usize, i32)>>, visible: Option<Visible>, members: Vec<usize> }
-impl TableDegrees<'_> {
-    fn source(&self, read: &cost::Read) -> Option<(usize, Vec<(usize, i32)>)> {
-        Some((self.model.names.iter().position(|name| *name == read.logical_relation)?, self.constants.get(&read.normalized_clause).cloned().unwrap_or_default()))
-    }
-}
-impl cost::variables::Degrees for TableDegrees<'_> {
-    fn distinct(&self, read: &cost::Read, columns: &[usize]) -> Option<f64> {
-        let (relation, filter) = self.source(read)?;
-        Some(self.memo.memoized(format!("distinct {relation} {filter:?} {columns:?}"), || {
-            let mut seen: HashSet<Row, Fast> = HashSet::default();
-            for row in &self.tables[relation].rows { if filter.iter().all(|&(c, v)| row[c] == v) { seen.insert(key(row, columns)); } }
-            (seen.len() as f64, 0.0, 0.0)
-        }).0)
-    }
-    fn joined(&self, reach: Option<cost::variables::Reach<'_>>, binder: &cost::Read, from: &[usize], read: &cost::Read, bound: &[usize], column: usize) -> Option<f64> {
-        let (source, passing) = self.source(binder)?;
-        let (relation, filter) = self.source(read)?;
-        let degrees = self.sequence(relation, &filter, bound, column);
-        let member = self.members.contains(&relation);
-        // The values a binder row meets, no younger than `stage` if given.
-        let met = |row: &Row, stage: Option<u32>| degrees.get(&key(row, from))
-            .map_or(0, |stages| stage.map_or(stages.len(), |stage| stages.partition_point(|&seen| seen <= stage))) as u64;
-        let Some(reach) = reach else {
-            // A row of the changing occurrence meets the rows no younger than itself.
-            let staged = binder.version == Version::Delta && member;
-            return Some(self.memo.memoized(format!("joined {source} {passing:?} {from:?} {relation} {filter:?} {bound:?} {column} {staged}"), || {
-                let (mut rows, mut total) = (0u64, 0u64);
-                for (row, &stage) in self.tables[source].rows.iter().zip(&self.tables[source].stage) {
-                    if passing.iter().any(|&(c, v)| row[c] != v) { continue; }
-                    rows += 1;
-                    total += met(row, staged.then_some(stage as u32));
-                }
-                (if rows > 0 { total as f64 / rows as f64 } else { 0.0 }, 0.0, 0.0)
-            }).0);
-        };
-        // Every pair of a changing row and a binder row it reaches.
-        let (changing, changes) = self.source(reach.changing)?;
-        Some(self.memo.memoized(format!("reached {changing} {changes:?} {:?} {source} {passing:?} {:?} {from:?} {relation} {filter:?} {bound:?} {column}", reach.columns, reach.binder), || {
-            let mut reached: HashMap<Row, Vec<u32>, Fast> = HashMap::default();
-            for (at, row) in self.tables[source].rows.iter().enumerate() {
-                if passing.iter().all(|&(c, v)| row[c] == v) { reached.entry(key(row, reach.binder)).or_default().push(at as u32); }
-            }
-            let (mut pairs, mut total) = (0u64, 0u64);
-            for (row, &stage) in self.tables[changing].rows.iter().zip(&self.tables[changing].stage) {
-                if changes.iter().any(|&(c, v)| row[c] != v) { continue; }
-                for &at in reached.get(&key(row, reach.columns)).into_iter().flatten() {
-                    pairs += 1;
-                    total += met(&self.tables[source].rows[at as usize], member.then_some(stage as u32));
-                }
-            }
-            (if pairs > 0 { total as f64 / pairs as f64 } else { 0.0 }, 0.0, 0.0)
-        }).0)
-    }
-    fn visible(&self, read: &cost::Read) -> f64 {
-        let relation = self.model.names.iter().position(|name| *name == read.logical_relation);
-        match (&self.visible, relation) { (Some(visible), Some(relation)) => visible.after[relation], _ => 1.0 }
-    }
-}
-impl TableDegrees<'_> {
-    /// The degree sequence of `column` given `bound`: per value of the
-    /// bound columns, the stage each distinct value of the column first
-    /// appears at, ascending.
-    fn sequence(&self, relation: usize, filter: &[(usize, i32)], bound: &[usize], column: usize) -> std::sync::Arc<HashMap<Row, Vec<u32>, Fast>> {
-        let name = format!("{relation} {filter:?} {bound:?} {column}");
-        if let Some(known) = self.memo.sequences.lock().unwrap().get(&name) { return known.clone(); }
-        let mut extended = bound.to_vec();
-        extended.push(column);
-        let mut first: HashMap<Row, u32, Fast> = HashMap::default();
-        for (row, &stage) in self.tables[relation].rows.iter().zip(&self.tables[relation].stage) {
-            if filter.iter().all(|&(c, v)| row[c] == v) { first.entry(key(row, &extended)).and_modify(|seen| *seen = (*seen).min(stage as u32)).or_insert(stage as u32); }
-        }
-        let mut groups: HashMap<Row, Vec<u32>, Fast> = HashMap::default();
-        for (pair, stage) in first {
-            let mut group = pair;
-            group[bound.len()] = 0;
-            groups.entry(group).or_default().push(stage);
-        }
-        for stages in groups.values_mut() { stages.sort_unstable(); }
-        let groups = std::sync::Arc::new(groups);
-        self.memo.sequences.lock().unwrap().insert(name, groups.clone());
-        groups
-    }
-}
-
 /// Variables a top-level constraint fixes to a closed value.
 fn fixed(hole: &export::Hole, model: &Model, slots: &mut BTreeMap<String, usize>) -> Vec<(usize, i32)> {
     let Ok(normal) = syn::parse_str::<cq_lang_cq::Program>(&hole.normalized_cq) else { return Vec::new() };
@@ -1168,6 +1063,278 @@ fn scrambled(line: &str, mode: &str) -> String {
         _ => panic!("DOOP_SCRAMBLE is reverse or shuffle:<seed>"),
     }
     format!("{head} :- {};", positive.into_iter().chain(rest).collect::<Vec<_>>().join(", "))
+}
+
+/// The evidence with the degree facts the variable planner requests,
+/// collected over the run's relations with each row's stage (PS-Collect);
+/// the requests and the time `finish` took.
+fn collect_degrees(input: &PlannerInput, evidence: &DatasetEvidence, model: &Model, run: &Run, threads: usize) -> (DatasetEvidence, usize, std::time::Duration) {
+    let requests = cost::variables::Planner::new(input, evidence).unwrap().requests().unwrap();
+    let requested = requests.len();
+    let mut collector = cq_load::stats::DegreeCollector::new(requests);
+    let mut cells = [0i64; W];
+    for (relation, name) in model.names.iter().enumerate() {
+        let Some(id) = collector.relation(name) else { continue };
+        let table = &run.tables[relation];
+        for (row, &stage) in table.rows.iter().zip(&table.stage) {
+            for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
+            collector.push(id, stage, &cells[..model.arity[relation]]);
+        }
+    }
+    let clock = std::time::Instant::now();
+    let values = collector.finish(threads).unwrap();
+    let collecting = clock.elapsed();
+    let provenance = ev::Provenance { producer: "doop_order.rs".into(), method: "exact degrees of the oracle's run".into(), locator: "doop_order.rs".into(), run: None, artifact_hash: None };
+    let mut measured = evidence.clone();
+    measured.degrees = cq_load::stats::bind_degrees(values, &evidence.dataset.hash, ev::Source::Exact, ev::Claim::Equal, provenance);
+    measured.check().unwrap();
+    (measured, requested, collecting)
+}
+
+/// The evidence with the planner's degree facts as the runtime keeps them
+/// (PS-Admit): every row of the run admitted with its stage, each
+/// relation's rows in stage order; and the time admitting and finishing took.
+fn admit_degrees(input: &PlannerInput, evidence: &DatasetEvidence, model: &Model, run: &Run) -> (DatasetEvidence, std::time::Duration) {
+    let requests = cost::variables::Planner::new(input, evidence).unwrap().requests().unwrap();
+    let relations: Vec<(&str, usize)> = model.names.iter().map(String::as_str).zip(model.arity.iter().copied()).collect();
+    let mut degrees = cq_load::stats::admitted_degrees(&requests, &relations).unwrap();
+    // The oracle's tables hold their rows in the order it derived them.
+    for table in &run.tables { assert!(table.stage.is_sorted(), "a table's rows are not in stage order"); }
+    let clock = std::time::Instant::now();
+    let mut cells = [0i64; W];
+    for (relation, table) in run.tables.iter().enumerate() {
+        if !degrees.wants(relation) { continue; }
+        for (row, &stage) in table.rows.iter().zip(&table.stage) {
+            for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
+            degrees.admit(relation, stage, &cells[..model.arity[relation]]);
+        }
+    }
+    let values = requests.into_iter().zip(degrees.finish()).map(|(request, (numerator, denominator))| (request, numerator, denominator)).collect();
+    let admitting = clock.elapsed();
+    // An admitted degree observes one run; it is no exact fact of the dataset.
+    let observed = ev::RunIdentity { program_hash: input.identity.program_hash.clone(), configuration_hash: input.identity.configuration_hash.clone(),
+        admission: ev::Admission::InsertOnlySet, run_id: "doop-order-oracle".into(), completed: true };
+    let provenance = ev::Provenance { producer: "doop_order.rs".into(), method: "degrees kept as the oracle's rows are admitted: sketches and a sample of keys".into(), locator: "doop_order.rs".into(), run: Some(observed), artifact_hash: None };
+    let mut measured = evidence.clone();
+    measured.degrees = cq_load::stats::bind_degrees(values, &evidence.dataset.hash, ev::Source::Calibrated, ev::Claim::Observation, provenance);
+    measured.check().unwrap();
+    (measured, admitting)
+}
+
+/// What the planner's degree facts cost on a DOOP dataset, exact and as
+/// the runtime keeps them: the time of `DegreeCollector::finish` at every
+/// core and at 1 thread; the time of admitting every row; how far each
+/// admitted fact is from the exact one; and what the difference costs the
+/// plans, in the exact facts' own measure.
+#[test]
+#[ignore = "measurement over a prepared DOOP dataset: set DOOP_PREPARED"]
+fn the_cost_of_collecting_degree_facts_on_doop() {
+    let dataset = std::path::PathBuf::from(std::env::var("DOOP_PREPARED").expect("DOOP_PREPARED names a prepared DOOP dataset"));
+    let doop = Doop::load(|text| text.to_string());
+    let model = Model::new(&doop.program, doop.constants(&dataset));
+    let run = Run::evaluate(&model, doop.rows(&dataset, &model));
+    let (input, evidence) = doop.planned(&dataset);
+    let peak = || std::fs::read_to_string("/proc/self/status").unwrap().lines().find_map(|line| line.strip_prefix("VmHWM:").map(|rest| rest.trim().to_string())).unwrap();
+    let rows: usize = run.tables.iter().map(|table| table.rows.len()).sum();
+    eprintln!("{} rows in all relations; peak before collecting {}", rows, peak());
+    let mut facts = Vec::new();
+    for threads in [std::thread::available_parallelism().map_or(1, usize::from), 1] {
+        let (measured, requested, collecting) = collect_degrees(&input, &evidence, &model, &run, threads);
+        eprintln!("{requested} requests, {threads} threads: {collecting:.2?}; peak {}", peak());
+        facts.push(measured.degrees);
+    }
+    assert_eq!(facts[0], facts[1], "the facts depend on the thread count");
+    // `DOOP_DEGREES_OUT=<file>`: every fact as `id<TAB>numerator/denominator`,
+    // to compare with those a calibrated engine run collects.
+    if let Ok(path) = std::env::var("DOOP_DEGREES_OUT") {
+        let text: String = facts[0].iter().map(|degree| { let value = degree.value.value.as_ref().unwrap(); format!("{}\t{}/{}\n", degree.value.id, value.numerator, value.denominator) }).collect();
+        std::fs::write(path, text).unwrap();
+    }
+    let ratio = |degree: &ev::DegreeEvidence| { let value = degree.value.value.as_ref().unwrap(); value.numerator.parse::<f64>().unwrap() / value.denominator.parse::<f64>().unwrap() };
+    let exact: BTreeMap<&str, f64> = facts[0].iter().map(|degree| (degree.value.id.as_str(), ratio(degree))).collect();
+    let (admitted, admitting) = admit_degrees(&input, &evidence, &model, &run);
+    // Per kind of request: the facts, the mean relative error, and how
+    // many are off by more than a quarter and by more than a factor of two.
+    let mut kinds: BTreeMap<&str, (usize, f64, usize, usize)> = BTreeMap::new();
+    let mut worst: Vec<(f64, String)> = Vec::new();
+    for degree in &admitted.degrees {
+        let (truth, estimate) = (exact[degree.value.id.as_str()], ratio(degree));
+        let error = if truth == 0.0 { estimate } else { (estimate - truth).abs() / truth };
+        let kind = kind_of(&degree.request);
+        let entry = kinds.entry(kind).or_default();
+        *entry = (entry.0 + 1, entry.1 + error, entry.2 + usize::from(error > 0.25), entry.3 + usize::from(!(0.5..=2.0).contains(&(estimate / truth.max(f64::MIN_POSITIVE))) && truth != estimate));
+        worst.push((error, format!("{} exact {truth:.4} admitted {estimate:.4}", degree.value.id)));
+    }
+    eprintln!("admitted: {admitting:.2?}; peak {}", peak());
+    for (kind, (count, sum, quarter, double)) in kinds { eprintln!("  {kind:15} {count:4} facts, mean error {:.3}, {quarter} off by a quarter, {double} by a factor of two", sum / count as f64); }
+    worst.sort_by(|left, right| right.0.total_cmp(&left.0));
+    for (error, fact) in worst.iter().take(6) { eprintln!("  worst {error:.2}: {fact}"); }
+    // The plans: the order each set of facts chooses, costed by the exact facts.
+    let mut measured = evidence.clone();
+    measured.degrees = facts.swap_remove(0);
+    let (by_exact, by_admitted) = (cost::variables::Planner::new(&input, &measured).unwrap(), cost::variables::Planner::new(&input, &admitted).unwrap());
+    let (mut planned, mut differ, mut best, mut chosen) = (0, 0, 0.0, 0.0);
+    for hole in 0..input.holes.len() {
+        let (Some(exact), Some(admitted)) = (by_exact.plan(hole).unwrap(), by_admitted.plan(hole).unwrap()) else { continue };
+        planned += 1;
+        best += exact.estimate;
+        if exact.order == admitted.order { chosen += exact.estimate; continue; }
+        differ += 1;
+        let costed = by_exact.lower(hole, &admitted.order).unwrap().expect("an order of the hole's variables");
+        chosen += costed.estimate;
+        eprintln!("  hole {hole}: exact order {:?} costs {:.4}; admitted order {:?} costs {:.4} by the exact facts", exact.order, exact.estimate, admitted.order, costed.estimate);
+    }
+    eprintln!("{planned} holes planned from both; {differ} orders differ; summed VP-Cost by the exact facts: {best:.3} for the exact orders, {chosen:.3} for the admitted ones");
+}
+
+fn kind_of(request: &ev::DegreeRequest) -> &'static str {
+    match request {
+        ev::DegreeRequest::Distinct { .. } => "distinct",
+        ev::DegreeRequest::Visible { .. } => "visible",
+        ev::DegreeRequest::Joined { reach: None, staged: false, .. } => "joined",
+        ev::DegreeRequest::Joined { reach: None, staged: true, .. } => "joined staged",
+        ev::DegreeRequest::Joined { reach: Some(_), staged: false, .. } => "reached",
+        ev::DegreeRequest::Joined { reach: Some(_), staged: true, .. } => "reached staged",
+    }
+}
+
+/// What planning a DOOP dataset needs of its statistics. Of the facts
+/// requested: those the search reads, and those the chosen orders are
+/// valued by. Then what each kind is worth: the orders chosen with that
+/// kind replaced by what a cheaper statistic gives, costed by the exact
+/// facts; a hole weighs the rows of its changing relation, a seed one.
+#[test]
+#[ignore = "measurement over a prepared DOOP dataset: set DOOP_PREPARED"]
+fn what_the_plans_need_of_degree_facts_on_doop() {
+    use ev::DegreeRequest as Request;
+    let dataset = std::path::PathBuf::from(std::env::var("DOOP_PREPARED").expect("DOOP_PREPARED names a prepared DOOP dataset"));
+    let doop = Doop::load(|text| text.to_string());
+    let model = Model::new(&doop.program, doop.constants(&dataset));
+    let run = Run::evaluate(&model, doop.rows(&dataset, &model));
+    let (input, evidence) = doop.planned(&dataset);
+    let requests = cost::variables::Planner::new(&input, &evidence).unwrap().requests().unwrap();
+    // What stands in for a matched degree: the same without rounds; the
+    // same without the reach (a direct staged degree is another
+    // statistic, so without rounds too); the read relation's average.
+    let unstaged = |request: &Request| {
+        let mut twin = request.clone();
+        match &mut twin { Request::Joined { staged, .. } if *staged => *staged = false, _ => return None }
+        Some(twin)
+    };
+    let direct = |request: &Request| {
+        let mut twin = request.clone();
+        match &mut twin { Request::Joined { reach, staged, .. } if reach.is_some() => { *reach = None; *staged = false; } _ => return None }
+        Some(twin)
+    };
+    let average = |request: &Request| {
+        let Request::Joined { read, bound, column, .. } = request else { return None };
+        let mut columns = bound.clone();
+        columns.push(*column);
+        columns.sort_unstable();
+        Some([Request::Distinct { rows: read.clone(), columns }, Request::Distinct { rows: read.clone(), columns: bound.clone() }])
+    };
+    let mut all: BTreeSet<Request> = requests.iter().cloned().collect();
+    for request in &requests {
+        all.extend(unstaged(request));
+        all.extend(direct(request));
+        all.extend(average(request).into_iter().flatten());
+    }
+    let mut collector = cq_load::stats::DegreeCollector::new(all.into_iter().collect());
+    let mut cells = [0i64; W];
+    for (relation, name) in model.names.iter().enumerate() {
+        let Some(id) = collector.relation(name) else { continue };
+        let table = &run.tables[relation];
+        for (row, &stage) in table.rows.iter().zip(&table.stage) {
+            for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
+            collector.push(id, stage, &cells[..model.arity[relation]]);
+        }
+    }
+    let exact: HashMap<Request, (u64, u64)> = collector.finish(std::thread::available_parallelism().map_or(1, usize::from)).unwrap()
+        .into_iter().map(|(request, numerator, denominator)| (request, (numerator, denominator))).collect();
+    let bind = |value: &dyn Fn(&Request) -> (u64, u64)| {
+        let provenance = ev::Provenance { producer: "doop_order.rs".into(), method: "degrees of the oracle's run, a kind replaced".into(), locator: "doop_order.rs".into(), run: None, artifact_hash: None };
+        let values = requests.iter().map(|request| {
+            let (numerator, denominator) = value(request);
+            if denominator == 0 { (request.clone(), 0, 1) } else { (request.clone(), numerator, denominator) }
+        }).collect();
+        let mut measured = evidence.clone();
+        measured.degrees = cq_load::stats::bind_degrees(values, &evidence.dataset.hash, ev::Source::Exact, ev::Claim::Equal, provenance);
+        measured.check().unwrap();
+        measured
+    };
+    let of = |request: &Request| exact[request];
+    let averaged = |request: &Request| average(request).map(|[values, groups]| (of(&values).0, of(&groups).0));
+    let by_exact = cost::variables::Planner::new(&input, &bind(&of)).unwrap();
+
+    let (mut searched, mut valued) = (BTreeSet::new(), BTreeSet::new());
+    let mut plans = Vec::new();
+    for hole in 0..input.holes.len() {
+        let Some(planned) = by_exact.plan(hole).unwrap() else { continue };
+        searched.extend(planned.read.iter().cloned());
+        valued.extend(by_exact.lower(hole, &planned.order).unwrap().expect("the planned order").read);
+        let weight = planned.candidate.steps.iter().filter_map(|step| step.read.as_ref()).find(|read| read.version == Version::Delta)
+            .and_then(|read| model.names.iter().position(|name| *name == read.logical_relation)).map_or(1.0, |relation| run.tables[relation].rows.len() as f64);
+        plans.push((hole, weight, planned.order, planned.estimate));
+    }
+    let mut kinds: BTreeMap<&str, [usize; 3]> = BTreeMap::new();
+    for request in &requests {
+        let entry = kinds.entry(kind_of(request)).or_default();
+        entry[0] += 1;
+        entry[1] += usize::from(searched.contains(request));
+        entry[2] += usize::from(valued.contains(request));
+    }
+    eprintln!("{} holes planned; facts requested, read by the search, valuing the chosen orders:", plans.len());
+    for (kind, [requested, searched, valued]) in &kinds { eprintln!("  {kind:15} {requested:4} {searched:4} {valued:4}"); }
+    eprintln!("  {:15} {:4} {:4} {:4}", "all", requests.len(), searched.len(), valued.len());
+
+    let visible = |request: &Request| matches!(request, Request::Visible { .. });
+    let variants: [(&str, &dyn Fn(&Request) -> (u64, u64)); 6] = [
+        ("every fact exact", &of),
+        ("rounds dropped: staged as unstaged, every row visible", &|request| if visible(request) { (1, 1) } else { unstaged(request).map_or_else(|| of(request), |twin| of(&twin)) }),
+        ("reach dropped: reached as direct", &|request| direct(request).map_or_else(|| of(request), |twin| of(&twin))),
+        ("rounds and reach dropped: what a stored relation gives", &|request| if visible(request) { (1, 1) } else { direct(request).or_else(|| unstaged(request)).map_or_else(|| of(request), |twin| of(&twin)) }),
+        ("matched degrees dropped: a relation's average degree, visible shares kept", &|request| averaged(request).unwrap_or_else(|| of(request))),
+        ("distinct counts only: average degrees, every row visible", &|request| if visible(request) { (1, 1) } else { averaged(request).unwrap_or_else(|| of(request)) }),
+    ];
+    for (name, value) in &variants {
+        let planner = cost::variables::Planner::new(&input, &bind(*value)).unwrap();
+        let (mut differ, mut best, mut chosen, mut worse) = (0, 0.0, 0.0, Vec::new());
+        for (hole, weight, order, estimate) in &plans {
+            best += weight * estimate;
+            let planned = planner.plan(*hole).unwrap().expect("a hole the exact facts plan");
+            if planned.order == *order { chosen += weight * estimate; continue; }
+            differ += 1;
+            let costed = by_exact.lower(*hole, &planned.order).unwrap().expect("an order of the hole's variables").estimate;
+            chosen += weight * costed;
+            if costed > estimate * 1.1 { worse.push((weight * (costed - estimate), costed / estimate, *weight, *hole)); }
+        }
+        eprintln!("{name}: {differ} of {} orders differ, {} cost over 1.1 times the best; weighted cost {:.4} times the best", plans.len(), worse.len(), chosen / best);
+        worse.sort_by(|left, right| right.0.total_cmp(&left.0));
+        for (_, ratio, weight, hole) in worse.iter().take(4) {
+            let Origin::Rule { source_label, variant, seed, .. } = &input.holes[*hole].origin else { unreachable!() };
+            eprintln!("    {}{}#{variant}: {ratio:.2} times, {weight:.0} changing rows", source_label.clone().unwrap_or_default(), if *seed { " seed" } else { "" });
+        }
+    }
+}
+
+/// The inputs of a calibrated run of the CPU engine (`srd-doop-mini
+/// --features planner-calibration,srd-doop-shared/default-query --
+/// PREPARED --calibrate plans.json evidence.json request.json OUT RUN`),
+/// written to `DOOP_CALIBRATION_OUT`: the checked plans of the program in
+/// its written orders, the exact input evidence, and its request.
+#[test]
+#[ignore = "writes calibration inputs for a prepared DOOP dataset: set DOOP_PREPARED and DOOP_CALIBRATION_OUT"]
+fn the_calibration_inputs_of_doop() {
+    let dataset = std::path::PathBuf::from(std::env::var("DOOP_PREPARED").expect("DOOP_PREPARED names a prepared DOOP dataset"));
+    let out = std::path::PathBuf::from(std::env::var("DOOP_CALIBRATION_OUT").expect("DOOP_CALIBRATION_OUT names a directory"));
+    assert!(std::env::var("DOOP_DRIVER").is_err(), "the CPU engine compiles the written orders");
+    let doop = Doop::load(|text| text.to_string());
+    let (input, evidence) = doop.planned(&dataset);
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("plans.json"), serde_json::to_vec(&input).unwrap()).unwrap();
+    std::fs::write(out.join("evidence.json"), evidence.canonical_json().unwrap()).unwrap();
+    std::fs::write(out.join("request.json"), serde_json::to_vec_pretty(&doop.request()).unwrap()).unwrap();
+    eprintln!("{} holes, dataset {}", input.holes.len(), evidence.dataset.hash);
 }
 
 #[test]
@@ -1280,9 +1447,10 @@ fn the_order_the_tool_selects_against_the_optimal_order_on_doop() {
     // estimates, then any kept valuation outside it; the kept valuations'
     // places in that list.
     type Valuation<'a> = (&'a Candidate, Option<f64>, &'a [Option<f64>]);
-    // Variable orders (`cost::variables`) from the exact degrees of the final
-    // relations: planned, and, with `DOOP_HAND_ORDERS=<SRDatalog rules.txt>`,
-    // the hand order of the same variant under the same lowering.
+    // Variable orders (`cost::variables`) from degree facts collected over
+    // the run's relations with each row's stage (PS-Collect): planned, and,
+    // with `DOOP_HAND_ORDERS=<SRDatalog rules.txt>`, the hand order of the
+    // same variant under the same lowering.
     let hand_orders: BTreeMap<String, Vec<String>> = std::env::var("DOOP_HAND_ORDERS").ok().map(|path| {
         let mut orders: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut current = String::new();
@@ -1295,27 +1463,26 @@ fn the_order_the_tool_selects_against_the_optimal_order_on_doop() {
         }
         orders
     }).unwrap_or_default();
-    let statistics = Pairs::default();
+    let (measured, requested, collecting) = collect_degrees(&input, &evidence, &model, &run, std::thread::available_parallelism().map_or(1, usize::from));
+    eprintln!("{requested} degree requests collected in {collecting:.1?}");
+    let planner = cost::variables::Planner::new(&input, &measured).unwrap();
     let selected: Option<Vec<String>> = std::env::var("DOOP_ORACLE_HOLES").ok().map(|list| list.split(',').map(str::to_owned).collect());
-    let variable_plans: Vec<[Option<cost::variables::Planned>; 2]> = input.holes.iter().zip(&report.holes).map(|(hole, advice)| {
-        let Origin::Rule { source_label, variant, seed, .. } = &hole.origin else { return [None, None] };
-        let shown = format!("{}{}#{variant}", source_label.clone().unwrap_or_default(), if *seed { " seed" } else { "" });
-        if selected.as_ref().is_some_and(|only| !only.iter().any(|part| shown.contains(part.as_str()))) { return [None, None]; }
+    let label = |hole: usize| match &input.holes[hole].origin {
+        Origin::Rule { source_label, variant, seed, .. } => format!("{}{}#{variant}", source_label.clone().unwrap_or_default(), if *seed { " seed" } else { "" }),
+        _ => format!("hole {hole}"),
+    };
+    let variable_plans: Vec<[Option<cost::variables::Planned>; 2]> = input.holes.iter().enumerate().zip(&report.holes).map(|((at, hole), advice)| {
+        let Origin::Rule { source_label, seed, .. } = &hole.origin else { return [None, None] };
+        if selected.as_ref().is_some_and(|only| !only.iter().any(|part| label(at).contains(part.as_str()))) { return [None, None]; }
         let changing = advice.candidates.iter().find(|record| record.plan.current)
-            .and_then(|record| record.plan.steps.iter().filter_map(|step| step.read.as_ref()).find(|read| read.version == Version::Delta));
-        // A steady variant sees of its component what is no younger than its delta.
-        let members: Vec<usize> = changing.filter(|_| !seed).and_then(|read| model.names.iter().position(|name| *name == read.logical_relation))
-            .and_then(|delta| run.component[delta]).map_or(Vec::new(), |component| (0..model.names.len()).filter(|&relation| run.component[relation] == Some(component)).collect());
-        let visible = changing.filter(|_| !members.is_empty()).and_then(|read| model.names.iter().position(|name| *name == read.logical_relation))
-            .map(|delta| Visible::new(&run.tables, &members, Some(delta), run.rounds[run.component[delta].unwrap()]));
-        let changing = changing.map(|read| read.source_occurrence);
-        let degrees = TableDegrees { model: &model, tables: &run.tables, memo: &statistics, constants: constants(hole, &model), visible, members };
+            .and_then(|record| record.plan.steps.iter().filter_map(|step| step.read.as_ref()).find(|read| read.version == Version::Delta))
+            .map(|read| read.source_occurrence);
         // A rule of several heads is one hand rule: `Rule_k` plans as `Rule`.
-        let label = source_label.clone().unwrap_or_default();
-        let named = |label: &str| match (seed, changing) { (false, Some(at)) => format!("{label}_D{at}"), _ => label.to_string() };
-        let single = label.rsplit_once('_').filter(|(_, head)| !head.is_empty() && head.chars().all(|c| c.is_ascii_digit())).map(|(rule, _)| rule.to_string());
-        let hand = hand_orders.get(&named(&label)).or_else(|| single.as_ref().and_then(|rule| hand_orders.get(&named(rule))));
-        [cost::variables::plan(&input, hole, &degrees).unwrap(), hand.and_then(|order| cost::variables::lower(&input, hole, &degrees, order).unwrap())]
+        let rule = source_label.clone().unwrap_or_default();
+        let named = |rule: &str| match (seed, changing) { (false, Some(at)) => format!("{rule}_D{at}"), _ => rule.to_string() };
+        let single = rule.rsplit_once('_').filter(|(_, head)| !head.is_empty() && head.chars().all(|c| c.is_ascii_digit())).map(|(rule, _)| rule.to_string());
+        let hand = hand_orders.get(&named(&rule)).or_else(|| single.as_ref().and_then(|rule| hand_orders.get(&named(rule))));
+        [planner.plan(at).unwrap(), hand.and_then(|order| planner.lower(at, order).unwrap())]
     }).collect();
     eprintln!("variable orders planned in {:.1?}", clock.elapsed());
     // `DOOP_VARS_ADVICE=<prefix>` writes the planned and the hand variable
@@ -1323,40 +1490,15 @@ fn the_order_the_tool_selects_against_the_optimal_order_on_doop() {
     // (`<prefix>.planned.dl`, `<prefix>.hand.dl`), names every variant it
     // rejects alone (`.rejected`), and stops.
     if let Ok(prefix) = std::env::var("DOOP_VARS_ADVICE") {
-        use cq_cost::cost::advice;
         for (slot, role) in ["planned", "hand"].iter().enumerate() {
-            let all: BTreeMap<usize, &Candidate> = variable_plans.iter().enumerate()
-                .filter_map(|(hole, plans)| Some((hole, &plans[slot].as_ref()?.candidate))).collect();
-            let compile = |chosen: &BTreeMap<usize, &Candidate>| -> Result<Vec<_>, String> {
-                let plans = advice::datalog_plans_for(&input, &report, chosen).map_err(|error| error.0)?;
-                advice::compile_datalog_advice(&input, &plans).map_err(|error| error.0)?;
-                Ok(plans)
-            };
-            let label = |hole: usize| match &input.holes[hole].origin {
-                Origin::Rule { source_label, variant, seed, .. } => format!("{}{}#{variant}", source_label.clone().unwrap_or_default(), if *seed { " seed" } else { "" }),
-                _ => format!("hole {hole}"),
-            };
-            let mut rejected: Vec<(usize, String)> = Vec::new();
-            let mut accepted = all.clone();
-            if let Err(whole) = compile(&all) {
-                eprintln!("{role}: the whole advice is rejected ({whole}); trying each variant alone");
-                let next = std::sync::atomic::AtomicUsize::new(0);
-                let holes: Vec<usize> = all.keys().copied().collect();
-                let found = std::sync::Mutex::new(Vec::new());
-                std::thread::scope(|scope| for _ in 0..24 { scope.spawn(|| loop {
-                    let Some(&hole) = holes.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) else { break };
-                    if let Err(reason) = compile(&BTreeMap::from([(hole, all[&hole])])) { found.lock().unwrap().push((hole, reason)); }
-                }); });
-                rejected = found.into_inner().unwrap();
-                rejected.sort();
-                for (hole, _) in &rejected { accepted.remove(hole); }
-            }
-            let plans = compile(&accepted).unwrap_or_else(|error| panic!("{role}: the variants accepted alone are rejected together: {error}"));
-            let text: String = plans.iter().map(|plan| advice::AdviceList(vec![plan.clone()]).to_token_stream().to_string() + "\n").collect();
+            let valuations: BTreeMap<usize, Candidate> = variable_plans.iter().enumerate()
+                .filter_map(|(hole, plans)| Some((hole, plans[slot].as_ref()?.candidate.clone()))).collect();
+            let advised = planner.adopt(&valuations).unwrap();
+            let text: String = advised.plans.iter().map(|plan| cost::advice::AdviceList(vec![plan.clone()]).to_token_stream().to_string() + "\n").collect();
             std::fs::write(format!("{prefix}.{role}.dl"), format!("// {role} variable orders of {}; {} variants advised, {} rejected by production\n{text}",
-                planned_dir.display(), accepted.len(), rejected.len())).unwrap();
-            std::fs::write(format!("{prefix}.{role}.rejected"), rejected.iter().map(|(hole, reason)| format!("{}\t{reason}\n", label(*hole))).collect::<String>()).unwrap();
-            eprintln!("{role}: {} variants advised, {} rejected", accepted.len(), rejected.len());
+                planned_dir.display(), advised.adopted.len(), advised.rejected.len())).unwrap();
+            std::fs::write(format!("{prefix}.{role}.rejected"), advised.rejected.iter().map(|(hole, reason)| format!("{}\t{reason}\n", label(*hole))).collect::<String>()).unwrap();
+            eprintln!("{role}: {} variants advised, {} rejected", advised.adopted.len(), advised.rejected.len());
         }
         return;
     }

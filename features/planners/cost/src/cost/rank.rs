@@ -25,11 +25,11 @@ enum Filter {
 enum Op { Eq, Ne, Lt, Le, Gt, Ge }
 
 impl Filter {
-    fn new(constraint: &Constraint, model: &BoundModel<'_>) -> Self {
+    fn new(constraint: &Constraint, closed: Closed<'_>) -> Self {
         let side = |term: &Term| match term {
             Term::Variable(name) => Err(symbol_name(name)),
-            Term::Closed(expression) => Ok(value(expression, model)),
-            Term::Literal(expression) => Ok(value(expression, model)),
+            Term::Closed(expression) => Ok(value(expression, closed)),
+            Term::Literal(expression) => Ok(value(expression, closed)),
         };
         let compare = |variable: String, op: Op, value: Option<i64>| value.map_or(Self::Opaque, |value| Self::Compare { variable, op, value });
         match constraint {
@@ -50,10 +50,10 @@ impl Filter {
                 _ => Self::Opaque,
             },
             Constraint::In { term, literals } => match side(term) {
-                Err(variable) => Self::Any(literals.iter().map(|literal| compare(variable.clone(), Op::Eq, value(literal, model))).collect()),
+                Err(variable) => Self::Any(literals.iter().map(|literal| compare(variable.clone(), Op::Eq, value(literal, closed))).collect()),
                 Ok(_) => Self::Opaque,
             },
-            Constraint::Or(branches) => Self::Any(branches.iter().map(|branch| Self::All(branch.iter().map(|part| Self::new(part, model)).collect())).collect()),
+            Constraint::Or(branches) => Self::Any(branches.iter().map(|branch| Self::All(branch.iter().map(|part| Self::new(part, closed)).collect())).collect()),
         }
     }
     fn variables<'s>(&'s self, into: &mut BTreeSet<&'s str>) {
@@ -65,16 +65,71 @@ impl Filter {
     }
 }
 
+/// The value of a closed constant by field name, where the evidence binds it.
+pub(crate) type Closed<'a> = &'a dyn Fn(&str) -> Option<i64>;
+
 /// An integer literal, or a closed constant the evidence binds by field name.
-fn value(expression: &syn::Expr, model: &BoundModel<'_>) -> Option<i64> {
+fn value(expression: &syn::Expr, closed: Closed<'_>) -> Option<i64> {
     match expression {
-        syn::Expr::Paren(inner) => value(&inner.expr, model),
-        syn::Expr::Group(inner) => value(&inner.expr, model),
+        syn::Expr::Paren(inner) => value(&inner.expr, closed),
+        syn::Expr::Group(inner) => value(&inner.expr, closed),
         syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(int), .. }) => int.base10_parse().ok(),
-        syn::Expr::Unary(syn::ExprUnary { op: syn::UnOp::Neg(_), expr, .. }) => value(expr, model).map(|value| -value),
-        syn::Expr::Field(field) => match &field.member { syn::Member::Named(name) => model.constant(&name.to_string()), _ => None },
+        syn::Expr::Unary(syn::ExprUnary { op: syn::UnOp::Neg(_), expr, .. }) => value(expr, closed).map(|value| -value),
+        syn::Expr::Field(field) => match &field.member { syn::Member::Named(name) => closed(&name.to_string()), _ => None },
         _ => None,
     }
+}
+
+/// The source predicates by clause, with their variables.
+type Predicates = Vec<(usize, BTreeSet<String>, Filter)>;
+
+/// The variables an equality fixes to a value, and the source predicates.
+fn fixed(normal: &cq::Program, closed: Closed<'_>) -> (BTreeMap<String, i64>, Predicates) {
+    let mut fixed: BTreeMap<String, i64> = BTreeMap::new();
+    let mut filters = Vec::new();
+    for (clause, item) in normal.query.body.iter().enumerate() {
+        match item {
+            cq::BodyItem::Constraint(constraint) => {
+                let filter = Filter::new(constraint, closed);
+                if let Filter::Compare { variable, op: Op::Eq, value } = &filter { fixed.insert(variable.clone(), *value); }
+                let mut variables = BTreeSet::new();
+                filter.variables(&mut variables);
+                let variables = variables.into_iter().map(str::to_string).collect();
+                filters.push((clause, variables, filter));
+            }
+            cq::BodyItem::Equality(equality) => {
+                if let cq_syntax::equality::EqualityValue::Literal(literal) = &equality.right {
+                    if let Some(value) = value(literal, closed) { fixed.insert(symbol_name(&equality.left), value); }
+                }
+            }
+            _ => {}
+        }
+    }
+    (fixed, filters)
+}
+
+/// The value of each constant column of `reads`, by clause and source
+/// column: a literal or closed argument, or a variable an equality fixes.
+fn columns<'r>(normal: &cq::Program, reads: impl Iterator<Item = &'r Read>, fixed: &BTreeMap<String, i64>, closed: Closed<'_>) -> BTreeMap<(usize, usize), i64> {
+    let mut constants = BTreeMap::new();
+    for read in reads {
+        let clause = read.normalized_clause;
+        let Some(cq::BodyItem::Positive { atom }) = normal.query.body.iter().nth(clause) else { continue };
+        for (column, argument) in read.columns.iter().zip(atom.args.iter()) {
+            if column.variable.is_some() { continue; }
+            let known = match cq_syntax::rust::variable(argument) {
+                Some(name) => fixed.get(&symbol_name(name)).copied(),
+                None => value(argument, closed),
+            };
+            if let Some(known) = known { constants.insert((clause, column.source_column), known); }
+        }
+    }
+    constants
+}
+
+/// `columns` of a hole's reads, for a caller that reads no predicate.
+pub(crate) fn constant_columns<'r>(normal: &cq::Program, reads: impl Iterator<Item = &'r Read>, closed: Closed<'_>) -> BTreeMap<(usize, usize), i64> {
+    columns(normal, reads, &fixed(normal, closed).0, closed)
 }
 
 /// The share of an occurrence's rows whose `column` satisfies `op value`:
@@ -162,39 +217,9 @@ impl<'a> Estimator<'a> {
         }
         if steady && delta.is_none() { return Ok(None); }
         let normal: cq::Program = syn::parse_str(&hole.normalized_cq)?;
-        // Variables an equality fixes to a value read as constant columns.
-        let mut fixed: BTreeMap<String, i64> = BTreeMap::new();
-        let mut filters = Vec::new();
-        for (clause, item) in normal.query.body.iter().enumerate() {
-            match item {
-                cq::BodyItem::Constraint(constraint) => {
-                    let filter = Filter::new(constraint, model);
-                    if let Filter::Compare { variable, op: Op::Eq, value } = &filter { fixed.insert(variable.clone(), *value); }
-                    let mut variables = BTreeSet::new();
-                    filter.variables(&mut variables);
-                    let variables = variables.into_iter().map(str::to_string).collect();
-                    filters.push((clause, variables, filter));
-                }
-                cq::BodyItem::Equality(equality) => {
-                    if let cq_syntax::equality::EqualityValue::Literal(literal) = &equality.right {
-                        if let Some(value) = value(literal, model) { fixed.insert(symbol_name(&equality.left), value); }
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut constants = BTreeMap::new();
-        for (clause, (read, _)) in &facts {
-            let Some(cq::BodyItem::Positive { atom }) = normal.query.body.iter().nth(*clause) else { continue };
-            for (column, argument) in read.columns.iter().zip(atom.args.iter()) {
-                if column.variable.is_some() { continue; }
-                let known = match cq_syntax::rust::variable(argument) {
-                    Some(name) => fixed.get(&symbol_name(name)).copied(),
-                    None => value(argument, model),
-                };
-                if let Some(known) = known { constants.insert((*clause, column.source_column), known); }
-            }
-        }
+        let closed = |name: &str| model.constant(name);
+        let (fixed, filters) = fixed(&normal, &closed);
+        let constants = columns(&normal, facts.values().map(|(read, _)| read), &fixed, &closed);
         Ok(Some(Self {
             model, hole, facts, constants, filters, steady, cq: matches!(hole.origin, Origin::Cq {}), datalog: !matches!(hole.origin, Origin::Cq {}),
             delta, f, n, shared, forbidden, interned: Vec::new(), maintenance: BTreeMap::new(), failure: None,

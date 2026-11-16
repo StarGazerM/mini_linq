@@ -86,6 +86,7 @@ pub(super) fn finish(
             formulation: baseline.dataset.formulation.clone(), manifest },
         relations: BTreeMap::new(), premises: Vec::new(), relative: Vec::new(),
         targets: baseline.targets.clone(), observations: ev::Observations::default(), constants: baseline.constants.clone(),
+        degrees: Vec::new(),
     };
     for input in captured.inputs.values_mut() {
         let mut provenance = provenance(run, input.path.clone(), "typed-row-stream-v1 over the bound input set; exact column/key frequencies over its rows; repeated complete rows rejected; checked against the engine's stored row count");
@@ -95,6 +96,11 @@ pub(super) fn finish(
     }
     for (stratum, observations) in captured.strata.iter().enumerate() {
         let final_rows = observations.final_rows.as_ref().ok_or_else(|| invalid("incomplete stratum"))?;
+        for (&relation, &(full, _)) in final_rows {
+            if captured.degrees.degrees.wants(relation) {
+                require(captured.degrees.degrees.rows(relation) == full, "the admitted delta rows of a relation differ from its final rows")?;
+            }
+        }
         for (&relation, &(full, tail)) in final_rows {
             let name = derived.get(&relation).ok_or_else(|| invalid("stratum member lacks derived evidence identity"))?;
             let locator = format!("stratum:{stratum}/relation:{relation}");
@@ -138,15 +144,22 @@ pub(super) fn finish(
             }
         }
     }
-    for target in evidence.targets.values_mut() {
-        for fact in [&mut target.build_per_row_h, &mut target.merge_per_row_m] {
-            require(fact.source == ev::Source::Declared, "calibration preserves only explicitly declared target unit costs")?;
-            if fact.dataset_hash != dataset_hash {
-                fact.dataset_hash = dataset_hash.clone();
-                fact.provenance.method.push_str(&format!("; retained declared policy from dataset {} after measured-schema enrichment", baseline.dataset.hash));
-            }
+    for fact in evidence.targets.values_mut().flat_map(|target| [&mut target.build_per_row_h, &mut target.merge_per_row_m]) {
+        require(fact.source == ev::Source::Declared, "calibration preserves only explicitly declared target unit costs")?;
+        if fact.dataset_hash != dataset_hash {
+            fact.dataset_hash = dataset_hash.clone();
+            fact.provenance.method.push_str(&format!("; retained declared policy from dataset {} after measured-schema enrichment", baseline.dataset.hash));
         }
     }
+    for fact in evidence.constants.values_mut().filter(|fact| fact.dataset_hash != dataset_hash) {
+        fact.dataset_hash = dataset_hash.clone();
+        fact.provenance.method.push_str(&format!("; retained from dataset {} after measured-schema enrichment", baseline.dataset.hash));
+    }
+    // PS-Admit: the degree statistics the runtime kept as the run admitted its rows.
+    let capture::DegreeCapture { requests, degrees, .. } = captured.degrees;
+    let degrees = requests.into_iter().zip(degrees.finish()).map(|(request, (numerator, denominator))| (request, numerator, denominator)).collect();
+    evidence.degrees = cq_load::stats::bind_degrees(degrees, &dataset_hash, ev::Source::Calibrated, ev::Claim::Observation,
+        provenance(run, "relations".into(), "degree statistics kept as rows were admitted: distinct counts by sketch, matched degrees over a sample of keys chosen by hash, each with the round its values were admitted"));
     evidence.check().map_err(evidence_error)?;
     let attachment = DeclaredEvidence { document: Arc::new(evidence.clone()), bindings };
     attachment.check(&source.declarations)?;
