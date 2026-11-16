@@ -412,8 +412,6 @@ pub struct TargetEvidence {
 pub struct Observations {
     #[serde(default)] pub rounds: Vec<RoundObservations>,
     #[serde(default)] pub steps: Vec<StepObservation>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub physical_steps: Vec<PhysicalStepObservation>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -450,36 +448,6 @@ pub struct BoundCitation {
     pub dataset_hash: String,
     pub program_hash: String,
     pub variant: String,
-}
-
-/// Actual lowered operator-counter observations. Unlike a supplied row
-/// certificate, a computed comparison can be unknown or falsified: neither
-/// outcome is silently promoted into planning evidence.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PhysicalStepObservation {
-    pub hole: String,
-    pub variant: String,
-    pub instance: String,
-    pub stratum: String,
-    pub trace_hash: String,
-    pub physical_steps: Vec<String>,
-    pub vo_steps: Vec<String>,
-    pub fused: bool,
-    pub run: RunIdentity,
-    pub round: Option<CountFact>,
-    pub rows: CountFact,
-    pub comparison: Option<PhysicalBoundComparison>,
-    pub unknown: Vec<String>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PhysicalBoundComparison {
-    /// Exact output of the bound calculation, not an admitted upper certificate.
-    pub computed: RationalFact,
-    pub fact_citations: Vec<String>,
-    pub compiler_citations: Vec<String>,
-    pub within_bound: bool,
 }
 
 /// A recursive JSON visitor, rather than `Value`'s last-key-wins parser.
@@ -1167,46 +1135,6 @@ impl DatasetEvidence {
                 }), "final-to-delta bound citation omits subset premise")?;
             }
         }
-        let mut physical = BTreeSet::new();
-        for step in &self.observations.physical_steps {
-            for label in [&step.hole, &step.variant, &step.instance, &step.stratum] { nonblank(label)?; }
-            digest(&step.trace_hash)?;
-            step.run.check()?;
-            ensure(!step.physical_steps.is_empty() && !step.vo_steps.is_empty(), "physical observation lacks operator/VO coverage")?;
-            for labels in [&step.physical_steps, &step.vo_steps] {
-                let mut unique = BTreeSet::new();
-                for label in labels { nonblank(label)?; ensure(unique.insert(label), "duplicate physical/VO coverage label")?; }
-            }
-            ensure(step.fused == (step.physical_steps.len() > 1 || step.vo_steps.len() > 1), "fused marker disagrees with recorded coverage")?;
-            checker.count(&step.rows, Unit::Rows, Some(&step.run))?;
-            let value = measured(&step.rows)?;
-            let round = if let Some(round) = &step.round {
-                checker.count(round, Unit::Rounds, Some(&step.run))?;
-                let n = measured(round)?;
-                let (run, rounds) = strata.get(step.stratum.as_str()).ok_or_else(|| EvidenceError("physical steady observation has no iterated component".into()))?;
-                ensure(*run == &step.run && n > 0 && n <= rounds.hi, "physical observation round/run mismatch")?;
-                Some(n)
-            } else { None };
-            ensure(physical.insert((&step.hole, &step.variant, &step.instance, &step.physical_steps, round)), "duplicate physical observation")?;
-            if let Some(comparison) = &step.comparison {
-                ensure(step.unknown.is_empty(), "partial physical bound cannot stand for full VO coverage")?;
-                checker.rational(&comparison.computed, Unit::Rows)?;
-                ensure(comparison.computed.source == Source::Calibrated
-                    && comparison.computed.claim == Claim::Observation
-                    && comparison.computed.provenance.run.as_ref() == Some(&step.run),
-                    "computed physical comparison must remain a run-scoped observation")?;
-                let bound = comparison.computed.value.as_ref().unwrap().exact()?;
-                ensure(comparison.within_bound == (BigRational::from_integer(value.into()) <= bound), "physical comparison outcome disagrees with its numbers")?;
-                let mut citations = BTreeSet::new();
-                for id in &comparison.fact_citations {
-                    ensure((certificate_ids.contains(id.as_str()) || premise_ids.contains(id.as_str())) && citations.insert(id), "physical bound cites an observation, duplicate, or absent fact")?;
-                }
-                for id in &comparison.compiler_citations { nonblank(id)?; ensure(citations.insert(id), "duplicate compiler citation")?; }
-            } else {
-                ensure(!step.unknown.is_empty(), "unknown physical bound requires a recorded reason")?;
-                for reason in &step.unknown { nonblank(reason)?; }
-            }
-        }
         Ok(())
     }
 }
@@ -1216,19 +1144,16 @@ fn measured(fact: &CountFact) -> Result<u64> {
 }
 
 impl DatasetEvidence {
-    /// Explicit compiler/cost projection. Step diagnostics (including failed
-    /// comparisons) cannot certify planning facts; complete delta series remain.
-    /// Clone only retained fields, never the potentially large physical packets.
-    pub fn planning_facts(&self) -> Self {
+    /// What a compiler attachment states. The planner's degree facts are read
+    /// from the evidence, never from an attachment, and step diagnostics
+    /// certify nothing; complete delta series remain.
+    pub fn attached_facts(&self) -> Self {
         Self {
             schema: self.schema.clone(), dataset: self.dataset.clone(),
             relations: self.relations.clone(), premises: self.premises.clone(),
             relative: self.relative.clone(), targets: self.targets.clone(),
-            observations: Observations {
-                rounds: self.observations.rounds.clone(),
-                steps: Vec::new(), physical_steps: Vec::new(),
-            },
-            constants: self.constants.clone(), degrees: self.degrees.clone(),
+            observations: Observations { rounds: self.observations.rounds.clone(), steps: Vec::new() },
+            constants: self.constants.clone(), degrees: Vec::new(),
         }
     }
 }

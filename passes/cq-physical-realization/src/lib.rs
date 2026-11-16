@@ -72,26 +72,6 @@ pub fn sources_with<'a>(
     physical: &'a physical::Program,
     module: &'a structures::Program,
     analysis: &'a structures::Analysis,
-    prepared: impl FnMut(&str, &Repr),
-) -> syn::Result<Context<'a>> {
-    sources_prepared(physical, module, analysis, false, prepared)
-}
-
-/// Prepare the same sources with the existing physical operator counters enabled.
-pub fn sources_profile_with<'a>(
-    physical: &'a physical::Program,
-    module: &'a structures::Program,
-    analysis: &'a structures::Analysis,
-    prepared: impl FnMut(&str, &Repr),
-) -> syn::Result<Context<'a>> {
-    sources_prepared(physical, module, analysis, true, prepared)
-}
-
-fn sources_prepared<'a>(
-    physical: &'a physical::Program,
-    module: &'a structures::Program,
-    analysis: &'a structures::Analysis,
-    profile: bool,
     mut prepared: impl FnMut(&str, &Repr),
 ) -> syn::Result<Context<'a>> {
     for definition in &physical.program.definitions {
@@ -146,9 +126,6 @@ fn sources_prepared<'a>(
         partitioned: false,
         canon_target: CanonTarget::Sequential,
     };
-    if profile {
-        printer.context.enable_profile(physical, module);
-    }
     let definitions = &physical.program.definitions;
     let mut position = 0;
     let deferred: std::collections::BTreeSet<_> = analysis

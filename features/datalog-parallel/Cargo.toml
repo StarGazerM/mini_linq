@@ -40,7 +40,3 @@ cq-datalog-parallel-test-passes = { path = "test-passes" }
 [[test]]
 name = "counters"
 required-features = ["counters"]
-
-[[test]]
-name = "calibration"
-required-features = ["planner-calibration"]

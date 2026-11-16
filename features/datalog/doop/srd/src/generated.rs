@@ -119,16 +119,7 @@ impl SrdFacts {
 
     pub fn load_with_manifest(dir: &std::path::Path, path: Option<&std::path::Path>) -> crate::Result<Self> {
         let manifest = crate::manifest::Manifest::load(dir, path);
-        #[cfg(not(feature = "planner-calibration"))]
         let meta = serde_json::from_reader(std::fs::File::open(dir.join("meta.json"))?)?;
-        #[cfg(feature = "planner-calibration")]
-        let meta = if cq_storage::counters::calibration::observing() {
-            let bytes = std::fs::read(dir.join("meta.json"))?;
-            cq_storage::counters::calibration::metadata("meta.json", &bytes);
-            serde_json::from_slice(&bytes)?
-        } else {
-            serde_json::from_reader(std::fs::File::open(dir.join("meta.json"))?)?
-        };
         let constants = SrdConstants::load(&meta)?;
         Ok(Self {
             constants,

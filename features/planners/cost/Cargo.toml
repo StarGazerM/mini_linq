@@ -7,7 +7,7 @@ license.workspace = true
 publish = false
 
 [features]
-planner-calibration = ["dep:cq-storage", "cq-storage/planner-calibration", "dep:cq-load", "cq-load/planner-calibration", "dep:cq-stage", "dep:cq-lang-ra", "dep:cq-lang-ix", "dep:cq-lang-physical", "dep:cq-lang-structures", "dep:cq-lang-sequence", "dep:cq-relational-lowering", "dep:cq-datalog-print"]
+planner-calibration = ["dep:cq-storage", "cq-storage/planner-calibration", "dep:cq-load", "cq-load/planner-calibration"]
 
 [dependencies]
 cq-syntax.workspace = true
@@ -22,14 +22,6 @@ cq-datalog-storage.workspace = true
 cq-datalog-fork.workspace = true
 cq-storage = { workspace = true, optional = true }
 cq-load = { workspace = true, optional = true }
-cq-stage = { workspace = true, optional = true }
-cq-lang-ra = { workspace = true, optional = true }
-cq-lang-ix = { workspace = true, optional = true }
-cq-lang-physical = { workspace = true, optional = true }
-cq-lang-structures = { workspace = true, optional = true }
-cq-lang-sequence = { workspace = true, optional = true }
-cq-relational-lowering = { workspace = true, optional = true }
-cq-datalog-print = { workspace = true, optional = true }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true

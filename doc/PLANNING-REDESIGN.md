@@ -708,21 +708,30 @@ permutation of a body plans to the same order and the same reads.
     `sum over rows b of B of deg_R(v | U = b.U) / |B|`. A key `R` lacks
     counts zero and a heavy key met often counts often; the average degree
     is wrong on both (it assumes every probe hits and no skew);
-  - the changing occurrence: the same sum over all its rows of the run,
-    each row meeting only the rows of `R` no younger than itself;
+  - the changing occurrence: the same sum over all its rows of the run;
   - an occurrence `B` that the changing occurrence reaches (it bound every
     variable `B` did not bind itself): the sum over the pairs of a
-    changing row and a row of `B` it reaches, each meeting the rows of `R`
-    no younger than the changing row. The rows of `B` a delta reaches are
-    not a sample of `B` (reachable call sites call the popular methods),
-    and a row younger than the delta is not there yet;
+    changing row and a row of `B` it reaches. The rows of `B` a delta
+    reaches are not a sample of `B` (reachable call sites call the popular
+    methods);
   - several binders: the least of the above, each over the variables that
     binder bound;
   - none: the distinct values of the variable.
-  A relation of the variant's own component, met through a binder the
-  changing occurrence does not reach, is scaled by the share of its rows a
-  round sees. Every one of these is a degree fact of the evidence,
-  collected from rows (Planner statistics path, below).
+  Every one of these is a degree fact of the evidence, a statistic of the
+  relations a completed run holds (PS-After). Until 2026-11-17 a degree
+  through the changing occurrence counted only the rows no younger than
+  the changing row, and a relation of the variant's own component was
+  scaled by the share of its rows a round sees; both needed the round of
+  every row and were given up with it (PS-After).
+- **VP-Connected (2026-11-17).** An occurrence not yet read that shares no
+  variable with those read proposes only when no other unread occurrence
+  shares one and still has a variable to bind: production's VO-Order I3,
+  searched inside rather than rejected after. Without it and without
+  rounds the typed load rule of the reference program planned a product
+  (`F(h,g)`, then every `to`), which production rejected, so the rule kept
+  its written order and the advice depended on the written order. With it
+  every variant of the reference programs is within 1.25 times the best
+  atom order, as before.
 - **VP-Cost.** An order costs the sum over its variables of the bindings of
   that variable and all before it, each the previous times VP-Bind's
   values: the cost model of Tributary Join (Chu, Balazinska, Suciu,
@@ -1111,9 +1120,9 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
   need the degree of one relation at the keys of another, and need
   neither the round of a row nor the reach — although those facts
   themselves are far from their unstaged values (PS-Admit). The measure
-  is VP-Cost, not frames, and the dataset is one. Not acted on: a
-  statistic that needs no round can be read from stored relations at any
-  time, without a hook in admission.
+  is VP-Cost, not frames, and the dataset is one. **The engine refuted
+  it the same day** (PS-After, below): VP-Cost does not see what the
+  round is worth.
 
 - **Why a calibrated run is slow (measured 2026-11-17, bloat, 108 s).**
   A calibration build is the engine with the `planner-calibration`
@@ -1137,6 +1146,62 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
     every copy is printed, escaped, hashed and parsed. Open: the
     document once per plans file, named by its hash in the texts; the
     degree facts out of the attachment, which no dialect reads.
+
+- **PS-After (the user's, 2026-11-17; replaces PS-Admit's hook and its
+  rounds).** Calibration is information about the relations of a run,
+  its inputs and its results, collected once after the result exists.
+  - A calibration run evaluates as a plain run: nothing observes an
+    operator, a round, a stratum or a row while the program evaluates,
+    and the input is not profiled as it loads. A build without
+    `planner-calibration` has no trace of calibration at all.
+  - When the program has its result, the generated program hands the
+    observer each relation once (`statistics::collection::relation`):
+    its rows are visited only if the observer asks, and what is known
+    without a read is taken there (the rows of a relation from its
+    length). The observer feeds `cq_storage::statistics::Degrees`
+    (sketches and a sample of keys, as PS-Admit describes, without the
+    rounds). On a device the pass runs on the device (PS-Device).
+  - No statistic depends on the round of a row: the planner asks for no
+    staged degree and no visible share. **This costs the plans, and the
+    planner's own measure did not show it** ("What the plans need" said
+    1.0003 times the weighted VP-Cost). Bloat, CPU engine, evaluation
+    seconds, medians of three alternating runs, equal counts:
+
+    | advice | seconds |
+    |---|---|
+    | none: the written text | 11.75 |
+    | from degrees with rounds (PS-Admit) | 12.73 |
+    | from the relations after the result, without five directives | 13.58 |
+    | from the relations after the result | 18.21 |
+
+    The five directives are the dispatch rules
+    (`Reachable_CGE_Virtual_{0,1}`, `VirtualDispatch_MultiHead_{0,1,2}`):
+    after the reachable instruction they read `HeapHelper` before
+    `VarPointsTo`. By the final relations a variable points to many
+    heaps; when its instruction becomes reachable it points to few yet,
+    which only the round of a row says. Open, the user's to decide: the
+    round of a row is known for free while its delta exists, so a
+    calibration build could keep each round's delta instead of dropping
+    it and pass over them after the result (no work while evaluating,
+    one more copy of the derived rows in memory); or the advice is
+    limited to rules where the round cannot matter.
+  - The run is bound to its inputs by what is free: the program text
+    the run reports equals the plans', and every requested input
+    relation holds the rows its evidence states. The input files are
+    not hashed again.
+  - A calibration run writes the facts and the advice. It writes no
+    report: no per-operator row counts, no comparison with bounds, no
+    rebound copy of the plans. Bloat: 25 s and 4.6 GB in all (101 s and
+    28 GB before), the evaluation with the pass 18 s (12.3 s plain: the
+    pass and the comparison of the program text), 670 facts, 48 of 115
+    holes changed.
+
+  Removed with it (2026-11-17): the operator frames and row counters of
+  a calibration session, the stage trace the compiler recorded to name
+  them, the stratum, round, input and row hooks, the in-run input
+  profile, the calibration report and bound review, and plan rebinding.
+  The `counters` feature (the timed operator tree) is no part of
+  calibration and stays.
 
 Related cost models, read 2026-11-13: Graphflow's i-cost (partial matches
 times the sizes of the intersected lists, cardinalities from a catalogue of

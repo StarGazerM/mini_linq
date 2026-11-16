@@ -246,18 +246,7 @@ pub(super) fn step_loop(
         let __cq_rel_initial = [#(#initial,)*];
         #(#declarations)*
         let mut __cq_rel_scheduler = ::cq_datalog_parallel_runtime::relational::RelationalScheduler::new(::std::vec![#(#hole_reads,)*], &__cq_rel_initial);
-        ::cq_storage::calibration_select! {
-            plain {}
-            calibration { let __cq_calibration_task = ::cq_storage::counters::TaskContext::capture(); }
-        }
-        ::cq_storage::calibration_select! {
-            plain {
-                ::cq_datalog_parallel_runtime::relational::drive(&mut __cq_rel_scheduler, &|action| #action);
-            }
-            calibration {
-                ::cq_datalog_parallel_runtime::relational::drive(&mut __cq_rel_scheduler, &|action| __cq_calibration_task.run(|| #action));
-            }
-        }
+        ::cq_datalog_parallel_runtime::relational::drive(&mut __cq_rel_scheduler, &|action| #action);
     } else { #default }))
 }
 

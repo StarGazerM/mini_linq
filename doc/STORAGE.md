@@ -1195,21 +1195,10 @@ publication and never executes a query, estimates recursive final sizes or
 rounds, supplies target h/m constants, or selects a plan. Input-only evidence
 leaves those facts unknown.
 
-With `planner-calibration`, `CanonicalAccumulator` instead consumes the
-generated Datalog input boundary: raw rows are hashed before insertion, and
-the same borrowed row is counted only inside successful canonical admission.
-It reuses the engine's uniqueness decision, checks final canonical length,
-and retains no duplicate full-tuple set. Both paths produce the same typed
-content digest and exact statistics. Unsupported codecs, mismatched rows,
-repeated admission or incomplete counts poison the measurement rather than
-publishing partial evidence.
-
-Physical calibration packets are observational diagnostics, including unknown
-or exceeded computed bounds. `DatasetEvidence::planning_facts()` removes only
-step diagnostics, not row/degree/recursive facts or complete delta series.
-The full file and compiler projection share their measured manifest identity;
-cost matching cannot use a diagnostic comparison as a cardinality certificate.
-See the optional completed-run calibration section in `PLANNING-REDESIGN.md`.
+With `planner-calibration` nothing observes the input as it loads
+(PLANNING-REDESIGN, PS-After): a completed run is bound to its evidence by
+the rows each requested input relation holds, and the degree facts of its
+relations are the only facts it adds.
 
 
 **P5 S3 authored CPU checkpoint.** `select(blocks(R { block_rows 1024;

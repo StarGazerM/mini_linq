@@ -13,6 +13,36 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Calibration is collected once, after the result (PLANNING-REDESIGN,
+  PS-After). A calibration run evaluates as a plain run. Removed: the
+  operator frames and row counters of a calibration session
+  (`CalibrationFrame`, `OperatorPush`, `register_plan`, host alias
+  scopes), the compiler's stage trace that named them
+  (`cq_stage::calibration`, `Pipeline::calibration`, `calibration_trace`
+  text, observed hole compilation in the own-dialect printer), the
+  stratum, round, input and row hooks of both Datalog printers, the
+  in-run input profile (`cq_load::stats::CanonicalAccumulator`), the
+  calibration report, the bound review (`cq-cost review`), plan
+  rebinding, the lineage module, and the evidence schema's physical step
+  observations. New: `cq_storage::statistics::collection` (a program that
+  has its result offers each relation once; its rows are passed only if
+  the observer asks). `cq-storage`'s `planner-calibration` no longer
+  enables `counters`. `cq_cost::calibration::{measure, try_measure}` take
+  the plans, the evidence and a run identity, check that the run is the
+  planned program and that each requested input holds the rows its
+  evidence states, and return the evidence with the run's degree facts
+  and the advice (`calibration.{facts.json,costs.json,orders.dl}`);
+  `srd-doop-mini --calibrate PLANS EVIDENCE OUTPUT RUN-ID`.
+  `DatasetEvidence::planning_facts` is `attached_facts` and leaves the
+  degree facts out, so evidence may add degree facts to what a plans
+  record attaches. A generated stratum is no longer emitted twice (once
+  per arm of the calibration selector). The planner asks for no staged
+  degree and no visible share, and searches inside production's
+  VO-Order I3 (VP-Connected). Bloat: a calibrated run takes 25 s and
+  4.6 GB (101 s and 28 GB). **The advice is worse without rounds**: the
+  engine takes 18.2 s with it, 12.7 s with the round-aware advice it
+  replaces, 11.75 s as written.
+
 - A counted operator stream of a calibration session no longer reads
   the clock (`cq_storage::counters::operators::OperatorStream`): a lookup
   makes one stream per binding, each read the clock twice, and

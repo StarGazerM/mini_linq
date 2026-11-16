@@ -115,12 +115,6 @@ impl<C: Language, V: for<'a> Annotation<&'a C>> Language for Valuation<C, V> {
     }
     fn context(&self) -> Context { self.cq.context() }
     fn program_tokens(&self) -> TokenStream { self.valuation.to_token_stream() }
-    fn calibration_stage(&self) -> crate::calibration::Stage {
-        crate::calibration::Stage::annotation(
-            &self.valuation,
-            vec![self.cq.to_token_stream().to_string()],
-        )
-    }
 }
 
 /// Physical and its Structures annotation, printed independently in continuations.
@@ -210,12 +204,6 @@ impl<P: Language, S: for<'a> Annotation<&'a P>> Language for Structures<P, S> {
     fn context(&self) -> Context { self.physical.context() }
     fn output_consumer(&self) -> Option<&OutputConsumer> { self.structures.output_consumer() }
     fn program_tokens(&self) -> TokenStream { self.structures.to_token_stream() }
-    fn calibration_stage(&self) -> crate::calibration::Stage {
-        crate::calibration::Stage::annotation(
-            &self.structures,
-            vec![self.physical.to_token_stream().to_string()],
-        )
-    }
 }
 
 /// Physical, Structures and the Sequence schedule, all separate programs.
@@ -330,15 +318,6 @@ where
     fn context(&self) -> Context { self.physical.context() }
     fn output_consumer(&self) -> Option<&OutputConsumer> { self.sequence.output_consumer() }
     fn program_tokens(&self) -> TokenStream { self.sequence.to_token_stream() }
-    fn calibration_stage(&self) -> crate::calibration::Stage {
-        crate::calibration::Stage::annotation(
-            &self.sequence,
-            vec![
-                self.physical.to_token_stream().to_string(),
-                self.structures.to_token_stream().to_string(),
-            ],
-        )
-    }
 }
 
 fn program<L: Parse>(input: ParseStream<'_>) -> syn::Result<L> {

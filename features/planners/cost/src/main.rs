@@ -15,8 +15,6 @@ fn run() -> Result<()> {
         println!("{USAGE}\n\ncq-cost check --plans plans.json\ncq-cost advise --plans plans.json --evidence evidence.json --target cpu|cpu-par|gpu --out costs.json --advice orders.dl\n  [--partial-reads rows|distinct]                      (default rows: a sub-atom read visits one frame per row;\n                                                         distinct declares that the adopting target enumerates each key once)\n  [--phased N]                                         (default 1: the most occurrences a candidate reads in phases;\n                                                         0 searches atom orders only)\ncq-cost bound --plans plans.json --evidence evidence.json --out bounds.json\n  Structural upper bounds of every derived Datalog relation from exact input facts; a worst case, not an estimate.");
         println!("cq-cost profile --plans plans.json --evidence evidence.json --observed observed.json --out profile.json [--into profile0.json]\n  Add one example to a profile: what a completed run produced, beside the structural bounds of the same dataset.\ncq-cost advise ... --profile profile.json\n  Read derived relations the evidence does not bind through estimates: this dataset's structural bound times the\n  profile's median observed/bound ratio. Decisions that rest on an estimate are marked predicted.");
         println!("cq-cost orders --plans plans.json --evidence facts.json [--advice orders.dl] [--requests requests.json]\n  Plan every rule as a variable order from the evidence's degree facts and print the directives production accepts;\n  --requests lists the degree facts planning this program asks for (a calibrated run collects them).");
-        #[cfg(feature = "planner-calibration")]
-        println!("cq-cost review --plans plans.json --evidence facts.json --costs costs.json --report calibration.report.json --out review.json [--vo-out plans-review.json]\nReassess saved observations only; no workload execution or fan-out inference.");
         return Ok(());
     }
     if command == "check" {
@@ -35,8 +33,6 @@ fn run() -> Result<()> {
     if command == "bound" { return bound(args); }
     if command == "profile" { return profile(args); }
     if command == "orders" { return orders(args); }
-    #[cfg(feature = "planner-calibration")]
-    if command == "review" { return review(args); }
     if command != "export" { return Err(format!("expected export, check, advise, orders, bound or profile\n{USAGE}").into()); }
     let mut flags = BTreeMap::new();
     let mut vos = Vec::new();
@@ -256,75 +252,6 @@ fn profile(mut args: impl Iterator<Item = String>) -> Result<()> {
     publish(Path::new(required("--out")?), &serde_json::to_vec_pretty(&profile)?)?;
     println!("dataset={} relations={relations} examples={}", evidence.dataset.hash, profile.examples.len());
     Ok(())
-}
-
-#[cfg(feature = "planner-calibration")]
-fn review(mut args: impl Iterator<Item = String>) -> Result<()> {
-    let mut flags = BTreeMap::new();
-    while let Some(flag) = args.next() {
-        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--costs" | "--report" | "--out" | "--vo-out") {
-            return Err(format!("unknown review option {flag}").into());
-        }
-        let value = args.next().ok_or_else(|| format!("missing value for {flag}"))?;
-        if flags.insert(flag.clone(), value).is_some() { return Err(format!("duplicate {flag}").into()); }
-    }
-    let required = |flag: &str| -> Result<&str> {
-        flags.get(flag).map(String::as_str).ok_or_else(|| format!("missing {flag}").into())
-    };
-    let plans = export::parse_json(&std::fs::read_to_string(required("--plans")?)?)?;
-    let evidence = cq_evidence::parse_bytes(&std::fs::read(required("--evidence")?)?)?;
-    let cost_bytes = std::fs::read(required("--costs")?)?;
-    let report_bytes = std::fs::read(required("--report")?)?;
-    let costs: cq_cost::cost::AdviceReport = serde_json::from_slice(&cost_bytes)?;
-    let report: cq_cost::calibration::CalibrationReport = serde_json::from_slice(&report_bytes)?;
-    let reviews = cq_cost::calibration::assess_bounds(&report, &costs, &plans, &evidence)?;
-    let valuations = flags.get("--vo-out").map(|_| review_valuations(&plans, &costs)).transpose()?;
-    let record = serde_json::json!({
-        "schema": "mini-linq.bound-review.v1", "input_hash": plans.input_hash,
-        "dataset_hash": evidence.dataset.hash, "run": report.run,
-        "source_cost_hash": export::sha256(&cost_bytes), "source_report_hash": export::sha256(&report_bytes),
-        "bound_reviews": reviews,
-        "provenance": "exact arithmetic over cited recorded bounds and same-scope operator observations; not a fan-out certificate or timing"
-    });
-    cq_cost::artifacts::publish_new(Path::new(required("--out")?), &serde_json::to_vec_pretty(&record)?)?;
-    if let Some(valuations) = valuations {
-        cq_cost::artifacts::publish_new(Path::new(required("--vo-out")?), &serde_json::to_vec_pretty(&valuations)?)?;
-    }
-    println!("reviewed={} source=recorded-calibration no_new_execution=true calibrated_fanout_recost=unknown", reviews.len());
-    Ok(())
-}
-
-#[cfg(feature = "planner-calibration")]
-fn review_valuations(input: &export::PlannerInput, costs: &cq_cost::cost::AdviceReport) -> Result<Vec<serde_json::Value>> {
-    use quote::ToTokens;
-    let directives: cq_cost::cost::advice::AdviceList = syn::parse_str(&costs.advice)?;
-    let planned = cq_cost::cost::advice::check_datalog_advice(input, costs, &directives.0)?;
-    let mut result = Vec::new();
-    for choice in costs.holes.iter().filter(|choice| choice.decision == cq_cost::cost::Decision::Changed) {
-        let export::Origin::Rule { variant, .. } = choice.origin else { continue; };
-        let rule = planned.context.strata.iter().flat_map(|s| s.seeds.iter().chain(&s.steps))
-            .find(|rule| rule.variant == variant).ok_or("review lost advised variant")?;
-        let hole = &planned.holes[rule.hole];
-        let pipeline = hole.invocation_pipeline()?;
-        let at = hole.plan.ok_or("review hole lacks planning invocation")?;
-        let options = syn::parse2(pipeline.passes[at].arguments.clone())?;
-        let (normal, proposed) = cq_planning::prefix_valuation(&hole.cq, &options)?;
-        cq_lang_vo::contract::check(&normal, &proposed)?;
-        let old = input.holes.iter().find(|hole| hole.id == choice.hole).ok_or("review lost incumbent")?;
-        let old_cq = syn::parse_str(&old.normalized_cq)?;
-        let incumbent = syn::parse::Parser::parse_str(
-            |input: syn::parse::ParseStream| cq_lang_vo::Program::parse(input, &old_cq), &old.checked_vo,
-        )?;
-        // Numeric attachments remain in the separate CQ/input evidence records;
-        // valuation-only displays contain no attachment and preserve every step.
-        result.push(serde_json::json!({
-            "hole": choice.hole, "origin": choice.origin, "input_hash": input.input_hash,
-            "numeric_attachment_omitted": true, "execution": "incumbent only; proposed VO is checked, not executed",
-            "incumbent_vo": incumbent.to_token_stream().to_string(),
-            "proposed_vo": proposed.to_token_stream().to_string()
-        }));
-    }
-    Ok(result)
 }
 
 

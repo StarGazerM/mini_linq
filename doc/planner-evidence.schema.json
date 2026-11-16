@@ -1523,39 +1523,6 @@
       ],
       "additionalProperties": false
     },
-    "PhysicalBoundComparison": {
-      "type": "object",
-      "$comment": "A computed bound comparison is observational, never a supplied cardinality certificate. The Rust checker requires calibrated/observation strength, matching completed run, non-observational fact citations, and an arithmetically correct within_bound flag; a falsified comparison remains visible.",
-      "properties": {
-        "computed": { "$ref": "#/$defs/RationalFact" },
-        "fact_citations": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "compiler_citations": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "within_bound": { "type": "boolean" }
-      },
-      "required": ["computed", "fact_citations", "compiler_citations", "within_bound"],
-      "additionalProperties": false
-    },
-    "PhysicalStepObservation": {
-      "type": "object",
-      "$comment": "Actual operator-counter instance, with checked VO lineage and true row-alias fusion. Numeric labels are identities, not measured facts. Unknown bounds require a reason; comparison numbers must not enter the optimizer as certificates.",
-      "properties": {
-        "hole": { "type": "string", "minLength": 1 },
-        "variant": { "type": "string", "minLength": 1 },
-        "instance": { "type": "string", "minLength": 1 },
-        "stratum": { "type": "string", "minLength": 1 },
-        "trace_hash": { "$ref": "#/$defs/Hash" },
-        "physical_steps": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "vo_steps": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
-        "fused": { "type": "boolean" },
-        "run": { "$ref": "#/$defs/RunIdentity" },
-        "round": { "anyOf": [{ "$ref": "#/$defs/CountFact" }, { "type": "null" }] },
-        "rows": { "$ref": "#/$defs/CountFact" },
-        "comparison": { "anyOf": [{ "$ref": "#/$defs/PhysicalBoundComparison" }, { "type": "null" }] },
-        "unknown": { "type": "array", "items": { "type": "string", "minLength": 1 } }
-      },
-      "required": ["hole", "variant", "instance", "stratum", "trace_hash", "physical_steps", "vo_steps", "fused", "run", "rows", "unknown"],
-      "additionalProperties": false
-    },
     "Observations": {
       "type": "object",
       "properties": {
@@ -1570,10 +1537,6 @@
           "items": {
             "$ref": "#/$defs/StepObservation"
           }
-        },
-        "physical_steps": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/PhysicalStepObservation" }
         }
       },
       "required": [],

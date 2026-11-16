@@ -23,16 +23,12 @@
 //! sum of worker peaks. Keyset staging peak is the largest individual staging
 //! set estimate, not simultaneous staging memory.
 //! Fixture construction and independent BTreeSet oracles are not query costs.
-#[cfg(feature = "planner-calibration")]
-pub mod calibration;
 mod expansions;
 mod operators;
 pub use expansions::{ExpansionRecord, expansion, expansions, render_expansions};
 #[cfg(feature = "counters")]
 pub(crate) use operators::build_cardinality;
 pub(crate) use operators::{DeferredBuild, defer_build};
-#[cfg(feature = "planner-calibration")]
-pub use operators::OperatorPush;
 pub use operators::{
     OperatorDrained, OperatorInput, OperatorLabel, OperatorOutput, OperatorPredicate,
     OperatorProgram, OperatorRecord, OperatorScope, OperatorStream, operators, render_operators,
@@ -115,23 +111,18 @@ struct BuildWall {
 pub struct TaskContext(
     Arc<SharedCounts>,
     operators::BuildContext,
-    #[cfg(feature = "planner-calibration")] calibration::Context,
 );
 impl TaskContext {
     pub fn capture() -> Self {
         TASK_CONTEXT.with(|context| Self(
             context.borrow().0.clone(),
             operators::capture_build(),
-            #[cfg(feature = "planner-calibration")]
-            calibration::capture(),
         ))
     }
     pub fn run<T>(&self, run: impl FnOnce() -> T) -> T {
         struct Restore {
             previous: TaskContext,
             build: operators::BuildContext,
-            #[cfg(feature = "planner-calibration")]
-            calibration: calibration::Context,
             #[cfg(feature = "counters")]
             counts: Snapshot,
         }
@@ -152,15 +143,11 @@ impl TaskContext {
                     *context.borrow_mut() = self.previous.clone();
                 });
                 operators::replace_build(self.build.take());
-                #[cfg(feature = "planner-calibration")]
-                calibration::replace(self.calibration.clone());
             }
         }
         let restore = Restore {
             previous: TASK_CONTEXT.with(|context| context.replace(self.clone())),
             build: operators::replace_build(self.1.clone()),
-            #[cfg(feature = "planner-calibration")]
-            calibration: calibration::replace(self.2.clone()),
             #[cfg(feature = "counters")]
             counts: COUNTS.with(|counts| counts.replace(Snapshot::default())),
         };

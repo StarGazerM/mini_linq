@@ -1,7 +1,8 @@
 //! Statistics the runtime keeps of the relations it stores (PLANNING-REDESIGN,
-//! PS-Admit): they are updated as rows are admitted, from the rows being
-//! admitted, and keep sketches and samples, never the rows.
+//! PS-After): sketches and samples of the rows it is given, never the rows.
 
+#[cfg(feature = "planner-calibration")]
+pub mod collection;
 mod degrees;
 pub use degrees::{Degrees, Reach, Request, Rows};
 

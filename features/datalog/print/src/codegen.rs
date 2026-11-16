@@ -84,51 +84,12 @@ fn substitute(tokens: TokenStream, names: &BTreeMap<String, Ident>) -> TokenStre
         .collect()
 }
 
-/// Replay recorded compiler-owned host bindings with the printer's exact
-/// substitution rule. Each side must be a distinct identifier, never Rust code.
-pub fn substitute_host_parameters(
-    tokens: TokenStream,
-    pairs: &[(&str, &str)],
-) -> syn::Result<TokenStream> {
-    let mut names = BTreeMap::new();
-    let mut parameters = BTreeSet::new();
-    for &(host, parameter) in pairs {
-        let host: Ident = syn::parse_str(host)?;
-        let parameter: Ident = syn::parse_str(parameter)?;
-        if names.contains_key(&host.to_string()) {
-            return Err(syn::Error::new_spanned(host, "duplicate host binding"));
-        }
-        if !parameters.insert(parameter.to_string()) {
-            return Err(syn::Error::new_spanned(parameter, "duplicate host parameter"));
-        }
-        names.insert(host.to_string(), parameter);
-    }
-    Ok(substitute(tokens, &names))
-}
-
 pub(crate) fn split(
     body: TokenStream,
     context: &RoundContext,
     slot: usize,
     mutable: &BTreeSet<String>,
     locals: &BTreeSet<String>,
-) -> TokenStream {
-    // Capture discovery must not retain hosts referenced only by erased metadata.
-    let plain = split_branch(calibration_branch(body.clone(), false), context, slot, mutable, locals, false);
-    let calibrated = split_branch(calibration_branch(body, true), context, slot, mutable, locals, true);
-    quote!(::cq_storage::calibration_select! {
-        plain { #plain }
-        calibration { #calibrated }
-    })
-}
-
-fn split_branch(
-    body: TokenStream,
-    context: &RoundContext,
-    slot: usize,
-    mutable: &BTreeSet<String>,
-    locals: &BTreeSet<String>,
-    calibrated: bool,
 ) -> TokenStream {
     let mut used = BTreeSet::new();
     identifiers(body.clone(), &mut used);
@@ -171,16 +132,8 @@ fn split_branch(
     }
     let body = substitute(body, &names);
     let module = format_ident!("partition_{}", slot % 16);
-    let aliases = calibrated.then(|| {
-        let aliases = names.iter().map(|(host, parameter)| {
-            let replacement = parameter.to_string();
-            quote!((#host, #replacement))
-        });
-        let guard = format_ident!("__cq_calibration_host_aliases_{}", slot, span = Span::mixed_site());
-        quote!(let #guard = ::cq_storage::counters::calibration::host_alias_scope(&[#(#aliases),*]);)
-    });
     quote!({ ::cq_datalog::__codegen::#module::run(
         (#(#arguments,)*),
-        #[inline(always)] |(#(#parameters,)*)| { #aliases #body },
+        #[inline(always)] |(#(#parameters,)*)| { #body },
     ) })
 }

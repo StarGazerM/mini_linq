@@ -111,10 +111,6 @@ fn valuation_carrier_prints_only_annotation_when_observed() {
         |cq, vo, _| Ok((cq.clone(), vo.clone())),
     );
     assert_eq!(observed.to_string(), quote!(inspect! { ; ordered = input }).to_string());
-    let stack: Ordered = syn::parse_quote!(ordering { cq { input } vo { ; ordered = input } });
-    assert_eq!(stack.calibration_stage(), cq_stage::calibration::Stage::annotation(
-        &stack.valuation, vec!["input".into()],
-    ));
 }
 
 #[test]
@@ -247,19 +243,3 @@ fn observation_identifies_only_the_selected_program() {
     assert_eq!(pair.program_tokens().to_string(), "; hash = input");
 }
 
-#[test]
-fn calibration_retains_selected_identity_and_separate_bases() {
-    use cq_stage::calibration::Stage;
-    let stack: Triple = syn::parse_quote!(input; hash = input; rows = input, hash);
-    let stage = stack.calibration_stage();
-    assert!(stage.is::<Schedule>());
-    assert_eq!(stage.program, stack.program_tokens().to_string());
-    assert_eq!(stage, Stage::annotation(&stack.sequence, vec![
-        "input".into(), "; hash = input".into(),
-    ]));
-    let pair = Pair::new(stack.physical, stack.structures);
-    let stage = pair.calibration_stage();
-    assert!(stage.is::<Providers>());
-    assert_eq!(stage.program, pair.program_tokens().to_string());
-    assert_eq!(stage, Stage::annotation(&pair.structures, vec!["input".into()]));
-}

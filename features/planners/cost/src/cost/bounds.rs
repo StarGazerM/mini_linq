@@ -47,8 +47,8 @@ pub(crate) fn validate_dataset(input: &PlannerInput, evidence: &DatasetEvidence)
                 let source: cq_lang_datalog_round::incremental::source::Program = syn::parse_str(&input.source)?;
                 source.declared_evidence.ok_or_else(|| error("bound input has no evidence attachment"))?.document.as_ref().clone()
             };
-            if attached.planning_facts() != evidence.planning_facts() {
-                return Err(error("cost planning facts differ from checked compiler attachment"));
+            if attached.attached_facts() != evidence.attached_facts() {
+                return Err(error("evidence differs from the checked compiler attachment in more than degree facts"));
             }
         }
     }
@@ -463,25 +463,6 @@ pub fn cost_candidate(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
     BoundModel::new(input, evidence, target)?.cost(hole, candidate, shared)
 }
 
-/// Raw input/setup rows are distinct from a joined prefix's output rows.
-/// Calibration uses this certificate for actual source-materialization nodes;
-/// it does not add a second maintenance charge to the logical cost objective.
-#[cfg(feature = "planner-calibration")]
-pub(crate) fn input_rows(hole: &Hole, read: &Read, evidence: &DatasetEvidence) -> Result<StepBound> {
-    let bound = if read.version == Version::Delta && matches!(hole.origin, Origin::Rule { seed: false, .. }) {
-        Some(Bound::delta())
-    } else {
-        relation(hole, read, evidence, &BTreeMap::new())?.as_ref().and_then(Relation::rows)
-    };
-    Ok(StepBound {
-        clause: read.normalized_clause,
-        output: bound.as_ref().map(Bound::wire),
-        work: bound.as_ref().map(Bound::wire),
-        inequality: "raw input/setup cardinality; before joining to the valuation prefix".into(),
-        citations: bound.as_ref().map(|b| b.citations.clone()).unwrap_or_default(),
-        unknown: if bound.is_some() { Vec::new() } else { vec![format!("raw input bound for {}", read.input_relation)] },
-    })
-}
 fn cost_checked(input: &PlannerInput, hole: &Hole, candidate: &Candidate,
     evidence: &DatasetEvidence, target: &str, shared: &BTreeSet<IndexDemand>, h: &Q, m: &Q,
     partial_reads: PartialReads, derived: &BTreeMap<String, String>) -> Result<CandidateCost> {
@@ -926,34 +907,6 @@ fn compare_checked(left: &LinearCost, right: &LinearCost, evidence: &DatasetEvid
         else if lower.as_ref().is_some_and(|v| v >= &Q::zero()) { Comparison::RightDominates }
         else if lower.as_ref().is_some_and(|v| v < &Q::zero()) && upper.as_ref().is_some_and(|v| v > &Q::zero()) { Comparison::Crossing }
         else { Comparison::Unknown })
-}
-
-/// A checked Round negative/key input is a full relation or a filtered/projected
-/// set view. Its setup cardinality is at most the source rows. This is distinct
-/// from the negative probe's prefix-output bound and does not infer a delta
-/// subset premise from an alias name.
-#[cfg(feature = "planner-calibration")]
-pub(crate) fn negative_input_rows(hole: &Hole, clause: usize, alias: &str, evidence: &DatasetEvidence) -> Result<StepBound> {
-    let binding = hole.evidence.as_ref().and_then(|e| e.bindings.iter().find(|b| b.input_relation == alias));
-    let bound = binding.and_then(|binding| {
-        if binding.view == EvidenceView::Delta { return None; }
-        let facts = evidence.relations.get(&binding.dataset_relation)?;
-        let fact = if let Some(recursive) = &facts.recursive {
-            if recursive.run.admission != ev::Admission::InsertOnlySet { return None; }
-            &recursive.final_rows
-        } else { facts.rows.as_ref()? };
-        let mut bound = Bound::fact(fact)?;
-        if binding.view == EvidenceView::Subset {
-            bound.citations.insert(format!("compiler:Round-filtered-key-projection:{alias}"));
-        }
-        Some(bound)
-    });
-    Ok(StepBound {
-        clause, output: bound.as_ref().map(Bound::wire), work: bound.as_ref().map(Bound::wire),
-        inequality: "negative input setup: projected/filtered rows <= checked full source rows".into(),
-        citations: bound.as_ref().map(|b| b.citations.clone()).unwrap_or_default(),
-        unknown: if bound.is_some() { Vec::new() } else { vec![format!("negative setup input {alias} lacks a scoped source row cap")] },
-    })
 }
 
 struct Preprocessing {

@@ -65,12 +65,10 @@
 //! `realization { physical { ... } structures { ... } sequence { ... } }`,
 //! omitting Sequence before its lowering. [`Annotation`] parses and checks each
 //! annotation against its separately supplied upper programs. Observers print
-//! only the selected IR; calibration records that IR with its separate bases.
+//! only the selected IR.
 //! Authored entry parses Physical, then Structures against Physical, then Sequence
 //! against both bases; annotations do not embed upper programs. The carrier checks
-//! these actual seams rather than comparing printed token prefixes. Calibration
-//! keeps the selected layer's language/program identity and records bases in order:
-//! `[P]` for Structures, `[P, S]` for Sequence, and none for flat languages.
+//! these actual seams rather than comparing printed token prefixes.
 //!
 //! Restricted context facts enter only through [`pass_with_context`] (the
 //! lower/select adapters). Checked continuations carry a separate
@@ -87,8 +85,6 @@
 //! checked context. Ordinary passes forward it opaquely; selection binds it once
 //! through [`pass_with_output_consumer`]. It never authorizes removing dedup.
 
-/// Optional diagnostic provenance carried outside every executable language.
-pub mod calibration;
 pub mod planning;
 
 mod realization;
@@ -111,7 +107,6 @@ mod kw {
     syn::custom_keyword!(output_consumer);
     syn::custom_keyword!(head);
     syn::custom_keyword!(value_reads);
-    syn::custom_keyword!(calibration_trace);
     syn::custom_keyword!(planning_tables);
 }
 
@@ -125,11 +120,6 @@ pub trait Language: Parse + ToTokens {
     /// Printed selected IR, without the realization transport envelope.
     fn program_tokens(&self) -> TokenStream {
         self.to_token_stream()
-    }
-    /// Selected language/program identity and the separate bases needed to check it.
-    /// Flat languages need no bases; annotation carriers record their upper programs.
-    fn calibration_stage(&self) -> calibration::Stage {
-        calibration::Stage::of(self)
     }
     /// Restricted facts recorded in this program, not ambient Rust assumptions.
     fn context(&self) -> Context {
@@ -327,8 +317,6 @@ pub struct Pipeline {
     pub observer: Option<syn::Path>,
     /// Pending checked outer-consumer requirement, consumed only by selection.
     pub output_consumer: Option<OutputConsumer>,
-    /// Absent on ordinary paths; never printed when disabled.
-    pub calibration: Option<calibration::Trace>,
     /// Producer-owned side tables, consumed by advice at its own invocation.
     pub planning: Option<planning::Planning>,
 }
@@ -354,13 +342,8 @@ impl Parse for Pipeline {
             None
         };
         let output_consumer = OutputConsumer::parse_optional(input)?;
-        let calibration = if input.peek(kw::calibration_trace) {
-            Some(input.parse()?)
-        } else {
-            None
-        };
         let planning = if input.peek(kw::planning_tables) { Some(input.parse()?) } else { None };
-        Ok(Self { passes, observer, output_consumer, calibration, planning })
+        Ok(Self { passes, observer, output_consumer, planning })
     }
 }
 impl ToTokens for Pipeline {
@@ -371,16 +354,10 @@ impl ToTokens for Pipeline {
             output.extend(quote!(observe { #receiver }));
         }
         self.output_consumer.to_tokens(output);
-        self.calibration.to_tokens(output);
         self.planning.to_tokens(output);
     }
 }
 impl Pipeline {
-    /// Enable checked origin recording without changing executable IR choices.
-    pub fn enable_calibration(&mut self) {
-        self.calibration.get_or_insert_with(Default::default);
-    }
-
     /// Start this pipeline with unchecked tokens (surface expansion is allowed).
     /// This does not authorize recorded facts: a factful payload still requires
     /// an exact context envelope at the receiving pass (CTX-Entry).
@@ -465,26 +442,16 @@ pub fn pass<In: Language, Out: Language>(
     input: TokenStream,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _, _, _| f(source, args), |_, _| Ok(()))
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), |_, _| Ok(()))
 }
 
-/// A planning/lowering producer supplies provenance from the actual compilation.
-/// The boolean is false on ordinary paths, which need not allocate diagnostics.
-/// The producer records side tables without inspecting future invocations.
-pub fn pass_with_calibration<In: Language, Out: Language>(
+/// Run a producer with side tables consumed by later planning advice.
+pub fn pass_with_planning<In: Language, Out: Language>(
     input: TokenStream,
-    f: impl FnOnce(&In, TokenStream, bool, &mut Option<planning::Planning>) -> syn::Result<(Out, Option<calibration::Seed>)>,
+    f: impl FnOnce(&In, TokenStream, &mut Option<planning::Planning>) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _, trace, planning| {
-        let (target, seed) = f(source, args, trace.is_some(), planning)?;
-        match (trace.as_mut(), seed) {
-            (Some(trace), Some(seed)) => trace.initialize(seed)?,
-            (None, Some(_)) => return Err(syn::Error::new_spanned(&target,
-                "ST-Calibration: disabled producer supplied metadata")),
-            _ => (),
-        }
-        Ok(target)
-    }, |_, _| Ok(()))
+    run(input, |_| Ok(Context::default()), false,
+        |source, args, _, planning| f(source, args, planning), |_, _| Ok(()))
 }
 
 /// Run a rewrite with producer-owned side tables; never inspect future passes.
@@ -493,7 +460,7 @@ pub fn rewrite_with_planning<L: Language>(
     f: impl FnOnce(&L, TokenStream, Option<&planning::Planning>) -> syn::Result<L>,
 ) -> TokenStream {
     run(input, |_| Ok(Context::default()), false,
-        |source, args, _, _, planning| f(source, args, planning.as_ref()), L::check_rewrite)
+        |source, args, _, planning| f(source, args, planning.as_ref()), L::check_rewrite)
 }
 
 /// Introduce facts named by a lower/select argument packet into a fact-free source.
@@ -509,7 +476,7 @@ pub fn pass_with_context<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, false, |source, args, _, _, _| f(source, args), |_, _| Ok(()))
+    run(input, authorize, false, |source, args, _, _| f(source, args), |_, _| Ok(()))
 }
 
 /// Bind a pending outer-consumer requirement into the selected target exactly
@@ -519,7 +486,7 @@ pub fn pass_with_output_consumer<In: Language, Out: Language>(
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>) -> syn::Result<Out>,
 ) -> TokenStream {
-    run(input, authorize, true, |source, args, consumer, _, _| f(source, args, consumer), |_, _| Ok(()))
+    run(input, authorize, true, |source, args, consumer, _| f(source, args, consumer), |_, _| Ok(()))
 }
 
 /// Run an L → L pass and the language's exported correspondence check.
@@ -527,7 +494,7 @@ pub fn rewrite<L: Language>(
     input: TokenStream,
     f: impl FnOnce(&L, TokenStream) -> syn::Result<L>,
 ) -> TokenStream {
-    run(input, |_| Ok(Context::default()), false, |source, args, _, _, _| f(source, args), L::check_rewrite)
+    run(input, |_| Ok(Context::default()), false, |source, args, _, _| f(source, args), L::check_rewrite)
 }
 
 /// Delegate an invocation's checked packet to a target-owned macro path.
@@ -577,7 +544,7 @@ fn run<In: Language, Out: Language>(
     input: TokenStream,
     authorize: impl FnOnce(TokenStream) -> syn::Result<Context>,
     bind_consumer: bool,
-    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>, &mut Option<calibration::Trace>, &mut Option<planning::Planning>) -> syn::Result<Out>,
+    f: impl FnOnce(&In, TokenStream, Option<&OutputConsumer>, &mut Option<planning::Planning>) -> syn::Result<Out>,
     correspondence: impl FnOnce(&In, &Out) -> syn::Result<()>,
 ) -> TokenStream {
     let result = (|| {
@@ -607,15 +574,12 @@ fn run<In: Language, Out: Language>(
             ));
         }
         input.program.check()?;
-        if let Some(trace) = &input.pipeline.calibration {
-            trace.check_source(&input.program.calibration_stage())?;
-        }
         let consumer = if bind_consumer {
             input.pipeline.output_consumer.take()
         } else {
             None
         };
-        let target = f(&input.program, input.args, consumer.as_ref(), &mut input.pipeline.calibration, &mut input.pipeline.planning)?;
+        let target = f(&input.program, input.args, consumer.as_ref(), &mut input.pipeline.planning)?;
         if bind_consumer {
             if input.program.output_consumer().is_some()
                 || target.output_consumer() != consumer.as_ref()
@@ -641,11 +605,6 @@ fn run<In: Language, Out: Language>(
         }
         target.check()?;
         correspondence(&input.program, &target)?;
-        if let Some(trace) = &mut input.pipeline.calibration {
-            if !Out::terminal() {
-                trace.advance(target.calibration_stage());
-            }
-        }
         let target_context = target.context();
         let mut allowed = source_context;
         allowed.extend(&authorized);
@@ -666,18 +625,7 @@ fn run<In: Language, Out: Language>(
                 let target = target.program_tokens();
                 Ok(quote!(#receiver! { #target }))
             } else if Out::terminal() {
-                if let Some(trace) = &input.pipeline.calibration {
-                    let descriptor = trace.descriptor()?;
-                    Ok(quote!(::cq_storage::calibration_select! {
-                        plain { #target }
-                        calibration {{
-                            ::cq_storage::counters::calibration::register_plan(#descriptor);
-                            #target
-                        }}
-                    }))
-                } else {
-                    Ok(target.to_token_stream())
-                }
+                Ok(target.to_token_stream())
             } else {
                 Err(syn::Error::new_spanned(
                     target,
@@ -941,6 +889,6 @@ impl Configuration {
         } else {
             None
         };
-        Ok(Pipeline { passes, observer, output_consumer: None, calibration: None, planning: None })
+        Ok(Pipeline { passes, observer, output_consumer: None, planning: None })
     }
 }

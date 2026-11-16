@@ -24,7 +24,7 @@ pub use round::{
 use std::collections::BTreeSet;
 use syn::Ident;
 mod codegen;
-pub use codegen::{calibration_branch, substitute_host_parameters};
+pub use codegen::calibration_branch;
 
 /// Host realization supports iterator and consumer holes, not device batches.
 pub fn check_host_interfaces(program: &Program) -> syn::Result<()> {
@@ -93,18 +93,6 @@ pub fn consume_hole(
             "host Datalog printers do not support batch holes"
         )),
     }
-}
-
-/// Scope the complete consumed evaluation, never only construction of a lazy iterator.
-pub fn calibration_scope(hole: usize, body: TokenStream) -> TokenStream {
-    let guard = Ident::new("__cq_calibration_hole", Span::mixed_site());
-    quote!(::cq_storage::calibration_select! {
-        plain { #body }
-        calibration {{
-            let #guard = ::cq_storage::counters::calibration::hole_scope(#hole);
-            #body
-        }}
-    })
 }
 
 /// Collect directly into the requested provider, without an intermediate buffer.
@@ -310,7 +298,6 @@ fn render_admitted(
                 quote!(#provider),
                 None,
             );
-            let collection = calibration_scope(key.hole, collection);
             quote!(let #name = &#collection;)
         });
         let scheduled_rules = |phase: &str, rules: &[RuleHole]| {
@@ -405,49 +392,9 @@ fn render_admitted(
             program.policy.timing == "phases",
             &fresh,
         );
-        let deltas: Vec<_> = stratum.members.iter().map(|&index| {
-            let delta = context.relations[index].delta_host.as_ref().expect("checked IDB delta host");
-            quote!((#index, #delta.len()))
-        }).collect();
-        let final_rows = stratum.members.iter().map(|&index| {
-            let relation = &context.relations[index];
-            let canonical = &context.layouts[relation.providers.canonical].host;
-            let delta = relation.delta_host.as_ref().expect("checked IDB delta host");
-            quote!((#index, #canonical.len(), #delta.len()))
-        });
-        // The rows of every member's delta, for an observer that asks for
-        // them: at a round's begin the delta it consumes, at the stratum's
-        // end the last, unconsumed one.
-        let delta_rows: Vec<_> = stratum.members.iter().map(|&index| {
-            let relation = &context.relations[index];
-            let delta = relation.delta_host.as_ref().expect("checked IDB delta host");
-            let arity = relation.declaration.arity();
-            let cells = (0..arity).map(|column| {
-                let column = syn::Index::from(column);
-                quote!(::cq_storage::counters::calibration::Cell(&row.#column).scalar())
-            });
-            let dispatch_import = (arity != 0).then(|| {
-                quote!(use ::cq_storage::counters::calibration::ScalarCell as _;)
-            });
-            quote!(::cq_storage::counters::calibration::delta(#stratum_index, #round, #index, &mut |visit| {
-                #dispatch_import
-                for row in &#delta {
-                    let row: [::cq_storage::counters::calibration::ScalarValue<'_>; #arity] = [#(#cells),*];
-                    visit(&row);
-                }
-            });)
-        }).collect();
-        let calibration_round = quote!(::cq_storage::calibration_select! {
-            plain {}
-            calibration {
-                ::cq_storage::counters::calibration::round_begin(#stratum_index, #round, &[#(#deltas),*]);
-                #(#delta_rows)*
-            }
-        });
         let loop_body = match stratum.loop_form.to_string().as_str() {
             "while_nonempty" => quote!(
                 while #condition {
-                    #calibration_round
                     #observe
                     #step_round
                     #round += 1;
@@ -456,7 +403,6 @@ fn render_admitted(
             "loop_until_empty" => quote!(
                 loop {
                     if !(#condition) { break; }
-                    #calibration_round
                     #observe
                     #step_round
                     #round += 1;
@@ -468,25 +414,10 @@ fn render_admitted(
         match stratum.key_scope.to_string().as_str() {
             "component" => {
                 let body = quote!({
-                    ::cq_storage::calibration_select! {
-                        plain {}
-                        calibration { ::cq_storage::counters::calibration::stratum_begin(#stratum_index); }
-                    }
                     #(#keys)*
                     #seed_round
-                    ::cq_storage::calibration_select! {
-                        plain {}
-                        calibration { ::cq_storage::counters::calibration::seed_end(#stratum_index, &[#(#deltas),*]); }
-                    }
                     let mut #round = 0usize;
                     #loop_body
-                    ::cq_storage::calibration_select! {
-                        plain {}
-                        calibration {
-                            #(#delta_rows)*
-                            ::cq_storage::counters::calibration::stratum_end(#stratum_index, #round, &[#(#final_rows),*]);
-                        }
-                    }
                 });
                 let mut mutable = BTreeSet::new();
                 let mut locals = BTreeSet::new();
@@ -524,21 +455,48 @@ fn render_admitted(
     }
     let result = outputs(context);
     let descriptor = program.to_token_stream().to_string();
-    let guard = Ident::new("__cq_calibration_program", Span::mixed_site());
     let output = Ident::new("__cq_calibration_output", Span::mixed_site());
+    // PS-After: once the relations are final, each is offered to a
+    // statistics observer; its rows are visited only if the observer asks.
+    let relations = context.relations.iter().enumerate().map(|(index, relation)| {
+        let canonical = &context.layouts[relation.providers.canonical];
+        let host = &canonical.host;
+        let arity = relation.declaration.arity();
+        let cells = (0..arity).map(|column| {
+            let position = syn::Index::from(
+                canonical.columns.iter().position(|&c| c == column).expect("checked complete canonical permutation"),
+            );
+            quote!(::cq_storage::statistics::collection::Cell(row.#position).scalar())
+        });
+        let dispatch_import = (arity != 0).then(|| {
+            quote!(use ::cq_storage::statistics::collection::ScalarCell as _;)
+        });
+        // A layout keyed by the whole row holds one entry per row.
+        let rows = if canonical.key == arity {
+            quote!(::core::option::Option::Some(#host.len()))
+        } else {
+            quote!(::core::option::Option::None)
+        };
+        quote!(::cq_storage::statistics::collection::relation(#index, #rows, &mut |visit| {
+            #dispatch_import
+            for row in ::cq_storage::rows::Rows::rows(&#host) {
+                let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
+                visit(&row);
+            }
+        });)
+    });
     syn::parse2(quote!({
         ::cq_storage::calibration_select! {
             plain {}
-            calibration {
-                let #guard = ::cq_storage::counters::calibration::program_begin(#descriptor);
-            }
+            calibration { ::cq_storage::statistics::collection::program_begin(#descriptor); }
         }
         #(#bindings)* #bind_observer #(#strata)*
         ::cq_storage::calibration_select! {
             plain { #result }
             calibration {{
+                #(#relations)*
                 let #output = #result;
-                #guard.complete();
+                ::cq_storage::statistics::collection::program_end();
                 #output
             }}
         }
@@ -583,30 +541,8 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
             .map(|(_, layout)| insert_layout(layout, true));
         // `Rows::rows` yields every input column borrowed.
         let borrowed = vec![round::AnswerColumn::Borrowed; relation.declaration.arity()];
-        let observed = Ident::new("__cq_calibration_input_row", Span::mixed_site());
-        let observing = Ident::new("__cq_calibration_observing", Span::mixed_site());
-        let arity = relation.declaration.arity();
-        let cells = (0..arity).map(|column| {
-            let column = syn::Index::from(column);
-            quote!(::cq_storage::counters::calibration::Cell(&row.#column).scalar())
-        });
-        let dispatch_import = (arity != 0).then(|| {
-            quote!(use ::cq_storage::counters::calibration::ScalarCell as _;)
-        });
-        let loaded = Ident::new("__cq_calibration_loaded_rows", Span::mixed_site());
         let canonical_host = &canonical.host;
-        let admitted = quote!(
-            ::cq_storage::calibration_select! {
-                plain {}
-                calibration {
-                    if let Some(row) = &#observed {
-                        ::cq_storage::counters::calibration::input_admitted(#index, row);
-                    }
-                    #loaded += 1;
-                }
-            }
-            #(#inserts)*
-        );
+        let admitted = quote!(#(#inserts)*);
         let admit = if complete_key {
             admit_canonical(canonical, None, canonical_host, &borrowed, admitted)
         } else {
@@ -616,36 +552,8 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
         // Keep the original host alive, including temporary and grouped hosts.
         bindings.push(quote!({
             let #input = &(#expression);
-            ::cq_storage::calibration_select! {
-                plain {}
-                calibration {
-                    ::cq_storage::counters::calibration::input_begin(#index);
-                    let #observing = ::cq_storage::counters::calibration::observing();
-                    let mut #loaded = 0usize;
-                }
-            }
             for row in ::cq_storage::rows::Rows::rows(#input) {
-                ::cq_storage::calibration_select! {
-                    plain {}
-                    calibration {
-                        let #observed: ::core::option::Option<[
-                            ::cq_storage::counters::calibration::ScalarValue<'_>; #arity
-                        ]> = if #observing {
-                            #dispatch_import
-                            Some([#(#cells),*])
-                        } else {
-                            None
-                        };
-                        if let Some(row) = &#observed {
-                            ::cq_storage::counters::calibration::input_raw(#index, row);
-                        }
-                    }
-                }
                 #admit
-            }
-            ::cq_storage::calibration_select! {
-                plain {}
-                calibration { ::cq_storage::counters::calibration::input_end(#index, #loaded); }
             }
         }));
     }
@@ -937,7 +845,7 @@ pub fn evaluate(
 /// captured Rust expressions out of their lexical scope.
 pub fn split_evaluation(rule: &RuleHole, context: &RoundContext, body: TokenStream) -> TokenStream {
     let head = &context.relations[rule.head];
-    calibration_scope(rule.hole, codegen::split(
+    codegen::split(
         body,
         context,
         rule.hole,
@@ -945,7 +853,7 @@ pub fn split_evaluation(rule: &RuleHole, context: &RoundContext, body: TokenStre
             .into_iter()
             .collect(),
         &BTreeSet::new(),
-    ))
+    )
 }
 /// Candidate rows reaching admission in one timed round, before deduplication.
 /// Atomic so parallel admission tasks may add their counts.

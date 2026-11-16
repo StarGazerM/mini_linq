@@ -29,10 +29,22 @@ use crate::{Batch, Date, Decimal, Error, Result};
 mod degrees;
 pub use degrees::{DegreeCollector, RelationId, admitted_degrees, bind_degrees};
 
+/// What a statistics pass reads of the loader's column types (PS-After).
 #[cfg(feature = "planner-calibration")]
-mod canonical;
-#[cfg(feature = "planner-calibration")]
-pub use canonical::CanonicalAccumulator;
+mod collection {
+    use crate::{Date, Decimal};
+    use cq_storage::statistics::collection::{CalibrationCell, ScalarValue};
+
+    impl CalibrationCell for Date {
+        fn calibration_value(&self) -> ScalarValue<'_> { ScalarValue::Date(i64::from(self.days_since_epoch())) }
+    }
+    impl<const SCALE: u32> CalibrationCell for Decimal<SCALE> {
+        fn calibration_value(&self) -> ScalarValue<'_> { ScalarValue::Decimal { unscaled: self.scaled(), scale: SCALE } }
+    }
+    impl CalibrationCell for crate::StringCode {
+        fn calibration_value(&self) -> ScalarValue<'_> { ScalarValue::Symbol(u64::from(self.0)) }
+    }
+}
 
 /// The canonical content digest is independent of source formatting/batch size.
 pub use cq_evidence::HASH_MODE;

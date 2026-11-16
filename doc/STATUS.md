@@ -507,19 +507,20 @@ time on bloat, eclipse and xalan (the last two from bloat's statistics:
 delta-first orders over the scrambled texts take 3.6 times longer on
 bloat for one shuffle and exceed 300 s for the other two. The statistics
 are degree facts of the dataset evidence (PLANNING-REDESIGN, "Planner
-statistics path"): the planner lists the facts a program can ask for, the
-runtime keeps them as a calibrated run admits its rows
-(`cq_storage::statistics::Degrees`: sketches and a sample of keys, no copy
-of the rows; 3.6 s on bloat's 33.4M rows against 21 s for the exact
-reference and 1.46 s for DuckDB's `ANALYZE`; the plans cost the same by
-the exact facts), and `cq-cost orders` plans from the evidence. `cq-cost
-advise` selects the planned order of every hole whose facts the evidence
-holds (basis `measured`). A calibrated bloat run of the CPU engine takes
-108 s in all; its advice (46 of 115 holes changed, 2 rejected by
-production) compiles into the engine and gives the same counts; with the
-exact facts' advice the engine was 8% slower than the written text (12.83 s
-against 11.86 s; 111 indexes against 97, and the planner's cost has no
-index term). No GPU run and no device statistics; one program.
+statistics path", PS-After): the planner lists the facts a program can
+ask for; a calibration run evaluates as a plain run and, once it has its
+result, passes over the relations it holds into
+`cq_storage::statistics::Degrees` (sketches and a sample of keys, no copy
+of the rows); `cq-cost advise` selects the planned order of every hole
+whose facts the evidence holds (basis `measured`). A calibrated bloat run
+of the CPU engine takes 25 s and 4.6 GB in all (the evaluation with the
+pass 18 s, 12.3 s plain). The facts carry no round of a row, and that
+costs: the engine with this advice takes 18.2 s against 11.75 s for the
+written text and 12.7 s for the advice from round-aware degrees; five
+dispatch-rule directives account for 4.6 s of it. Whether a calibration
+build keeps its deltas to recover the rounds after the result is open.
+No advice has beaten the written text on bloat. No GPU run and no device
+statistics; one program.
 
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`

@@ -121,7 +121,6 @@ fn evaluate(
     let grain = Ident::new("__cq_grain", Span::mixed_site());
     let bucket = Ident::new("__cq_bucket", Span::mixed_site());
     let inline = Ident::new("__cq_inline", Span::mixed_site());
-    let calibration_task = Ident::new("__cq_calibration_task", Span::mixed_site());
     for rule in rules {
         let index = phase_rules
             .iter()
@@ -213,15 +212,8 @@ fn evaluate(
                 .map(|&column| &relation.declaration.columns[column].ty);
             quote!({
                 let #source_name = #source;
-                ::cq_storage::calibration_select! {
-                    plain {}
-                    calibration { let #calibration_task = ::cq_storage::counters::TaskContext::capture(); }
-                }
                 let #evaluator = |#chunk: &[(#(#input_types,)*)]| {
-                    ::cq_storage::calibration_select! {
-                        plain { #consume }
-                        calibration { #calibration_task.run(|| { #consume }) }
-                    }
+                    #consume
                 };
                 // Recorded minimum grain, widened so a large driver yields about
                 // four chunks per worker (the documented partition formula).
@@ -364,15 +356,8 @@ fn evaluate(
             let run = &evaluators[index];
             let body = &evaluations[index];
             quote!(
-                ::cq_storage::calibration_select! {
-                    plain {}
-                    calibration { let #calibration_task = ::cq_storage::counters::TaskContext::capture(); }
-                }
                 let mut #run = || {
-                    ::cq_storage::calibration_select! {
-                        plain { #body }
-                        calibration { #calibration_task.run(|| { #body }) }
-                    }
+                    #body
                 };
             )
         });
@@ -419,15 +404,8 @@ fn evaluate(
             .iter()
             .zip(&inline_admit)
             .map(|(task, body)| quote!(
-                ::cq_storage::calibration_select! {
-                    plain {}
-                    calibration { let #calibration_task = ::cq_storage::counters::TaskContext::capture(); }
-                }
                 let #task = || {
-                    ::cq_storage::calibration_select! {
-                        plain { #body }
-                        calibration { #calibration_task.run(|| { #body }) }
-                    }
+                    #body
                 };
             ));
         emitted_waves.push(quote! {

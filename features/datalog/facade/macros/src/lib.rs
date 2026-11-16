@@ -57,11 +57,7 @@ fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStre
             .extend(quote::quote!(hoist_invariants;));
     }
     let defaults = DatalogConfiguration::defaults();
-    let pipeline = if cfg!(feature = "planner-calibration") {
-        entry.configuration.resolve_calibrated(defaults)?
-    } else {
-        entry.configuration.resolve(defaults)?
-    };
+    let pipeline = entry.configuration.resolve(defaults)?;
     pipeline.start(entry.source)
 }
 

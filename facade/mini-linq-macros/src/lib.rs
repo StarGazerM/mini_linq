@@ -160,7 +160,6 @@ fn sequence_pipeline(config: cq_stage::Configuration) -> syn::Result<cq_stage::P
         passes,
         observer: None,
         output_consumer: None,
-        calibration: None,
         planning: None,
     })
 }
@@ -241,22 +240,12 @@ pub fn plan(input: TokenStream) -> TokenStream {
     if sequence_plan_source(&input) {
         return plan_sequential(input.into());
     }
-    cq_stage::pass_with_calibration::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args, enabled, planning| {
+    cq_stage::pass_with_planning::<cq_lang_cq::Program, cq_lang_ra::Program>(input, |source, args, planning| {
         let args: PlanOptions = syn::parse2(args)?;
-        use cq_stage::calibration::{Seed, Stage};
         let (target, cq, valuation, steps) = cq_planning::compile_prefix_with_steps(source, &args)?;
         let reads = cq_planning::first_reads(&cq, &valuation);
-        if !enabled {
-            *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
-            return Ok((target, None));
-        }
-        let seed = Seed {
-            valuation: Stage::annotation(&valuation, vec![quote::ToTokens::to_token_stream(&cq).to_string()]),
-            lowering: Stage::of(&target),
-            steps: steps.0.clone(),
-        };
         *planning = Some(cq_stage::planning::Planning { reads, steps: steps.0 });
-        Ok((target, Some(seed)))
+        Ok(target)
     })
     .into()
 }
@@ -837,61 +826,5 @@ mod tests {
             ).unwrap();
             assert_eq!(render(&selected.1), expected);
         }
-    }
-    #[test]
-    fn facade_records_each_checked_stage_and_keeps_executable_ir() {
-        use cq_stage::calibration::{Seed, Stage, Trace};
-        let source = syn::parse_quote! {
-            struct Q; relation R(x:i32,y:i32); relation S(y:i32);
-            answer(x) :- R(x,y), where x >= 1, S(y), if accept(x);
-        };
-        let options: PlanOptions = syn::parse_quote!(no_reduce);
-        let ordinary = cq_planning::compile_prefix(&source, &options).unwrap();
-        let (lowered, cq, valuation, steps) =
-            cq_planning::compile_prefix_with_steps(&source, &options).unwrap();
-        assert_eq!(ordinary, lowered);
-        let mut trace = Trace::default();
-        trace.initialize(Seed {
-            valuation: Stage::annotation(&valuation, vec![cq.to_token_stream().to_string()]),
-            lowering: Stage::of(&lowered),
-            steps: steps.0,
-        }).unwrap();
-        trace.check_source(&Stage::of(&lowered)).unwrap();
-        let indexed = cq_index_policy::compile(&lowered).unwrap();
-        trace.advance(Stage::of(&indexed));
-        let physical = cq_physical_lowering::compile(&indexed).unwrap();
-        trace.advance(Stage::of(&physical));
-        let structures = cq_structure_selection::compile(&physical).unwrap();
-        let structures_stage = Stage::annotation(
-            &structures, vec![physical.to_token_stream().to_string()],
-        );
-        trace.advance(structures_stage.clone());
-        assert!(trace.check_source(&Stage::of(&physical)).is_err());
-        assert_eq!(trace.current(), Some(&structures_stage));
-        let encoded = trace.descriptor().unwrap();
-        assert_eq!(Trace::parse_descriptor(&encoded).unwrap(), trace);
-        let sequence = cq_sequence_lowering::compile(&physical, &structures).unwrap();
-        let sequence_stage = Stage::annotation(&sequence, vec![
-            physical.to_token_stream().to_string(), structures.to_token_stream().to_string(),
-        ]);
-        trace.advance(sequence_stage.clone());
-        assert_eq!(trace.stages, [Stage::of(&indexed), Stage::of(&physical),
-            structures_stage, sequence_stage]);
-        let analysis = cq_lang_sequence::check_grading(&physical, &structures, &sequence, &cq_sequence_pull::machine()).unwrap();
-        let original = cq_sequence_pull::translate(&physical, &structures, &sequence, &analysis).unwrap();
-        let source_tokens = quote!(pipeline {}; #physical #structures #sequence);
-        let trace_off = super::Sequence::pass::<syn::Expr>(
-            source_tokens, |physical, structures, source, _| cq_sequence_pull::translate(physical, structures, source, &analysis),
-        );
-        assert_eq!(trace_off.to_string(), original.to_token_stream().to_string());
-        let descriptor = trace.descriptor().unwrap();
-        let trace_on = super::Sequence::pass::<syn::Expr>(
-            quote!(pipeline {} #trace; #physical #structures #sequence),
-            |physical, structures, source, _| cq_sequence_pull::translate(physical, structures, source, &analysis),
-        );
-        assert_eq!(trace_on.to_string(), quote!(::cq_storage::calibration_select! {
-            plain { #original }
-            calibration {{ ::cq_storage::counters::calibration::register_plan(#descriptor); #original }}
-        }).to_string());
     }
 }

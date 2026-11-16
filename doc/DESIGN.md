@@ -228,11 +228,6 @@ against Physical and Structures. Neither annotation embeds its base programs.
 Checked continuations use the realization envelope above.
 
 Observers receive only the selected printed IR, never the transport envelope.
-A calibration `Stage` likewise retains the selected layer's language and printed
-program as its identity, with separately printed `bases`: none for flat layers,
-`[P]` for Structures, and `[P, S]` for Sequence. The calibrator reparses the bases
-and annotation and checks their actual seam before deriving lineage. Calibration
-descriptors preserve those bases; they are not part of the selected IR grammar.
 
 The root Cargo workspace groups portable core, all feature consumers, formal
 examples and fixtures, and CPU benchmarks for shared compilation and lock

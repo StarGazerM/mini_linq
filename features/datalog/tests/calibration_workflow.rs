@@ -1,13 +1,15 @@
 #![cfg(feature = "planner-calibration")]
+//! PS-After: a completed run yields the degree facts of the relations it
+//! leaves, and advice from them; nothing else is observed.
 #[path = "calibration_erasure.rs"]
 mod fixture;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use cq_cost::{calibration, export};
 use cq_load::stats::{ColumnSpec, DistinctMode, RelationSpec};
-use cq_load::stats_manifest::{DatasetRequest, MetadataInput, RelationInput, REQUEST_SCHEMA};
+use cq_load::stats_manifest::{DatasetRequest, RelationInput, REQUEST_SCHEMA};
 use cq_load::stats_source::{SourceFormat, SourceOptions};
 use cq_syntax::declared_evidence::{DeclaredEvidence, RelationBinding, ColumnBinding, EvidenceView};
 use cq_evidence as ev;
@@ -16,7 +18,6 @@ use quote::ToTokens;
 const BUILD: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
 struct Case {
     root: PathBuf,
-    request: DatasetRequest,
     evidence: ev::DatasetEvidence,
     plans: export::PlannerInput,
 }
@@ -29,16 +30,13 @@ fn weight(id: &str, hash: &str) -> ev::RationalFact {
         provenance: ev::Provenance { producer: "test reference policy".into(), method: "explicit h=m=1; not measured hardware cost".into(), locator: "calibration_workflow.rs".into(), run: None, artifact_hash: None },
     }
 }
+/// The plans of the fixture program with the exact evidence of its input files attached.
 fn case(edges: &[(i32,i32)], seeds: &[(i32,)]) -> Case {
-    case_for(fixture::SOURCE, edges, seeds)
-}
-fn case_for(source_text: &str, edges: &[(i32,i32)], seeds: &[(i32,)]) -> Case {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!("cq-calibration-workflow-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("Edge.csv"), edges.iter().map(|(x,y)| format!("{x},{y}\n")).collect::<String>()).unwrap();
     std::fs::write(root.join("Seed.csv"), seeds.iter().map(|(x,)| format!("{x}\n")).collect::<String>()).unwrap();
-    std::fs::write(root.join("meta.json"), b"{ \"fixture\": \"canonical-stream\" }\n").unwrap();
     let relation = |name: &str, columns: &[&str]| RelationInput {
         relation: RelationSpec { name: name.into(), columns: columns.iter().map(|name| ColumnSpec { name: (*name).into(), domain: ev::ScalarDomain::SignedInteger }).collect(),
             semantics: ev::RelationSemantics::Set, key_sets: Vec::new() },
@@ -47,144 +45,100 @@ fn case_for(source_text: &str, edges: &[(i32,i32)], seeds: &[(i32,)]) -> Case {
     };
     let request = DatasetRequest { schema: REQUEST_SCHEMA.into(), name: "reach-fixture".into(), date: "2026-11-05".into(), formulation: "set reachability".into(),
         hash_mode: ev::HASH_MODE.into(), distinct: DistinctMode::Exact,
-        relations: vec![relation("Edge", &["x","y"]), relation("Seed", &["x"])], metadata: vec![MetadataInput { path: "meta.json".into(), role: ev::FileRole::Metadata }] };
+        relations: vec![relation("Edge", &["x","y"]), relation("Seed", &["x"])], metadata: Vec::new() };
     let configuration = export::Configuration { compiler_hash: BUILD.into(), target: export::Target::Cpu, invocation: "CPU default route; explicit reference row-work policy".into() };
-    let unbound = export::compile_datalog(source_text, configuration.clone()).unwrap();
+    let unbound = export::compile_datalog(fixture::SOURCE, configuration.clone()).unwrap();
     let mut evidence = request.collect(&root).unwrap();
     evidence.targets.insert("cpu".into(), ev::TargetEvidence {
         unit: ev::Unit::DeclaredRowWork, build_per_row_h: weight("policy.h", &evidence.dataset.hash), merge_per_row_m: weight("policy.m", &evidence.dataset.hash),
         configuration_hash: unbound.identity.configuration_hash,
     });
-    let mut source: cq_datalog::source::Program = syn::parse_str(source_text).unwrap();
+    let mut source: cq_datalog::source::Program = syn::parse_str(fixture::SOURCE).unwrap();
     source.declared_evidence = Some(DeclaredEvidence::from_json(&evidence.canonical_json().unwrap(), request.relations.iter().map(|input| RelationBinding {
         relation: syn::parse_str(&input.relation.name).unwrap(), source: input.relation.name.clone(), view: EvidenceView::Full,
         columns: input.relation.columns.iter().map(|column| ColumnBinding { column: syn::parse_str(&column.name).unwrap(), source: column.name.clone() }).collect(),
     }).collect()).unwrap());
     let plans = export::compile_datalog(&source.to_token_stream().to_string(), configuration).unwrap();
-    Case { root, request, evidence, plans }
-}
-fn metadata(case: &Case) {
-    let bytes = std::fs::read(case.root.join("meta.json")).unwrap();
-    cq_storage::counters::calibration::metadata("meta.json", &bytes);
+    Case { root, evidence, plans }
 }
 fn run(case: &Case, edges: &[(i32,i32)], seeds: &[(i32,)]) -> calibration::Result<calibration::CalibrationResult<BTreeSet<(i32,)>>> {
-    calibration::measure(&case.plans, &case.evidence, &case.request, "completed-fixture", || {
-        metadata(case);
-        fixture::reach(edges, seeds)
-    })
+    calibration::measure(&case.plans, &case.evidence, "completed-fixture", || fixture::reach(edges, seeds))
+}
+fn degrees(evidence: &ev::DatasetEvidence) -> BTreeMap<String, (u64, u64)> {
+    evidence.degrees.iter().map(|degree| {
+        assert_eq!(degree.value.source, ev::Source::Calibrated);
+        let value = degree.value.value.as_ref().unwrap();
+        (degree.value.id.clone(), (value.numerator.parse().unwrap(), value.denominator.parse().unwrap()))
+    }).collect()
 }
 
 #[test]
-fn complete_run_emits_exact_input_round_physical_and_recosted_evidence() {
+fn a_completed_run_yields_the_degree_facts_of_its_relations_and_advice_from_them() {
     let edges = [(0,1),(1,2),(2,3)]; let seeds = [(0,)];
     let case = case(&edges, &seeds);
     let result = run(&case, &edges, &seeds).unwrap();
     assert_eq!(result.value, BTreeSet::from([(0,),(1,),(2,),(3,)]));
-    result.evidence.check().unwrap(); result.plans.check().unwrap();
-    assert_eq!(result.evidence.relations["Edge"].rows.as_ref().unwrap().value, Some(3));
-    assert_eq!(result.evidence.relations["Seed"].rows.as_ref().unwrap().value, Some(1));
-    let recursive = result.evidence.relations.values().find_map(|r| r.recursive.as_ref()).unwrap();
-    assert_eq!(recursive.final_rows.value, Some(4));
-    assert_eq!(recursive.rounds.value, Some(4));
-    assert_eq!(recursive.seed_rows.as_ref().unwrap().value, Some(1));
-    assert_eq!(recursive.unconsumed_final_delta_rows.as_ref().unwrap().value, Some(0));
-    assert_eq!(result.evidence.observations.rounds[0].entries.iter().map(|r| r.delta_rows.value.unwrap()).collect::<Vec<_>>(), [1,1,1,1]);
-    assert!(!result.report.physical_steps.is_empty());
-    assert!(result.report.physical_steps.iter().any(|step| step.measured.fused));
-    assert!(result.report.physical_steps.iter().all(|step| step.measured.comparison.as_ref().is_none_or(|bound| bound.within_bound)));
-    assert_eq!(result.plans.identity.program_hash, case.plans.identity.program_hash);
-    assert!(result.evidence.observations.physical_steps.len() == result.report.physical_steps.len());
-    assert!(result.planning_evidence().observations.physical_steps.is_empty());
-    assert_eq!(result.advice.evidence_hash, export::sha256(result.evidence.canonical_json().unwrap()));
-    let report = result.report.render(&result.evidence);
-    assert!(report.contains("fused; counted once") && report.contains("No runtime advice adoption"));
-    // PS-Rows: the run collected the degree facts the variable planner asks
-    // for, from the bound inputs and every delta row. Reach = {0,1,2,3} and
-    // Edge maps 0, 1 and 2 on: three targets over four reached sources.
-    let degree = |id: &str| {
-        let fact = result.evidence.degrees.iter().find(|degree| degree.value.id == id)
-            .unwrap_or_else(|| panic!("no fact {id} among {:?}", result.evidence.degrees.iter().map(|degree| &degree.value.id).collect::<Vec<_>>()));
-        assert_eq!(fact.value.source, ev::Source::Calibrated);
-        let value = fact.value.value.as_ref().unwrap();
-        (value.numerator.parse::<u64>().unwrap(), value.denominator.parse::<u64>().unwrap())
-    };
-    assert_eq!(degree("degree:joined:Reach[0]~Edge[0]>1"), (3, 4));
-    assert_eq!(degree("degree:distinct:Edge[1]"), (3, 1));
-    assert_eq!(degree("degree:distinct:Seed[0]"), (1, 1));
+    result.evidence.check().unwrap();
+    // The facts are added to the supplied evidence; nothing else of it changes.
+    let mut without = result.evidence.clone();
+    without.degrees.clear();
+    assert_eq!(without, case.evidence);
+    // Reach = {0,1,2,3} and Edge maps 0, 1 and 2 on: three targets over
+    // four reached sources. No fact depends on a round.
+    let facts = degrees(&result.evidence);
+    assert_eq!(facts["degree:joined:Reach[0]~Edge[0]>1"], (3, 4));
+    assert_eq!(facts["degree:distinct:Edge[1]"], (3, 1));
+    assert_eq!(facts["degree:distinct:Seed[0]"], (1, 1));
+    assert!(facts.keys().all(|id| !id.contains("@staged") && !id.starts_with("degree:visible")), "{:?}", facts.keys());
     // PS-Read: the planner plans every rule from that evidence alone.
-    let planner = cq_cost::cost::variables::Planner::new(&result.plans, &result.evidence).unwrap();
-    let planned: Vec<_> = (0..result.plans.holes.len()).filter_map(|hole| planner.plan(hole).unwrap()).collect();
-    assert_eq!(planned.len(), result.plans.holes.iter().filter(|hole| matches!(hole.origin, export::Origin::Rule { .. })).count());
+    let planner = cq_cost::cost::variables::Planner::new(&case.plans, &result.evidence).unwrap();
+    let planned: Vec<_> = (0..case.plans.holes.len()).filter_map(|hole| planner.plan(hole).unwrap()).collect();
+    assert_eq!(planned.len(), case.plans.holes.iter().filter(|hole| matches!(hole.origin, export::Origin::Rule { .. })).count());
     assert!(planned.iter().any(|plan| plan.order == ["x", "y"]), "{:?}", planned.iter().map(|plan| &plan.order).collect::<Vec<_>>());
     // PS-Decide: the advice of the calibrated run is decided from them.
+    assert_eq!(result.advice.evidence_hash, export::sha256(result.evidence.canonical_json().unwrap()));
     for hole in result.advice.holes.iter().filter(|hole| matches!(hole.origin, export::Origin::Rule { .. })) {
         assert_eq!(hole.basis, cq_cost::cost::Basis::Measured, "{}", hole.reason);
     }
-    // Review an alternative without executing it: changed prefix/key scopes
-    // must not acquire incumbent row counts or invented fan-out maxima. The
-    // report keeps only the valuations a decision weighed, so the
-    // alternative comes from the listing of every valuation.
-    let mut alternative = result.advice.clone();
-    let listings = cq_cost::cost::listed(&result.plans, &result.evidence, &alternative.target, alternative.space, None).unwrap();
-    let (at, plan) = listings.iter().enumerate().find_map(|(at, listing)| listing.valuations.iter()
-        .find(|valued| !valued.plan.current).map(|valued| (at, valued.plan.clone()))).unwrap();
-    let hole = &mut alternative.holes[at];
-    let cost = cq_cost::cost::bounds::cost_candidate(&result.plans, &result.plans.holes[at], &plan, &result.evidence, &result.advice.target, &hole.shared_before).unwrap();
-    hole.candidates.push(cq_cost::cost::CandidateRecord { plan, cost, estimate: None });
-    hole.selected = hole.candidates.len() - 1;
-    hole.decision = cq_cost::cost::Decision::Changed;
-    hole.noise_screen = None;
-    let reviews = calibration::assess_bounds(&result.report, &alternative, &result.plans, &result.evidence).unwrap();
-    assert!(!reviews.is_empty());
-    assert!(reviews.iter().all(|review| review.calibrated_fanout_recost.is_none()));
-    assert!(reviews.iter().flat_map(|review| &review.proposed_steps).any(|step| !step.same_executed_prefix));
-    assert!(reviews.iter().flat_map(|review| &review.proposed_steps)
-        .filter(|step| !step.same_executed_prefix).all(|step| step.comparison.is_none()));
-    alternative.input_hash = export::sha256("other program");
-    assert!(calibration::assess_bounds(&result.report, &alternative, &result.plans, &result.evidence).is_err());
     let output = case.root.join("output"); result.write_artifacts(&output).unwrap();
-    let restored = ev::parse_json(&std::fs::read_to_string(output.join("calibration.evidence.json")).unwrap()).unwrap();
+    let restored = ev::parse_json(&std::fs::read_to_string(output.join("calibration.facts.json")).unwrap()).unwrap();
     assert_eq!(restored, result.evidence);
+    assert_eq!(std::fs::read_to_string(output.join("calibration.orders.dl")).unwrap().trim_end(), result.advice.advice.trim_end());
+    let mut written: Vec<_> = std::fs::read_dir(&output).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect();
+    written.sort();
+    assert_eq!(written, ["calibration.costs.json", "calibration.facts.json", "calibration.orders.dl"]);
     assert!(result.write_artifacts(&output).is_err(), "never overwrite existing artifacts");
 }
 
 #[test]
-fn empty_fixpoint_has_zero_executed_rounds_without_invented_delta_entries() {
+fn an_empty_fixpoint_has_facts_of_empty_relations() {
     let case = case(&[], &[]);
     let result = run(&case, &[], &[]).unwrap();
     assert!(result.value.is_empty());
-    let recursive = result.evidence.relations.values().find_map(|r| r.recursive.as_ref()).unwrap();
-    assert_eq!(recursive.final_rows.value, Some(0)); assert_eq!(recursive.rounds.value, Some(0));
-    assert!(result.evidence.observations.rounds[0].entries.is_empty());
-    assert!(!result.report.unexecuted_holes.is_empty());
     result.evidence.check().unwrap();
+    assert!(!result.evidence.degrees.is_empty());
+    assert!(degrees(&result.evidence).values().all(|&(numerator, _)| numerator == 0));
 }
 
 #[test]
-fn incomplete_wrong_dataset_and_metadata_runs_never_publish_facts() {
+fn a_run_that_is_not_the_planned_one_publishes_nothing() {
     let edges = [(0,1)]; let seeds = [(0,)]; let case = case(&edges, &seeds);
-    assert!(calibration::measure(&case.plans, &case.evidence, &case.request, "no-program", || metadata(&case)).is_err());
-    assert!(run(&case, &[(0,2)], &seeds).is_err(), "decoded row identity mismatch");
-    assert!(calibration::measure(&case.plans, &case.evidence, &case.request, "no-meta", || fixture::reach(&edges, &seeds)).is_err());
-    assert!(calibration::measure(&case.plans, &case.evidence, &case.request, "bad-meta", || {
-        cq_storage::counters::calibration::metadata("meta.json", b"{}"); fixture::reach(&edges, &seeds)
+    assert!(calibration::measure(&case.plans, &case.evidence, "no-program", || ()).is_err());
+    assert!(calibration::measure(&case.plans, &case.evidence, "two-programs", || {
+        fixture::reach(&edges, &seeds); fixture::reach(&edges, &seeds)
     }).is_err());
-    assert!(calibration::measure(&case.plans, &case.evidence, &case.request, "two-programs", || {
-        metadata(&case); fixture::reach(&edges, &seeds); fixture::reach(&edges, &seeds)
-    }).is_err());
-    let error = calibration::try_measure::<()>(&case.plans, &case.evidence, &case.request, "loader-error", || Err(export::ExportError("original loader error".into()))).err().unwrap();
+    assert!(calibration::measure(&case.plans, &case.evidence, " ", || fixture::reach(&edges, &seeds)).is_err(), "a run needs an identity");
+    let error = calibration::try_measure::<()>(&case.plans, &case.evidence, "loader-error", || Err(export::ExportError("original loader error".into()))).err().unwrap();
     assert_eq!(error.to_string(), "original loader error");
-    // A bound input relation is a set: a repeated complete row is not repaired
-    // and fails the run instead of publishing bag counts as set statistics.
-    let repeated = [(0,1),(0,1)];
-    let raw = case_for(fixture::SOURCE, &repeated, &seeds);
-    assert!(run(&raw, &repeated, &seeds).is_err(), "repeated complete input row");
+    // The run is bound to its inputs by their rows: the evidence states one edge.
+    let error = run(&case, &[(0,1),(1,2)], &seeds).err().unwrap();
+    assert!(error.to_string().contains("holds 2 rows; its evidence states 1"), "{error}");
+    // Outside a calibration nothing is observed.
+    assert_eq!(fixture::reach(&edges, &seeds), BTreeSet::from([(0,),(1,)]));
 }
 
 fn parallel_case(edges: &[(i32,i32)], seeds: &[(i32,)]) -> Case {
-    make_parallel(case(edges, seeds))
-}
-fn make_parallel(mut case: Case) -> Case {
+    let mut case = case(edges, seeds);
     let configuration = export::Configuration {
         compiler_hash: BUILD.into(), target: export::Target::CpuPar,
         invocation: "CPU-par sharded layouts; threshold=0, grain=1; Rayon threads=2; explicit reference row-work policy".into(),
@@ -227,107 +181,17 @@ fn parallel_reach(edges: &[(i32,i32)], seeds: &[(i32,)]) -> BTreeSet<(i32,)> {
 }
 
 #[test]
-fn parallel_push_instances_preserve_complete_rounds_and_evidence_bindings() {
+fn a_parallel_run_leaves_the_same_degree_facts() {
     let edges = [(0,1),(1,2),(2,3),(10,11)];
     let seeds = [(0,),(10,)];
+    let serial_case = case(&edges, &seeds);
+    let serial = run(&serial_case, &edges, &seeds).unwrap();
     let case = parallel_case(&edges, &seeds);
     let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
-    let result = pool.install(|| calibration::measure(&case.plans, &case.evidence, &case.request, "parallel-fixture", || {
-        metadata(&case); parallel_reach(&edges, &seeds)
-    })).unwrap();
+    let result = pool.install(|| calibration::measure(&case.plans, &case.evidence, "parallel-fixture", || parallel_reach(&edges, &seeds))).unwrap();
     assert_eq!(result.value, BTreeSet::from([(0,),(1,),(2,),(3,),(10,)]));
-    result.evidence.check().unwrap(); result.plans.check().unwrap();
-    let recursive = result.evidence.relations.values().find_map(|r| r.recursive.as_ref()).unwrap();
-    assert_eq!(recursive.final_rows.value, Some(5));
-    assert_eq!(recursive.rounds.value, Some(4));
-    assert_eq!(result.evidence.observations.rounds[0].entries.iter().map(|e| e.delta_rows.value.unwrap()).collect::<Vec<_>>(), [2,1,1,1]);
-    assert!(result.report.physical_steps.iter().any(|step| step.measured.fused));
-    assert!(result.report.physical_steps.iter().all(|step| step.measured.comparison.as_ref().is_none_or(|bound| bound.within_bound)));
-    assert!(result.report.traces.values().all(|trace| !trace.host_aliases.is_empty()));
-    assert!(result.plans.holes.iter().any(|hole| hole.evidence.as_ref().is_some_and(|e|
-        e.bindings.iter().any(|b| b.view == export::EvidenceView::Delta))));
-}
-
-const CARTESIAN: &str = stringify! {
-    struct CartesianCalibration;
-    relation Edge(x:i32,y:i32) = (edges);
-    relation Seed(x:i32) = (seeds);
-    relation Out(x:i32,y:i32,z:i32);
-    output Out;
-    Product: Out(*x,*y,*z) :- Edge(x,y), Seed(z);
-};
-fn cartesian(edges: &[(i32,i32)], seeds: &[(i32,)]) -> BTreeSet<(i32,i32,i32)> {
-    cq_datalog::datalog! {
-        struct CartesianCalibration;
-        relation Edge(x:i32,y:i32) = (edges);
-        relation Seed(x:i32) = (seeds);
-        relation Out(x:i32,y:i32,z:i32);
-        output Out;
-        Product: Out(*x,*y,*z) :- Edge(x,y), Seed(z);
-    }.into_iter().collect()
-}
-fn parallel_cartesian(edges: &[(i32,i32)], seeds: &[(i32,)]) -> BTreeSet<(i32,i32,i32)> {
-    cq_datalog::datalog! {
-        pipeline {
-            storage_rewrites = [cq_datalog_parallel::shard_storage(layouts(sharded))];
-            round = [cq_datalog_parallel::partition(threshold=0, grain=1)];
-            print = cq_datalog_parallel::print_rounds;
-        }
-        struct CartesianCalibration;
-        relation Edge(x:i32,y:i32) = (edges);
-        relation Seed(x:i32) = (seeds);
-        relation Out(x:i32,y:i32,z:i32);
-        output Out;
-        Product: Out(*x,*y,*z) :- Edge(x,y), Seed(z);
-    }.into_iter().collect()
-}
-
-/// M6: record a stream-work correspondence certificate for repeated inputs
-/// (`features/planners/cost/src/calibration/report.rs::evaluation_scopes`).
-/// Sparse lowering Steps are not that certificate; report unknown bounds.
-#[test]
-fn keyless_rhs_replay_reports_unknown_without_stream_work_certificate() {
-    let edges = [(0,1),(1,2),(2,3),(3,4)]; let seeds = [(10,),(20,)];
-    let expected = edges.iter().flat_map(|&(x,y)| seeds.iter().map(move |&(z,)| (x,y,z))).collect::<BTreeSet<_>>();
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
-    for parallel in [false, true] {
-        let case = case_for(CARTESIAN, &edges, &seeds);
-        let case = if parallel { make_parallel(case) } else { case };
-        let result = pool.install(|| calibration::measure(&case.plans, &case.evidence, &case.request, "cartesian", || {
-            metadata(&case);
-            if parallel { parallel_cartesian(&edges, &seeds) } else { cartesian(&edges, &seeds) }
-        })).unwrap();
-        assert_eq!(result.value, expected);
-        let replayed = result.report.physical_steps.iter().filter(|step|
-            step.bound_role == "unmodeled repeated-input evaluation scope"
-        ).collect::<Vec<_>>();
-        assert!(!replayed.is_empty(), "the repeated operand scope must be explicit");
-        for step in &replayed {
-            assert!(step.planned_comparison.is_none());
-            assert!(step.measured.comparison.is_none());
-            assert!(!step.planned_unknown.is_empty());
-            assert!(!step.measured.unknown.is_empty());
-        }
-        // Without the stream-work certificate, these diagnostic scopes cannot
-        // be summed as one join-output counter. Exact output is checked above.
-        assert!(result.report.physical_steps.iter().all(|step| step.measured.comparison.as_ref().is_none_or(|bound| bound.within_bound)));
-        result.evidence.check().unwrap();
-    }
-}
-
-#[test]
-fn unobserved_operators_are_not_published_as_measured_zero() {
-    let edges = [(10,11)]; let seeds = [(10,)];
-    let case = case(&edges, &seeds);
-    let result = run(&case, &edges, &seeds).unwrap();
-    assert_eq!(result.value, BTreeSet::from([(10,)]));
-    assert!(!result.report.unobserved_physical_steps.is_empty());
-    for absent in &result.report.unobserved_physical_steps {
-        assert!(!result.report.physical_steps.iter().any(|step|
-            step.measured.hole == format!("hole:{}", absent.hole)
-                && step.measured.instance.starts_with(&format!("program:{}:", absent.program))
-                && step.measured.physical_steps.contains(&absent.physical_step)));
-    }
-    assert!(result.report.physical_steps.iter().any(|step| step.measured.rows.value == Some(0)),
-        "a genuinely observed empty output remains an exact zero");
+    assert_eq!(result.value, serial.value);
+    result.evidence.check().unwrap();
+    // The relations a run leaves do not depend on how it evaluated them.
+    assert_eq!(degrees(&result.evidence), degrees(&serial.evidence));
 }
