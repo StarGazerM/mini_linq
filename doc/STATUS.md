@@ -540,7 +540,7 @@ GPU report are historical, not timings for this revised CPU order.
 
 Cursor retention uses `share` / `repr … witness` / `stage … expand`
 (ST-Share, STR-Witness, ST-Expand; `cq_rewrites::retain_lookups`), the R/E
-encoding in [the co-design note](GPU-LE-BACKEND-CODESIGN.md). `le_runs` =
+encoding of the [back-end rules](formal/backend.tex). `le_runs` =
 `order(le)` + `sorted_runs` + `retain_lookups`. Historical SF1 uninstrumented
 medians (`cargo xtask bench --tpch --sf 1 --runs 5 --config le_runs`,
 2026-10-18, all 13 exact vs DuckDB):
