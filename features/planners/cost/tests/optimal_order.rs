@@ -595,3 +595,41 @@ fn advice_from_measured_degrees_does_not_depend_on_the_written_body_order() {
     assert_eq!(reads, written, "reversed bodies are advised differently");
     assert!(changed > 0, "no reversed body was reordered");
 }
+
+/// VP-Index: a steady variant whose only order reads by an index of more
+/// groups than its work is worth gets no advice; with few groups it does.
+#[test]
+fn an_index_costlier_than_the_work_it_serves_is_not_advised() {
+    let program = Program { inputs: vec![("New", 2), ("Cast", 3)], derived: vec![("V", 2)], rules: vec![
+        rule(atom("V", &[Var("v"), Var("h")]), &[atom("New", &[Var("v"), Var("h")])]),
+        rule(atom("V", &[Var("to"), Var("h")]), &[atom("Cast", &[Var("from"), Var("to"), Var("h")]), atom("V", &[Var("from"), Var("h")])]),
+    ] };
+    // `news` allocated variables over five heaps; a cast from each of
+    // `sources` variables at each heap, so `Cast` by (from, h) has a group a row.
+    let steady = |news: i64, sources: i64| -> cost::variables::Decided {
+        let inputs: Database = BTreeMap::from([
+            ("New", (0..news).flat_map(|v| (0..5).map(move |h| vec![v, h])).collect::<Rows>()),
+            ("Cast", (0..sources).flat_map(|from| (0..5).map(move |h| vec![from, (from * 7 + h) % sources.max(news), h])).collect::<Rows>()),
+        ]);
+        let history = program.semi_naive(&inputs);
+        let evidence = profiled(&program, &inputs);
+        let input = planned(&program, &evidence);
+        let evidence = with_degrees(&input, evidence, &history);
+        let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide().unwrap();
+        let mut steady = input.holes.iter().zip(decided).filter_map(|(hole, decided)| match &hole.origin {
+            Origin::Rule { seed, .. } => { let decided = decided.expect("every hole of the fixture plans"); if *seed { assert!(decided.advised); None } else { Some(decided) } }
+            _ => None,
+        });
+        let only = steady.next().expect("one steady variant");
+        assert!(steady.next().is_none());
+        only
+    };
+    // 4,000 groups against at most 4,000 changing rows of about two bindings each.
+    let costly = steady(20, 800);
+    assert_eq!(costly.added, 16.0 * 4000.0);
+    assert!(!costly.advised, "work {:?} against {} for the index", costly.work, costly.added);
+    // 50 groups against 600 changing rows or more.
+    let cheap = steady(120, 10);
+    assert_eq!(cheap.added, 16.0 * 50.0);
+    assert!(cheap.advised, "work {:?} against {} for the index", cheap.work, cheap.added);
+}

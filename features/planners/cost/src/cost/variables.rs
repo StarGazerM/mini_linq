@@ -10,7 +10,7 @@ use cq_evidence::{DatasetEvidence, DegreeRequest, Reach, Scalar, Selection};
 use cq_lang_cq as cq;
 
 use super::{advice, enumerate, rank};
-use super::{Candidate, Space};
+use super::{Candidate, IndexDemand, IndexVersion, Space};
 use crate::export::{self, Origin, PlannerInput, Version};
 
 /// A planned variable order with its valuation.
@@ -32,6 +32,20 @@ pub struct Advised {
     pub plans: Vec<RulePlan>,
     pub adopted: Vec<usize>,
     pub rejected: Vec<(usize, String)>,
+}
+
+/// VP-Index: the order decided for a hole.
+#[derive(Clone, Debug)]
+pub struct Decided {
+    pub order: Planned,
+    /// Its bindings over the run, where the changing relation's rows are known.
+    pub work: Option<f64>,
+    /// The charge of the full indexes it reads by and no earlier decision built.
+    pub added: f64,
+    /// The lowerings weighed.
+    pub weighed: usize,
+    /// Whether the order is advised: its new indexes cost no more than its work.
+    pub advised: bool,
 }
 
 struct Occurrence {
@@ -122,6 +136,10 @@ impl Model<'_> {
             let free = self.variables(at) & !pinned;
             // Its own keys: every set of the variables it can propose.
             for mask in subsets(free) { into.insert(self.distinct(at, mask)); }
+            // VP-Index: the groups of every index an order can read it by.
+            for mask in subsets(self.variables(at)).filter(|mask| *mask != 0) {
+                into.insert(groups(&self.occurrences[at].rows.relation, self.pairs(at, at, mask).0));
+            }
             for variable in (0..self.names.len()).filter(|variable| free & (1 << variable) != 0) {
                 // The changing occurrence binds all of its variables at once.
                 if let Some(changing) = self.changing.filter(|_| self.variables(at) & pinned != 0) {
@@ -262,20 +280,50 @@ impl Model<'_> {
 
 /// Orders tried before the search keeps the best found so far.
 const BUDGET: usize = 200_000;
+/// VP-Index: the lowerings of a hole a decision weighs, cheapest first.
+const ALTERNATIVES: usize = 16;
+/// VP-Index: what a group of a full index costs, in bindings.
+const GROUP: f64 = 16.0;
+
+/// PS-Request: the groups of a relation on `columns`, its distinct values there.
+fn groups(relation: &str, columns: Vec<usize>) -> DegreeRequest {
+    DegreeRequest::Distinct { rows: Selection { relation: relation.to_owned(), fixed: Vec::new() }, columns }
+}
+
+/// PS-Request: the rows of a relation, its distinct whole rows.
+fn whole(relation: &str, arity: usize) -> DegreeRequest { groups(relation, (0..arity).collect()) }
 
 struct Search<'a, 'b> {
     model: &'a Model<'b>,
-    /// The variables to order after those already bound.
+    /// The variables bound first, and those to order after them.
+    root: &'a [usize],
     rest: &'a [usize],
-    best: Option<(f64, Vec<usize>)>,
+    /// The cheapest orders found, each of another lowering: its VP-Cost,
+    /// the whole order and its lowering; cheapest first, at most `keep`.
+    best: Vec<(f64, Vec<usize>, Vec<usize>)>,
+    keep: usize,
     tried: usize,
 }
 impl Search<'_, '_> {
+    /// Whether an order of this cost cannot enter `best`.
+    fn beaten(&self, total: f64) -> bool {
+        self.best.len() == self.keep && self.best.last().is_some_and(|worst| total >= worst.0)
+    }
     fn extend(&mut self, order: &mut Vec<usize>, owners: &mut Vec<usize>, bound: u64, bindings: f64, total: f64) -> Option<()> {
         if self.tried >= BUDGET { return Some(()); }
         if order.len() == self.rest.len() {
             self.tried += 1;
-            if self.best.as_ref().is_none_or(|(known, _)| total < *known) { self.best = Some((total, order.clone())); }
+            if self.beaten(total) { return Some(()); }
+            let complete: Vec<usize> = self.root.iter().chain(order.iter()).copied().collect();
+            let lowering = self.model.lowering(&complete)?;
+            match self.best.iter().position(|held| held.2 == lowering) {
+                Some(at) if self.best[at].0 <= total => return Some(()),
+                Some(at) => { self.best.remove(at); }
+                None => {}
+            }
+            let at = self.best.partition_point(|held| held.0 <= total);
+            self.best.insert(at, (total, complete, lowering));
+            self.best.truncate(self.keep);
             return Some(());
         }
         // Candidates in the order of their step, so good orders come first.
@@ -288,7 +336,7 @@ impl Search<'_, '_> {
         for (variable, step) in next {
             let bindings = bindings * step.expected;
             let total = total + bindings;
-            if self.best.as_ref().is_some_and(|(known, _)| total >= *known) { continue; }
+            if self.beaten(total) { continue; }
             order.push(variable);
             owners[variable] = step.proposer;
             self.extend(order, owners, bound | 1 << variable, bindings, total)?;
@@ -307,6 +355,8 @@ pub struct Planner<'a> {
     prepared: Vec<Option<enumerate::Prepared>>,
     /// The relations that change in each recursive component, by stratum.
     members: BTreeMap<usize, BTreeSet<String>>,
+    /// The columns of every relation a rule hole reads.
+    arity: BTreeMap<String, usize>,
     facts: HashMap<DegreeRequest, f64>,
     constants: BTreeMap<String, i64>,
 }
@@ -314,6 +364,7 @@ pub struct Planner<'a> {
 impl<'a> Planner<'a> {
     pub fn new(input: &'a PlannerInput, evidence: &DatasetEvidence) -> export::Result<Self> {
         let mut members: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
+        let mut arity = BTreeMap::new();
         let mut prepared = Vec::with_capacity(input.holes.len());
         for hole in &input.holes {
             let Origin::Rule { stratum, seed, .. } = &hole.origin else { prepared.push(None); continue };
@@ -321,6 +372,7 @@ impl<'a> Planner<'a> {
             if !seed {
                 members.entry(*stratum).or_default().extend(problem.reads().filter(|read| read.version == Version::Delta).map(|read| read.logical_relation.clone()));
             }
+            arity.extend(problem.reads().map(|read| (read.logical_relation.clone(), read.columns.len())));
             prepared.push(Some(problem));
         }
         let facts = evidence.degrees.iter().filter_map(|degree| {
@@ -331,7 +383,7 @@ impl<'a> Planner<'a> {
             Scalar::SignedInteger { value } => Some((name.clone(), *value)),
             _ => None,
         }).collect();
-        Ok(Self { input, prepared, members, facts, constants })
+        Ok(Self { input, prepared, members, arity, facts, constants })
     }
 
     /// The model of a rule hole. `None` for another hole, or one with an
@@ -381,9 +433,10 @@ impl<'a> Planner<'a> {
     }
 
     /// PS-Derive: every degree statistic planning this program can ask
-    /// for, at the evidence's closed constants.
+    /// for, at the evidence's closed constants; and the rows of every
+    /// relation a rule reads (VP-Index weighs holes and indexes by them).
     pub fn requests(&self) -> export::Result<Vec<DegreeRequest>> {
-        let mut requests = BTreeSet::new();
+        let mut requests: BTreeSet<DegreeRequest> = self.arity.iter().map(|(relation, arity)| whole(relation, *arity)).collect();
         for hole in 0..self.input.holes.len() {
             if let Some((model, _)) = self.model(hole)? { model.requests(&mut requests); }
         }
@@ -394,17 +447,47 @@ impl<'a> Planner<'a> {
     /// lowered by VP-Lower. `None` where a fact is missing, or the hole is
     /// no rule hole or has an introducing occurrence outside its prefix.
     pub fn plan(&self, hole: usize) -> export::Result<Option<Planned>> {
-        let Some((model, prepared)) = self.model(hole)? else { return Ok(None) };
+        Ok(self.search(hole, 1)?.into_iter().next())
+    }
+
+    /// VP-Index: the cheapest plans of one rule hole, each of another
+    /// lowering, cheapest first. Empty where `plan` is `None`.
+    pub fn plans(&self, hole: usize) -> export::Result<Vec<Planned>> {
+        self.search(hole, ALTERNATIVES)
+    }
+
+    fn search(&self, hole: usize, keep: usize) -> export::Result<Vec<Planned>> {
+        let Some((model, prepared)) = self.model(hole)? else { return Ok(Vec::new()) };
         let root = model.root();
         let rest: Vec<usize> = (0..model.names.len()).filter(|variable| !root.contains(variable)).collect();
-        let mut search = Search { model: &model, rest: &rest, best: None, tried: 0 };
+        let mut search = Search { model: &model, root: &root, rest: &rest, best: Vec::new(), keep, tried: 0 };
         // The search starts where `Model::steps` arrives after the root.
         let mut owners = vec![UNBOUND; model.names.len()];
         for &variable in &root { owners[variable] = model.changing.expect("root variables have a changing occurrence"); }
         let bound = root.iter().fold(0u64, |bound, variable| bound | 1 << variable);
-        if search.extend(&mut Vec::new(), &mut owners, bound, 1.0, root.len() as f64).is_none() { return Ok(None); }
-        let Some((_, order)) = search.best else { return Ok(None) };
-        Ok(Self::planned(&model, prepared, root.into_iter().chain(order).collect()))
+        if search.extend(&mut Vec::new(), &mut owners, bound, 1.0, root.len() as f64).is_none() { return Ok(Vec::new()); }
+        Ok(search.best.into_iter().filter_map(|(_, order, _)| Self::planned(&model, prepared, order)).collect())
+    }
+
+    /// The rows of a relation a rule hole reads, where the evidence holds them.
+    fn rows(&self, relation: &str) -> Option<f64> {
+        self.facts.get(&whole(relation, *self.arity.get(relation)?)).copied()
+    }
+
+    /// VP-Index: the groups of an index of a relation on `key`, its
+    /// distinct keys; the relation's rows where the evidence lacks them.
+    fn groups(&self, relation: &str, key: &[usize]) -> Option<f64> {
+        self.facts.get(&groups(relation, key.to_vec())).copied().or_else(|| self.rows(relation))
+    }
+
+    /// VP-Index: what a hole's VP-Cost is per: the rows of its changing
+    /// relation over the run, each consumed once; one for a seed.
+    fn weight(&self, hole: usize) -> export::Result<Option<f64>> {
+        let Some((model, _)) = self.model(hole)? else { return Ok(None) };
+        Ok(match model.changing {
+            Some(changing) => self.rows(&model.occurrences[changing].rows.relation),
+            None => Some(1.0),
+        })
     }
 
     /// The valuation of a given variable order under the same lowering,
@@ -430,12 +513,54 @@ impl<'a> Planner<'a> {
         Ok(self.lower(hole, &order)?.map(|planned| planned.estimate))
     }
 
-    /// PS-Advise: plan every rule hole and adopt the plans.
-    pub fn advise(&self) -> export::Result<Advised> {
-        let mut planned = BTreeMap::new();
-        for hole in 0..self.input.holes.len() {
-            if let Some(plan) = self.plan(hole)? { planned.insert(hole, plan.candidate); }
+    /// VP-Index: decide every rule hole, heaviest first within a stratum,
+    /// each charged for the full indexes the holes before it did not build.
+    pub fn decide(&self) -> export::Result<Vec<Option<Decided>>> {
+        let mut holes = Vec::new();
+        for (hole, declared) in self.input.holes.iter().enumerate() {
+            let Origin::Rule { stratum, seed, .. } = &declared.origin else { continue };
+            let orders = self.plans(hole)?;
+            let Some(cheapest) = orders.first() else { continue };
+            let weight = self.weight(hole)?;
+            holes.push((*stratum, weight.map_or(0.0, |weight| weight * cheapest.estimate), hole, *seed, weight, orders));
         }
+        holes.sort_by(|left, right| left.0.cmp(&right.0).then(right.1.total_cmp(&left.1)).then(left.2.cmp(&right.2)));
+        let mut built: BTreeSet<IndexDemand> = BTreeSet::new();
+        let mut decided = vec![None; self.input.holes.len()];
+        for (_, _, hole, seed, weight, mut orders) in holes {
+            // A grouped index: keyed, and by less than the whole row.
+            let grouped = |demand: &IndexDemand| demand.version == IndexVersion::Full && !demand.key.is_empty()
+                && self.arity.get(&demand.logical_relation).is_none_or(|arity| demand.key.len() < *arity);
+            let charge = |order: &Planned| order.candidate.demands.iter()
+                .filter(|demand| grouped(demand) && !built.contains(*demand))
+                .map(|demand| Some(GROUP * self.groups(&demand.logical_relation, &demand.key)?)).sum::<Option<f64>>();
+            // Its bindings and its new index charge, per order.
+            let weighed: Option<Vec<(f64, f64)>> = weight.and_then(|weight| orders.iter()
+                .map(|order| Some((weight * order.estimate, charge(order)?))).collect());
+            let (at, work, added) = match &weighed {
+                Some(weighed) => {
+                    let mut at = 0;
+                    for (next, (work, added)) in weighed.iter().enumerate() {
+                        if work + added < weighed[at].0 + weighed[at].1 { at = next; }
+                    }
+                    (at, Some(weighed[at].0), weighed[at].1)
+                }
+                None => (0, None, 0.0),
+            };
+            // A seed's written order is one of its orders; a steady
+            // variant's may read the changing occurrence later, which no
+            // order here does.
+            let advised = seed || work.is_none_or(|work| added <= work);
+            if advised { built.extend(orders[at].candidate.demands.iter().cloned()); }
+            decided[hole] = Some(Decided { weighed: orders.len(), order: orders.swap_remove(at), work, added, advised });
+        }
+        Ok(decided)
+    }
+
+    /// PS-Advise: decide every rule hole and adopt the advised orders.
+    pub fn advise(&self) -> export::Result<Advised> {
+        let planned = self.decide()?.into_iter().enumerate()
+            .filter_map(|(hole, decided)| decided.filter(|decided| decided.advised).map(|decided| (hole, decided.order.candidate))).collect();
         self.adopt(&planned)
     }
 

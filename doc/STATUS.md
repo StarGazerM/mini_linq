@@ -521,11 +521,17 @@ of the peak), and the pass over 33.4M rows takes 0.4 s; an ordinary
 build has no token of calibration and a calibration build without an
 observer keeps nothing. A calibrated bloat run
 of the CPU engine takes 24 s in all (the evaluation with the pass and the
-statistics 16.9 s, 11.7 s plain); its directives are those the
-admission-time statistics gave. Without the rounds the advised engine
-took 18.2 s; with them 12.7 s; the written text takes 11.7 s: no advice
-has beaten the written text on bloat. No GPU run and no device
-statistics; one program.
+statistics 16.9 s, 11.7 s plain); before VP-Index its directives were
+those the admission-time statistics gave. An order is charged for the grouped
+indexes it adds, 16 bindings a group (VP-Index; one index on bloat sets
+the constant, and it is this CPU engine's), and a steady hole whose
+charge exceeds its bindings keeps its text. Bloat, CPU engine, medians of
+five alternating runs on 2026-11-17: advised 11.19 s, written 12.18 s
+(advised without the rule 13.67 s; without the rounds 18.2 s on
+2026-11-16). 32 steady holes keep their text, so a badly written body of
+one of them is not repaired: an order reading the changing occurrence
+last is neither planned nor costed. No GPU run and no device statistics;
+one program, one dataset.
 
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`

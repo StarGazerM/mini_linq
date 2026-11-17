@@ -433,12 +433,12 @@ fn analyze_inner(
     let estimated: BTreeSet<&str> = synthesized.iter().flat_map(|extended| extended.facts.keys())
         .filter_map(|id| id.strip_prefix(estimate::ESTIMATE)).filter_map(|rest| rest.split(':').next()).collect();
     let prepared = input.holes.iter().map(|hole| enumerate::prepare(input, hole, space)).collect::<crate::export::Result<Vec<_>>>()?;
-    // PS-Decide: the variable order of every hole whose degree facts the
-    // evidence holds, with the VP-Cost of its recorded order.
+    // PS-Decide: the variable order VP-Index decides for every hole whose
+    // degree facts the evidence holds, with the VP-Cost of its recorded order.
     let planned: Vec<Option<Measured>> = if evidence.degrees.is_empty() { vec![None; input.holes.len()] } else {
         let planner = variables::Planner::new(input, evidence)?;
-        (0..input.holes.len()).map(|hole| Ok(match planner.plan(hole)? {
-            Some(order) => Some(Measured { recorded: planner.recorded(hole)?, order }),
+        planner.decide()?.into_iter().enumerate().map(|(hole, decided)| Ok(match decided {
+            Some(decided) => Some(Measured { recorded: planner.recorded(hole)?, decided }),
             None => None,
         })).collect::<crate::export::Result<_>>()?
     };
@@ -518,9 +518,9 @@ struct Excluded { indexes: BTreeSet<IndexDemand>, partial: Option<IndexDemand>, 
 /// The indexes the planned holes demand, per stratum.
 type IndexUnion = BTreeMap<usize, BTreeSet<IndexDemand>>;
 
-/// A hole's planned variable order and the VP-Cost of its recorded order.
+/// A hole's decided variable order and the VP-Cost of its recorded order.
 #[derive(Clone)]
-struct Measured { order: variables::Planned, recorded: Option<f64> }
+struct Measured { decided: variables::Decided, recorded: Option<f64> }
 
 /// Plan every hole in the greedy stratum order, each with the indexes the
 /// holes before it already demand; returns the advice and the index union.
@@ -614,15 +614,22 @@ fn plan_hole(
     let mut noise_screen = None;
     let mut search = Search::Exact;
     let mut reason;
-    if let Some(Measured { order, recorded }) = planned {
+    if let Some(Measured { decided, recorded }) = planned {
+        let order = &decided.order;
         // The estimates are recorded beside the valuations; they decide nothing.
         let mut estimator = rank::Estimator::new(model, hole, prepared.reads(), known, &excluded.indexes)?;
         if let Some(estimator) = &mut estimator { kept[0].1 = estimator.total(&incumbent.steps)?; }
         reason = format!("variable order [{}] planned from measured degree facts, VP-Cost {:.4}{}", order.order.join(", "), order.estimate,
             recorded.map_or(String::new(), |recorded| format!(" against {recorded:.4} for the recorded order")));
+        if let Some(work) = decided.work {
+            reason = format!("{reason}; {work:.0} bindings and {:.0} for new indexes, the least of {} lowerings", decided.added, decided.weighed);
+        }
         if !excluded.indexes.is_empty() || excluded.partial.is_some() {
             decision = Decision::Retained;
             reason = format!("{reason}; retain the recorded order");
+        } else if !decided.advised {
+            decision = Decision::Retained;
+            reason = format!("{reason}; its new indexes cost more than the bindings they serve: no advice");
         } else if enumerate::same(&order.candidate, incumbent) {
             decision = Decision::Retained;
             reason = format!("{reason}; the recorded order reads the same");

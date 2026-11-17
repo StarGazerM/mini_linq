@@ -752,6 +752,76 @@ permutation of a body plans to the same order and the same reads.
   lookup before an occurrence's own read either: a lookup is a step of
   its own, charged its input frames, and on the GPU a launch per round
   (about 15M frames on bloat).
+- **VP-Index.** An order is charged for the grouped indexes it reads by
+  and no earlier decision built. A grouped index is a full index keyed by
+  some but not all columns; it costs its groups (the distinct keys, a
+  `Distinct` fact, PS-Request; the relation's rows where the fact is
+  missing) times `GROUP = 16` bindings. Scans, whole-row keys and delta
+  indexes are not charged. Per hole:
+  1. The search keeps its 16 cheapest orders of distinct lowerings
+     (`Planner::plans`).
+  2. The hole's weight is the rows of its changing relation (each is
+     consumed once), one for a seed. The chosen order has the least
+     `weight x VP-Cost + new index charge`; among equals the least
+     VP-Cost.
+  3. A steady hole whose chosen order's new index charge exceeds its
+     `weight x VP-Cost` gets no advice and keeps its text. Otherwise the
+     order is advised and its demands count as built. A seed is always
+     advised: its written order is one of its orders.
+  Holes are decided by stratum, then by `weight x VP-Cost` of their
+  cheapest order, heaviest first, then by hole. Nothing here reads the
+  recorded order, so whether a hole is advised, and what, does not depend
+  on the text. A hole without advice does depend on it: step 3 trusts the
+  text exactly where VP-Delta leaves the planner one costly order. The
+  indexes of such a hole are not counted as built. Without the rows of
+  the changing relation or of a charged index the hole takes its cheapest
+  order uncharged.
+
+  Measured on bloat, CPU engine, 2026-11-17 (medians of alternating runs,
+  three for the first table and five for the second; the machine ran
+  about 5% slower than on 2026-11-16). `VPT_Cast` with changing
+  `VarPointsTo(heap, frm)` has one connected order, `CastTo(frm, to,
+  inmeth, heap)` by `(frm, heap)`, and that index holds 10,495,305 rows
+  in 10,134,242 groups. The written text reads `Reachable`, `CastTo` by
+  `inmeth` (4,526 groups), and probes the delta.
+
+  | engine | evaluation |
+  |---|---:|
+  | written | 12.45 s |
+  | written, `VPT_Cast` advised alone | 15.01 s |
+  | written, one `VPT_LoadArray` variant advised alone (adds `VarPointsTo` by `[0]`: 11.2M rows, 10,291 groups) | 12.55 s |
+  | written, one `VPT_LoadField` variant advised alone (adds `InstanceFieldPointsTo` by `[1]`: 2.8M rows, 1,291 groups) | 12.44 s |
+
+  So rows cost nothing measurable and groups do: 2.55 s over 10.13M
+  groups is about 250 ns a group, against about 16 ns a binding (12.4 s
+  over the 764.5M bindings VP-Cost counts for the written orders); hence
+  16. One index on one engine sets the constant, and the 2.55 s includes
+  that index's probes. The engine's grouped index holds a bucket per
+  group; a sorted GPU index would cost by rows instead, so the constant
+  is this engine's. Whole-row keys and delta indexes are uncharged
+  without a run that isolates either: the written program keeps
+  `VarPointsTo` delta by `[0, 1]` (11.2M rows).
+
+  | engine | evaluation | range |
+  |---|---:|---:|
+  | written | 12.18 s | 12.13 to 12.43 |
+  | advised before VP-Index (46 directives) | 13.67 s | 12.90 to 14.75 (three runs) |
+  | advised before VP-Index, less the `VPT_Cast` directive | 11.14 s | 11.00 to 11.22 |
+  | advised with VP-Index (38 directives) | 11.19 s | 11.13 to 11.52 |
+
+  Of 115 holes 38 change, 40 read the same as recorded, 32 steady holes
+  get no advice, production rejects 2, and 3 are not planned. Of the 32
+  only that `VPT_Cast` variant is large (22.7M bindings against 162M for
+  its index); the others have under 0.25M bindings each, and no run tells
+  whether their text or their planned order is faster. The calibrated
+  run now collects 765 facts (699 before: the rows of each relation and
+  the groups of each index an order can read by) in 25.8 s and 4.8 GB,
+  as before.
+
+  Open: an order that reads the changing occurrence last, as the written
+  `VPT_Cast` does, is not planned (VP-Delta) and its cost is not
+  modeled, so step 3 cannot weigh it and falls back to the text. A
+  badly written body of a hole without advice is therefore not repaired.
 
 Checked on bloat in the DOOP oracle (`DOOP_DRIVER=delta_first`, exact
 degrees of the final relations with each row's round; 109 of 113 variants
@@ -875,17 +945,19 @@ delivered, accumulated, recorded as evidence, and read by the planner.
 - **PS-Read.** `cost::variables` reads `DatasetEvidence` only. A missing
   fact leaves its hole unplanned. Tests build evidence through the
   collector; no test implements a statistic.
-- **PS-Advise.** `Planner::advise` plans every rule hole and returns the
-  directives production accepts with the variants it rejects;
+- **PS-Advise.** `Planner::advise` decides every rule hole (VP-Index) and
+  returns the directives production accepts with the variants it rejects;
   `cq-cost orders --plans P --evidence E [--advice OUT] [--requests OUT]`
   is its command.
 - **PS-Decide.** Where the evidence holds the degree facts of a hole,
-  `cq-cost advise` selects its planned variable order. No estimate ratio
-  screens it: a screen would keep the recorded order when the two are
-  close, and the advice would then depend on the text. The decision's
-  basis is `measured` (the facts observe one run; they bound nothing), and
-  the report states the order and its VP-Cost beside the recorded
-  order's. Where production rejects the order, or does not provision an
+  `cq-cost advise` selects the order VP-Index decides (`Planner::decide`,
+  the one decision both commands use). No estimate ratio against the
+  recorded order screens it: a screen would keep the recorded order when
+  the two are close, and the advice would then depend on the text. The
+  decision's basis is `measured` (the facts observe one run; they bound
+  nothing), and the report states the order, its VP-Cost beside the
+  recorded order's, its bindings and its new index charge. Where VP-Index
+  gives no advice, production rejects the order, or does not provision an
   index it reads, the hole keeps its recorded order. A hole without the
   facts is decided as before.
 

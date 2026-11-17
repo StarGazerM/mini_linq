@@ -13,6 +13,20 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- The planner charges an order for the indexes it adds (PLANNING-REDESIGN,
+  VP-Index). `Planner::plans` keeps a hole's 16 cheapest orders of
+  distinct lowerings; `Planner::decide` takes, heaviest hole first, the
+  order of least bindings plus 16 bindings for each group of a grouped
+  full index no earlier hole built, and gives a steady hole no advice
+  when that charge exceeds its bindings. `Planner::advise` and
+  `cq-cost advise` both use it. The planner asks for the rows of every
+  relation and the groups of every index an order can read by (bloat: 765
+  facts for 699, the calibrated run still 26 s and 4.8 GB). Bloat, CPU
+  engine, medians of five alternating runs: advised 11.19 s, written
+  12.18 s; the advice before this rule 13.67 s, of which one directive
+  (`VPT_Cast` by an index of 10.1M groups) cost 2.55 s. 32 steady holes
+  now keep their text, 31 of them under 0.25M bindings.
+
 - Calibration assumes no schedule (PLANNING-REDESIGN, PS-After). A
   calibration build has a publication clock: a printer emits
   `cq_datalog_print::publication_tick` before each publication (a round's
