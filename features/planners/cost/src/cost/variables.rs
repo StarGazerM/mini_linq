@@ -39,6 +39,9 @@ struct Occurrence {
     /// The rows it reads.
     rows: Selection,
     changing: bool,
+    /// Its relation is of the changing relation's recursive component: a
+    /// round sees part of it.
+    member: bool,
     /// Variable index and source column, one per distinct variable.
     columns: Vec<(usize, usize)>,
 }
@@ -98,17 +101,24 @@ impl Model<'_> {
             Reach { changing: self.occurrences[changing].rows.clone(), columns, binder: binder_columns }
         });
         DegreeRequest::Joined {
-            // PS-After: a statistic never depends on the round of a row.
-            staged: false,
+            // A round sees the rows no younger than the changing row.
+            staged: self.occurrences[at].member && (reach != 0 || self.occurrences[binder].changing),
             reach: reached, binder: self.occurrences[binder].rows.clone(), from, read: self.occurrences[at].rows.clone(), bound,
             column: self.column(at, variable),
         }
+    }
+    /// PS-Request: the share of an occurrence's rows a round sees, asked
+    /// for a relation of the changing relation's component.
+    fn visible(&self, at: usize) -> Option<DegreeRequest> {
+        let changing = self.changing.filter(|changing| *changing != at && self.occurrences[at].member)?;
+        Some(DegreeRequest::Visible { changing: self.occurrences[changing].rows.relation.clone(), relation: self.occurrences[at].rows.relation.clone() })
     }
     /// PS-Derive: every statistic `step` can ask for.
     fn requests(&self, into: &mut BTreeSet<DegreeRequest>) {
         let pinned = self.changing.map_or(0, |changing| self.variables(changing));
         let subsets = |of: u64| { let mut next = Some(of); std::iter::from_fn(move || { let mask = next?; next = (mask != 0).then(|| (mask - 1) & of); Some(mask) }) };
         for at in (0..self.occurrences.len()).filter(|at| Some(*at) != self.changing) {
+            into.extend(self.visible(at));
             let free = self.variables(at) & !pinned;
             // Its own keys: every set of the variables it can propose.
             for mask in subsets(free) { into.insert(self.distinct(at, mask)); }
@@ -184,12 +194,23 @@ impl Model<'_> {
             let mut binders: Vec<usize> = occurrence.columns.iter().filter(|(held, _)| mask & (1 << held) != 0).map(|(held, _)| owners[*held]).collect();
             binders.sort_unstable();
             binders.dedup();
+            let visible = match self.visible(at) {
+                Some(request) => {
+                    let value = self.facts.get(&request).copied();
+                    self.read.borrow_mut().insert(request);
+                    value?
+                }
+                None => 1.0,
+            };
             let mut expected = f64::INFINITY;
-            if binders.is_empty() { expected = self.expected(at, at, 0, variable, 0)?; }
+            if binders.is_empty() { expected = self.expected(at, at, 0, variable, 0)? * visible; }
             for binder in binders {
                 let part = occurrence.columns.iter().filter(|(held, _)| mask & (1 << held) != 0 && owners[*held] == binder).fold(0u64, |part, (held, _)| part | 1 << held);
-                let reach = if binder == at || Some(binder) == self.changing { 0 } else { self.reach(binder, bound, owners) };
-                expected = expected.min(self.expected(at, binder, part, variable, reach)?);
+                let through = Some(binder) == self.changing;
+                let reach = if binder == at || through { 0 } else { self.reach(binder, bound, owners) };
+                // Through the changing occurrence the degree already counts what its rows see.
+                let share = if through || reach != 0 { 1.0 } else { visible };
+                expected = expected.min(self.expected(at, binder, part, variable, reach)? * share);
             }
             step = Some(match step {
                 Some(known) if known.expected <= expected => known,
@@ -284,16 +305,23 @@ pub struct Planner<'a> {
     input: &'a PlannerInput,
     /// The search problem of every rule hole, by hole.
     prepared: Vec<Option<enumerate::Prepared>>,
+    /// The relations that change in each recursive component, by stratum.
+    members: BTreeMap<usize, BTreeSet<String>>,
     facts: HashMap<DegreeRequest, f64>,
     constants: BTreeMap<String, i64>,
 }
 
 impl<'a> Planner<'a> {
     pub fn new(input: &'a PlannerInput, evidence: &DatasetEvidence) -> export::Result<Self> {
+        let mut members: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
         let mut prepared = Vec::with_capacity(input.holes.len());
         for hole in &input.holes {
-            let Origin::Rule { .. } = &hole.origin else { prepared.push(None); continue };
-            prepared.push(Some(enumerate::prepare(input, hole, Space::default())?));
+            let Origin::Rule { stratum, seed, .. } = &hole.origin else { prepared.push(None); continue };
+            let problem = enumerate::prepare(input, hole, Space::default())?;
+            if !seed {
+                members.entry(*stratum).or_default().extend(problem.reads().filter(|read| read.version == Version::Delta).map(|read| read.logical_relation.clone()));
+            }
+            prepared.push(Some(problem));
         }
         let facts = evidence.degrees.iter().filter_map(|degree| {
             let value = degree.value.value.as_ref()?;
@@ -303,19 +331,21 @@ impl<'a> Planner<'a> {
             Scalar::SignedInteger { value } => Some((name.clone(), *value)),
             _ => None,
         }).collect();
-        Ok(Self { input, prepared, facts, constants })
+        Ok(Self { input, prepared, members, facts, constants })
     }
 
     /// The model of a rule hole. `None` for another hole, or one with an
     /// introducing occurrence outside its reorderable prefix.
     fn model(&self, hole: usize) -> export::Result<Option<(Model<'_>, &enumerate::Prepared)>> {
-        let (Origin::Rule { seed, .. }, Some(prepared)) = (&self.input.holes[hole].origin, self.prepared[hole].as_ref()) else { return Ok(None) };
+        let (Origin::Rule { stratum, seed, .. }, Some(prepared)) = (&self.input.holes[hole].origin, self.prepared[hole].as_ref()) else { return Ok(None) };
         let Some(reads) = prepared.occurrences() else { return Ok(None) };
         let names: Vec<String> = reads.iter().flat_map(|(_, read)| read.columns.iter().filter_map(|column| column.variable.clone()))
             .collect::<BTreeSet<_>>().into_iter().collect();
         if names.len() > 60 { return Ok(None); }
         let normal: cq::Program = syn::parse_str(&self.input.holes[hole].normalized_cq)?;
         let constants = rank::constant_columns(&normal, reads.iter().map(|(_, read)| *read), &|name| self.constants.get(name).copied());
+        // Only a steady variant has a changing occurrence.
+        let members = self.members.get(stratum).filter(|_| !seed);
         let mut occurrences: Vec<Occurrence> = reads.iter().map(|&(clause, read)| {
             let mut columns: Vec<(usize, usize)> = Vec::new();
             let mut fixed = Vec::new();
@@ -330,7 +360,8 @@ impl<'a> Planner<'a> {
             fixed.sort_unstable();
             Occurrence {
                 clause, rows: Selection { relation: read.logical_relation.clone(), fixed },
-                changing: !seed && read.version == Version::Delta, columns,
+                changing: !seed && read.version == Version::Delta,
+                member: members.is_some_and(|members| members.contains(&read.logical_relation)), columns,
             }
         }).collect();
         // Ties between occurrences break by what they read, not where they are written.

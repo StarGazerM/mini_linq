@@ -84,12 +84,11 @@ fn a_completed_run_yields_the_degree_facts_of_its_relations_and_advice_from_them
     without.degrees.clear();
     assert_eq!(without, case.evidence);
     // Reach = {0,1,2,3} and Edge maps 0, 1 and 2 on: three targets over
-    // four reached sources. No fact depends on a round.
+    // four reached sources.
     let facts = degrees(&result.evidence);
     assert_eq!(facts["degree:joined:Reach[0]~Edge[0]>1"], (3, 4));
     assert_eq!(facts["degree:distinct:Edge[1]"], (3, 1));
     assert_eq!(facts["degree:distinct:Seed[0]"], (1, 1));
-    assert!(facts.keys().all(|id| !id.contains("@staged") && !id.starts_with("degree:visible")), "{:?}", facts.keys());
     // PS-Read: the planner plans every rule from that evidence alone.
     let planner = cq_cost::cost::variables::Planner::new(&case.plans, &result.evidence).unwrap();
     let planned: Vec<_> = (0..case.plans.holes.len()).filter_map(|hole| planner.plan(hole).unwrap()).collect();
@@ -135,6 +134,43 @@ fn a_run_that_is_not_the_planned_one_publishes_nothing() {
     assert!(error.to_string().contains("holds 2 rows; its evidence states 1"), "{error}");
     // Outside a calibration nothing is observed.
     assert_eq!(fixture::reach(&edges, &seeds), BTreeSet::from([(0,),(1,)]));
+}
+
+/// A derived row is passed with the round that derived it: under an
+/// observer the deltas a run consumed are kept and passed in order.
+#[test]
+fn a_derived_row_is_passed_with_the_round_that_derived_it() {
+    use cq_storage::statistics::collection::{with_observer, Observer, RelationRows, ScalarValue};
+    #[derive(Default)]
+    struct Rounds(std::sync::Mutex<BTreeMap<usize, Vec<(usize, i64)>>>);
+    impl Observer for Rounds {
+        fn relation(&self, relation: usize, _rows: Option<usize>, pass: RelationRows<'_>) {
+            let mut rows = Vec::new();
+            pass(&mut |round, row| {
+                let ScalarValue::Signed(value) = row.cell(0) else { panic!("an integer column") };
+                rows.push((round, value));
+            });
+            self.0.lock().unwrap().insert(relation, rows);
+        }
+    }
+    // 0 is the seed; 1 and 3 follow it; 2 follows 1 and 4 follows 3. 3 is
+    // derived again through 2, a round later: only its first round counts.
+    let edges = [(0,1),(1,2),(2,3),(0,3),(3,4)]; let seeds = [(0,)];
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
+    for parallel in [false, true] {
+        let seen = std::sync::Arc::new(Rounds::default());
+        let reached = pool.install(|| with_observer(seen.clone(), || if parallel { parallel_reach(&edges, &seeds) } else { fixture::reach(&edges, &seeds) }));
+        assert_eq!(reached, BTreeSet::from([(0,),(1,),(2,),(3,),(4,)]));
+        let seen = seen.0.lock().unwrap();
+        // Relations in declaration order: Edge, Seed, Reach. Inputs are of round 0.
+        assert!(seen[&0].iter().all(|(round, _)| *round == 0) && seen[&0].len() == 5, "{:?}", seen[&0]);
+        assert_eq!(seen[&1], [(0, 0)]);
+        let rounds: BTreeMap<i64, usize> = seen[&2].iter().map(|&(round, value)| (value, round)).collect();
+        assert_eq!(rounds.len(), 5, "every reached row once: {:?}", seen[&2]);
+        assert!(seen[&2].is_sorted_by_key(|(round, _)| *round), "rounds ascend along the pass: {:?}", seen[&2]);
+        assert!(rounds[&0] < rounds[&1] && rounds[&1] < rounds[&2], "parallel {parallel}: {rounds:?}");
+        assert!(rounds[&1] == rounds[&3] && rounds[&2] == rounds[&4], "parallel {parallel}: {rounds:?}");
+    }
 }
 
 fn parallel_case(edges: &[(i32,i32)], seeds: &[(i32,)]) -> Case {

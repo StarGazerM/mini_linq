@@ -456,18 +456,15 @@ fn render_admitted(
     let result = outputs(context);
     let descriptor = program.to_token_stream().to_string();
     let output = Ident::new("__cq_calibration_output", Span::mixed_site());
+    let observing = observing();
     // PS-After: once the relations are final, each is offered to a
     // statistics observer; its rows are visited only if the observer asks.
+    // A derived relation is passed delta by delta, so each row has its
+    // round; an input is passed from its canonical layout.
     let relations = context.relations.iter().enumerate().map(|(index, relation)| {
         let canonical = &context.layouts[relation.providers.canonical];
         let host = &canonical.host;
         let arity = relation.declaration.arity();
-        let cells = (0..arity).map(|column| {
-            let position = syn::Index::from(
-                canonical.columns.iter().position(|&c| c == column).expect("checked complete canonical permutation"),
-            );
-            quote!(::cq_storage::statistics::collection::Cell(row.#position).scalar())
-        });
         let dispatch_import = (arity != 0).then(|| {
             quote!(use ::cq_storage::statistics::collection::ScalarCell as _;)
         });
@@ -477,18 +474,42 @@ fn render_admitted(
         } else {
             quote!(::core::option::Option::None)
         };
+        let pass = if let Some(delta) = &relation.delta_host {
+            let kept = kept_deltas(delta);
+            let cells = (0..arity).map(|column| {
+                let column = syn::Index::from(column);
+                quote!(::cq_storage::statistics::collection::Cell(&row.#column).scalar())
+            });
+            quote!(for (round, delta) in #kept.iter().chain(::core::iter::once(&#delta)).enumerate() {
+                for row in delta {
+                    let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
+                    visit(round, &row);
+                }
+            })
+        } else {
+            let cells = (0..arity).map(|column| {
+                let position = syn::Index::from(
+                    canonical.columns.iter().position(|&c| c == column).expect("checked complete canonical permutation"),
+                );
+                quote!(::cq_storage::statistics::collection::Cell(row.#position).scalar())
+            });
+            quote!(for row in ::cq_storage::rows::Rows::rows(&#host) {
+                let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
+                visit(0, &row);
+            })
+        };
         quote!(::cq_storage::statistics::collection::relation(#index, #rows, &mut |visit| {
             #dispatch_import
-            for row in ::cq_storage::rows::Rows::rows(&#host) {
-                let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
-                visit(&row);
-            }
+            #pass
         });)
     });
     syn::parse2(quote!({
         ::cq_storage::calibration_select! {
             plain {}
-            calibration { ::cq_storage::statistics::collection::program_begin(#descriptor); }
+            calibration {
+                let #observing = ::cq_storage::statistics::collection::observing();
+                ::cq_storage::statistics::collection::program_begin(#descriptor);
+            }
         }
         #(#bindings)* #bind_observer #(#strata)*
         ::cq_storage::calibration_select! {
@@ -502,13 +523,28 @@ fn render_admitted(
         }
     }))
 }
+/// Whether a statistics observer is installed, read once per program.
+fn observing() -> Ident {
+    Ident::new("__cq_calibration_observing", Span::mixed_site())
+}
+/// The deltas a relation consumed, kept in round order under an observer.
+fn kept_deltas(delta: &Ident) -> Ident {
+    Ident::new(&format!("__cq_calibration_kept_{delta}"), Span::mixed_site())
+}
 pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
     let mut bindings = Vec::new();
     for relation in &context.relations {
         if let Some(delta) = &relation.delta_host {
             let provider = &relation.providers.delta.ty;
             let init = &relation.providers.delta_init;
-            bindings.push(quote!(let mut #delta: #provider = #init;));
+            let kept = kept_deltas(delta);
+            bindings.push(quote!(
+                let mut #delta: #provider = #init;
+                ::cq_storage::calibration_select! {
+                    plain {}
+                    calibration { let mut #kept: ::std::vec::Vec<#provider> = ::std::vec::Vec::new(); }
+                }
+            ));
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
@@ -685,14 +721,26 @@ pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ide
     };
     quote!({ #rows #(#bulk)* })
 }
-/// Publish admitted rows as the relation's next delta.
+/// Publish admitted rows as the relation's next delta. PS-After: under a
+/// statistics observer the delta it replaces is moved aside, not dropped:
+/// its place among the kept deltas is the round of its rows.
 pub fn delta_swap(relation: &round::Relation) -> TokenStream {
     let delta = relation
         .delta_host
         .as_ref()
         .expect("checked IDB delta host");
     let next = &relation.next;
-    quote!(#delta = #next;)
+    let (kept, observing) = (kept_deltas(delta), observing());
+    quote!(::cq_storage::calibration_select! {
+        plain { #delta = #next; }
+        calibration {
+            if #observing {
+                #kept.push(::core::mem::replace(&mut #delta, #next));
+            } else {
+                #delta = #next;
+            }
+        }
+    })
 }
 /// Replace a delta's rows, retaining bulk layout host capacity across rounds.
 pub fn delta_rebuild(layout: &Layout, delta: &Ident) -> TokenStream {

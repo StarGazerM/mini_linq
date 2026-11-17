@@ -59,7 +59,8 @@ impl Captured {
             requests, degrees, rows: vec![None; relations.len()], cells: Vec::new(), text: HashMap::new(),
         })
     }
-    fn admit(&mut self, relation: usize, row: &dyn CalibrationRow) -> Result<()> {
+    fn admit(&mut self, relation: usize, round: usize, row: &dyn CalibrationRow) -> Result<()> {
+        let round = u32::try_from(round).map_err(|_| invalid("round index exceeds u32"))?;
         self.cells.clear();
         for index in 0..row.len() {
             self.cells.push(match row.cell(index) {
@@ -73,7 +74,7 @@ impl Captured {
                 ScalarValue::Unsupported(reason) => return Err(invalid(format!("degree statistics over an unsupported column: {reason}"))),
             });
         }
-        self.degrees.admit(relation, 0, &self.cells);
+        self.degrees.admit(relation, round, &self.cells);
         Ok(())
     }
     /// The supplied evidence with this run's degree facts. The run is bound
@@ -129,7 +130,7 @@ impl Observer for Recorder {
             let mut held = rows.map(|rows| rows as u64);
             if state.degrees.wants(relation) {
                 let (mut passed, mut failure) = (0u64, None);
-                pass(&mut |row| if failure.is_none() { passed += 1; failure = state.admit(relation, row).err(); });
+                pass(&mut |round, row| if failure.is_none() { passed += 1; failure = state.admit(relation, round, row).err(); });
                 if let Some(failure) = failure { return Err(failure); }
                 require(held.is_none_or(|held| held == passed), "a relation passed other rows than it holds")?;
                 held = Some(passed);

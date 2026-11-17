@@ -13,6 +13,17 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- A calibration run keeps the round of every derived row for free
+  (PLANNING-REDESIGN, PS-After): under a statistics observer the
+  generated program moves each delta aside where it dropped it
+  (`cq_datalog_print::delta_swap`) and passes a derived relation delta by
+  delta, so `collection::RelationRows` visits a row with its round. The
+  planner asks for staged degrees and visible shares again. Bloat:
+  keeping the deltas costs no time (11.71 s against 11.70 s) and 425 MB
+  (2,199 MB against 1,774 MB at the peak); the pass over all rows 0.39 s;
+  the directives equal those of the admission-time statistics and the
+  engine with them takes 12.8 s (18.2 s without rounds, 11.7 s written).
+
 - Calibration is collected once, after the result (PLANNING-REDESIGN,
   PS-After). A calibration run evaluates as a plain run. Removed: the
   operator frames and row counters of a calibration session

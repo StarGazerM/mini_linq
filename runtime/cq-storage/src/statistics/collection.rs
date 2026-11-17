@@ -92,8 +92,12 @@ impl CalibrationCell for String {
     fn calibration_value(&self) -> ScalarValue<'_> { ScalarValue::Utf8(self) }
 }
 
-/// A pass over a relation's rows: call it with the visitor of each row.
-pub type RelationRows<'a> = &'a mut dyn FnMut(&mut dyn FnMut(&dyn CalibrationRow));
+/// A pass over a relation's rows: call it with the visitor of each row and
+/// the round that derived it. A round is the position of the row's delta
+/// among its relation's deltas, ascending along the pass; an input's rows
+/// are of round 0. The deltas are kept, not copied: a program under an
+/// observer moves each delta aside where it would drop it.
+pub type RelationRows<'a> = &'a mut dyn FnMut(&mut dyn FnMut(usize, &dyn CalibrationRow));
 
 pub trait Observer: Send + Sync {
     /// A program is about to run; `round_ir` is its recorded Round text.
@@ -143,7 +147,7 @@ mod tests {
         fn program_begin(&self, round_ir: &'static str) { self.0.lock().unwrap().push(format!("begin {round_ir}")); }
         fn relation(&self, relation: usize, rows: Option<usize>, pass: RelationRows<'_>) {
             let mut cells = Vec::new();
-            if relation == 1 { pass(&mut |row| cells.push((0..row.len()).map(|index| format!("{:?}", row.cell(index))).collect::<Vec<_>>().join(" "))); }
+            if relation == 1 { pass(&mut |round, row| cells.push(format!("{round}: {}", (0..row.len()).map(|index| format!("{:?}", row.cell(index))).collect::<Vec<_>>().join(" ")))); }
             self.0.lock().unwrap().push(format!("relation {relation} of {rows:?}: {cells:?}"));
         }
         fn program_end(&self) { self.0.lock().unwrap().push("end".into()); }
@@ -160,9 +164,9 @@ mod tests {
         let stored = [(7i32, "a"), (8, "b")];
         relation(index, (index == 0).then_some(stored.len()), &mut |visit| {
             passes.set(passes.get() + 1);
-            for row in &stored {
+            for (round, row) in stored.iter().enumerate() {
                 let row = [Cell(&row.0).scalar(), Cell(row.1).scalar()];
-                visit(&row);
+                visit(round, &row);
             }
         });
     }
@@ -179,7 +183,7 @@ mod tests {
         assert_eq!(*seen.0.lock().unwrap(), [
             "begin p",
             "relation 0 of Some(2): []",
-            "relation 1 of None: [\"Signed(7) Utf8(\\\"a\\\")\", \"Signed(8) Utf8(\\\"b\\\")\"]",
+            "relation 1 of None: [\"0: Signed(7) Utf8(\\\"a\\\")\", \"1: Signed(8) Utf8(\\\"b\\\")\"]",
             "end",
         ]);
     }

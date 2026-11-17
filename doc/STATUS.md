@@ -512,14 +512,15 @@ ask for; a calibration run evaluates as a plain run and, once it has its
 result, passes over the relations it holds into
 `cq_storage::statistics::Degrees` (sketches and a sample of keys, no copy
 of the rows); `cq-cost advise` selects the planned order of every hole
-whose facts the evidence holds (basis `measured`). A calibrated bloat run
-of the CPU engine takes 25 s and 4.6 GB in all (the evaluation with the
-pass 18 s, 12.3 s plain). The facts carry no round of a row, and that
-costs: the engine with this advice takes 18.2 s against 11.75 s for the
-written text and 12.7 s for the advice from round-aware degrees; five
-dispatch-rule directives account for 4.6 s of it. Whether a calibration
-build keeps its deltas to recover the rounds after the result is open.
-No advice has beaten the written text on bloat. No GPU run and no device
+whose facts the evidence holds (basis `measured`). The round of a row is
+the place of its delta: under an observer a program keeps each delta
+where it would drop it, at no time and 425 MB (24% of the peak) on
+bloat, and the pass over 33.4M rows takes 0.4 s. A calibrated bloat run
+of the CPU engine takes 24 s in all (the evaluation with the pass and the
+statistics 16.9 s, 11.7 s plain); its directives are those the
+admission-time statistics gave. Without the rounds the advised engine
+took 18.2 s; with them 12.7 s; the written text takes 11.7 s: no advice
+has beaten the written text on bloat. No GPU run and no device
 statistics; one program.
 
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
