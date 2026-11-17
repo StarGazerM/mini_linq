@@ -186,10 +186,11 @@ thread_local! {
     // printed on this thread are kept, so a repeated document is unescaped,
     // parsed, checked, serialized and escaped once, and its parsed
     // occurrences share one allocation (which also makes their comparison
-    // a pointer comparison).
+    // a pointer comparison). Only text and data are kept: a token is a
+    // handle of the macro expansion that made it, dead in the next one.
     static PARSED: RefCell<Option<(String, Arc<evidence::DatasetEvidence>)>> = const { RefCell::new(None) };
     static CHECKED: RefCell<Option<Arc<evidence::DatasetEvidence>>> = const { RefCell::new(None) };
-    static PRINTED: RefCell<Option<(Arc<evidence::DatasetEvidence>, proc_macro2::Literal)>> = const { RefCell::new(None) };
+    static PRINTED: RefCell<Option<(Arc<evidence::DatasetEvidence>, String)>> = const { RefCell::new(None) };
 }
 impl Parse for DeclaredEvidence {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -218,13 +219,15 @@ impl Parse for DeclaredEvidence {
 }
 impl ToTokens for DeclaredEvidence {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let json = PRINTED.with(|printed| {
+        let json: proc_macro2::Literal = PRINTED.with(|printed| {
             let mut printed = printed.borrow_mut();
-            if let Some((_, literal)) = printed.as_ref().filter(|(document, _)| Arc::ptr_eq(document, &self.document)) { return literal.clone(); }
+            if let Some((_, literal)) = printed.as_ref().filter(|(document, _)| Arc::ptr_eq(document, &self.document)) {
+                return literal.parse().expect("the text of a printed literal");
+            }
             // Serialization is total for this string/integer data model. Do not
             // call check here: even malformed records must print in diagnostics.
             let literal = proc_macro2::Literal::string(&serde_json::to_string(self.document.as_ref()).expect("evidence is JSON-serializable"));
-            *printed = Some((Arc::clone(&self.document), literal.clone()));
+            *printed = Some((Arc::clone(&self.document), literal.to_string()));
             literal
         });
         let bindings = &self.bindings;
