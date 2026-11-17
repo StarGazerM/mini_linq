@@ -248,7 +248,7 @@ fn admitted(requests: &[DegreeRequest], relations: &Relations, arities: &[(&str,
     for (at, (name, _)) in arities.iter().enumerate() {
         let mut rows: Vec<&Row> = relations[*name].iter().collect();
         rows.sort_by_key(|row| row.0);
-        for (round, row) in rows { degrees.admit(at, *round, row); }
+        for (round, row) in rows { degrees.admit(at, *round, *round, row); }
     }
     requests.iter().cloned().zip(degrees.finish()).map(|(request, (numerator, denominator))| (request, numerator, denominator)).collect()
 }

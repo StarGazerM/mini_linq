@@ -1170,17 +1170,34 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
     length). The observer feeds `cq_storage::statistics::Degrees`
     (sketches and a sample of keys, as PS-Admit describes). On a device
     the pass runs on the device (PS-Device).
-  - The round of a row is what its delta already says. A program keeps
-    the deltas of the derived relations whose rounds the observer needs
-    (`Observer::needs_rounds`, asked as the program begins: the
-    relations a staged degree or a visible share compares), each moved
-    aside where it would be dropped (`delta_swap`), and passes such a
-    relation delta by delta: the place of a delta is the round of its
-    rows. Every other relation is passed from its stored rows, of round
-    0. Nothing is copied and nothing is done per row while the program
-    evaluates. Measured on bloat (CPU engine, 30.96M derived rows, three
+  - What a row could meet is what its delta already says, under any
+    schedule. A program keeps the deltas of the derived relations whose
+    rounds the observer needs (`Observer::needs_rounds`, asked as the
+    program begins: the relations a staged degree or a visible share
+    compares), each moved aside where it would be dropped
+    (`delta_swap`), and passes such a relation delta by delta. Every
+    other relation is passed from its stored rows. Nothing is copied
+    and nothing is done per row while the program evaluates.
+  - No schedule is assumed (the user's, 2026-11-17: a rule that needs
+    synchronous rounds bans every backend that publishes otherwise, the
+    GPU's among them). A calibration build has one publication clock. A
+    printer says two things, wherever its schedule puts them:
+    `publication_tick` before a publication (a round's publish phase, a
+    member published early in a wave, a relational commit), and
+    `consumption_mark` where a delta is about to be read (a round, a
+    step hole of a wave or of a relational action). A kept delta has the
+    tick that published it and the clock when it was last consumed: its
+    rows' `Age { published, horizon }`. A row `r` could be met by a
+    delta row `c` exactly when `r.published <= c.horizon`, and that is
+    the comparison every staged degree and visible share makes
+    (`Degrees::admit(relation, published, horizon, row)`). With one
+    publication a round the two are the round and nothing changes; the
+    relational schedule of the parallel engine is tested at 1, 2 and 4
+    threads (a row derived after a delta row is never among those it
+    met; every row published before it was consumed is).
+    Measured on bloat (CPU engine, 30.96M derived rows, three
     runs each): 18 of 77 relations need rounds; the peak is 1,774 MB
-    with no observer, 2,094 MB keeping those (320 MB, 18%) and 2,199 MB
+    with no observer, 2,101 MB keeping those (327 MB, 18%) and 2,199 MB
     keeping every relation's (425 MB; the deltas' cells alone are
     397 MB); the evaluation time does not move (11.7 to 12.6 s in every
     configuration, the spread of the machine); the pass over all 33.4M

@@ -13,6 +13,20 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- Calibration assumes no schedule (PLANNING-REDESIGN, PS-After). A
+  calibration build has a publication clock: a printer emits
+  `cq_datalog_print::publication_tick` before each publication (a round's
+  publish phase, a member published early in a wave, a relational commit)
+  and `consumption_mark` where a delta is about to be read (a round, each
+  step hole of the parallel printer). A kept delta carries the tick that
+  published it and the clock when it was last consumed;
+  `collection::RelationRows` visits a row with its `Age { published,
+  horizon }` and `Degrees::admit` takes both: a row is met by a delta row
+  when it was published by that row's horizon. With one publication a
+  round both are the round. The refusal of a relational schedule is
+  withdrawn; the parallel engine's relational schedule is tested at 1, 2
+  and 4 threads.
+
 - A program that is not calibrated pays nothing, and a calibrated one
   keeps only the deltas whose rounds are needed (PLANNING-REDESIGN,
   PS-After). The Datalog printer emits the calibration code only under
@@ -24,8 +38,8 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   `collection::Observer::needs_rounds` is asked once per derived relation
   as a program begins; only those relations keep their deltas, the others
   are passed from their stored rows. The calibration observer needs the
-  relations a staged degree or a visible share compares, and refuses a
-  relational schedule (its rounds are not synchronous). Bloat: 18 of 77
+  relations a staged degree or a visible share compares (it refused a
+  relational schedule; see above). Bloat: 18 of 77
   relations; peak 1,774 MB in an ordinary build, in a calibration build
   without an observer and under an observer needing none, 2,094 MB
   keeping the 18, 2,199 MB keeping all; no change in evaluation time; the

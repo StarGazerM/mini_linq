@@ -92,13 +92,25 @@ impl CalibrationCell for String {
     fn calibration_value(&self) -> ScalarValue<'_> { ScalarValue::Utf8(self) }
 }
 
+/// When a row was visible, on the program's publication clock: the clock
+/// ticks once per publication (a round's, under a synchronous schedule;
+/// a commit's, under a relational one), whatever the schedule. A row is
+/// visible from the publication that published its delta; it is consumed
+/// as a delta row until the publication that replaces its delta, and
+/// `horizon` is the last publication before that one. A row `r` could be
+/// met by a delta row `c` exactly when `r.published <= c.horizon`. Under
+/// a synchronous schedule both are the row's round.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Age {
+    pub published: usize,
+    pub horizon: usize,
+}
 /// A pass over a relation's rows: call it with the visitor of each row and
-/// the round that derived it. A round is the position of the row's delta
-/// among its relation's deltas, ascending along the pass. The deltas are
-/// kept, not copied, and only for a derived relation whose rounds the
-/// observer needs: the program moves each of its deltas aside where it
-/// would drop it. Every other row is of round 0.
-pub type RelationRows<'a> = &'a mut dyn FnMut(&mut dyn FnMut(usize, &dyn CalibrationRow));
+/// its age, ascending along the pass. The deltas are kept, not copied,
+/// and only for a derived relation whose rounds the observer needs: the
+/// program moves each of its deltas aside where it would drop it. Every
+/// other row has the default age.
+pub type RelationRows<'a> = &'a mut dyn FnMut(&mut dyn FnMut(Age, &dyn CalibrationRow));
 
 pub trait Observer: Send + Sync {
     /// A program is about to run; `round_ir` is its recorded Round text.
@@ -155,7 +167,7 @@ mod tests {
         fn program_begin(&self, round_ir: &'static str) { self.0.lock().unwrap().push(format!("begin {round_ir}")); }
         fn relation(&self, relation: usize, rows: Option<usize>, pass: RelationRows<'_>) {
             let mut cells = Vec::new();
-            if relation == 1 { pass(&mut |round, row| cells.push(format!("{round}: {}", (0..row.len()).map(|index| format!("{:?}", row.cell(index))).collect::<Vec<_>>().join(" ")))); }
+            if relation == 1 { pass(&mut |age, row| cells.push(format!("{}: {}", age.published, (0..row.len()).map(|index| format!("{:?}", row.cell(index))).collect::<Vec<_>>().join(" ")))); }
             self.0.lock().unwrap().push(format!("relation {relation} of {rows:?}: {cells:?}"));
         }
         fn program_end(&self) { self.0.lock().unwrap().push("end".into()); }
@@ -174,7 +186,7 @@ mod tests {
             passes.set(passes.get() + 1);
             for (round, row) in stored.iter().enumerate() {
                 let row = [Cell(&row.0).scalar(), Cell(row.1).scalar()];
-                visit(round, &row);
+                visit(Age { published: round, horizon: round }, &row);
             }
         });
     }

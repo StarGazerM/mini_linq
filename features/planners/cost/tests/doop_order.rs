@@ -1106,7 +1106,7 @@ fn admit_degrees(input: &PlannerInput, evidence: &DatasetEvidence, model: &Model
         if !degrees.wants(relation) { continue; }
         for (row, &stage) in table.rows.iter().zip(&table.stage) {
             for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
-            degrees.admit(relation, stage, &cells[..model.arity[relation]]);
+            degrees.admit(relation, stage, stage, &cells[..model.arity[relation]]);
         }
     }
     let values = requests.into_iter().zip(degrees.finish()).map(|(request, (numerator, denominator))| (request, numerator, denominator)).collect();

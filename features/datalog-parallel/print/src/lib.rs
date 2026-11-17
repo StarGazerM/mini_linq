@@ -270,6 +270,15 @@ fn evaluate(
                 );
             }));
         }
+        // PS-After: a step hole consumes its member's delta against what is
+        // published when it starts, whichever wave or action runs it.
+        let consumed = schedule.reads.iter().find(|entry| entry.phase == phase && entry.index == index)
+            .and_then(|entry| entry.reads.iter().find(|read| read.version == "delta"))
+            .map(|read| cq_datalog_print::consumption_mark(&context.relations[read.relation]));
+        if let Some(consumed) = consumed.filter(|consumed| !consumed.is_empty()) {
+            let evaluation = evaluations.pop().expect("this rule's evaluation");
+            evaluations.push(quote!(#consumed #evaluation));
+        }
         candidates_by_head
             .entry(rule.head)
             .or_default()

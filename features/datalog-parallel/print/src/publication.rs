@@ -30,6 +30,7 @@ pub fn phase_publication(
 }
 
 /// Publish a completed member in one task, after its last reader has joined.
+/// It is a publication of its own (PS-After): it ticks the clock.
 pub fn member(
     context: &RoundContext,
     publication: &Publication,
@@ -39,8 +40,10 @@ pub fn member(
     let threshold = certificate.threshold;
     let inline = Ident::new("__cq_publication_inline", Span::mixed_site());
     let operations = operations(context, publication, certificate, &inline);
+    let tick = cq_datalog_print::publication_tick();
     quote!({
         let #inline = #next.len() < #threshold || ::rayon::current_num_threads() == 1;
+        #tick
         #operations
     })
 }

@@ -150,9 +150,11 @@ fn a_relation_whose_rounds_are_needed_is_passed_delta_by_delta() {
         }
         fn relation(&self, relation: usize, _rows: Option<usize>, pass: RelationRows<'_>) {
             let mut rows = Vec::new();
-            pass(&mut |round, row| {
+            pass(&mut |age, row| {
                 let ScalarValue::Signed(value) = row.cell(0) else { panic!("an integer column") };
-                rows.push((round, value));
+                // Rounds are synchronous here: a row sees what its own round published.
+                assert_eq!(age.published, age.horizon);
+                rows.push((age.published, value));
             });
             self.rows.lock().unwrap().insert(relation, rows);
         }

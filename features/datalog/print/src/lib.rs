@@ -391,9 +391,12 @@ fn render_admitted(
             program.policy.timing == "phases",
             &fresh,
         );
+        // PS-After: a round consumes every member's delta.
+        let consumed: Vec<_> = stratum.members.iter().map(|&member| consumption_mark(&context.relations[member])).collect();
         let loop_body = match stratum.loop_form.to_string().as_str() {
             "while_nonempty" => quote!(
                 while #condition {
+                    #(#consumed)*
                     #observe
                     #step_round
                     #round += 1;
@@ -402,6 +405,7 @@ fn render_admitted(
             "loop_until_empty" => quote!(
                 loop {
                     if !(#condition) { break; }
+                    #(#consumed)*
                     #observe
                     #step_round
                     #round += 1;
@@ -490,7 +494,7 @@ fn render_admitted(
         });
         let mut pass = quote!(for row in ::cq_storage::rows::Rows::rows(&#host) {
             let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
-            visit(0, &row);
+            visit(::core::default::Default::default(), &row);
         });
         if let Some(delta) = &relation.delta_host {
             let (kept, keeps) = (kept_deltas(delta), keeps(delta));
@@ -499,10 +503,14 @@ fn render_admitted(
                 quote!(::cq_storage::statistics::collection::Cell(&row.#column).scalar())
             });
             pass = quote!(if #keeps {
-                for (round, delta) in #kept.lock().unwrap().iter().chain(::core::iter::once(&#delta)).enumerate() {
+                let kept = #kept.lock().unwrap();
+                for (published, horizon, delta) in kept.2.iter().map(|(published, horizon, delta)| (*published, *horizon, delta))
+                    .chain(::core::iter::once((kept.0, kept.1, &#delta)))
+                {
+                    let age = ::cq_storage::statistics::collection::Age { published, horizon };
                     for row in delta {
                         let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
-                        visit(round, &row);
+                        visit(age, &row);
                     }
                 }
             } else {
@@ -514,8 +522,10 @@ fn render_admitted(
             #pass
         });)
     });
+    let clock = clock();
     syn::parse2(quote!({
         ::cq_storage::statistics::collection::program_begin(#descriptor);
+        let #clock = ::core::sync::atomic::AtomicUsize::new(0);
         #(#wants)*
         #(#bindings)* #bind_observer #(#strata)*
         #(#relations)*
@@ -529,13 +539,30 @@ fn render_admitted(
 fn calibrated() -> bool {
     cfg!(feature = "planner-calibration")
 }
-/// Whether the observer wants a derived relation's rows, read once per program.
+/// Whether the observer needs a derived relation's rounds, read once per program.
 fn keeps(delta: &Ident) -> Ident {
     Ident::new(&format!("__cq_calibration_keeps_{delta}"), Span::mixed_site())
 }
-/// The deltas a wanted relation consumed, kept in round order.
+/// What such a relation keeps: the publication of the delta it holds, the
+/// last publication before that delta was last consumed, and the deltas
+/// it replaced, in the order it published them, each with the same two.
 fn kept_deltas(delta: &Ident) -> Ident {
     Ident::new(&format!("__cq_calibration_kept_{delta}"), Span::mixed_site())
+}
+/// The publication clock of a calibration build.
+fn clock() -> Ident {
+    Ident::new("__cq_calibration_clock", Span::mixed_site())
+}
+/// PS-After: what a printer emits before each publication, synchronous or
+/// not: the deltas one publication publishes become visible together, and
+/// the clock orders publications however they are scheduled. Nothing in
+/// an ordinary build.
+pub fn publication_tick() -> TokenStream {
+    if !calibrated() {
+        return TokenStream::new();
+    }
+    let clock = clock();
+    quote!(#clock.fetch_add(1, ::core::sync::atomic::Ordering::Relaxed);)
 }
 pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
     let mut bindings = Vec::new();
@@ -547,7 +574,10 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
             if calibrated() {
                 let kept = kept_deltas(delta);
                 // Behind a lock: a relational schedule publishes from a shared closure.
-                bindings.push(quote!(let #kept: ::std::sync::Mutex<::std::vec::Vec<#provider>> = ::std::sync::Mutex::new(::std::vec::Vec::new());));
+                bindings.push(quote!(
+                    let #kept: ::std::sync::Mutex<(usize, usize, ::std::vec::Vec<(usize, usize, #provider)>)>
+                        = ::std::sync::Mutex::new((0, 0, ::std::vec::Vec::new()));
+                ));
             }
         }
     }
@@ -726,9 +756,10 @@ pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ide
     quote!({ #rows #(#bulk)* })
 }
 /// Publish admitted rows as the relation's next delta. PS-After: in a
-/// calibration build, the delta of a relation the observer wants is moved
-/// aside where it would be dropped: its place among the kept deltas is
-/// the round of its rows.
+/// calibration build, the delta of a relation whose rounds the observer
+/// needs is moved aside where it would be dropped, with the publication
+/// that published it and the last one its consumers could see. A relation
+/// is published at most once per publication: `publication_tick` precedes.
 pub fn delta_swap(relation: &round::Relation) -> TokenStream {
     let delta = relation
         .delta_host
@@ -738,11 +769,28 @@ pub fn delta_swap(relation: &round::Relation) -> TokenStream {
     if !calibrated() {
         return quote!(#delta = #next;);
     }
-    let (kept, keeps) = (kept_deltas(delta), keeps(delta));
+    let (kept, keeps, clock) = (kept_deltas(delta), keeps(delta), clock());
     quote!(if #keeps {
-        #kept.lock().unwrap().push(::core::mem::replace(&mut #delta, #next));
+        let now = #clock.load(::core::sync::atomic::Ordering::Relaxed);
+        let mut kept = #kept.lock().unwrap();
+        ::core::assert!(now > kept.0, "calibration: a relation published twice in one publication");
+        let (published, horizon) = (kept.0, kept.1);
+        kept.2.push((published, horizon, ::core::mem::replace(&mut #delta, #next)));
+        (kept.0, kept.1) = (now, now);
     } else {
         #delta = #next;
+    })
+}
+/// PS-After: what a printer emits where a relation's delta is about to be
+/// consumed (a round's evaluation; a relational hole): the rows published
+/// until now are what its rows can meet. Nothing in an ordinary build.
+pub fn consumption_mark(relation: &round::Relation) -> TokenStream {
+    let Some(delta) = relation.delta_host.as_ref().filter(|_| calibrated()) else { return TokenStream::new() };
+    let (kept, keeps, clock) = (kept_deltas(delta), keeps(delta), clock());
+    quote!(if #keeps {
+        let now = #clock.load(::core::sync::atomic::Ordering::Relaxed);
+        let mut kept = #kept.lock().unwrap();
+        if now > kept.1 { kept.1 = now; }
     })
 }
 /// Replace a delta's rows, retaining bulk layout host capacity across rounds.
@@ -925,6 +973,7 @@ pub fn round_body(
     let admission_time = Ident::new("__cq_admission_time", Span::mixed_site());
     let fresh_count = Ident::new("__cq_fresh_count", Span::mixed_site());
     let candidates = candidate_count();
+    let tick = publication_tick();
     let bodies = phases.iter().map(|phase| {
         let (body, elapsed) = match phase.to_string().as_str() {
             "evaluate" => (evaluate.clone(), quote!(let #evaluation_time = #phase_start.elapsed();)),
@@ -932,7 +981,7 @@ pub fn round_body(
                 let #admission_time = #phase_start.elapsed();
                 let #fresh_count: usize = #fresh;
             )),
-            "publish" => (quote!(#(#publish)*), quote!(
+            "publish" => (quote!(#tick #(#publish)*), quote!(
                 ::std::eprintln!("datalog-phase evaluation_ns={} admission_ns={} publication_ns={} candidates={} fresh={}",
                     #evaluation_time.as_nanos(), #admission_time.as_nanos(), #phase_start.elapsed().as_nanos(),
                     #candidates.load(::core::sync::atomic::Ordering::Relaxed), #fresh_count);

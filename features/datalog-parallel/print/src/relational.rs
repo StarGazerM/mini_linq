@@ -189,6 +189,8 @@ pub(super) fn step_loop(
     // Reuse provider-aware publication under each exclusive member guard:
     // sharded layouts bulk-fill without introducing a separate commit path.
     let publications = cq_datalog_print::publication(context, stratum);
+    // A commit is one publication (PS-After).
+    let tick = cq_datalog_print::publication_tick();
     let commit_arms = stratum.members.iter().enumerate().map(|(m, &member)| {
         let lock = &locks[m];
         let admit = &admits[m];
@@ -233,6 +235,7 @@ pub(super) fn step_loop(
             let #next = #admission;
             let fresh = !#next.is_empty();
             if fresh {
+                #tick
                 #publication
             }
             ::cq_datalog_parallel_runtime::relational::Completion::Commit { fresh }

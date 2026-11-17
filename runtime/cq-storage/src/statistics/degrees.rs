@@ -182,8 +182,10 @@ enum Role {
 #[derive(Default)]
 struct Admitted {
     arity: usize,
-    /// Its rows by the round that admitted them.
-    rounds: Vec<u64>,
+    /// Its rows by the publication that made them visible, and by the last
+    /// publication each could see as a delta row.
+    published: Vec<u64>,
+    horizon: Vec<u64>,
     /// The selections of its rows requests read, each with its rows.
     selections: Vec<(Vec<(usize, i64)>, u64)>,
     /// The column lists hashed as keys for each row, and the column sets
@@ -288,16 +290,20 @@ impl Degrees {
     }
 
     /// The rows admitted of a relation.
-    pub fn rows(&self, relation: usize) -> u64 { self.relations[relation].rounds.iter().sum() }
+    pub fn rows(&self, relation: usize) -> u64 { self.relations[relation].published.iter().sum() }
 
-    /// One row `relation` gains in `round`. A relation's rows come in
-    /// round order: its inputs at round 0, then each round's delta.
-    pub fn admit(&mut self, relation: usize, round: u32, row: &[i64]) {
+    /// One row of `relation`: visible from publication `published`, and
+    /// as a delta row meeting what was published up to `horizon`. Under a
+    /// synchronous schedule both are its round: 0 for an input, then each
+    /// round's delta. A relation's rows come in ascending order of both.
+    pub fn admit(&mut self, relation: usize, published: u32, horizon: u32, row: &[i64]) {
         let Self { relations, sketches, reads, counted, reached, .. } = self;
         let admitted = &mut relations[relation];
         debug_assert_eq!(row.len(), admitted.arity);
-        if admitted.rounds.len() <= round as usize { admitted.rounds.resize(round as usize + 1, 0); }
-        admitted.rounds[round as usize] += 1;
+        for (rows, at) in [(&mut admitted.published, published), (&mut admitted.horizon, horizon)] {
+            if rows.len() <= at as usize { rows.resize(at as usize + 1, 0); }
+            rows[at as usize] += 1;
+        }
         for (at, (fixed, rows)) in admitted.selections.iter_mut().enumerate() {
             let passes = fixed.iter().all(|&(column, value)| row[column] == value);
             admitted.passed[at] = passes;
@@ -315,7 +321,7 @@ impl Degrees {
                     if !passed[rows] || hashes[key] >= read.limit { continue; }
                     let width = read.columns.len();
                     let values = read.keys.entry(hashes[key]).or_insert_with(|| (0..width).map(|_| Values::Exact(Vec::new())).collect());
-                    for (slot, &column) in read.columns.iter().enumerate() { values[slot].insert(row[column], round); }
+                    for (slot, &column) in read.columns.iter().enumerate() { values[slot].insert(row[column], published); }
                     read.taken += 1;
                     if read.keys.len() > CAPACITY || (read.taken >= READ && read.keys.len() > FLOOR) {
                         read.taken = 0;
@@ -330,8 +336,8 @@ impl Degrees {
                     let Some(weight) = counted.stride.weight() else { continue };
                     let rounds = counted.keys.entry(hashes[key]).or_default();
                     match rounds.last_mut() {
-                        Some(last) if last.0 == round => last.1 += weight,
-                        _ => rounds.push((round, weight)),
+                        Some(last) if last.0 == horizon => last.1 += weight,
+                        _ => rounds.push((horizon, weight)),
                     }
                     if counted.keys.len() > CAPACITY {
                         counted.limit >>= 1;
@@ -380,10 +386,11 @@ impl Degrees {
         };
         work.iter().map(|work| match *work {
             Work::Any { relation, rows } => (u64::from(relations[relation].selections[rows].1 > 0), 1),
-            Work::All { relation } => (relations[relation].rounds.iter().sum(), 1),
+            Work::All { relation } => (relations[relation].published.iter().sum(), 1),
             Work::Sketched { relation, rows, sketch } => (sketches[sketch].count().min(relations[relation].selections[rows].1), 1),
             Work::Visible { changing, relation } => {
-                let (changing, seen) = (&relations[changing].rounds, &relations[relation].rounds);
+                // A changing row sees what was published up to its horizon.
+                let (changing, seen) = (&relations[changing].horizon, &relations[relation].published);
                 let (mut pairs, mut so_far) = (0u128, 0u128);
                 for (round, &rows) in changing.iter().enumerate() {
                     if let Some(&gained) = seen.get(round) { so_far += u128::from(gained); }
