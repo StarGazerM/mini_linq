@@ -728,8 +728,7 @@ mod tests {
     use quote::ToTokens;
 
     fn compile(program: &cq_datalog_partition::ShardedProgram) -> syn::Result<syn::Expr> {
-        let expression = super::compile(program)?;
-        syn::parse2(cq_datalog_print::calibration_branch(expression.to_token_stream(), false))
+        super::compile(program)
     }
 
     fn pull_program() -> round::Program {
@@ -1098,7 +1097,7 @@ mod tests {
                 &round::erase(&program.round).unwrap(),
             )
             .unwrap();
-            let evaluation = cq_datalog_print::calibration_branch(evaluation, false).to_string();
+            let evaluation = evaluation.to_string();
             assert_eq!(
                 evaluation.contains("for row in"),
                 interface == round::HoleInterface::Pull,

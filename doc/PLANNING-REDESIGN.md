@@ -1153,8 +1153,16 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
   and its results, collected once after the result exists.
   - A calibration run evaluates as a plain run: nothing observes an
     operator, a round, a stratum or a row while the program evaluates,
-    and the input is not profiled as it loads. A build without
-    `planner-calibration` has no trace of calibration at all.
+    and the input is not profiled as it loads.
+  - A program that is not calibrated pays nothing. The printer emits the
+    calibration code only when built for it (`cq-datalog-print`'s
+    `planner-calibration`, reached from `cq-datalog`'s): an ordinary
+    program has no token of it, so nothing is compiled, linked or run
+    (the selector macro that erased it after printing is gone; the bloat
+    engine has no symbol of the hook and the same peak, 1,774 MB). A
+    calibration build run without an observer asks once per derived
+    relation whether its rounds are needed, is told no, and keeps
+    nothing: the same peak.
   - When the program has its result, the generated program hands the
     observer each relation once (`statistics::collection::relation`):
     its rows are visited only if the observer asks, and what is known
@@ -1162,16 +1170,22 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
     length). The observer feeds `cq_storage::statistics::Degrees`
     (sketches and a sample of keys, as PS-Admit describes). On a device
     the pass runs on the device (PS-Device).
-  - The round of a row is what its delta already says, so under an
-    observer a program keeps each delta where it would drop it
-    (`delta_swap` moves it aside) and passes a derived relation delta by
-    delta: the place of a delta is the round of its rows. Nothing is
-    copied and nothing is done per row while the program evaluates.
-    Measured on bloat (CPU engine, 30.96M derived rows, medians of
-    three): the evaluation takes 11.70 s without an observer and 11.71 s
-    keeping its deltas; the peak grows from 1,774 MB to 2,199 MB (425 MB,
-    24%; the deltas' cells alone are 397 MB); the pass over all 33.4M
-    rows, reading every cell, adds 0.39 s.
+  - The round of a row is what its delta already says. A program keeps
+    the deltas of the derived relations whose rounds the observer needs
+    (`Observer::needs_rounds`, asked as the program begins: the
+    relations a staged degree or a visible share compares), each moved
+    aside where it would be dropped (`delta_swap`), and passes such a
+    relation delta by delta: the place of a delta is the round of its
+    rows. Every other relation is passed from its stored rows, of round
+    0. Nothing is copied and nothing is done per row while the program
+    evaluates. Measured on bloat (CPU engine, 30.96M derived rows, three
+    runs each): 18 of 77 relations need rounds; the peak is 1,774 MB
+    with no observer, 2,094 MB keeping those (320 MB, 18%) and 2,199 MB
+    keeping every relation's (425 MB; the deltas' cells alone are
+    397 MB); the evaluation time does not move (11.7 to 12.6 s in every
+    configuration, the spread of the machine); the pass over all 33.4M
+    rows, reading every cell, takes 0.39 s. The directives are the same
+    keeping 18 relations or all.
   - Why the rounds are kept. Without them (the planner asking for no
     staged degree and no visible share, tried the same day) the advice
     was much worse, and the planner's own measure had not shown it

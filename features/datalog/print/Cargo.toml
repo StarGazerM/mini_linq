@@ -6,6 +6,11 @@ rust-version = "1.85.1"
 license.workspace = true
 publish = false
 
+[features]
+# Print what offers a program's relations to a statistics observer once it
+# has its result (PLANNING-REDESIGN, PS-After). Off: no token of it.
+planner-calibration = []
+
 [dependencies]
 cq-datalog-support.workspace = true
 cq-lang-datalog-round.workspace = true

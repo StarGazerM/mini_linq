@@ -4,52 +4,6 @@ use proc_macro2::{Group, Ident, Span, TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Expand only the runtime calibration selector, leaving every other macro opaque.
-/// This also lets syntax fixtures inspect exactly the feature-off realization.
-pub fn calibration_branch(tokens: TokenStream, enabled: bool) -> TokenStream {
-    use syn::parse::{ParseStream, Parser};
-    fn select(input: ParseStream<'_>, enabled: bool) -> syn::Result<TokenStream> {
-        let mut output = TokenStream::new();
-        while !input.is_empty() {
-            let candidate = input.fork().parse::<syn::Macro>().ok().filter(|mac| {
-                mac.path.segments.len() == 2
-                    && mac.path.segments[0].ident == "cq_storage"
-                    && mac.path.segments[1].ident == "calibration_select"
-            });
-            if candidate.is_some() {
-                let mac: syn::Macro = input.parse()?;
-                let selected = (|input: ParseStream<'_>| {
-                    let plain: Ident = input.parse()?;
-                    if plain != "plain" { return Err(input.error("expected plain branch")); }
-                    let body;
-                    syn::braced!(body in input);
-                    let plain: TokenStream = body.parse()?;
-                    let calibration: Ident = input.parse()?;
-                    if calibration != "calibration" { return Err(input.error("expected calibration branch")); }
-                    let body;
-                    syn::braced!(body in input);
-                    let calibration: TokenStream = body.parse()?;
-                    Ok(if enabled { calibration } else { plain })
-                }).parse2(mac.tokens)?;
-                output.extend(calibration_branch(selected, enabled));
-            } else {
-                let token: TokenTree = input.parse()?;
-                match token {
-                    TokenTree::Group(group) => {
-                        let mut replacement = Group::new(group.delimiter(), calibration_branch(group.stream(), enabled));
-                        replacement.set_span(group.span());
-                        output.extend([TokenTree::Group(replacement)]);
-                    }
-                    token => output.extend([token]),
-                }
-            }
-        }
-        Ok(output)
-    }
-    (|input: ParseStream<'_>| select(input, enabled)).parse2(tokens)
-        .expect("printer emits complete calibration selectors")
-}
-
 fn identifiers(tokens: TokenStream, names: &mut BTreeSet<String>) {
     for token in tokens {
         match token {

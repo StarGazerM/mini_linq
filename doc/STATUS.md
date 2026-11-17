@@ -513,9 +513,11 @@ result, passes over the relations it holds into
 `cq_storage::statistics::Degrees` (sketches and a sample of keys, no copy
 of the rows); `cq-cost advise` selects the planned order of every hole
 whose facts the evidence holds (basis `measured`). The round of a row is
-the place of its delta: under an observer a program keeps each delta
-where it would drop it, at no time and 425 MB (24% of the peak) on
-bloat, and the pass over 33.4M rows takes 0.4 s. A calibrated bloat run
+the place of its delta: a calibration build keeps the deltas of the
+relations whose rounds a request compares (18 of 77 on bloat), at no
+time and 320 MB (18% of the peak), and the pass over 33.4M rows takes
+0.4 s; an ordinary build has no token of calibration and a calibration
+build without an observer keeps nothing. A calibrated bloat run
 of the CPU engine takes 24 s in all (the evaluation with the pass and the
 statistics 16.9 s, 11.7 s plain); its directives are those the
 admission-time statistics gave. Without the rounds the advised engine

@@ -12,7 +12,7 @@ counters = ["cq-storage/counters"]
 # The proc macro resolves host-side features separately: forward to it too.
 phase-timing = ["cq-datalog-configuration/phase-timing", "cq-datalog-macros/phase-timing"]
 hoist-invariants = ["cq-datalog-macros/hoist-invariants"]
-planner-calibration = ["cq-storage/planner-calibration", "dep:cq-cost", "cq-cost/planner-calibration"]
+planner-calibration = ["cq-storage/planner-calibration", "cq-datalog-macros/planner-calibration", "dep:cq-cost", "cq-cost/planner-calibration"]
 
 [dependencies]
 cq-datalog-configuration.workspace = true

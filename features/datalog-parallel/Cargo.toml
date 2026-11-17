@@ -15,7 +15,7 @@ default = []
 counters = ["cq-datalog/counters", "cq-storage/counters"]
 phase-timing = ["cq-datalog/phase-timing"]
 hole-timing = ["cq-datalog-rayon-print/hole-timing"]
-planner-calibration = ["cq-datalog/planner-calibration", "cq-storage/planner-calibration"]
+planner-calibration = ["cq-datalog/planner-calibration", "cq-storage/planner-calibration", "cq-datalog-rayon-print/planner-calibration"]
 
 [dependencies]
 cq-stage = { version = "0.1.0", path = "../../facade/cq-stage" }

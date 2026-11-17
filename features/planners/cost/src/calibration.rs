@@ -44,6 +44,8 @@ struct Captured {
     degrees: cq_storage::statistics::Degrees,
     /// Per relation, the rows the program holds, where it reported or passed them.
     rows: Vec<Option<u64>>,
+    /// Per relation, whether a request compares the rounds of its rows.
+    rounds: Vec<bool>,
     cells: Vec<i64>,
     /// A code per text value: degrees compare values for equality only.
     text: HashMap<String, i64>,
@@ -54,9 +56,22 @@ impl Captured {
         let names: Vec<String> = declarations.iter().map(|declaration| declaration.name.to_string()).collect();
         let relations: Vec<(&str, usize)> = names.iter().map(String::as_str).zip(declarations.iter().map(|declaration| declaration.columns.len())).collect();
         let degrees = cq_load::stats::admitted_degrees(&requests, &relations).map_err(|e| invalid(e.to_string()))?;
+        let mut rounds = vec![false; relations.len()];
+        let mut compared = |name: &str| if let Some(relation) = names.iter().position(|known| known == name) { rounds[relation] = true; };
+        for request in &requests {
+            match request {
+                ev::DegreeRequest::Joined { staged: true, reach, binder, read, .. } => {
+                    compared(&read.relation);
+                    compared(&binder.relation);
+                    if let Some(reach) = reach { compared(&reach.changing.relation); }
+                }
+                ev::DegreeRequest::Visible { changing, relation } => { compared(changing); compared(relation); }
+                _ => {}
+            }
+        }
         Ok(Self {
             expected_round: erased_round(program.clone()), begun: false, completed: false, failure: None,
-            requests, degrees, rows: vec![None; relations.len()], cells: Vec::new(), text: HashMap::new(),
+            requests, degrees, rows: vec![None; relations.len()], rounds, cells: Vec::new(), text: HashMap::new(),
         })
     }
     fn admit(&mut self, relation: usize, round: usize, row: &dyn CalibrationRow) -> Result<()> {
@@ -123,6 +138,9 @@ impl Observer for Recorder {
             Ok(())
         });
     }
+    fn needs_rounds(&self, relation: usize) -> bool {
+        self.0.lock().unwrap_or_else(|error| error.into_inner()).rounds.get(relation).copied().unwrap_or(false)
+    }
     fn relation(&self, relation: usize, rows: Option<usize>, pass: RelationRows<'_>) {
         self.update(|state| {
             require(state.begun && !state.completed, "a relation outside its program invocation")?;
@@ -164,6 +182,7 @@ pub fn try_measure<T>(
         return Err(invalid("calibration requires a recorded Datalog program"));
     };
     let program: round::Program = syn::parse_str(text)?;
+    require(program.schedule.progress != "relational", "schedule.progress=relational has no synchronous rounds: the round of a row is not comparable across relations")?;
     let target = target_name(input.configuration.target);
     crate::cost::bounds::validate_context(input, baseline, target)?;
     // PS-Derive: what the variable planner can ask for, at the baseline's constants.

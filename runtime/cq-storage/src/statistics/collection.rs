@@ -94,14 +94,18 @@ impl CalibrationCell for String {
 
 /// A pass over a relation's rows: call it with the visitor of each row and
 /// the round that derived it. A round is the position of the row's delta
-/// among its relation's deltas, ascending along the pass; an input's rows
-/// are of round 0. The deltas are kept, not copied: a program under an
-/// observer moves each delta aside where it would drop it.
+/// among its relation's deltas, ascending along the pass. The deltas are
+/// kept, not copied, and only for a derived relation whose rounds the
+/// observer needs: the program moves each of its deltas aside where it
+/// would drop it. Every other row is of round 0.
 pub type RelationRows<'a> = &'a mut dyn FnMut(&mut dyn FnMut(usize, &dyn CalibrationRow));
 
 pub trait Observer: Send + Sync {
     /// A program is about to run; `round_ir` is its recorded Round text.
     fn program_begin(&self, _round_ir: &'static str) {}
+    /// Asked once per derived relation as the program begins: whether the
+    /// round of each of its rows is needed. Only then are its deltas kept.
+    fn needs_rounds(&self, _relation: usize) -> bool { false }
     /// Once per relation of a program that has its result: its position
     /// among the declarations, the rows it holds where that is known
     /// without a pass, and a pass over them. An observer that never calls
@@ -131,6 +135,10 @@ pub fn with_observer<T>(observer: Arc<dyn Observer>, run: impl FnOnce() -> T) ->
     run()
 }
 pub fn program_begin(round_ir: &'static str) { notify(|observer| observer.program_begin(round_ir)); }
+/// Whether the installed observer needs a derived relation's rounds; `false` without one.
+pub fn needs_rounds(relation: usize) -> bool {
+    OBSERVER.with(|observer| observer.borrow().clone()).is_some_and(|observer| observer.needs_rounds(relation))
+}
 pub fn relation(relation: usize, rows: Option<usize>, pass: RelationRows<'_>) {
     notify(|observer| observer.relation(relation, rows, pass));
 }

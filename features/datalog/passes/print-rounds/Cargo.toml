@@ -6,6 +6,9 @@ rust-version = "1.85.1"
 license.workspace = true
 publish = false
 
+[features]
+planner-calibration = ["cq-datalog-print/planner-calibration"]
+
 [dependencies]
 cq-lang-datalog-round.workspace = true
 cq-datalog-print.workspace = true

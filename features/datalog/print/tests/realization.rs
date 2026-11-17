@@ -4,12 +4,12 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use round::storage::incremental;
 
-fn plain(expression: syn::Expr) -> syn::Expr {
-    syn::parse2(calibration_branch(expression.to_token_stream(), false)).unwrap()
-}
-
 fn compile(program: &Program) -> syn::Result<syn::Expr> {
-    cq_datalog_print::compile(program).map(plain)
+    let expression = cq_datalog_print::compile(program)?;
+    // An ordinary build prints nothing of calibration.
+    #[cfg(not(feature = "planner-calibration"))]
+    assert!(!expression.to_token_stream().to_string().contains("calibration"));
+    Ok(expression)
 }
 struct Expanded {
     program: Program,
@@ -43,7 +43,7 @@ fn render(expanded: Expanded) -> TokenStream {
             ))
         },
     )
-    .map(plain).unwrap();
+    .unwrap();
     erase_partitions(&mut expression);
     expression.to_token_stream()
 }
@@ -147,7 +147,7 @@ fn authored_round_expansion_matches_independent_fixture() {
     let partitioned = render_with(&fork.program, &fork.holes, |rules, context, holes, _| {
         Ok(evaluate(rules, context, holes, &fork.program.holes, false))
     })
-    .map(plain).unwrap()
+    .unwrap()
     .to_token_stream()
     .to_string();
     for slot in 0..3 {

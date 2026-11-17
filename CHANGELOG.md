@@ -13,6 +13,24 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- A program that is not calibrated pays nothing, and a calibrated one
+  keeps only the deltas whose rounds are needed (PLANNING-REDESIGN,
+  PS-After). The Datalog printer emits the calibration code only under
+  its own `planner-calibration` feature (forwarded from `cq-datalog`'s
+  through the macros and the print pass; `cq-datalog-parallel`'s through
+  its printer): an ordinary program has no token of it.
+  `cq_storage::calibration_select!` and
+  `cq_datalog_print::calibration_branch` are removed.
+  `collection::Observer::needs_rounds` is asked once per derived relation
+  as a program begins; only those relations keep their deltas, the others
+  are passed from their stored rows. The calibration observer needs the
+  relations a staged degree or a visible share compares, and refuses a
+  relational schedule (its rounds are not synchronous). Bloat: 18 of 77
+  relations; peak 1,774 MB in an ordinary build, in a calibration build
+  without an observer and under an observer needing none, 2,094 MB
+  keeping the 18, 2,199 MB keeping all; no change in evaluation time; the
+  same directives.
+
 - A calibration run keeps the round of every derived row for free
   (PLANNING-REDESIGN, PS-After): under a statistics observer the
   generated program moves each delta aside where it dropped it

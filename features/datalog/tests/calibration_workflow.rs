@@ -136,37 +136,47 @@ fn a_run_that_is_not_the_planned_one_publishes_nothing() {
     assert_eq!(fixture::reach(&edges, &seeds), BTreeSet::from([(0,),(1,)]));
 }
 
-/// A derived row is passed with the round that derived it: under an
-/// observer the deltas a run consumed are kept and passed in order.
+/// A derived row is passed with the round that derived it, for a relation
+/// whose rounds the observer needs: only its deltas are kept, and passed
+/// in order. Another relation keeps nothing: its rows come without rounds.
 #[test]
-fn a_derived_row_is_passed_with_the_round_that_derived_it() {
+fn a_relation_whose_rounds_are_needed_is_passed_delta_by_delta() {
     use cq_storage::statistics::collection::{with_observer, Observer, RelationRows, ScalarValue};
-    #[derive(Default)]
-    struct Rounds(std::sync::Mutex<BTreeMap<usize, Vec<(usize, i64)>>>);
+    struct Rounds { wanted: bool, asked: std::sync::Mutex<Vec<usize>>, rows: std::sync::Mutex<BTreeMap<usize, Vec<(usize, i64)>>> }
     impl Observer for Rounds {
+        fn needs_rounds(&self, relation: usize) -> bool {
+            self.asked.lock().unwrap().push(relation);
+            self.wanted
+        }
         fn relation(&self, relation: usize, _rows: Option<usize>, pass: RelationRows<'_>) {
             let mut rows = Vec::new();
             pass(&mut |round, row| {
                 let ScalarValue::Signed(value) = row.cell(0) else { panic!("an integer column") };
                 rows.push((round, value));
             });
-            self.0.lock().unwrap().insert(relation, rows);
+            self.rows.lock().unwrap().insert(relation, rows);
         }
     }
     // 0 is the seed; 1 and 3 follow it; 2 follows 1 and 4 follows 3. 3 is
     // derived again through 2, a round later: only its first round counts.
     let edges = [(0,1),(1,2),(2,3),(0,3),(3,4)]; let seeds = [(0,)];
     let pool = rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap();
-    for parallel in [false, true] {
-        let seen = std::sync::Arc::new(Rounds::default());
+    for (parallel, wanted) in [(false, true), (true, true), (false, false), (true, false)] {
+        let seen = std::sync::Arc::new(Rounds { wanted, asked: Default::default(), rows: Default::default() });
         let reached = pool.install(|| with_observer(seen.clone(), || if parallel { parallel_reach(&edges, &seeds) } else { fixture::reach(&edges, &seeds) }));
         assert_eq!(reached, BTreeSet::from([(0,),(1,),(2,),(3,),(4,)]));
-        let seen = seen.0.lock().unwrap();
-        // Relations in declaration order: Edge, Seed, Reach. Inputs are of round 0.
+        // Relations in declaration order: Edge, Seed, Reach. Only the
+        // derived one is asked about; inputs are of round 0.
+        assert_eq!(*seen.asked.lock().unwrap(), [2]);
+        let seen = seen.rows.lock().unwrap();
         assert!(seen[&0].iter().all(|(round, _)| *round == 0) && seen[&0].len() == 5, "{:?}", seen[&0]);
         assert_eq!(seen[&1], [(0, 0)]);
         let rounds: BTreeMap<i64, usize> = seen[&2].iter().map(|&(round, value)| (value, round)).collect();
-        assert_eq!(rounds.len(), 5, "every reached row once: {:?}", seen[&2]);
+        assert_eq!((rounds.len(), seen[&2].len()), (5, 5), "every reached row once: {:?}", seen[&2]);
+        if !wanted {
+            assert!(rounds.values().all(|round| *round == 0), "an unwanted relation has no rounds: {rounds:?}");
+            continue;
+        }
         assert!(seen[&2].is_sorted_by_key(|(round, _)| *round), "rounds ascend along the pass: {:?}", seen[&2]);
         assert!(rounds[&0] < rounds[&1] && rounds[&1] < rounds[&2], "parallel {parallel}: {rounds:?}");
         assert!(rounds[&1] == rounds[&3] && rounds[&2] == rounds[&4], "parallel {parallel}: {rounds:?}");

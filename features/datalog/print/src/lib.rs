@@ -24,7 +24,6 @@ pub use round::{
 use std::collections::BTreeSet;
 use syn::Ident;
 mod codegen;
-pub use codegen::calibration_branch;
 
 /// Host realization supports iterator and consumer holes, not device batches.
 pub fn check_host_interfaces(program: &Program) -> syn::Result<()> {
@@ -454,13 +453,22 @@ fn render_admitted(
         }
     }
     let result = outputs(context);
+    // An ordinary program has no token of calibration.
+    if !calibrated() {
+        return syn::parse2(quote!({ #(#bindings)* #bind_observer #(#strata)* #result }));
+    }
     let descriptor = program.to_token_stream().to_string();
     let output = Ident::new("__cq_calibration_output", Span::mixed_site());
-    let observing = observing();
-    // PS-After: once the relations are final, each is offered to a
-    // statistics observer; its rows are visited only if the observer asks.
-    // A derived relation is passed delta by delta, so each row has its
-    // round; an input is passed from its canonical layout.
+    // PS-After: the observer says once which derived relations' rounds it
+    // needs; only their deltas are kept.
+    let wants = context.relations.iter().enumerate().filter_map(|(index, relation)| {
+        let keeps = keeps(relation.delta_host.as_ref()?);
+        Some(quote!(let #keeps = ::cq_storage::statistics::collection::needs_rounds(#index);))
+    });
+    // Once the relations are final, each is offered to the observer; its
+    // rows are visited only if the observer asks. A derived relation it
+    // wanted is passed delta by delta, so each row has its round; any
+    // other relation is passed from its canonical layout, of round 0.
     let relations = context.relations.iter().enumerate().map(|(index, relation)| {
         let canonical = &context.layouts[relation.providers.canonical];
         let host = &canonical.host;
@@ -474,60 +482,58 @@ fn render_admitted(
         } else {
             quote!(::core::option::Option::None)
         };
-        let pass = if let Some(delta) = &relation.delta_host {
-            let kept = kept_deltas(delta);
+        let cells = (0..arity).map(|column| {
+            let position = syn::Index::from(
+                canonical.columns.iter().position(|&c| c == column).expect("checked complete canonical permutation"),
+            );
+            quote!(::cq_storage::statistics::collection::Cell(row.#position).scalar())
+        });
+        let mut pass = quote!(for row in ::cq_storage::rows::Rows::rows(&#host) {
+            let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
+            visit(0, &row);
+        });
+        if let Some(delta) = &relation.delta_host {
+            let (kept, keeps) = (kept_deltas(delta), keeps(delta));
             let cells = (0..arity).map(|column| {
                 let column = syn::Index::from(column);
                 quote!(::cq_storage::statistics::collection::Cell(&row.#column).scalar())
             });
-            quote!(for (round, delta) in #kept.iter().chain(::core::iter::once(&#delta)).enumerate() {
-                for row in delta {
-                    let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
-                    visit(round, &row);
+            pass = quote!(if #keeps {
+                for (round, delta) in #kept.lock().unwrap().iter().chain(::core::iter::once(&#delta)).enumerate() {
+                    for row in delta {
+                        let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
+                        visit(round, &row);
+                    }
                 }
-            })
-        } else {
-            let cells = (0..arity).map(|column| {
-                let position = syn::Index::from(
-                    canonical.columns.iter().position(|&c| c == column).expect("checked complete canonical permutation"),
-                );
-                quote!(::cq_storage::statistics::collection::Cell(row.#position).scalar())
+            } else {
+                #pass
             });
-            quote!(for row in ::cq_storage::rows::Rows::rows(&#host) {
-                let row: [::cq_storage::statistics::collection::ScalarValue<'_>; #arity] = [#(#cells),*];
-                visit(0, &row);
-            })
-        };
+        }
         quote!(::cq_storage::statistics::collection::relation(#index, #rows, &mut |visit| {
             #dispatch_import
             #pass
         });)
     });
     syn::parse2(quote!({
-        ::cq_storage::calibration_select! {
-            plain {}
-            calibration {
-                let #observing = ::cq_storage::statistics::collection::observing();
-                ::cq_storage::statistics::collection::program_begin(#descriptor);
-            }
-        }
+        ::cq_storage::statistics::collection::program_begin(#descriptor);
+        #(#wants)*
         #(#bindings)* #bind_observer #(#strata)*
-        ::cq_storage::calibration_select! {
-            plain { #result }
-            calibration {{
-                #(#relations)*
-                let #output = #result;
-                ::cq_storage::statistics::collection::program_end();
-                #output
-            }}
-        }
+        #(#relations)*
+        let #output = #result;
+        ::cq_storage::statistics::collection::program_end();
+        #output
     }))
 }
-/// Whether a statistics observer is installed, read once per program.
-fn observing() -> Ident {
-    Ident::new("__cq_calibration_observing", Span::mixed_site())
+/// PS-After: whether this build offers its relations to a statistics
+/// observer. Without the feature the printer emits nothing for it.
+fn calibrated() -> bool {
+    cfg!(feature = "planner-calibration")
 }
-/// The deltas a relation consumed, kept in round order under an observer.
+/// Whether the observer wants a derived relation's rows, read once per program.
+fn keeps(delta: &Ident) -> Ident {
+    Ident::new(&format!("__cq_calibration_keeps_{delta}"), Span::mixed_site())
+}
+/// The deltas a wanted relation consumed, kept in round order.
 fn kept_deltas(delta: &Ident) -> Ident {
     Ident::new(&format!("__cq_calibration_kept_{delta}"), Span::mixed_site())
 }
@@ -537,14 +543,12 @@ pub fn bindings(context: &RoundContext) -> Vec<TokenStream> {
         if let Some(delta) = &relation.delta_host {
             let provider = &relation.providers.delta.ty;
             let init = &relation.providers.delta_init;
-            let kept = kept_deltas(delta);
-            bindings.push(quote!(
-                let mut #delta: #provider = #init;
-                ::cq_storage::calibration_select! {
-                    plain {}
-                    calibration { let mut #kept: ::std::vec::Vec<#provider> = ::std::vec::Vec::new(); }
-                }
-            ));
+            bindings.push(quote!(let mut #delta: #provider = #init;));
+            if calibrated() {
+                let kept = kept_deltas(delta);
+                // Behind a lock: a relational schedule publishes from a shared closure.
+                bindings.push(quote!(let #kept: ::std::sync::Mutex<::std::vec::Vec<#provider>> = ::std::sync::Mutex::new(::std::vec::Vec::new());));
+            }
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
@@ -721,25 +725,24 @@ pub fn full_insert<'a>(layouts: impl IntoIterator<Item = &'a Layout>, next: &Ide
     };
     quote!({ #rows #(#bulk)* })
 }
-/// Publish admitted rows as the relation's next delta. PS-After: under a
-/// statistics observer the delta it replaces is moved aside, not dropped:
-/// its place among the kept deltas is the round of its rows.
+/// Publish admitted rows as the relation's next delta. PS-After: in a
+/// calibration build, the delta of a relation the observer wants is moved
+/// aside where it would be dropped: its place among the kept deltas is
+/// the round of its rows.
 pub fn delta_swap(relation: &round::Relation) -> TokenStream {
     let delta = relation
         .delta_host
         .as_ref()
         .expect("checked IDB delta host");
     let next = &relation.next;
-    let (kept, observing) = (kept_deltas(delta), observing());
-    quote!(::cq_storage::calibration_select! {
-        plain { #delta = #next; }
-        calibration {
-            if #observing {
-                #kept.push(::core::mem::replace(&mut #delta, #next));
-            } else {
-                #delta = #next;
-            }
-        }
+    if !calibrated() {
+        return quote!(#delta = #next;);
+    }
+    let (kept, keeps) = (kept_deltas(delta), keeps(delta));
+    quote!(if #keeps {
+        #kept.lock().unwrap().push(::core::mem::replace(&mut #delta, #next));
+    } else {
+        #delta = #next;
     })
 }
 /// Replace a delta's rows, retaining bulk layout host capacity across rounds.
