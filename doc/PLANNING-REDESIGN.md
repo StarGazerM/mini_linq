@@ -1008,12 +1008,14 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
   (reference note, section 4). Join sizes come from a formula over the
   distinct counts, not from data.
 
-- **PS-Admit.** The runtime keeps the statistics of the relations it
-  stores, as it admits their rows and from the rows being admitted, where
-  DuckDB keeps its own: `cq_storage::statistics::Degrees`. It is given
-  the requests in the runtime's terms (relations by position) and then
-  every admitted row with its round, a relation's rows in round order. It
-  keeps sketches and samples, never a relation:
+- **PS-Admit (what is kept stands; when the rows are given is PS-After's,
+  2026-11-17: once, after the result, each with its age).** The runtime
+  keeps the statistics of the relations it stores from the rows it is
+  given, where DuckDB keeps its own:
+  `cq_storage::statistics::Degrees`. It is given the requests in the
+  runtime's terms (relations by position) and then every row with its
+  round, a relation's rows in round order. It keeps sketches and samples,
+  never a relation:
   - `distinct`: the rows for a whole row; else a sketch of the column set
     (HyperLogLog, 1,024 registers, about 3%);
   - `joined`: over a sample of *keys* chosen by hash before any row is
