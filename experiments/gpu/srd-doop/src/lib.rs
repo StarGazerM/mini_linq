@@ -39,7 +39,8 @@ compile_error!("select at most one advice experiment; authored advice requires t
 macro_rules! engine {
     ($($advice:tt)*) => {
 srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advice)*), pipeline {
-    storage_rewrites = [::cq_gpu_datalog::device_storage];
+    // Device layouts are sorted complete rows: membership needs no order of its own.
+    storage_rewrites = [::cq_datalog_canonical::canonical(ordered), ::cq_gpu_datalog::device_storage];
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];

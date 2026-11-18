@@ -626,11 +626,22 @@ canonical layout, appends it to every full layout, builds NEW from it and
 moves NEW to the delta; outputs read the canonical layout once. All programs on one thread share
 `gpu_datalog_runtime::thread_pool()` (device 0), so the runtime's thread-local
 caches never pin a finished program's pool.
-Candidate batches are released after admission. Multistream execution retains
-component-scoped arenas per lane/head and hole-local previous-count hints;
-completed strata release cached Sequence scratch and wholly unused pool chunks.
-Layout states and views retain their published owners; trimming never
-invalidates live device views.
+Candidate batches are released after admission. Admission reads the batches
+one sort portion at a time and never copies the bag whole. Multistream
+execution retains component-scoped arenas per lane/head and hole-local
+previous-count hints; an arena keeps a slot for the next round only up to
+1 GiB. Completed strata release cached Sequence scratch and wholly unused
+pool chunks. Layout states and views retain their published owners; trimming
+never invalidates live device views.
+
+Memory comes from two tiers (`gpu_device_columns::TieredMemoryResource`):
+blocks under 64 MiB are suballocated from the pool, larger ones are single
+stream-ordered driver allocations (`cuMemAllocAsync`), the allocator the
+runtime's sort scratch already uses. Full layouts of one relation with the
+same column order share one device state (DL-DeviceSharedOrder), and the DOOP
+engines select each membership-only canonical layout's order among the orders
+already read (`cq_datalog_canonical::canonical(ordered)`, DL-CanonicalOrder),
+so a relation stores one sorted run set per distinct order its joins use.
 
 Symbol columns are declared with
 `device_storage(symbols(IStr => MyCodec))`, where
@@ -761,6 +772,17 @@ timer. Pass `--gpu-only` to skip the CPU reference and exact comparison when
 measuring GPU execution alone. Set `GPU_DATALOG_PHASES=1` to report synchronized
 setup, fixpoint, and output phase times on stderr; disabled phase marks add no
 stream synchronization.
+
+Set `GPU_DATALOG_PROFILE=1` for a wall-clock breakdown of the fixpoint, printed
+as `gpu_datalog_profile` records at its end: seconds, entries and rows per
+(stratum, phase, relation, step). Phases are `holes` (per rule version as
+`Label@delta#hole` on the calling thread's stream; `main lane`/`join lanes`
+when a wave runs on several streams), `admit`, `orders` and `publish`; steps
+are the admission and publication operations (`sort/portion-unique`,
+`subtract`, `merge`, ...). Every boundary synchronizes the main stream, so a
+profiled run is slower than an unprofiled one and is not a timing sample.
+Per-hole attribution requires one stream (`lanes(streams = 1)`): worker-lane
+holes overlap the main lane and are charged to `main lane`.
 
 #### Relational heads (2026-10-31)
 

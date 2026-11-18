@@ -445,6 +445,7 @@ impl Packing {
         if !pool.shares_memory(input.pool()) {
             return Err("permutation pool does not share the input's memory".into());
         }
+        crate::stats::trace_step(pool, "permute", rows, std::mem::size_of::<W>());
         let output = unsafe { Buffer::uninitialized(pool.clone(), rows)? };
         if rows == 0 {
             return Ok(output);

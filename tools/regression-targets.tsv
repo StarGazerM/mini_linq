@@ -91,6 +91,7 @@ datalog-doop	manifest-test	doop	Cargo.toml
 doop-shared	manifest-test	doop-shared	Cargo.toml
 datalog-oracle	manifest-test	oracles	Cargo.toml
 oracle-shared	manifest-test	oracle-shared	Cargo.toml
+cq-datalog-canonical	manifest-test	correspondence	Cargo.toml
 cq-datalog-hasher	manifest-test	correspondence	Cargo.toml
 cq-datalog-schedule	manifest-test	correspondence	Cargo.toml
 cq-datalog-parallel-runtime	manifest-test	runtime	Cargo.toml

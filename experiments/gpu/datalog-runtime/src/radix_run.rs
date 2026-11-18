@@ -1123,6 +1123,10 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
             return Err("set admission requires a full-key set constructor".into());
         }
         let unique = unsafe { self.sort_unique(candidates, rows)? };
+        self.uncommitted(unique)
+    }
+
+    fn uncommitted(&self, unique: runs::SortedBatch<W>) -> Result<runs::SortedBatch<W>> {
         if unique.is_empty() || self.is_empty() {
             return Ok(unique);
         }
@@ -1130,6 +1134,72 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
             ptr: run.keys.ptr(), len: run.key_count,
         }).collect::<Vec<_>>();
         self.set_ops().subtract(&unique, &accepted)
+    }
+
+    /// [`Self::fresh`] over one publication's candidate batches, packed in
+    /// `packing`'s relation order; `order` permutes each row into this set's
+    /// column order first. The bag is never copied whole: each sort portion
+    /// is gathered from the batches, permuted, sorted and deduplicated on its
+    /// own, loses the rows earlier portions produced, and is merged into the
+    /// result. A bag of at most one portion is one such step.
+    /// # Safety
+    /// As [`Self::fresh`], for every batch and for the permuted rows.
+    pub unsafe fn fresh_batches(
+        &self,
+        packing: &Packing,
+        batches: &[crate::CandidateBatch],
+        order: Option<(&[usize], u32)>,
+    ) -> Result<runs::SortedBatch<W>> {
+        // SAFETY: forwarded premises.
+        unsafe { self.fresh_portions(packing, batches, order, runs::SORT_PORTION_ROWS) }
+    }
+
+    unsafe fn fresh_portions(
+        &self,
+        packing: &Packing,
+        batches: &[crate::CandidateBatch],
+        order: Option<(&[usize], u32)>,
+        portion: usize,
+    ) -> Result<runs::SortedBatch<W>> {
+        if !self.full_key_set {
+            return Err("set admission requires a full-key set constructor".into());
+        }
+        let mut pieces = vec![Vec::new()];
+        let mut room = portion;
+        for batch in batches {
+            let mut first = 0;
+            while first < batch.len() {
+                if room == 0 {
+                    pieces.push(Vec::new());
+                    room = portion;
+                }
+                let count = room.min(batch.len() - first);
+                pieces.last_mut().expect("nonempty").push((batch, first, count));
+                first += count;
+                room -= count;
+            }
+        }
+        let mut unique: Option<runs::SortedBatch<W>> = None;
+        for piece in &pieces {
+            let rows = crate::arena::concatenate_ranges::<W>(self.pool.clone(), packing, piece)?;
+            let rows = match order {
+                Some((order, threads)) => packing.permute_device(&rows, rows.len(), order, threads)?,
+                None => rows,
+            };
+            // SAFETY: the caller's packing and readiness premises cover every range.
+            let mut next = unsafe { self.sort_unique(&rows, rows.len())? };
+            drop(rows);
+            unique = Some(match unique {
+                None => next,
+                Some(previous) => {
+                    if !next.is_empty() {
+                        next = self.set_ops().subtract(&next, &[previous.view()])?;
+                    }
+                    if next.is_empty() { previous } else { self.set_ops().merge(&previous, &next)? }
+                }
+            });
+        }
+        self.uncommitted(unique.expect("at least one piece"))
     }
 
     /// Sort and deduplicate complete keys without changing committed state.
@@ -1146,6 +1216,49 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
     /// zero padding above `active_bits()`, ready and immutable during this sort.
     pub unsafe fn sort_known_unique(&self, input: &Buffer<W>, rows: usize) -> Result<runs::SortedBatch<W>> {
         self.set_ops().sort(input, rows, true)
+    }
+
+    /// `batch`'s rows re-sorted under a full-column permutation of
+    /// `packing`. One sort portion at a time is permuted and sorted and the
+    /// sorted portions are merged, so beside the result the transient is one
+    /// portion, never a permuted copy of the whole batch.
+    /// # Safety
+    /// `batch` holds initialized pairwise distinct rows in `packing`; the
+    /// permutation is a bijection of its columns of the same active width.
+    pub unsafe fn reorder_unique(
+        &self,
+        packing: &Packing,
+        batch: &runs::SortedBatch<W>,
+        permutation: &[usize],
+        threads: u32,
+    ) -> Result<runs::SortedBatch<W>> {
+        // SAFETY: forwarded premises.
+        unsafe { self.reorder_portions(packing, batch, permutation, threads, runs::SORT_PORTION_ROWS) }
+    }
+
+    unsafe fn reorder_portions(
+        &self,
+        packing: &Packing,
+        batch: &runs::SortedBatch<W>,
+        permutation: &[usize],
+        threads: u32,
+        portion: usize,
+    ) -> Result<runs::SortedBatch<W>> {
+        let mut sorted: Option<runs::SortedBatch<W>> = None;
+        for start in (0..batch.len().max(1)).step_by(portion) {
+            let len = (batch.len() - start).min(portion);
+            let rows = batch.shared_range(start, len)?;
+            let permuted = packing.permute_device(&rows, len, permutation, threads)?;
+            // SAFETY: a bijection of distinct rows yields distinct rows.
+            let next = unsafe { self.sort_known_unique(&permuted, len)? };
+            drop(permuted);
+            sorted = Some(match sorted {
+                None => next,
+                // Portions of distinct rows are disjoint.
+                Some(previous) => self.set_ops().merge(&previous, &next)?,
+            });
+        }
+        Ok(sorted.expect("at least one portion"))
     }
 
     fn set_segment(&self, batch: runs::SortedBatch<W>) -> Result<Segment<W, O, ()>> {
@@ -1174,6 +1287,7 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         if batch.is_empty() { return Ok(()); }
         let total = self.len().checked_add(batch.len()).ok_or("set length overflow")?;
         if !offset_fits::<O>(total) { return Err("set exceeds offset carrier".into()); }
+        crate::stats::trace_step(&self.pool, "append", batch.len(), size_of::<W>());
         let mut merged = batch;
         let mut keep = self.runs.len();
         while keep > 0 && self.runs[keep - 1].item_count / self.params.ratio < merged.len() {
@@ -3447,6 +3561,70 @@ mod set_representation_tests {
         let current = state.snapshot()?.probe_keys(&pool, &more, 4)?.to_host()?;
         assert_eq!(current[0].count, 4);
         assert_eq!(current[2].count, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_batches_admit_by_portions_in_either_column_order() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let packing = Packing::with_columns(&[crate::Column::U32, crate::Column::U32])?;
+        let pack = |packing: &Packing, rows: &[(i128, i128)]| -> Result<Vec<u64>> {
+            rows.iter().map(|&(a, b)| packing.pack::<u64>(&[a, b])).collect()
+        };
+        // Duplicates inside a batch, across batches and against the committed row.
+        let groups: [&[(i128, i128)]; 3] =
+            [&[(1, 2), (3, 4), (1, 2)], &[(5, 6)], &[(3, 4), (7, 8), (9, 1), (1, 2)]];
+        let mut arena = crate::CandidateArena::new(pool.clone());
+        let mut batches = Vec::new();
+        for group in groups {
+            let lease = arena.reserve(packing.clone(), group.len())?;
+            // SAFETY: the lease's only writer initializes the published prefix.
+            unsafe {
+                lease.buffer().write_async(&pack(&packing, group)?)?;
+                batches.push(lease.finish(group.len(), vec![])?);
+            }
+        }
+        let swapped = packing.permute(&[1, 0])?;
+        for portion in [2, 3, 64] {
+            for (order, stored, committed, expected) in [
+                (None, &packing, (5, 6), [(1, 2), (3, 4), (7, 8), (9, 1)]),
+                (Some((&[1usize, 0][..], 256u32)), &swapped, (6, 5), [(1, 9), (2, 1), (4, 3), (8, 7)]),
+            ] {
+                let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 64)?;
+                let seen = Buffer::from_host(pool.clone(), &pack(stored, &[committed])?)?;
+                // SAFETY: one initialized row in the stored packing.
+                unsafe {
+                    let seen = state.sort_unique(&seen, 1)?;
+                    state.append_sorted(seen)?;
+                }
+                // SAFETY: every batch holds initialized rows in `packing`.
+                let fresh = unsafe { state.fresh_portions(&packing, &batches, order, portion)? };
+                assert_eq!(fresh.buffer().to_host()?, pack(stored, &expected)?);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_rows_reorder_by_portions() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let packing = Packing::with_columns(&[crate::Column::U32, crate::Column::U32])?;
+        let swapped = packing.permute(&[1, 0])?;
+        let pack = |packing: &Packing, rows: &[(i128, i128)]| -> Result<Vec<u64>> {
+            rows.iter().map(|&(a, b)| packing.pack::<u64>(&[a, b])).collect()
+        };
+        let state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 64)?;
+        let rows = [(1, 9), (2, 3), (4, 8), (5, 0), (6, 7)];
+        let input = Buffer::from_host(pool.clone(), &pack(&packing, &rows)?)?;
+        // SAFETY: initialized distinct rows; the swap is a column bijection.
+        let batch = unsafe { state.sort_unique(&input, rows.len())? };
+        for portion in [2, 3, 64] {
+            let reordered = unsafe { state.reorder_portions(&packing, &batch, &[1, 0], 256, portion)? };
+            assert_eq!(
+                reordered.buffer().to_host()?,
+                pack(&swapped, &[(0, 5), (3, 2), (7, 6), (8, 4), (9, 1)])?
+            );
+        }
         Ok(())
     }
 

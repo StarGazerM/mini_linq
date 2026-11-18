@@ -23,7 +23,7 @@ pub use domain::{Domain, DomainView, KeyDomain, RANK_SPARSITY_THRESHOLD};
 pub use encoding::{decode_value, encode_value, DecodeValue, Dictionary, EncodeValue};
 pub use host::*;
 pub use host_pack::{check_packed_layout, pack_for};
-pub use memory::{Buffer, MemoryResource, Pool, PoolMemoryStats};
+pub use memory::{Buffer, MemoryResource, Pool, PoolMemoryStats, TieredMemoryResource};
 
 /// A host-owned handle with an explicitly declared plain device carrier.
 /// Device views do not implement this trait and cannot stand in for an owner.

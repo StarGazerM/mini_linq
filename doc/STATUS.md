@@ -887,16 +887,20 @@ approval.
   are prepared locally. GPU `srd-doop-gpu`, three samples each: 18 datasets
   complete with fixpoint 0.51 to 1.01 of SRDatalog's published GPU median
   (geometric mean 0.82; soot 6.06 s against 11.89 s); jython, scala and
-  kotlin fail. Device memory on soot: layouts 2.75x the raw tuple bytes, pool
-  reservation 5.8x; Datalog device relations are not compressed (P6 C covers
-  TPC-H base columns). Follow-up the same day
-  (`/data/design-notes/gpu-datalog-memory-2026-11-10.md`): set sorts now run
-  by portions, so jython passes RCCL's one-portion limit (268,435,200 rows)
-  and then exhausts the card on a 1.96-billion-row candidate round; scala
-  stopped on the pool's doubling growth with about 20 GiB free and completes
-  (fixpoint 10.8 s against 9.13 s, counts equal the CPU engine) with a
-  prepared, unpinned RCCL pool patch that costs 3-5% fixpoint on xalan and
-  soot; kotlin fails in its 680 M-row CastTo seed round. CPU field-flow at
+  kotlin failed. Memory follow-up (2026-11-11,
+  `/data/design-notes/gpu-datalog-vs-srdatalog-memory-2026-11-11.md`): the
+  device kept 132 layouts where 96 distinct orders are read, copied each
+  candidate bag several times and reserved twice its live bytes. Now one
+  device state per order (`canonical(ordered)`, DL-CanonicalOrder;
+  DL-DeviceSharedOrder), admission by portions without bag copies, and large
+  blocks as single driver allocations. Pinned RCCL, empty card: scala
+  completes (10.0 s, 28 GiB; SRDatalog here 9.44 s, 26.1 GiB) and kotlin
+  completes (9.94 s, 44.4 GiB; SRDatalog 10.52 s, 44.8 GiB); soot peaks at
+  19 GiB instead of 34 (5.93 s), xalan at 4.0 instead of 7-8 (0.753 s against
+  0.867 s). jython still fails: one round has 4.3 billion `VarPointsTo`
+  candidates, which SRDatalog avoids with a bitmap join its baseline plan
+  also lacks. Datalog device relations remain uncompressed (P6 C covers
+  TPC-H base columns). CPU field-flow at
   24 threads: geometric mean 9.8x
   SRDatalog's GPU fixpoint over 20 datasets (4.0x to 25.6x), kotlin over the
   100 GiB cap. Order: `driver(delta_first)` is 0.82x on the default DOOP
@@ -904,6 +908,18 @@ approval.
   1.51x on the field-flow program (slower on 17 of 19), where it adds a third
   full copy of the 80 M-row `CastTo` helper. No default was changed: order
   and index cost need the M7 cost stage.
+  Join-time diagnosis (2026-11-11,
+  `/data/design-notes/gpu-datalog-join-time-2026-11-11.md`): against
+  SRDatalog the device's maintenance is 1.3-1.5x faster and its joins are
+  1.6x faster on soot but 1.4-1.6x slower on scala and kotlin. The kernels'
+  unit costs are fine; the plan does more work. Every delta row is a work
+  item and binds all of its variables first, where SRDatalog drives from the
+  delta's distinct join keys and expands the delta's other columns last: one
+  `VPT_LoadArray` version enumerates 10-24 billion pairs for 45-175 million
+  candidates (21-37% of join time). No estimation runs on the GPU Datalog
+  path and the recorded statistics (rows, distinct, max degree) could not
+  rank these plans. Open: variable-order planning from cardinality
+  estimates.
 - Open: reach chain at 15 threads below sequential; nested CQ code in one
   codegen unit; rule-local aggregates; FlowLog comparison; surface sugar
   (disjunction, facts, rule macros). Pure-total Rust remains a semantic premise.

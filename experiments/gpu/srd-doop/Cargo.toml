@@ -19,6 +19,7 @@ advice-cost = ["default-query"]
 srd-doop-shared = { path = "../../../features/datalog/doop/srd" }
 srd-doop-harness = { path = "../../../features/datalog/doop/srd-engines/harness" }
 cq-datalog = { path = "../../../features/datalog/facade/cq-datalog" }
+cq-datalog-canonical = { path = "../../../features/datalog/passes/canonical" }
 mini-linq = { path = "../../../facade/mini-linq" }
 cq-storage = { path = "../../../runtime/cq-storage" }
 cq-gpu-datalog = { path = "../datalog/facade" }

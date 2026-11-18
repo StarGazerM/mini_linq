@@ -18,7 +18,7 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
 
 doop_shared::doop_engine!(run, pipeline {
     incremental = ::cq_datalog::passes::incremental(driver(delta_first););
-    storage_rewrites = [::cq_gpu_datalog::device_storage(symbols(IStr => [0] crate::DoopSymbols))];
+    storage_rewrites = [::cq_datalog_canonical::canonical(ordered), ::cq_gpu_datalog::device_storage(symbols(IStr => [0] crate::DoopSymbols))];
     cq = pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];

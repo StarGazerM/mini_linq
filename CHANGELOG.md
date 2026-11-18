@@ -444,6 +444,38 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   maximum` on a 378 M-row candidate round (it then exhausts the card on a
   1.96-billion-row round). Under `GPU_DATALOG_TRACE_MEMORY`, a refused pool
   allocation reports its size and the pool counters.
+- Datalog canonical order for ordered index kinds (DL-CanonicalOrder). New
+  Storage rewrite `cq_datalog_canonical::canonical(ordered)`
+  (`features/datalog/passes/canonical`): a canonical layout keyed by every
+  column that no occurrence reads takes the column order of one of its
+  relation's read layouts, a full read in the relation's own component
+  first, with its provider respelled. Layout count, keys and reads are
+  unchanged; the default (hash) canonical choice is untouched. For index kinds
+  whose full layouts are sorted complete rows, the membership layout then
+  needs no order of its own.
+- GPU Datalog memory (design note
+  `/data/design-notes/gpu-datalog-vs-srdatalog-memory-2026-11-11.md`):
+  - Full device layouts of one relation with the same column order share one
+    state (DL-DeviceSharedOrder); both GPU DOOP engines run
+    `canonical(ordered)` before `device_storage`. The SRD field-flow program
+    keeps 96 device states for its 132 layouts. A delta no occurrence scans
+    adopts the canonical batch instead of a relation-order copy.
+  - Admission reads candidate batches one sort portion at a time
+    (`DeviceRadixRun::fresh_batches`) and never concatenates or permutes the
+    whole bag; other admitted orders are built the same way
+    (`reorder_unique`). An arena keeps a slot for the next round only up to
+    1 GiB.
+  - Device memory has two tiers (`TieredMemoryResource`): blocks under 64 MiB
+    come from the suballocating pool, larger ones are single
+    `cuMemAllocAsync` allocations in the device's default driver pool, whose
+    freed blocks stay mapped until a stratum boundary trims them. This
+    applies to every GPU workload.
+  - `GPU_DATALOG_TRACE_MEMORY` adds one line per admission and publication
+    step with pool and driver memory; a refused driver scratch allocation
+    reports its size under `CQ_GPU_VRAM_EXCEEDED`.
+  - `GPU_DATALOG_PROFILE` prints the fixpoint's wall time per (stratum,
+    phase, relation, step): holes per rule version, admission, order builds
+    and publication (`experiments/gpu/README.md`).
 
 - GPU base-column storage (STORAGE E1, §§12.5–12.6). `gpu-device-columns`
   adds `BaseLayout` (`For`, `Plain64`, `Native`, `HostFor`, FastLanes `Delta`

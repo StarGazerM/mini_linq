@@ -381,6 +381,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-datalog-canonical"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog",
+ "cq-datalog-incremental",
+ "cq-datalog-storage",
+ "cq-datalog-stratify",
+ "cq-datalog-support",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-storage",
+ "cq-syntax",
+ "mini-linq",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-datalog-configuration"
 version = "0.0.0"
 dependencies = [

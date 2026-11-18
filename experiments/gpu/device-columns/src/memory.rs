@@ -1,19 +1,115 @@
 use crate::Result;
-use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceCopy, PinnedHostBuffer};
+use cuda_core::{CudaContext, CudaEvent, CudaStream, DeviceCopy, IntoResult, PinnedHostBuffer};
 use rccl_memory::{
-    ContiguousDeviceRange, CudaMemoryResource, DeviceAllocator, DeviceBlock, PoolMemoryResource,
-    StatisticsMemoryResource,
+    ContiguousDeviceRange, CudaAsyncMemoryResource, CudaMemoryResource, DeviceAllocator,
+    DeviceBlock, MemoryError, PoolMemoryResource, StatisticsMemoryResource,
 };
 use std::{
     alloc::Layout,
     marker::PhantomData,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
-pub type MemoryResource = StatisticsMemoryResource<PoolMemoryResource<CudaMemoryResource>>;
+pub type MemoryResource = StatisticsMemoryResource<TieredMemoryResource>;
 
-/// Host-side accounting for this runtime pool, including pooled library scratch.
-/// Allocated bytes include CUDA allocation alignment.
+/// Requests of at least this many bytes are the driver's stream-ordered
+/// allocations; smaller ones are suballocated from the pool.
+const DIRECT_BYTES: usize = 64 << 20;
+
+/// A suballocating pool for small blocks and one driver allocation per large
+/// block.
+///
+/// A pool chunk stays reserved while any block inside it lives, and the pool
+/// doubles its chunks. Relation runs of several gigabytes inside such chunks
+/// pinned freed scratch between them: the pool held twice the live bytes, its
+/// next chunk no longer fit the card, and what it held was invisible to the
+/// runtime's own driver-side sort scratch. A large block is therefore its own
+/// `cuMemAllocAsync` allocation, freed in stream order to the same driver
+/// pool that scratch draws from; nothing larger than the threshold is ever
+/// carved from a shared chunk.
+pub struct TieredMemoryResource {
+    pool: PoolMemoryResource<CudaMemoryResource>,
+    direct: CudaAsyncMemoryResource,
+    /// Requested bytes live in both tiers, and their high-water mark.
+    current: AtomicUsize,
+    peak: AtomicUsize,
+    direct_bytes: AtomicUsize,
+}
+impl TieredMemoryResource {
+    fn new(context: Arc<CudaContext>, initial: usize, maximum: usize) -> Result<Self> {
+        // Freed large blocks stay mapped in the device's default driver pool,
+        // which this tier and native sort scratch both draw from: unmapping at
+        // every synchronization and mapping again on the next request costs
+        // more than the memory it returns between two rounds.
+        let mut retain = u64::MAX;
+        // SAFETY: the pool handle and the attribute value are live locals.
+        unsafe {
+            cuda_core::sys::cuMemPoolSetAttribute(
+                driver_pool(&context)?,
+                cuda_core::sys::CUmemPool_attribute_enum_CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+                (&mut retain as *mut u64).cast(),
+            )
+            .result()?;
+        }
+        Ok(Self {
+            pool: PoolMemoryResource::new(CudaMemoryResource::new(context.clone()), initial, maximum)
+                .map_err(allocation_error)?,
+            direct: CudaAsyncMemoryResource::new(context),
+            current: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+            direct_bytes: AtomicUsize::new(0),
+        })
+    }
+}
+
+/// The device's default stream-ordered driver pool.
+fn driver_pool(context: &Arc<CudaContext>) -> Result<cuda_core::sys::CUmemoryPool> {
+    context.bind_to_thread()?;
+    let mut pool = std::mem::MaybeUninit::uninit();
+    // SAFETY: the out-pointer is a live local and the device handle is the context's.
+    unsafe {
+        cuda_core::sys::cuDeviceGetDefaultMemPool(pool.as_mut_ptr(), context.cu_device()).result()?;
+        Ok(pool.assume_init())
+    }
+}
+// SAFETY: each block is returned to the tier that produced it, selected by
+// the same size test on the same requested size; both tiers are allocators.
+unsafe impl DeviceAllocator for TieredMemoryResource {
+    fn context(&self) -> &Arc<CudaContext> {
+        self.pool.context()
+    }
+    fn allocate(&self, layout: Layout, stream: &CudaStream) -> std::result::Result<DeviceBlock, MemoryError> {
+        let block = if layout.size() >= DIRECT_BYTES {
+            let block = self.direct.allocate(layout, stream)?;
+            self.direct_bytes.fetch_add(layout.size(), Ordering::Relaxed);
+            block
+        } else {
+            self.pool.allocate(layout, stream)?
+        };
+        let current = self.current.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+        self.peak.fetch_max(current, Ordering::Relaxed);
+        Ok(block)
+    }
+    unsafe fn deallocate(&self, block: DeviceBlock, stream: &CudaStream) -> std::result::Result<(), MemoryError> {
+        let bytes = block.size();
+        self.current.fetch_sub(bytes, Ordering::Relaxed);
+        if bytes >= DIRECT_BYTES {
+            self.direct_bytes.fetch_sub(bytes, Ordering::Relaxed);
+            // SAFETY: a block of this size came from the direct tier.
+            unsafe { self.direct.deallocate(block, stream) }
+        } else {
+            // SAFETY: a block below the threshold came from the pool.
+            unsafe { self.pool.deallocate(block, stream) }
+        }
+    }
+}
+
+/// Host-side accounting for this runtime's allocator, including pooled
+/// library scratch. Current and peak are requested bytes in both tiers;
+/// reserved is the pool's chunks plus the live large blocks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PoolMemoryStats {
     pub current_bytes: usize,
@@ -54,10 +150,8 @@ impl Pool {
     pub fn new(device: usize, initial: usize, maximum: usize) -> Result<Arc<Self>> {
         let context = CudaContext::new(device)?;
         let stream = context.default_stream();
-        let memory = StatisticsMemoryResource::new(
-            PoolMemoryResource::new(CudaMemoryResource::new(context.clone()), initial, maximum)
-                .map_err(allocation_error)?,
-        );
+        let memory =
+            StatisticsMemoryResource::new(TieredMemoryResource::new(context.clone(), initial, maximum)?);
         Ok(Arc::new(Self {
             memory: Arc::new(memory),
             stream,
@@ -91,25 +185,32 @@ impl Pool {
     /// stream dependency is recorded, even if its last device use is pending.
     /// Unlike the statistics adaptor's nested counters, these are pool-wide.
     pub fn memory_stats(&self) -> PoolMemoryStats {
-        let stats = self.memory.upstream().stats();
+        let tiers = self.memory.upstream();
+        let stats = tiers.pool.stats();
         PoolMemoryStats {
-            current_bytes: stats.allocated_bytes,
-            peak_bytes: stats.peak_allocated_bytes,
-            reserved_bytes: stats.pool_size,
+            current_bytes: tiers.current.load(Ordering::Relaxed),
+            peak_bytes: tiers.peak.load(Ordering::Relaxed),
+            reserved_bytes: stats.pool_size + tiers.direct_bytes.load(Ordering::Relaxed),
             cached_bytes: stats.free_bytes,
         }
     }
-    /// Return wholly unused upstream chunks and report the released bytes.
+    /// Return wholly unused pool chunks and the driver pool's idle large
+    /// blocks, and report the released pool bytes.
     ///
     /// Call after dropping dead owners and cached scratch at a stratum boundary.
     /// RCCL orders frees after their recorded uses on this pool's stream.
     /// Partly live chunks remain reserved; the synchronous CUDA upstream may
     /// block while freeing a chunk, so this is not a hot-path operation.
     pub fn release_unused(&self) -> Result<usize> {
-        self.memory
+        let released = self
+            .memory
             .upstream()
+            .pool
             .release_unused(self.stream())
-            .map_err(allocation_error)
+            .map_err(allocation_error)?;
+        // SAFETY: trimming only returns memory no live allocation maps.
+        unsafe { cuda_core::sys::cuMemPoolTrimTo(driver_pool(&self.context)?, 0).result()? };
+        Ok(released)
     }
     pub fn context(&self) -> &Arc<CudaContext> {
         &self.context

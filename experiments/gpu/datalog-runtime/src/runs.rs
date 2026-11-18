@@ -72,6 +72,14 @@ impl<W: Word> SortedBatch<W> {
         // SAFETY: the owner retains this immutable initialized prefix.
         unsafe { Buffer::shared_slice(self.buffer.clone(), 0, self.rows) }
     }
+    /// `len` rows from `start` of the same immutable prefix, retaining it.
+    pub(crate) fn shared_range(&self, start: usize, len: usize) -> Result<Buffer<W>> {
+        if start.checked_add(len).is_none_or(|end| end > self.rows) {
+            return Err("run range exceeds its rows".into());
+        }
+        // SAFETY: the owner retains this immutable initialized prefix.
+        unsafe { Buffer::shared_slice(self.buffer.clone(), start, len) }
+    }
     pub(crate) fn view(&self) -> RunView<W> {
         RunView {
             ptr: self.buffer.ptr(),
@@ -108,7 +116,7 @@ unsafe impl<W: Word> cuda_host::KernelSliceArgMut for Output<W> {}
 /// Rows given to one RCCL radix sort. RCCL accepts a single CUB Policy800
 /// portion, `2^28 - 1` rounded down to its tile size; this stays below that
 /// for every tile of at most `2^20` items.
-const SORT_PORTION_ROWS: usize = (1 << 28) - (1 << 20);
+pub(crate) const SORT_PORTION_ROWS: usize = (1 << 28) - (1 << 20);
 
 /// Shared stateless full-key sorting, compaction, subtraction and merge kernels.
 /// Accepted state belongs exclusively to DeviceRadixRun.
@@ -166,6 +174,7 @@ impl SetOps<'_> {
         Ok(sorted.expect("a nonempty input has a first portion"))
     }
     fn sort_portion<W: Word>(&self, input: *const W, rows: usize, known_unique: bool) -> Result<SortedBatch<W>> {
+        crate::stats::trace_step(self.pool, if known_unique { "sort/portion-known-unique" } else { "sort/portion-unique" }, rows, std::mem::size_of::<W>());
         // SAFETY: kernels initialize the returned prefix before publication.
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
@@ -264,6 +273,7 @@ impl SetOps<'_> {
     }
     pub(crate) fn subtract<W: Word>(&self, unique: &SortedBatch<W>, accepted: &[RunView<W>]) -> Result<SortedBatch<W>> {
         let rows = unique.len();
+        crate::stats::trace_step(self.pool, "subtract", rows, std::mem::size_of::<W>() + 4);
         let descriptors = Buffer::from_host_async(self.pool.clone(), accepted)?;
         crate::stats::record_work(|work| {
             work.descriptor_materializations += 1;
@@ -320,6 +330,7 @@ impl SetOps<'_> {
             .checked_add(second.len())
             .ok_or("merged length overflow")?;
         crate::stats::record_work(|work| work.merges += 1);
+        crate::stats::trace_step(self.pool, "merge", rows, std::mem::size_of::<W>());
         // SAFETY: merge writes every output element before publication.
         let mut output = Output(unsafe { Buffer::uninitialized(self.pool.clone(), rows)? });
         if W::BITS > 128 {

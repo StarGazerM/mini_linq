@@ -374,6 +374,34 @@ layout with the same key/payload types is admitted under its lawful ordering pre
 Likewise a later changing occurrence may select a direct delta scan instead
 of a delta layout, retaining its written position and declaration-order columns.
 
+\paragraph{Canonical order for ordered index kinds.}
+The default canonical layout is the one a hash layout needs: a hash layout
+answers membership only through its own key, so a relation with no read
+binding every column receives one more layout for admission alone. An
+\emph{ordered} index kind stores every full layout as the complete rows in the
+layout's column order (sorted runs, as on the device), so every full layout of
+a relation answers membership. The Storage rewrite
+\code{canonical(ordered)} then gives such a canonical layout the column order
+of a layout the relation already maintains.
+\begin{mathpar}
+\Rule{DL-CanonicalOrder}{\ell=D.\mathrm{layouts}[D.\mathrm{providers}[R].\mathrm{canonical}]\quad
+ \ell.\mathrm{key}=\mathrm{arity}(R)\quad
+ \text{no occurrence reads }\ell\text{ or a layout of }R\text{ with }\ell\text{'s columns}\\
+ \ell'\in D.\mathrm{layouts}\quad \ell'.\mathrm{relation}=R\quad
+ \text{an occurrence reads }\ell'\text{ as a full version}}
+ {D'=D[\ell.\mathrm{columns}:=\ell'.\mathrm{columns}]\text{, with }\ell\text{'s provider respelled over that order}}
+\end{mathpar}
+Among the admissible $\ell'$ the rewrite prefers one read as a full version by
+a rule whose head lies in $R$'s own component, the order that component
+maintains while it iterates, and otherwise takes the earliest layout; the
+choice is thus made per relation within its component, not once for the
+program. Layout count, keys, reads and maintenance are unchanged, and
+\textsc{DL-Canonical} still holds: canonical consumers read complete rows
+through the recorded permutation. The rewrite is admissible for hash layouts
+but removes nothing there. A realization that shares one state between
+layouts of equal order (\textsc{DL-DeviceSharedOrder}) stores no rows for the
+re-ordered layout.
+
 \paragraph{Recorded decisions.} Concrete provider types, canonical layout
 choice, container initializers, layout shape, maintenance and protocol,
 occurrence bindings, negative projections and the supported
@@ -1591,13 +1619,38 @@ publication wave of a member (\textsc{DL-PublishAfterReaders}; after its
 phase's holes when the phase has no waves) the member admits: fresh is the
 unique candidates, permuted into canonical order when that order is not the
 identity, minus the committed canonical layout's runs (\textsc{DL-DeviceRuns},
-read-only). Publication then follows the recorded operations:
+read-only). Admission reads the candidate batches where the holes left them
+and never copies the bag whole: it gathers one sort portion at a time,
+permutes, sorts and deduplicates it, removes the rows earlier portions
+produced and merges the rest, so the transient is one portion plus the
+distinct rows so far; a bag of at most one portion is one such step. An
+arena keeps a slot for the next round only up to a fixed size; a larger slot
+belongs to its batch and is freed when admission has consumed it, while the
+hole's count hint is kept. Publication then follows the recorded operations:
 \code{full\_layouts} appends fresh to every full layout's state, the canonical
 one included, sharing the \code{SortedBatch} when the layout's order equals
 the canonical order and otherwise permuting and sorting it (unique and
 disjoint because it was admitted), and republishes each view with
 \code{republish(\&state)}; \code{delta\_swap} builds NEW from fresh in relation
-order (\code{fresh\_run}) and moves it to the delta.
+order (\code{fresh\_run}) and moves it to the delta. When no occurrence scans
+a relation's delta directly, NEW adopts the canonical batch as it is: its
+rows are counted for termination and never read, so no relation-order copy
+is sorted for it.
+\begin{mathpar}
+\Rule{DL-DeviceSharedOrder}{\ell_i,\ell_j\in D.\mathrm{layouts}\quad
+ \ell_i.\mathrm{relation}=\ell_j.\mathrm{relation}\quad
+ \ell_i.\mathrm{columns}=\ell_j.\mathrm{columns}\quad i<j\quad
+ i\text{ least}}
+ {\ell_j\text{ has no state of its own: its view is }\ell_i\text{'s published view}}
+\end{mathpar}
+A device layout is a sorted set of complete rows, so layouts of one relation
+with the same column order hold the same rows in the same order whatever
+their logical key length; a probe supplies its own prefix. The first such
+layout owns the one backing state. Publication appends to owners only and
+then gives every other layout its owner's republished view, within the same
+\code{full\_layouts} operation. Storage's logical layouts, their keys and the
+recorded device states are unchanged; the shared state is identified by the
+relation and the recorded admitted order.
 Initial construction uses \code{from\_sorted(pool, packing, params, batch)};
 replacement uses \code{with\_sorted(batch, params)}, retaining kernels and
 field descriptors. \code{delta\_rebuild} replaces each delta layout from fresh.

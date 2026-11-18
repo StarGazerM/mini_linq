@@ -80,6 +80,7 @@ members = [
     "features/datalog/oracle/engines/mini",
     "features/datalog/oracle/engines/mini-keyed",
     "features/datalog/oracle/shared",
+    "features/datalog/passes/canonical",
     "features/datalog/passes/fork",
     "features/datalog/passes/hasher",
     "features/datalog/passes/incremental",
@@ -203,6 +204,7 @@ default-members = [
     "features/datalog/oracle/engines/mini",
     "features/datalog/oracle/engines/mini-keyed",
     "features/datalog/oracle/shared",
+    "features/datalog/passes/canonical",
     "features/datalog/passes/fork",
     "features/datalog/passes/hasher",
     "features/datalog/passes/incremental",
@@ -298,6 +300,7 @@ syn = { version = "2", features = ["extra-traits", "full", "visit", "visit-mut"]
 syn_derive = { version = "0.2.0", git = "https://github.com/StarGazerM/syn_derive", rev = "97bbe5871ac5ca8e9ba64cf50ba78d75e8cb2562" }
 cq-datalog = { version = "0.0.0", path = "features/datalog/facade/cq-datalog" }
 cq-datalog-configuration = { version = "0.0.0", path = "features/datalog/facade/configuration" }
+cq-datalog-canonical = { version = "0.0.0", path = "features/datalog/passes/canonical" }
 cq-datalog-fork = { version = "0.0.0", path = "features/datalog/passes/fork" }
 cq-datalog-hasher = { version = "0.0.0", path = "features/datalog/passes/hasher" }
 cq-datalog-incremental = { version = "0.0.0", path = "features/datalog/passes/incremental" }

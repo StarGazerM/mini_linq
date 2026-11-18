@@ -2,6 +2,12 @@
 use crate::{Buffer, Packing, Pool, Result, Word};
 use std::{any::Any, sync::Arc};
 
+/// Largest slot an arena keeps for reuse. A larger slot belongs to its batch
+/// alone and is freed once admission has consumed the rows: holding a
+/// multi-gigabyte candidate bag through publication and into the next round
+/// costs more than allocating it again. The hole's count hint is still kept.
+const RETAINED_SLOT_BYTES: usize = 1 << 30;
+
 /// Reusable storage for generated Sequence terminals on one pool stream.
 ///
 /// A lease exclusively reserves a slot. Published batches keep that slot and
@@ -145,6 +151,14 @@ impl CandidateArena {
                         buffer.allocated_bytes(), self.allocated_bytes() + buffer.allocated_bytes(),
                         self.retained_buffers() + 1);
                 }
+                if buffer.allocated_bytes() > RETAINED_SLOT_BYTES {
+                    let rows = buffer.len() / (packing.word_bits() / 64) as usize;
+                    return Ok(CandidateLease {
+                        buffer,
+                        packing,
+                        capacity: rows.min(u32::MAX as usize).max(capacity),
+                    });
+                }
                 self.slots.push(buffer);
                 self.slots.len() - 1
             }
@@ -285,6 +299,16 @@ pub fn concatenate_batches<W: Word>(
     packing: &Packing,
     batches: &[CandidateBatch],
 ) -> Result<Buffer<W>> {
+    let ranges = batches.iter().map(|batch| (batch, 0, batch.len())).collect::<Vec<_>>();
+    concatenate_ranges(pool, packing, &ranges)
+}
+
+/// [`concatenate_batches`] over `(batch, first row, rows)` ranges.
+pub(crate) fn concatenate_ranges<W: Word>(
+    pool: Arc<Pool>,
+    packing: &Packing,
+    ranges: &[(&CandidateBatch, usize, usize)],
+) -> Result<Buffer<W>> {
     if W::BITS != packing.word_bits() {
         return Err("candidate concatenation word width differs from packing".into());
     }
@@ -292,27 +316,31 @@ pub fn concatenate_batches<W: Word>(
         return Err("candidate concatenation requires native u128 lane order".into());
     }
     let mut rows = 0usize;
-    for batch in batches {
+    for &(batch, first, count) in ranges {
         if !pool.shares_memory(batch.pool()) {
             return Err("candidate concatenation pool differs from batch".into());
         }
         if batch.packing() != packing {
             return Err("candidate concatenation packing differs from batch".into());
         }
+        if first.checked_add(count).is_none_or(|end| end > batch.len()) {
+            return Err("candidate concatenation range exceeds its batch".into());
+        }
         rows = rows
-            .checked_add(batch.len())
+            .checked_add(count)
             .filter(|&rows| rows <= u32::MAX as usize)
             .ok_or("candidate concatenation exceeds u32 positions")?;
     }
     let bytes_per_word = std::mem::size_of::<W>();
     rows.checked_mul(bytes_per_word)
         .ok_or("candidate concatenation byte count overflow")?;
+    crate::stats::trace_step(&pool, "admit/concatenate", rows, bytes_per_word);
     // SAFETY: the disjoint copies below initialize exactly the allocated prefix
     // before any subsequent operation on the same stream can consume it.
     let output = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
     let mut offset = 0usize;
-    for batch in batches {
-        let bytes = batch.len() * bytes_per_word;
+    for &(batch, first, count) in ranges {
+        let bytes = count * bytes_per_word;
         if bytes != 0 {
             // SAFETY: exact packing/word widths and lane order make the lanes
             // byte-identical to W on CUDA. Both buffers share this pool stream;
@@ -321,7 +349,7 @@ pub fn concatenate_batches<W: Word>(
             unsafe {
                 cuda_core::simt::memory::memcpy_dtod_async(
                     output.cu_deviceptr() + offset as u64,
-                    batch.buffer().cu_deviceptr(),
+                    batch.buffer().cu_deviceptr() + (first * bytes_per_word) as u64,
                     bytes,
                     pool.stream().cu_stream(),
                 )?;

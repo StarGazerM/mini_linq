@@ -134,6 +134,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cq-datalog-canonical"
+version = "0.0.0"
+dependencies = [
+ "cq-datalog-support",
+ "cq-lang-datalog-storage",
+ "cq-stage",
+ "cq-syntax",
+ "proc-macro2",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "cq-datalog-configuration"
 version = "0.0.0"
 dependencies = [
@@ -1199,6 +1211,7 @@ version = "0.1.0"
 dependencies = [
  "bench-check",
  "cq-datalog",
+ "cq-datalog-canonical",
  "cq-gpu-datalog",
  "cq-gpu-runtime",
  "cq-gpu-sequence",
@@ -1919,6 +1932,7 @@ name = "srd-doop-gpu"
 version = "0.1.0"
 dependencies = [
  "cq-datalog",
+ "cq-datalog-canonical",
  "cq-gpu-datalog",
  "cq-gpu-runtime",
  "cq-gpu-sequence",

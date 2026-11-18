@@ -22,6 +22,96 @@ pub fn trace_kernels() -> bool {
     *ENABLED
 }
 
+fn device_memory(pool: &crate::Pool) -> (usize, usize) {
+    let (mut free, mut total) = (0, 0);
+    if pool.context().bind_to_thread().is_ok() {
+        // SAFETY: both out-pointers are live locals and the context is current.
+        let _ = unsafe { cuda_core::sys::cuMemGetInfo_v2(&mut free, &mut total) };
+    }
+    (free, total)
+}
+
+/// Step-level memory diagnostics under `GPU_DATALOG_TRACE_MEMORY`: one line
+/// before each admission or publication operation allocates, with the pool
+/// counters and the driver's free bytes. The last line before a failure names
+/// the failing step. `rows * row_bytes` is the volume the step processes.
+pub fn trace_step(pool: &crate::Pool, step: &'static str, rows: usize, row_bytes: usize) {
+    static ENABLED: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var_os("GPU_DATALOG_TRACE_MEMORY").is_some());
+    if profiling() {
+        profile_step(pool, step, rows);
+    }
+    if !*ENABLED {
+        return;
+    }
+    let stats = pool.memory_stats();
+    let (free, total) = device_memory(pool);
+    eprintln!("gpu_datalog_step\tstep={step}\trows={rows}\tbytes={}\tcurrent_bytes={}\treserved_bytes={}\tcached_bytes={}\tdevice_free_bytes={free}\tdevice_total_bytes={total}",
+        rows * row_bytes, stats.current_bytes, stats.reserved_bytes, stats.cached_bytes);
+}
+
+/// Whether `GPU_DATALOG_PROFILE` asks for the wall-clock breakdown.
+pub fn profiling() -> bool {
+    static ENABLED: std::sync::LazyLock<bool> =
+        std::sync::LazyLock::new(|| std::env::var_os("GPU_DATALOG_PROFILE").is_some());
+    *ENABLED
+}
+
+type ProfileKey = (usize, &'static str, String, &'static str);
+struct Profile {
+    last: std::time::Instant,
+    key: ProfileKey,
+    /// Seconds, entries and rows per (stratum, phase, relation, step).
+    totals: std::collections::BTreeMap<ProfileKey, (f64, u64, u64)>,
+}
+thread_local! {
+    static PROFILE: std::cell::RefCell<Option<Profile>> = const { std::cell::RefCell::new(None) };
+}
+
+fn profile_switch(pool: &crate::Pool, key: impl FnOnce(&ProfileKey) -> ProfileKey, rows: usize) {
+    // The breakdown charges wall time, so each boundary waits for the stream.
+    let _ = pool.stream().synchronize();
+    PROFILE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let now = std::time::Instant::now();
+        let profile = slot.get_or_insert_with(|| Profile {
+            last: now,
+            key: (0, "setup", String::new(), ""),
+            totals: Default::default(),
+        });
+        let elapsed = (now - profile.last).as_secs_f64();
+        profile.totals.entry(profile.key.clone()).or_default().0 += elapsed;
+        profile.key = key(&profile.key);
+        let entry = profile.totals.entry(profile.key.clone()).or_default();
+        entry.1 += 1;
+        entry.2 += rows as u64;
+        profile.last = now;
+    });
+}
+
+/// Opt-in profile (`GPU_DATALOG_PROFILE`): charge the wall time since the
+/// previous boundary to it and enter `phase` of `relation` in `stratum`.
+/// Boundaries synchronize the stream, so totals exceed an unprofiled run.
+pub fn profile_enter(pool: &crate::Pool, stratum: usize, phase: &'static str, relation: &str) {
+    profile_switch(pool, |_| (stratum, phase, relation.to_owned(), ""), 0);
+}
+
+fn profile_step(pool: &crate::Pool, step: &'static str, rows: usize) {
+    profile_switch(pool, |key| (key.0, key.1, key.2.clone(), step), rows);
+}
+
+/// Print and clear the profile: one line per (stratum, phase, relation, step).
+pub fn profile_report(pool: &crate::Pool) {
+    profile_switch(pool, |key| key.clone(), 0);
+    PROFILE.with(|slot| {
+        if let Some(profile) = slot.borrow_mut().take() {
+            for ((stratum, phase, relation, step), (seconds, count, rows)) in profile.totals {
+                eprintln!("gpu_datalog_profile\tstratum={stratum}\tphase={phase}\trelation={relation}\tstep={step}\tseconds={seconds:.6}\tcount={count}\trows={rows}");
+            }
+        }
+    });
+}
+
 /// Declared radix work, not elapsed time or measured DRAM traffic.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SortWork {
