@@ -8,6 +8,22 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Batch gates (2026-11-18, RCCL packed primitives and opt-in packed radix
+runs `325dfbdd` vs `e797977e`):** four commits; no IR grammar
+(`check_ir_scope` PASS at base `e797977e`); formal checker PASS (522 decode
+sites); local `tools/gpu_gate.sh` PASS on an RTX 6000 Ada.
+- `03dddeee`: RCCL pinned to `d05b07b7` (radix histogram reads the selected
+  double buffer; range expansion and frame-of-reference primitives). Default
+  engine: two new kernels, 44 rule kernels and five merge-sort kernels change
+  code; xalan fixpoint 540.5 → 541.9 ms, memory and all 26 outputs unchanged.
+- `e7a55435`, `6cdcdea4`, `325dfbdd`: packed radix runs and replay tooling,
+  compiled only with `gpu-datalog-runtime/packed-radix`. With the feature off
+  all 340 kernels match the pin-only build in code, registers and stack.
+  With it on, xalan (five fresh processes each): fixpoint 541.9 → 524.7 ms,
+  pool live 273.4 → 114.5 MB, peak 314.5 → 141.9 MB, all 26 outputs exact;
+  the same binary with plain storage runs 511.8 ms. Grouped and non-radix
+  providers stay plain.
+
 **Batch gates (2026-11-13, GPU Datalog state sharing and compile time
 `9c71e59f` vs `75ae1b4e`):** four commits; no IR grammar (`check_ir_scope`
 PASS for both IR crates at base `fd94ace0`).
