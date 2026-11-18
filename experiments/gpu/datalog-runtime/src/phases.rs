@@ -8,6 +8,28 @@ use crate::{Pool, Result};
 use std::cell::Cell;
 use std::time::Instant;
 
+// Scope and class are separate nested ranges so both names remain static.
+// Nsight correlates CUDA API calls to this stack on the issuing CPU thread.
+macro_rules! admission_scope {
+    ($name:expr) => {
+        #[cfg(feature = "admission-trace")]
+        let _admission_op = cq_gpu_runtime::nvtx::range($name);
+    };
+    ($name:expr, $rows:expr) => {
+        $crate::phases::admission_scope!($name);
+        #[cfg(feature = "admission-trace")]
+        let _admission_size = cq_gpu_runtime::nvtx::range(match $rows {
+            0 => c"rows/0",
+            1..=256 => c"rows/1-256",
+            257..=32768 => c"rows/257-32K",
+            32769..=131072 => c"rows/32K-128K",
+            131073..=2_000_000 => c"rows/128K-2M",
+            _ => c"rows/over-2M",
+        });
+    };
+}
+pub(crate) use admission_scope;
+
 thread_local! {
     static LAST: Cell<Option<Instant>> = const { Cell::new(None) };
 }

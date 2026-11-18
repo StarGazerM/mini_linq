@@ -5,6 +5,10 @@ edition = "2021"
 
 [features]
 radix-counters = []
+# Compile packed-aware fused readers only when requested (their register footprint differs).
+packed-radix = []
+# Host-only, static-name NVTX attribution. Not enabled in acceptance timings.
+admission-trace = ["cq-gpu-runtime/nvtx"]
 
 [dependencies]
 cq-load = { path = "../../../io/cq-load" }
@@ -15,6 +19,8 @@ cq-gpu-runtime = { path = "../printer-runtime" }
 gpu-device-columns = { path = "../device-columns" }
 rccl-cub.workspace = true
 rccl-memory.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 cq-storage = { path = "../../../runtime/cq-storage" }

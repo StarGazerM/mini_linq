@@ -1322,6 +1322,8 @@ dependencies = [
  "gpu-device-columns",
  "rccl-cub",
  "rccl-memory",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
