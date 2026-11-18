@@ -8,7 +8,6 @@ mod merge;
 mod leaf;
 mod geometry;
 mod set;
-#[cfg(feature = "packed-radix")]
 mod permute;
 mod small;
 pub use small::MAX_SMALL_CANDIDATES;
@@ -55,13 +54,9 @@ unsafe impl DeviceCopy for Header {}
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Frame {
     pub base: u64,
-    #[cfg(not(feature = "packed-radix"))]
-    pub bits: u32,
-    #[cfg(feature = "packed-radix")]
+
     pub bits: u8,
-    #[cfg(feature = "packed-radix")]
     stride: u8,
-    #[cfg(feature = "packed-radix")]
     shift: u16,
     /// Plans and wide leaves: inclusive column width. Published narrow
     /// leaves: low 32 bits of the leaf's payload word offset.
@@ -78,14 +73,13 @@ impl Frame {
     /// field's low bit. Occupies the old padding word, including for copies.
     #[inline(always)]
     fn after(self, preceding: u32) -> Self {
-        Self { end: if cfg!(feature = "packed-radix") { preceding + self.width() } else { 0 }, ..self }
+        Self { end: preceding + self.width(), ..self }
     }
     /// Narrow published frames carry the bit address of this field in the
     /// first row relative to a payload page, plus the byte-sized row stride.
     /// Plans (and wider carriers) instead carry the inclusive column width.
     #[inline(always)]
     unsafe fn published<W: Word>(self, h: Header, fields: *const PackedField, column: usize) -> Self {
-        #[cfg(feature = "packed-radix")]
         if W::BITS <= 128 {
             let (base, bits, shift) = if h.encoding == 0 {
                 let f = *fields.add(column);
@@ -93,8 +87,7 @@ impl Frame {
             } else { (self.base, self.width(), h.bits - self.end) };
             return Self { base, bits: bits as u8, stride: h.bits as u8, shift: shift as u16, end: h.offset as u32 };
         }
-        #[cfg(not(feature = "packed-radix"))]
-        let _ = (h, fields, column);
+
         self
     }
 }
@@ -106,7 +99,7 @@ pub(crate) const FRAME_PAGE_MASK: u64 = u32::MAX as u64;
 // Published frames support one aligned 128-bit device read. The residual
 // iterator's transient Frame does not have this stronger alignment.
 #[repr(C)]
-#[cfg_attr(feature = "packed-radix", repr(align(16)))]
+#[repr(align(16))]
 #[derive(Clone, Copy)]
 struct StoredFrame(Frame);
 unsafe impl DeviceCopy for StoredFrame {}
@@ -342,21 +335,18 @@ pub mod device {
     }
     /// Plain slot address, narrow frame page and local row, or a wide row's
     /// first word and relative end bit. No variant carries a descriptor.
-    #[cfg(feature = "packed-radix")]
     #[derive(Clone, Copy)]
     pub struct RowCursor {
         pub(crate) words: *const u64,
         pub(crate) frames: *const Frame,
         pub(crate) bit: u32,
     }
-    #[cfg(feature = "packed-radix")]
     impl RowCursor {
         #[inline(always)]
         pub(crate) fn plain<W>(slot: *const W) -> Self {
             Self { words: slot.cast(), frames: std::ptr::null(), bit: 0 }
         }
     }
-    #[cfg(feature = "packed-radix")]
     #[inline(never)]
     pub(crate) unsafe fn resolve_row<W: Word>(descriptor: *const PackedView<W>, position: u64) -> RowCursor {
         let view = &*descriptor;
@@ -379,7 +369,6 @@ pub mod device {
         RowCursor { words, frames: view.frames.add(block as usize * view.columns as usize),
             bit: (start % 64) as u32 + header.bits }
     }
-    #[cfg(feature = "packed-radix")]
     #[inline(never)]
     pub(crate) unsafe fn field_code(row: RowCursor, column: u32) -> (u64, u64) {
         // Published frames are StoredFrame-aligned and devices are little endian.
@@ -390,7 +379,6 @@ pub mod device {
         (read_code(row.words, bit as u64, width), f as u64)
     }
     /// Base, width and the first row's bit address arrive in a single frame load.
-    #[cfg(feature = "packed-radix")]
     #[inline(always)]
     pub(crate) unsafe fn direct_code(row: RowCursor, column: u32) -> (u64, u64) {
         let f = *row.frames.add(column as usize).cast::<u128>();
@@ -407,7 +395,6 @@ pub mod device {
         } else if width == 0 { 0 } else { wide_code(words, bit, width) };
         (code, f as u64)
     }
-    #[cfg(feature = "packed-radix")]
     #[inline(never)]
     unsafe fn wide_code(words: *const u64, bit: u32, width: u32) -> u64 {
         read_bits(words, bit as u64, width)
@@ -1032,7 +1019,7 @@ mod kernels {
                     *output.add((header.offset + word) as usize) = super::merge::merge_kernels::payload_word(view, block, input, word);
                     word += 256;
                 }
-                if cfg!(feature = "packed-radix") && W::BITS <= 128 {
+                if W::BITS <= 128 {
                     // Finish every payload read of these frames before updating them.
                     thread::sync_threads();
                     let mut col = thread::threadIdx_x() as usize;

@@ -22,12 +22,11 @@
 //! until every stream user has completed.
 use crate::{
     layout::{PackedField, ScalarTuple},
-    packed_run::{PackedRun, PackedSet},
     runs::{self, Native},
     Column, Packing, Result, Word,
 };
 #[cfg(feature = "packed-radix")]
-use crate::packed_run::{PackedView, DEFAULT_BLOCK_ROWS, SMALL_RUN_ROWS};
+use crate::packed_run::{PackedRun, PackedSet, PackedView, DEFAULT_BLOCK_ROWS, SMALL_RUN_ROWS};
 use cuda_core::{DeviceCopy, LaunchConfig1D};
 use gpu_device_columns::{Buffer, OutputCount, Pool, SourceView};
 use rccl_cub::{DeviceArithmeticRange, DeviceMap, DeviceSliceRead, DeviceSliceWrite};
@@ -37,9 +36,12 @@ use std::{
     ops::RangeInclusive,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
     },
 };
+
+#[cfg(feature = "packed-radix")]
+use std::sync::OnceLock;
 
 const SIDE: u64 = 1 << 63;
 
@@ -483,7 +485,9 @@ pub struct RadixRunView<W: Word, O: OffsetWord> {
 }
 // SAFETY: this C-layout descriptor contains only device pointers and integers.
 unsafe impl<W: Word, O: OffsetWord> DeviceCopy for RadixRunView<W, O> {}
+#[cfg(feature = "packed-radix")]
 const PACKED_UNIT: u32 = 2;
+#[cfg(feature = "packed-radix")]
 const FIXED_UNIT: u32 = 3;
 // SAFETY: the pointers name immutable device storage and are never
 // dereferenced on the host, so moving or sharing descriptors is sound.
@@ -598,15 +602,18 @@ struct Segment<W: Word, O: OffsetWord, C> {
 
 // Packing is supplied by the typed layout's first publication, not by new_set.
 // Leave small states on their original path, including their directory policy.
+#[cfg(feature = "packed-radix")]
 struct PackedBacking<W: Word> {
     packing: OnceLock<Packing>,
     set: Option<PackedSet<W>>,
 }
 
+#[cfg(feature = "packed-radix")]
 struct PackedPublication<W: Word> {
     runs: Vec<Arc<PackedRun<W>>>,
 }
 
+#[cfg(feature = "packed-radix")]
 impl<W: Word> PackedPublication<W> {
     fn bytes(&self) -> usize {
         self.runs.iter().map(|r| r.allocated_bytes()).sum()
@@ -806,18 +813,22 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
         self.active_bits
     }
     pub fn run_count(&self) -> usize {
-        self.packed_set().map_or(self.runs.len(), |set| set.runs().len())
+        #[cfg(feature = "packed-radix")]
+        if let Some(set) = self.packed_set() { return set.runs().len(); }
+        self.runs.len()
     }
     pub fn is_empty(&self) -> bool {
         self.run_count() == 0
     }
     /// Total occurrences across all runs.
     pub fn item_count(&self) -> usize {
+        #[cfg(feature = "packed-radix")]
         if let Some(set) = self.packed_set() { return set.len(); }
         self.runs.iter().map(|run| run.item_count).sum()
     }
     /// `(distinct keys, occurrences)` per run, oldest first.
     pub fn run_lengths(&self) -> Vec<(usize, usize)> {
+        #[cfg(feature = "packed-radix")]
         if let Some(set) = self.packed_set() {
             return set.runs().iter().map(|r| (r.len(), r.len())).collect();
         }
@@ -827,20 +838,14 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             .collect()
     }
 
-    #[inline]
-    fn packed_backing(&self) -> Option<&PackedBacking<W>> {
-        #[cfg(feature = "packed-radix")]
-        { self.packed.as_deref() }
-        #[cfg(not(feature = "packed-radix"))]
-        { None }
-    }
-
+    #[cfg(feature = "packed-radix")]
     fn packed_set(&self) -> Option<&PackedSet<W>> {
-        self.packed_backing()?.set.as_ref()
+        self.packed.as_ref()?.set.as_ref()
     }
 
+    #[cfg(feature = "packed-radix")]
     fn bind_packing(&self, packing: &Packing) -> Result<()> {
-        if let Some(backing) = self.packed_backing() {
+        if let Some(backing) = &self.packed {
             if backing.packing.get_or_init(|| packing.clone()) != packing {
                 return Err("packed radix state already has a different field layout".into());
             }
@@ -929,6 +934,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
 
     /// Explicit diagnostic download of every run, oldest first.
     pub fn to_host(&self) -> Result<Vec<HostRadixRun<W, O, C::Host>>> {
+        #[cfg(feature = "packed-radix")]
         if let Some(set) = self.packed_set() {
             return set.runs().iter().map(|run| Ok(HostRadixRun {
                 keys: run.unpack()?.to_host()?,
@@ -1252,25 +1258,29 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         self.item_count()
     }
 
+    fn retained_metadata_and_packed_bytes(&self) -> usize {
+        let bytes = self.published.lock().expect("radix publication cache")
+            .as_ref().map_or(0, |snapshot| snapshot.descriptor_bytes());
+        #[cfg(feature = "packed-radix")]
+        let bytes = bytes + self.packed_set().map_or(0, PackedSet::allocated_bytes);
+        bytes
+    }
+
     /// Initialized keys, materialized offsets (if any), and radix directories.
     pub fn live_bytes(&self) -> usize {
-        let packed = self.packed_set().map_or(0, PackedSet::allocated_bytes);
         self.runs.iter().map(|run| {
             run.key_count * size_of::<W>()
                 + (run.offsets.as_ref().map_or(0, |_| run.key_count + 1)
                     + run.directory.len()) * size_of::<O>()
-        }).sum::<usize>() + packed + self.published.lock().expect("radix publication cache")
-            .as_ref().map_or(0, |snapshot| snapshot.descriptor_bytes())
+        }).sum::<usize>() + self.retained_metadata_and_packed_bytes()
     }
 
     /// Current backing allocations; older retained snapshots are separate owners.
     pub fn allocated_bytes(&self) -> usize {
-        let packed = self.packed_set().map_or(0, PackedSet::allocated_bytes);
         self.runs.iter().map(|run| {
             run.keys.allocated_bytes() + run.offsets.as_ref().map_or(0, Buffer::allocated_bytes)
                 + run.directory.allocated_bytes()
-        }).sum::<usize>() + packed + self.published.lock().expect("radix publication cache")
-            .as_ref().map_or(0, |snapshot| snapshot.descriptor_bytes())
+        }).sum::<usize>() + self.retained_metadata_and_packed_bytes()
     }
 
     /// Read-only unique(candidates) minus every committed key, in sorted order.
@@ -1287,18 +1297,15 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         if unique.is_empty() || self.is_empty() {
             return Ok(unique);
         }
+        #[cfg(feature = "packed-radix")]
         if let Some(set) = self.packed_set() {
             // An append invalidates this cache before the next fresh call.
             // Don't materialize a snapshot just for subtraction on a cold set.
-            #[cfg(feature = "packed-radix")]
             let published = self.published.lock().expect("radix publication cache").clone();
-            #[cfg(feature = "packed-radix")]
             let views = published.as_ref().map(|snapshot| {
                 debug_assert!(snapshot.packed.is_some());
                 snapshot.tables.runs().wrapping_add(snapshot.run_count()).cast::<PackedView<W>>()
             });
-            #[cfg(not(feature = "packed-radix"))]
-            let views = None;
             return unsafe { set.subtract_batch(unique, views) };
         }
         let accepted = self.runs.iter().map(|run| runs::RunView {
@@ -1462,13 +1469,6 @@ fn check_execution(publication: &Pool, execution: &Pool) -> Result<()> {
 }
 
 impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
-    #[inline]
-    fn packed(&self) -> Option<&PackedPublication<W>> {
-        #[cfg(feature = "packed-radix")]
-        { self.packed.as_deref() }
-        #[cfg(not(feature = "packed-radix"))]
-        { None }
-    }
     /// The publication pool: the stream that uploaded these descriptors.
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
@@ -1493,6 +1493,12 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> RadixSnapshot<W, O, C> {
     /// Descriptor, column-table and count bytes uploaded for this snapshot.
     pub fn descriptor_bytes(&self) -> usize {
         self.tables.bytes()
+    }
+    fn descriptors_and_packed_bytes(&self) -> usize {
+        let bytes = self.descriptor_bytes();
+        #[cfg(feature = "packed-radix")]
+        let bytes = bytes + self.packed.as_deref().map_or(0, PackedPublication::bytes);
+        bytes
     }
     #[cfg(test)]
     fn download_run_views(&self) -> Result<Vec<RadixRunView<W, O>>> {
@@ -2285,6 +2291,7 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
     /// Publish `run`'s current snapshot as a layout with key `packing`.
     pub fn publish(run: &DeviceRadixRun<W, O, C>, packing: Packing) -> Result<Self> {
         Self::check_schema(&packing)?;
+        #[cfg(feature = "packed-radix")]
         run.bind_packing(&packing)?;
         let fields = packing.packed_fields().collect::<Vec<_>>();
         Ok(Self {
@@ -2302,6 +2309,7 @@ impl<K: ScalarTuple, V: ScalarTuple, W: Word + 'static, O: OffsetWord, C: Device
     /// upload; otherwise the successor shares this layout's field descriptors.
     pub fn republish(&self, run: &DeviceRadixRun<W, O, C>) -> Result<Self> {
         check_execution(&self.publication.snapshot.pool, run.pool())?;
+        #[cfg(feature = "packed-radix")]
         run.bind_packing(self.packing())?;
         let snapshot = run.snapshot()?;
         if Arc::ptr_eq(&snapshot, &self.publication.snapshot) {
@@ -2463,6 +2471,7 @@ impl<K: ScalarTuple, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, 
             return Err("set active bits do not cover its packing".into());
         }
         let mut state = DeviceRadixRun::new_set(pool, params, active_bits)?;
+        #[cfg(feature = "packed-radix")]
         state.bind_packing(&packing)?;
         state.replace_sorted(batch)?;
         Self::publish(&state, packing)
@@ -2492,12 +2501,14 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             return Err("set batch memory differs".into());
         }
         let snapshot = self.snapshot();
-        let unchanged = snapshot.full_key_set && snapshot.packed().is_none() && match snapshot.runs.as_slice() {
+        let unchanged = snapshot.full_key_set && match snapshot.runs.as_slice() {
             [] => batch.is_empty(),
             [run] => run.keys.ptr() == batch.buffer().ptr()
                 && run.key_count == batch.len() && run.radix_bits == params.radix_bits,
             _ => false,
         };
+        #[cfg(feature = "packed-radix")]
+        let unchanged = unchanged && snapshot.packed.is_none();
         if unchanged {
             return Ok(self.clone());
         }
@@ -2542,7 +2553,8 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
     /// Explicit diagnostic download, sorted across all retained runs.
     pub fn to_host(&self) -> Result<Vec<W>> {
         let mut keys = Vec::with_capacity(self.len());
-        if let Some(packed) = self.snapshot().packed() {
+        #[cfg(feature = "packed-radix")]
+        if let Some(packed) = &self.snapshot().packed {
             for run in &packed.runs { keys.extend(run.unpack()?.to_host()?); }
         }
         for run in &self.snapshot().runs {
@@ -2563,8 +2575,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             run.key_count * size_of::<W>()
                 + (run.offsets.as_ref().map_or(0, |_| run.key_count + 1)
                     + run.directory.len()) * size_of::<O>()
-        }).sum::<usize>() + self.snapshot().packed().map_or(0, PackedPublication::bytes)
-            + self.snapshot().descriptor_bytes() + self.publication.fields.len() * size_of::<PackedField>()
+        }).sum::<usize>() + self.snapshot().descriptors_and_packed_bytes() + self.publication.fields.len() * size_of::<PackedField>()
     }
 
     /// Includes metadata. Aliased publications must not be summed as disjoint owners.
@@ -2573,8 +2584,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
         snapshot.runs.iter().map(|run| {
             run.keys.allocated_bytes() + run.offsets.as_ref().map_or(0, Buffer::allocated_bytes)
                 + run.directory.allocated_bytes()
-        }).sum::<usize>() + snapshot.packed().map_or(0, PackedPublication::bytes)
-            + snapshot.descriptor_bytes()
+        }).sum::<usize>() + snapshot.descriptors_and_packed_bytes()
             + self.publication.fields.allocated_bytes()
     }
 
@@ -2588,7 +2598,8 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             snapshot.tables.columns() as usize, snapshot.count_ptr() as usize,
             self.publication.fields.ptr() as usize,
         );
-        if let Some(packed) = snapshot.packed() {
+        #[cfg(feature = "packed-radix")]
+        if let Some(packed) = &snapshot.packed {
             for (index, run) in packed.runs.iter().enumerate() {
                 eprintln!("gpu_datalog_packed_run\trelation={relation}\tlayout={layout}\towner={owner}\trun={index}\tpacked={}\trows={}\tword_bytes={}\tstorage_bytes={}",
                     run.plain_batch().is_none(), run.len(), size_of::<W>(), run.allocated_bytes());
@@ -2619,6 +2630,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             return Err("set active bits do not cover its packing".into());
         }
         let mut state = DeviceRadixRun::<W, O, ()>::new_set(pool.clone(), params, active_bits)?;
+        #[cfg(feature = "packed-radix")]
         state.bind_packing(&packing)?;
         #[cfg(feature = "packed-radix")]
         if let Some(source) = &self.snapshot().packed {
@@ -2844,9 +2856,11 @@ pub mod device {
         // DECODE ?: invert only the demanded radix field, extracting its plain bits or adding its leaf base to its residual; relational callers still require publication evidence.
         #[cfg(not(feature = "packed-radix"))]
         let descriptor = unsafe { run(view.keys, index) };
+        #[cfg(not(feature = "packed-radix"))]
+        let key = unsafe { *descriptor.keys.add(position as usize) };
         let field = unsafe { *view.fields.add(column as usize) };
         #[cfg(not(feature = "packed-radix"))]
-        let encoded = unsafe { (*descriptor.keys.add(position as usize)).extract(field.shift, field.bits) };
+        let encoded = key.extract(field.shift, field.bits);
         #[cfg(feature = "packed-radix")]
         let (code, base) = unsafe { position.codes(view, index, column, field) };
         #[cfg(feature = "packed-radix")]
@@ -2905,7 +2919,8 @@ pub mod device {
         if len == 0 {
             return (0, false);
         }
-        if cfg!(feature = "packed-radix") && run.unit_offsets >= super::PACKED_UNIT {
+        #[cfg(feature = "packed-radix")]
+        if run.unit_offsets >= super::PACKED_UNIT {
             let packed = unsafe { *run.offsets.cast::<crate::packed_run::PackedView<W>>() };
             return unsafe { packed_search(packed, key) };
         }
@@ -2952,12 +2967,14 @@ pub mod device {
         )
     }
 
+    #[cfg(feature = "packed-radix")]
     #[inline(never)]
     unsafe fn packed_search<W: Word>(packed: crate::packed_run::PackedView<W>, key: W) -> (u64, bool) {
         let (first, end) = unsafe { crate::packed_run::device::range(packed, key, key) };
         (first, end != first)
     }
 
+    #[cfg(feature = "packed-radix")]
     #[inline(never)]
     unsafe fn packed_interval<W: Word>(packed: crate::packed_run::PackedView<W>, low: W, high: W) -> (u64, u64) {
         let (first, last) = unsafe { crate::packed_run::device::range(packed, low, high) };
@@ -3063,7 +3080,8 @@ pub mod device {
         low: W,
         high: W,
     ) -> (u64, u64) {
-        if cfg!(feature = "packed-radix") && run.unit_offsets >= super::PACKED_UNIT {
+        #[cfg(feature = "packed-radix")]
+        if run.unit_offsets >= super::PACKED_UNIT {
             return unsafe { packed_interval(*run.offsets.cast::<crate::packed_run::PackedView<W>>(), low, high) };
         }
         let (first, _) = unsafe { search(run, low) };

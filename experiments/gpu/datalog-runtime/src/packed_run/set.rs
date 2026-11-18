@@ -72,7 +72,6 @@ impl<W: Word> PackedSet<W> {
         self.runs[0] = Arc::new(replacement);
         Ok(())
     }
-    #[cfg(feature = "packed-radix")]
     /// Adopt a reordered run in a newly constructed provider. The bijection
     /// preserves disjointness; its requested ratio can differ from the source.
     pub(super) unsafe fn append_reordered(&mut self, mut run: Arc<PackedRun<W>>) -> Result<()> {
@@ -159,7 +158,6 @@ impl<W: Word> PackedSet<W> {
 
     /// Maintained engine tails churn; keep a small coalesced result in words
     /// when both inputs are already plain. Never unpack a leaf to do so.
-    #[cfg(feature = "packed-radix")]
     pub(crate) unsafe fn append_maintained(&mut self, fresh: &SortedBatch<W>) -> Result<()> {
         let limit = self.plain_limit.max((8 << 20) / size_of::<W>());
         self.append_with_merge_limit(fresh, limit)

@@ -10,6 +10,7 @@ pub mod arena;
 pub mod lanes;
 pub mod layout;
 pub mod pack;
+#[cfg(feature = "packed-radix")]
 pub mod packed_run;
 pub mod phases;
 pub mod radix_run;

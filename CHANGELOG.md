@@ -18,6 +18,7 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   accounting, device bounds/membership, packed tiled merge and geometric set
   admission. Blocks default to 256 rows (runtime-configurable); runs of at most
   32,768 rows remain plain on initial admission. Merge inputs must be disjoint, as after subtraction.
+  Build the replay and its packed-only tests with `--features packed-radix`.
   `packed-replay TRACE_DIR --block 256 --output RESULT.json` checks the shared
   admission trace against the existing plain engine and host sets, retaining all
   states in global sequence order and reporting pool peaks, operation timings

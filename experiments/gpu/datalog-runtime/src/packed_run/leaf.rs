@@ -1045,7 +1045,6 @@ pub(super) mod leaf_kernels {
                     let mut col = lane;
                     while col < owner.columns {
                         let mut frame = *target.add(col as usize);
-                        #[cfg(feature = "packed-radix")]
                         if W::BITS <= 128 && owner.plain.is_null() && oh.encoding != 0 {
                             // Relocate a published field; bootstrap frames still have plan prefixes.
                             frame.end = oh.bits - frame.shift as u32;
