@@ -264,7 +264,11 @@ impl SetOps<'_> {
     }
     pub(crate) fn subtract<W: Word>(&self, unique: &SortedBatch<W>, accepted: &[RunView<W>]) -> Result<SortedBatch<W>> {
         let rows = unique.len();
-        let descriptors = Buffer::from_host_async(self.pool.clone(), accepted)?;
+        crate::phases::admission_scope!(c"admit/plain-subtract", rows);
+        let descriptors = {
+            crate::phases::admission_scope!(c"admit/member-upload");
+            Buffer::from_host_async(self.pool.clone(), accepted)?
+        };
         crate::stats::record_work(|work| {
             work.descriptor_materializations += 1;
             work.descriptor_bytes += (accepted.len() * std::mem::size_of::<RunView<W>>()) as u64;
@@ -319,6 +323,7 @@ impl SetOps<'_> {
             .len()
             .checked_add(second.len())
             .ok_or("merged length overflow")?;
+        crate::phases::admission_scope!(c"admit/plain-merge", rows);
         crate::stats::record_work(|work| work.merges += 1);
         // SAFETY: merge writes every output element before publication.
         let mut output = Output(unsafe { Buffer::uninitialized(self.pool.clone(), rows)? });
@@ -623,6 +628,7 @@ impl RowSortScratch {
     }
 }
 pub(crate) fn read_count(pool: &Pool, buffer: &DeviceBuffer<u64>) -> Result<usize> {
+    crate::phases::admission_scope!(c"admit/count-readback");
     let mut count = 0_u64;
     // SAFETY: preceding compaction initialized one u64; stack storage survives synchronization.
     unsafe {
