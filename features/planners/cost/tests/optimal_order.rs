@@ -597,23 +597,26 @@ fn advice_from_measured_degrees_does_not_depend_on_the_written_body_order() {
 }
 
 /// VP-Index: a steady variant whose only order reads by an index of more
-/// groups than its work is worth gets no advice; with few groups it does.
+/// groups than its work is worth keeps a written order that avoids the
+/// index; it is advised where the index has few groups, and where the
+/// written order needs the index too.
 #[test]
-fn an_index_costlier_than_the_work_it_serves_is_not_advised() {
-    let program = Program { inputs: vec![("New", 2), ("Cast", 3)], derived: vec![("V", 2)], rules: vec![
+fn a_written_order_that_avoids_a_costly_index_is_kept() {
+    let body = [atom("Cast", &[Var("from"), Var("to"), Var("h")]), atom("V", &[Var("from"), Var("h")])];
+    let program = |body: &[support::Atom]| Program { inputs: vec![("New", 2), ("Cast", 3)], derived: vec![("V", 2)], rules: vec![
         rule(atom("V", &[Var("v"), Var("h")]), &[atom("New", &[Var("v"), Var("h")])]),
-        rule(atom("V", &[Var("to"), Var("h")]), &[atom("Cast", &[Var("from"), Var("to"), Var("h")]), atom("V", &[Var("from"), Var("h")])]),
+        rule(atom("V", &[Var("to"), Var("h")]), body),
     ] };
     // `news` allocated variables over five heaps; a cast from each of
     // `sources` variables at each heap, so `Cast` by (from, h) has a group a row.
-    let steady = |news: i64, sources: i64| -> cost::variables::Decided {
+    let steady = |program: &Program, news: i64, sources: i64| -> cost::variables::Decided {
         let inputs: Database = BTreeMap::from([
             ("New", (0..news).flat_map(|v| (0..5).map(move |h| vec![v, h])).collect::<Rows>()),
             ("Cast", (0..sources).flat_map(|from| (0..5).map(move |h| vec![from, (from * 7 + h) % sources.max(news), h])).collect::<Rows>()),
         ]);
         let history = program.semi_naive(&inputs);
-        let evidence = profiled(&program, &inputs);
-        let input = planned(&program, &evidence);
+        let evidence = profiled(program, &inputs);
+        let input = planned(program, &evidence);
         let evidence = with_degrees(&input, evidence, &history);
         let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide().unwrap();
         let mut steady = input.holes.iter().zip(decided).filter_map(|(hole, decided)| match &hole.origin {
@@ -624,12 +627,17 @@ fn an_index_costlier_than_the_work_it_serves_is_not_advised() {
         assert!(steady.next().is_none());
         only
     };
-    // 4,000 groups against at most 4,000 changing rows of about two bindings each.
-    let costly = steady(20, 800);
+    // 4,000 groups against at most 4,000 changing rows of about two
+    // bindings each; the written order scans `Cast` and probes the delta.
+    let costly = steady(&program(&body), 20, 800);
     assert_eq!(costly.added, 16.0 * 4000.0);
     assert!(!costly.advised, "work {:?} against {} for the index", costly.work, costly.added);
+    // Written delta first, the text reads `Cast` by the same index.
+    let delta_first = steady(&program(&[body[1].clone(), body[0].clone()]), 20, 800);
+    assert_eq!(delta_first.added, 16.0 * 4000.0);
+    assert!(delta_first.advised);
     // 50 groups against 600 changing rows or more.
-    let cheap = steady(120, 10);
+    let cheap = steady(&program(&body), 120, 10);
     assert_eq!(cheap.added, 16.0 * 50.0);
     assert!(cheap.advised, "work {:?} against {} for the index", cheap.work, cheap.added);
 }

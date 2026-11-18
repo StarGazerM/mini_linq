@@ -524,14 +524,20 @@ of the CPU engine takes 24 s in all (the evaluation with the pass and the
 statistics 16.9 s, 11.7 s plain); before VP-Index its directives were
 those the admission-time statistics gave. An order is charged for the grouped
 indexes it adds, 16 bindings a group (VP-Index; one index on bloat sets
-the constant, and it is this CPU engine's), and a steady hole whose
-charge exceeds its bindings keeps its text. Bloat, CPU engine, medians of
-five alternating runs on 2026-11-17: advised 11.19 s, written 12.18 s
-(advised without the rule 13.67 s; without the rounds 18.2 s on
-2026-11-16). 32 steady holes keep their text, so a badly written body of
-one of them is not repaired: an order reading the changing occurrence
-last is neither planned nor costed. No GPU run and no device statistics;
-one program, one dataset.
+the constant, and it is this CPU engine's). A steady hole keeps its
+written order where the chosen order's new index charge exceeds its
+bindings, is at least 1% of the program's, and the written order avoids
+it: an order reading the changing occurrence last is neither planned nor
+costed, so there the text is trusted. Seven DOOP datasets (bloat,
+eclipse, zxing, sunflow, chart, pmd, xalan), CPU engine, one thread, each
+calibrated on itself, medians of three alternating runs on 2026-11-18:
+the advised engine takes 0.90 to 0.97 of the written engine's time
+(bloat 10.56 against 11.67 s, eclipse 32.24 against 33.18 s), with equal
+counts; on each dataset one hole keeps its written order, the `VPT_Cast`
+variant with changing `VarPointsTo`. Bloat's advice on the other six is
+slower than the written text on eclipse and zxing (two runs, 4 to 5%).
+Not run: 14 other datasets, the parallel engine, the GPU; no device
+statistics; one program.
 
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`

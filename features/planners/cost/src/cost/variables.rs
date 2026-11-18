@@ -284,6 +284,9 @@ const BUDGET: usize = 200_000;
 const ALTERNATIVES: usize = 16;
 /// VP-Index: what a group of a full index costs, in bindings.
 const GROUP: f64 = 16.0;
+/// VP-Index: the share of the program's bindings below which an index
+/// charge does not keep a written order.
+const MATERIAL: f64 = 0.01;
 
 /// PS-Request: the groups of a relation on `columns`, its distinct values there.
 fn groups(relation: &str, columns: Vec<usize>) -> DegreeRequest {
@@ -525,18 +528,19 @@ impl<'a> Planner<'a> {
             holes.push((*stratum, weight.map_or(0.0, |weight| weight * cheapest.estimate), hole, *seed, weight, orders));
         }
         holes.sort_by(|left, right| left.0.cmp(&right.0).then(right.1.total_cmp(&left.1)).then(left.2.cmp(&right.2)));
+        let program: f64 = holes.iter().map(|hole| hole.1).sum();
         let mut built: BTreeSet<IndexDemand> = BTreeSet::new();
         let mut decided = vec![None; self.input.holes.len()];
         for (_, _, hole, seed, weight, mut orders) in holes {
             // A grouped index: keyed, and by less than the whole row.
             let grouped = |demand: &IndexDemand| demand.version == IndexVersion::Full && !demand.key.is_empty()
                 && self.arity.get(&demand.logical_relation).is_none_or(|arity| demand.key.len() < *arity);
-            let charge = |order: &Planned| order.candidate.demands.iter()
+            let charge = |candidate: &Candidate| candidate.demands.iter()
                 .filter(|demand| grouped(demand) && !built.contains(*demand))
                 .map(|demand| Some(GROUP * self.groups(&demand.logical_relation, &demand.key)?)).sum::<Option<f64>>();
             // Its bindings and its new index charge, per order.
             let weighed: Option<Vec<(f64, f64)>> = weight.and_then(|weight| orders.iter()
-                .map(|order| Some((weight * order.estimate, charge(order)?))).collect());
+                .map(|order| Some((weight * order.estimate, charge(&order.candidate)?))).collect());
             let (at, work, added) = match &weighed {
                 Some(weighed) => {
                     let mut at = 0;
@@ -547,12 +551,15 @@ impl<'a> Planner<'a> {
                 }
                 None => (0, None, 0.0),
             };
-            // A seed's written order is one of its orders; a steady
-            // variant's may read the changing occurrence later, which no
-            // order here does.
-            let advised = seed || work.is_none_or(|work| added <= work);
-            if advised { built.extend(orders[at].candidate.demands.iter().cloned()); }
-            decided[hole] = Some(Decided { weighed: orders.len(), order: orders.swap_remove(at), work, added, advised });
+            // A steady variant's written order may read the changing
+            // occurrence later, which no order here does: it is kept where
+            // the chosen order's indexes cost more than its bindings and
+            // matter to the program, and the written order avoids them.
+            let written = self.prepared[hole].as_ref().map(|prepared| &prepared.incumbent);
+            let kept = written.filter(|written| !seed && work.is_some_and(|work| added > work) && added >= MATERIAL * program
+                && charge(written).is_some_and(|charge| charge < added));
+            built.extend(kept.map_or(&orders[at].candidate, |written| written).demands.iter().cloned());
+            decided[hole] = Some(Decided { weighed: orders.len(), order: orders.swap_remove(at), work, added, advised: kept.is_none() });
         }
         Ok(decided)
     }

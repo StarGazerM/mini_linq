@@ -13,6 +13,18 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- A steady hole keeps its written order only where that matters
+  (PLANNING-REDESIGN, VP-Index step 3): the chosen order's new index
+  charge exceeds its bindings, is at least 1% of the program's bindings,
+  and the written order's own charge is smaller. Seven DOOP datasets, CPU
+  engine, each calibrated on itself, medians of three alternating runs,
+  advised against written: bloat 10.56 against 11.67 s, eclipse 32.24
+  against 33.18, zxing 17.39 against 18.55, sunflow 19.60 against 20.61,
+  chart 24.60 against 25.63, pmd 24.34 against 25.54, xalan 31.31 against
+  32.91; equal counts. On each, one hole keeps its written order
+  (`VPT_Cast` with changing `VarPointsTo`). Bloat's advice on the other
+  six is above the written median on eclipse and zxing.
+
 - The planner charges an order for the indexes it adds (PLANNING-REDESIGN,
   VP-Index). `Planner::plans` keeps a hole's 16 cheapest orders of
   distinct lowerings; `Planner::decide` takes, heaviest hole first, the

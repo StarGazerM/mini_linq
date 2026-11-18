@@ -764,17 +764,24 @@ permutation of a body plans to the same order and the same reads.
      consumed once), one for a seed. The chosen order has the least
      `weight x VP-Cost + new index charge`; among equals the least
      VP-Cost.
-  3. A steady hole whose chosen order's new index charge exceeds its
-     `weight x VP-Cost` gets no advice and keeps its text. Otherwise the
-     order is advised and its demands count as built. A seed is always
-     advised: its written order is one of its orders.
+  3. A steady hole keeps its written order, without advice, when all
+     three hold: the chosen order's new index charge exceeds its
+     `weight x VP-Cost`; the charge is at least 1% of the program's
+     bindings (every hole's cheapest `weight x VP-Cost`, summed); and the
+     written order's own new index charge is smaller. Then the written
+     order's demands count as built. Otherwise the chosen order is
+     advised and its demands count as built. A seed is always advised:
+     its written order is one of its orders.
   Holes are decided by stratum, then by `weight x VP-Cost` of their
-  cheapest order, heaviest first, then by hole. Nothing here reads the
-  recorded order, so whether a hole is advised, and what, does not depend
-  on the text. A hole without advice does depend on it: step 3 trusts the
-  text exactly where VP-Delta leaves the planner one costly order. The
-  indexes of such a hole are not counted as built. Without the rows of
-  the changing relation or of a charged index the hole takes its cheapest
+  cheapest order, heaviest first, then by hole. Step 3 is the one place
+  the decision reads the text (agreed 2026-11-18: invariance may be
+  weakened here). It applies where VP-Delta leaves the planner a costly
+  order and the written order reads the changing occurrence later; the
+  1% keeps it from small holes, where a bad text costs more than the
+  index, and the third condition from texts that need the index too.
+  The written order's bindings are not modeled, so a text that avoids
+  the index by a worse scan is kept as well. Without the rows of the
+  changing relation or of a charged index the hole takes its cheapest
   order uncharged.
 
   Measured on bloat, CPU engine, 2026-11-17 (medians of alternating runs,
@@ -810,18 +817,48 @@ permutation of a body plans to the same order and the same reads.
   | advised with VP-Index (38 directives) | 11.19 s | 11.13 to 11.52 |
 
   Of 115 holes 38 change, 40 read the same as recorded, 32 steady holes
-  get no advice, production rejects 2, and 3 are not planned. Of the 32
-  only that `VPT_Cast` variant is large (22.7M bindings against 162M for
-  its index); the others have under 0.25M bindings each, and no run tells
-  whether their text or their planned order is faster. The calibrated
-  run now collects 765 facts (699 before: the rows of each relation and
-  the groups of each index an order can read by) in 25.8 s and 4.8 GB,
-  as before.
+  get no advice, production rejects 2, and 3 are not planned; that run
+  kept the written order wherever the charge exceeded the bindings,
+  without the other two conditions. Of the 32 only that `VPT_Cast`
+  variant is large (22.7M bindings against 162M for its index); the
+  others have under 0.25M bindings each. The calibrated run now collects
+  765 facts (699 before: the rows of each relation and the groups of
+  each index an order can read by) in 25.8 s and 4.8 GB, as before.
+
+  Seven DOOP datasets with all three conditions of step 3, CPU engine,
+  one thread, 2026-11-18 (`run.sh` under
+  `/data/doop-bench/corpus-20261110/calibration-20261116/vp-index-datasets`:
+  each dataset sorted, calibrated on itself, its advice compiled, three
+  runs alternating with the written engine; median and range; the counts
+  of every relation equal the written engine's):
+
+  | dataset | written | advised | advised / written | calibrated run | its peak |
+  |---|---:|---:|---:|---:|---:|
+  | bloat | 11.67 s (11.63 to 11.72) | 10.56 s (10.55 to 10.71) | 0.904 | 26 s | 4.8 GB |
+  | eclipse | 33.18 s (33.08 to 34.59) | 32.24 s (31.96 to 32.41) | 0.972 | 51 s | 6.2 GB |
+  | zxing | 18.55 s (18.36 to 18.72) | 17.39 s (17.37 to 17.80) | 0.937 | 36 s | 5.8 GB |
+  | sunflow | 20.61 s (20.42 to 21.02) | 19.60 s (19.15 to 20.23) | 0.951 | 39 s | 6.0 GB |
+  | chart | 25.63 s (25.44 to 25.96) | 24.60 s (24.01 to 26.21) | 0.960 | 44 s | 6.2 GB |
+  | pmd | 25.54 s (25.42 to 26.10) | 24.34 s (24.30 to 24.50) | 0.953 | 47 s | 6.6 GB |
+  | xalan | 32.91 s (32.32 to 35.29) | 31.31 s (30.88 to 32.00) | 0.952 | 55 s | 9.1 GB |
+
+  On every dataset one hole keeps its written order, the `VPT_Cast`
+  variant with changing `VarPointsTo` (charge 162M to 1,284M bindings
+  against 5.5M to 79.5M of its own); 44 to 47 holes change, 62 to 65 read
+  the same, production rejects 2, 3 are not planned. One chart run of the
+  advised engine (26.21 s) is above the written range.
+
+  Advice does not transfer as well as it fits. Bloat's advice on the
+  other six (two runs each, not alternated with the written engine):
+  eclipse 34.88 and 35.01 s, zxing 19.27 and 19.44 s, both above the
+  written median; sunflow 19.13 and 19.79 s, pmd 24.74 and 24.77 s, xalan
+  31.52 and 31.58 s, below it; chart 24.23 and 26.37 s.
+
+  Not run: the 14 other prepared datasets, the parallel engine, the GPU.
 
   Open: an order that reads the changing occurrence last, as the written
   `VPT_Cast` does, is not planned (VP-Delta) and its cost is not
-  modeled, so step 3 cannot weigh it and falls back to the text. A
-  badly written body of a hole without advice is therefore not repaired.
+  modeled, so step 3 cannot weigh it and falls back to the text.
 
 Checked on bloat in the DOOP oracle (`DOOP_DRIVER=delta_first`, exact
 degrees of the final relations with each row's round; 109 of 113 variants

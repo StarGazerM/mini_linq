@@ -629,7 +629,7 @@ fn plan_hole(
             reason = format!("{reason}; retain the recorded order");
         } else if !decided.advised {
             decision = Decision::Retained;
-            reason = format!("{reason}; its new indexes cost more than the bindings they serve: no advice");
+            reason = format!("{reason}; its new indexes cost more than its bindings and the written order avoids them: keep the written order");
         } else if enumerate::same(&order.candidate, incumbent) {
             decision = Decision::Retained;
             reason = format!("{reason}; the recorded order reads the same");
