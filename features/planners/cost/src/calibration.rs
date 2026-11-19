@@ -154,6 +154,17 @@ impl Observer for Recorder {
     fn needs_rounds(&self, relation: usize) -> bool {
         self.0.lock().unwrap_or_else(|error| error.into_inner()).rounds.get(relation).copied().unwrap_or(false)
     }
+    fn survey(&self, relation: usize, pass: RelationRows<'_>) {
+        self.update(|state| {
+            require(state.begun && !state.completed, "a relation outside its program invocation")?;
+            require(relation < state.rows.len() && state.rows.iter().all(Option::is_none), "a relation the program does not declare, or surveyed after one was offered")?;
+            let mut failure = None;
+            if state.degrees.observes(relation) {
+                pass(&mut |_, row| if failure.is_none() { failure = state.observe(relation, row).err(); });
+            }
+            failure.map_or(Ok(()), Err)
+        });
+    }
     fn relation(&self, relation: usize, rows: Option<usize>, pass: RelationRows<'_>) {
         self.update(|state| {
             require(state.begun && !state.completed, "a relation outside its program invocation")?;
@@ -161,11 +172,6 @@ impl Observer for Recorder {
             let mut held = rows.map(|rows| rows as u64);
             if state.degrees.wants(relation) {
                 let (mut passed, mut failure) = (0u64, None);
-                // PS-Heavy: the relation's heavy keys first, then its rows.
-                if state.degrees.observes(relation) {
-                    pass(&mut |_, row| if failure.is_none() { failure = state.observe(relation, row).err(); });
-                    state.degrees.observed(relation);
-                }
                 pass(&mut |age, row| if failure.is_none() { passed += 1; failure = state.admit(relation, age, row).err(); });
                 if let Some(failure) = failure { return Err(failure); }
                 require(held.is_none_or(|held| held == passed), "a relation passed other rows than it holds")?;

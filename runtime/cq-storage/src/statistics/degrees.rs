@@ -37,36 +37,49 @@ const CAPACITY: usize = 1 << 13;
 /// Values of one key kept exactly before a sketch takes over.
 const EXACT: usize = 24;
 /// PS-Heavy: the counters of a relation's first pass over one key column
-/// list, and the keys kept of them.
+/// list, the keys kept of them, and the distinct keys up to which a
+/// relation's keys are all kept.
 const SUMMARY: usize = 1 << 12;
 const HEAVY: usize = 1 << 10;
+const FEW: usize = 1 << 16;
 
-/// PS-Heavy: the keys most rows of a relation hold in one key column
-/// list. `observe` is a Misra-Gries summary: a key held by more than one
-/// row in `SUMMARY + 1` is among its counters.
-#[derive(Default)]
-struct Heavy { counters: Keyed<u64>, kept: hashbrown::HashSet<u64, BuildHasherDefault<Identity>> }
+type Keys = hashbrown::HashSet<u64, BuildHasherDefault<Identity>>;
+/// PS-Heavy: the keys of a relation in one key column list that tables
+/// keep for sure: all of them while they are few, else those most of its
+/// rows hold. `observe` is a Misra-Gries summary: a key held by more than
+/// one row in `SUMMARY + 1` is among its counters. `kept` are the sure
+/// keys of every table joined with this one by the key, its own among
+/// them.
+struct Heavy { counters: Keyed<u64>, few: Option<Keys>, kept: Keys }
+impl Default for Heavy {
+    fn default() -> Self { Self { counters: Keyed::default(), few: Some(Keys::default()), kept: Keys::default() } }
+}
 impl Heavy {
     #[inline]
     fn observe(&mut self, key: u64) {
+        if let Some(few) = &mut self.few {
+            few.insert(key);
+            if few.len() > FEW { self.few = None; }
+        }
         if let Some(count) = self.counters.get_mut(&key) { *count += 1; return; }
         if self.counters.len() < SUMMARY { self.counters.insert(key, 1); return; }
         // A new key against a full summary takes one from every counter.
         self.counters.retain(|_, count| { *count -= 1; *count > 0 });
     }
-    /// Keep the keys of the largest counters; ties by key.
-    fn settle(&mut self) {
+    /// Its sure keys: all of few, else those of the largest counters; ties by key.
+    fn top(&mut self) -> Vec<u64> {
         let mut counts: Vec<(u64, u64)> = self.counters.drain().map(|(key, count)| (count, key)).collect();
+        if let Some(few) = self.few.take() { return few.into_iter().collect(); }
         counts.sort_unstable_by(|left, right| right.cmp(left));
-        self.kept = counts.into_iter().take(HEAVY).map(|(_, key)| key).collect();
+        counts.into_iter().take(HEAVY).map(|(_, key)| key).collect()
     }
     #[inline]
     fn holds(&self, key: u64) -> bool { !self.kept.is_empty() && self.kept.contains(&key) }
 }
 /// PS-Heavy: the weight of a key two tables hold by the same hash, as a
-/// shift: one over the chance both hold it. Each table is its relation's
-/// heavy keys and its share of the others. `None` where a table that
-/// samples the key might have dropped it.
+/// shift: one over the chance both hold it. Each table is its heavy keys
+/// and its share of the others. `None` where a table that samples the
+/// key might have dropped it.
 fn weight(key: u64, first: (&Heavy, u64), second: (&Heavy, u64)) -> Option<u32> {
     let (sure, also) = (first.0.holds(key), second.0.holds(key));
     if (!sure && key >= first.1) || (!also && key >= second.1) { return None; }
@@ -186,13 +199,14 @@ fn up_to(counts: &[(u32, u64)], round: Option<u32>) -> u64 {
 /// column. It halves its share of the keys when it holds more than the
 /// capacity, and also after every `READ` rows it took in while it still
 /// holds more than `FLOOR` keys: a table of few keys and many rows.
-struct Read { columns: Vec<usize>, limit: u64, taken: u64, keys: Keyed<Vec<Values>>, relation: usize, key: usize }
+struct Read { columns: Vec<usize>, limit: u64, taken: u64, keys: Keyed<Vec<Values>>, relation: usize, key: usize, sure: usize }
 const READ: u64 = 1 << 20;
 const FLOOR: usize = 1 << 10;
 /// The sampled keys some rows hold, each with the rows holding it by
 /// round: the keys of a binder, or the reach keys of changing rows. Past
 /// `STRIDE` counted rows it counts every other row for two, and so on.
-struct Counted { limit: u64, stride: Stride, keys: Keyed<Vec<(u32, u64)>>, relation: usize, key: usize }
+/// `sure` of its keys are heavy: its capacity counts the others.
+struct Counted { limit: u64, stride: Stride, keys: Keyed<Vec<(u32, u64)>>, relation: usize, key: usize, sure: usize }
 /// The binder rows of a sampled reach key and a sampled read key.
 struct Reached { reach_limit: u64, key_limit: u64, stride: Stride, rows: Paired<(u64, u64), u64>, relation: usize, key: usize }
 
@@ -262,6 +276,10 @@ pub struct Degrees {
     counted: Vec<Counted>,
     reached: Vec<Reached>,
     work: Vec<Work>,
+    /// PS-Heavy: the keys (a relation and one of its key lists) requests
+    /// join, pairwise; and whether the survey is settled.
+    joined: Vec<((usize, usize), (usize, usize))>,
+    settled: bool,
 }
 
 impl Degrees {
@@ -331,7 +349,12 @@ impl Degrees {
             admitted.hashes = vec![0; admitted.keys.len()];
             admitted.heavy = admitted.keys.iter().map(|_| Heavy::default()).collect();
         }
-        Ok(Self { relations: plan.relations, sketches: plan.sketches, reads: plan.reads, counted: plan.counted, reached: plan.reached, work })
+        let joined = work.iter().filter_map(|work| match *work {
+            Work::Direct { binder, read, .. } => Some(((plan.counted[binder].relation, plan.counted[binder].key), (plan.reads[read].relation, plan.reads[read].key))),
+            Work::Reach { reached, read, .. } => Some(((plan.reached[reached].relation, plan.reached[reached].key), (plan.reads[read].relation, plan.reads[read].key))),
+            _ => None,
+        }).collect();
+        Ok(Self { relations: plan.relations, sketches: plan.sketches, reads: plan.reads, counted: plan.counted, reached: plan.reached, work, joined, settled: false })
     }
 
     /// Whether a request reads this relation.
@@ -345,21 +368,40 @@ impl Degrees {
     pub fn rows(&self, relation: usize) -> u64 { self.relations[relation].published.iter().sum() }
 
     /// PS-Heavy: whether a relation's rows are to be passed to `observe`
-    /// before they are admitted.
+    /// before any row is admitted.
     pub fn observes(&self, relation: usize) -> bool { self.relations.get(relation).is_some_and(|admitted| !admitted.keys.is_empty()) }
 
-    /// PS-Heavy: one row of `relation` in its first pass. Every row is
-    /// observed before `observed` and before any is admitted.
+    /// PS-Heavy: one row of `relation` in the survey. Every relation is
+    /// surveyed before any row is admitted.
     pub fn observe(&mut self, relation: usize, row: &[i64]) {
+        debug_assert!(!self.settled, "a row surveyed after a row was admitted");
         let admitted = &mut self.relations[relation];
         debug_assert_eq!(row.len(), admitted.arity);
         for (cell, &value) in admitted.cells.iter_mut().zip(row) { *cell = hash(value); }
         for (heavy, columns) in admitted.heavy.iter_mut().zip(&admitted.keys) { heavy.observe(keyed(&admitted.cells, columns)); }
     }
 
-    /// PS-Heavy: the first pass of `relation` is over.
-    pub fn observed(&mut self, relation: usize) {
-        for heavy in &mut self.relations[relation].heavy { heavy.settle(); }
+    /// PS-Heavy: the survey is over. The keys requests join share their
+    /// heavy keys.
+    fn settle(&mut self) {
+        self.settled = true;
+        // The group of each key: the least key it is joined with, transitively.
+        let mut group: BTreeMap<(usize, usize), (usize, usize)> = BTreeMap::new();
+        fn find(group: &BTreeMap<(usize, usize), (usize, usize)>, mut key: (usize, usize)) -> (usize, usize) {
+            while let Some(&next) = group.get(&key).filter(|next| **next != key) { key = next; }
+            key
+        }
+        for &(left, right) in &self.joined {
+            let (left, right) = (find(&group, left), find(&group, right));
+            group.insert(left.max(right), left.min(right));
+        }
+        let mut shared: BTreeMap<(usize, usize), Vec<u64>> = BTreeMap::new();
+        for (relation, admitted) in self.relations.iter_mut().enumerate() {
+            for (key, heavy) in admitted.heavy.iter_mut().enumerate() { shared.entry(find(&group, (relation, key))).or_default().extend(heavy.top()); }
+        }
+        for (relation, admitted) in self.relations.iter_mut().enumerate() {
+            for (key, heavy) in admitted.heavy.iter_mut().enumerate() { heavy.kept = shared[&find(&group, (relation, key))].iter().copied().collect(); }
+        }
     }
 
     /// One row of `relation`: visible from publication `published`, and
@@ -367,6 +409,7 @@ impl Degrees {
     /// synchronous schedule both are its round: 0 for an input, then each
     /// round's delta. A relation's rows come in ascending order of both.
     pub fn admit(&mut self, relation: usize, published: u32, horizon: u32, row: &[i64]) {
+        if !self.settled { self.settle(); }
         let Self { relations, sketches, reads, counted, reached, .. } = self;
         let admitted = &mut relations[relation];
         debug_assert_eq!(row.len(), admitted.arity);
@@ -388,12 +431,16 @@ impl Degrees {
                 Role::Sketch { rows, set, sketch } => if passed[rows] { sketches[sketch].insert(of_set(cells, &sets[set])); },
                 Role::Read { rows, key, read } => {
                     let read = &mut reads[read];
-                    if !passed[rows] || (hashes[key] >= read.limit && !heavy[key].holds(hashes[key])) { continue; }
-                    let width = read.columns.len();
+                    let sure = heavy[key].holds(hashes[key]);
+                    if !passed[rows] || (hashes[key] >= read.limit && !sure) { continue; }
+                    let (width, held) = (read.columns.len(), read.keys.len());
                     let values = read.keys.entry(hashes[key]).or_insert_with(|| (0..width).map(|_| Values::Exact(Vec::new())).collect());
                     for (slot, &column) in read.columns.iter().enumerate() { values[slot].insert(row[column], published); }
+                    read.sure += usize::from(sure && read.keys.len() > held);
                     read.taken += 1;
-                    if read.keys.len() > CAPACITY || (read.taken >= READ && read.keys.len() > FLOOR) {
+                    // Its capacity counts the keys it may drop.
+                    let light = read.keys.len() - read.sure;
+                    if light > CAPACITY || (read.taken >= READ && light > FLOOR) {
                         read.taken = 0;
                         read.limit >>= 1;
                         let limit = read.limit;
@@ -402,14 +449,17 @@ impl Degrees {
                 }
                 Role::Counted { rows, key, counted: at } => {
                     let counted = &mut counted[at];
-                    if !passed[rows] || (hashes[key] >= counted.limit && !heavy[key].holds(hashes[key])) { continue; }
+                    let sure = heavy[key].holds(hashes[key]);
+                    if !passed[rows] || (hashes[key] >= counted.limit && !sure) { continue; }
                     let Some(weight) = counted.stride.weight() else { continue };
+                    let held = counted.keys.len();
                     let rounds = counted.keys.entry(hashes[key]).or_default();
                     match rounds.last_mut() {
                         Some(last) if last.0 == horizon => last.1 += weight,
                         _ => rounds.push((horizon, weight)),
                     }
-                    if counted.keys.len() > CAPACITY {
+                    counted.sure += usize::from(sure && counted.keys.len() > held);
+                    if counted.keys.len() - counted.sure > CAPACITY {
                         counted.limit >>= 1;
                         let limit = counted.limit;
                         counted.keys.retain(|held, _| *held < limit || heavy[key].holds(*held));
@@ -445,7 +495,7 @@ impl Degrees {
     /// The value of every request, in request order, as a numerator and a
     /// denominator; `0/1` where the denominator would be zero.
     pub fn finish(self) -> Vec<(u64, u64)> {
-        let Self { relations, sketches, reads, counted, reached, work } = self;
+        let Self { relations, sketches, reads, counted, reached, work, .. } = self;
         // Per read table: its share of the keys, where its heavy keys are,
         // and per key and column the values by round.
         type ByRound = Keyed<Vec<Vec<(u32, u64)>>>;
@@ -549,7 +599,7 @@ impl Plan {
         let next = self.reads.len();
         let id = *self.read_ids.entry((rows.relation, selected, key)).or_insert(next);
         if id == next {
-            self.reads.push(Read { columns: Vec::new(), limit: u64::MAX, taken: 0, keys: Keyed::default(), relation: rows.relation, key });
+            self.reads.push(Read { columns: Vec::new(), limit: u64::MAX, taken: 0, keys: Keyed::default(), relation: rows.relation, key, sure: 0 });
             self.relations[rows.relation].roles.push(Role::Read { rows: selected, key, read: id });
         }
         let columns = &mut self.reads[id].columns;
@@ -563,7 +613,7 @@ impl Plan {
         let next = self.counted.len();
         let id = *self.counted_ids.entry((rows.relation, selected, key)).or_insert(next);
         if id == next {
-            self.counted.push(Counted { limit: u64::MAX, stride: Stride::default(), keys: Keyed::default(), relation: rows.relation, key });
+            self.counted.push(Counted { limit: u64::MAX, stride: Stride::default(), keys: Keyed::default(), relation: rows.relation, key, sure: 0 });
             self.relations[rows.relation].roles.push(Role::Counted { rows: selected, key, counted: id });
         }
         Ok(id)

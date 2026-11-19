@@ -1,3 +1,6 @@
+// These pin the expansion of an ordinary build; a calibration build adds
+// its offering of the relations to it.
+#![cfg(not(feature = "planner-calibration"))]
 use cq_datalog_print::*;
 use incremental::strata::source;
 use proc_macro2::TokenStream;

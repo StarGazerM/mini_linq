@@ -1106,16 +1106,16 @@ fn admit_degrees(input: &PlannerInput, evidence: &DatasetEvidence, model: &Model
     for table in &run.tables { assert!(table.stage.is_sorted(), "a table's rows are not in stage order"); }
     let clock = std::time::Instant::now();
     let mut cells = [0i64; W];
+    // PS-Heavy: every relation is surveyed before any row is admitted.
+    for (relation, table) in run.tables.iter().enumerate() {
+        if !degrees.observes(relation) { continue; }
+        for row in &table.rows {
+            for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
+            degrees.observe(relation, &cells[..model.arity[relation]]);
+        }
+    }
     for (relation, table) in run.tables.iter().enumerate() {
         if !degrees.wants(relation) { continue; }
-        // PS-Heavy: a relation's heavy keys first, then its rows.
-        if degrees.observes(relation) {
-            for row in &table.rows {
-                for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
-                degrees.observe(relation, &cells[..model.arity[relation]]);
-            }
-            degrees.observed(relation);
-        }
         for (row, &stage) in table.rows.iter().zip(&table.stage) {
             for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
             degrees.admit(relation, stage, stage, &cells[..model.arity[relation]]);

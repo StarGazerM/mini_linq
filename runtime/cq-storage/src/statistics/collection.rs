@@ -118,6 +118,11 @@ pub trait Observer: Send + Sync {
     /// Asked once per derived relation as the program begins: whether the
     /// round of each of its rows is needed. Only then are its deltas kept.
     fn needs_rounds(&self, _relation: usize) -> bool { false }
+    /// PS-Heavy: once per relation of a program that has its result,
+    /// before any relation is offered by `relation`: its position and a
+    /// pass over its rows (their ages are not meant). An observer that
+    /// never calls `pass` costs none.
+    fn survey(&self, _relation: usize, _pass: RelationRows<'_>) {}
     /// Once per relation of a program that has its result: its position
     /// among the declarations, the rows it holds where that is known
     /// without a pass, and a pass over them. An observer that never calls
@@ -150,6 +155,9 @@ pub fn program_begin(round_ir: &'static str) { notify(|observer| observer.progra
 /// Whether the installed observer needs a derived relation's rounds; `false` without one.
 pub fn needs_rounds(relation: usize) -> bool {
     OBSERVER.with(|observer| observer.borrow().clone()).is_some_and(|observer| observer.needs_rounds(relation))
+}
+pub fn survey(relation: usize, pass: RelationRows<'_>) {
+    notify(|observer| observer.survey(relation, pass));
 }
 pub fn relation(relation: usize, rows: Option<usize>, pass: RelationRows<'_>) {
     notify(|observer| observer.relation(relation, rows, pass));

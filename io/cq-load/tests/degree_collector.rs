@@ -246,16 +246,17 @@ fn records_wider_than_eight_cells_agree_with_the_reference() {
     assert_eq!(values[0].1, 500);
 }
 
-/// The degrees as the runtime keeps them (PS-Admit): every row admitted,
-/// each relation's rows in round order.
+/// The degrees as the runtime keeps them (PS-Admit): every relation
+/// surveyed (PS-Heavy), then every row admitted, each relation's rows in
+/// round order.
 fn admitted(requests: &[DegreeRequest], relations: &Relations, arities: &[(&str, usize)]) -> Vec<(DegreeRequest, u64, u64)> {
     let mut degrees = cq_load::stats::admitted_degrees(requests, arities).unwrap();
     for (at, (name, _)) in arities.iter().enumerate() {
+        if degrees.observes(at) { for (_, row) in &relations[*name] { degrees.observe(at, row); } }
+    }
+    for (at, (name, _)) in arities.iter().enumerate() {
         let mut rows: Vec<&Row> = relations[*name].iter().collect();
         rows.sort_by_key(|row| row.0);
-        // PS-Heavy: a relation's heavy keys first, then its rows.
-        for (_, row) in &rows { degrees.observe(at, row); }
-        degrees.observed(at);
         for (round, row) in rows { degrees.admit(at, *round, *round, row); }
     }
     requests.iter().cloned().zip(degrees.finish()).map(|(request, (numerator, denominator))| (request, numerator, denominator)).collect()
@@ -300,10 +301,10 @@ fn admitted_degrees_agree_with_the_reference() {
 
 #[test]
 fn a_sample_of_the_keys_estimates_a_matched_degree() {
-    // 40,000 binder keys, five times the capacity of a table: the key `k`
+    // 100,000 binder keys, more than a table keeps: the key `k`
     // holds `1 + k % 7` values in the read, the value `v` admitted in round
     // `v`; the binder holds every key twice, in round 3.
-    let keys = 40_000i64;
+    let keys = 100_000i64;
     let relations = Relations::from([
         ("b".to_owned(), (0..keys).flat_map(|k| [(3, vec![k, 0]), (3, vec![k, 1])]).collect()),
         ("r".to_owned(), (0..keys).flat_map(|k| (0..=k % 7).map(move |v| (v as u32, vec![k, v]))).collect()),
@@ -320,23 +321,66 @@ fn a_sample_of_the_keys_estimates_a_matched_degree() {
 /// Whichever keys the hash samples, the degree is theirs.
 #[test]
 fn heavy_keys_are_kept_whatever_the_sample() {
-    // 40,000 keys, five times the capacity of a table. A heavy key has
-    // 3,000 binder rows and 500 values in the read; another key has one of
-    // each. A sample of an eighth of the keys holds two heavy keys on
-    // average, and would give 1, 188, 273 or 353 with none, one, two or four.
-    let exact = (16.0 * 3000.0 * 500.0 + 39_984.0) / (16.0 * 3000.0 + 39_984.0);
-    for salt in 0..8i64 {
+    // 100,000 keys, more than a table keeps. A heavy key has 3,000 binder
+    // rows and 500 values in the read; another key has one of each. A
+    // sample of the keys would hold a heavy key or lack it.
+    let exact = (16.0 * 3000.0 * 500.0 + 99_984.0) / (16.0 * 3000.0 + 99_984.0);
+    for salt in 0..6i64 {
         // Other key values, so other hashes and another sample.
         let key = |k: i64| k * 7919 + salt * 1_000_003;
         let (rows, values) = (|k: i64| if k < 16 { 3000 } else { 1 }, |k: i64| if k < 16 { 500 } else { 1 });
         let relations = Relations::from([
-            ("b".to_owned(), (0..40_000i64).flat_map(|k| (0..rows(k)).map(move |row| (0, vec![key(k), row]))).collect()),
-            ("r".to_owned(), (0..40_000i64).flat_map(|k| (0..values(k)).map(move |value| (0, vec![key(k), value]))).collect()),
+            ("b".to_owned(), (0..100_000i64).flat_map(|k| (0..rows(k)).map(move |row| (0, vec![key(k), row]))).collect()),
+            ("r".to_owned(), (0..100_000i64).flat_map(|k| (0..values(k)).map(move |value| (0, vec![key(k), value]))).collect()),
         ]);
         let request = DegreeRequest::Joined { reach: None, binder: selection("b"), from: vec![0], read: selection("r"), bound: vec![0], column: 1, staged: false };
         let values = admitted(&[request], &relations, &[("b", 2), ("r", 2)]);
         let estimated = values[0].1 as f64 / values[0].2 as f64;
         assert!((estimated - exact).abs() <= 0.1 * exact, "salt {salt}: {estimated} against {exact}");
+    }
+}
+
+/// PS-Heavy: heaviness is the join's. One key has most of the binder's
+/// rows and a hundred values in the read, where two thousand other keys
+/// have more: the read's own heavy keys do not include it.
+#[test]
+fn a_key_heavy_on_one_side_of_a_join_is_kept_on_the_other() {
+    let (rows, values) = (|k: i64| if k == 0 { 50_000 } else { 1 }, |k: i64| if k == 0 { 100 } else if k <= 2000 { 300 } else { 1 });
+    let exact = (50_000.0 * 100.0 + 2000.0 * 300.0 + 97_999.0) / (50_000.0 + 99_999.0);
+    for salt in 0..6i64 {
+        let key = |k: i64| k * 7919 + salt * 1_000_003;
+        let relations = Relations::from([
+            ("b".to_owned(), (0..100_000i64).flat_map(|k| (0..rows(k)).map(move |row| (0, vec![key(k), row]))).collect()),
+            ("r".to_owned(), (0..100_000i64).flat_map(|k| (0..values(k)).map(move |value| (0, vec![key(k), value]))).collect()),
+        ]);
+        let request = DegreeRequest::Joined { reach: None, binder: selection("b"), from: vec![0], read: selection("r"), bound: vec![0], column: 1, staged: false };
+        let found = admitted(&[request], &relations, &[("b", 2), ("r", 2)]);
+        let estimated = found[0].1 as f64 / found[0].2 as f64;
+        // Without the key the degree is about 7.
+        assert!((estimated - exact).abs() <= 0.1 * exact, "salt {salt}: {estimated} against {exact}");
+    }
+}
+
+/// PS-Heavy: a binder of few keys has them all kept in what it reads,
+/// however many keys the read has and however their degrees are spread.
+#[test]
+fn the_keys_of_a_binder_with_few_are_all_kept() {
+    // The binder holds 20,000 of the read's 200,000 keys; a quarter of
+    // them hold 200 values, more keys than are heavy.
+    let values = |k: i64| if k % 4 == 0 { 200 } else { 1 };
+    let exact = (5_000.0 * 200.0 + 15_000.0) / 20_000.0;
+    for salt in 0..3i64 {
+        let key = |k: i64| k * 7919 + salt * 1_000_003;
+        let relations = Relations::from([
+            ("b".to_owned(), (0..20_000i64).map(|k| (0, vec![key(k), 0])).collect()),
+            ("r".to_owned(), (0..200_000i64).flat_map(|k| (0..values(k)).map(move |value| (0, vec![key(k), value]))).collect()),
+        ]);
+        let request = DegreeRequest::Joined { reach: None, binder: selection("b"), from: vec![0], read: selection("r"), bound: vec![0], column: 1, staged: false };
+        let found = admitted(&[request], &relations, &[("b", 2), ("r", 2)]);
+        let estimated = found[0].1 as f64 / found[0].2 as f64;
+        // Every binder key is counted; what differs is the sketch of a key's 200 values.
+        assert_eq!(found[0].2, 20_000);
+        assert!((estimated - exact).abs() <= 0.03 * exact, "salt {salt}: {estimated} against {exact}");
     }
 }
 

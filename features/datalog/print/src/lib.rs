@@ -473,7 +473,8 @@ fn render_admitted(
     // rows are visited only if the observer asks. A derived relation it
     // wanted is passed delta by delta, so each row has its round; any
     // other relation is passed from its canonical layout, of round 0.
-    let relations = context.relations.iter().enumerate().map(|(index, relation)| {
+    // PS-Heavy: every relation is offered for a survey first.
+    let (surveys, relations): (Vec<_>, Vec<_>) = context.relations.iter().enumerate().map(|(index, relation)| {
         let canonical = &context.layouts[relation.providers.canonical];
         let host = &canonical.host;
         let arity = relation.declaration.arity();
@@ -517,17 +518,21 @@ fn render_admitted(
                 #pass
             });
         }
-        quote!(::cq_storage::statistics::collection::relation(#index, #rows, &mut |visit| {
+        (quote!(::cq_storage::statistics::collection::survey(#index, &mut |visit| {
             #dispatch_import
             #pass
-        });)
-    });
+        });), quote!(::cq_storage::statistics::collection::relation(#index, #rows, &mut |visit| {
+            #dispatch_import
+            #pass
+        });))
+    }).unzip();
     let clock = clock();
     syn::parse2(quote!({
         ::cq_storage::statistics::collection::program_begin(#descriptor);
         let #clock = ::core::sync::atomic::AtomicUsize::new(0);
         #(#wants)*
         #(#bindings)* #bind_observer #(#strata)*
+        #(#surveys)*
         #(#relations)*
         let #output = #result;
         ::cq_storage::statistics::collection::program_end();

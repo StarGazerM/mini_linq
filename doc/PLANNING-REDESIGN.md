@@ -1220,24 +1220,69 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
     same rows by the same key share a table.
     **PS-Heavy (2026-11-19).** A sample of keys chosen by hash has a
     heavy key or lacks it, and a degree summed over rows is mostly its
-    heavy keys. So a relation is passed twice. The first pass finds, for
-    each key column list a table of the relation uses, the keys most of
-    its rows hold: a Misra-Gries summary of 4,096 counters, of which the
-    1,024 largest are its heavy keys. In the second pass a table keeps a
-    heavy key whatever its hash, and halving its share drops light keys
-    only. The fact weighs each key by one over the chance that both of
-    its tables hold it: 1 where both hold it for sure; where one samples
-    it, that table's share inverted; where both do, the smaller share's.
-    A key a sampling side might have dropped is left out; a key that side
-    would have kept and lacks has no rows there. A reach weighs its two
-    keys so and multiplies.
-    Why: `VPT_LoadField` on soot. `InstanceFieldPointsTo` rows by field
-    against `ReachableLoadInstanceField` by field (9,691 fields, half of
-    them sampled, covering 39% of the changing rows): 4.46 loads a
-    changing row from the sample, 66.2 with every key kept. Planned from
-    4.46 the hole cost soot 123 s; from 66.2 the planner keeps the written
-    order, and soot takes 376 and 371 s advised against 392 and 387 s
-    written (two alternating runs beside another job);
+    heavy keys. So every relation is surveyed before any is admitted
+    (`collection::survey`, a first pass over each). The survey finds, for
+    each key column list a table of the relation uses, the keys tables
+    keep for sure: all of them where the relation has at most 65,536
+    distinct ones; else the keys most of its rows hold (a Misra-Gries
+    summary of 4,096 counters, the 1,024 largest). Sureness is the
+    join's, not one relation's: the tables a request joins by a key share
+    their sure keys, so a statement relation's few keys are all kept in
+    the derived relation it reads, and a key heavy on one side is kept on
+    the other. A table keeps a sure key whatever its hash; its capacity
+    counts the others, and halving its share drops only those. The fact
+    weighs a sure key 1 and a sampled key by the smaller share inverted.
+    A reach's reach keys are a plain sample on the binder's side.
+
+    Checked on bloat against the exact degrees of its relations
+    (`audit.py` under the corpus's `vp-written`; 240 direct unstaged
+    degrees, by DuckDB over the engine's exported relations):
+
+    | collector | median error | off by over 25% | off by over 2x | worst |
+    |---|---:|---:|---:|---:|
+    | a relation's own heavy keys (first PS-Heavy) | 2.3% | 33 | 17 | 30x |
+    | heavy keys shared across a join | 1.4% | 11 | 3 | 3.9x |
+    | and all keys of a relation with few | 0.6% | 0 | 0 | 14% |
+
+    The calibrated bloat run takes 35.6 s and 6.4 GB (31.2 s and 5.0 GB
+    before the survey kept the few keys).
+    The errors were of two kinds. One key with most of a join: on bloat
+    `ArrayIndexPointsTo` by array object against `VarPointsTo` by object
+    was 20.45 for an exact 105.6, of which one array object is 56% (1,575
+    of the changing rows, 1,741 variables, not among `VarPointsTo`'s own
+    heaviest objects); on soot `InstanceFieldPointsTo` by field against
+    `ReachableLoadInstanceField` by field was 4.46 for an exact 68.3, of
+    which one field is 88%. And a statement relation's keys sampled with
+    those of the derived relation it reads: `ArrayTypeCompat` by object
+    against `VarPointsTo` by object was 1.54 for an exact 45.6, and
+    `ReachableLoadInstanceField` by base against `VarPointsTo` by
+    variable 69.7 for 17.9; a variable's points-to set has a median of 1
+    object and a 99th percentile of 3,330, so a sixty-fourth of the
+    variables has such a one or lacks it. From 1.54 the planner read
+    `VarPointsTo` by object once a round in `VPT_LoadArray`; from 45.6 it
+    reads `LoadArrayIndex`, `Reachable`, `VarPointsTo` by the base
+    variable, and the changing occurrence last.
+
+    Where the skew sits in the analyzed program (soot and bloat, from
+    their stored relations, `skew.py` beside `audit.py`):
+    - `VPT_LoadArray` from `ArrayIndexPointsTo`. The analysis has no
+      contexts, so every collection's backing array is one of a few
+      `new Object[]` sites in the library (`Arrays.copyOf`,
+      `AbstractCollection.toArray`, `ArrayList.<init>`, and on soot about
+      150 like them). Each holds every object ever put in a collection
+      (3,330 on bloat, 19,812 on soot) and is pointed to by every
+      variable that may hold a backing array (22 to 226 on bloat, about
+      14,300 on soot). Read first, a changing row pays the variables of
+      its array: 105.6 on bloat, 6,438 on soot, the top 100 arrays 76% of
+      it. That degree is of `VarPointsTo` itself, by object: 1,090
+      variables an object on bloat and 9,957 on soot. It grows with the
+      fixpoint; the array loads of the text do not (8,003 and 21,613).
+    - `VPT_LoadField` from `InstanceFieldPointsTo`. One field of soot's
+      generated parser, `beaver.Symbol.value` (`Object`): 3.08M of the
+      changing rows, each meeting its 1,109 reachable loads, 88% of the
+      rule's bindings; `java_cup.runtime.Symbol.value` is next with 756
+      loads. Bloat's widest is `Instruction.operand`, 9 loads and 25%. No
+      statistic of bloat holds a field bloat lacks;
   - `visible`: exact, from the rows each relation gained by round.
   The boundaries: the planner derives the requests and reads facts
   (`cq-cost`); `cq-evidence` is their schema; `cq_load::stats` turns
