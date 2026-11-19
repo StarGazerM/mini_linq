@@ -224,9 +224,37 @@ impl CandidateLease {
             return Err("candidate live length exceeds reserved row capacity".into());
         }
         let lanes = lane_count(&self.packing, live_len)?;
-        // SAFETY: the caller initialized this prefix and publishes no writers;
-        // the shared slice retains the arena slot until every batch is dropped.
-        let buffer = unsafe { Buffer::shared_slice(self.buffer, 0, lanes)? };
+        let (live, held) = (lanes * size_of::<u64>(), self.buffer.allocated_bytes());
+        // A slot above the retained size is this batch's alone, sized by the
+        // hole's previous count. When this result is at most half of it and
+        // the rest is more than a retained slot, the rows move to a slot of
+        // their own size: the spare capacity would otherwise stay allocated
+        // through admission, beside every other batch of the round.
+        let buffer = if held > RETAINED_SLOT_BYTES
+            && live <= held / 2
+            && held - live > RETAINED_SLOT_BYTES
+        {
+            let pool = self.buffer.pool().clone();
+            // SAFETY: the copy below initializes all of it on the stream that
+            // wrote the rows, and the oversized slot is freed after the copy
+            // on that same stream.
+            let exact = unsafe { Buffer::<u64>::uninitialized(pool.clone(), lanes)? };
+            if live != 0 {
+                unsafe {
+                    cuda_core::simt::memory::memcpy_dtod_async(
+                        exact.cu_deviceptr(),
+                        self.buffer.cu_deviceptr(),
+                        live,
+                        pool.stream().cu_stream(),
+                    )?;
+                }
+            }
+            exact
+        } else {
+            // SAFETY: the caller initialized this prefix and publishes no writers;
+            // the shared slice retains the arena slot until every batch is dropped.
+            unsafe { Buffer::shared_slice(self.buffer, 0, lanes)? }
+        };
         Ok(CandidateBatch {
             storage: Arc::new(BatchStorage {
                 buffer,
@@ -343,9 +371,9 @@ pub(crate) fn concatenate_ranges<W: Word>(
         let bytes = count * bytes_per_word;
         if bytes != 0 {
             // SAFETY: exact packing/word widths and lane order make the lanes
-            // byte-identical to W on CUDA. Both buffers share this pool stream;
-            // slices are initialized and disjoint, and pool frees/reuse follow
-            // the copy in stream order even when callers drop the input batch.
+            // byte-identical to W on CUDA. The slices are initialized and
+            // disjoint, and the batch's production precedes this stream
+            // (DL-WaveLanes join).
             unsafe {
                 cuda_core::simt::memory::memcpy_dtod_async(
                     output.cu_deviceptr() + offset as u64,
@@ -356,6 +384,28 @@ pub(crate) fn concatenate_ranges<W: Word>(
             }
         }
         offset += bytes;
+    }
+    // A batch is freed on its own pool's stream. For a lane's batch that
+    // stream is not this one, so its free is ordered after the copies above
+    // by an event: a large block returns to the driver the moment its stream
+    // reaches the free, and the driver may unmap it for this stream's next
+    // allocation while the copy is still pending.
+    let mut copied = None;
+    for (index, &(batch, ..)) in ranges.iter().enumerate() {
+        let lane = batch.pool();
+        let again = ranges[..index]
+            .iter()
+            .any(|(other, ..)| Arc::ptr_eq(other.pool(), lane));
+        if Arc::ptr_eq(lane, &pool) || again {
+            continue;
+        }
+        if copied.is_none() {
+            let event = pool.context().new_event(None)?;
+            event.record(pool.stream())?;
+            copied = Some(event);
+        }
+        lane.stream()
+            .wait(copied.as_ref().expect("recorded above"))?;
     }
     Ok(output)
 }

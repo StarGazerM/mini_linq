@@ -13,6 +13,38 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- `doop-gpu` runs all four xlarge DOOP datasets; soot and jython failed
+  with CUDA error 700 before. Three changes in the GPU Datalog runtime and
+  printer:
+  - A lane's candidate batch is freed on the lane's stream, which nothing
+    ordered after the main stream's copy out of it. A slot above 1 GiB
+    belongs to its batch and returns to the driver at once; the driver
+    could unmap it for the main stream's next large allocation while the
+    copy was pending (soot: a 1.75 GB batch beside a 2.3 GB request).
+    `concatenate_ranges` now records an event after its copies and every
+    lane stream it read from waits for it.
+  - The printer admits a publication's candidate bag one sort portion at a
+    time (`fresh_batches`) and builds the other admitted orders the same
+    way (`reorder_unique`), instead of copying the whole bag first. The
+    runtime half landed in `894e1dd5`; the printer half and the callers
+    of `GPU_DATALOG_PROFILE` had stayed in a stash, so the profile printed
+    nothing. Both are restored; holes are named `Label@delta#hole`.
+  - A candidate slot above 1 GiB that its result fills to at most half,
+    with more than 1 GiB to spare, gives the spare back when the batch is
+    published (`CandidateLease::finish` moves the rows to a slot of their
+    size). The slot is sized by the hole's previous count: on jython one
+    hole held 20 GB for 4.3 GB of rows beside a 12.7 GB batch.
+  `GPU_DATALOG_TRACE_MEMORY` now also reports the results of worker-lane
+  holes. Fixpoint and output, medians of three, RTX 6000 Ada: soot 9.35
+  and 0.51 s, jython 20.94 and 0.69 s (pool peak 41.0 of 48 GB), scala
+  12.26 and 0.91 s, kotlin 12.40 and 0.84 s; batik, cassandra and xalan
+  unchanged (1.46, 0.48, 0.55 s). All 26 relation counts equal the CPU
+  engine's on the four xlarge datasets; xalan equals it tuple for tuple.
+  The DOOP load-array rule is labelled `VPT_LoadArray`. An authored order
+  for its version with changing `arrayindexpointsto` (the load's base
+  first) was measured and not kept: soot 9.4 → 8.1 s and kotlin 12.4 →
+  11.3 s, but scala 12.2 → 14.4 s.
+
 - GPU Datalog final output no longer builds one heap vector per row. The
   printer's outputs call `RadixLayout::publish_rows` (new
   `datalog-runtime/src/publish.rs`): the longest run of a relation streams

@@ -338,10 +338,6 @@ fn tc_emits_resident_waves_admission_and_publication() {
         .unwrap()
         .to_token_stream()
         .to_string();
-    assert!(source.contains("concatenate_batches"));
-    // Admission is read-only fresh; publication appends to every layout.
-    assert!(source.contains(". fresh ("));
-    assert!(!source.contains(". admit ("));
     assert!(source.contains("append_sorted"));
     assert!(source.contains("RadixLayout"));
     assert!(source.contains("DeviceRadixRun"));
@@ -441,7 +437,6 @@ fn admitted_orders_are_printed_once_per_publication_and_reused() {
     let device = program.storage.device.as_ref().unwrap();
     let source = print::compile(&program).unwrap().to_token_stream().to_string();
     assert!(source.contains("new_set"));
-    assert!(source.contains("sort_known_unique"));
     for (relation, record) in device.relations.iter().enumerate() {
         let sites = source.matches(&format!("let __cq_gpu_admitted_{relation}_0 =")).count();
         for order in 1..record.admitted_orders.len() {

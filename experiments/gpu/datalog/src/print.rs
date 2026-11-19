@@ -198,12 +198,10 @@ fn admitted_orders(program: &Program, index: usize, fresh: &Ident) -> TokenStrea
         let permutation = &order.permutation;
         let build = match order.certificate.to_string().as_str() {
             "sorted_unique" => quote!(#fresh.clone()),
-            "unique_permutation" => quote!({
-                let permuted = #packing.permute_device(
-                    #fresh.buffer(), #fresh.len(), &[#(#permutation),*], #threads)?;
-                // SAFETY: the checked full-heading bijection preserves uniqueness
-                // and the same declared active bit width, but not ordering.
-                unsafe { #state.sort_known_unique(&permuted, #fresh.len())? }
+            // SAFETY: the checked full-heading bijection preserves uniqueness
+            // and the same declared active bit width, but not ordering.
+            "unique_permutation" => quote!(unsafe {
+                #state.reorder_unique(&#packing, &#fresh, &[#(#permutation),*], #threads)?
             }),
             _ => unreachable!("checked admitted input certificate"),
         };
@@ -261,12 +259,16 @@ fn admit_publish(
     let i = transaction.relation;
     let relation = &context.relations[i];
     let record = &device(program).relations[i];
-    let word = &record.word;
     let packing = local("packing", i);
     let candidates = local("candidates", i);
     let fresh = local("fresh", i);
-    let buffer = format_ident!("__cq_gpu_candidate_rows");
-    let admit = admission(program, context, i, &buffer, &fresh);
+    let threads = device(program).layouts[relation.providers.canonical].permutation_threads;
+    let order = &record.admitted_orders[0].columns;
+    let permutation = match record.candidate_order.to_string().as_str() {
+        "canonical" => quote!(::core::option::Option::None),
+        "permutation" => quote!(::core::option::Option::Some((&[#(#order),*][..], #threads))),
+        _ => unreachable!("checked candidate order certificate"),
+    };
     let orders = admitted_orders(program, i, &fresh);
     let relation_name = relation.declaration.name.to_string();
     let canonical = local("layout", relation.providers.canonical);
@@ -301,18 +303,32 @@ fn admit_publish(
     }
     Ok(quote!({
         let #fresh = {
-            let #buffer = ::gpu_datalog_runtime::concatenate_batches::<#word>(__cq_gpu_pool.clone(), &#packing, &#candidates)?;
+            let candidates = #candidates.iter().map(|batch| batch.len()).sum::<usize>();
+            if ::gpu_datalog_runtime::profiling() {
+                ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index_in_stratum, "admit", #relation_name);
+            }
+            // SAFETY: every batch was packed with this relation's declared
+            // packing, which initializes exactly the recorded codec bit window.
+            // The bag is admitted one sort portion at a time, never copied whole.
+            let #fresh = unsafe { #canonical.fresh_batches(&#packing, &#candidates, #permutation)? };
             ::std::mem::drop(#candidates);
-            let candidates = #buffer.len();
-            #admit
             if ::gpu_datalog_runtime::trace_kernels() {
                 ::std::eprintln!("gpu_datalog_admission\tstratum={}\tphase={}\tround={}\trelation={}\tcandidates={}\tadmitted={}",
                     #index_in_stratum, #phase, __cq_gpu_round, #relation_name, candidates, #fresh.len());
             }
             #fresh
         };
+        if ::gpu_datalog_runtime::profiling() {
+            ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index_in_stratum, "orders", #relation_name);
+        }
         #orders
+        if ::gpu_datalog_runtime::profiling() {
+            ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index_in_stratum, "publish", #relation_name);
+        }
         #(#operations)*
+        if ::gpu_datalog_runtime::profiling() {
+            ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index_in_stratum, "holes", "");
+        }
     }))
 }
 
@@ -912,9 +928,15 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             #(#initialize)*
             #initialized
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "setup")?;
+            if ::gpu_datalog_runtime::profiling() {
+                ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, 0, "holes", "");
+            }
             ::gpu_datalog_runtime::trace_work("setup");
             ::gpu_datalog_runtime::reset_work_counters();
             #(#strata)*
+            if ::gpu_datalog_runtime::profiling() {
+                ::gpu_datalog_runtime::profile_report(&__cq_gpu_pool);
+            }
             if __cq_gpu_trace_memory { #(#census)* }
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "fixpoint")?;
             ::gpu_datalog_runtime::trace_work("fixpoint");
@@ -1047,7 +1069,22 @@ fn phase(
             } else {
                 None
             };
+            // `GPU_DATALOG_PROFILE` names a hole by its rule, changing occurrence and index.
+            let profile_label = {
+                let variant = &program.storage.incremental.variants[rule.variant];
+                let label = program.storage.incremental.strata.source.labels[variant.rule]
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| head_name.clone());
+                let delta = variant
+                    .delta
+                    .map_or_else(|| "seed".to_owned(), |position| position.to_string());
+                format!("{label}@{delta}#{hole}")
+            };
             launches.push(quote!({
+                if ::gpu_datalog_runtime::profiling() {
+                    ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index, "holes", #profile_label);
+                }
                 #scan
                 if __cq_gpu_trace_memory {
                     let memory = __cq_gpu_pool.memory_stats();
@@ -1115,16 +1152,39 @@ fn phase(
                 }
                 let count = wave.holes.len();
                 let delivered = wave.holes.iter().enumerate().map(|(at, &rule_index)| {
-                    let candidates = local("candidates", rules[rule_index].head);
-                    quote!(#candidates.push(__cq_gpu_wave[#at].take().expect("joined wave hole"));)
+                    let rule = &rules[rule_index];
+                    let candidates = local("candidates", rule.head);
+                    // The main lane's holes are traced where they run; a
+                    // worker lane's result is first seen here.
+                    let trace = (!entry.lanes[0].contains(&rule_index)).then(|| {
+                        let (hole, head) = (rule.hole, context.relations[rule.head].declaration.name.to_string());
+                        quote!(if __cq_gpu_trace_memory {
+                            ::std::eprintln!("gpu_datalog_hole_result\tstratum={}\tphase={}\thole={}\trows={}\tcapacity={}\tbytes={}\thead={}",
+                                #index, #phase, #hole, __cq_gpu_batch.len(), __cq_gpu_batch.reserved_capacity(), __cq_gpu_batch.allocated_bytes(), #head);
+                        })
+                    });
+                    quote!({
+                        let __cq_gpu_batch = __cq_gpu_wave[#at].take().expect("joined wave hole");
+                        #trace
+                        #candidates.push(__cq_gpu_batch);
+                    })
                 });
+                let mark = |label: &str| quote!(if ::gpu_datalog_runtime::profiling() {
+                    ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index, "holes", #label);
+                });
+                let (submit, main, join, deliver) =
+                    (mark("submit"), mark("main lane"), mark("join lanes"), mark("deliver"));
                 steps.push(quote!({
                     let mut __cq_gpu_wave: ::std::vec::Vec<::std::option::Option<::gpu_datalog_runtime::CandidateBatch>> =
                         (0..#count).map(|_| None).collect();
+                    #submit
                     __cq_gpu_lanes.fork()?;
                     #(#submits)*
+                    #main
                     #(#launches)*
+                    #join
                     for (at, batch) in __cq_gpu_lanes.join()? { __cq_gpu_wave[at] = Some(batch); }
+                    #deliver
                     #(#delivered)*
                 }));
             }

@@ -496,7 +496,7 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             heapallocation_type(baseheap, baseheaptype),
             componenttype(baseheaptype, componenttype_),
             supertypeof(componenttype_, heaptype);
-    varpointsto(heap, to) :-
+    VPT_LoadArray: varpointsto(heap, to) :-
             reachable(inmethod),
             loadarrayindex(base, to, inmethod),
             varpointsto(baseheap, base),

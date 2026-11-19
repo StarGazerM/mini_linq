@@ -16,8 +16,12 @@
 //!    makes the main stream wait for all of them before returning the batches,
 //!    so admission and publication (DL-PublishAfterReaders) follow every read.
 //!
-//! Batches stay bound to their lane pool. Blocks a lane frees after the join
-//! are reused by RCCL only behind that lane's free event, and a lane reuses a
+//! Batches stay bound to their lane pool, so a batch is freed on its lane's
+//! stream. The main stream's copy out of a batch is therefore followed by an
+//! event the lane stream waits for (`concatenate_ranges`): without it a large
+//! block returns to the driver while the copy is pending, and the driver may
+//! unmap it for the main stream's next allocation. Blocks a lane frees are
+//! reused by RCCL only behind that lane's free event, and a lane reuses a
 //! block or arena slot only after its next fork, which follows the main
 //! stream's consumption of the batch.
 use crate::{CandidateArena, CandidateBatch, Pool, Result};

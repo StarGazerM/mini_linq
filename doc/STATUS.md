@@ -21,11 +21,31 @@ unchanged (the same 155 hole kernels by name).
   sampled witness (26 deduplicated counts and 1,000 rows per relation) is
   byte-identical to the previous output path's. Local `tools/gpu_gate.sh`
   PASS (Cassandra 26/26); formal checker PASS (523 decode sites).
-- Open on xlarge: soot and jython fail in `doop-gpu` with CUDA error 700;
-  on soot at the first candidate batch above the one-portion sort limit
-  (289,137,314 rows, `sort/portion-unique`). On scala one rule version
-  (load-array, changing `arrayindexpointsto`) is 33% of rule kernel time.
+- Open on xlarge (at that commit): soot and jython fail in `doop-gpu` with
+  CUDA error 700. On scala one rule version (load-array, changing
+  `arrayindexpointsto`) is 33% of rule kernel time.
   Raw data: `/data/design-notes/doop-memory/profile-xlarge/`.
+
+**`doop-gpu` on all four xlarge datasets (2026-11-19, on `b6ed766b`):** soot
+and jython complete (CHANGELOG: lane free ordering, admission by portions
+wired into the printer, oversized candidate slots returned). Statements
+below of 2026-11-11 that admission runs by portions describe a working
+tree whose printer half was never committed; it is committed now.
+- Fixpoint and output, medians of three, RTX 6000 Ada: soot 9.35 and
+  0.51 s, jython 20.94 and 0.69 s (pool peak 41.0 GB), scala 12.26 and
+  0.91 s, kotlin 12.40 and 0.84 s. batik 1.46, cassandra 0.48, xalan 0.55 s
+  as before.
+- Exactness: all 26 relation counts equal the CPU engine's
+  (`corpus-20261110/default-results.json`) on soot, jython, scala and
+  kotlin; xalan equals the CPU engine tuple for tuple.
+- Open: jython's candidate volume (the two versions of the assign rule
+  produce 42.0 billion `varpointsto` candidate rows for 438 million facts,
+  up to 2.85 billion in one round) leaves 7 GB of the card. The load-array version with changing
+  `arrayindexpointsto` still expands every variable pointing to a new
+  array content's base; reading the load's base first helps soot and
+  kotlin and costs scala 17%, so no order was fixed. Driving that version
+  from the delta's distinct keys needs a plan shape the GPU pipeline does
+  not have (design note of 2026-11-11).
 
 **Batch gates (2026-11-18, RCCL packed primitives and opt-in packed radix
 runs `325dfbdd` vs `e797977e`):** four commits; no IR grammar
