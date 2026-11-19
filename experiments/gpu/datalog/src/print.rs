@@ -867,20 +867,17 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             let ty = &declared.ty;
             match symbols.codec(declared.logical_type_id) {
                 // DECODE P: generated SymbolCodec inverse resolves final datalog host output fields.
-                Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(row[#position] as u32)),
+                Some(codec) => quote!(<#codec as ::gpu_datalog_runtime::SymbolCodec<#ty>>::decode(__cq_gpu_row.field(#position) as u32)),
                 // DECODE P: generated numeric carrier inversion constructs final host output fields.
-                None => quote!(row[#position] as #ty),
+                None => quote!(__cq_gpu_row.field(#position) as #ty),
             }
         });
-        // Borrowed canonical rows cross to the host only at the output boundary,
-        // where logical host symbols are restored.
+        // Canonical keys cross to the host only at the output boundary, where
+        // each is written once as its logical host row.
         let runner = program_runner();
         quote!(#runner(#[inline] || -> ::gpu_datalog_runtime::Result<_> {
             // DECODE P: invert canonical radix key fields only at final output.
-            Ok(#host.to_rows()?.into_iter()
-                .map(|row| (#(#fields,)*))
-                .collect::<::std::vec::Vec<_>>()
-                .into_iter())
+            Ok(#host.publish_rows(&mut __cq_gpu_output, |__cq_gpu_row| (#(#fields,)*))?.into_iter())
         })?)
     }).collect::<Vec<_>>();
     let result = if outputs.len() == 1 {
@@ -921,7 +918,9 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             if __cq_gpu_trace_memory { #(#census)* }
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "fixpoint")?;
             ::gpu_datalog_runtime::trace_work("fixpoint");
+            let mut __cq_gpu_output = ::gpu_datalog_runtime::OutputStaging::new(&__cq_gpu_pool);
             let __cq_gpu_result = #result;
+            ::std::mem::drop(__cq_gpu_output);
             ::gpu_datalog_runtime::phases::mark(&__cq_gpu_pool, "output")?;
             Ok(__cq_gpu_result)
         })().expect("GPU Datalog execution failed")

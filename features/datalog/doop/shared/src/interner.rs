@@ -7,7 +7,13 @@
 //! Query constant lookup must not be confused with inserting symbols at invocation preparation.
 
 use ahash::AHashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{
+    Arc, LazyLock, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
+
+/// Number of interned symbols, for code validation without the dictionary lock.
+static INTERNED: AtomicUsize = AtomicUsize::new(0);
 
 /// Process-global string identity, shared by both engines and all input columns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -23,14 +29,12 @@ impl IStr {
     ///
     /// Panics if the code has never been interned.
     // Code restoration retains IStr's identity representation; it does not resolve dictionary strings.
+    #[inline]
     pub fn from_code(code: u32) -> Self {
-        let exists = (code as usize)
-            < interner()
-                .lock()
-                .expect("string interner poisoned")
-                .strings
-                .len();
-        assert!(exists, "symbol code {code} has never been interned");
+        assert!(
+            (code as usize) < INTERNED.load(Ordering::Acquire),
+            "symbol code {code} has never been interned"
+        );
         Self(code)
     }
 }
@@ -67,6 +71,7 @@ pub fn sym(value: &str) -> IStr {
     // One allocation per distinct string, shared by both lookup directions.
     let value: Arc<str> = Arc::from(value);
     interner.strings.push(Arc::clone(&value));
+    INTERNED.store(interner.strings.len(), Ordering::Release);
     interner.ids.insert(value, id);
     id
 }

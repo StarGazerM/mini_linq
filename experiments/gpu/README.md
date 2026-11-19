@@ -438,7 +438,10 @@ deduplicate, since projection need not be injective. Recorded delta moves
 are unchanged. Maintained views use `republish(&state)`; initial construction
 uses `from_sorted(pool, packing, params, batch)`, and delta replacement uses
 `with_sorted(batch, params)` to retain kernels and field descriptors.
-Explicit output uses `to_rows`. Full-key views require the state/snapshot's
+Final output uses `publish_rows` (`datalog-runtime/src/publish.rs`): rows in
+key order, decoded on all host threads straight into the result, the longest
+run streamed through pinned staging; `to_rows` remains for diagnostics and
+the Sequence host fallback. Full-key views require the state/snapshot's
 construction-only set witness, established by `new_set` and preserved by set
 append/replacement. Occurrence publication into that state is rejected;
 unit item columns alone are not a uniqueness certificate.

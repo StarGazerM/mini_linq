@@ -8,6 +8,25 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**GPU Datalog final output (2026-11-19, on `7430f7c5`):** the output phase
+was one host thread building a heap vector per row (`to_rows`): on the two
+xlarge DOOP datasets that run it took 88 to 91% of `doop-gpu` evaluation.
+Outputs now use `RadixLayout::publish_rows` (CHANGELOG). Device code is
+unchanged (the same 155 hole kernels by name).
+- `doop-gpu` output phase, RTX 6000 Ada, medians of three (one observation
+  before): scala 121.0 → 0.94 s, kotlin 92.0 → 0.85 s, batik 5.07 → 0.155 s,
+  xalan 0.48 → 0.034 s, cassandra 0.30 → 0.018 s. Fixpoints: scala 12.0 and
+  12.2 s, kotlin 12.1 and 12.3 s.
+- Exactness: xalan equals the CPU engine on all 26 outputs; on scala the
+  sampled witness (26 deduplicated counts and 1,000 rows per relation) is
+  byte-identical to the previous output path's. Local `tools/gpu_gate.sh`
+  PASS (Cassandra 26/26); formal checker PASS (523 decode sites).
+- Open on xlarge: soot and jython fail in `doop-gpu` with CUDA error 700;
+  on soot at the first candidate batch above the one-portion sort limit
+  (289,137,314 rows, `sort/portion-unique`). On scala one rule version
+  (load-array, changing `arrayindexpointsto`) is 33% of rule kernel time.
+  Raw data: `/data/design-notes/doop-memory/profile-xlarge/`.
+
 **Batch gates (2026-11-18, RCCL packed primitives and opt-in packed radix
 runs `325dfbdd` vs `e797977e`):** four commits; no IR grammar
 (`check_ir_scope` PASS at base `e797977e`); formal checker PASS (522 decode

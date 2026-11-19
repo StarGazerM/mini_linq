@@ -2679,9 +2679,32 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
     }
 
     /// Explicit output reconstruction, never part of publication or admission.
-    // DECODE ?: radix to_rows unpacks host fields for final answers, diagnostics and intermediate fallback; caller publication evidence is required.
+    // DECODE ?: radix to_rows unpacks host fields for diagnostics and intermediate fallback; caller publication evidence is required.
     pub fn to_rows(&self) -> Result<Vec<Vec<i128>>> {
         self.to_host()?.into_iter().map(|key| self.packing().unpack(key)).collect()
+    }
+
+    /// Final answers in key order: every retained run is downloaded once and
+    /// `row` writes each key's host row straight into the result.
+    pub fn publish_rows<T: Send>(
+        &self, staging: &mut crate::OutputStaging,
+        row: impl Fn(crate::PackedRow<'_, W>) -> T + Sync,
+    ) -> Result<Vec<T>> {
+        let snapshot = self.snapshot();
+        let mut sizes = Vec::with_capacity(snapshot.runs.len());
+        #[cfg(feature = "packed-radix")]
+        let packed = snapshot.packed.as_ref().map_or(&[][..], |packed| &packed.runs);
+        #[cfg(feature = "packed-radix")]
+        sizes.extend(packed.iter().map(|run| run.len()));
+        let plain = sizes.len();
+        sizes.extend(snapshot.runs.iter().map(|run| run.key_count));
+        crate::publish::rows(staging, self.packing(), &sizes, |index| {
+            #[cfg(feature = "packed-radix")]
+            if let Some(run) = packed.get(index) {
+                return Ok(Arc::new(run.unpack()?));
+            }
+            Ok(snapshot.runs[index - plain].keys.clone())
+        }, &row)
     }
 
     pub fn live_bytes(&self) -> usize {

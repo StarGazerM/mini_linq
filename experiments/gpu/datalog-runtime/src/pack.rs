@@ -223,12 +223,31 @@ impl Field {
     }
 
     // DECODE ?: field sign-ordinal inverse serves publication and diagnostic data generators.
+    #[inline]
     fn decode(self, encoded: u128) -> i128 {
         if self.signed {
             encoded as i128 - (1_i128 << (self.bits - 1))
         } else {
             encoded as i128
         }
+    }
+}
+
+/// One downloaded key at the final-answer boundary. Fields are inverted on
+/// demand, in this packing's most-significant-first order, with no per-row
+/// allocation.
+#[derive(Clone, Copy)]
+pub struct PackedRow<'a, W> {
+    word: W,
+    fields: &'a [Field],
+}
+
+impl<W: Word> PackedRow<'_, W> {
+    // DECODE P: PackedRow inverts one field of a downloaded key for final host answer rows.
+    #[inline(always)]
+    pub fn field(&self, index: usize) -> i128 {
+        let field = self.fields[index];
+        field.decode(self.word.extract(field.shift, field.bits) as u128)
     }
 }
 
@@ -363,6 +382,23 @@ impl Packing {
                 field.decode(packed.extract(field.shift, field.bits) as u128)
             })
             .collect())
+    }
+
+    /// `packed` as a row of this schema; [`Self::stray_bits`] validates it.
+    #[inline(always)]
+    pub(crate) fn row<W: Word>(&self, packed: W) -> PackedRow<'_, W> {
+        PackedRow {
+            word: packed,
+            fields: &self.fields,
+        }
+    }
+
+    /// Whether `packed`, or the bitwise OR of several keys, has a bit set
+    /// outside this schema.
+    pub(crate) fn stray_bits<W: Word>(&self, packed: &W) -> bool {
+        (self.bits / 64..W::BITS / 64).any(|lane| {
+            packed.lane(lane) & !(mask(self.bits.saturating_sub(lane * 64)) as u64) != 0
+        })
     }
 
     /// Inclusive bounds avoid an unrepresentable successor of the maximum key.

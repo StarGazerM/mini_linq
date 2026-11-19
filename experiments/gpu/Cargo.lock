@@ -1333,6 +1333,7 @@ dependencies = [
  "cuda-device",
  "cuda-host",
  "gpu-device-columns",
+ "libc",
  "rccl-cub",
  "rccl-memory",
  "serde",

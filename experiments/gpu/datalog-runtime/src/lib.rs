@@ -13,6 +13,7 @@ pub mod pack;
 #[cfg(feature = "packed-radix")]
 pub mod packed_run;
 pub mod phases;
+mod publish;
 pub mod radix_run;
 mod runs;
 mod stats;
@@ -20,7 +21,8 @@ pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLe
 pub use gpu_device_columns::{Buffer, Pool};
 pub use lanes::{Job, Lane, Lanes};
 pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};
-pub use pack::{Column, Packing, Word};
+pub use pack::{Column, PackedRow, Packing, Word};
+pub use publish::OutputStaging;
 pub use radix_run::{
     DeviceItemColumns, DeviceRadixRun, ItemColumn, OffsetWord, RadixItemsView, RadixKeysView,
     RadixLayout, RadixLayoutView, RadixMatch, RadixMatches, RadixRunParams, RadixSnapshot,

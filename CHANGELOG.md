@@ -13,6 +13,27 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog final output no longer builds one heap vector per row. The
+  printer's outputs call `RadixLayout::publish_rows` (new
+  `datalog-runtime/src/publish.rs`): the longest run of a relation streams
+  through two reusable 32 MiB pinned chunks, and every host thread merges
+  its part of a chunk with the matching keys of the shorter runs straight
+  into the one result allocation, in key order as before; fields are read
+  through `PackedRow::field`. Before, `to_rows` downloaded the keys
+  pageable, sorted them on one host thread and allocated a `Vec<i128>` per
+  row. `OutputStaging` owns the pinned chunks for one program and frees
+  them after the last output; relations whose longest run is under 128 MiB
+  use a pageable download. `IStr::from_code` validates against an atomic
+  count instead of taking the interner lock per field. `doop-gpu` output
+  phase, RTX 6000 Ada, 24 host threads, medians of three after and one
+  observation before: scala (848 M rows, 8.26 GB of keys) 121.0 → 0.94 s,
+  kotlin 92.0 → 0.85 s, batik 5.07 → 0.155 s, xalan 0.48 → 0.034 s,
+  cassandra 0.30 → 0.018 s; host peak RSS on scala 49.2 → 8.9 GB. xalan
+  equals the CPU engine on all 26 outputs. The staged path is bound by
+  host memory, not the bus: an empty sink sustains 26 GB/s, decoding into
+  fresh memory 10 to 12 GB/s. `to_rows` remains for diagnostics and the
+  Sequence host fallback, which still has the per-row cost.
+
 - The planner prices a written order that reads its changing occurrence
   later and keeps it where it is cheaper (PLANNING-REDESIGN, VP-Written):
   `rounds x before + after + held`, from a new `rounds` degree request

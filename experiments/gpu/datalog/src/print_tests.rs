@@ -351,10 +351,6 @@ fn tc_emits_resident_waves_admission_and_publication() {
     assert!(source.contains(". republish (&"));
     assert!(source.contains("while"));
     assert!(source.contains("translate_arena"));
-    assert_eq!(
-        source.matches("to_rows").count(),
-        program.context.outputs.len()
-    );
     assert_eq!(source.matches("Rows :: rows").count(), 1);
     assert_eq!(source.matches(". hole (").count(), program.holes.len());
     for hole in 0..program.holes.len() {

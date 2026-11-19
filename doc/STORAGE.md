@@ -2049,7 +2049,9 @@ builds retain materialized group offsets and share an item-source map only
 when item columns exist. Output field reconstruction uses the recorded
 `output_permutation`, not a printer-derived item map.
 
-Explicit output materialization uses `to_rows`.
+Explicit output materialization uses `publish_rows`: one result allocation,
+no per-row allocation and no host sort (the runs are merged in key order);
+`to_rows` remains a diagnostic.
 State and snapshots carry a construction-only `full_key_set` witness:
 `new_set` establishes it and set append/replacement preserves it.
 Occurrence publication into a set state is rejected. Full-key validation and permutation require
