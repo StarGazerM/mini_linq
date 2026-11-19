@@ -23,6 +23,12 @@ sites); local `tools/gpu_gate.sh` PASS on an RTX 6000 Ada.
   pool live 273.4 → 114.5 MB, peak 314.5 → 141.9 MB, all 26 outputs exact;
   the same binary with plain storage runs 511.8 ms. Grouped and non-radix
   providers stay plain.
+- Three datasets on the merged tree `d28c212b` (same protocol, default → packed
+  fixpoint, pool live): xalan 529.3 → 524.6 ms, 245.2 → 105.1 MB; cassandra
+  476.6 → 473.2 ms, 113.0 → 52.4 MB; **batik 1424.3 → 1621.2 ms**, 1001.8 →
+  478.5 MB. The batik slowdown is the packed merge planner (14 launches of
+  `plan`, 162.7 ms in a trace); the feature stays opt-in. Profile:
+  `/data/design-notes/doop-performance-profile.md`.
 
 **Batch gates (2026-11-13, GPU Datalog state sharing and compile time
 `9c71e59f` vs `75ae1b4e`):** four commits; no IR grammar (`check_ir_scope`
