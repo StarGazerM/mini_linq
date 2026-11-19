@@ -212,7 +212,8 @@ fn admitted_orders(program: &Program, index: usize, fresh: &Ident) -> TokenStrea
     quote!(#(#orders)*)
 }
 
-/// Append and publish once per checked physical full state, then refresh all
+/// Formal rule DL-DeviceSharedOrder: append and publish once per checked
+/// physical full state (the owner of each admitted order), then refresh all
 /// logical prefix-read hosts with Arc-backed clones of that publication.
 fn full_layouts(
     program: &Program,
