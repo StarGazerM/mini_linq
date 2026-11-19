@@ -11,6 +11,69 @@ const PARAMS: RadixRunParams = RadixRunParams {
     block_threads: 256,
 };
 
+#[cfg(feature = "packed-radix")]
+#[test]
+fn packed_publications_survive_merge_permutation_and_delta_replacement() -> Result<()> {
+    type Layout = RadixLayout<(u32, u32), (), u64, u64, ()>;
+    let packed = std::env::var_os("GPU_DATALOG_PACKED_RUN").as_deref() != Some(std::ffi::OsStr::new("0"));
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Layout::derive_packing()?;
+    let mut state = DeviceRadixRun::new_set(pool.clone(), PARAMS, 64)?;
+    let empty = Layout::publish(&state, packing)?;
+    let values: Vec<u64> = (0..36_000u64).map(|i| ((1_000 + i) << 32) | (40_000 - i)).collect();
+    let input = Buffer::from_host(pool.clone(), &values)?;
+    let first = unsafe { SortedBatch::from_sorted(input, values.len())? };
+    unsafe { state.append_sorted(first.clone())?; }
+    let retained = empty.republish(&state)?;
+    assert_eq!(retained.allocated_bytes() < values.len() * size_of::<u64>(), packed);
+    let more: Vec<u64> = (36_000..49_000u64).map(|i| ((1_000 + i) << 32) | 1).collect();
+    let more = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &more)?, more.len())? };
+    unsafe { state.append_sorted(more)?; }
+    let successor = retained.republish(&state)?;
+    drop(state);
+    assert_eq!(successor.len(), 49_000);
+    assert_eq!(retained.to_host()?, values);
+    let permuted = retained.permuted_provider::<(u32, u32)>(&pool, &[1, 0], PARAMS, 256, 64)?;
+    let mut expected: Vec<_> = values.iter().map(|v| v.rotate_right(32)).collect();
+    expected.sort_unstable();
+    assert_eq!(permuted.to_host()?, expected);
+    let adopted = Layout::from_sorted(pool, Layout::derive_packing()?, PARAMS, first.clone(), 64)?;
+    assert_eq!(adopted.to_host()?, values);
+    assert_eq!(adopted.allocated_bytes() < values.len() * size_of::<u64>(), packed);
+    let delta = empty.with_sorted(first.clone(), PARAMS)?;
+    assert_eq!(delta.to_host()?, values);
+    // The replacement shares the immutable batch, even in a packed layout.
+    assert_eq!(delta.with_sorted(first, PARAMS)?.snapshot_id(), delta.snapshot_id());
+    Ok(())
+}
+
+#[cfg(feature = "packed-radix")]
+#[test]
+fn fixed_leaf_cursor_reads_large_payload_offsets() -> Result<()> {
+    type Layout = RadixLayout<(u32, u32), (), u64, u64, ()>;
+    let pool = Pool::new(0, 0, 0)?;
+    // Each full leaf needs eight high-column bits and 32 low-column bits:
+    // 160 payload words. The probes straddle the 16-bit word-offset limit.
+    let words: Vec<_> = (0..106_000u32).map(|i| {
+        (u64::from(i) << 32) | u64::from(i.wrapping_mul(0x9e37_79b9))
+    }).collect();
+    let probes = [0, 255, 256, 409 * 256, 410 * 256 - 1, 410 * 256, 105_999];
+    let batch = unsafe { SortedBatch::from_sorted(Buffer::from_host(pool.clone(), &words)?, words.len())? };
+    let layout = Layout::from_sorted(pool.clone(), Layout::derive_packing()?, PARAMS, batch, 64)?;
+    assert_eq!(layout.view().keys.run_count, 1);
+    let positions = Buffer::from_host(pool.clone(), &probes)?;
+    let answers = Buffer::<[i64; 4]>::zeroed(pool.clone(), probes.len())?;
+    let module = unsafe { decode_kernel::load(pool.context())? };
+    module.read_slots(pool.stream(), &module.prepare_read_slots(cuda_core::LaunchConfig1D::new(1, 256, 0))?,
+        layout.view(), positions.ptr(), probes.len() as u32, answers.ptr())?;
+    for (slot, answer) in probes.into_iter().zip(answers.to_host()?) {
+        let word = words[slot as usize];
+        let (a, b) = ((word >> 32) as i64, word as u32 as i64);
+        assert_eq!(answer, [a, b, a, b]);
+    }
+    Ok(())
+}
+
 #[test]
 fn lane_workers_consume_recorded_initializer_and_release_thread_scratch() -> Result<()> {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -359,6 +422,21 @@ mod decode_kernel {
         view: RadixLayoutView<[u64; 4], u64>, rows: u32, output: *mut i64, ranges: *mut u64,
     ) {
         unsafe { decode(view, rows, output, ranges); }
+    }
+
+    #[kernel]
+    #[launch_bounds(256)]
+    #[launch_contract(domain = 1, block = (256, 1, 1))]
+    pub fn read_slots(view: RadixLayoutView<u64, u64>, positions: *const u64, count: u32, out: *mut [i64; 4]) {
+        let i = thread::index_1d().get();
+        if i < count as usize {
+            unsafe {
+                let slot = *positions.add(i);
+                let (run, cursor) = device::locate_key(view.keys, slot);
+                *out.add(i) = [device::decode_key(view, run, cursor, 0), device::decode_key(view, run, cursor, 1),
+                    device::decode_key(view, run, slot, 0), device::decode_key(view, run, slot, 1)];
+            }
+        }
     }
 }
 

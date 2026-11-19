@@ -200,6 +200,23 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   the earlier one. Collection on bloat (699 requests, 33.4M rows): 4.4 s on
   24 threads, 21 s on one, 4.3 GB. Not run: a calibrated DOOP engine.
 
+- Experimental GPU `packed_run` seals immutable sorted unique keys into
+  per-column frame-of-reference blocks, with pooled payload/header/fence
+  accounting, device bounds/membership, packed tiled merge and geometric set
+  admission. Blocks default to 256 rows (runtime-configurable); runs of at most
+  32,768 rows remain plain on initial admission. Merge inputs must be disjoint, as after subtraction.
+  Build the replay and its packed-only tests with `--features packed-radix`.
+  `packed-replay TRACE_DIR --block 256 --output RESULT.json` checks the shared
+  admission trace against the existing plain engine and host sets, retaining all
+  states in global sequence order and reporting pool peaks, operation timings
+  and leading-prefix lookup proxies. `--synthetic` creates a deterministic trace
+  in a new directory. Existing default Datalog and TPC-H execution paths are unchanged.
+  The Xalan replay (131 states, 25,026,847 rows) stores 93.94 MB at B=256 versus
+  269.64 MB plain (65.16% less), but admission is 1.74× slower and prefix lookup
+  is 2.81× slower on an otherwise idle RTX 6000 Ada. Full per-state results are archived under
+  `/data/design-notes/doop-memory/`. See [the engine measurements](experiments/gpu/datalog-runtime/measurements/WIRE-IN.md)
+  for the `gpu-datalog-runtime/packed-radix` opt-in and its forced-off control.
+
 - `cq_cost::cost::variables` plans a rule hole as a variable order
   (PLANNING-REDESIGN, "Variable-order planning"): `plan(input, hole,
   degrees)` reads the changing occurrence in full first, costs an order by

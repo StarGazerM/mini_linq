@@ -228,6 +228,16 @@ mod tests {
                 (1_000_007, 1_000_000),
                 (1_000_000, 1_000_007),
             ],
+            // Extreme ids in a narrow span are translated by the column
+            // minimum and stay supported.
+            vec![(u32::MAX, 0)],
+            vec![(0, u32::MAX)],
+            vec![(u32::MAX - 1, 0)],
+            vec![
+                (u32::MAX - 2, u32::MAX - 1),
+                (u32::MAX - 1, u32::MAX),
+                (u32::MAX - 2, u32::MAX),
+            ],
         ] {
             rows.sort_unstable();
             rows.dedup();
@@ -252,12 +262,15 @@ mod tests {
     #[test]
     fn compiled_triangle_rejects_unsupported_dense_span() -> Result<(), Box<dyn Error>> {
         let pool = cq_gpu_runtime::Pool::new(0, 0, 0)?;
-        // Exercise each key column independently, as well as a full-domain
-        // graph with triangles that the sparse Smallest plan can enumerate.
+        // A key column is translated by its recorded minimum, so what is
+        // unsupported is a span of u32::MAX or more values in one column,
+        // not a large vertex id. Exercise each key column independently, the
+        // exact boundary span, and a full-domain graph with triangles that
+        // the sparse Smallest plan can enumerate.
         for rows in [
-            vec![(u32::MAX, 0)],
-            vec![(0, u32::MAX)],
-            vec![(u32::MAX - 1, 0)],
+            vec![(0, 0), (u32::MAX, 0)],
+            vec![(0, 0), (0, u32::MAX)],
+            vec![(0, 0), (u32::MAX - 1, 0)],
             vec![(0, 1), (0, u32::MAX), (1, u32::MAX)],
         ] {
             let resident = DeviceColumns::from_rows(

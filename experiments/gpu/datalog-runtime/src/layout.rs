@@ -266,10 +266,12 @@ mod tests {
             count: std::ptr::null(),
         };
         for (position, row) in rows.iter().enumerate() {
+            let (index, cursor) = unsafe { device::locate_key(view.keys, position as u64) };
+            assert_eq!(index, 0);
             for (column, &expected) in row.iter().enumerate() {
                 assert_eq!(unsafe { device::decode_key(view, 0, position as u64, column as u32) }, expected as i64);
+                assert_eq!(unsafe { device::decode_key(view, index, cursor, column as u32) }, expected as i64);
             }
-            assert_eq!(unsafe { device::locate_key(view.keys, position as u64) }, (0, position as u64));
             let prefix = row.iter().map(|&value| value as i64).collect::<Vec<_>>();
             for length in 0..=row.len() {
                 let (low, high, valid) = unsafe { device::encode_prefix(view, prefix.as_ptr(), length as u32) };
@@ -279,7 +281,7 @@ mod tests {
                 assert_eq!(unsafe { device::interval(run, low, high) }, (first as u64, last as u64));
             }
         }
-        assert_eq!(unsafe { device::locate_key(view.keys, rows.len() as u64) }, (1, 0));
+        assert_eq!(unsafe { device::locate_key(view.keys, rows.len() as u64) }.0, 1);
     }
 
     #[test]
