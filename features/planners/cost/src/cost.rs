@@ -437,7 +437,7 @@ fn analyze_inner(
     // degree facts the evidence holds, with the VP-Cost of its recorded order.
     let planned: Vec<Option<Measured>> = if evidence.degrees.is_empty() { vec![None; input.holes.len()] } else {
         let planner = variables::Planner::new(input, evidence)?;
-        planner.decide()?.into_iter().enumerate().map(|(hole, decided)| Ok(match decided {
+        planner.decide(target)?.into_iter().enumerate().map(|(hole, decided)| Ok(match decided {
             Some(decided) => Some(Measured { recorded: planner.recorded(hole)?, decided }),
             None => None,
         })).collect::<crate::export::Result<_>>()?
@@ -624,12 +624,18 @@ fn plan_hole(
         if let Some(work) = decided.work {
             reason = format!("{reason}; {work:.0} bindings and {:.0} for new indexes, the least of {} lowerings", decided.added, decided.weighed);
         }
+        if let Some(written) = decided.written {
+            reason = format!("{reason}; the written order reads the changing occurrence later for {written:.0} bindings");
+        }
         if !excluded.indexes.is_empty() || excluded.partial.is_some() {
             decision = Decision::Retained;
             reason = format!("{reason}; retain the recorded order");
-        } else if !decided.advised {
+        } else if let Some(kept) = decided.kept {
             decision = Decision::Retained;
-            reason = format!("{reason}; its new indexes cost more than its bindings and the written order avoids them: keep the written order");
+            reason = format!("{reason}; {}: keep the written order", match kept {
+                variables::Kept::Index => "its new indexes cost more than its bindings and the written order avoids them",
+                variables::Kept::Bindings => "the written order has fewer bindings",
+            });
         } else if enumerate::same(&order.candidate, incumbent) {
             decision = Decision::Retained;
             reason = format!("{reason}; the recorded order reads the same");

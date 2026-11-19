@@ -885,7 +885,7 @@ cq_evidence::DatasetIdentity::schema_hash	{"struct_field":{"resolved_path":{"arg
 cq_evidence::DegreeEvidence	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_evidence::DegreeEvidence::request","cq_evidence::DegreeEvidence::value"],"has_stripped_fields":false}}}}
 cq_evidence::DegreeEvidence::request	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::DegreeRequest","path":"DegreeRequest"}}}
 cq_evidence::DegreeEvidence::value	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::RationalFact","path":"RationalFact"}}}
-cq_evidence::DegreeRequest	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_evidence::DegreeRequest::Distinct","cq_evidence::DegreeRequest::Joined","cq_evidence::DegreeRequest::Visible"]}}
+cq_evidence::DegreeRequest	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_evidence::DegreeRequest::Distinct","cq_evidence::DegreeRequest::Joined","cq_evidence::DegreeRequest::Visible","cq_evidence::DegreeRequest::Rounds"]}}
 cq_evidence::DegreeRequest::Distinct	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_evidence::DegreeRequest::Distinct::rows","cq_evidence::DegreeRequest::Distinct::columns"],"has_stripped_fields":false}}}}
 cq_evidence::DegreeRequest::Distinct::columns	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_evidence::DegreeRequest::Distinct::rows	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::Selection","path":"Selection"}}}
@@ -897,6 +897,8 @@ cq_evidence::DegreeRequest::Joined::from	{"struct_field":{"resolved_path":{"args
 cq_evidence::DegreeRequest::Joined::reach	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_evidence::Reach","path":"Reach"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_evidence::DegreeRequest::Joined::read	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::Selection","path":"Selection"}}}
 cq_evidence::DegreeRequest::Joined::staged	{"struct_field":{"primitive":"bool"}}
+cq_evidence::DegreeRequest::Rounds	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_evidence::DegreeRequest::Rounds::relation"],"has_stripped_fields":false}}}}
+cq_evidence::DegreeRequest::Rounds::relation	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
 cq_evidence::DegreeRequest::Visible	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_evidence::DegreeRequest::Visible::changing","cq_evidence::DegreeRequest::Visible::relation"],"has_stripped_fields":false}}}}
 cq_evidence::DegreeRequest::Visible::changing	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
 cq_evidence::DegreeRequest::Visible::relation	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
@@ -1089,9 +1091,10 @@ cq_evidence::StepObservation::rows	{"struct_field":{"resolved_path":{"args":null
 cq_evidence::StepObservation::run	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::RunIdentity","path":"RunIdentity"}}}
 cq_evidence::StepObservation::step	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
 cq_evidence::StepObservation::variant	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
-cq_evidence::TargetEvidence	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_evidence::TargetEvidence::unit","cq_evidence::TargetEvidence::build_per_row_h","cq_evidence::TargetEvidence::merge_per_row_m","cq_evidence::TargetEvidence::configuration_hash"],"has_stripped_fields":false}}}}
+cq_evidence::TargetEvidence	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_evidence::TargetEvidence::unit","cq_evidence::TargetEvidence::build_per_row_h","cq_evidence::TargetEvidence::merge_per_row_m","cq_evidence::TargetEvidence::index_per_group_g","cq_evidence::TargetEvidence::configuration_hash"],"has_stripped_fields":false}}}}
 cq_evidence::TargetEvidence::build_per_row_h	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::RationalFact","path":"RationalFact"}}}
 cq_evidence::TargetEvidence::configuration_hash	{"struct_field":{"resolved_path":{"args":null,"id":"alloc::string::String","path":"String"}}}
+cq_evidence::TargetEvidence::index_per_group_g	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_evidence::RationalFact","path":"RationalFact"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_evidence::TargetEvidence::merge_per_row_m	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::RationalFact","path":"RationalFact"}}}
 cq_evidence::TargetEvidence::unit	{"struct_field":{"resolved_path":{"args":null,"id":"cq_evidence::Unit","path":"Unit"}}}
 cq_evidence::Unit	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_evidence::Unit::Rows","cq_evidence::Unit::Distinct","cq_evidence::Unit::Degree","cq_evidence::Unit::Rounds","cq_evidence::Unit::Scalar","cq_evidence::Unit::Ratio","cq_evidence::Unit::DeclaredRowWork"]}}

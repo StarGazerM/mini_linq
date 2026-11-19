@@ -52,6 +52,10 @@ fn reference(request: &DegreeRequest, relations: &Relations) -> (u64, u64) {
             }
             normalize(numerator, (relations[changing].len() as u64) * (relations[relation].len() as u64))
         }
+        DegreeRequest::Rounds { relation } => {
+            let rounds: BTreeSet<_> = relations[relation].iter().map(|(round, _)| *round).collect();
+            (rounds.len() as u64, 1)
+        }
     }
 }
 
@@ -106,6 +110,7 @@ fn requests() -> Vec<DegreeRequest> {
             requests.push(DegreeRequest::Distinct { rows: binder, columns });
         } else if i % 6 == 1 {
             requests.push(DegreeRequest::Visible { changing: names[b].to_owned(), relation: names[r].to_owned() });
+            if i % 12 == 1 { requests.push(DegreeRequest::Rounds { relation: names[r].to_owned() }); }
         } else {
             let width = random.below(arities[b].min(arities[r] - 1) + 1);
             let from = (0..width).rev().collect();
@@ -328,11 +333,14 @@ fn exact_small_cases_of_admitted_degrees() {
         DegreeRequest::Distinct { rows: Selection { relation: "r".to_owned(), fixed: vec![(0, 2)] }, columns: vec![] },
         DegreeRequest::Distinct { rows: Selection { relation: "r".to_owned(), fixed: vec![(0, 5)] }, columns: vec![] },
         DegreeRequest::Visible { changing: "b".to_owned(), relation: "r".to_owned() },
+        DegreeRequest::Rounds { relation: "r".to_owned() },
+        DegreeRequest::Rounds { relation: "x".to_owned() },
     ];
     let values = admitted(&requests, &relations, &[("b", 2), ("r", 2), ("x", 1)]);
     // b's keys 2, 3, 9 meet 2, 1 and 0 values of r, of which 8 arrives a
-    // round after b; x = 1 reaches b's first two rows.
+    // round after b; x = 1 reaches b's first two rows. r has rows of two
+    // rounds, x of one.
     let found: Vec<_> = values.iter().map(|(_, numerator, denominator)| (*numerator, *denominator)).collect();
-    assert_eq!(found, [(3, 3), (2, 3), (3, 2), (2, 2), (3, 1), (1, 1), (0, 1), (9, 12)]);
+    assert_eq!(found, [(3, 3), (2, 3), (3, 2), (2, 2), (3, 1), (1, 1), (0, 1), (9, 12), (2, 1), (1, 1)]);
     for (request, numerator, denominator) in &values { assert_eq!((*numerator, *denominator), reference(request, &relations), "{}", request.id()); }
 }

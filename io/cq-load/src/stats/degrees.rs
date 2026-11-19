@@ -60,6 +60,7 @@ impl DegreeCollector {
                     keep(&Selection { relation: changing.clone(), fixed: Vec::new() }, &[]);
                     keep(&Selection { relation: relation.clone(), fixed: Vec::new() }, &[]);
                 }
+                DegreeRequest::Rounds { relation } => keep(&Selection { relation: relation.clone(), fixed: Vec::new() }, &[]),
             }
         }
         let mut names = BTreeMap::new();
@@ -139,6 +140,7 @@ pub fn admitted_degrees(requests: &[DegreeRequest], relations: &[(&str, usize)])
     let requests = requests.iter().map(|request| Ok(match request {
         DegreeRequest::Distinct { rows: selection, columns } => Request::Distinct { rows: rows(selection)?, columns: columns.clone() },
         DegreeRequest::Visible { changing, relation } => Request::Visible { changing: at(changing)?, relation: at(relation)? },
+        DegreeRequest::Rounds { relation } => Request::Rounds { relation: at(relation)? },
         DegreeRequest::Joined { reach, binder, from, read, bound, column, staged } => Request::Joined {
             reach: reach.as_ref().map(|reach| Ok::<_, crate::Error>(Reach { changing: rows(&reach.changing)?, columns: reach.columns.clone(), binder: reach.binder.clone() })).transpose()?,
             binder: rows(binder)?, from: from.clone(), read: rows(read)?, bound: bound.clone(), column: *column, staged: *staged,
@@ -242,6 +244,7 @@ impl Plan {
                 self.projection(&Selection { relation: changing.clone(), fixed: Vec::new() }, &[]),
                 self.projection(&Selection { relation: relation.clone(), fixed: Vec::new() }, &[]),
             ),
+            DegreeRequest::Rounds { relation } => Work::Rounds(self.projection(&Selection { relation: relation.clone(), fixed: Vec::new() }, &[])),
             DegreeRequest::Joined { reach, binder, from, read, bound, column, staged } => {
                 if from.len() != bound.len() { return Err(error("joined degree key lengths differ")); }
                 let sequence = self.sequence(read, bound, *column);
@@ -472,13 +475,15 @@ enum Work {
     /// The distinct values of a table's leading columns.
     Distinct(usize, usize),
     Visible(usize, usize),
+    /// The rounds of a table without columns: a row a round.
+    Rounds(usize),
     Joined { binder: usize, sequence: usize, changing: Option<usize>, reach_width: usize, staged: bool },
 }
 impl Work {
     // Deduplicate direct uses (e.g. Visible of a relation against itself).
     fn dependencies(&self, mut visit: impl FnMut(usize)) {
         match *self {
-            Self::Distinct(id, _) => visit(id),
+            Self::Distinct(id, _) | Self::Rounds(id) => visit(id),
             Self::Visible(a, b) => { visit(a); if a != b { visit(b); } }
             Self::Joined { binder, sequence, changing, .. } => {
                 visit(sequence);
@@ -489,7 +494,7 @@ impl Work {
     }
     fn locality(&self) -> (usize, usize, usize) {
         match *self {
-            Self::Distinct(id, _) => (id, id, id),
+            Self::Distinct(id, _) | Self::Rounds(id) => (id, id, id),
             Self::Visible(a, b) => (a, b, a),
             Self::Joined { binder, sequence, changing, .. } => (sequence, changing.unwrap_or(binder), binder),
         }
@@ -502,6 +507,7 @@ impl Work {
                 while at < table.len() { distinct = add(distinct, 1); at = table.end(at, keep); }
                 (distinct, 1)
             }
+            Self::Rounds(id) => (cache.get(id).len() as u64, 1),
             Self::Visible(a, b) => {
                 let (changing, relation) = (cache.get(a), cache.get(b));
                 normalized(weighted(&changing, 0, changing.len(), &relation, 0, relation.len()), mul(changing.total, relation.total))

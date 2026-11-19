@@ -13,6 +13,26 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- The planner prices a written order that reads its changing occurrence
+  later and keeps it where it is cheaper (PLANNING-REDESIGN, VP-Written):
+  `rounds x before + after + held`, from a new `rounds` degree request
+  (`DegreeRequest::Rounds`, collected by both collectors) and the degree
+  facts along the written order. `Planner::decide` and `advise` take the
+  target; `Decided::kept` says why a hole keeps its text (`Kept::Index`,
+  `Kept::Bindings`). The charge for a group of an index is no longer a
+  constant of the planner: it is the target's declared
+  `TargetEvidence::index_per_group_g` (16 for the CPU DOOP evidence),
+  and a target that declares none is not charged. `cq-cost orders
+  --advice` needs `--target`. Nineteen DOOP datasets, CPU engine, each
+  calibrated on itself, medians of three alternating runs: advised takes
+  0.87 to 1.00 of the written time on seventeen, 0.95 on scala (503.5
+  against 531.4 s) and 1.26 on soot (479.3 against 380.8 s). Before this
+  rule scala took 1.15 and soot 5.2 times the written time, from
+  `VPT_LoadArray` read first. Soot's remaining loss is one directive
+  (`VPT_LoadField` with changing `InstanceFieldPointsTo`, 123 s alone);
+  the same directive is neutral on seven other datasets, scala among
+  them, and the planner has no rule for it.
+
 - A steady hole keeps its written order only where that matters
   (PLANNING-REDESIGN, VP-Index step 3): the chosen order's new index
   charge exceeds its bindings, is at least 1% of the program's bindings,

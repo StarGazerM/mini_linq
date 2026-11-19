@@ -436,7 +436,11 @@ impl Doop {
         let unit = |id: &str| ev::Fact { id: id.into(), source: ev::Source::Declared, claim: ev::Claim::Equal,
             value: Some(ev::Rational { numerator: "1".into(), denominator: "1".into() }), lower: None, upper: None, dataset_hash: evidence.dataset.hash.clone(),
             unit: ev::Unit::DeclaredRowWork, provenance: ev::Provenance { producer: "doop_order.rs".into(), method: "explicit h=m=1 row work".into(), locator: "doop_order.rs".into(), run: None, artifact_hash: None } };
-        evidence.targets.insert("cpu".into(), ev::TargetEvidence { unit: ev::Unit::DeclaredRowWork,
+        // VP-Index: 16 bindings a group, measured on bloat (PLANNING-REDESIGN).
+        let group = ev::Fact { value: Some(ev::Rational { numerator: "16".into(), denominator: "1".into() }),
+            provenance: ev::Provenance { producer: "doop_order.rs".into(), method: "one grouped index of the CPU engine on bloat, 2026-11-17: 250 ns a group against 16 ns a binding".into(), locator: "doc/PLANNING-REDESIGN.md VP-Index".into(), run: None, artifact_hash: None },
+            ..unit("cpu.g") };
+        evidence.targets.insert("cpu".into(), ev::TargetEvidence { unit: ev::Unit::DeclaredRowWork, index_per_group_g: Some(group),
             configuration_hash: export::sha256(serde_json::to_vec(&configuration).unwrap()), build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m") });
         for (field, value) in self.constants(dataset) {
             evidence.constants.insert(field.clone(), ev::Fact { id: format!("constant:{field}"), source: ev::Source::Declared, claim: ev::Claim::Equal,
@@ -1191,6 +1195,7 @@ fn kind_of(request: &ev::DegreeRequest) -> &'static str {
     match request {
         ev::DegreeRequest::Distinct { .. } => "distinct",
         ev::DegreeRequest::Visible { .. } => "visible",
+        ev::DegreeRequest::Rounds { .. } => "rounds",
         ev::DegreeRequest::Joined { reach: None, staged: false, .. } => "joined",
         ev::DegreeRequest::Joined { reach: None, staged: true, .. } => "joined staged",
         ev::DegreeRequest::Joined { reach: Some(_), staged: false, .. } => "reached",

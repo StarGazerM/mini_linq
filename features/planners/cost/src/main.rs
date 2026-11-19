@@ -169,7 +169,7 @@ fn advise(mut args: impl Iterator<Item = String>) -> Result<()> {
 fn orders(mut args: impl Iterator<Item = String>) -> Result<()> {
     let mut flags = BTreeMap::new();
     while let Some(flag) = args.next() {
-        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--advice" | "--requests") {
+        if !matches!(flag.as_str(), "--plans" | "--evidence" | "--target" | "--advice" | "--requests") {
             return Err(format!("unknown orders option {flag}").into());
         }
         let value = args.next().ok_or_else(|| format!("missing value for {flag}"))?;
@@ -188,7 +188,7 @@ fn orders(mut args: impl Iterator<Item = String>) -> Result<()> {
     }
     if let Some(path) = flags.get("--advice") {
         use quote::ToTokens;
-        let advised = planner.advise()?;
+        let advised = planner.advise(required("--target")?)?;
         let text: String = advised.plans.iter().map(|plan| cq_cost::cost::advice::AdviceList(vec![plan.clone()]).to_token_stream().to_string() + "\n").collect();
         publish(Path::new(path), text.as_bytes())?;
         for (hole, reason) in &advised.rejected { eprintln!("hole {hole} keeps its own order: {reason}"); }

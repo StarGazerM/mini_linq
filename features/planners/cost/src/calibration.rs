@@ -66,6 +66,7 @@ impl Captured {
                     if let Some(reach) = reach { compared(&reach.changing.relation); }
                 }
                 ev::DegreeRequest::Visible { changing, relation } => { compared(changing); compared(relation); }
+                ev::DegreeRequest::Rounds { relation } => compared(relation),
                 _ => {}
             }
         }

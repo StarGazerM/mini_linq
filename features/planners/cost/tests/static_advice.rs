@@ -38,7 +38,7 @@ fn evidence(files: &Fixture) -> DatasetEvidence {
     };
     evidence.targets.insert("cpu".into(), TargetEvidence {
         unit: Unit::DeclaredRowWork, configuration_hash: export::sha256(serde_json::to_vec(&config()).unwrap()),
-        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"),
+        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"), index_per_group_g: None,
     });
     evidence.check().unwrap();
     evidence
@@ -292,7 +292,7 @@ fn profiled(files: &Fixture, relations: &[(&str, usize, String)]) -> DatasetEvid
     };
     evidence.targets.insert("cpu".into(), TargetEvidence {
         unit: Unit::DeclaredRowWork, configuration_hash: export::sha256(serde_json::to_vec(&config()).unwrap()),
-        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"),
+        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"), index_per_group_g: None,
     });
     evidence.check().unwrap();
     evidence

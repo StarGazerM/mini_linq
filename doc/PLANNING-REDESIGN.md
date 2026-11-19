@@ -756,33 +756,74 @@ permutation of a body plans to the same order and the same reads.
   and no earlier decision built. A grouped index is a full index keyed by
   some but not all columns; it costs its groups (the distinct keys, a
   `Distinct` fact, PS-Request; the relation's rows where the fact is
-  missing) times `GROUP = 16` bindings. Scans, whole-row keys and delta
-  indexes are not charged. Per hole:
+  missing) times the target's `index_per_group_g`, a declared fact of
+  `TargetEvidence` beside `build_per_row_h`, in bindings. What an index
+  costs is the provider's matter, not the plan's: the CPU engine's
+  grouped layouts hold a bucket a group and declare 16 (measured below);
+  a target that declares nothing is not charged, and then every hole
+  takes its cheapest order and is advised. The planner holds no such
+  constant. Scans, whole-row keys and delta indexes are not charged. Per
+  hole:
   1. The search keeps its 16 cheapest orders of distinct lowerings
      (`Planner::plans`).
   2. The hole's weight is the rows of its changing relation (each is
      consumed once), one for a seed. The chosen order has the least
      `weight x VP-Cost + new index charge`; among equals the least
      VP-Cost.
-  3. A steady hole keeps its written order, without advice, when all
-     three hold: the chosen order's new index charge exceeds its
-     `weight x VP-Cost`; the charge is at least 1% of the program's
-     bindings (every hole's cheapest `weight x VP-Cost`, summed); and the
-     written order's own new index charge is smaller. Then the written
-     order's demands count as built. Otherwise the chosen order is
-     advised and its demands count as built. A seed is always advised:
-     its written order is one of its orders.
+  3. A steady hole keeps its written order, without advice, in two
+     cases. By its index: the chosen order's new index charge exceeds
+     its `weight x VP-Cost`, is at least 1% of the program's bindings
+     (every hole's cheapest `weight x VP-Cost`, summed), and the written
+     order's own new index charge is smaller. By its bindings: the
+     written order reads the changing occurrence later, and its bindings
+     (VP-Written) plus its new index charge are below the chosen order's
+     `weight x VP-Cost` plus charge by at least 1% of the program's
+     bindings. Then the written order's demands count as built.
+     Otherwise the chosen order is advised and its demands count as
+     built. A seed is always advised: its written order is one of its
+     orders.
   Holes are decided by stratum, then by `weight x VP-Cost` of their
   cheapest order, heaviest first, then by hole. Step 3 is the one place
   the decision reads the text (agreed 2026-11-18: invariance may be
   weakened here). It applies where VP-Delta leaves the planner a costly
   order and the written order reads the changing occurrence later; the
-  1% keeps it from small holes, where a bad text costs more than the
-  index, and the third condition from texts that need the index too.
-  The written order's bindings are not modeled, so a text that avoids
-  the index by a worse scan is kept as well. Without the rows of the
-  changing relation or of a charged index the hole takes its cheapest
-  order uncharged.
+  1% keeps it from small holes. Without the rows of the changing relation
+  or of a charged index the hole takes its cheapest order uncharged.
+- **VP-Written.** The bindings of a steady hole's written order that
+  reads its changing occurrence after other occurrences:
+  `rounds x before + after + held`. The reads before the changing one run
+  once a round over full relations; the changing read and what follows
+  run once per changing row, and each changing row is in one delta.
+  - `rounds`: the publications that published a row of the changing
+    relation, a `Rounds` fact (PS-Request).
+  - `before`: VP-Cost of the variables the earlier reads introduce, in
+    that order, over those occurrences alone and in full.
+  - `after`: the prefix bindings of the remaining variables, in the
+    written order over every occurrence in full, the changing one
+    included.
+  - `held`: the changing relation's rows times the changing occurrence's
+    variables. A changing row must be put where the later read probes
+    it; that is taken to cost what reading it first costs, a binding a
+    variable, so the two orders differ only in the rest. No delta index
+    cost is measured apart from this.
+  The final relations stand for what each round sees, so `before` is
+  from above. The planner asks for the facts of these two valuations
+  along the written order only. It does not search orders that read the
+  changing occurrence later; it prices the one the text has.
+
+  Why (2026-11-18): `VPT_LoadArray` with changing
+  `ArrayIndexPointsTo(baseheap, heap)`. Read first, the changing row
+  meets every variable pointing to its array heap: 5,150 on soot, 1,494
+  on scala, 18 on bloat; the cheapest order from it has VP-Cost 1,808 on
+  soot (5.2 of the program's 17.1 billion bindings). The written order
+  reads `Reachable`, `LoadArrayIndex` (21,613 rows on soot) and
+  `VarPointsTo` by the loaded base (1.3 heaps a load) and then probes the
+  delta. The advice that read it first: soot 1,980 s against 380 s
+  written (three runs each, ranges 1,977 to 1,981 and 378 to 384) and
+  scala 659 s against 573 s (636 to 682, 566 to 690). VP-Written prices
+  the written order at 33M bindings on soot and 341M on scala (the
+  planned one 5,216M and 78,975M) and keeps it; so on eclipse, spring,
+  clojure and groovy, and four dispatch holes on groovy.
 
   Measured on bloat, CPU engine, 2026-11-17 (medians of alternating runs,
   three for the first table and five for the second; the machine ran
@@ -802,12 +843,12 @@ permutation of a body plans to the same order and the same reads.
   So rows cost nothing measurable and groups do: 2.55 s over 10.13M
   groups is about 250 ns a group, against about 16 ns a binding (12.4 s
   over the 764.5M bindings VP-Cost counts for the written orders); hence
-  16. One index on one engine sets the constant, and the 2.55 s includes
-  that index's probes. The engine's grouped index holds a bucket per
-  group; a sorted GPU index would cost by rows instead, so the constant
-  is this engine's. Whole-row keys and delta indexes are uncharged
-  without a run that isolates either: the written program keeps
-  `VarPointsTo` delta by `[0, 1]` (11.2M rows).
+  the CPU target's 16. One index on one engine sets it, and the 2.55 s
+  includes that index's probes. The GPU engines' device layouts are
+  sorted columns, whose cost would follow rows; they declare nothing, and
+  no charge by rows is built. Whole-row keys and delta indexes are
+  uncharged without a run that isolates either: the written program
+  keeps `VarPointsTo` delta by `[0, 1]` (11.2M rows).
 
   | engine | evaluation | range |
   |---|---:|---:|
@@ -825,40 +866,72 @@ permutation of a body plans to the same order and the same reads.
   765 facts (699 before: the rows of each relation and the groups of
   each index an order can read by) in 25.8 s and 4.8 GB, as before.
 
-  Seven DOOP datasets with all three conditions of step 3, CPU engine,
-  one thread, 2026-11-18 (`run.sh` under
-  `/data/doop-bench/corpus-20261110/calibration-20261116/vp-index-datasets`:
+  Nineteen DOOP datasets, CPU engine, one thread, 2026-11-18 and 19
+  (scripts and outputs under
+  `/data/doop-bench/corpus-20261110/calibration-20261116/vp-written`):
   each dataset sorted, calibrated on itself, its advice compiled, three
   runs alternating with the written engine; median and range; the counts
-  of every relation equal the written engine's):
+  of every relation equal the written engine's. Thirteen were timed
+  before VP-Written with advice that the final planner reproduces
+  directive for directive; eclipse, clojure, spring, groovy, scala and
+  soot were timed again with their changed advice.
 
   | dataset | written | advised | advised / written | calibrated run | its peak |
   |---|---:|---:|---:|---:|---:|
   | bloat | 11.67 s (11.63 to 11.72) | 10.56 s (10.55 to 10.71) | 0.904 | 26 s | 4.8 GB |
-  | eclipse | 33.18 s (33.08 to 34.59) | 32.24 s (31.96 to 32.41) | 0.972 | 51 s | 6.2 GB |
   | zxing | 18.55 s (18.36 to 18.72) | 17.39 s (17.37 to 17.80) | 0.937 | 36 s | 5.8 GB |
-  | sunflow | 20.61 s (20.42 to 21.02) | 19.60 s (19.15 to 20.23) | 0.951 | 39 s | 6.0 GB |
-  | chart | 25.63 s (25.44 to 25.96) | 24.60 s (24.01 to 26.21) | 0.960 | 44 s | 6.2 GB |
-  | pmd | 25.54 s (25.42 to 26.10) | 24.34 s (24.30 to 24.50) | 0.953 | 47 s | 6.6 GB |
+  | sunflow | 20.61 s (20.42 to 21.02) | 19.60 s (19.15 to 20.23) | 0.951 | 38 s | 6.0 GB |
+  | chart | 25.63 s (25.44 to 25.96) | 24.60 s (24.01 to 26.21) | 0.960 | 44 s | 6.3 GB |
+  | pmd | 25.54 s (25.42 to 26.10) | 24.34 s (24.30 to 24.50) | 0.953 | 45 s | 6.6 GB |
   | xalan | 32.91 s (32.32 to 35.29) | 31.31 s (30.88 to 32.00) | 0.952 | 55 s | 9.1 GB |
+  | eclipse | 33.90 s (33.90 to 34.00) | 31.90 s (31.83 to 31.92) | 0.941 | 51 s | 6.2 GB |
+  | clojure | 29.78 s (29.76 to 29.79) | 29.30 s (29.18 to 29.50) | 0.984 | 50 s | 8.1 GB |
+  | spring | 38.86 s (38.86 to 39.91) | 35.88 s (35.62 to 35.90) | 0.923 | 60 s | 7.1 GB |
+  | groovy | 40.97 s (40.91 to 41.06) | 39.69 s (38.79 to 39.72) | 0.969 | 63 s | 9.1 GB |
+  | h2 | 47.61 s (46.95 to 49.39) | 45.62 s (41.24 to 45.88) | 0.958 | 64 s | 7.5 GB |
+  | fop | 48.73 s (47.73 to 48.91) | 45.81 s (45.75 to 47.56) | 0.940 | 71 s | 8.5 GB |
+  | batik | 52.14 s (50.74 to 53.93) | 45.23 s (45.13 to 47.90) | 0.868 | 73 s | 8.1 GB |
+  | pdfbox | 69.51 s (68.46 to 70.65) | 67.44 s (65.71 to 70.37) | 0.970 | 94 s | 10.1 GB |
+  | javac | 67.10 s (63.67 to 78.05) | 61.14 s (60.84 to 63.10) | 0.911 | 90 s | 15.4 GB |
+  | jruby | 97.01 s (96.76 to 100.5) | 91.13 s (84.06 to 102.2) | 0.939 | 2.0 min | 12.6 GB |
+  | biojava | 61.28 s (60.89 to 67.86) | 61.27 s (59.46 to 72.25) | 1.000 | 94 s | 16.8 GB |
+  | scala | 531.4 s (529.4 to 533.0) | 503.5 s (503.4 to 504.0) | 0.947 | 10.2 min | 43.7 GB |
+  | soot | 380.8 s (379.2 to 383.1) | 479.3 s (478.7 to 479.9) | 1.259 | 7.1 min | 25.4 GB |
 
-  On every dataset one hole keeps its written order, the `VPT_Cast`
-  variant with changing `VarPointsTo` (charge 162M to 1,284M bindings
-  against 5.5M to 79.5M of its own); 44 to 47 holes change, 62 to 65 read
-  the same, production rejects 2, 3 are not planned. One chart run of the
-  advised engine (26.21 s) is above the written range.
+  The ten from h2 to biojava were timed on a noisier machine (single
+  runs spread up to 20%). In another session scala's advised engine took
+  526 and 533 s. A calibrated run asks for 784 facts.
 
-  Advice does not transfer as well as it fits. Bloat's advice on the
-  other six (two runs each, not alternated with the written engine):
+  **Soot is 26% slower advised, and why is not known.** One directive
+  does it: `VPT_LoadField` with changing `InstanceFieldPointsTo(heap,
+  sig, baseheap)`, read first, then `ReachableLoadInstanceField` by `sig`,
+  then `VarPointsTo(base, baseheap)` by the whole row. Soot's written
+  engine with that directive alone takes 552 s against 429 s (run
+  together with eight others; every other load and store directive alone
+  is within 4 s of written, bar one 25 s below). A profile gives the
+  directive's join loop 27.6% of 546 s. VP-Cost prices it at 608M
+  bindings (10.7 a changing row, 253M of them whole-row probes of a
+  413M-row set) and VP-Written prices the written order at 2,628M. The
+  size of the probed set does not explain it: with and without the same
+  directive scala (612M rows, 219M probes) takes 529.5 and 529.2 s (means
+  of two), pdfbox 65.5 and 65.4 s, jruby 83.6 and 84.1 s, biojava 59.1 and
+  59.6 s, javac 60.05 and 59.71 s, xalan 30.99 and 31.26 s, bloat 10.49
+  and 10.59 s. The planner has no rule for it.
+
+  Advice does not transfer as well as it fits. Bloat's first advice on
+  six others (two runs each, not alternated with the written engine):
   eclipse 34.88 and 35.01 s, zxing 19.27 and 19.44 s, both above the
   written median; sunflow 19.13 and 19.79 s, pmd 24.74 and 24.77 s, xalan
   31.52 and 31.58 s, below it; chart 24.23 and 26.37 s.
 
-  Not run: the 14 other prepared datasets, the parallel engine, the GPU.
+  Not run: the parallel engine, the GPU.
 
-  Open: an order that reads the changing occurrence last, as the written
-  `VPT_Cast` does, is not planned (VP-Delta) and its cost is not
-  modeled, so step 3 cannot weigh it and falls back to the text.
+  Open: orders that read the changing occurrence later are not planned
+  (VP-Delta), only the written one is priced; a binding is one unit
+  whatever it touches, which the `VPT_Cast` index, `VPT_LoadArray` on
+  soot (5.2 billion bindings for about 1,500 s, where the written
+  program's 17 billion take 380 s) and `VPT_LoadField` on soot each
+  contradict.
 
 Checked on bloat in the DOOP oracle (`DOOP_DRIVER=delta_first`, exact
 degrees of the final relations with each row's round; 109 of 113 variants
@@ -951,9 +1024,16 @@ delivered, accumulated, recorded as evidence, and read by the planner.
   read's rows that agree with the binder row on the bound columns, as a sum
   and a count; `staged` counts only values no younger than the changing
   row. `visible` is the share of a relation's rows a changing row sees.
+  `rounds` is the publications that published a row of a relation: the
+  rounds in which it changed, and one more if it holds input rows
+  (VP-Written).
 - **PS-Derive.** Only the planner knows which statistics a program can ask
   for. `cost::variables::Planner::requests` lists them from the rule bodies: per
-  occurrence and variable, every key another single occurrence can bind.
+  occurrence and variable, every key another single occurrence can bind;
+  the rows of each relation and the groups of each index an order can
+  read by (VP-Index); and, for a written order that reads its changing
+  occurrence later, the facts of its two valuations along that order and
+  the changing relation's rounds (VP-Written).
   The planner builds a lookup and a request from the same function, so it
   never asks for a statistic the list lacks.
 - **PS-Fact.** A statistic is a `DegreeEvidence` in `DatasetEvidence`: its
@@ -984,7 +1064,7 @@ delivered, accumulated, recorded as evidence, and read by the planner.
   collector; no test implements a statistic.
 - **PS-Advise.** `Planner::advise` decides every rule hole (VP-Index) and
   returns the directives production accepts with the variants it rejects;
-  `cq-cost orders --plans P --evidence E [--advice OUT] [--requests OUT]`
+  `cq-cost orders --plans P --evidence E [--target T --advice OUT] [--requests OUT]`
   is its command.
 - **PS-Decide.** Where the evidence holds the degree facts of a hole,
   `cq-cost advise` selects the order VP-Index decides (`Planner::decide`,

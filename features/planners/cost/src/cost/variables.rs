@@ -44,8 +44,46 @@ pub struct Decided {
     pub added: f64,
     /// The lowerings weighed.
     pub weighed: usize,
-    /// Whether the order is advised: its new indexes cost no more than its work.
-    pub advised: bool,
+    /// VP-Written: the bindings of the written order, where it reads the
+    /// changing occurrence later and its facts are known.
+    pub written: Option<f64>,
+    /// Why the hole keeps its written order; `None` where the order is advised.
+    pub kept: Option<Kept>,
+}
+
+/// VP-Index step 3: what keeps a written order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kept {
+    /// The chosen order's new indexes cost more than its bindings, and the
+    /// written order avoids them.
+    Index,
+    /// The written order reads the changing occurrence later for fewer bindings.
+    Bindings,
+}
+
+/// VP-Written: a steady hole's written order that reads its changing
+/// occurrence later, as two valuations with every occurrence in full.
+struct Written<'a> {
+    /// The occurrences read before the changing one, and their variables
+    /// in the order those reads introduce them.
+    before: Model<'a>,
+    first: Vec<usize>,
+    /// Every occurrence, and the whole written variable order.
+    whole: Model<'a>,
+    order: Vec<usize>,
+    changing: String,
+    /// The variables of the changing occurrence.
+    held: usize,
+}
+
+/// Which occurrences a model holds, and whether one of them changes.
+enum Scope<'s> {
+    /// The hole as it runs: a steady variant's delta occurrence changes.
+    Planned,
+    /// Every occurrence in full.
+    Full,
+    /// The occurrences of these normalized clauses, in full.
+    Only(&'s BTreeSet<usize>),
 }
 
 struct Occurrence {
@@ -126,6 +164,28 @@ impl Model<'_> {
     fn visible(&self, at: usize) -> Option<DegreeRequest> {
         let changing = self.changing.filter(|changing| *changing != at && self.occurrences[at].member)?;
         Some(DegreeRequest::Visible { changing: self.occurrences[changing].rows.relation.clone(), relation: self.occurrences[at].rows.relation.clone() })
+    }
+    /// PS-Derive: every statistic `steps` can ask for along one order,
+    /// whichever occurrence proposes each variable.
+    fn along(&self, order: &[usize], into: &mut BTreeSet<DegreeRequest>) {
+        let subsets = |of: u64| { let mut next = Some(of); std::iter::from_fn(move || { let mask = next?; next = (mask != 0).then(|| (mask - 1) & of); Some(mask) }) };
+        let mut bound = 0u64;
+        for &variable in order {
+            for &at in &self.holders[variable] {
+                let mask = self.variables(at) & bound;
+                // Its own keys, for whatever part of them it bound itself.
+                for own in subsets(mask) {
+                    into.insert(self.distinct(at, own));
+                    into.insert(self.distinct(at, own | 1 << variable));
+                }
+                for binder in (0..self.occurrences.len()).filter(|binder| *binder != at) {
+                    for part in subsets(mask & self.variables(binder)).filter(|part| *part != 0) {
+                        into.insert(self.joined(at, binder, part, variable, 0));
+                    }
+                }
+            }
+            bound |= 1 << variable;
+        }
     }
     /// PS-Derive: every statistic `step` can ask for.
     fn requests(&self, into: &mut BTreeSet<DegreeRequest>) {
@@ -282,10 +342,8 @@ impl Model<'_> {
 const BUDGET: usize = 200_000;
 /// VP-Index: the lowerings of a hole a decision weighs, cheapest first.
 const ALTERNATIVES: usize = 16;
-/// VP-Index: what a group of a full index costs, in bindings.
-const GROUP: f64 = 16.0;
-/// VP-Index: the share of the program's bindings below which an index
-/// charge does not keep a written order.
+/// VP-Index: the share of the program's bindings below which a
+/// difference does not keep a written order.
 const MATERIAL: f64 = 0.01;
 
 /// PS-Request: the groups of a relation on `columns`, its distinct values there.
@@ -361,6 +419,8 @@ pub struct Planner<'a> {
     /// The columns of every relation a rule hole reads.
     arity: BTreeMap<String, usize>,
     facts: HashMap<DegreeRequest, f64>,
+    /// VP-Index: what a group of a grouped full index costs, by target.
+    group: BTreeMap<String, f64>,
     constants: BTreeMap<String, i64>,
 }
 
@@ -386,21 +446,29 @@ impl<'a> Planner<'a> {
             Scalar::SignedInteger { value } => Some((name.clone(), *value)),
             _ => None,
         }).collect();
-        Ok(Self { input, prepared, members, arity, facts, constants })
+        let group = evidence.targets.iter().filter_map(|(target, costs)| {
+            let value = costs.index_per_group_g.as_ref()?.value.as_ref()?;
+            Some((target.clone(), value.numerator.parse::<f64>().ok()? / value.denominator.parse::<f64>().ok()?))
+        }).collect();
+        Ok(Self { input, prepared, members, arity, facts, group, constants })
     }
 
     /// The model of a rule hole. `None` for another hole, or one with an
     /// introducing occurrence outside its reorderable prefix.
-    fn model(&self, hole: usize) -> export::Result<Option<(Model<'_>, &enumerate::Prepared)>> {
+    fn model(&self, hole: usize) -> export::Result<Option<(Model<'_>, &enumerate::Prepared)>> { self.scoped(hole, Scope::Planned) }
+
+    fn scoped(&self, hole: usize, scope: Scope<'_>) -> export::Result<Option<(Model<'_>, &enumerate::Prepared)>> {
         let (Origin::Rule { stratum, seed, .. }, Some(prepared)) = (&self.input.holes[hole].origin, self.prepared[hole].as_ref()) else { return Ok(None) };
-        let Some(reads) = prepared.occurrences() else { return Ok(None) };
+        let Some(mut reads) = prepared.occurrences() else { return Ok(None) };
         let names: Vec<String> = reads.iter().flat_map(|(_, read)| read.columns.iter().filter_map(|column| column.variable.clone()))
             .collect::<BTreeSet<_>>().into_iter().collect();
         if names.len() > 60 { return Ok(None); }
         let normal: cq::Program = syn::parse_str(&self.input.holes[hole].normalized_cq)?;
         let constants = rank::constant_columns(&normal, reads.iter().map(|(_, read)| *read), &|name| self.constants.get(name).copied());
-        // Only a steady variant has a changing occurrence.
-        let members = self.members.get(stratum).filter(|_| !seed);
+        if let Scope::Only(clauses) = scope { reads.retain(|(_, read)| clauses.contains(&read.normalized_clause)); }
+        // Only a steady variant as it runs has a changing occurrence.
+        let steady = matches!(scope, Scope::Planned) && !seed;
+        let members = self.members.get(stratum).filter(|_| steady);
         let mut occurrences: Vec<Occurrence> = reads.iter().map(|&(clause, read)| {
             let mut columns: Vec<(usize, usize)> = Vec::new();
             let mut fixed = Vec::new();
@@ -415,7 +483,7 @@ impl<'a> Planner<'a> {
             fixed.sort_unstable();
             Occurrence {
                 clause, rows: Selection { relation: read.logical_relation.clone(), fixed },
-                changing: !seed && read.version == Version::Delta,
+                changing: steady && read.version == Version::Delta,
                 member: members.is_some_and(|members| members.contains(&read.logical_relation)), columns,
             }
         }).collect();
@@ -442,8 +510,48 @@ impl<'a> Planner<'a> {
         let mut requests: BTreeSet<DegreeRequest> = self.arity.iter().map(|(relation, arity)| whole(relation, *arity)).collect();
         for hole in 0..self.input.holes.len() {
             if let Some((model, _)) = self.model(hole)? { model.requests(&mut requests); }
+            // VP-Written: the two valuations of a written order, and its rounds.
+            if let Some(written) = self.written(hole)? {
+                written.before.along(&written.first, &mut requests);
+                written.whole.along(&written.order, &mut requests);
+                requests.insert(DegreeRequest::Rounds { relation: written.changing });
+            }
         }
         Ok(requests.into_iter().collect())
+    }
+
+    /// VP-Written: the written order of a steady hole that reads its
+    /// changing occurrence after other occurrences.
+    fn written(&self, hole: usize) -> export::Result<Option<Written<'_>>> {
+        let (Origin::Rule { seed: false, .. }, Some(prepared)) = (&self.input.holes[hole].origin, self.prepared[hole].as_ref()) else { return Ok(None) };
+        let reads: Vec<_> = prepared.incumbent.steps.iter().filter_map(|step| step.read.as_ref()).collect();
+        let Some(at) = reads.iter().position(|read| read.version == Version::Delta).filter(|at| *at > 0) else { return Ok(None) };
+        let earlier: BTreeSet<usize> = reads[..at].iter().map(|read| read.normalized_clause).collect();
+        let (Some((before, _)), Some((whole, _))) = (self.scoped(hole, Scope::Only(&earlier))?, self.scoped(hole, Scope::Full)?) else { return Ok(None) };
+        // The variables in the order the written reads introduce them.
+        let (mut first, mut order) = (0, Vec::new());
+        for (place, read) in reads.iter().enumerate() {
+            for name in read.columns.iter().filter_map(|column| column.variable.as_ref()) {
+                if let Ok(variable) = whole.names.binary_search(name) { if !order.contains(&variable) { order.push(variable); } }
+            }
+            if place + 1 == at { first = order.len(); }
+        }
+        let held = reads[at].columns.iter().filter_map(|column| column.variable.as_ref()).collect::<BTreeSet<_>>().len();
+        Ok(Some(Written { before, first: order[..first].to_vec(), whole, order, changing: reads[at].logical_relation.clone(), held }))
+    }
+
+    /// VP-Written: `rounds x before + after + held`. A changing row is
+    /// put where the later read probes it for what reading it first
+    /// costs: a binding a variable.
+    fn written_bindings(&self, written: &Written<'_>) -> Option<f64> {
+        let rounds = *self.facts.get(&DegreeRequest::Rounds { relation: written.changing.clone() })?;
+        let before = written.before.cost(&written.first)?;
+        let (mut bindings, mut after) = (1.0, 0.0);
+        for (place, step) in written.whole.steps(&written.order)?.iter().enumerate() {
+            bindings *= step.expected;
+            if place >= written.first.len() { after += bindings; }
+        }
+        Some(rounds * before + after + self.rows(&written.changing)? * written.held as f64)
     }
 
     /// Plan the variable order of one rule hole: VP-Delta and VP-Cost,
@@ -516,28 +624,33 @@ impl<'a> Planner<'a> {
         Ok(self.lower(hole, &order)?.map(|planned| planned.estimate))
     }
 
-    /// VP-Index: decide every rule hole, heaviest first within a stratum,
-    /// each charged for the full indexes the holes before it did not build.
-    pub fn decide(&self) -> export::Result<Vec<Option<Decided>>> {
+    /// VP-Index: decide every rule hole for a target, heaviest first
+    /// within a stratum, each charged for the grouped indexes the holes
+    /// before it did not build at the target's declared charge.
+    pub fn decide(&self, target: &str) -> export::Result<Vec<Option<Decided>>> {
+        let group = self.group.get(target).copied();
         let mut holes = Vec::new();
         for (hole, declared) in self.input.holes.iter().enumerate() {
             let Origin::Rule { stratum, seed, .. } = &declared.origin else { continue };
             let orders = self.plans(hole)?;
             let Some(cheapest) = orders.first() else { continue };
             let weight = self.weight(hole)?;
-            holes.push((*stratum, weight.map_or(0.0, |weight| weight * cheapest.estimate), hole, *seed, weight, orders));
+            let written = self.written(hole)?.and_then(|written| self.written_bindings(&written));
+            holes.push((*stratum, weight.map_or(0.0, |weight| weight * cheapest.estimate), hole, *seed, weight, written, orders));
         }
         holes.sort_by(|left, right| left.0.cmp(&right.0).then(right.1.total_cmp(&left.1)).then(left.2.cmp(&right.2)));
         let program: f64 = holes.iter().map(|hole| hole.1).sum();
         let mut built: BTreeSet<IndexDemand> = BTreeSet::new();
         let mut decided = vec![None; self.input.holes.len()];
-        for (_, _, hole, seed, weight, mut orders) in holes {
+        for (_, _, hole, seed, weight, written, mut orders) in holes {
             // A grouped index: keyed, and by less than the whole row.
             let grouped = |demand: &IndexDemand| demand.version == IndexVersion::Full && !demand.key.is_empty()
                 && self.arity.get(&demand.logical_relation).is_none_or(|arity| demand.key.len() < *arity);
-            let charge = |candidate: &Candidate| candidate.demands.iter()
-                .filter(|demand| grouped(demand) && !built.contains(*demand))
-                .map(|demand| Some(GROUP * self.groups(&demand.logical_relation, &demand.key)?)).sum::<Option<f64>>();
+            let charge = |candidate: &Candidate| match group {
+                Some(group) => candidate.demands.iter().filter(|demand| grouped(demand) && !built.contains(*demand))
+                    .map(|demand| Some(group * self.groups(&demand.logical_relation, &demand.key)?)).sum::<Option<f64>>(),
+                None => Some(0.0),
+            };
             // Its bindings and its new index charge, per order.
             let weighed: Option<Vec<(f64, f64)>> = weight.and_then(|weight| orders.iter()
                 .map(|order| Some((weight * order.estimate, charge(&order.candidate)?))).collect());
@@ -552,22 +665,28 @@ impl<'a> Planner<'a> {
                 None => (0, None, 0.0),
             };
             // A steady variant's written order may read the changing
-            // occurrence later, which no order here does: it is kept where
+            // occurrence later, which no order here does. It is kept where
             // the chosen order's indexes cost more than its bindings and
-            // matter to the program, and the written order avoids them.
-            let written = self.prepared[hole].as_ref().map(|prepared| &prepared.incumbent);
-            let kept = written.filter(|written| !seed && work.is_some_and(|work| added > work) && added >= MATERIAL * program
-                && charge(written).is_some_and(|charge| charge < added));
-            built.extend(kept.map_or(&orders[at].candidate, |written| written).demands.iter().cloned());
-            decided[hole] = Some(Decided { weighed: orders.len(), order: orders.swap_remove(at), work, added, advised: kept.is_none() });
+            // the written order avoids them, or where the written order
+            // has fewer bindings; either by a share of the program's.
+            let recorded = self.prepared[hole].as_ref().map(|prepared| &prepared.incumbent).filter(|_| !seed);
+            let avoided = recorded.and_then(|recorded| charge(recorded));
+            let kept = match (work, avoided) {
+                (Some(work), Some(avoided)) if added > work && added >= MATERIAL * program && avoided < added => Some(Kept::Index),
+                (Some(work), Some(avoided)) if written.is_some_and(|written| written + avoided + MATERIAL * program <= work + added) => Some(Kept::Bindings),
+                _ => None,
+            };
+            let demands = match (kept, recorded) { (Some(_), Some(recorded)) => &recorded.demands, _ => &orders[at].candidate.demands };
+            built.extend(demands.iter().cloned());
+            decided[hole] = Some(Decided { weighed: orders.len(), order: orders.swap_remove(at), work, added, written, kept });
         }
         Ok(decided)
     }
 
-    /// PS-Advise: decide every rule hole and adopt the advised orders.
-    pub fn advise(&self) -> export::Result<Advised> {
-        let planned = self.decide()?.into_iter().enumerate()
-            .filter_map(|(hole, decided)| decided.filter(|decided| decided.advised).map(|decided| (hole, decided.order.candidate))).collect();
+    /// PS-Advise: decide every rule hole for a target and adopt the advised orders.
+    pub fn advise(&self, target: &str) -> export::Result<Advised> {
+        let planned = self.decide(target)?.into_iter().enumerate()
+            .filter_map(|(hole, decided)| decided.filter(|decided| decided.kept.is_none()).map(|decided| (hole, decided.order.candidate))).collect();
         self.adopt(&planned)
     }
 

@@ -58,6 +58,8 @@ pub enum Request {
     /// Of the pairs of a changing row and a row of `relation`, those whose
     /// row was admitted no later than the changing row.
     Visible { changing: usize, relation: usize },
+    /// The publications that published a row of `relation`.
+    Rounds { relation: usize },
 }
 
 /// A key is identified by its 64-bit hash, which is its own table hash.
@@ -203,6 +205,7 @@ enum Work {
     All { relation: usize },
     Sketched { relation: usize, rows: usize, sketch: usize },
     Visible { changing: usize, relation: usize },
+    Rounds { relation: usize },
     Direct { binder: usize, read: usize, slot: usize, staged: bool },
     Reach { changing: usize, reached: usize, read: usize, slot: usize, staged: bool },
 }
@@ -254,6 +257,10 @@ impl Degrees {
                     plan.columns(*relation, &[])?;
                     Work::Visible { changing: *changing, relation: *relation }
                 }
+                Request::Rounds { relation } => {
+                    plan.columns(*relation, &[])?;
+                    Work::Rounds { relation: *relation }
+                }
                 Request::Joined { reach, binder, from, read, bound, column, staged } => {
                     if from.len() != bound.len() { return Err("joined degree key lengths differ".into()); }
                     plan.columns(binder.relation, from)?;
@@ -285,7 +292,7 @@ impl Degrees {
     /// Whether a request reads this relation.
     pub fn wants(&self, relation: usize) -> bool {
         self.relations.get(relation).is_some_and(|admitted| !admitted.roles.is_empty() || !admitted.selections.is_empty())
-            || self.work.iter().any(|work| matches!(work, Work::All { relation: all } if *all == relation)
+            || self.work.iter().any(|work| matches!(work, Work::All { relation: all } | Work::Rounds { relation: all } if *all == relation)
                 || matches!(work, Work::Visible { changing, relation: seen } if *changing == relation || *seen == relation))
     }
 
@@ -387,6 +394,7 @@ impl Degrees {
         work.iter().map(|work| match *work {
             Work::Any { relation, rows } => (u64::from(relations[relation].selections[rows].1 > 0), 1),
             Work::All { relation } => (relations[relation].published.iter().sum(), 1),
+            Work::Rounds { relation } => (relations[relation].published.iter().filter(|&&rows| rows > 0).count() as u64, 1),
             Work::Sketched { relation, rows, sketch } => (sketches[sketch].count().min(relations[relation].selections[rows].1), 1),
             Work::Visible { changing, relation } => {
                 // A changing row sees what was published up to its horizon.

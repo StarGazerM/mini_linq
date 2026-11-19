@@ -92,6 +92,9 @@ pub enum DegreeRequest {
     /// Numerator: the pairs of a row of `changing` and a row of `relation`
     /// no younger than it. Denominator: all pairs of their rows.
     Visible { changing: String, relation: String },
+    /// The publications that published a row of `relation`, over 1: the
+    /// rounds in which it changed, and one more if it holds input rows.
+    Rounds { relation: String },
 }
 impl Selection {
     fn id(&self) -> String {
@@ -110,11 +113,15 @@ impl DegreeRequest {
                 format!("degree:joined:{reach}{}[{}]~{}[{}]>{column}{}", binder.id(), list(from), read.id(), list(bound), if *staged { "@staged" } else { "" })
             }
             Self::Visible { changing, relation } => format!("degree:visible:{changing}/{relation}"),
+            Self::Rounds { relation } => format!("degree:rounds:{relation}"),
         }
     }
     /// The unit of this request's fact.
     pub fn unit(&self) -> Unit {
-        match self { Self::Distinct { .. } => Unit::Distinct, Self::Joined { .. } => Unit::Degree, Self::Visible { .. } => Unit::Ratio }
+        match self {
+            Self::Distinct { .. } => Unit::Distinct, Self::Joined { .. } => Unit::Degree,
+            Self::Visible { .. } => Unit::Ratio, Self::Rounds { .. } => Unit::Rounds,
+        }
     }
     fn check(&self) -> Result<()> {
         fn selection(rows: &Selection) -> Result<()> {
@@ -137,6 +144,7 @@ impl DegreeRequest {
                 Ok(())
             }
             Self::Visible { changing, relation } => { nonblank(changing)?; nonblank(relation) }
+            Self::Rounds { relation } => nonblank(relation),
         }
     }
 }
@@ -405,6 +413,9 @@ pub struct TargetEvidence {
     pub unit: Unit,
     pub build_per_row_h: RationalFact,
     pub merge_per_row_m: RationalFact,
+    /// What a group of a grouped full index costs to build, in bindings
+    /// (VP-Index); absent where the target's indexes are not charged.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub index_per_group_g: Option<RationalFact>,
     pub configuration_hash: String,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -916,7 +927,7 @@ impl DatasetEvidence {
             ensure(matches!(target.as_str(), "cpu" | "cpu-par" | "gpu"), "unknown target")?;
             ensure(costs.unit == Unit::DeclaredRowWork, "target unit must be declared_row_work")?;
             digest(&costs.configuration_hash)?;
-            for f in [&costs.build_per_row_h, &costs.merge_per_row_m] {
+            for f in [&costs.build_per_row_h, &costs.merge_per_row_m].into_iter().chain(&costs.index_per_group_g) {
                 checker.rational(f, Unit::DeclaredRowWork)?;
                 ensure(f.claim == Claim::Equal && matches!(f.source, Source::Declared | Source::Calibrated | Source::Exact), "target h/m must be supplied exact rational constants")?;
                 if let Some(run) = &f.provenance.run { ensure(run.configuration_hash == costs.configuration_hash, "target calibration configuration mismatch")?; }

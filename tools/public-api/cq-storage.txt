@@ -3895,7 +3895,7 @@ cq_storage::statistics::Reach	{"struct":{"generics":{"params":[],"where_predicat
 cq_storage::statistics::Reach::binder	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_storage::statistics::Reach::changing	{"struct_field":{"resolved_path":{"args":null,"id":"cq_storage::statistics::Rows","path":"Rows"}}}
 cq_storage::statistics::Reach::columns	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
-cq_storage::statistics::Request	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_storage::statistics::Request::Distinct","cq_storage::statistics::Request::Joined","cq_storage::statistics::Request::Visible"]}}
+cq_storage::statistics::Request	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_storage::statistics::Request::Distinct","cq_storage::statistics::Request::Joined","cq_storage::statistics::Request::Visible","cq_storage::statistics::Request::Rounds"]}}
 cq_storage::statistics::Request::Distinct	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_storage::statistics::Request::Distinct::rows","cq_storage::statistics::Request::Distinct::columns"],"has_stripped_fields":false}}}}
 cq_storage::statistics::Request::Distinct::columns	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"primitive":"usize"}}],"constraints":[]}},"id":"alloc::vec::Vec","path":"Vec"}}}
 cq_storage::statistics::Request::Distinct::rows	{"struct_field":{"resolved_path":{"args":null,"id":"cq_storage::statistics::Rows","path":"Rows"}}}
@@ -3907,6 +3907,8 @@ cq_storage::statistics::Request::Joined::from	{"struct_field":{"resolved_path":{
 cq_storage::statistics::Request::Joined::reach	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_storage::statistics::Reach","path":"Reach"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
 cq_storage::statistics::Request::Joined::read	{"struct_field":{"resolved_path":{"args":null,"id":"cq_storage::statistics::Rows","path":"Rows"}}}
 cq_storage::statistics::Request::Joined::staged	{"struct_field":{"primitive":"bool"}}
+cq_storage::statistics::Request::Rounds	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_storage::statistics::Request::Rounds::relation"],"has_stripped_fields":false}}}}
+cq_storage::statistics::Request::Rounds::relation	{"struct_field":{"primitive":"usize"}}
 cq_storage::statistics::Request::Visible	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_storage::statistics::Request::Visible::changing","cq_storage::statistics::Request::Visible::relation"],"has_stripped_fields":false}}}}
 cq_storage::statistics::Request::Visible::changing	{"struct_field":{"primitive":"usize"}}
 cq_storage::statistics::Request::Visible::relation	{"struct_field":{"primitive":"usize"}}

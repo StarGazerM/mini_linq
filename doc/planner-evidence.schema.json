@@ -1377,6 +1377,9 @@
         "merge_per_row_m": {
           "$ref": "#/$defs/RationalFact"
         },
+        "index_per_group_g": {
+          "$ref": "#/$defs/RationalFact"
+        },
         "configuration_hash": {
           "$ref": "#/$defs/Hash"
         }

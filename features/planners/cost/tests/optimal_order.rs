@@ -42,9 +42,11 @@ fn profiled(program: &Program, inputs: &Database) -> DatasetEvidence {
         dataset_hash: evidence.dataset.hash.clone(), unit: Unit::DeclaredRowWork,
         provenance: Provenance { producer: "test reference policy".into(), method: "explicit h=m=1 row work".into(), locator: "optimal_order.rs".into(), run: None, artifact_hash: None },
     };
+    // VP-Index: the CPU engine's 16 bindings a group.
+    let group = Fact { value: Some(Rational { numerator: "16".into(), denominator: "1".into() }), ..unit("cpu.g") };
     evidence.targets.insert("cpu".into(), TargetEvidence {
         unit: Unit::DeclaredRowWork, configuration_hash: export::sha256(serde_json::to_vec(&config()).unwrap()),
-        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"),
+        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"), index_per_group_g: Some(group),
     });
     evidence.check().unwrap();
     evidence
@@ -607,37 +609,75 @@ fn a_written_order_that_avoids_a_costly_index_is_kept() {
         rule(atom("V", &[Var("v"), Var("h")]), &[atom("New", &[Var("v"), Var("h")])]),
         rule(atom("V", &[Var("to"), Var("h")]), body),
     ] };
-    // `news` allocated variables over five heaps; a cast from each of
-    // `sources` variables at each heap, so `Cast` by (from, h) has a group a row.
-    let steady = |program: &Program, news: i64, sources: i64| -> cost::variables::Decided {
-        let inputs: Database = BTreeMap::from([
-            ("New", (0..news).flat_map(|v| (0..5).map(move |h| vec![v, h])).collect::<Rows>()),
-            ("Cast", (0..sources).flat_map(|from| (0..5).map(move |h| vec![from, (from * 7 + h) % sources.max(news), h])).collect::<Rows>()),
-        ]);
-        let history = program.semi_naive(&inputs);
-        let evidence = profiled(program, &inputs);
+    // The one steady variant's decision.
+    let decide = |program: &Program, inputs: &Database| -> cost::variables::Decided {
+        let history = program.semi_naive(inputs);
+        let evidence = profiled(program, inputs);
         let input = planned(program, &evidence);
         let evidence = with_degrees(&input, evidence, &history);
-        let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide().unwrap();
+        let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide("cpu").unwrap();
         let mut steady = input.holes.iter().zip(decided).filter_map(|(hole, decided)| match &hole.origin {
-            Origin::Rule { seed, .. } => { let decided = decided.expect("every hole of the fixture plans"); if *seed { assert!(decided.advised); None } else { Some(decided) } }
+            Origin::Rule { seed, .. } => { let decided = decided.expect("every hole of the fixture plans"); if *seed { assert_eq!(decided.kept, None); None } else { Some(decided) } }
             _ => None,
         });
         let only = steady.next().expect("one steady variant");
         assert!(steady.next().is_none());
         only
     };
+    // `news` allocated variables over five heaps; a cast from each of
+    // `sources` variables at each heap: `Cast` by (from, h) has a group a row.
+    let casts = |news: i64, sources: i64| -> Database { BTreeMap::from([
+        ("New", (0..news).flat_map(|v| (0..5).map(move |h| vec![v, h])).collect::<Rows>()),
+        ("Cast", (0..sources).flat_map(|from| (0..5).map(move |h| vec![from, (from * 7 + h) % sources.max(news), h])).collect::<Rows>()),
+    ]) };
     // 4,000 groups against at most 4,000 changing rows of about two
     // bindings each; the written order scans `Cast` and probes the delta.
-    let costly = steady(&program(&body), 20, 800);
+    let costly = decide(&program(&body), &casts(20, 800));
     assert_eq!(costly.added, 16.0 * 4000.0);
-    assert!(!costly.advised, "work {:?} against {} for the index", costly.work, costly.added);
+    assert_eq!(costly.kept, Some(cost::variables::Kept::Index), "work {:?} against {} for the index", costly.work, costly.added);
     // Written delta first, the text reads `Cast` by the same index.
-    let delta_first = steady(&program(&[body[1].clone(), body[0].clone()]), 20, 800);
+    let delta_first = decide(&program(&[body[1].clone(), body[0].clone()]), &casts(20, 800));
     assert_eq!(delta_first.added, 16.0 * 4000.0);
-    assert!(delta_first.advised);
-    // 50 groups against 600 changing rows or more.
-    let cheap = steady(&program(&body), 120, 10);
-    assert_eq!(cheap.added, 16.0 * 50.0);
-    assert!(cheap.advised, "work {:?} against {} for the index", cheap.work, cheap.added);
+    assert_eq!((delta_first.kept, delta_first.written), (None, None));
+    // A chain of 40 casts, each variable also cast to 20 that go nowhere:
+    // 200 groups, and the written order scans all 4,200 casts in each of
+    // 41 rounds.
+    let chain: Database = BTreeMap::from([
+        ("New", (0..5).map(|h| vec![0, h]).collect::<Rows>()),
+        ("Cast", (0..40i64).flat_map(|from| (0..5).flat_map(move |h| std::iter::once(vec![from, from + 1, h])
+            .chain((0..20).map(move |junk| vec![from, 1000 + from * 20 + junk, h])))).collect::<Rows>()),
+    ]);
+    let cheap = decide(&program(&body), &chain);
+    assert_eq!(cheap.added, 16.0 * 200.0);
+    assert_eq!(cheap.kept, None, "work {:?}, index {}, written {:?}", cheap.work, cheap.added, cheap.written);
+    assert!(cheap.written.unwrap() > cheap.work.unwrap() + cheap.added);
+}
+
+/// VP-Written: a changing row that meets a hub, where the written order
+/// reaches the delta from a few rows, keeps the written order.
+#[test]
+fn a_written_order_that_reads_the_delta_later_for_fewer_bindings_is_kept() {
+    // D(x, z) :- Sel(x, y), Big(y, w), D(w, z): every changing row (w, z)
+    // meets the 400 `y` of its hub `w`, of which `Sel` holds three.
+    let program = Program { inputs: vec![("Base", 2), ("Sel", 2), ("Big", 2)], derived: vec![("D", 2)], rules: vec![
+        rule(atom("D", &[Var("w"), Var("z")]), &[atom("Base", &[Var("w"), Var("z")])]),
+        rule(atom("D", &[Var("x"), Var("z")]), &[atom("Sel", &[Var("x"), Var("y")]), atom("Big", &[Var("y"), Var("w")]), atom("D", &[Var("w"), Var("z")])]),
+    ] };
+    let inputs: Database = BTreeMap::from([
+        ("Base", (0..5i64).flat_map(|w| (0..50).map(move |z| vec![w, z])).collect::<Rows>()),
+        ("Sel", (0..3i64).map(|at| vec![100 + at, at]).collect::<Rows>()),
+        ("Big", (0..2000i64).map(|y| vec![y, y % 5]).collect::<Rows>()),
+    ]);
+    let history = program.semi_naive(&inputs);
+    let evidence = profiled(&program, &inputs);
+    let input = planned(&program, &evidence);
+    let evidence = with_degrees(&input, evidence, &history);
+    let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide("cpu").unwrap();
+    let steady: Vec<_> = input.holes.iter().zip(decided).filter(|(hole, _)| matches!(&hole.origin, Origin::Rule { seed: false, .. }))
+        .map(|(_, decided)| decided.expect("every hole of the fixture plans")).collect();
+    assert_eq!(steady.len(), 1);
+    let (work, written) = (steady[0].work.unwrap(), steady[0].written.expect("the written order reads the delta last"));
+    // 400 changing rows of about 400 bindings each, against a few rows a round.
+    assert!(work > 100_000.0 && written < 2_000.0, "work {work}, written {written}");
+    assert_eq!(steady[0].kept, Some(cost::variables::Kept::Bindings));
 }
