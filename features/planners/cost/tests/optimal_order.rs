@@ -351,7 +351,7 @@ fn the_advised_orders_are_below_the_written_orders() {
 }
 
 #[test]
-fn recursive_holes_are_unknown_without_a_profile_and_predicted_with_one() {
+fn recursive_holes_are_structural_without_a_profile_and_predicted_with_one() {
     let (program, _, planned_inputs) = workload();
     let evidence = profiled(&program, &planned_inputs);
     let input = planned(&program, &evidence);
@@ -360,7 +360,12 @@ fn recursive_holes_are_unknown_without_a_profile_and_predicted_with_one() {
     };
     let bare = cost::analyze(&input, &evidence, "cpu").unwrap();
     assert!(bare.profile.is_none());
-    assert_eq!(steady(&bare), vec![(cost::Decision::Unknown, cost::Basis::Certified); 5]);
+    // VP-Structural: no fact of a derived relation, so the changing occurrence is read first.
+    assert!(steady(&bare).iter().all(|(decision, basis)| *decision != cost::Decision::Unknown && *basis == cost::Basis::Structural), "{:?}", steady(&bare));
+    for hole in bare.holes.iter().filter(|hole| matches!(hole.origin, Origin::Rule { seed: false, .. })) {
+        let first = hole.candidates[hole.selected].plan.steps.iter().find_map(|step| step.read.as_ref()).unwrap();
+        assert_eq!(first.version, Version::Delta, "{}", hole.reason);
+    }
     let own = profile(&program, &[&planned_inputs]);
     let predicted = cost::analyze_predicted(&input, &evidence, "cpu", Space::default(), &own).unwrap();
     assert!(steady(&predicted).iter().all(|(decision, basis)| *decision != cost::Decision::Unknown && *basis == cost::Basis::Predicted));
@@ -372,11 +377,10 @@ fn recursive_holes_are_unknown_without_a_profile_and_predicted_with_one() {
     // Rounds belong to the component, named by its first declared relation.
     assert_eq!(used.facts["estimate:V:rounds"], history.rounds[history.component["V"]].len() as u64);
     assert_eq!(used.examples, [evidence.dataset.hash.clone()]);
-    // The report round-trips, and a report without a profile omits the fields.
+    // The report round-trips, and a report without a profile omits it.
     let reread: cost::AdviceReport = serde_json::from_str(&serde_json::to_string(&predicted).unwrap()).unwrap();
     assert_eq!(reread, predicted);
-    let text = serde_json::to_string(&bare).unwrap();
-    assert!(!text.contains("\"profile\"") && !text.contains("\"basis\""));
+    assert!(!serde_json::to_string(&bare).unwrap().contains("\"profile\""));
 }
 
 #[test]
@@ -598,86 +602,72 @@ fn advice_from_measured_degrees_does_not_depend_on_the_written_body_order() {
     assert!(changed > 0, "no reversed body was reordered");
 }
 
-/// VP-Index: a steady variant whose only order reads by an index of more
-/// groups than its work is worth keeps a written order that avoids the
-/// index; it is advised where the index has few groups, and where the
-/// written order needs the index too.
+/// The decision of the one steady variant of a program over its inputs.
+fn steady_decision(program: &Program, inputs: &Database) -> cost::variables::Decided {
+    let history = program.semi_naive(inputs);
+    let evidence = profiled(program, inputs);
+    let input = planned(program, &evidence);
+    let evidence = with_degrees(&input, evidence, &history);
+    let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide("cpu").unwrap();
+    let mut steady = input.holes.iter().zip(decided).filter(|(hole, _)| matches!(&hole.origin, Origin::Rule { seed: false, .. }))
+        .map(|(_, decided)| decided.expect("every hole of the fixture plans"));
+    let only = steady.next().expect("one steady variant");
+    assert!(steady.next().is_none());
+    only
+}
+/// The relations a decided order reads, in order, each with its version.
+fn reads_of(decided: &cost::variables::Decided) -> Vec<(String, Version)> {
+    decided.order.candidate.steps.iter().filter_map(|step| step.read.as_ref()).map(|read| (read.logical_relation.clone(), read.version)).collect()
+}
+
+/// VP-Place: where each changing row has about one continuation, the
+/// changing occurrence is read first, however the body is written.
 #[test]
-fn a_written_order_that_avoids_a_costly_index_is_kept() {
+fn the_changing_occurrence_is_read_first_where_its_rows_continue_once() {
     let body = [atom("Cast", &[Var("from"), Var("to"), Var("h")]), atom("V", &[Var("from"), Var("h")])];
     let program = |body: &[support::Atom]| Program { inputs: vec![("New", 2), ("Cast", 3)], derived: vec![("V", 2)], rules: vec![
         rule(atom("V", &[Var("v"), Var("h")]), &[atom("New", &[Var("v"), Var("h")])]),
         rule(atom("V", &[Var("to"), Var("h")]), body),
     ] };
-    // The one steady variant's decision.
-    let decide = |program: &Program, inputs: &Database| -> cost::variables::Decided {
-        let history = program.semi_naive(inputs);
-        let evidence = profiled(program, inputs);
-        let input = planned(program, &evidence);
-        let evidence = with_degrees(&input, evidence, &history);
-        let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide("cpu").unwrap();
-        let mut steady = input.holes.iter().zip(decided).filter_map(|(hole, decided)| match &hole.origin {
-            Origin::Rule { seed, .. } => { let decided = decided.expect("every hole of the fixture plans"); if *seed { assert_eq!(decided.kept, None); None } else { Some(decided) } }
-            _ => None,
-        });
-        let only = steady.next().expect("one steady variant");
-        assert!(steady.next().is_none());
-        only
-    };
-    // `news` allocated variables over five heaps; a cast from each of
-    // `sources` variables at each heap: `Cast` by (from, h) has a group a row.
-    let casts = |news: i64, sources: i64| -> Database { BTreeMap::from([
-        ("New", (0..news).flat_map(|v| (0..5).map(move |h| vec![v, h])).collect::<Rows>()),
-        ("Cast", (0..sources).flat_map(|from| (0..5).map(move |h| vec![from, (from * 7 + h) % sources.max(news), h])).collect::<Rows>()),
-    ]) };
-    // 4,000 groups against at most 4,000 changing rows of about two
-    // bindings each; the written order scans `Cast` and probes the delta.
-    let costly = decide(&program(&body), &casts(20, 800));
-    assert_eq!(costly.added, 16.0 * 4000.0);
-    assert_eq!(costly.kept, Some(cost::variables::Kept::Index), "work {:?} against {} for the index", costly.work, costly.added);
-    // Written delta first, the text reads `Cast` by the same index.
-    let delta_first = decide(&program(&[body[1].clone(), body[0].clone()]), &casts(20, 800));
-    assert_eq!(delta_first.added, 16.0 * 4000.0);
-    assert_eq!((delta_first.kept, delta_first.written), (None, None));
     // A chain of 40 casts, each variable also cast to 20 that go nowhere:
-    // 200 groups, and the written order scans all 4,200 casts in each of
-    // 41 rounds.
+    // reading `Cast` first scans its 4,200 rows in each of 41 rounds.
     let chain: Database = BTreeMap::from([
         ("New", (0..5).map(|h| vec![0, h]).collect::<Rows>()),
         ("Cast", (0..40i64).flat_map(|from| (0..5).flat_map(move |h| std::iter::once(vec![from, from + 1, h])
             .chain((0..20).map(move |junk| vec![from, 1000 + from * 20 + junk, h])))).collect::<Rows>()),
     ]);
-    let cheap = decide(&program(&body), &chain);
-    assert_eq!(cheap.added, 16.0 * 200.0);
-    assert_eq!(cheap.kept, None, "work {:?}, index {}, written {:?}", cheap.work, cheap.added, cheap.written);
-    assert!(cheap.written.unwrap() > cheap.work.unwrap() + cheap.added);
+    for body in [body.to_vec(), vec![body[1].clone(), body[0].clone()]] {
+        let decided = steady_decision(&program(&body), &chain);
+        assert_eq!(decided.order.before, 0, "{:?}", reads_of(&decided));
+        assert_eq!(reads_of(&decided), [("V".to_owned(), Version::Delta), ("Cast".to_owned(), Version::Full)]);
+    }
 }
 
-/// VP-Written: a changing row that meets a hub, where the written order
-/// reaches the delta from a few rows, keeps the written order.
+/// VP-Place: where a changing row meets a hub, the planner reads the
+/// occurrences that reach it from a few rows first, however the body is
+/// written.
 #[test]
-fn a_written_order_that_reads_the_delta_later_for_fewer_bindings_is_kept() {
+fn the_changing_occurrence_is_read_later_where_its_rows_meet_a_hub() {
     // D(x, z) :- Sel(x, y), Big(y, w), D(w, z): every changing row (w, z)
     // meets the 400 `y` of its hub `w`, of which `Sel` holds three.
-    let program = Program { inputs: vec![("Base", 2), ("Sel", 2), ("Big", 2)], derived: vec![("D", 2)], rules: vec![
+    let body = [atom("Sel", &[Var("x"), Var("y")]), atom("Big", &[Var("y"), Var("w")]), atom("D", &[Var("w"), Var("z")])];
+    let program = |body: &[support::Atom]| Program { inputs: vec![("Base", 2), ("Sel", 2), ("Big", 2)], derived: vec![("D", 2)], rules: vec![
         rule(atom("D", &[Var("w"), Var("z")]), &[atom("Base", &[Var("w"), Var("z")])]),
-        rule(atom("D", &[Var("x"), Var("z")]), &[atom("Sel", &[Var("x"), Var("y")]), atom("Big", &[Var("y"), Var("w")]), atom("D", &[Var("w"), Var("z")])]),
+        rule(atom("D", &[Var("x"), Var("z")]), body),
     ] };
     let inputs: Database = BTreeMap::from([
         ("Base", (0..5i64).flat_map(|w| (0..50).map(move |z| vec![w, z])).collect::<Rows>()),
         ("Sel", (0..3i64).map(|at| vec![100 + at, at]).collect::<Rows>()),
         ("Big", (0..2000i64).map(|y| vec![y, y % 5]).collect::<Rows>()),
     ]);
-    let history = program.semi_naive(&inputs);
-    let evidence = profiled(&program, &inputs);
-    let input = planned(&program, &evidence);
-    let evidence = with_degrees(&input, evidence, &history);
-    let decided = cost::variables::Planner::new(&input, &evidence).unwrap().decide("cpu").unwrap();
-    let steady: Vec<_> = input.holes.iter().zip(decided).filter(|(hole, _)| matches!(&hole.origin, Origin::Rule { seed: false, .. }))
-        .map(|(_, decided)| decided.expect("every hole of the fixture plans")).collect();
-    assert_eq!(steady.len(), 1);
-    let (work, written) = (steady[0].work.unwrap(), steady[0].written.expect("the written order reads the delta last"));
-    // 400 changing rows of about 400 bindings each, against a few rows a round.
-    assert!(work > 100_000.0 && written < 2_000.0, "work {work}, written {written}");
-    assert_eq!(steady[0].kept, Some(cost::variables::Kept::Bindings));
+    let mut orders = Vec::new();
+    for body in [body.to_vec(), vec![body[2].clone(), body[1].clone(), body[0].clone()]] {
+        let decided = steady_decision(&program(&body), &inputs);
+        let reads = reads_of(&decided);
+        assert!(decided.order.before > 0 && reads[0].1 == Version::Full, "{reads:?}");
+        // Read first, 400 changing rows would meet about 400 bindings each.
+        assert!(decided.work.unwrap() < 10_000.0, "{:?}", decided.work);
+        orders.push(reads);
+    }
+    assert_eq!(orders[0], orders[1]);
 }

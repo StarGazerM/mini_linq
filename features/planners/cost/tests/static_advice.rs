@@ -107,13 +107,14 @@ fn sub_five_percent_bound_changes_are_recorded_but_never_advised_or_shared() {
 }
 
 #[test]
-fn incomplete_facts_retain_structural_order_and_emit_no_fake_default_advice() {
+fn incomplete_facts_take_the_structural_order_and_emit_no_fake_default_advice() {
     let files = Fixture::new(); let mut evidence = evidence(&files);
     let r = evidence.relations.get_mut("R").unwrap(); r.rows = None;
     for c in r.columns.values_mut() { c.distinct = None; c.max_degree = None; c.min = None; c.max = None; }
     let input = program(&evidence);
     let report = cost::analyze(&input, &evidence, "cpu").unwrap();
-    assert_eq!(report.holes[0].decision, Decision::Unknown);
+    // VP-Structural: the recorded order is the structural one here.
+    assert_eq!((report.holes[0].decision, report.holes[0].basis), (Decision::Retained, cost::Basis::Structural));
     assert!(report.holes[0].candidates[report.holes[0].selected].plan.current);
     assert!(syn::parse_str::<AdviceList>(&report.advice).unwrap().0.is_empty());
     assert!(report.whole_run.is_none());

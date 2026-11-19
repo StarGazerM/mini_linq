@@ -242,6 +242,9 @@ pub enum Basis {
     /// PS-Decide: the degree facts of one run chose the hole's variable
     /// order. They observe that run and bound nothing.
     Measured,
+    /// VP-Structural: no fact decided the hole; its clause order is
+    /// SRDatalog's default.
+    Structural,
 }
 impl Basis {
     fn is_certified(&self) -> bool { *self == Self::Certified }
@@ -622,20 +625,14 @@ fn plan_hole(
         reason = format!("variable order [{}] planned from measured degree facts, VP-Cost {:.4}{}", order.order.join(", "), order.estimate,
             recorded.map_or(String::new(), |recorded| format!(" against {recorded:.4} for the recorded order")));
         if let Some(work) = decided.work {
-            reason = format!("{reason}; {work:.0} bindings and {:.0} for new indexes, the least of {} lowerings", decided.added, decided.weighed);
+            reason = format!("{reason}; {work:.0} bindings and {:.0} for new indexes, the least of {} orders", decided.added, decided.weighed);
         }
-        if let Some(written) = decided.written {
-            reason = format!("{reason}; the written order reads the changing occurrence later for {written:.0} bindings");
+        if order.before > 0 {
+            reason = format!("{reason}; reads the changing occurrence after {} others, once a round", order.before);
         }
         if !excluded.indexes.is_empty() || excluded.partial.is_some() {
             decision = Decision::Retained;
             reason = format!("{reason}; retain the recorded order");
-        } else if let Some(kept) = decided.kept {
-            decision = Decision::Retained;
-            reason = format!("{reason}; {}: keep the written order", match kept {
-                variables::Kept::Index => "its new indexes cost more than its bindings and the written order avoids them",
-                variables::Kept::Bindings => "the written order has fewer bindings",
-            });
         } else if enumerate::same(&order.candidate, incumbent) {
             decision = Decision::Retained;
             reason = format!("{reason}; the recorded order reads the same");
@@ -676,7 +673,24 @@ fn plan_hole(
             _ => "no estimate for the incumbent or for every valuation; retain recorded structural order".into(),
         };
     } else {
-        reason = "a read has no row fact, or the changing relation no final rows and rounds; retain recorded structural order".into();
+        reason = "a read has no row fact, or the changing relation no final rows and rounds".into();
+    }
+    // VP-Structural: a rule hole no fact decided takes SRDatalog's default clause order.
+    let mut structural = false;
+    if let (Decision::Unknown, crate::export::Origin::Rule { seed, .. }) = (decision, &hole.origin) {
+        if !excluded.indexes.is_empty() || excluded.partial.is_some() {
+            reason = format!("{reason}; retain the recorded order");
+        } else if let Some(order) = variables::structural(prepared, *seed) {
+            structural = true;
+            reason = format!("{reason}; the structural order: the changing occurrence, then most bound variables");
+            if enumerate::same(&order, incumbent) {
+                decision = Decision::Retained;
+                reason = format!("{reason}; the recorded order reads the same");
+            } else {
+                kept.push((order, None));
+                (selected, decision) = (kept.len() - 1, Decision::Changed);
+            }
+        }
     }
     if let (Some(rejection), Decision::Changed) = (&excluded.rejected, decision) {
         (selected, decision) = (0, Decision::Retained);
@@ -697,7 +711,7 @@ fn plan_hole(
         hole: hole.id, origin: hole.origin.clone(), planning_rank: 0, standalone_estimate: None, shared_before: BTreeSet::new(),
         citations: candidates[selected].cost.citations.clone(), candidates, selected, decision, reason,
         admission: None, noise_screen, search,
-        basis: if planned.is_some() { Basis::Measured } else if predicted { Basis::Predicted } else { Basis::Certified },
+        basis: if planned.is_some() { Basis::Measured } else if structural { Basis::Structural } else if predicted { Basis::Predicted } else { Basis::Certified },
     })
 }
 

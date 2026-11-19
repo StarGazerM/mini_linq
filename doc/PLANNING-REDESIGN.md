@@ -768,48 +768,40 @@ permutation of a body plans to the same order and the same reads.
      (`Planner::plans`).
   2. The hole's weight is the rows of its changing relation (each is
      consumed once), one for a seed. The chosen order has the least
-     `weight x VP-Cost + new index charge`; among equals the least
-     VP-Cost.
-  3. A steady hole keeps its written order, without advice, in two
-     cases. By its index: the chosen order's new index charge exceeds
-     its `weight x VP-Cost`, is at least 1% of the program's bindings
-     (every hole's cheapest `weight x VP-Cost`, summed), and the written
-     order's own new index charge is smaller. By its bindings: the
-     written order reads the changing occurrence later, and its bindings
-     (VP-Written) plus its new index charge are below the chosen order's
-     `weight x VP-Cost` plus charge by at least 1% of the program's
-     bindings. Then the written order's demands count as built.
-     Otherwise the chosen order is advised and its demands count as
-     built. A seed is always advised: its written order is one of its
-     orders.
+     cost (VP-Place) plus new index charge; among equals the least
+     VP-Cost. It is always advised, and its demands count as built.
   Holes are decided by stratum, then by `weight x VP-Cost` of their
-  cheapest order, heaviest first, then by hole. Step 3 is the one place
-  the decision reads the text (agreed 2026-11-18: invariance may be
-  weakened here). It applies where VP-Delta leaves the planner a costly
-  order and the written order reads the changing occurrence later; the
-  1% keeps it from small holes. Without the rows of the changing relation
-  or of a charged index the hole takes its cheapest order uncharged.
-- **VP-Written.** The bindings of a steady hole's written order that
-  reads its changing occurrence after other occurrences:
+  cheapest order, heaviest first, then by hole. Nothing reads the
+  recorded order: the written order is no outcome of the planner (decided
+  2026-11-19; the two rules of 2026-11-18 that kept it are withdrawn).
+  Without the rows of the changing relation or of a charged index the
+  hole takes its cheapest order uncharged.
+- **VP-Place (2026-11-19, replaces VP-Written).** Where a steady hole
+  reads its changing occurrence is planned. An order is a set of
+  occurrences read before it (possibly none, which is VP-Delta), their
+  variable order, and the order of the rest:
   `rounds x before + after + held`. The reads before the changing one run
   once a round over full relations; the changing read and what follows
   run once per changing row, and each changing row is in one delta.
   - `rounds`: the publications that published a row of the changing
     relation, a `Rounds` fact (PS-Request).
-  - `before`: VP-Cost of the variables the earlier reads introduce, in
-    that order, over those occurrences alone and in full.
-  - `after`: the prefix bindings of the remaining variables, in the
-    written order over every occurrence in full, the changing one
-    included.
+  - `before`: the least VP-Cost of the earlier occurrences alone and in
+    full, over the orders of their variables.
+  - `after`: the prefix bindings of the remaining variables in their
+    least order after those, over every occurrence in full, the changing
+    one included.
   - `held`: the changing relation's rows times the changing occurrence's
-    variables. A changing row must be put where the later read probes
-    it; that is taken to cost what reading it first costs, a binding a
-    variable, so the two orders differ only in the rest. No delta index
-    cost is measured apart from this.
-  The final relations stand for what each round sees, so `before` is
-  from above. The planner asks for the facts of these two valuations
-  along the written order only. It does not search orders that read the
-  changing occurrence later; it prices the one the text has.
+    variables: what reading each changing row once costs wherever it is
+    read.
+  The changing occurrence shares a variable with the set read before it.
+  With none read before it the cost is `weight x VP-Cost` as before (its
+  degrees know what a round sees). The planner asks for the facts of
+  every occurrence in full, and for the changing relation's rounds.
+  **Growth.** A calibration input is small. `rounds x before` hardly
+  grows with the input; `after`, `held` and `weight x VP-Cost` grow with
+  the changing relation. Orders are compared with the growing part taken
+  `GROWTH = 16` times: an order that is cheaper only because the
+  calibration's changing relation is small is not chosen.
 
   Why (2026-11-18): `VPT_LoadArray` with changing
   `ArrayIndexPointsTo(baseheap, heap)`. Read first, the changing row
@@ -1075,8 +1067,14 @@ delivered, accumulated, recorded as evidence, and read by the planner.
   nothing), and the report states the order, its VP-Cost beside the
   recorded order's, its bindings and its new index charge. Where VP-Index
   gives no advice, production rejects the order, or does not provision an
-  index it reads, the hole keeps its recorded order. A hole without the
-  facts is decided as before.
+  index it reads, the hole keeps its recorded order.
+- **VP-Structural (2026-11-19).** A rule hole no fact decides takes
+  SRDatalog's default clause order (`ir/hir/plan.py`,
+  `compute_clause_order`): the changing occurrence first, then the
+  occurrence sharing most variables with those read, the earlier written
+  on a tie; checks run as soon as their variables are bound. Its basis is
+  `structural`. No data gives no better: bloat's plans without degree
+  facts left 93 of 115 holes undecided, on their recorded order.
 
 Built 2026-11-16. A calibrated run of the reachability fixture writes the
 facts and the planner plans from them (`calibration_workflow.rs`). The
