@@ -1218,9 +1218,28 @@ c5d48dff; planning side in `/data/design-notes/duckdb-planner-reference.md`):
     than 8,192 keys halves its share of the keys, and so does a read
     table after every 2^20 rows it takes in while it holds more than
     1,024 keys; a binder table past 2^16 counted rows counts every second
-    row for two, then every fourth for four. The fact is the ratio of the
-    two sums over the keys every side still holds. Requests that read the
-    same rows by the same key share a table;
+    row for two, then every fourth for four. Requests that read the
+    same rows by the same key share a table.
+    **PS-Heavy (2026-11-19).** A sample of keys chosen by hash has a
+    heavy key or lacks it, and a degree summed over rows is mostly its
+    heavy keys. So a relation is passed twice. The first pass finds, for
+    each key column list a table of the relation uses, the keys most of
+    its rows hold: a Misra-Gries summary of 4,096 counters, of which the
+    1,024 largest are its heavy keys. In the second pass a table keeps a
+    heavy key whatever its hash, and halving its share drops light keys
+    only. The fact weighs each key by one over the chance that both of
+    its tables hold it: 1 where both hold it for sure; where one samples
+    it, that table's share inverted; where both do, the smaller share's.
+    A key a sampling side might have dropped is left out; a key that side
+    would have kept and lacks has no rows there. A reach weighs its two
+    keys so and multiplies.
+    Why: `VPT_LoadField` on soot. `InstanceFieldPointsTo` rows by field
+    against `ReachableLoadInstanceField` by field (9,691 fields, half of
+    them sampled, covering 39% of the changing rows): 4.46 loads a
+    changing row from the sample, 66.2 with every key kept. Planned from
+    4.46 the hole cost soot 123 s; from 66.2 the planner keeps the written
+    order, and soot takes 376 and 371 s advised against 392 and 387 s
+    written (two alternating runs beside another job);
   - `visible`: exact, from the rows each relation gained by round.
   The boundaries: the planner derives the requests and reads facts
   (`cq-cost`); `cq-evidence` is their schema; `cq_load::stats` turns

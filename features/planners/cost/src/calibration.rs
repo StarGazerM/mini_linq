@@ -75,9 +75,8 @@ impl Captured {
             requests, degrees, rows: vec![None; relations.len()], rounds, cells: Vec::new(), text: HashMap::new(),
         })
     }
-    fn admit(&mut self, relation: usize, age: Age, row: &dyn CalibrationRow) -> Result<()> {
-        let stamp = |at: usize| u32::try_from(at).map_err(|_| invalid("a program published more than 2^32 times"));
-        let (published, horizon) = (stamp(age.published)?, stamp(age.horizon)?);
+    /// The cells of a row as the degrees take them.
+    fn cells(&mut self, row: &dyn CalibrationRow) -> Result<()> {
         self.cells.clear();
         for index in 0..row.len() {
             self.cells.push(match row.cell(index) {
@@ -91,6 +90,18 @@ impl Captured {
                 ScalarValue::Unsupported(reason) => return Err(invalid(format!("degree statistics over an unsupported column: {reason}"))),
             });
         }
+        Ok(())
+    }
+    /// PS-Heavy: a row of a relation's first pass.
+    fn observe(&mut self, relation: usize, row: &dyn CalibrationRow) -> Result<()> {
+        self.cells(row)?;
+        self.degrees.observe(relation, &self.cells);
+        Ok(())
+    }
+    fn admit(&mut self, relation: usize, age: Age, row: &dyn CalibrationRow) -> Result<()> {
+        let stamp = |at: usize| u32::try_from(at).map_err(|_| invalid("a program published more than 2^32 times"));
+        let (published, horizon) = (stamp(age.published)?, stamp(age.horizon)?);
+        self.cells(row)?;
         self.degrees.admit(relation, published, horizon, &self.cells);
         Ok(())
     }
@@ -150,6 +161,11 @@ impl Observer for Recorder {
             let mut held = rows.map(|rows| rows as u64);
             if state.degrees.wants(relation) {
                 let (mut passed, mut failure) = (0u64, None);
+                // PS-Heavy: the relation's heavy keys first, then its rows.
+                if state.degrees.observes(relation) {
+                    pass(&mut |_, row| if failure.is_none() { failure = state.observe(relation, row).err(); });
+                    state.degrees.observed(relation);
+                }
                 pass(&mut |age, row| if failure.is_none() { passed += 1; failure = state.admit(relation, age, row).err(); });
                 if let Some(failure) = failure { return Err(failure); }
                 require(held.is_none_or(|held| held == passed), "a relation passed other rows than it holds")?;

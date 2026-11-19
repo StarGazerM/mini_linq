@@ -1108,6 +1108,14 @@ fn admit_degrees(input: &PlannerInput, evidence: &DatasetEvidence, model: &Model
     let mut cells = [0i64; W];
     for (relation, table) in run.tables.iter().enumerate() {
         if !degrees.wants(relation) { continue; }
+        // PS-Heavy: a relation's heavy keys first, then its rows.
+        if degrees.observes(relation) {
+            for row in &table.rows {
+                for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
+                degrees.observe(relation, &cells[..model.arity[relation]]);
+            }
+            degrees.observed(relation);
+        }
         for (row, &stage) in table.rows.iter().zip(&table.stage) {
             for column in 0..model.arity[relation] { cells[column] = row[column].into(); }
             degrees.admit(relation, stage, stage, &cells[..model.arity[relation]]);
