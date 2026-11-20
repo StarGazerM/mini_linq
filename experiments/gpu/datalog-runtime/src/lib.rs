@@ -28,7 +28,7 @@ pub use radix_run::{
 };
 pub use runs::SortedBatch;
 pub use stats::{
-    readback_count, record_readback, reset_work_counters,
+    readback_count, record_readback, release_at_stratum_boundary, reset_work_counters,
     profile_enter, profile_report, profiling, trace_kernels, trace_memory, trace_work,
     work_counters, MemoryUse, SortWork, WorkCounters,
 };

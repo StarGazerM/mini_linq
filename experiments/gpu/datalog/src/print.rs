@@ -827,8 +827,10 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 #rounds
                 Ok(())
             })?;
-            ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
-            __cq_gpu_pool.release_unused()?;
+            if ::gpu_datalog_runtime::release_at_stratum_boundary(&__cq_gpu_pool) {
+                ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
+                __cq_gpu_pool.release_unused()?;
+            }
             #released
         }));
     }
