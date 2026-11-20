@@ -8,6 +8,22 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**Hand-written `VPT_LoadArray@3` (2026-11-20, on `ccae0575` plus this
+change):** the join in SRDatalog's plan shape (distinct delta `baseheap`
+first, `heap` attached last, scan balanced over the grid) runs in place of
+the generated hole under `doop-gpu --features manual-joins` (CHANGELOG).
+- Same 175,290,361 candidates on scala from 0.36 G scanned rows instead of
+  23.2 G; the rule takes 0.113 s instead of 4.743 s, kotlin 0.074 s instead
+  of 2.784 s.
+- `doop-gpu` fixpoint, medians of three: soot 8.17 s, scala 8.66 s, kotlin
+  9.04 s, jython 20.77 s (10.70 / 13.29 / 11.71 / 21.23 s generated).
+- Against SRDatalog on its field-flow program (`srd-doop-gpu`, generated
+  holes, one stream): soot 7.30 s vs 9.93 s live, scala 10.86 vs 9.44 s,
+  kotlin 10.75 vs 10.52 s. Maintenance is 1.3–1.5x faster than SRDatalog's
+  (2026-11-11); the joins do more work, because every delta row is a work
+  item that binds all its columns first. Open: generate this plan shape
+  (distinct join keys of a delta, head-only columns expanded last).
+
 **GPU expansion share (2026-11-20, on `a09ff4b6` plus this change):** join
 launches whose first expansion is small and a later one large no longer run
 on one block (CHANGELOG, GPU-ExpansionShare).

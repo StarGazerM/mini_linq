@@ -1,17 +1,6 @@
 //! Named pipeline adapters for checked GPU Datalog realization.
 use proc_macro::TokenStream;
 
-fn no_arguments(args: proc_macro2::TokenStream) -> syn::Result<()> {
-    if args.is_empty() {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(
-            args,
-            "GPU Datalog pass accepts no arguments",
-        ))
-    }
-}
-
 #[proc_macro]
 pub fn device_storage(input: TokenStream) -> TokenStream {
     cq_stage::rewrite::<cq_lang_datalog_storage::Program>(
@@ -21,13 +10,48 @@ pub fn device_storage(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// `print_rounds` or `print_rounds(manual("rule@delta" => path, ...))`: the
+/// named rule versions call a hand-written function in place of the generated
+/// hole (`cq_gpu_datalog_core::print::Manual`).
 #[proc_macro]
 pub fn print_rounds(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_datalog_round::Program, syn::Expr>(input.into(), |source, args| {
-        no_arguments(args)?;
-        cq_gpu_datalog_core::print::compile(source)
+        cq_gpu_datalog_core::print::compile_with(source, &manual(args)?)
     })
     .into()
+}
+
+fn manual(args: proc_macro2::TokenStream) -> syn::Result<cq_gpu_datalog_core::print::Manual> {
+    use syn::parse::{ParseStream, Parser};
+    let mut manual = cq_gpu_datalog_core::print::Manual::new();
+    if args.is_empty() {
+        return Ok(manual);
+    }
+    let entries = |input: ParseStream| {
+        let name: syn::Ident = input.parse()?;
+        if name != "manual" {
+            return Err(syn::Error::new_spanned(name, "expected manual(\"rule@delta\" => path, ...)"));
+        }
+        let content;
+        syn::parenthesized!(content in input);
+        let mut entries = Vec::new();
+        while !content.is_empty() {
+            let label: syn::LitStr = content.parse()?;
+            content.parse::<syn::Token![=>]>()?;
+            let path: syn::Path = content.parse()?;
+            entries.push((label, path));
+            if !content.is_empty() {
+                content.parse::<syn::Token![,]>()?;
+            }
+        }
+        Ok(entries)
+    };
+    for (label, path) in entries.parse2(args)? {
+        if manual.insert(label.value(), path).is_some() {
+            return Err(syn::Error::new_spanned(label, "rule version replaced twice"));
+        }
+    }
+    Ok(manual)
 }
 
 #[proc_macro]

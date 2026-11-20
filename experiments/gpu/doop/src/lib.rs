@@ -1,5 +1,8 @@
 #![recursion_limit = "2048"]
 
+#[cfg(feature = "manual-joins")]
+pub mod manual;
+
 /// The dataset's process-global dictionary is the only symbol representation.
 /// Device kernels receive its integer codes and never resolve strings.
 pub struct DoopSymbols;
@@ -16,34 +19,48 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
     }
 }
 
-doop_shared::doop_engine!(run, pipeline {
-    incremental = ::cq_datalog::passes::incremental(driver(delta_first););
-    storage_rewrites = [::cq_datalog_canonical::canonical(ordered), ::cq_gpu_datalog::device_storage(symbols(IStr => [0] crate::DoopSymbols))];
-    cq = pipeline {
-        physical = [::cq_gpu_sequence::capture_constants];
-        structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
-        sequence = ::mini_linq::passes::sequence;
-        // Each arena hole reuses only its last validated count as a capacity hint;
-        // root tiles are sized at launch to fill the device (GPU-RootSpread).
-        // With relational heads (c1b75718) spread measured 0.953x [0.923, 0.960]
-        // of no spread on Cassandra (P6b).
-        decompose = [
-            ::cq_gpu_sequence::decompose(codecs [
-                CodecToken {
-                    codec_id: Some(0),
-                    codec: Some(crate::DoopSymbols),
-                    ordered: true,
-                    levels: [[host], [host, device], [host, device, block], [host, device, block, lane]],
-                }
-            ]),
-            ::cq_sequence_rewrites::output(reserve_previous),
-            ::cq_sequence_rewrites::roots(spread),
-        ];
-        stage = ::cq_gpu_sequence::stage;
-        grade = ::cq_gpu_sequence::machine_grade;
-        print = ::cq_gpu_sequence::translate_arena;
+/// The engine with its round printer: `print_rounds`, or with hand-written
+/// rule holes under the `manual-joins` feature.
+macro_rules! engine {
+    ($($print:tt)*) => {
+        doop_shared::doop_engine!(run, pipeline {
+            incremental = ::cq_datalog::passes::incremental(driver(delta_first););
+            storage_rewrites = [::cq_datalog_canonical::canonical(ordered), ::cq_gpu_datalog::device_storage(symbols(IStr => [0] crate::DoopSymbols))];
+            cq = pipeline {
+                physical = [::cq_gpu_sequence::capture_constants];
+                structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
+                sequence = ::mini_linq::passes::sequence;
+                // Each arena hole reuses only its last validated count as a capacity hint;
+                // root tiles are sized at launch to fill the device (GPU-RootSpread).
+                // With relational heads (c1b75718) spread measured 0.953x [0.923, 0.960]
+                // of no spread on Cassandra (P6b).
+                decompose = [
+                    ::cq_gpu_sequence::decompose(codecs [
+                        CodecToken {
+                            codec_id: Some(0),
+                            codec: Some(crate::DoopSymbols),
+                            ordered: true,
+                            levels: [[host], [host, device], [host, device, block], [host, device, block, lane]],
+                        }
+                    ]),
+                    ::cq_sequence_rewrites::output(reserve_previous),
+                    ::cq_sequence_rewrites::roots(spread),
+                ];
+                stage = ::cq_gpu_sequence::stage;
+                grade = ::cq_gpu_sequence::machine_grade;
+                print = ::cq_gpu_sequence::translate_arena;
+            };
+            terminals = [::cq_gpu_sequence::translate_arena => batch];
+            round = [::cq_gpu_datalog::bind_round(binding = 5)];
+            print = $($print)*;
+        });
     };
-    terminals = [::cq_gpu_sequence::translate_arena => batch];
-    round = [::cq_gpu_datalog::bind_round(binding = 5)];
-    print = ::cq_gpu_datalog::print_rounds;
-});
+}
+
+#[cfg(not(feature = "manual-joins"))]
+engine!(::cq_gpu_datalog::print_rounds);
+
+#[cfg(feature = "manual-joins")]
+engine!(::cq_gpu_datalog::print_rounds(manual(
+    "VPT_LoadArray@3" => crate::manual::vpt_load_array_delta_index
+)));

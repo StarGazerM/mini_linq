@@ -450,6 +450,33 @@ pub(crate) fn reads_environment(cq: &round::cq::Program) -> bool {
 /// committed canonical layout; publication appends fresh rows to every layout.
 /// Constructors consume recorded merge tiles and auxiliary geometry.
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
+    compile_with(program, &Manual::new())
+}
+
+/// Hand-written replacements of rule holes, keyed `rule@delta` (the
+/// `GPU_DATALOG_PROFILE` label without its hole number). Each path is called
+/// in place of the generated hole function with the candidate arena, a
+/// `&[&str]` naming what each following argument reads (`delta R`,
+/// `R[columns]`, `keys R`), the scan when the rule has one, then the inputs in
+/// declaration order. It returns the hole's `CandidateBatch`.
+pub type Manual = BTreeMap<String, syn::Path>;
+
+/// `rule@delta` of a rule version: its rule label (or head relation) and the
+/// delta occurrence it drives, `seed` for a seed version.
+fn version_label(program: &Program, variant: usize, head: usize) -> String {
+    let variant = &program.storage.incremental.variants[variant];
+    let label = program.storage.incremental.strata.source.labels[variant.rule]
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| program.context.relations[head].declaration.name.to_string());
+    let delta = variant
+        .delta
+        .map_or_else(|| "seed".to_owned(), |position| position.to_string());
+    format!("{label}@{delta}")
+}
+
+/// [`compile`] with the rule holes named in `manual` replaced.
+pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr> {
     let packed_aliases = PackedAliases::definitions(program)?;
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
@@ -531,24 +558,42 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
     let symbols = crate::storage::Symbols::from_program(&program.storage)?;
     // Hosts a hole may read through its CQ declarations, with their providers.
     let mut hosts = BTreeMap::<String, Type>::new();
-    for relation in &context.relations {
+    // What each host reads, as a replaced hole's function receives it: `delta
+    // R`, `R[columns]` for a layout, `keys R` for a key set.
+    let mut reads = BTreeMap::<String, String>::new();
+    let relation_name = |relation: usize| context.relations[relation].declaration.name.to_string();
+    for (index, relation) in context.relations.iter().enumerate() {
         if let Some(delta) = &relation.delta_host {
             hosts.insert(delta.to_string(), relation.providers.delta.ty.clone());
+            reads.insert(delta.to_string(), format!("delta {}", relation_name(index)));
         }
     }
     for layout in context.layouts.iter().chain(&context.delta_layouts) {
         hosts.insert(layout.host.to_string(), layout.provider.ty.clone());
+        reads.insert(layout.host.to_string(), format!("{}{:?}", relation_name(layout.relation), layout.columns));
     }
     // The relation whose candidate arena each hole's terminal fills.
     let mut owners = vec![0usize; program.holes.len()];
     let mut scans = BTreeMap::new();
+    let mut replaced = BTreeMap::new();
     for stratum in &context.strata {
         for key in &stratum.keys {
             hosts.insert(key.name.to_string(), key.provider.ty.clone());
+            reads.insert(key.name.to_string(), format!("keys {}", relation_name(key.relation)));
             owners[key.hole] = key.relation;
         }
         for rule in stratum.seeds.iter().chain(&stratum.steps) {
             owners[rule.hole] = rule.head;
+            let scan = rule.scan.as_ref().map(|scan| match scan.source {
+                InputSource::Delta(relation) => format!("delta {}", relation_name(relation)),
+                InputSource::Layout(layout) => {
+                    let layout = &context.layouts[layout];
+                    format!("{}{:?}", relation_name(layout.relation), layout.columns)
+                }
+            });
+            if let Some(path) = manual.get(&version_label(program, rule.variant, rule.head)) {
+                replaced.insert(rule.hole, (path, scan));
+            }
             if let Some(scan) = &rule.scan {
                 let ty = match scan.source {
                     InputSource::Delta(relation) => &context.relations[relation].providers.delta.ty,
@@ -557,6 +602,12 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 scans.insert(rule.hole, (&scan.binding, ty));
             }
         }
+    }
+    if let Some(unknown) = manual.keys().find(|key| {
+        !context.strata.iter().flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps))
+            .any(|rule| &version_label(program, rule.variant, rule.head) == *key)
+    }) {
+        return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("manual hole `{unknown}` names no rule version")));
     }
     // Each hole is a separate function item: rustc type-checks a closure with
     // its enclosing body, so closures would keep the whole program one query.
@@ -579,9 +630,11 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
                 }
             }
         }
-        let invocation = hole.invocation_pipeline()?.start(cq.to_token_stream())?;
         if !standalone {
-            return Ok(invocation);
+            if replaced.contains_key(&index) {
+                return Err(syn::Error::new(proc_macro2::Span::call_site(), "a manual hole cannot replace a hole reading local variables"));
+            }
+            return Ok(hole.invocation_pipeline()?.start(cq.to_token_stream())?);
         }
         let function = format_ident!("__cq_gpu_hole_{}", index);
         let (scan_parameter, scan_argument) = match scans.get(&index) {
@@ -590,11 +643,18 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
             }
             None => (quote!(), quote!()),
         };
+        let arguments: Vec<_> = parameters.iter().map(|(_, host, _)| quote!(&#host)).collect();
+        // A replaced hole compiles no generated kernel. Its function first
+        // receives what each following input reads, to check the order.
+        if let Some((path, scan)) = replaced.get(&index) {
+            let described = scan.iter().cloned().chain(parameters.iter().map(|(_, host, _)| reads[&host.to_string()].clone()));
+            return Ok(quote!(#path(&mut *__cq_gpu_arena, &[#(#described),*], #scan_argument #(#arguments,)*)));
+        }
+        let invocation = hole.invocation_pipeline()?.start(cq.to_token_stream())?;
         let arena = &device.relations[owners[index]].arena;
         let declared = parameters
             .iter()
             .map(|(parameter, _, ty)| quote!(#parameter: &#ty));
-        let arguments = parameters.iter().map(|(_, host, _)| quote!(&#host));
         hole_items.push(quote!(
             fn #function(
                 __cq_gpu_arena: &mut #arena,
@@ -1008,17 +1068,7 @@ fn phase(
                 None
             };
             // `GPU_DATALOG_PROFILE` names a hole by its rule, changing occurrence and index.
-            let profile_label = {
-                let variant = &program.storage.incremental.variants[rule.variant];
-                let label = program.storage.incremental.strata.source.labels[variant.rule]
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| head_name.clone());
-                let delta = variant
-                    .delta
-                    .map_or_else(|| "seed".to_owned(), |position| position.to_string());
-                format!("{label}@{delta}#{hole}")
-            };
+            let profile_label = format!("{}#{hole}", version_label(program, rule.variant, rule.head));
             launches.push(quote!({
                 if ::gpu_datalog_runtime::profiling() {
                     ::gpu_datalog_runtime::profile_enter(&__cq_gpu_pool, #index, "holes", #profile_label);

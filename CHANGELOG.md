@@ -13,6 +13,26 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog: hand-written rule holes. `print_rounds` takes
+  `manual("rule@delta" => path, ...)` (`cq_gpu_datalog_core::print::Manual`,
+  `compile_with`); a named rule version calls `path` with the candidate
+  arena, the description of each input (`delta R`, `R[columns]`, `keys R`)
+  and the generated hole's arguments, and compiles no generated kernel. An
+  unknown label is an error. `doop-gpu --features manual-joins` replaces
+  `VPT_LoadArray@3` (delta `arrayindexpointsto`) with four kernels
+  (`doop/src/manual.rs`): one group per distinct delta `baseheap`, each
+  group's `varpointsto` range per run, one thread per spanned row balanced
+  over the grid (host prefix sums) probing `loadarrayindex`, `reachable`,
+  `var_type` and `supertypeof`, and one warp per (group, `to`) pair writing
+  the group's heaps. On scala 0.36 G rows are scanned instead of 23.2 G and
+  the candidates are the same 175,290,361; the rule takes 0.113 s instead of
+  4.743 s (kotlin 0.074 s instead of 2.784 s). `doop-gpu` fixpoint, medians
+  of three: soot 10.70 → 8.17 s, scala 13.29 → 8.66 s, kotlin 11.71 →
+  9.04 s, jython 21.23 → 20.77 s; counts unchanged, xalan exact. Rejected
+  on the way: a block per group (4.10 s: hot groups serialize), probing
+  `varpointsto` per `loadarrayindex` row for large groups (deep uncached
+  searches). The default build is unchanged.
+
 - GPU Sequence: every expansion of a spread single-chain dispatch is
   shared, not only the first (GPU-RootShare becomes GPU-ExpansionShare;
   `Share::FirstExpansion { tiles }` becomes `Share::Expansions { slots,

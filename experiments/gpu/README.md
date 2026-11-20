@@ -615,6 +615,19 @@ registers ptxas picks and halve the resident blocks. Before this, only the
 first expansion was shared (GPU-RootShare), so a small first expansion with a
 large later one ran on one block while the rest of the GPU waited.
 
+`print_rounds(manual("rule@delta" => path, ...))` replaces the named rule
+versions' generated holes with hand-written functions; the printer passes the
+candidate arena, what each input reads (checked by the function), the scan and
+the inputs. `doop-gpu --features manual-joins` replaces `VPT_LoadArray@3`
+([`doop/src/manual.rs`](doop/src/manual.rs)) with SRDatalog's plan shape: one
+group per distinct delta `baseheap` (0.64 M for scala's 52.8 M delta rows),
+each group's `varpointsto` range scanned once, balanced over the grid from
+host prefix sums, and `heap` attached last (one warp per (group, `to`) pair).
+On scala it scans 0.36 G rows instead of 23.2 G for the same 175 M candidates;
+the rule takes 0.11 s instead of 4.74 s. The generated plan shape is the open
+work: drive a delta from its distinct join keys and expand columns that only
+reach the head last.
+
 The GPU Structures stage validates target support without inheriting the CPU
 batching policy. GPU batches are selected by Sequence decomposition; explicit
 unsupported Structures witnesses, stages and join filters are rejected rather

@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+# Hand-written rule holes in `src/manual.rs` replace the generated ones.
+manual-joins = []
+
 [dependencies]
 bench-check = { path = "../../../testkit/bench-check" }
 doop-shared = { path = "../../../features/datalog/doop/shared" }
