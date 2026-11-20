@@ -160,9 +160,9 @@ impl Pool {
         }))
     }
     /// A pool on a new non-blocking stream sharing this pool's allocator and
-    /// context, with its own upload staging (DL-WaveLanes). Work on the lane
-    /// is unordered with this pool's stream except through explicit events
-    /// and RCCL's ordering of reused blocks.
+    /// context, with its own upload staging. Work on it is unordered with this
+    /// pool's stream except through explicit events and RCCL's ordering of
+    /// reused blocks.
     pub fn lane(&self) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             memory: self.memory.clone(),

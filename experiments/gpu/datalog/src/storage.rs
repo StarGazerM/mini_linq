@@ -478,6 +478,14 @@ fn device_relation(input: InputSchema) -> syn::Result<DeviceRelation> {
     Ok(relation)
 }
 
+/// Whether an occurrence scans this relation's delta in relation order.
+fn direct_read(program: &Program, relation: usize) -> bool {
+    program
+        .reads
+        .iter()
+        .any(|read| read.kind == "direct" && read.index == relation)
+}
+
 fn admitted_order(
     record: &mut DeviceRelation,
     canonical: &[usize],
@@ -601,7 +609,10 @@ fn realize(source: &Program, symbols: &Symbols, ratio: usize) -> syn::Result<Pro
         record.output_permutation = relation_order.iter().map(|column| {
             canonical.iter().position(|source| source == column).expect("checked complete heading")
         }).collect();
-        if declarations[index].value.is_none() {
+        // NEW is relation-order rows only where an occurrence scans the delta
+        // directly. An unread delta adopts the canonical batch as it is,
+        // instead of sorting one more order nobody reads.
+        if declarations[index].value.is_none() && direct_read(source, index) {
             record.relation_order = admitted_order(record, canonical, &relation_order);
         }
         for (layout, state) in target.layouts.iter().zip(&mut layouts)
@@ -735,11 +746,12 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         program,
         "device read token facts differ from its declared ABI",
     )?;
-    for ((relation, declaration), providers) in advice
+    for (index, ((relation, declaration), providers)) in advice
         .relations
         .iter()
         .zip(declarations)
         .zip(&program.providers)
+        .enumerate()
     {
         let logical = declaration.columns.iter().collect::<Vec<_>>();
         check_input(&relation.input, &logical, logical.len(), &symbols, program)?;
@@ -809,7 +821,9 @@ pub fn check_device(program: &Program) -> syn::Result<()> {
         }
         ensure(
             relation.admitted_orders.get(relation.relation_order).is_some_and(|order| {
-                declaration.value.is_some() || order.columns == identity
+                declaration.value.is_some()
+                    || order.columns == identity
+                    || (relation.relation_order == 0 && !direct_read(program, index))
             }),
             program,
             "relation delta has no certified relation-order input",

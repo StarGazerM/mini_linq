@@ -57,9 +57,7 @@ srd_doop_shared::srd_doop_engine!(run, incremental(driver(delta_first); $($advic
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
-    // DL-WaveLanes: the holes of each wave run on four streams (xalan 0.865x,
-    // batik 0.811x of one stream; P6b in doc/PLANNING-REDESIGN.md).
-    round = [::cq_gpu_datalog::bind_round(binding = 5), ::cq_gpu_datalog::lanes(streams = 4)];
+    round = [::cq_gpu_datalog::bind_round(binding = 5)];
     print = ::cq_gpu_datalog::print_rounds;
 });
     };

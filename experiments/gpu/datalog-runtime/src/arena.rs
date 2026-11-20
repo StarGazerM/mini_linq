@@ -320,8 +320,6 @@ impl CandidateBatch {
 /// 64 bits, `u128` through 128 bits, then `[u64; L]` with MS-first lanes.
 /// Batch order and duplicates are preserved; admission remains separate.
 /// The returned allocation is initialized by stream-ordered device copies.
-/// Batches may come from lane pools sharing this pool's memory; the caller
-/// orders their production before this pool's stream (DL-WaveLanes join).
 pub fn concatenate_batches<W: Word>(
     pool: Arc<Pool>,
     packing: &Packing,
@@ -371,9 +369,8 @@ pub(crate) fn concatenate_ranges<W: Word>(
         let bytes = count * bytes_per_word;
         if bytes != 0 {
             // SAFETY: exact packing/word widths and lane order make the lanes
-            // byte-identical to W on CUDA. The slices are initialized and
-            // disjoint, and the batch's production precedes this stream
-            // (DL-WaveLanes join).
+            // byte-identical to W on CUDA. Both buffers are ordered on this
+            // pool's stream; slices are initialized and disjoint.
             unsafe {
                 cuda_core::simt::memory::memcpy_dtod_async(
                     output.cu_deviceptr() + offset as u64,
@@ -384,28 +381,6 @@ pub(crate) fn concatenate_ranges<W: Word>(
             }
         }
         offset += bytes;
-    }
-    // A batch is freed on its own pool's stream. For a lane's batch that
-    // stream is not this one, so its free is ordered after the copies above
-    // by an event: a large block returns to the driver the moment its stream
-    // reaches the free, and the driver may unmap it for this stream's next
-    // allocation while the copy is still pending.
-    let mut copied = None;
-    for (index, &(batch, ..)) in ranges.iter().enumerate() {
-        let lane = batch.pool();
-        let again = ranges[..index]
-            .iter()
-            .any(|(other, ..)| Arc::ptr_eq(other.pool(), lane));
-        if Arc::ptr_eq(lane, &pool) || again {
-            continue;
-        }
-        if copied.is_none() {
-            let event = pool.context().new_event(None)?;
-            event.record(pool.stream())?;
-            copied = Some(event);
-        }
-        lane.stream()
-            .wait(copied.as_ref().expect("recorded above"))?;
     }
     Ok(output)
 }

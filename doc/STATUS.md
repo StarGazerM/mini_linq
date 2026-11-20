@@ -47,6 +47,53 @@ tree whose printer half was never committed; it is committed now.
   from the delta's distinct keys needs a plan shape the GPU pipeline does
   not have (design note of 2026-11-11).
 
+**Lost-work audit (2026-11-19):** kotlin failed in `srd-doop-gpu` although
+2026-11-11 records it complete. Cause: the memory work of that day was
+stashed around two rebases (`stash@{0}`, `stash@{1}`) and `894e1dd5` landed
+it without `datalog/src/{print,print_tests,storage}.rs`. `6e471ee1` restored
+the printer half; the storage half (an unread delta adopts the canonical
+batch) is restored now. kotlin: field-flow 10.0 s (46.1 GB), default
+program 10.5 s (47.0 GB).
+- Checked against HEAD by added lines: both stashes, both `backup/pre-sync`
+  branches, 20 unmerged local and remote branches, 40 dangling commits.
+  Nothing else of the GPU Datalog runtime is missing; the stashes' other
+  missing lines are planner code since rewritten or removed, and the
+  scratch diagnostics replaced by pooled scratch (`75ae1b4e`). Branches
+  with unlanded code are the recorded parked ones (`comp-doop-domains`,
+  `p4gpu-*`, `p5-joins`, `p6b-slice`, `seq-retention`, `lending-read`,
+  `packed-run-tile-wip`).
+- `/data/rccl` (branch `mini-linq/main`) holds an uncommitted pool patch
+  (growth halving, free-chunk return, `with_growth_limit`): the alternative
+  the 2026-11-11 note calls optional; not in the pinned revision.
+- Field-flow jython still fails (candidate volume, as recorded).
+- Calibrated advice on the GPU (`srd-doop-gpu --features advice-cost`,
+  default program, each dataset's own advice of 2026-11-18): scala 10.2
+  against 10.3 s, soot 8.0 against 8.1 s, jython 18.7 against 18.6 s. The
+  advice keeps the changing atom first, as the GPU default does.
+
+**Wave lanes removed (2026-11-19):** `lanes(streams = K)` ran each multi-hole
+wave on K CUDA streams driven by K-1 CPU worker threads, each hole into its
+own per-lane buffer, with every buffer alive until the wave joined. That is
+not the recorded round design (session of 2026-10-24/25: one arena per head
+that every rule of the round appends to, a per-head admission stream ordered
+by events, one count readback per round, then the round captured as a CUDA
+graph); `a1e3423b` landed this reduced form. It made the memory peak depend
+on thread interleaving: the same jython binary peaked at 43.4 and 48.65 GB and
+failed once in six. The schedule IR keeps waves, read sets and derived
+publication; `Schedule.streams`, `StratumSchedule.lanes`, WF-DL-Lanes,
+DL-WaveLanes, the rewrite, the printer path and the runtime `Lanes` are gone.
+`Pool::lane` stays as the multi-stream pool primitive the radix runtime tests
+and the per-head design need.
+- Now one stream, pool peak identical in every run (fixpoint s, medians,
+  four lanes in brackets): `doop-gpu` soot 11.10 (9.35), jython 22.67
+  (20.94), scala 15.34 (12.26), kotlin 15.68 (12.40), xalan exact 0.63
+  (0.55); peaks 16.04, 40.64, 20.81 and 24.26 GB. `srd-doop-gpu` default
+  program kotlin 12.69 (10.49) at 46.69 GB, scala 11.50 (10.05), soot 9.03
+  (7.85), jython 19.51 (18.77) at 43.42 GB; field-flow kotlin 11.5 (10.0),
+  scala 11.5 (9.94), soot 7.03 (6.60). Counts unchanged.
+- One stream is 4–26% slower on these runs; that overlap is to come back
+  from the per-head arena round, which is not built.
+
 **Batch gates (2026-11-18, RCCL packed primitives and opt-in packed radix
 runs `325dfbdd` vs `e797977e`):** four commits; no IR grammar
 (`check_ir_scope` PASS at base `e797977e`); formal checker PASS (522 decode

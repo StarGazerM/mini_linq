@@ -7,7 +7,6 @@
 //! [`DeviceRadixRun`] is the occurrence-preserving grouped index engine;
 //! [`RadixLayout`] is its typed relational view over one immutable publication.
 pub mod arena;
-pub mod lanes;
 pub mod layout;
 pub mod pack;
 #[cfg(feature = "packed-radix")]
@@ -19,7 +18,6 @@ mod runs;
 mod stats;
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
 pub use gpu_device_columns::{Buffer, Pool};
-pub use lanes::{Job, Lane, Lanes};
 pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};
 pub use pack::{Column, PackedRow, Packing, Word};
 pub use publish::OutputStaging;
@@ -35,20 +33,6 @@ pub use stats::{
     work_counters, MemoryUse, SortWork, WorkCounters,
 };
 pub type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
-
-// DL-WaveLanes Sync audit: lane workers receive cloned input layouts, run holes
-// into their own arenas on lane pools, and return batches to the main thread.
-const _: () = {
-    const fn send_sync<T: Send + Sync>() {}
-    const fn send<T: Send>() {}
-    send_sync::<Pool>();
-    send_sync::<Buffer<u64>>();
-    send_sync::<Packing>();
-    send_sync::<RadixLayout<(u32, i64), (), u128, u64, ()>>();
-    send_sync::<CandidateBatch>();
-    send::<CandidateArena>();
-    send::<Job>();
-};
 
 /// Host-side bijection between logical symbols and their device integer codes.
 ///

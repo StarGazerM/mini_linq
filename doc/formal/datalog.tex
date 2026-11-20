@@ -725,19 +725,7 @@ evaluations may overlap and when an admission may start.
  \text{admission of head }H\text{ runs after every hole with head }H}
  {\mathrm{supp}\bigl(\textstyle\biguplus_h C_h\bigr)\text{ and }\Delta_{r+1}
   \text{ are independent of wave partition and overlap}}
-\Rule{WF-DL-Lanes}{\text{each lane entry names a distinct wave }w\quad
- 1\le|\mathsf{lanes}(w)|\le\mathsf{streams}\quad
- \biguplus_j\mathsf{lanes}(w)_j=\mathsf{holes}(w)\text{, each lane nonempty}}
- {\mathrm{WF}_{\mathrm{Lanes}}(s)}
-\Rule{DL-WaveLanes}{\mathrm{WF}_{\mathrm{Lanes}}(s)\quad
- \text{every lane starts after the wave's fork on the committed snapshot}\quad
- \text{the wave joins before any admission (DL-PublishAfterReaders)}}
- {\text{evaluating the lanes of }w\text{ concurrently yields the same candidate multiset per head (DL-WaveCommute)}}
 \end{mathpar}
-A recorded lane split (\code{lanes(streams = K)}, round-robin over each
-multi-hole wave's holes in order) is realization advice like waves: lane 0 is
-the program stream, other lanes are persistent device-stream workers, and
-admission still sorts, so values are unchanged.
 The schedule is a Round rewrite target: a \code{schedule} pass changes only
 the schedule record, and the correspondence checker requires both contracts
 and exact equality of the erased programs modulo that record.
@@ -1658,15 +1646,11 @@ Full-key views require the state's construction-only set witness; ordinary
 occurrence publication clears that witness even with unit item columns.
 Frozen negative projections independently
 deduplicate, because projection is not generally injective.
-Termination tests the sum of the fresh counts. Outputs use \code{to\_rows}
+Termination tests the sum of the fresh counts. Outputs use \code{publish\_rows}
 on the canonical layout and restore its column permutation.
 Hole grain and inline advice is rejected: each hole is one device invocation.
-Recorded wave lanes and per-hole reservations are unchanged; main-stream
-admission and publication follow the recorded lane join. Shared allocation
-alone does not establish stream readiness (\textsc{GPU-RadixLaneRead}).
-Worker lanes construct each relation's arena from the same recorded initializer
-as the caller. Component release drops those arenas, releases that worker's
-thread-local scratch and then returns unused pool storage, matching the caller.
+Waves run in order on the program's one device stream; per-hole reservations
+are unchanged.
 \begin{mathpar}
 \Rule{P-DL-Gpu}{\mathrm{WF}_{\mathrm{Round}}(r)\quad
  \text{every hole has the batch interface}\quad\text{no hole policy}\quad

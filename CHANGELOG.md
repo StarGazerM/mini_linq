@@ -13,6 +13,37 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog: wave lanes removed. `lanes(streams = K)` ran each wave's
+  holes on K streams from K-1 CPU worker threads, each into its own
+  per-lane buffer, which departs from the recorded round design (one
+  append arena per head, a per-head admission stream, one readback per
+  round, then CUDA graph capture) and made the memory peak depend on thread
+  interleaving: the same jython binary peaked at 43.4 or 48.65 GB and failed
+  once in six. Removed: `Schedule.streams`, `StratumSchedule.lanes`,
+  `WaveLanes`, `check_lanes`, WF-DL-Lanes, DL-WaveLanes, the
+  `cq_gpu_datalog::lanes` rewrite and macro, the printer's lane path and
+  the runtime `Lanes`/`Lane`/`Job`; `doop-gpu` and `srd-doop-gpu` drop
+  `lanes(streams = 4)`. `Pool::lane` remains as the multi-stream pool
+  primitive. Waves run in order on one stream; every run's pool peak is now
+  identical. Fixpoint on one stream is 4–26% slower than on four
+  (`doop-gpu` scala 12.26 → 15.34 s, kotlin 12.40 → 15.68 s, soot 9.35 →
+  11.10 s, jython 20.94 → 22.67 s); counts are unchanged and xalan is exact.
+
+- GPU Datalog: an unread delta adopts the canonical batch again
+  (`direct_read` in `experiments/gpu/datalog/src/storage.rs`): a relation
+  whose delta no occurrence scans directly records no relation-order
+  admitted order, so publication does not sort one more copy of the fresh
+  rows. This is the last piece of the 2026-11-11 memory work that only
+  existed in `stash@{0}`: `894e1dd5` landed the stash without its three
+  files that conflicted with `c92caa90` and `d2c61034` (`print.rs`,
+  `print_tests.rs`, `storage.rs`), while the notes said all of it had
+  landed. kotlin (680 M-row `CastTo` seed) ran out of memory in
+  `srd-doop-gpu` without it and completes with it: field-flow 10.0 s
+  (pool peak 46.1 GB; recorded 9.94 s on 2026-11-11), default program
+  10.5 s (47.0 GB). Field-flow scala 9.94 s and soot 6.60 s, 43 relation
+  counts equal the CPU engine's; `doop-gpu` times, peaks and counts are
+  unchanged on all four xlarge datasets, and xalan stays exact.
+
 - `doop-gpu` runs all four xlarge DOOP datasets; soot and jython failed
   with CUDA error 700 before. Three changes in the GPU Datalog runtime and
   printer:

@@ -17,8 +17,8 @@ and typed `RadixLayout` views (`radix_relation` / `NativeAbi::RadixRelation`),
 with read-only `fresh` admission and separate `append_sorted` publication.
 Offset, construction, prefix-read, directory and launch facts are checked
 independently; see P4-GPU slice D for the contract, not a new gate result.
-Recorded wave lanes support stream overlap; the single-stream initial profile
-is historical. See [storage ownership](STORAGE.md#132-gpu-provider-ownership-p3d-c1c2).
+GPU Datalog runs each round's waves in order on one device stream. See
+[storage ownership](STORAGE.md#132-gpu-provider-ownership-p3d-c1c2).
 
 ## Rust and relational predicates
 

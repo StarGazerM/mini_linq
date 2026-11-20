@@ -461,9 +461,8 @@ replays realization or requires its default choices. Full keys are retained
 regardless of directory resolution; unit item columns alone do not establish
 set uniqueness. The former public `DeviceRuns`/`DeviceLayout` APIs have no
 compatibility aliases.
-Work is ordered on the owning pool's stream. The main pool uses the legacy
-default stream; explicit wave lanes use streams sharing that pool's allocator,
-with event fork/join before admission (see `lanes` below).
+Work is ordered on the owning pool's stream. GPU Datalog runs every wave on the
+program pool's one stream (the legacy default stream).
 Packed permutation, wide-word radix gather, admission membership and wide merge
 size their grid-stride launches from the loaded kernel's CUDA occupancy,
 capped by the work domain; they do not assume a particular device's grid cap.
@@ -592,20 +591,17 @@ pipeline {
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
-    round = [
-        ::cq_gpu_datalog::bind_round(binding = 5),
-        ::cq_gpu_datalog::lanes(streams = 4),
-    ];
+    round = [::cq_gpu_datalog::bind_round(binding = 5)];
     print = ::cq_gpu_datalog::print_rounds;
 }
 ```
 
 This configuration follows [`srd-doop/src/lib.rs`](srd-doop/src/lib.rs);
 [`doop/src/lib.rs`](doop/src/lib.rs) additionally declares its symbol codec.
-`reserve_previous`, `roots(spread)`, and `lanes(streams = 4)` are explicit
-benchmark choices, not implicit defaults. The lane rewrite records independent
-holes of a wave on worker streams sharing the allocator; fork/join events order
-their work before main-stream admission. It does not run dependent waves in parallel.
+`reserve_previous` and `roots(spread)` are explicit benchmark choices, not
+implicit defaults. Waves run in order on one stream: the former
+`lanes(streams = K)` rewrite (CPU worker threads, one buffer per hole per lane)
+was removed on 2026-11-19 as a departure from the recorded round design.
 
 The GPU Structures stage validates target support without inheriting the CPU
 batching policy. GPU batches are selected by Sequence decomposition; explicit
@@ -779,13 +775,10 @@ stream synchronization.
 Set `GPU_DATALOG_PROFILE=1` for a wall-clock breakdown of the fixpoint, printed
 as `gpu_datalog_profile` records at its end: seconds, entries and rows per
 (stratum, phase, relation, step). Phases are `holes` (per rule version as
-`Label@delta#hole` on the calling thread's stream; `main lane`/`join lanes`
-when a wave runs on several streams), `admit`, `orders` and `publish`; steps
+`Label@delta#hole`), `admit`, `orders` and `publish`; steps
 are the admission and publication operations (`sort/portion-unique`,
-`subtract`, `merge`, ...). Every boundary synchronizes the main stream, so a
+`subtract`, `merge`, ...). Every boundary synchronizes the stream, so a
 profiled run is slower than an unprofiled one and is not a timing sample.
-Per-hole attribution requires one stream (`lanes(streams = 1)`): worker-lane
-holes overlap the main lane and are charged to `main lane`.
 
 #### Relational heads (2026-10-31)
 
@@ -1020,8 +1013,8 @@ It instantiates `srd_doop_shared::srd_doop_engine!` from
 rules, and 43 output relations. Prepared integer IDs and `meta.json` constants
 are passed unchanged; there is no symbol codec or alternate GPU query body.
 The pipeline uses `device_storage`, `delta_first`, `capture_constants`,
-`select_catalog`, `reserve_previous`, `roots(spread)`, `translate_arena`,
-`lanes(streams = 4)`, and `print_rounds`, like `doop-gpu`.
+`select_catalog`, `reserve_previous`, `roots(spread)`, `translate_arena`
+and `print_rounds`, like `doop-gpu`.
 Each rule keeps its SRDatalog name as a label. Join orders come from the
 planner's connected default; SRDatalog's `with_plan` orders are not emitted
 unless `translate.py --plans` is used, which turns every `with_plan` into

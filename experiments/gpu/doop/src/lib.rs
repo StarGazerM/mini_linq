@@ -44,7 +44,6 @@ doop_shared::doop_engine!(run, pipeline {
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
-    // DL-WaveLanes: four streams measured 0.723x [0.702, 0.765] of one on Cassandra.
-    round = [::cq_gpu_datalog::bind_round(binding = 5), ::cq_gpu_datalog::lanes(streams = 4)];
+    round = [::cq_gpu_datalog::bind_round(binding = 5)];
     print = ::cq_gpu_datalog::print_rounds;
 });

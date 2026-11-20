@@ -75,55 +75,6 @@ fn fixed_leaf_cursor_reads_large_payload_offsets() -> Result<()> {
 }
 
 #[test]
-fn lane_workers_consume_recorded_initializer_and_release_thread_scratch() -> Result<()> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static INITIALIZED: AtomicUsize = AtomicUsize::new(0);
-    static RELEASED: AtomicUsize = AtomicUsize::new(0);
-    thread_local! {
-        static SCRATCH_LIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    fn initialize(relation: usize, pool: Arc<Pool>) -> CandidateArena {
-        INITIALIZED.fetch_add(1, Ordering::SeqCst);
-        SCRATCH_LIVE.with(|live| {
-            assert!(!live.replace(true));
-        });
-        let mut arena = CandidateArena::new(pool);
-        arena.hole(3).record_count(100 + relation);
-        arena
-    }
-    fn release(_: &Arc<Pool>) {
-        SCRATCH_LIVE.with(|live| assert!(live.replace(false)));
-        RELEASED.fetch_add(1, Ordering::SeqCst);
-    }
-    let pool = Pool::new(0, 0, 0)?;
-    let lanes = gpu_datalog_runtime::Lanes::new(&pool, 2, initialize, release)?;
-    for component in 0..2 {
-        lanes.fork()?;
-        for position in 0..2 {
-            lanes.submit(
-                1,
-                position,
-                Box::new(move |lane| {
-                    let arena = lane.arena(9, 3);
-                    assert_eq!(arena.previous_count(), 109 + position);
-                    arena.record_count(110 + position);
-                    let lease = arena.reserve(Packing::new(&[32]).unwrap(), 0).unwrap();
-                    // SAFETY: the empty prefix is initialized vacuously.
-                    unsafe { lease.finish(0, Vec::new()).unwrap() }
-                }),
-            )?;
-        }
-        let batches = lanes.join()?;
-        assert_eq!(batches.len(), 2);
-        drop(batches);
-        lanes.release()?;
-        assert_eq!(INITIALIZED.load(Ordering::SeqCst), component + 1);
-        assert_eq!(RELEASED.load(Ordering::SeqCst), component + 1);
-    }
-    Ok(())
-}
-
-#[test]
 fn layouts_retain_runs_and_validate_native_schema() -> Result<()> {
     let pool = Pool::new(0, 0, 0)?;
     type Layout = RadixLayout<(i32, u32), (), u64, u64, ()>;
