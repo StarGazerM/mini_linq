@@ -1493,9 +1493,34 @@ struct Kernel<'c, 'p> {
     /// The current chain's recorded BE-Resource payload parents
     /// (`ResourceAllocation::Payload`), consumed in pre-order per expansion.
     parents: std::collections::VecDeque<Vec<String>>,
-    /// GPU-RootShare: metadata word of the per-tile cursors, taken by the
-    /// chain's first expansion.
-    share: Option<usize>,
+    /// GPU-ExpansionShare: the chain's published-expansion pool, when shared.
+    share: Option<ShareSites>,
+}
+
+/// GPU-ExpansionShare: the dispatch's pool words and the expansion sites.
+struct ShareSites {
+    /// Metadata word counting blocks busy with a root tile or claimed batch.
+    busy: usize,
+    /// Metadata word counting blocks waiting with nothing to steal.
+    hungry: usize,
+    /// First pool word (even): the published count and a pad
+    /// (`share::POOL_WORDS`), then four words per slot, each claim word
+    /// `u64`-aligned.
+    headers: usize,
+    slots: usize,
+    min_chunks: usize,
+    /// Expansion sites so far, numbered in pre-order: within one chain every
+    /// site with a smaller number encloses every site with a larger one.
+    sites: usize,
+    /// Largest descriptor, in `u32` words.
+    stride: usize,
+}
+
+impl ShareSites {
+    /// Pool words after the dispatch's own metadata words.
+    fn words(&self, meta_words: usize) -> usize {
+        self.headers + 2 + self.slots * 4 - meta_words
+    }
 }
 
 impl Kernel<'_, '_> {
@@ -1669,14 +1694,24 @@ impl Kernel<'_, '_> {
         }
         let body = self.scalar_operations(operations, &row)?;
         self.sink = previous_sink;
+        // GPU-ExpansionShare: a block resuming a published expansion passes
+        // through the enclosing levels once, with every lane dead, to reach it.
+        let (resuming_items, resuming_lanes) = if self.share.is_some() {
+            (
+                quote!(&& (__resume == u32::MAX || __item == 0)),
+                quote!(&& __resume == u32::MAX),
+            )
+        } else {
+            (TokenStream::new(), TokenStream::new())
+        };
         Ok(quote! {
             let mut __batch = __partition_begin;
             while __batch < __partition_end {
                 #gather_declare
                 let mut __item = 0usize;
-                while __item < #items {
+                while __item < #items #resuming_items {
                     let __position = __batch + (__item * 256 + __tid) as u64;
-                    let mut __live = __position < __partition_end;
+                    let mut __live = __position < __partition_end #resuming_lanes;
                     #prelude
                     #declarations
                     if __live { #load }
@@ -1766,7 +1801,6 @@ impl Kernel<'_, '_> {
                 let begins = format_ident!("__begins_{begin_offset}");
                 let offsets = format_ident!("__offsets_{offsets_offset}");
                 let owner = format_ident!("__owner_{begin_offset}");
-                let mut shared = TokenStream::new();
                 let mut child = DeviceRow::default();
                 // BE-Resource: the recorded payload parents (later uses, live
                 // keys and smallest prefixes, without provider payload).
@@ -1779,6 +1813,9 @@ impl Kernel<'_, '_> {
                     .iter()
                     .map(|column| self.compiler.slot(column))
                     .collect::<syn::Result<BTreeSet<_>>>()?;
+                let mut pointers = TokenStream::new();
+                let mut stores = TokenStream::new();
+                let mut parent_ids = Vec::new();
                 for slot in &parents {
                     let ty = self.code_type(*slot);
                     let at = self.shared.parent(8)?;
@@ -1787,24 +1824,26 @@ impl Kernel<'_, '_> {
                         .0
                         .get(slot)
                         .ok_or_else(|| error("live parent column lacks checked provenance"))?;
-                    shared.extend(quote! {
-                        let #id = __shared.add(#at).cast::<#ty>();
-                        *#id.add(__tid) = #value;
-                    });
+                    pointers.extend(quote!(let #id = __shared.add(#at).cast::<#ty>();));
+                    stores.extend(quote!(*#id.add(__tid) = #value;));
                     child.0.insert(*slot, quote!(*#id.add(#owner)));
+                    parent_ids.push((id, ty));
                 }
                 let strip = self.next_strip()?;
-                // GPU-RootShare: only the chain's first expansion is shared.
-                let share = self.share.take();
+                // GPU-ExpansionShare: every expansion is a site, numbered in
+                // pre-order, so a site's enclosing sites have smaller numbers.
+                let site = self.share.as_mut().map(|share| {
+                    share.sites += 1;
+                    share.sites - 1
+                });
                 // Formal rule SQ-ExpansionCounters: count children before closing
-                // operators, once per block collective, not once per lane.
+                // operators, once per block collective, not once per lane. The
+                // owner counts; a block resuming a published expansion does not.
                 let stage = self.expansion_stages;
                 self.expansion_stages += usize::from(self.expansion_counters);
                 let count_children = self.expansion_counters.then(|| {
-                    // A helper's replay of a shared tile must not count twice.
-                    let owner_only = share.map(|_| quote!(&& !__share_helping));
                     quote! {
-                        if __tid == 0 #owner_only {
+                        if __tid == 0 {
                             ::cuda_device::atomic::DeviceAtomicU64::from_ptr(__cq_expansions.add(#stage))
                                 .fetch_add(__children as u64, ::cuda_device::atomic::AtomicOrdering::Relaxed);
                         }
@@ -1834,64 +1873,10 @@ impl Kernel<'_, '_> {
                             #payload
                         },
                     })?;
-                let children_loop = match share {
-                    None => quote! {
-                        let mut __child_base = 0u64;
-                        while __child_base < __children as u64 {
-                            let __partition_begin = __child_base;
-                            let __partition_end = (__child_base + #tile as u64).min(__children as u64);
-                            #partition
-                            __child_base += #tile as u64;
-                        }
-                    },
-                    // GPU-RootShare: child batches of this expansion are numbered
-                    // after those of the tile's earlier expansions (`__share_base`)
-                    // and claimed exactly once from the tile's cursor. The owner
-                    // announces each expansion's batches so idle blocks can help.
-                    // A claim beyond this expansion stays pending for the next one.
-                    Some(word) => quote! {
-                        let __share_batches = (__children as u64).div_ceil(#tile as u64);
-                        let __share_word = #word + 2 * __tile as usize;
-                        if __share_tile && !__share_helping && __tid == 0 && __share_batches != 0 {
-                            let __announced = ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__share_word + 1))
-                                .fetch_add(__share_batches as u32, ::cuda_device::atomic::AtomicOrdering::Relaxed);
-                            // List a tile once, when it first has more than one batch.
-                            if __announced <= 1 && __announced as u64 + __share_batches > 1 {
-                                let __list = #word + 2 * __cq_share_tiles as usize;
-                                let __at = ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__list))
-                                    .fetch_add(1, ::cuda_device::atomic::AtomicOrdering::Relaxed);
-                                ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__list + 1 + __at as usize))
-                                    .fetch_add(__tile as u32 + 1, ::cuda_device::atomic::AtomicOrdering::Relaxed);
-                            }
-                        }
-                        loop {
-                            if __tid == 0 && *__claim_slot == u32::MAX {
-                                *__claim_slot = if __share_tile {
-                                    ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__share_word))
-                                        .fetch_add(1, ::cuda_device::atomic::AtomicOrdering::Relaxed)
-                                } else {
-                                    __share_next as u32
-                                };
-                            }
-                            ::cuda_device::thread::sync_threads();
-                            let __claim = *__claim_slot as u64;
-                            if __claim >= __share_base + __share_batches { break; }
-                            if !__share_tile { __share_next += 1; }
-                            let __partition_begin = (__claim - __share_base) * #tile as u64;
-                            let __partition_end = (__partition_begin + #tile as u64).min(__children as u64);
-                            #partition
-                            ::cuda_device::thread::sync_threads();
-                            if __tid == 0 { *__claim_slot = u32::MAX; }
-                            ::cuda_device::thread::sync_threads();
-                        }
-                        __share_base += __share_batches;
-                    },
-                };
-                let expansion = quote! {
+                // The block's own lookup and range scan of this level.
+                let scan = quote! {
                     #lookup
-                    #shared
-                    let #begins = __shared.add(#begin_offset).cast::<u32>();
-                    let #offsets = __shared.add(#offsets_offset).cast::<u32>();
+                    #stores
                     *#begins.add(__tid) = __begin;
                     let (__offset, __children) = ::cq_gpu_sequence_runtime::device::checked_scan(
                         if __live { __end - __begin } else { 0 }, __scratch, __meta.add(2));
@@ -1902,23 +1887,182 @@ impl Kernel<'_, '_> {
                     ::cuda_device::thread::sync_threads();
                     if *__abort_slot != 0 { return; }
                     #count_children
-                    #children_loop
-                    ::cuda_device::thread::sync_threads();
                 };
-                if smallest.is_none() && self.compiler.rows.run_provider(provider) {
+                // The run a run provider's expansion reads is part of its state.
+                let run = (smallest.is_none()
+                    && (self.compiler.rows.run_provider(provider)
+                        || self.compiler.rows.radix_provider(provider).is_some()))
+                .then(|| format_ident!("__cq_run_{provider}"));
+                let tile_u64 = tile as u64;
+                let (expansion, shared_site) = match (site, self.share.as_mut()) {
+                    (Some(site), Some(share)) => {
+                        // Descriptor words: site, run, children, reserved; each
+                        // parent's 256 lanes; 256 range begins; 257 offsets.
+                        let begins_word = 4 + parent_ids.len() * 2 * 256;
+                        let offsets_word = begins_word + 256;
+                        share.stride = share.stride.max((offsets_word + 257).div_ceil(4) * 4);
+                        let (headers, hungry, slots, min_chunks) = (
+                            share.headers,
+                            share.hungry,
+                            share.slots as u32,
+                            share.min_chunks as u32,
+                        );
+                        let site = site as u32;
+                        let store_parents = parent_ids.iter().enumerate().map(|(k, (id, ty))| {
+                            let word = 4 + k * 2 * 256;
+                            quote!(*(__share_body.add(#word) as *mut #ty).add(__tid) = *#id.add(__tid);)
+                        });
+                        let load_parents = parent_ids.iter().enumerate().map(|(k, (id, ty))| {
+                            let word = 4 + k * 2 * 256;
+                            quote!(*#id.add(__tid) = *(__share_body.add(#word) as *const #ty).add(__tid);)
+                        });
+                        let store_run = run.as_ref().map(|run| quote!(*__share_body.add(1) = #run;));
+                        // A block resuming this site copies its published state
+                        // instead of scanning; one passing through to a deeper
+                        // site scans with dead lanes and runs one empty batch.
+                        let expansion = quote! {
+                            #pointers
+                            let #begins = __shared.add(#begin_offset).cast::<u32>();
+                            let #offsets = __shared.add(#offsets_offset).cast::<u32>();
+                            let __share_here = __resume == #site;
+                            let __share_pass = __resume != u32::MAX && __resume > #site;
+                            let __children = if __share_here {
+                                let __share_body = __cq_share.add(__resume_slot as usize * __cq_share_stride);
+                                #(#load_parents)*
+                                *#begins.add(__tid) = *__share_body.add(#begins_word + __tid);
+                                *#offsets.add(__tid) = *__share_body.add(#offsets_word + __tid);
+                                if __tid == 0 { *#offsets.add(256) = *__share_body.add(#offsets_word + 256); }
+                                let __children = *__share_body.add(2);
+                                ::cuda_device::thread::sync_threads();
+                                if __tid == 0 {
+                                    ::cq_gpu_sequence_runtime::share::copied(__meta.add(#headers), __resume_slot);
+                                }
+                                __children
+                            } else {
+                                #scan
+                                __children
+                            };
+                            let __share_first = if __share_here { __resume_first } else { 0u32 };
+                            let __share_last = if __share_here {
+                                __resume_last
+                            } else if __share_pass {
+                                1u32
+                            } else {
+                                (__children as u64).div_ceil(#tile_u64) as u32
+                            };
+                            if __share_here { __resume = u32::MAX; }
+                            // Per-level state stays three u32 words: the next
+                            // local batch, the end, and the slot (`u32::MAX`
+                            // local, `u32::MAX - 1` local with a full pool).
+                            let mut __share_next = __share_first;
+                            let mut __share_slot = u32::MAX;
+                            loop {
+                                let __share_batch = if __share_slot >= u32::MAX - 1 {
+                                    if __share_next >= __share_last { break; }
+                                    // Every 8 batches, publish the rest when
+                                    // blocks wait with nothing to steal.
+                                    if __share_slot == u32::MAX && __share_last - __share_next > #min_chunks
+                                        && (__share_next - __share_first) % 8 == 0 {
+                                        if __tid == 0 {
+                                            *__claim_slot = if ::cq_gpu_sequence_runtime::share::wanted(__meta.add(#hungry), __meta.add(#headers)) {
+                                                ::cq_gpu_sequence_runtime::share::acquire(
+                                                    __meta.add(#headers), #slots, ::cuda_device::thread::blockIdx_x() as u32)
+                                                    .min(u32::MAX - 1)
+                                            } else {
+                                                u32::MAX
+                                            };
+                                        }
+                                        ::cuda_device::thread::sync_threads();
+                                        __share_slot = *__claim_slot;
+                                        ::cuda_device::thread::sync_threads();
+                                        if __share_slot < u32::MAX - 1 {
+                                            let __share_body = __cq_share.add(__share_slot as usize * __cq_share_stride);
+                                            #(#store_parents)*
+                                            *__share_body.add(#begins_word + __tid) = *#begins.add(__tid);
+                                            *__share_body.add(#offsets_word + __tid) = *#offsets.add(__tid);
+                                            if __tid == 0 {
+                                                *__share_body.add(#offsets_word + 256) = *#offsets.add(256);
+                                                *__share_body = #site;
+                                                #store_run
+                                                *__share_body.add(2) = __children;
+                                            }
+                                            ::cuda_device::threadfence();
+                                            ::cuda_device::thread::sync_threads();
+                                            if __tid == 0 {
+                                                ::cq_gpu_sequence_runtime::share::publish(
+                                                    __meta.add(#headers), __share_slot, __share_next, __share_last);
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                    __share_next += 1;
+                                    __share_next - 1
+                                } else {
+                                    if __tid == 0 {
+                                        *__claim_slot = ::cq_gpu_sequence_runtime::share::claim(__meta.add(#headers), __share_slot);
+                                    }
+                                    ::cuda_device::thread::sync_threads();
+                                    let __claimed = *__claim_slot;
+                                    ::cuda_device::thread::sync_threads();
+                                    if __claimed == u32::MAX {
+                                        if __tid == 0 {
+                                            ::cq_gpu_sequence_runtime::share::release(__meta.add(#headers), __share_slot);
+                                        }
+                                        break;
+                                    }
+                                    __claimed
+                                };
+                                let __partition_begin = __share_batch as u64 * #tile_u64;
+                                let __partition_end = if __share_pass {
+                                    1u64
+                                } else {
+                                    (__partition_begin + #tile_u64).min(__children as u64)
+                                };
+                                #partition
+                            }
+                            ::cuda_device::thread::sync_threads();
+                        };
+                        (expansion, Some(site))
+                    }
+                    _ => (
+                        quote! {
+                            #pointers
+                            let #begins = __shared.add(#begin_offset).cast::<u32>();
+                            let #offsets = __shared.add(#offsets_offset).cast::<u32>();
+                            #scan
+                            let mut __child_base = 0u64;
+                            while __child_base < __children as u64 {
+                                let __partition_begin = __child_base;
+                                let __partition_end = (__child_base + #tile_u64).min(__children as u64);
+                                #partition
+                                __child_base += #tile_u64;
+                            }
+                            ::cuda_device::thread::sync_threads();
+                        },
+                        None,
+                    ),
+                };
+                if let Some(run) = &run {
                     let view = self.compiler.rows.provider(provider)?.0;
-                    let run = format_ident!("__cq_run_{provider}");
                     // Run bounds are uniform descriptor metadata: every lane
-                    // executes every run's existing segmented collective.
-                    Ok(quote! { for #run in 0..#view.keys.run_count { #expansion } })
-                } else if smallest.is_none()
-                    && self.compiler.rows.radix_provider(provider).is_some()
-                {
-                    let view = self.compiler.rows.provider(provider)?.0;
-                    let run = format_ident!("__cq_run_{provider}");
-                    // GPU-RadixCursor: each run's local item interval is one
-                    // segmented collective; runs are uniform descriptor metadata.
-                    Ok(quote! { for #run in 0..#view.keys.run_count { #expansion } })
+                    // executes every run's existing segmented collective
+                    // (GPU-RadixCursor for radix providers). A block resuming
+                    // this site reads only the published run; one passing
+                    // through to a deeper site reads one run.
+                    let range = match shared_site {
+                        Some(site) => quote! {
+                            if __resume == #site {
+                                let __share_run = *__cq_share.add(__resume_slot as usize * __cq_share_stride + 1);
+                                __share_run..__share_run + 1
+                            } else if __resume != u32::MAX && __resume > #site {
+                                0..1
+                            } else {
+                                0..#view.keys.run_count
+                            }
+                        },
+                        None => quote!(0..#view.keys.run_count),
+                    };
+                    Ok(quote! { for #run in #range { #expansion } })
                 } else {
                     Ok(expansion)
                 }
@@ -3348,6 +3492,7 @@ fn translate_with_metadata(
         let mut bodies = Vec::new();
         let mut host_domains = Vec::new();
         let mut combine_bodies = Vec::new();
+        let mut dispatch_share: Option<ShareSites> = None;
         for (chain_index, chain) in chains.iter().enumerate() {
             let domain = format_ident!("__cq_domain_{chain_index}");
             let enabled = format_ident!("__cq_enabled_{chain_index}");
@@ -3485,15 +3630,21 @@ fn translate_with_metadata(
                     quote!(#tile)
                 }
             };
-            let share_word = 4 + chains.len();
-            let share = matches!(
-                execution.share,
-                cq_lang_sequence::gpu::Share::FirstExpansion { .. }
-            );
-            if share {
-                parameters.push(abi_parameter(format_ident!("__cq_share_tiles"), syn::parse_quote!(u32)));
-                arguments.push(abi_argument(format_ident!("__cq_share_tiles"), quote!(__cq_share_tiles)));
-                generator.share = Some(share_word);
+            // GPU-ExpansionShare: the busy and hungry words follow the
+            // dispatch's cursor words; the pool starts at the next even word.
+            if let cq_lang_sequence::gpu::Share::Expansions { slots, min_chunks } = execution.share {
+                let busy = 4 + chains.len();
+                parameters.push(abi_parameter(format_ident!("__cq_share"), syn::parse_quote!(*mut u32)));
+                arguments.push(abi_argument(format_ident!("__cq_share"), quote!(__cq_share)));
+                generator.share = Some(ShareSites {
+                    busy,
+                    hungry: busy + 1,
+                    headers: (busy + 3) & !1,
+                    slots,
+                    min_chunks,
+                    sites: 0,
+                    stride: 0,
+                });
             }
             let (outside_declare, partition, outside_finish, whole) = generator.partition_rows(
                 &chain.operations,
@@ -3508,10 +3659,9 @@ fn translate_with_metadata(
             if !generator.strips.is_empty() {
                 return Err(error("GPU-Launch: unconsumed strip records"));
             }
-            if generator.share.take().is_some() {
-                return Err(error(
-                    "GPU-RootShare: the chain has no shared first expansion",
-                ));
+            let share = generator.share.take();
+            if share.as_ref().is_some_and(|share| share.sites == 0) {
+                return Err(error("GPU-ExpansionShare: the shared chain has no expansion"));
             }
             if whole {
                 let combine = generator.combine.take().expect("whole-fold combine");
@@ -3525,64 +3675,100 @@ fn translate_with_metadata(
             // Every block finishes one branch before entering the next. Distinct
             // cursor words avoid cross-branch reset races in multi-block launches.
             let cursor = 4 + chain_index;
-            let root_loop = if share {
-                // GPU-RootShare: blocks first claim root tiles; once those are
-                // exhausted, each block visits the shared tiles once and replays
-                // any whose announced child batches are not all claimed yet.
+            let root_loop = if let Some(sites) = &share {
+                // GPU-ExpansionShare: one loop takes a root tile while any is
+                // left, then a published expansion range, and runs the chain's
+                // single copy: a resumed range passes through the enclosing
+                // levels with dead lanes (`__resume` names its site). A block is
+                // busy while it holds a tile or a range; it stops once no block
+                // is busy (or the launch failed).
+                let (busy, hungry, headers, slots) = (sites.busy, sites.hungry, sites.headers, sites.slots as u32);
                 quote! {
-                    let __claim_slot=__shared.add(44).cast::<u32>();
-                    let mut __share_helping=false;
-                    let mut __share_visit=0u64;
+                    let mut __share_wait=32u32;
+                    let mut __share_hungry=false;
+                    let mut __share_roots=true;
                     loop {
-                        let __tile = if !__share_helping {
+                        let __partition_begin;
+                        let __partition_end;
+                        if __share_roots {
                             if __tid==0 {
+                                ::cq_gpu_sequence_runtime::share::busy(__meta.add(#busy), 1);
                                 *__tile_slot=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(#cursor))
                                     .fetch_add(1,::cuda_device::atomic::AtomicOrdering::Relaxed);
                             }
                             ::cuda_device::thread::sync_threads();
                             let __tile=*__tile_slot as u64;
                             ::cuda_device::thread::sync_threads();
-                            if __tile*#tile as u64>=#domain as u64 { __share_helping=true; continue; }
-                            __tile
+                            if __tile*#tile as u64>=#domain as u64 {
+                                if __tid==0 { ::cq_gpu_sequence_runtime::share::busy(__meta.add(#busy), u32::MAX); }
+                                __share_roots=false;
+                                continue;
+                            }
+                            __resume=u32::MAX;
+                            __partition_begin=__tile*#tile as u64;
+                            __partition_end=(__partition_begin+#tile as u64).min(#domain as u64);
                         } else {
-                            // Only tiles their owner listed as hot (more than one
-                            // batch in an expansion) are visited, in list order.
-                            let __list=#share_word+2*__cq_share_tiles as usize;
+                            // Every thread probes its slots; thread 0 steals from
+                            // the lowest claimable one. The stolen range's batch
+                            // count travels in the reservation word, free here.
+                            if __tid==0 { *__tile_slot=u32::MAX; }
+                            ::cuda_device::thread::sync_threads();
+                            let mut __probe=__tid as u32;
+                            while __probe<#slots {
+                                if ::cq_gpu_sequence_runtime::share::claimable(__meta.add(#headers),__probe) {
+                                    ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__tile_slot)
+                                        .fetch_min(__probe,::cuda_device::atomic::AtomicOrdering::Relaxed);
+                                }
+                                __probe+=256;
+                            }
+                            ::cuda_device::thread::sync_threads();
                             if __tid==0 {
-                                let __listed=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__list))
-                                    .fetch_add(0,::cuda_device::atomic::AtomicOrdering::Relaxed) as u64;
-                                *__tile_slot=0;
-                                if __share_visit<__listed {
-                                    let __entry=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__list+1+__share_visit as usize))
-                                        .fetch_add(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
-                                    if __entry!=0 {
-                                        let __word=#share_word+2*(__entry-1) as usize;
-                                        let __claimed=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__word))
-                                            .fetch_add(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
-                                        let __known=::cuda_device::atomic::DeviceAtomicU32::from_ptr(__meta.add(__word+1))
-                                            .fetch_add(0,::cuda_device::atomic::AtomicOrdering::Relaxed);
-                                        *__tile_slot=if __claimed<__known {__entry} else {u32::MAX};
-                                    } else {
-                                        *__tile_slot=u32::MAX;
+                                let __slot=*__tile_slot;
+                                let (__first,__count)=if __slot!=u32::MAX {
+                                    ::cq_gpu_sequence_runtime::share::steal(__meta.add(#headers),__slot,__meta.add(#busy))
+                                } else { (0,0) };
+                                *__reservation=__count;
+                                if __count!=0 {
+                                    *__claim_slot=__first;
+                                    if __share_hungry {
+                                        ::cq_gpu_sequence_runtime::share::hungry(__meta.add(#hungry), u32::MAX);
+                                        __share_hungry=false;
+                                    }
+                                } else {
+                                    *__tile_slot=u32::MAX;
+                                    *__claim_slot=::cq_gpu_sequence_runtime::share::finished(__meta.add(#busy),__meta.add(2)) as u32;
+                                    if !__share_hungry {
+                                        ::cq_gpu_sequence_runtime::share::hungry(__meta.add(#hungry), 1);
+                                        __share_hungry=true;
                                     }
                                 }
                             }
                             ::cuda_device::thread::sync_threads();
-                            let __entry=*__tile_slot;
+                            let __share_slot=*__tile_slot;
+                            let __share_batch=*__claim_slot;
+                            let __share_count=*__reservation;
                             ::cuda_device::thread::sync_threads();
-                            if __entry==0 {break;}
-                            __share_visit+=1;
-                            if __entry==u32::MAX {continue;}
-                            (__entry-1) as u64
-                        };
-                        let __share_tile=__tile<__cq_share_tiles as u64;
-                        let mut __share_base=0u64;
-                        let mut __share_next=0u64;
-                        if __tid==0 { *__claim_slot=u32::MAX; }
-                        ::cuda_device::thread::sync_threads();
-                        let __partition_begin=__tile*#tile as u64;
-                        let __partition_end=(__partition_begin+#tile as u64).min(#domain as u64);
+                            if __share_slot==u32::MAX {
+                                if __share_batch!=0 {break;}
+                                if __tid==0 { ::cuda_device::barrier::nanosleep(__share_wait); }
+                                __share_wait=(__share_wait*2).min(1024);
+                                continue;
+                            }
+                            __share_wait=32;
+                            // The claim's acquire made the body visible to thread
+                            // 0; the fence orders every thread's loads after it.
+                            ::cuda_device::threadfence();
+                            __resume=*__cq_share.add(__share_slot as usize*__cq_share_stride);
+                            __resume_slot=__share_slot;
+                            __resume_first=__share_batch;
+                            __resume_last=__share_batch+__share_count;
+                            __partition_begin=0u64;
+                            __partition_end=1u64;
+                        }
                         #partition
+                        if *__abort_slot != 0 { return; }
+                        ::cuda_device::thread::sync_threads();
+                        if __tid==0 { ::cq_gpu_sequence_runtime::share::busy(__meta.add(#busy), u32::MAX); }
                     }
                 }
             } else {
@@ -3609,6 +3795,7 @@ fn translate_with_metadata(
                     #outside_finish
                 }
             });
+            dispatch_share = share;
         }
         let shared = generator.shared.bytes()?;
         if let Some(resource) = analysis.resources.get(&publication)
@@ -3633,11 +3820,10 @@ fn translate_with_metadata(
         }
         let (resident_parameter, resident_epilogue) = if resident {
             let used_words = 4 + chains.len();
-            let share_used = matches!(
-                execution.share,
-                cq_lang_sequence::gpu::Share::FirstExpansion { .. }
-            )
-            .then(|| quote!(+ 3 * __cq_share_tiles as usize + 1));
+            let share_used = dispatch_share.as_ref().map(|share| {
+                let words = share.words(used_words);
+                quote!(+ #words)
+            });
             let finished = RESIDENT_FINISHED;
             let result_words = RESIDENT_RESULT;
             (
@@ -3723,18 +3909,52 @@ fn translate_with_metadata(
             dispatch_parameters.push(parameter);
         }
         dispatch_parameters.extend(tail.clone());
+        // GPU-ExpansionShare: the claim broadcast word, the descriptor stride
+        // and the block-uniform resume state (`__resume` names the site a
+        // stolen range resumes, `u32::MAX` while running the kernel's own
+        // path; the stolen slot and batch range are read there).
+        let share_prologue = dispatch_share.as_ref().map(|share| {
+            let stride = share.stride;
+            quote! {
+                let __claim_slot=__shared.add(44).cast::<u32>();
+                let __cq_share_stride: usize = #stride;
+                let mut __resume=u32::MAX;
+                let mut __resume_slot=0u32;
+                let mut __resume_first=0u32;
+                let mut __resume_last=0u32;
+            }
+        });
+        let prologue = quote! {
+            let __tid=::cuda_device::thread::threadIdx_x() as usize;
+            let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
+            let __scratch=__shared.cast::<u32>();
+            let __reservation=__shared.add(32).cast::<u32>();
+            let __tile_slot=__shared.add(36).cast::<u32>();
+            let __abort_slot=__shared.add(40).cast::<u32>();
+            #share_prologue
+        };
+        // GPU-ExpansionShare: a stealing block tests the abort word after a
+        // range it did not expand itself, so the word starts at zero.
+        let share_abort = dispatch_share.as_ref().map(|_| {
+            quote! {
+                if __tid==0 { *__abort_slot=0; }
+                ::cuda_device::thread::sync_threads();
+            }
+        });
+        // The share paths roughly double ptxas' register choice (srd-doop soot
+        // hole 79: 64 -> 125, two resident blocks); at least three resident
+        // blocks caps it at 80. Measured 2026-11-20: srd field-flow soot 7.82 ->
+        // 7.21 s (7.03 without sharing), scala 11.88 -> 10.76 s; four blocks
+        // (64 registers) spilled more and was slower on both programs.
+        let bounds = if dispatch_share.is_some() { quote!(#[launch_bounds(256, 3)]) } else { quote!(#[launch_bounds(256)]) };
         let dispatch_abi = CheckedKernel::lower(&kernel_name, quote! {
             #[kernel]
-            #[launch_bounds(256)]
+            #bounds
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
         }, dispatch_parameters, uses, quote! {
                 unsafe {
-                    let __tid=::cuda_device::thread::threadIdx_x() as usize;
-                    let __shared=::cuda_device::DynamicSharedArray::<u8,16>::get_raw();
-                    let __scratch=__shared.cast::<u32>();
-                    let __reservation=__shared.add(32).cast::<u32>();
-                    let __tile_slot=__shared.add(36).cast::<u32>();
-                    let __abort_slot=__shared.add(40).cast::<u32>();
+                    #prologue
+                    #share_abort
                     #(#bodies)*
                     #resident_epilogue
                 }
@@ -3813,14 +4033,17 @@ fn translate_with_metadata(
                     let tile = format_ident!("__cq_tile_{i}");
                     quote!((#domain as usize).div_ceil(#tile as usize))
                 });
-                match execution.share {
-                    // GPU-RootShare: every resident block may help a hot tile,
-                    // so the grid stays at the resident capacity.
-                    cq_lang_sequence::gpu::Share::FirstExpansion { tiles: cap } => quote! {
-                        #(#tiles)*
-                        let __cq_share_tiles=((__cq_domain_0 as usize).div_ceil(__cq_tile_0 as usize)).min(#cap) as u32;
-                    },
-                    cq_lang_sequence::gpu::Share::None => quote! {
+                match &dispatch_share {
+                    // GPU-ExpansionShare: every resident block may resume a
+                    // published batch, so the grid stays at the resident capacity.
+                    Some(share) => {
+                        let words = share.slots * share.stride;
+                        quote! {
+                            #(#tiles)*
+                            let __cq_share=::cq_gpu_sequence_runtime::share::bodies(&__cq_pool,#words)?;
+                        }
+                    }
+                    None => quote! {
                         #(#tiles)*
                         let __cq_grid=(0usize #(.max(#counts))*).clamp(1,__cq_grid as usize) as u32;
                     },
@@ -3828,13 +4051,11 @@ fn translate_with_metadata(
             }
             _ => quote!(),
         };
-        // GPU-RootShare: per shared tile a claim cursor and announced batches,
-        // then the hot-tile list count and entries.
-        let share_words = matches!(
-            execution.share,
-            cq_lang_sequence::gpu::Share::FirstExpansion { .. }
-        )
-        .then(|| quote!(+ 3 * __cq_share_tiles as usize + 1));
+        // GPU-ExpansionShare: the busy word, then the slot headers.
+        let share_words = dispatch_share.as_ref().map(|share| {
+            let words = share.words(meta_words);
+            quote!(+ #words)
+        });
         use cq_lang_sequence::gpu::InitialCapacity;
         let initial = match (&execution.capacity, capacity) {
             (InitialCapacity::Zero, _) => quote!(0usize),
@@ -4001,7 +4222,7 @@ fn translate_with_metadata(
                     // GPU-ResidentMeta: the last block published the result words.
                     quote!(let __cq_counts=__cq_resident.to_host_prefix(#RESIDENT_RESULT)?;)
                 } else if share_words.is_some() {
-                    // GPU-RootShare cursors stay on the device.
+                    // GPU-ExpansionShare pool words stay on the device.
                     quote!(let __cq_counts=#store_meta.to_host_prefix(#meta_words)?;)
                 } else {
                     quote!(let __cq_counts=#store_meta.to_host()?;)

@@ -1384,18 +1384,29 @@ local tiles). Omitted items cover a tile in one block pass; an untiled
 expansion batches one block of children with one item. The checker accepts
 any positive implicit strip and requires explicit tiles and fold scopes to be
 the chain's. Under the Sequence statement \code{roots spread} (EXT-SeqRoots),
-every fold-free dispatch records \textsc{Spread}$(m)$ instead: a block still
-exhausts the descendants of the roots it claims, but root tiles shrink at
-launch so a small driver occupies every resident block (GPU-RootSpread). A
-dispatch with a fold keeps its declared partition, because block-local fold
-scopes depend on the root tile. Only the assignment of roots to blocks
-changes; the multiset of published rows is the declared partition's. The
-checker accepts any positive $m$ (the declared distributed tile when there is
-one), an optional first-expansion share on a spread single-chain dispatch
-that expands, with any positive tile cap, and fresh metadata anywhere; it
-never recomputes the producer's bound, cap or metadata choice. An arena
-terminal (\code{reserve\_previous}) with a local fold may keep its count,
-failure and claim-cursor words in its arena's resident words
+every fold-free dispatch records \textsc{Spread}$(m)$ instead: root tiles
+shrink at launch so a small driver occupies every resident block
+(GPU-RootSpread). A dispatch with a fold keeps its declared partition, because
+block-local fold scopes depend on the root tile. A spread single-chain
+dispatch that expands also records an expansion share (GPU-ExpansionShare):
+once some block waits with nothing to steal, a block running an expansion with
+more than $k$ batches left publishes that expansion's block state (parents,
+range begins, offsets and the run it reads) and its remaining batch range to
+a free pool slot. The owner keeps claiming one batch at a time; an idle block
+copies the state and claims half of what is left, and may publish the rest of
+its range again. Without a free slot the owner expands alone. The kernel holds
+one copy of the chain: a block resuming a published range passes once through
+the enclosing levels with every lane dead until it reaches that site, then
+runs its claimed batches. A block therefore no longer exhausts the descendants of the
+roots it claims. Only the assignment
+of roots and batches to blocks changes; the multiset of published rows is the
+declared partition's. The checker accepts any positive $m$ (the declared
+distributed tile when there is one), an optional expansion share on a spread
+single-chain dispatch that expands, with 1 to 65,536 slots and any u32 $k$,
+and fresh metadata anywhere; it never recomputes the producer's bound, share
+or metadata choice. An arena terminal (\code{reserve\_previous}) with a local
+fold may keep its count, failure, claim-cursor and pool words in its arena's
+resident words
 (GPU-ResidentMeta): they are zero on entry, the last block to finish
 publishes count and failure and re-zeroes them, so a launch attempt neither
 allocates nor clears metadata.
@@ -1442,11 +1453,11 @@ raw-candidate programs; checking accepts any legal recorded alternative.
  R'=S R\text{ (GPU-LAUNCH-OCCUPANCY)}}
  {d.\mathsf{partition}=\mathsf{Spread}(m)\quad
   \mathsf{tile}_i=\min(m,\max(1,\lceil|D_i|/R'\rceil))\quad
-  \mathsf{grid}=\min(\max(1,\max_i\lceil|D_i|/\mathsf{tile}_i\rceil),R')\text{, or }R'\text{ when shared (GPU-RootShare)}}
-\Rule{GPU-RootShare}{d.\mathsf{partition}=\mathsf{Spread}(m)\quad d\text{ has one chain}\quad
- \text{its source level has one local tile and it expands}\quad
+  \mathsf{grid}=\min(\max(1,\max_i\lceil|D_i|/\mathsf{tile}_i\rceil),R')\text{, or }R'\text{ when shared (GPU-ExpansionShare)}}
+\Rule{GPU-ExpansionShare}{d.\mathsf{partition}=\mathsf{Spread}(m)\quad d\text{ has one chain and it expands}\quad
+ 1\le s\le 65536\quad
  \text{inputs immutable during the launch}}
- {\text{first-expansion batches of tile }t<T\text{ are numbered in replay order and each is claimed once from }\mathsf{cursor}_t\text{; idle blocks replay }t\text{ while }\mathsf{cursor}_t<\mathsf{announced}_t\text{; the published multiset is unchanged}}
+ {\text{an expansion with more than }k\text{ batches left may publish that range to one of }s\text{ slots; each batch is claimed once by its owner or by a block that copied the published state; a slot is freed only after its claims fail and no block copies it; blocks stop when none is busy; the published multiset is unchanged}}
 \Rule{GPU-ResidentMeta}{d.\mathsf{capacity}=\mathsf{PreviousCount}\quad
  d.\mathsf{foldCompletion}=\mathsf{Local}\quad
  \text{the arena's resident words are zero before the launch}}

@@ -106,6 +106,55 @@ fn resident_if_let_preserves_declared_scalar_metadata() {
     assert_eq!(s.collect::<Vec<(i32, i32)>>(), edges);
 }
 
+/// GPU-ExpansionShare: one seed reaches four hubs, each with 50,000
+/// successors. The first expansion has four children, so one block holds the
+/// second expansion's 200,000 children (782 batches) while every other block
+/// has no root tile; that expansion is published and stolen. The answer must
+/// be the complete two-hop set.
+#[test]
+fn skewed_second_expansion_is_shared_without_changing_the_answer() {
+    const HUBS: i32 = 4;
+    const LEAVES: i32 = 50_000;
+    let leaf = |hub: i32, index: i32| 1_000 + hub * 100_000 + index;
+    let mut edges = Vec::new();
+    for hub in 1..=HUBS {
+        edges.push((0, hub));
+        edges.extend((0..LEAVES).map(|index| (hub, leaf(hub, index))));
+    }
+    let seeds = vec![(0i32,)];
+    let two_hop = cq_datalog::datalog! {
+        pipeline {
+            incremental = ::cq_datalog::passes::incremental(driver(delta_first););
+            storage_rewrites = [::cq_gpu_datalog::device_storage];
+            cq = pipeline {
+                physical = [::cq_gpu_sequence::capture_constants];
+                structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
+                sequence = ::mini_linq::passes::sequence;
+                stage = ::cq_gpu_sequence::stage;
+                decompose = [::cq_gpu_sequence::decompose, ::cq_sequence_rewrites::roots(spread)];
+                grade = ::cq_gpu_sequence::machine_grade;
+                print = ::cq_gpu_sequence::translate_arena;
+            };
+            terminals = [::cq_gpu_sequence::translate_arena => batch];
+            round = [::cq_gpu_datalog::bind_round(binding = 5)];
+            print = ::cq_gpu_datalog::print_rounds;
+        }
+        struct SkewedTwoHop;
+        relation Seed(x: i32) = (&seeds);
+        relation Edge(x: i32, y: i32) = (&edges);
+        relation TwoHop(x: i32, z: i32);
+        output TwoHop;
+        TwoHop(*x, *z) :- Seed(x), Edge(x, y), Edge(y, z);
+    };
+    let mut actual: Vec<(i32, i32)> = two_hop.collect();
+    actual.sort_unstable();
+    let mut expected: Vec<(i32, i32)> = (1..=HUBS)
+        .flat_map(|hub| (0..LEAVES).map(move |index| (0, leaf(hub, index))))
+        .collect();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+}
+
 fn bounded_random_graph(nodes: i32, fanout: usize, mut state: u64) -> Data {
     let mut edge = Vec::with_capacity(nodes as usize * fanout);
     for source in 0..nodes {

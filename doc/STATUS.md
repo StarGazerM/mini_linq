@@ -8,6 +8,27 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**GPU expansion share (2026-11-20, on `a09ff4b6` plus this change):** join
+launches whose first expansion is small and a later one large no longer run
+on one block (CHANGELOG, GPU-ExpansionShare).
+- Nsight Compute, `doop-gpu` scala, the same launches: `arrayindexpointsto@2`
+  86.1 → 3.22 ms, `varpointsto@0` 110.9 → 10.15 ms, `VPT_LoadArray@2` 69.4 →
+  5.07 ms; SM active avg/max 1.2–3.9% → 100%.
+- `doop-gpu` fixpoint, medians of three (one stream before): soot 11.10 →
+  10.70 s, scala 15.34 → 13.29 s, kotlin 15.68 → 11.71 s, jython 22.67 →
+  21.23 s. Counts digests unchanged; xalan exact (26/26); `tools/gpu_gate.sh`
+  PASS.
+- `srd-doop-gpu`, one interleaved run each: six of seven dataset/program
+  pairs faster (up to kotlin default-query 12.77 → 11.43 s); field-flow
+  soot 7.08 → 7.30 s (+3%). Share kernels are capped at 80 registers
+  (`#[launch_bounds(256, 3)]`); uncapped, field-flow soot took 7.82 s.
+- Largest remaining rule version: `VPT_LoadArray@3` (delta
+  `arrayindexpointsto`), already on all SMs: 4.78 s of the scala fixpoint
+  before this change; over all rounds its first expansion
+  (`varpointsto` by base heap) yields 23.2 G rows, of which 175 M pass the
+  `loadarrayindex` probe and 5.8 M are new. Raw data:
+  `/data/design-notes/doop-memory/profile-xlarge/share/`.
+
 **GPU Datalog final output (2026-11-19, on `7430f7c5`):** the output phase
 was one host thread building a heap vector per row (`to_rows`): on the two
 xlarge DOOP datasets that run it took 88 to 91% of `doop-gpu` evaluation.

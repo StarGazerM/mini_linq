@@ -133,19 +133,23 @@ pub enum Meta {
     Resident,
 }
 
-/// GPU-RootShare: how blocks divide the first expansion level of a root tile.
+/// GPU-ExpansionShare: how blocks divide the descendants of a root tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Share {
     /// The block that claimed the root tile expands all of its descendants.
     None,
-    /// Child batches of the first expansion are claimed from a per-tile cursor
-    /// for the first `tiles` root tiles; once root tiles are exhausted, idle
-    /// blocks replay a tile with unclaimed batches and claim from it too.
-    FirstExpansion { tiles: usize },
+    /// At every expansion, a block holding more than `min_chunks` child
+    /// batches publishes its expansion state to one of `slots` pool slots;
+    /// idle blocks copy the state and claim batches until all are claimed.
+    Expansions { slots: usize, min_chunks: usize },
 }
 
-/// Root tiles whose first expansion is shared under `Spread`.
-pub const SHARED_TILES: usize = 2048;
+/// Pool slots for published expansions under `Spread`.
+pub const SHARE_SLOTS: usize = 256;
+/// An expansion with more child batches left than this is published. A copy
+/// of the expansion state and the claims cost about as much as a few batches,
+/// so only expansions with many batches left pay for them.
+pub const SHARE_MIN_CHUNKS: usize = 32;
 
 /// Formal rule GPU-Launch: grading records partition, fold completion and
 /// synchronization before emission; target realization owns launch preparation.
@@ -322,7 +326,7 @@ pub(crate) fn derive(
         }
         if let Some(max_rows) = spread_rows(program, &execution, dispatch.parts) {
             execution.partition = Partition::Spread { max_rows };
-            execution.share = shared_first(&execution);
+            execution.share = shared_expansions(&execution);
         }
         execution.meta = resident_meta(&execution);
         executions.push(execution);
@@ -356,21 +360,18 @@ fn spread_rows(program: &Program, execution: &Execution, parts: Option<usize>) -
         })
 }
 
-/// Formal rule GPU-RootShare: a spread single-chain dispatch whose source level
-/// has one local tile and that expands at least once shares its first
-/// expansion's child batches across blocks. Batches are claimed exactly once
-/// from a per-tile cursor; a helper replays the tile's source and first lookup,
-/// which are deterministic over the immutable inputs, so every participant
-/// numbers the batches identically.
-fn shared_first(execution: &Execution) -> Share {
+/// Formal rule GPU-ExpansionShare: a spread single-chain dispatch that expands
+/// at least once may hand any expansion's child batches to other blocks. A
+/// block whose expansion holds more than `min_chunks` batches publishes the
+/// expansion's block state (parents, range begins, offsets) to one of `slots`
+/// pool slots; every batch is claimed exactly once, by the owner or by an idle
+/// block that copied the state, so the published multiset is unchanged.
+fn shared_expansions(execution: &Execution) -> Share {
     match (&execution.partition, execution.chains.as_slice()) {
-        (Partition::Spread { .. }, [chain])
-            if chain.strips.len() >= 2 && chain.strips[0].nested.is_empty() =>
-        {
-            Share::FirstExpansion {
-                tiles: SHARED_TILES,
-            }
-        }
+        (Partition::Spread { .. }, [chain]) if chain.strips.len() >= 2 => Share::Expansions {
+            slots: SHARE_SLOTS,
+            min_chunks: SHARE_MIN_CHUNKS,
+        },
         _ => Share::None,
     }
 }
@@ -624,18 +625,17 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
                 "root partition contradicts the recorded roots policy",
             ));
         }
-        // GPU-RootShare: sharing is optional; when recorded, the dispatch is a
-        // spread single chain whose source level has one local tile and that
-        // expands at least once, and the claimed tile cap is a positive u32.
-        if let Share::FirstExpansion { tiles } = execution.share {
+        // GPU-ExpansionShare: sharing is optional; when recorded, the dispatch
+        // is a spread single chain that expands at least once, with between
+        // one and 65,536 pool slots and a u32 batch threshold.
+        if let Share::Expansions { slots, min_chunks } = execution.share {
             let shareable = matches!(
                 (&execution.partition, execution.chains.as_slice()),
-                (Partition::Spread { .. }, [chain])
-                    if chain.strips.len() >= 2 && chain.strips[0].nested.is_empty()
+                (Partition::Spread { .. }, [chain]) if chain.strips.len() >= 2
             );
-            if !shareable || tiles == 0 || u32::try_from(tiles).is_err() {
+            if !shareable || !(1..=65_536).contains(&slots) || u32::try_from(min_chunks).is_err() {
                 return Err(error(
-                    "first-expansion sharing requires a spread single-chain dispatch that expands",
+                    "expansion sharing requires a spread single-chain dispatch that expands",
                 ));
             }
         }

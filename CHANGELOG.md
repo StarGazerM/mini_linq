@@ -13,6 +13,39 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Sequence: every expansion of a spread single-chain dispatch is
+  shared, not only the first (GPU-RootShare becomes GPU-ExpansionShare;
+  `Share::FirstExpansion { tiles }` becomes `Share::Expansions { slots,
+  min_chunks }`, runtime `cq_gpu_sequence_runtime::share`). A small first
+  expansion followed by a large one used to run on the one block that
+  claimed it: in `doop-gpu` scala, Nsight Compute showed one SM active
+  (avg/max 1.2–3.9%) for `varpointsto@0`, `arrayindexpointsto@2` and
+  `VPT_LoadArray@2` launches of 69–111 ms. Now, once a block waits with
+  nothing to steal, a block with more than 32 batches (of 256 children)
+  left in an expansion publishes its block state to one of 256 pool slots;
+  idle blocks probe the slots in parallel, copy the state and claim half of
+  what is left. The kernel keeps one copy of the chain: a block resuming a
+  stolen range passes once through the enclosing levels with dead lanes
+  until it reaches that site. The share paths about double ptxas' register
+  choice (srd-doop hole 79: 64 → 125), so share kernels declare
+  `#[launch_bounds(256, 3)]` (at most 80 registers); without it srd
+  field-flow soot ran 7.82 s against 7.03 s before, with four blocks it
+  spilled more and was slower. Those three launches take 3.22, 10.15 and
+  5.07 ms with all SMs active (were 86.1, 110.9, 69.4 ms). `doop-gpu`
+  fixpoint, medians of three against one stream before: soot 11.10 →
+  10.70 s, scala 15.34 → 13.29 s, kotlin 15.68 → 11.71 s, jython 22.67 →
+  21.23 s; counts unchanged, xalan exact. `srd-doop-gpu` (one run each,
+  interleaved with the previous binary, counts identical): field-flow soot
+  7.08 → 7.30 s, scala 11.55 → 10.86 s, kotlin 11.54 → 10.75 s;
+  default-query soot 9.09 → 9.05 s, scala 11.61 → 10.85 s, kotlin 12.77 →
+  11.43 s, jython 19.64 → 19.15 s. Cost: dispatch kernels grow from 8.7 to
+  11.4 MB of expanded Rust (whole crate 20.7 → 23.4 MB); build time is
+  unchanged (75 s); ptxas spill stores grow from 1.6 KB in 52 kernels to
+  8.0 KB in 46. Earlier drafts that duplicated the chain per stealing site
+  (exponential in depth) or called per-site device functions (more
+  registers) were not committed. New test: a seed reaching four hubs of
+  50,000 successors each yields the complete two-hop set.
+
 - GPU Datalog: wave lanes removed. `lanes(streams = K)` ran each wave's
   holes on K streams from K-1 CPU worker threads, each into its own
   per-lane buffer, which departs from the recorded round design (one

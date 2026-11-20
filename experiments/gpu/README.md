@@ -602,6 +602,18 @@ This configuration follows [`srd-doop/src/lib.rs`](srd-doop/src/lib.rs);
 implicit defaults. Waves run in order on one stream: the former
 `lanes(streams = K)` rewrite (CPU worker threads, one buffer per hole per lane)
 was removed on 2026-11-19 as a departure from the recorded round design.
+Under `roots(spread)` a single-chain dispatch also shares its expansions
+(GPU-ExpansionShare, `cq_gpu_sequence_runtime::share`): once some block waits
+with nothing to steal, a block whose expansion has more than 32 batches left (256
+children each) publishes the expansion's block state to a pool slot, and idle
+blocks copy it and claim half of what is left. The kernel holds one copy of
+the chain: a block resuming a published range passes through the enclosing
+levels once with dead lanes until it reaches that site, so there is no
+duplicated code and no device call. These kernels declare
+`#[launch_bounds(256, 3)]`: the share paths otherwise about double the
+registers ptxas picks and halve the resident blocks. Before this, only the
+first expansion was shared (GPU-RootShare), so a small first expansion with a
+large later one ran on one block while the rest of the GPU waited.
 
 The GPU Structures stage validates target support without inheriting the CPU
 batching policy. GPU batches are selected by Sequence decomposition; explicit

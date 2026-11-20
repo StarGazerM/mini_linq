@@ -7,6 +7,7 @@ pub mod index_bytes;
 mod kernels;
 pub mod offsets;
 pub mod selected;
+pub mod share;
 pub use selected::{select, SelectedRows};
 
 pub use cq_gpu_runtime::{Bounds, Buffer, Codec, ColumnView, DeviceColumns, EncodedColumn, Pool};

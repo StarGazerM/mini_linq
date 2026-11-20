@@ -1143,9 +1143,10 @@ fn gpu_launch_checker_accepts_any_legal_spread_share_and_meta() {
     let (mut p, mut analysis) = gpu_launch_fixture(false);
     p.sequence.roots = Roots::Spread;
     let execution = analysis.dispatches[0].gpu.as_mut().unwrap();
-    // Any positive bound and tile cap is sound; neither is the producer's default.
+    // Any positive bound, slot count and batch threshold is sound; none is
+    // the producer's default.
     execution.partition = gpu::Partition::Spread { max_rows: 5 };
-    execution.share = gpu::Share::FirstExpansion { tiles: 7 };
+    execution.share = gpu::Share::Expansions { slots: 7, min_chunks: 0 };
     gpu::check(&p, &analysis).unwrap();
     // Sharing and resident words are optional.
     analysis.dispatches[0].gpu.as_mut().unwrap().share = gpu::Share::None;
@@ -1165,7 +1166,7 @@ fn gpu_launch_checker_rejects_illegal_spread_share_and_meta() {
         execution.partition = gpu::Partition::Spread { max_rows: 5 }
     }));
     assert!(mutated(&p, &|execution| {
-        execution.share = gpu::Share::FirstExpansion { tiles: 7 }
+        execution.share = gpu::Share::Expansions { slots: 7, min_chunks: 2 }
     }));
     // Resident words need the arena terminal protocol.
     assert!(mutated(&p, &|execution| execution.meta = gpu::Meta::Resident));
@@ -1177,7 +1178,7 @@ fn gpu_launch_checker_rejects_illegal_spread_share_and_meta() {
     }));
     assert!(mutated(&p, &|execution| {
         execution.partition = gpu::Partition::Spread { max_rows: 5 };
-        execution.share = gpu::Share::FirstExpansion { tiles: 0 };
+        execution.share = gpu::Share::Expansions { slots: 0, min_chunks: 2 };
     }));
 }
 

@@ -2236,10 +2236,12 @@ cq_lang_sequence::gpu::Publication::DeferredRange::provider	{"struct_field":{"re
 cq_lang_sequence::gpu::Publication::Rows	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_lang_sequence::gpu::Reservation	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::gpu::Reservation::StripeBatch"]}}
 cq_lang_sequence::gpu::Reservation::StripeBatch	{"variant":{"discriminant":null,"kind":"plain"}}
-cq_lang_sequence::gpu::SHARED_TILES	{"constant":{"const":{"expr":"2048","is_literal":true,"value":"2_048usize"},"type":{"primitive":"usize"}}}
-cq_lang_sequence::gpu::Share	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::gpu::Share::None","cq_lang_sequence::gpu::Share::FirstExpansion"]}}
-cq_lang_sequence::gpu::Share::FirstExpansion	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_lang_sequence::gpu::Share::FirstExpansion::tiles"],"has_stripped_fields":false}}}}
-cq_lang_sequence::gpu::Share::FirstExpansion::tiles	{"struct_field":{"primitive":"usize"}}
+cq_lang_sequence::gpu::SHARE_MIN_CHUNKS	{"constant":{"const":{"expr":"32","is_literal":true,"value":"32usize"},"type":{"primitive":"usize"}}}
+cq_lang_sequence::gpu::SHARE_SLOTS	{"constant":{"const":{"expr":"256","is_literal":true,"value":"256usize"},"type":{"primitive":"usize"}}}
+cq_lang_sequence::gpu::Share	{"enum":{"generics":{"params":[],"where_predicates":[]},"has_stripped_variants":false,"variants":["cq_lang_sequence::gpu::Share::None","cq_lang_sequence::gpu::Share::Expansions"]}}
+cq_lang_sequence::gpu::Share::Expansions	{"variant":{"discriminant":null,"kind":{"struct":{"fields":["cq_lang_sequence::gpu::Share::Expansions::slots","cq_lang_sequence::gpu::Share::Expansions::min_chunks"],"has_stripped_fields":false}}}}
+cq_lang_sequence::gpu::Share::Expansions::min_chunks	{"struct_field":{"primitive":"usize"}}
+cq_lang_sequence::gpu::Share::Expansions::slots	{"struct_field":{"primitive":"usize"}}
 cq_lang_sequence::gpu::Share::None	{"variant":{"discriminant":null,"kind":"plain"}}
 cq_lang_sequence::gpu::Strip	{"struct":{"generics":{"params":[],"where_predicates":[]},"kind":{"plain":{"fields":["cq_lang_sequence::gpu::Strip::rows","cq_lang_sequence::gpu::Strip::items","cq_lang_sequence::gpu::Strip::nested","cq_lang_sequence::gpu::Strip::fold"],"has_stripped_fields":false}}}}
 cq_lang_sequence::gpu::Strip::fold	{"struct_field":{"resolved_path":{"args":{"angle_bracketed":{"args":[{"type":{"resolved_path":{"args":null,"id":"cq_lang_sequence::gpu::FoldScope","path":"FoldScope"}}}],"constraints":[]}},"id":"core::option::Option","path":"Option"}}}
