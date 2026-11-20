@@ -406,7 +406,8 @@ pub(crate) fn provisions(planned: &round::Program) -> BTreeSet<IndexDemand> { de
 pub(crate) fn render(input: &PlannerInput, report: &AdviceReport, compiled: Option<&Compiled>) -> Result<(String, String)> {
     check_report(input, report)?;
     let mut text = format!("// static advice; dataset {}\n// input {}; evidence {}; target {}\n", report.dataset_hash, report.input_hash, report.evidence_hash, report.target);
-    for fact in [&report.target_constants.build_per_row_h, &report.target_constants.merge_per_row_m].into_iter().chain(&report.target_constants.index_per_group_g) {
+    for fact in [&report.target_constants.build_per_row_h, &report.target_constants.merge_per_row_m].into_iter()
+        .chain(&report.target_constants.index_per_group_g).chain(&report.target_constants.scan_per_row_s) {
         text.push_str(&format!("// declared unit cost {}: {:?}; provenance {}\n",
             fact.id.escape_debug(), fact.value, fact.provenance.method.escape_debug()));
     }

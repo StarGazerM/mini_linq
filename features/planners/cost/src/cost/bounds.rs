@@ -92,7 +92,7 @@ pub fn validate_context(input: &PlannerInput, evidence: &DatasetEvidence, target
         Premise::DeltaSubset { provenance: p, .. } | Premise::DeltaPartition { provenance: p, .. } => provenance(p)?,
     } }
     for relative in &evidence.relative { provenance(&relative.provenance)?; provenance(&relative.factor.provenance)?; }
-    for f in [&profile.build_per_row_h, &profile.merge_per_row_m].into_iter().chain(&profile.index_per_group_g) { provenance(&f.provenance)?; }
+    for f in [&profile.build_per_row_h, &profile.merge_per_row_m].into_iter().chain(&profile.index_per_group_g).chain(&profile.scan_per_row_s) { provenance(&f.provenance)?; }
     Ok(())
 }
 

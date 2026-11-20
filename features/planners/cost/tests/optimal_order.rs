@@ -46,7 +46,7 @@ fn profiled(program: &Program, inputs: &Database) -> DatasetEvidence {
     let group = Fact { value: Some(Rational { numerator: "16".into(), denominator: "1".into() }), ..unit("cpu.g") };
     evidence.targets.insert("cpu".into(), TargetEvidence {
         unit: Unit::DeclaredRowWork, configuration_hash: export::sha256(serde_json::to_vec(&config()).unwrap()),
-        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"), index_per_group_g: Some(group),
+        build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m"), index_per_group_g: Some(group), scan_per_row_s: None,
     });
     evidence.check().unwrap();
     evidence

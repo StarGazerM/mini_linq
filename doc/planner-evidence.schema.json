@@ -1380,6 +1380,9 @@
         "index_per_group_g": {
           "$ref": "#/$defs/RationalFact"
         },
+        "scan_per_row_s": {
+          "$ref": "#/$defs/RationalFact"
+        },
         "configuration_hash": {
           "$ref": "#/$defs/Hash"
         }

@@ -416,6 +416,9 @@ pub struct TargetEvidence {
     /// What a group of a grouped full index costs to build, in bindings
     /// (VP-Index); absent where the target's indexes are not charged.
     #[serde(default, skip_serializing_if = "Option::is_none")] pub index_per_group_g: Option<RationalFact>,
+    /// What a row read once a round before the changing occurrence costs,
+    /// in bindings (VP-Place); absent where it costs a binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub scan_per_row_s: Option<RationalFact>,
     pub configuration_hash: String,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -927,7 +930,7 @@ impl DatasetEvidence {
             ensure(matches!(target.as_str(), "cpu" | "cpu-par" | "gpu"), "unknown target")?;
             ensure(costs.unit == Unit::DeclaredRowWork, "target unit must be declared_row_work")?;
             digest(&costs.configuration_hash)?;
-            for f in [&costs.build_per_row_h, &costs.merge_per_row_m].into_iter().chain(&costs.index_per_group_g) {
+            for f in [&costs.build_per_row_h, &costs.merge_per_row_m].into_iter().chain(&costs.index_per_group_g).chain(&costs.scan_per_row_s) {
                 checker.rational(f, Unit::DeclaredRowWork)?;
                 ensure(f.claim == Claim::Equal && matches!(f.source, Source::Declared | Source::Calibrated | Source::Exact), "target h/m must be supplied exact rational constants")?;
                 if let Some(run) = &f.provenance.run { ensure(run.configuration_hash == costs.configuration_hash, "target calibration configuration mismatch")?; }

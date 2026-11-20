@@ -751,7 +751,13 @@ permutation of a body plans to the same order and the same reads.
   distinct values) had the same plans below the written frames. No
   lookup before an occurrence's own read either: a lookup is a step of
   its own, charged its input frames, and on the GPU a launch per round
-  (about 15M frames on bloat).
+  (about 15M frames on bloat). Where no occurrence changes, the one read
+  first is scanned whole: of the occurrences holding the first variable
+  it is the one of fewest rows, whichever proposed (2026-11-19). The
+  variables see no difference, the rows do: for `VPT_Cast` read before
+  its delta, `CastTo` proposed the method (4,526 against `Reachable`'s
+  7,089) and was scanned, 10.5M rows a round, each then checked against
+  `Reachable`; bloat's plan took 15.2 s against 12.5 s written.
 - **VP-Index.** An order is charged for the grouped indexes it reads by
   and no earlier decision built. A grouped index is a full index keyed by
   some but not all columns; it costs its groups (the distinct keys, a
@@ -759,7 +765,7 @@ permutation of a body plans to the same order and the same reads.
   missing) times the target's `index_per_group_g`, a declared fact of
   `TargetEvidence` beside `build_per_row_h`, in bindings. What an index
   costs is the provider's matter, not the plan's: the CPU engine's
-  grouped layouts hold a bucket a group and declare 16 (measured below);
+  grouped layouts hold a bucket a group and declare 24 (measured below);
   a target that declares nothing is not charged, and then every hole
   takes its cheapest order and is advised. The planner holds no such
   constant. Scans, whole-row keys and delta indexes are not charged. Per
@@ -786,7 +792,16 @@ permutation of a body plans to the same order and the same reads.
   - `rounds`: the publications that published a row of the changing
     relation, a `Rounds` fact (PS-Request).
   - `before`: the least VP-Cost of the earlier occurrences alone and in
-    full, over the orders of their variables.
+    full, over the orders of their variables, times the target's
+    `scan_per_row_s`: a row read once a round before the changing
+    occurrence is read in sequence and met with the round's delta, and
+    costs less than a binding (the CPU engine declares 1/16, measured
+    below; a target that declares nothing takes 1); and a probe, at a
+    binding, for each binding they reach of every other occurrence those
+    bound whole, which is checked there once a round. Without the probes
+    `VPT_Cast` scanned `CastTo` (10.5M rows) and checked `Reachable`
+    against each row; with them it scans `Reachable` and reads `CastTo`
+    by method, as the text does.
   - `after`: the prefix bindings of the remaining variables in their
     least order after those, over every occurrence in full, the changing
     one included.
@@ -797,11 +812,31 @@ permutation of a body plans to the same order and the same reads.
   With none read before it the cost is `weight x VP-Cost` as before (its
   degrees know what a round sees). The planner asks for the facts of
   every occurrence in full, and for the changing relation's rounds.
-  **Growth.** A calibration input is small. `rounds x before` hardly
-  grows with the input; `after`, `held` and `weight x VP-Cost` grow with
-  the changing relation. Orders are compared with the growing part taken
-  `GROWTH = 16` times: an order that is cheaper only because the
-  calibration's changing relation is small is not chosen.
+  No allowance for the input growing: a factor of 16 on the part taken
+  to grow with the changing relation was tried on 2026-11-19 and
+  withdrawn the same day. What is read before the changing occurrence
+  grows too where it is a derived relation, and with the factor bloat's
+  plan read all of `VarPointsTo` once a round in `VPT_LoadField` (111M
+  bindings by its own count against 32M read first). An order is chosen
+  by its cost on the calibration's data.
+
+  **Bloat, planned from bloat alone** (2026-11-19; one calibrated run of
+  38 s and 6.4 GB, 822 facts; 115 holes: 51 change, 62 read as recorded,
+  2 production rejects, 1 unplanned; 25 read their changing occurrence
+  after others). CPU engine, one thread, three runs alternating with the
+  written engine, counts equal: advised 11.42 s (11.24 to 11.45), written
+  11.61 s (11.49 to 11.74). The three rules of the skew get the text's
+  orders, each from a fact: `VPT_LoadArray` reads `LoadArrayIndex`,
+  `Reachable`, `VarPointsTo` by base, then the changing occurrence (from
+  `ArrayTypeCompat` against `VarPointsTo` at its exact 45.6, PS-Heavy);
+  `VPT_Cast` reads `Reachable`, `CastTo` by method, then the changing
+  occurrence (from the target's scan price and the probes above);
+  `VPT_LoadField` reads its changing occurrence first, as bloat's 5.4
+  loads a field row warrant. On soot that last order costs 123 s more
+  than the text: one field of its parser has 1,109 loads, which no
+  statistic of bloat holds. Not run since: soot, scala and the other
+  datasets with this planner (a large dataset is not to be run on one
+  thread).
 
   Why (2026-11-18): `VPT_LoadArray` with changing
   `ArrayIndexPointsTo(baseheap, heap)`. Read first, the changing row
@@ -812,10 +847,9 @@ permutation of a body plans to the same order and the same reads.
   `VarPointsTo` by the loaded base (1.3 heaps a load) and then probes the
   delta. The advice that read it first: soot 1,980 s against 380 s
   written (three runs each, ranges 1,977 to 1,981 and 378 to 384) and
-  scala 659 s against 573 s (636 to 682, 566 to 690). VP-Written prices
-  the written order at 33M bindings on soot and 341M on scala (the
-  planned one 5,216M and 78,975M) and keeps it; so on eclipse, spring,
-  clojure and groovy, and four dispatch holes on groovy.
+  scala 659 s against 573 s (636 to 682, 566 to 690). Read last, the
+  order costs 33M bindings on soot and 341M on scala (read first 5,216M
+  and 78,975M).
 
   Measured on bloat, CPU engine, 2026-11-17 (medians of alternating runs,
   three for the first table and five for the second; the machine ran
@@ -832,15 +866,26 @@ permutation of a body plans to the same order and the same reads.
   | written, one `VPT_LoadArray` variant advised alone (adds `VarPointsTo` by `[0]`: 11.2M rows, 10,291 groups) | 12.55 s |
   | written, one `VPT_LoadField` variant advised alone (adds `InstanceFieldPointsTo` by `[1]`: 2.8M rows, 1,291 groups) | 12.44 s |
 
-  So rows cost nothing measurable and groups do: 2.55 s over 10.13M
-  groups is about 250 ns a group, against about 16 ns a binding (12.4 s
-  over the 764.5M bindings VP-Cost counts for the written orders); hence
-  the CPU target's 16. One index on one engine sets it, and the 2.55 s
-  includes that index's probes. The GPU engines' device layouts are
-  sorted columns, whose cost would follow rows; they declare nothing, and
-  no charge by rows is built. Whole-row keys and delta indexes are
-  uncharged without a run that isolates either: the written program
-  keeps `VarPointsTo` delta by `[0, 1]` (11.2M rows).
+  So rows cost nothing measurable and groups do. The two prices of the
+  CPU target, from profiles of bloat (2026-11-19, `perf`, 499 Hz), in
+  bindings of about 16 ns (12.4 s over the 764.5M bindings VP-Cost counts
+  for the written orders):
+  - `index_per_group_g = 24`. The engine's grouped index allocates a
+    bucket a group: with the `(frm, heap)` index the allocator takes 34%
+    of 13.28 s, against 8.6% of 11.61 s written. The index costs the
+    written loop it replaces (1.76 s) and the 2.3 to 2.55 s more that
+    were measured, less its 22.7M probes: about 3.9 s over 10.13M groups,
+    380 ns a group. (16 until then, from the 2.55 s alone.)
+  - `scan_per_row_s = 1/16`. The written `VPT_Cast` reads `CastTo` by
+    method once a round and meets each row with the delta: one function,
+    15.2% of 11.61 s, for 154 rounds of 10.5M rows: 1.09 ns a row. (On
+    soot the same loop is 22.6% of 403 s for 434 rounds of 117M rows,
+    1.8 ns.)
+  One rule on one dataset sets both. The GPU engines' device layouts are
+  sorted columns, whose cost would follow rows; they declare nothing.
+  Whole-row keys and delta indexes are uncharged without a run that
+  isolates either: the written program keeps `VarPointsTo` delta by
+  `[0, 1]` (11.2M rows).
 
   | engine | evaluation | range |
   |---|---:|---:|
@@ -863,10 +908,13 @@ permutation of a body plans to the same order and the same reads.
   `/data/doop-bench/corpus-20261110/calibration-20261116/vp-written`):
   each dataset sorted, calibrated on itself, its advice compiled, three
   runs alternating with the written engine; median and range; the counts
-  of every relation equal the written engine's. Thirteen were timed
-  before VP-Written with advice that the final planner reproduces
-  directive for directive; eclipse, clojure, spring, groovy, scala and
-  soot were timed again with their changed advice.
+  of every relation equal the written engine's. **These are of the
+  planner of 2026-11-18**, which kept the written order of `VPT_Cast`
+  everywhere and of `VPT_LoadArray` where it was cheaper, and whose
+  statistics sampled keys (PS-Heavy came after). Thirteen were timed
+  before the written-order pricing with advice it reproduced directive
+  for directive; eclipse, clojure, spring, groovy, scala and soot were
+  timed again with their changed advice.
 
   | dataset | written | advised | advised / written | calibrated run | its peak |
   |---|---:|---:|---:|---:|---:|
@@ -894,21 +942,23 @@ permutation of a body plans to the same order and the same reads.
   runs spread up to 20%). In another session scala's advised engine took
   526 and 533 s. A calibrated run asks for 784 facts.
 
-  **Soot is 26% slower advised, and why is not known.** One directive
-  does it: `VPT_LoadField` with changing `InstanceFieldPointsTo(heap,
-  sig, baseheap)`, read first, then `ReachableLoadInstanceField` by `sig`,
+  **Soot's 26% was a wrong statistic.** One directive does it:
+  `VPT_LoadField` with changing `InstanceFieldPointsTo(heap, sig,
+  baseheap)`, read first, then `ReachableLoadInstanceField` by `sig`,
   then `VarPointsTo(base, baseheap)` by the whole row. Soot's written
   engine with that directive alone takes 552 s against 429 s (run
   together with eight others; every other load and store directive alone
-  is within 4 s of written, bar one 25 s below). A profile gives the
-  directive's join loop 27.6% of 546 s. VP-Cost prices it at 608M
-  bindings (10.7 a changing row, 253M of them whole-row probes of a
-  413M-row set) and VP-Written prices the written order at 2,628M. The
-  size of the probed set does not explain it: with and without the same
-  directive scala (612M rows, 219M probes) takes 529.5 and 529.2 s (means
-  of two), pdfbox 65.5 and 65.4 s, jruby 83.6 and 84.1 s, biojava 59.1 and
-  59.6 s, javac 60.05 and 59.71 s, xalan 30.99 and 31.26 s, bloat 10.49
-  and 10.59 s. The planner has no rule for it.
+  is within 4 s of written, bar one 25 s below); a profile gives its join
+  loop 27.6% of 546 s. The planner was told a changing row meets 4.46
+  loads of its field; it meets 68.3 (PS-Heavy: one field of soot's
+  parser is 88% of it, and the key sample lacked it). With every key
+  kept the planner of that day kept the written order there, and soot
+  took 376 and 371 s advised against 392 and 387 s written (two
+  alternating runs beside another job). The same directive is neutral
+  where the degree is small: scala 529.5 and 529.2 s with and without it
+  (means of two), pdfbox 65.5 and 65.4 s, jruby 83.6 and 84.1 s, biojava
+  59.1 and 59.6 s, javac 60.05 and 59.71 s, xalan 30.99 and 31.26 s,
+  bloat 10.49 and 10.59 s.
 
   Advice does not transfer as well as it fits. Bloat's first advice on
   six others (two runs each, not alternated with the written engine):
@@ -916,14 +966,8 @@ permutation of a body plans to the same order and the same reads.
   written median; sunflow 19.13 and 19.79 s, pmd 24.74 and 24.77 s, xalan
   31.52 and 31.58 s, below it; chart 24.23 and 26.37 s.
 
-  Not run: the parallel engine, the GPU.
-
-  Open: orders that read the changing occurrence later are not planned
-  (VP-Delta), only the written one is priced; a binding is one unit
-  whatever it touches, which the `VPT_Cast` index, `VPT_LoadArray` on
-  soot (5.2 billion bindings for about 1,500 s, where the written
-  program's 17 billion take 380 s) and `VPT_LoadField` on soot each
-  contradict.
+  Not run: the parallel engine, the GPU; jython and kotlin (one thread
+  takes 25 minutes and more; a large dataset is not to be run so).
 
 Checked on bloat in the DOOP oracle (`DOOP_DRIVER=delta_first`, exact
 degrees of the final relations with each row's round; 109 of 113 variants
@@ -1018,14 +1062,13 @@ delivered, accumulated, recorded as evidence, and read by the planner.
   row. `visible` is the share of a relation's rows a changing row sees.
   `rounds` is the publications that published a row of a relation: the
   rounds in which it changed, and one more if it holds input rows
-  (VP-Written).
+  (VP-Place).
 - **PS-Derive.** Only the planner knows which statistics a program can ask
   for. `cost::variables::Planner::requests` lists them from the rule bodies: per
   occurrence and variable, every key another single occurrence can bind;
   the rows of each relation and the groups of each index an order can
-  read by (VP-Index); and, for a written order that reads its changing
-  occurrence later, the facts of its two valuations along that order and
-  the changing relation's rounds (VP-Written).
+  read by (VP-Index); and, for a steady hole, every occurrence in full
+  and the changing relation's rounds (VP-Place).
   The planner builds a lookup and a request from the same function, so it
   never asks for a statistic the list lacks.
 - **PS-Fact.** A statistic is a `DegreeEvidence` in `DatasetEvidence`: its

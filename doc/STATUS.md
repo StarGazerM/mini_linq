@@ -583,26 +583,22 @@ build has no token of calibration and a calibration build without an
 observer keeps nothing. A calibrated bloat run
 of the CPU engine takes 24 s in all (the evaluation with the pass and the
 statistics 16.9 s, 11.7 s plain); before VP-Index its directives were
-those the admission-time statistics gave. An order is charged for the grouped
-indexes it adds at the target's declared charge a group (VP-Index; 16
-bindings for the CPU engine, set by one index on bloat). A steady hole
-keeps its written order in two cases: the chosen order's new index
-charge exceeds its bindings and the written order avoids it; or the
-written order reads the changing occurrence later for fewer bindings
-(VP-Written: rounds times the work before the changing read, plus the
-work after). Orders that read the changing occurrence later are not
-planned; only the written one is priced. Nineteen DOOP datasets, CPU
-engine, one thread, each calibrated on itself, medians of three
-alternating runs on 2026-11-18 and 19, equal counts: the advised engine
-takes 0.87 to 1.00 of the written time on seventeen (bloat 10.56 against
-11.67 s, biojava 61.27 against 61.28 s), 0.95 on scala (503.5 against
-531.4 s) and 1.26 on soot (479.3 against 380.8 s). Soot's loss is one
-directive, `VPT_LoadField` with changing `InstanceFieldPointsTo` (123 s
-alone); it is neutral on seven other datasets including scala, and no
-rule of the planner explains it: a binding is priced the same whatever
-it touches. Bloat's advice on six others is slower than the written text
-on eclipse and zxing (two runs, 4 to 5%). Not run: the parallel engine,
-the GPU; no device statistics; one program.
+those the admission-time statistics gave. Since 2026-11-19 the planner
+plans every rule hole from one small calibration and never falls back to
+the text: a hole no fact decides takes SRDatalog's default clause order;
+a steady hole may read other occurrences before its changing one, at the
+target's declared prices (a row read once a round 1/16 of a binding, an
+index group 24, both measured on bloat); its statistics keep the keys a
+join depends on (bloat's degrees within 14% of exact, 30x off before).
+Bloat planned from bloat alone, CPU engine, one thread, medians of three
+alternating runs: advised 11.42 s, written 11.61 s, equal counts;
+`VPT_LoadArray` and `VPT_Cast` get the text's orders from facts. Soot's
+`VPT_LoadField` is planned delta-first, which costs it 123 s: one parser
+field there has 1,109 loads, a skew bloat lacks. The nineteen-dataset
+table of PLANNING-REDESIGN is of the planner of 2026-11-18 (each dataset
+calibrated on itself; 0.87 to 1.00 of written on seventeen). Not run with
+this planner: datasets other than bloat, the parallel engine, the GPU; no
+device statistics; one program.
 
 The retail runtime registers `le` and `le_runs`. The e2e corpus carries both
 as planner axes (538 new accepted configurations; the two D85 `merge_joins`

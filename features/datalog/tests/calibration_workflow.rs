@@ -51,7 +51,7 @@ fn case(edges: &[(i32,i32)], seeds: &[(i32,)]) -> Case {
     let mut evidence = request.collect(&root).unwrap();
     evidence.targets.insert("cpu".into(), ev::TargetEvidence {
         unit: ev::Unit::DeclaredRowWork, build_per_row_h: weight("policy.h", &evidence.dataset.hash), merge_per_row_m: weight("policy.m", &evidence.dataset.hash),
-        configuration_hash: unbound.identity.configuration_hash, index_per_group_g: None,
+        configuration_hash: unbound.identity.configuration_hash, index_per_group_g: None, scan_per_row_s: None,
     });
     let mut source: cq_datalog::source::Program = syn::parse_str(fixture::SOURCE).unwrap();
     source.declared_evidence = Some(DeclaredEvidence::from_json(&evidence.canonical_json().unwrap(), request.relations.iter().map(|input| RelationBinding {

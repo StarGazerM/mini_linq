@@ -66,10 +66,8 @@ pub struct Decided {
     pub weighed: usize,
 }
 
-/// VP-Place: an order with its cost in the part the input's growth leaves
-/// (what is read before the changing occurrence, once a round) and the
-/// part that grows with the changing relation.
-struct Placed { planned: Planned, fixed: f64, grows: f64 }
+/// VP-Place: an order with its bindings over the run.
+struct Placed { planned: Planned, work: f64 }
 
 /// Which occurrences a model holds, and whether one of them changes.
 enum Scope<'s> {
@@ -104,6 +102,8 @@ struct Model<'a> {
     /// Variable names, sorted: a plan depends on no written order.
     names: Vec<String>,
     holders: Vec<Vec<usize>>,
+    /// The rows of each occurrence's relation, where the evidence holds them.
+    sizes: Vec<Option<f64>>,
     facts: &'a HashMap<DegreeRequest, f64>,
     expected: RefCell<HashMap<Probe, Option<f64>>>,
     read: RefCell<BTreeSet<DegreeRequest>>,
@@ -297,15 +297,22 @@ impl Model<'_> {
         root
     }
     /// VP-Lower: the clauses of the occurrences in the order they first
-    /// propose a variable; each is read in full there.
+    /// propose a variable; each is read in full there. Where none
+    /// changes, the first is scanned whole: of the occurrences holding the
+    /// first variable, the one of fewest rows.
     fn lowering(&self, order: &[usize]) -> Option<Vec<usize>> {
         let steps = self.steps(order)?;
         let mut clauses = Vec::new();
         let mut bound = 0u64;
         for (place, &variable) in order.iter().enumerate() {
             if bound & (1 << variable) != 0 { continue; }
-            clauses.push(self.occurrences[steps[place].proposer].clause);
-            bound |= self.variables(steps[place].proposer);
+            let mut proposer = steps[place].proposer;
+            if clauses.is_empty() && self.changing.is_none() {
+                let rows = |at: usize| self.sizes[at].unwrap_or(f64::INFINITY);
+                for &at in &self.holders[variable] { if rows(at) < rows(proposer) { proposer = at; } }
+            }
+            clauses.push(self.occurrences[proposer].clause);
+            bound |= self.variables(proposer);
         }
         Some(clauses)
     }
@@ -315,9 +322,6 @@ impl Model<'_> {
 const BUDGET: usize = 200_000;
 /// VP-Index: the lowerings of a hole a decision weighs, cheapest first.
 const ALTERNATIVES: usize = 16;
-/// VP-Place: how many times the part of a cost that grows with the
-/// changing relation is taken: a calibration input is small.
-const GROWTH: f64 = 16.0;
 
 /// PS-Request: the groups of a relation on `columns`, its distinct values there.
 fn groups(relation: &str, columns: Vec<usize>) -> DegreeRequest {
@@ -392,8 +396,10 @@ pub struct Planner<'a> {
     /// The columns of every relation a rule hole reads.
     arity: BTreeMap<String, usize>,
     facts: HashMap<DegreeRequest, f64>,
-    /// VP-Index: what a group of a grouped full index costs, by target.
+    /// VP-Index: what a group of a grouped full index costs, by target;
+    /// VP-Place: what a row read once a round costs, by target.
     group: BTreeMap<String, f64>,
+    scan: BTreeMap<String, f64>,
     constants: BTreeMap<String, i64>,
 }
 
@@ -419,11 +425,14 @@ impl<'a> Planner<'a> {
             Scalar::SignedInteger { value } => Some((name.clone(), *value)),
             _ => None,
         }).collect();
-        let group = evidence.targets.iter().filter_map(|(target, costs)| {
-            let value = costs.index_per_group_g.as_ref()?.value.as_ref()?;
-            Some((target.clone(), value.numerator.parse::<f64>().ok()? / value.denominator.parse::<f64>().ok()?))
-        }).collect();
-        Ok(Self { input, prepared, members, arity, facts, group, constants })
+        let price = |of: fn(&cq_evidence::TargetEvidence) -> Option<&cq_evidence::RationalFact>| -> BTreeMap<String, f64> {
+            evidence.targets.iter().filter_map(|(target, costs)| {
+                let value = of(costs)?.value.as_ref()?;
+                Some((target.clone(), value.numerator.parse::<f64>().ok()? / value.denominator.parse::<f64>().ok()?))
+            }).collect()
+        };
+        let (group, scan) = (price(|costs| costs.index_per_group_g.as_ref()), price(|costs| costs.scan_per_row_s.as_ref()));
+        Ok(Self { input, prepared, members, arity, facts, group, scan, constants })
     }
 
     /// The model of a rule hole. `None` for another hole, or one with an
@@ -466,7 +475,8 @@ impl<'a> Planner<'a> {
         let holders = (0..names.len()).map(|variable| (0..occurrences.len())
             .filter(|&at| occurrences[at].columns.iter().any(|(held, _)| *held == variable)).collect()).collect();
         let changing = occurrences.iter().position(|occurrence| occurrence.changing);
-        Ok(Some((Model { occurrences, changing, names, holders, facts: &self.facts, expected: RefCell::new(HashMap::new()), read: RefCell::new(BTreeSet::new()) }, prepared)))
+        let sizes = occurrences.iter().map(|occurrence| self.rows(&occurrence.rows.relation)).collect();
+        Ok(Some((Model { occurrences, changing, names, holders, sizes, facts: &self.facts, expected: RefCell::new(HashMap::new()), read: RefCell::new(BTreeSet::new()) }, prepared)))
     }
 
     fn planned(model: &Model<'_>, prepared: &enumerate::Prepared, order: Vec<usize>) -> Option<Planned> {
@@ -508,8 +518,9 @@ impl<'a> Planner<'a> {
     }
 
     /// VP-Place: the orders of a steady hole that read its changing
-    /// occurrence after a set of the others, one per set.
-    fn later(&self, hole: usize) -> export::Result<Vec<Placed>> {
+    /// occurrence after a set of the others, one per set; `scan` is what
+    /// a row read once a round before it costs.
+    fn later(&self, hole: usize, scan: f64) -> export::Result<Vec<Placed>> {
         let (Origin::Rule { seed: false, .. }, Some(prepared)) = (&self.input.holes[hole].origin, self.prepared[hole].as_ref()) else { return Ok(Vec::new()) };
         let Some(reads) = prepared.occurrences() else { return Ok(Vec::new()) };
         let variables = |read: &super::Read| -> BTreeSet<String> { read.columns.iter().filter_map(|column| column.variable.clone()).collect() };
@@ -527,6 +538,13 @@ impl<'a> Planner<'a> {
             let Some((before, _)) = self.scoped(hole, Scope::Only(&clauses))? else { continue };
             let first: Vec<usize> = (0..before.names.len()).filter(|variable| !before.holders[*variable].is_empty()).collect();
             let Some((once, first)) = Self::least(&before, &[], &first) else { continue };
+            // An occurrence outside the set whose variables those bound is
+            // checked once a round for every binding they reach: a probe each.
+            let bound: BTreeSet<&String> = first.iter().map(|&variable| &before.names[variable]).collect();
+            let checks = others.iter().filter(|read| !earlier.iter().any(|held| std::ptr::eq(*held, **read)))
+                .filter(|read| read.columns.iter().filter_map(|column| column.variable.as_ref()).all(|name| bound.contains(name))).count();
+            let Some(steps) = before.steps(&first) else { continue };
+            let reached = steps.iter().fold(1.0, |bindings, step| bindings * step.expected);
             let rest: Vec<usize> = (0..whole.names.len()).filter(|variable| !first.contains(variable)).collect();
             let Some((after, order)) = Self::least(&whole, &first, &rest) else { continue };
             // VP-Lower: those before it as they propose, the changing occurrence, the rest.
@@ -534,16 +552,16 @@ impl<'a> Planner<'a> {
             lowered.push(changing);
             for clause in rest { if !lowered.contains(&clause) { lowered.push(clause); } }
             let Some(candidate) = prepared.ordered(&lowered) else { continue };
-            let (fixed, grows) = (rounds * once, after + rows * held.len() as f64);
-            if placed.iter().any(|held| enumerate::same(&held.planned.candidate, &candidate) && held.fixed + GROWTH * held.grows <= fixed + GROWTH * grows) { continue; }
+            let work = rounds * (once * scan + checks as f64 * reached) + after + rows * held.len() as f64;
+            if placed.iter().any(|held| enumerate::same(&held.planned.candidate, &candidate) && held.work <= work) { continue; }
             placed.retain(|held| !enumerate::same(&held.planned.candidate, &candidate));
             let read = before.read.borrow().iter().chain(whole.read.borrow().iter()).cloned().collect::<BTreeSet<_>>().into_iter().collect();
             placed.push(Placed {
                 planned: Planned {
                     order: order.iter().map(|&variable| whole.names[variable].clone()).collect(),
-                    estimate: if rows > 0.0 { (fixed + grows) / rows } else { fixed + grows }, candidate, read, before: earlier.len(),
+                    estimate: if rows > 0.0 { work / rows } else { work }, candidate, read, before: earlier.len(),
                 },
-                fixed, grows,
+                work,
             });
         }
         Ok(placed)
@@ -623,11 +641,9 @@ impl<'a> Planner<'a> {
     /// heaviest first within a stratum, each charged for the grouped
     /// indexes the holes before it did not build at the target's declared
     /// charge.
-    pub fn decide(&self, target: &str) -> export::Result<Vec<Option<Decided>>> { self.decide_grown(target, GROWTH) }
-
-    /// `decide` with the growing part of every cost taken `growth` times.
-    pub fn decide_grown(&self, target: &str, growth: f64) -> export::Result<Vec<Option<Decided>>> {
+    pub fn decide(&self, target: &str) -> export::Result<Vec<Option<Decided>>> {
         let group = self.group.get(target).copied();
+        let scan = self.scan.get(target).copied().unwrap_or(1.0);
         let mut holes = Vec::new();
         for (hole, declared) in self.input.holes.iter().enumerate() {
             let Origin::Rule { stratum, .. } = &declared.origin else { continue };
@@ -652,18 +668,18 @@ impl<'a> Planner<'a> {
             // first, then those that read it later; each with its charge.
             let mut placed: Vec<Placed> = Vec::new();
             if let Some(weight) = weight {
-                placed.extend(orders.iter().map(|order| Placed { planned: order.clone(), fixed: 0.0, grows: weight * order.estimate }));
-                placed.extend(self.later(hole)?);
+                placed.extend(orders.iter().map(|order| Placed { planned: order.clone(), work: weight * order.estimate }));
+                placed.extend(self.later(hole, scan)?);
             }
             let charged: Option<Vec<f64>> = placed.iter().map(|order| charge(&order.planned.candidate)).collect();
             let (order, work, added, weighed) = match charged {
                 Some(charged) if !placed.is_empty() => {
-                    let total = |at: usize| placed[at].fixed + charged[at] + growth * placed[at].grows;
+                    let total = |at: usize| placed[at].work + charged[at];
                     let mut at = 0;
                     for next in 1..placed.len() { if total(next) < total(at) { at = next; } }
                     let (added, weighed) = (charged[at], placed.len());
                     let chosen = placed.swap_remove(at);
-                    (chosen.planned, Some(chosen.fixed + chosen.grows), added, weighed)
+                    (chosen.planned, Some(chosen.work), added, weighed)
                 }
                 _ => (orders.into_iter().next().expect("a decided hole has an order"), None, 0.0, 1),
             };

@@ -66,6 +66,25 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   fresh memory 10 to 12 GB/s. `to_rows` remains for diagnostics and the
   Sequence host fallback, which still has the per-row cost.
 
+- The planner plans from one small calibration without falling back to
+  the text (PLANNING-REDESIGN, VP-Structural, VP-Place, PS-Heavy). A
+  hole no fact decides takes SRDatalog's default clause order. A steady
+  hole may read any set of its other occurrences before the changing one,
+  costed `rounds x before + after + held`; a row read once a round costs
+  the target's `TargetEvidence::scan_per_row_s` (1/16 for the CPU DOOP
+  evidence) and a check run there a binding; an index group costs
+  `index_per_group_g` (24, was 16). The two rules that kept the written
+  order (`Kept`, VP-Written) are withdrawn. Statistics: every relation is
+  surveyed before any is admitted (`collection::survey`); the tables a
+  request joins by a key share their sure keys, all keys of a relation
+  with at most 65,536 and else its heaviest 1,024; bloat's 240 direct
+  degrees are off by over 2x 0 times (17 before), worst 14% (30x).
+  Bloat planned from bloat alone, CPU engine, medians of three
+  alternating runs: advised 11.42 s, written 11.61 s, counts equal;
+  `VPT_LoadArray` and `VPT_Cast` get the text's orders from facts. Soot's
+  `VPT_LoadField` stays planned delta-first (one parser field of 1,109
+  loads that bloat lacks; 123 s on soot).
+
 - The planner prices a written order that reads its changing occurrence
   later and keeps it where it is cheaper (PLANNING-REDESIGN, VP-Written):
   `rounds x before + after + held`, from a new `rounds` degree request

@@ -436,11 +436,14 @@ impl Doop {
         let unit = |id: &str| ev::Fact { id: id.into(), source: ev::Source::Declared, claim: ev::Claim::Equal,
             value: Some(ev::Rational { numerator: "1".into(), denominator: "1".into() }), lower: None, upper: None, dataset_hash: evidence.dataset.hash.clone(),
             unit: ev::Unit::DeclaredRowWork, provenance: ev::Provenance { producer: "doop_order.rs".into(), method: "explicit h=m=1 row work".into(), locator: "doop_order.rs".into(), run: None, artifact_hash: None } };
-        // VP-Index: 16 bindings a group, measured on bloat (PLANNING-REDESIGN).
-        let group = ev::Fact { value: Some(ev::Rational { numerator: "16".into(), denominator: "1".into() }),
-            provenance: ev::Provenance { producer: "doop_order.rs".into(), method: "one grouped index of the CPU engine on bloat, 2026-11-17: 250 ns a group against 16 ns a binding".into(), locator: "doc/PLANNING-REDESIGN.md VP-Index".into(), run: None, artifact_hash: None },
-            ..unit("cpu.g") };
-        evidence.targets.insert("cpu".into(), ev::TargetEvidence { unit: ev::Unit::DeclaredRowWork, index_per_group_g: Some(group),
+        // VP-Index and VP-Place: the CPU engine's prices, measured on bloat (PLANNING-REDESIGN).
+        let measured = |id: &str, numerator: &str, denominator: &str, method: &str| ev::Fact {
+            value: Some(ev::Rational { numerator: numerator.into(), denominator: denominator.into() }),
+            provenance: ev::Provenance { producer: "doop_order.rs".into(), method: method.into(), locator: "doc/PLANNING-REDESIGN.md VP-Index".into(), run: None, artifact_hash: None },
+            ..unit(id) };
+        let group = measured("cpu.g", "24", "1", "one grouped index of the CPU engine on bloat, 2026-11-19: 380 ns a group against 16 ns a binding");
+        let scan = measured("cpu.s", "1", "16", "the written VPT_Cast loop of the CPU engine on bloat, 2026-11-19: 1.09 ns a row against 16 ns a binding");
+        evidence.targets.insert("cpu".into(), ev::TargetEvidence { unit: ev::Unit::DeclaredRowWork, index_per_group_g: Some(group), scan_per_row_s: Some(scan),
             configuration_hash: export::sha256(serde_json::to_vec(&configuration).unwrap()), build_per_row_h: unit("cpu.h"), merge_per_row_m: unit("cpu.m") });
         for (field, value) in self.constants(dataset) {
             evidence.constants.insert(field.clone(), ev::Fact { id: format!("constant:{field}"), source: ev::Source::Declared, claim: ev::Claim::Equal,
