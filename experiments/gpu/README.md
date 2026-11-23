@@ -632,9 +632,13 @@ Candidate batches are released after admission. Admission sorts one portion at
 a time, reading contiguous input directly and permuting it if required.
 Under GPU-HeadCursor, eligible rules writing the same head share one buffer,
 a cursor and a sticky failure flag. Heads publishing together validate in
-one readback. A short head replays at its exact count before any of those
-publications; the validated count is its next hint for that phase. Ungrouped
-terminals keep hole-local hints. An arena retains slots up to 1 GiB for reuse.
+one readback. A short head replays before any of those publications. For a
+retry and for the next hint in that phase, reserve 1.5 times the observed
+count (round up), with at most 64 MiB of extra rows. Headroom alone never
+pushes a reusable slot over the 1 GiB retention limit. Each attempt can use
+the entire slot it leases; only the validated prefix is published.
+`GPU_DATALOG_TRACE_ROUNDS=1` reports `head_replays` (heads retried, not
+kernel launches) alongside `readbacks`. Ungrouped terminals keep hole-local hints.
 Completed strata release cached Sequence scratch and wholly unused
 pool chunks. Layout states and views retain their published owners; trimming
 never invalidates live device views.

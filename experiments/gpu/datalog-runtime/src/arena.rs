@@ -8,6 +8,17 @@ use std::{any::Any, sync::Arc};
 /// costs more than allocating it again. The hole's count hint is still kept.
 const RETAINED_SLOT_BYTES: usize = 1 << 30;
 
+/// Grow a validated head count by 50%, but spend at most 64 MiB on speculative
+/// rows per head. Don't let slack alone turn a reusable slot into a transient one.
+fn head_capacity_hint(rows: usize, packing: &Packing) -> usize {
+    const MAX_SLACK_BYTES: usize = 64 << 20;
+    let row_bytes = (packing.word_bits() / 8) as usize;
+    let retained = RETAINED_SLOT_BYTES / row_bytes;
+    let extra = rows.div_ceil(2).min(MAX_SLACK_BYTES / row_bytes);
+    let limit = if rows <= retained { retained } else { u32::MAX as usize };
+    rows.saturating_add(extra).min(limit)
+}
+
 /// One publication point's interleaved `[cursor, failure]` pairs. Each head
 /// appends on this pool's stream; a single download checks every head before
 /// any prefix is published. Dispatch-local scratch is not shared here.
@@ -70,7 +81,7 @@ pub struct CandidateArena {
     hole: usize,
     resident: Option<Arc<Buffer<u32>>>,
     head: Option<HeadAttempt>,
-    head_counts: [usize; 2],
+    head_hints: [usize; 2],
 }
 impl CandidateArena {
     pub fn new(pool: Arc<Pool>) -> Self {
@@ -81,7 +92,7 @@ impl CandidateArena {
             hole: 0,
             resident: None,
             head: None,
-            head_counts: [0; 2],
+            head_hints: [0; 2],
         }
     }
     pub fn pool(&self) -> &Arc<Pool> {
@@ -89,7 +100,7 @@ impl CandidateArena {
     }
     /// Start the sole active head attempt on this arena. Use a distinct group
     /// slot for each head; finish or retry its attempt before reusing the slot.
-    /// Phase 0 (seed) and 1 (step) have independent previous-count hints.
+    /// Phase 0 (seed) and 1 (step) have independent hints with bounded slack.
     pub fn begin_head(
         &mut self, group: &HeadCursors, slot: usize, packing: Packing, phase: usize,
     ) -> Result<()> {
@@ -99,10 +110,8 @@ impl CandidateArena {
         if !Arc::ptr_eq(group.words.pool(), &self.pool) || slot >= group.words.len() / 2 {
             return Err("candidate head cursor pool or slot differs".into());
         }
-        let &capacity = self.head_counts.get(phase).ok_or("invalid candidate head phase")?;
-        let mut lease = self.reserve(packing, capacity)?;
-        // Slack in a recycled slot is not part of this head's prediction.
-        lease.capacity = capacity;
+        let &hint = self.head_hints.get(phase).ok_or("invalid candidate head phase")?;
+        let lease = self.reserve(packing, hint)?;
         self.head = Some(HeadAttempt {
             words: group.words.clone(), slot, phase, lease, owners: Vec::new(),
         });
@@ -135,16 +144,19 @@ impl CandidateArena {
         self.head.as_ref().expect("no active candidate head").lease.capacity()
     }
 
-    /// Retry only this head on unchanged inputs, with exactly the required
-    /// row count. Release the old lease before reserve can grow the slot.
+    /// Retry only this head on unchanged inputs. Reserve the observed count
+    /// plus bounded headroom, reusing the slot's full capacity if larger.
     pub fn retry_head(&mut self, required: usize) -> Result<()> {
+        if required > u32::MAX as usize {
+            return Err("candidate row capacity exceeds u32".into());
+        }
         let mut head = self.head.take().ok_or("no active candidate head")?;
         head.reset()?;
         let CandidateLease { buffer, packing, .. } = head.lease;
         drop(buffer);
         head.owners.clear();
-        head.lease = self.reserve(packing, required)?;
-        head.lease.capacity = required;
+        let hint = head_capacity_hint(required, &packing);
+        head.lease = self.reserve(packing, hint)?;
         self.head = Some(head);
         Ok(())
     }
@@ -158,9 +170,10 @@ impl CandidateArena {
     pub unsafe fn finish_head(&mut self, rows: usize) -> Result<CandidateBatch> {
         let head = self.head.take().ok_or("no active candidate head")?;
         head.reset()?;
+        let hint = head_capacity_hint(rows, head.lease.packing());
         // SAFETY: the group check and stream-ordered writers establish the premise.
         let batch = unsafe { head.lease.finish(rows, head.owners)? };
-        self.head_counts[head.phase] = rows;
+        self.head_hints[head.phase] = hint;
         Ok(batch)
     }
 
@@ -253,7 +266,7 @@ impl CandidateArena {
     pub fn clear(&mut self) {
         self.slots.clear();
         self.previous_counts.clear();
-        self.head_counts = [0; 2];
+        self.head_hints = [0; 2];
     }
 
     /// Reserve the minimum complete u64 lanes for each row. Native u128 words
@@ -596,21 +609,35 @@ mod tests {
     }
 
     #[test]
+    fn head_hint_bounds_slack_in_native_bytes() -> Result<()> {
+        let narrow = Packing::new(&[32])?;
+        let wide = Packing::new(&[64; 3])?;
+        assert_eq!(head_capacity_hint(0, &narrow), 0);
+        assert_eq!(head_capacity_hint(3, &narrow), 5);
+        let rows = 1 << 26;
+        assert_eq!(head_capacity_hint(rows, &narrow) - rows, (64 << 20) / 8);
+        assert_eq!(head_capacity_hint(rows, &wide) - rows, (64 << 20) / 24);
+        let retained = RETAINED_SLOT_BYTES / 8;
+        assert_eq!(head_capacity_hint(retained - 1, &narrow), retained);
+        assert_eq!(head_capacity_hint(u32::MAX as usize, &narrow), u32::MAX as usize);
+        Ok(())
+    }
+
+    #[test]
     fn grouped_heads_retry_and_publish_exact_prefixes() -> Result<()> {
         let pool = Pool::new(0, 0, 0)?;
         let packing = Packing::new(&[64])?;
         let group = HeadCursors::new(pool.clone(), 2)?;
         let mut a = CandidateArena::new(pool.clone());
         let mut b = CandidateArena::new(pool);
-        drop(a.reserve(packing.clone(), 19)?);
+        let retained = a.reserve(packing.clone(), 19)?.capacity();
         a.begin_head(&group, 0, packing.clone(), 0)?;
         b.begin_head(&group, 1, packing.clone(), 0)?;
         let (probe, cap, cursor) = a.head_target(&packing)?;
-        assert_eq!(cap, 0); // the retained slot fits 19
+        assert_eq!(cap, retained); // capacity already paid for, even on a cold head
         assert_eq!(b.head_target(&packing)?.2, cursor.wrapping_add(2));
         assert!(a.head_target(&Packing::new(&[32])?).is_err());
-        // Write only metadata for the count-only probe. A retry must reset
-        // both words for A without touching B's independent pair.
+        // A retry resets both words for A without touching B's independent pair.
         unsafe { group.words.write_async(&[3, 1, 1, 0])? };
         let baseline = crate::readback_count();
         assert_eq!(group.read()?, [3, 1, 1, 0]);
@@ -618,7 +645,7 @@ mod tests {
         assert_eq!(a.trace_head_count()?, 3);
         assert_eq!(crate::readback_count(), baseline + 2);
         a.retry_head(3)?;
-        assert_eq!(a.head_target(&packing)?, (probe, 3, cursor));
+        assert_eq!(a.head_target(&packing)?, (probe, retained, cursor));
         assert_eq!(group.read()?, [0, 0, 1, 0]);
         b.retry_head(1)?;
         let input = Arc::new(7);
@@ -640,12 +667,14 @@ mod tests {
         drop(full);
         assert!(weak.upgrade().is_none());
         assert_eq!(group.read()?, [0; 4]);
+        a.release_unused(); // Test phase hints without masking them with recycled space.
         a.begin_head(&group, 0, packing.clone(), 1)?;
-        assert_eq!(a.head_capacity(), 0);
+        assert_eq!(a.head_hints[1], 0);
         // SAFETY: no appends in this step; its zero hint is independent of seed.
         assert!(unsafe { a.finish_head(0)? }.buffer().is_empty());
         a.begin_head(&group, 0, packing, 0)?;
-        assert_eq!(a.head_capacity(), 3);
+        assert_eq!(a.head_hints[0], 5);
+        assert!(a.head_capacity() >= 5);
         // SAFETY: an empty prefix requires no initialized rows.
         unsafe { a.finish_head(0)? };
         Ok(())

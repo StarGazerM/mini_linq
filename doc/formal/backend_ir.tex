@@ -1592,9 +1592,11 @@ Dispatch-local claim cursors are still reset by the last block; the head's
 cursor and sticky failure bit are not. A failed count (including a wrapped
 reservation) rejects the whole attempt before admission. Heads due at the
 same publication point read their cursor/failure pairs in one transfer. Only
-a head that exceeds its capacity replays its producers, from zero with the
-exact observed total and the same inputs. On success its cursor resets and
-its validated length becomes the next capacity hint for that head and phase.
+a head that exceeds its capacity replays its producers, from zero on the
+same inputs with capacity at least the observed total. On success its cursor
+resets. Retry capacity and the next hint for that head and phase allow bounded
+headroom over the observed total, and all available rows in the leased slot
+are writable. Spare rows are never part of the published prefix.
 Intermediate stores and ungrouped terminals retain their own protocol.
 \begin{mathpar}
 \Rule{GPU-HeadCursor}{H=\text{head at a checked publication point}\quad

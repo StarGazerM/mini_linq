@@ -727,6 +727,7 @@ fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
     assert_eq!(source.matches(". begin_head (").count(), 4);
     assert_eq!(source.matches(". finish_head (").count(), 4);
     assert_eq!(source.matches(". retry_head (").count(), 4);
+    assert_eq!(source.matches("if __cq_gpu_trace_rounds { __cq_gpu_head_replays += 1").count(), 4);
     assert_eq!(source.matches(". clear ()").count(), 4);
     assert_eq!(source.matches(". trace_head_count ()").count(), grouped.holes.len());
     // Each macro queue appears in a standalone item, not at both call sites.

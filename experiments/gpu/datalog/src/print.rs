@@ -946,6 +946,7 @@ fn head_attempts(
                     // Discard Some(batch) fallback results of this attempt too.
                     #candidates.clear();
                     #arena.retry_head(rows)?;
+                    if __cq_gpu_trace_rounds { __cq_gpu_head_replays += 1; }
                     __cq_gpu_previous[#slot] = 0;
                 } else {
                     // SAFETY: same-stream dispatches initialized the prefix,
@@ -1176,12 +1177,13 @@ fn phase(
         let __cq_gpu_readbacks_before = if __cq_gpu_trace_rounds {
             ::gpu_datalog_runtime::readback_count()
         } else { 0 };
+        let mut __cq_gpu_head_replays = 0usize;
         #(#batches)* #(#steps)*
         #after
         if __cq_gpu_trace_rounds {
             ::std::eprintln!(
-                "gpu_datalog_round\tstratum={}\tphase={}\tround={}\treadbacks={}",
-                #index, #phase, __cq_gpu_round,
+                "gpu_datalog_round\tstratum={}\tphase={}\tround={}\thead_replays={}\treadbacks={}",
+                #index, #phase, __cq_gpu_round, __cq_gpu_head_replays,
                 ::gpu_datalog_runtime::readback_count() - __cq_gpu_readbacks_before,
             );
         }
