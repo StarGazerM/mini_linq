@@ -21,6 +21,33 @@ pub fn translate_arena(
     crate::emit::translate_impl(physical, structures, program, analysis, Some(arena))
 }
 
+/// Translate a `head; arena` terminal. A successful refinement appends to
+/// the caller's current head and returns `None`; otherwise keep the ordinary
+/// arena publication, including its empty gate, and return it in `Some`.
+pub fn translate_arena_head(
+    physical: &cq_lang_structures::physical::Program,
+    structures: &cq_lang_structures::Program,
+    program: &Program,
+    mut analysis: Analysis,
+    arena: &syn::Expr,
+) -> syn::Result<syn::Expr> {
+    let counters = std::env::var_os("CQ_EXPANSION_COUNTERS").is_some();
+    let append = !counters && cq_lang_sequence::gpu::request_head_cursor(program, &mut analysis);
+    let expression = crate::emit::translate_observed(
+        physical, structures, program, &analysis, Some(arena), counters,
+    )?;
+    if append {
+        Ok(expression)
+    } else {
+        Ok(syn::Expr::Call(syn::ExprCall {
+            attrs: Vec::new(),
+            func: Box::new(syn::parse_quote!(::core::option::Option::Some)),
+            paren_token: Default::default(),
+            args: std::iter::once(expression).collect(),
+        }))
+    }
+}
+
 pub(crate) struct Packing {
     fields: Vec<String>,
     columns: Vec<TokenStream>,

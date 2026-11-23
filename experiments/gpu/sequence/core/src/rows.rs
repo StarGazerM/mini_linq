@@ -615,17 +615,12 @@ impl Rows {
             raw.insert(name.clone(), fields);
             hosts.insert(name, (id, length));
         }
-        // DL-WaveLanes: run-input owners travel with candidate batches across
-        // lane threads, so a program with run bindings retains Send + Sync owners.
-        let owner = if run_hosts.is_empty() {
-            quote!(dyn ::std::any::Any)
-        } else {
-            quote!(dyn ::std::any::Any + Send + Sync)
-        };
+        // Arena batches (including grouped head appends) retain input owners
+        // across lane threads. With no run inputs this vector stays empty.
         setup = {
             let mut ordered = captured_setup;
             ordered.extend(quote! {
-                let mut __cq_run_owners: ::std::vec::Vec<::std::sync::Arc<#owner>> = ::std::vec::Vec::new();
+                let mut __cq_run_owners: ::std::vec::Vec<::std::sync::Arc<dyn ::std::any::Any + Send + Sync>> = ::std::vec::Vec::new();
             });
             ordered.extend(setup);
             ordered

@@ -1132,6 +1132,54 @@ fn gpu_launch_checker_rejects_duplicate_synchronization() {
 }
 
 #[test]
+fn head_cursor_refines_only_the_checked_raw_terminal() {
+    let (mut p, mut analysis) = gpu_launch_fixture(false);
+    publication_bounds(&p, &mut analysis);
+    let structures = structures::contract::check(&p.physical, &p.structures).unwrap();
+    analysis.gpu_publications =
+        gpu::publication::derive(&p.physical, &p.program, &structures, &analysis).unwrap();
+    assert!(!gpu::request_head_cursor(&p, &mut analysis)); // ordinary count
+    p.sequence.output = Some(OutputProtocol::ReservePrevious);
+    analysis.output = Some(("a".into(), OutputProtocol::ReservePrevious));
+    let dispatch = &mut analysis.dispatches[0];
+    dispatch.concatenation = OutputProtocol::ReservePrevious;
+    let execution = dispatch.gpu.as_mut().unwrap();
+    execution.capacity = gpu::InitialCapacity::PreviousCount;
+    execution.meta = gpu::Meta::Resident;
+    gpu::check(&p, &analysis).unwrap();
+
+    // A binding request is permission, not a change to every arena dispatch.
+    assert_eq!(analysis.dispatches[0].gpu.as_ref().unwrap().synchronization,
+        [gpu::Synchronization::CountAndFailure]);
+    let before = analysis.clone();
+    assert!(gpu::request_head_cursor(&p, &mut analysis));
+    assert_eq!(analysis.dispatches[0].gpu.as_ref().unwrap().synchronization,
+        [gpu::Synchronization::HeadCursor]);
+    gpu::check(&p, &analysis).unwrap();
+
+    let refused = |mutate: fn(&mut Analysis)| {
+        let mut fallback = before.clone();
+        mutate(&mut fallback);
+        assert!(!gpu::request_head_cursor(&p, &mut fallback));
+        assert_eq!(fallback.dispatches[0].gpu.as_ref().unwrap().synchronization,
+            [gpu::Synchronization::CountAndFailure]);
+        let mut forged = analysis.clone();
+        mutate(&mut forged);
+        reject_gpu_launch(&p, &forged);
+    };
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().meta = gpu::Meta::Fresh);
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().offsets = gpu::OffsetScan::DeviceExclusive);
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().fold =
+        gpu::FoldCompletion::BlockPartials { monoids: vec![Monoid::Count] });
+    refused(|a| a.output = Some(("other".into(), OutputProtocol::ReservePrevious)));
+    refused(|a| a.gpu_publications.get_mut("a").unwrap().arena = None);
+    refused(|a| a.gpu_publications.get_mut("a").unwrap().storage =
+        gpu::publication::PublicationStorage::FlatRows(gpu::publication::FlatRows {
+            columns: vec!["a".into(), "b".into()], width: 2,
+        }));
+}
+
+#[test]
 fn gpu_launch_checker_rejects_zero_partition_rows() {
     let (p, mut analysis) = gpu_launch_fixture(false);
     analysis.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::Tiles { rows: 0 };

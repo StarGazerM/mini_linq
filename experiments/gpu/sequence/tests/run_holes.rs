@@ -190,6 +190,49 @@ fn previous_count_is_only_a_hint_and_retained_batches_stay_immutable() -> Result
 }
 
 #[test]
+fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
+    use gpu_datalog_runtime::{CandidateArena, HeadCursors};
+    let pool = Pool::new(0, 0, 0)?;
+    let packing = Packing::with_columns(&[Column::I32, Column::U32])?;
+    let group = HeadCursors::new(pool.clone(), 2)?;
+    let mut arena = CandidateArena::new(pool.clone());
+    arena.begin_head(&group, 1, packing.clone(), 0)?;
+    // Ensure even a retained slot's actual capacity is too small.
+    let per_hole = arena.head_capacity() / 2 + 17;
+    let rows = vec![(0..per_hole).map(|i| vec![-7, i as i128]).collect::<Vec<_>>()];
+    let edge = relation::<(i32, u32), u64>(
+        pool.clone(), packing.clone(), runs(&pool, &packing, &rows)?,
+    )?;
+    let append = |mut arena: &mut CandidateArena, publish: bool| {
+        cq_gpu_sequence_test_macros::planned_head_hole!(reserve_previous gated_scan)
+    };
+    for replay in [false, true] {
+        let before = gpu_datalog_runtime::readback_count();
+        for _ in 0..2 {
+            assert!(append(&mut arena, true).is_none());
+        }
+        assert_eq!(gpu_datalog_runtime::readback_count(), before);
+        assert_eq!(group.read()?, [0, 0, (2 * per_hole) as u32, 0]);
+        assert_eq!(gpu_datalog_runtime::readback_count(), before + 1);
+        if !replay {
+            arena.retry_head(2 * per_hole)?;
+        }
+    }
+    // SAFETY: the replay fit both complete appends, as checked above.
+    let batch = unsafe { arena.finish_head(2 * per_hole)? };
+    let mut expected: Vec<_> = rows[0].iter().chain(&rows[0]).cloned().collect();
+    expected.sort();
+    assert_eq!(bag(batch.buffer(), batch.len(), batch.packing())?, expected);
+    // No active head: a closed gate must not acquire a target or a lease.
+    assert!(append(&mut arena, false).is_none());
+
+    // Ordinary reserve does not acquire the group, even with a head marker.
+    let fallback = cq_gpu_sequence_test_macros::planned_head_hole!(reserve scan).unwrap();
+    assert_eq!(bag(fallback.buffer(), fallback.len(), fallback.packing())?, rows[0]);
+    Ok(())
+}
+
+#[test]
 fn nonlinear_delta_full_visits_every_full_run() -> Result {
     let pool = Pool::new(0, 0, 0)?;
     let packing = Packing::with_columns(&[Column::I32, Column::I32])?;

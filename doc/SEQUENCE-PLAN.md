@@ -397,7 +397,8 @@ preparation owned by the target's `gpu::realization::Realization.launches`:
 | Deferred lookup range | `Publication::DeferredRange { provider, keys }`; grading resolves catalog identity and consumers before BE-Resource; accounting and emission share that record | exact (was independent emitter/resource choices) |
 | Range-offset completion | `OffsetScan::DeviceExclusive`; CUB device-wide scan and parallel overflow check before consumers, with per-pool module/workspace reuse | exact (was serial one-block finalize) |
 | Whole-input fold | `FoldCompletion::BlockPartials`; distributed block partials followed by stream-ordered combine | exact (was one-block finalize) |
-| Host metadata synchronization | `Synchronization::{CountAndFailure,RangeOffsets}`; output replay and completed range totals consume these recorded points | exact (was unconditional emitter decision) |
+| Host metadata synchronization | `Synchronization::{CountAndFailure,HeadCursor,RangeOffsets}`: check an individual dispatch, check a group of heads at their publication point, or read a completed range total. Replay consumes the recorded check. | checked |
+| Datalog candidate reservation | An eligible `reserve_previous` terminal reserves directly in the head's buffer. Counts persist across producers until the recorded publication barrier; heads publishing together share one metadata download. | GPU-HeadCursor |
 
 Historical measurement before the cutover (H05 automatic, SF10, `nsys`, 2026-10-28): dispatch 27
 scans all of Lineitem with a deferred range on one block, 783 ms per launch,

@@ -1,9 +1,10 @@
 //! GPU-resident packed Datalog tuples and immutable full-key radix sets.
 //! All device work uses an explicitly ordered [`Pool`] stream.
 //! [`RadixLayout`] retains typed immutable radix snapshots and field metadata.
-//! [`CandidateArena`] leases packed output lanes to Sequence
-//! terminals; [`CandidateBatch`] retains those lanes and input owners without a
-//! candidate-row download. Signed packing preserves numeric lexicographic order.
+//! [`CandidateArena`] leases packed output lanes to Sequence terminals.
+//! [`HeadCursors`] collects a publication's per-head counts and failures in one
+//! readback; [`CandidateBatch`] retains the initialized lanes and input owners
+//! without a candidate-row download. Signed packing preserves numeric order.
 //! [`DeviceRadixRun`] is the occurrence-preserving grouped index engine;
 //! [`RadixLayout`] is its typed relational view over one immutable publication.
 pub mod arena;
@@ -16,7 +17,7 @@ mod publish;
 pub mod radix_run;
 mod runs;
 mod stats;
-pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease};
+pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease, HeadCursors};
 pub use gpu_device_columns::{Buffer, Pool};
 pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};
 pub use pack::{Column, PackedRow, Packing, Word};

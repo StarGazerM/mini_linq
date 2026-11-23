@@ -12,6 +12,11 @@
 //! identifies the first Structures rewrite in this queue (add one for each
 //! preceding surface/physical rewrite). Checked construction records both the
 //! binding packet and arena argument; printing never fills invocation arguments.
+//! `bind_round(binding = 4, head_cursor)` certifies that the registered batch
+//! terminal accepts the grouped output ABI. Only a replay-safe head whose
+//! launches share one publication epoch receives `head; &mut *__cq_gpu_arena`
+//! and returns `Option<CandidateBatch>` (`None` means appended). Other holes
+//! keep the original batch ABI, as do all holes in expansion-counter builds.
 //! `device_storage(symbols(T => Codec), ratio(4))` records optional codecs and
 //! geometric run-maintenance advice; omitted ratio advice defaults to four.
 //!

@@ -286,12 +286,17 @@ fn negative_device_bindings_preserve_fork_declarations() {
         ),
     )
     .unwrap();
-    let bound = crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap();
+    let bound = crate::bindings::compile_with(&round, quote!(binding = #binding, head_cursor)).unwrap();
     cq_lang_datalog_round::check_storage(&device, &bound).unwrap();
     for (before, after) in round.holes.iter().zip(&bound.holes) {
         assert_eq!(before.cq.declarations, after.cq.declarations);
     }
     let key = &bound.context.strata[0].keys[0];
+    assert!(!crate::bindings::head_argument(&bound.holes[key.hole]));
+    let mut bad_key = bound.clone();
+    bad_key.holes[key.hole].pipeline.passes.last_mut().unwrap().arguments =
+        quote!(head; &mut *__cq_gpu_arena);
+    assert!(crate::bindings::check(&bad_key).is_err());
     assert_eq!(key.provider.token, storage::RADIX_RELATION);
     let consumer = &bound.holes[bound.context.strata[0].seeds[0].hole];
     let declaration = consumer
@@ -654,4 +659,127 @@ fn gpu_admission_is_recorded_at_admit_and_rejects_in_plan_advice() {
     let mut forged = program();
     forged.context.strata[0].steps[0].known = cq_lang_datalog_round::Admission::InPlan;
     assert!(print::compile(&forged).is_err());
+}
+
+// Two heads publish together by default. The second seed for A also lets us
+// split its writes with B's publication or make one A producer non-replayable.
+fn multihead_round(second_a: syn::Expr) -> (cq_lang_datalog_round::Program, usize) {
+    let host = cq_datalog_storage::compile(&syn::parse_quote! {
+        struct Pair;
+        relation E(x:i32,y:i32) = (edges);
+        relation A(x:i32);
+        relation B(x:i32);
+        output A, B;
+        A(*x) :- E(x,y);
+        B(*x) :- E(x,y);
+        A(#second_a) :- E(x,y);
+        A(*x) :- B(x);
+        B(*x) :- A(x);
+        strata { component [A,B]; }
+        incremental { scheme seminaive_covering;
+            delta A = RecentA;
+            delta B = RecentB;
+            variant 0 seed { A(*x) :- E(x,y); }
+            variant 1 seed { B(*x) :- E(x,y); }
+            variant 2 seed { A(#second_a) :- E(x,y); }
+            variant 3 delta 0 { A(*x) :- RecentB(x); }
+            variant 4 delta 0 { B(*x) :- RecentA(x); }
+        }
+    }).unwrap();
+    let device = storage::compile(&host).unwrap();
+    let mut pipeline = cq_datalog_fork::default_pipeline();
+    pipeline.passes.last_mut().unwrap().path = syn::parse_quote!(::consumer::output);
+    let binding = pipeline.passes.len() - 1;
+    pipeline.passes.insert(binding, syn::parse_quote!(::consumer::inputs));
+    let round = cq_datalog_fork::compile_with(&device, quote! {
+        cq = #pipeline; lower = 2; terminals = [::consumer::output => batch];
+    }).unwrap();
+    (round, binding)
+}
+
+#[test]
+fn grouped_abi_is_explicit_checked_per_head_and_per_phase() {
+    use crate::bindings::{check, compile_with, head_argument};
+    let (round, binding) = multihead_round(syn::parse_quote!(*y));
+    let legacy = compile_with(&round, quote!(binding = #binding)).unwrap();
+    assert!(!legacy.holes.iter().any(head_argument));
+    let grouped = compile_with(&round, quote!(binding = #binding, head_cursor)).unwrap();
+    if std::env::var_os("CQ_EXPANSION_COUNTERS").is_some() {
+        assert_eq!(grouped, legacy);
+        return;
+    }
+    assert!(grouped.holes.iter().all(head_argument));
+    let grouped: cq_lang_datalog_round::Program = syn::parse2(quote!(#grouped)).unwrap();
+    let a = grouped.context.strata[0].seeds[0].head;
+    let a_seeds: Vec<_> = grouped.context.strata[0].seeds.iter()
+        .filter(|rule| rule.head == a).map(|rule| rule.hole).collect();
+    assert_eq!(a_seeds.len(), 2);
+    let mut mixed = grouped.clone();
+    for (i, &hole) in a_seeds.iter().enumerate() {
+        mixed.holes[hole].pipeline.passes.last_mut().unwrap().arguments = quote!(&mut *__cq_gpu_arena);
+        if i == 0 { assert!(check(&mixed).is_err()); }
+    }
+    // Explicit legacy is legal even when the whole head could use a cursor.
+    check(&mixed).unwrap();
+    let source = print::compile(&grouped).unwrap().to_token_stream().to_string();
+    assert_eq!(source.matches("HeadCursors :: new").count(), 2);
+    assert_eq!(source.matches(". read ()").count(), 2);
+    assert_eq!(source.matches(". begin_head (").count(), 4);
+    assert_eq!(source.matches(". finish_head (").count(), 4);
+    assert_eq!(source.matches(". retry_head (").count(), 4);
+    assert_eq!(source.matches(". clear ()").count(), 4);
+    assert_eq!(source.matches(". trace_head_count ()").count(), grouped.holes.len());
+    // Each macro queue appears in a standalone item, not at both call sites.
+    assert_eq!(source.matches("consumer :: output").count(), grouped.holes.len());
+    assert!(source.contains("if __cq_gpu_active"));
+    assert!(source.contains("if let Some (__cq_gpu_batch)"));
+    assert!(source.contains("else if __cq_gpu_trace_memory || :: gpu_datalog_runtime :: trace_kernels ()"));
+    assert!(source.contains("checked_sub (* __cq_gpu_last)"));
+    // The seed group's first read precedes every retry. All retry call sites
+    // retain the original wave order and occur before the first admission.
+    let (_, retry) = source.split_once("__cq_gpu_seed_group_0 . read ()").unwrap();
+    let (mut retry, _) = retry.split_once(". fresh_batches (").unwrap();
+    for wave in grouped.schedule.strata[0].waves.iter().filter(|w| w.phase == "seed") {
+        for &i in &wave.holes {
+            let hole = grouped.context.strata[0].seeds[i].hole;
+            let function = format!("__cq_gpu_launch_{hole} (");
+            retry = retry.split_once(function.as_str()).unwrap().1;
+        }
+    }
+}
+
+#[test]
+fn grouped_abi_rejects_cross_epoch_replay_and_arbitrary_expressions() {
+    use crate::bindings::{check, compile_with, head_argument};
+    let (mut round, binding) = multihead_round(syn::parse_quote!(*y));
+    let seeds = &round.context.strata[0].seeds;
+    let a = seeds[0].head;
+    let a_indices: Vec<_> = seeds.iter().enumerate().filter(|(_, r)| r.head == a)
+        .map(|(i, _)| i).collect();
+    let b_index = seeds.iter().position(|r| r.head != a).unwrap();
+    let mut waves = vec![
+        cq_lang_datalog_round::schedule::Wave { phase: syn::parse_quote!(seed), holes: vec![a_indices[0], b_index] },
+        cq_lang_datalog_round::schedule::Wave { phase: syn::parse_quote!(seed), holes: vec![a_indices[1]] },
+    ];
+    waves.extend(round.schedule.strata[0].waves.iter().filter(|w| w.phase == "step").cloned());
+    round.schedule = round.schedule.with_stratum_waves(0, waves, &round.context);
+    for (source, binding) in [
+        (round, binding),
+        multihead_round(syn::parse_quote!(next_id(*y))),
+        multihead_round(syn::parse_quote!(*y + local_offset)),
+    ] {
+        let bound = compile_with(&source, quote!(binding = #binding, head_cursor)).unwrap();
+        let mut forged = bound.clone();
+        let enabled = std::env::var_os("CQ_EXPANSION_COUNTERS").is_none();
+        for rule in &bound.context.strata[0].seeds {
+            assert_eq!(head_argument(&bound.holes[rule.hole]), enabled && rule.head != a);
+            forged.holes[rule.hole].pipeline.passes.last_mut().unwrap().arguments = quote!(head; &mut *__cq_gpu_arena);
+        }
+        assert!(check(&forged).is_err());
+        // The step-phase writes to A read a different, stable epoch.
+        for rule in &bound.context.strata[0].steps {
+            assert_eq!(head_argument(&bound.holes[rule.hole]), enabled);
+        }
+        print::compile(&bound).unwrap();
+    }
 }

@@ -23,7 +23,7 @@ doop_shared::doop_engine!(run, pipeline {
         physical = [::cq_gpu_sequence::capture_constants];
         structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs, ::cq_gpu_sequence::select_catalog];
         sequence = ::mini_linq::passes::sequence;
-        // Each arena hole reuses only its last validated count as a capacity hint;
+        // Reuse the head/phase's last validated count (hole-local if ungrouped);
         // root tiles are sized at launch to fill the device (GPU-RootSpread).
         // With relational heads (c1b75718) spread measured 0.953x [0.923, 0.960]
         // of no spread on Cassandra (P6b).
@@ -44,6 +44,6 @@ doop_shared::doop_engine!(run, pipeline {
         print = ::cq_gpu_sequence::translate_arena;
     };
     terminals = [::cq_gpu_sequence::translate_arena => batch];
-    round = [::cq_gpu_datalog::bind_round(binding = 5)];
+    round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor)];
     print = ::cq_gpu_datalog::print_rounds;
 });

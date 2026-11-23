@@ -179,10 +179,31 @@ pub fn translate(input: TokenStream) -> TokenStream {
     .into()
 }
 
+struct ArenaArgument {
+    head: bool,
+    arena: syn::Expr,
+}
+
+impl syn::parse::Parse for ArenaArgument {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        mod keyword {
+            syn::custom_keyword!(head);
+        }
+        let head = input.peek(keyword::head) && input.peek2(syn::Token![;]);
+        if head {
+            input.parse::<keyword::head>()?;
+            input.parse::<syn::Token![;]>()?;
+        }
+        Ok(Self { head, arena: input.parse()? })
+    }
+}
+
 /// Publish raw candidate rows into the explicitly supplied mutable arena.
 ///
 /// Use `translate_arena(&mut arena)` as the terminal pipeline pass. The
 /// recorded output protocol still controls counting and capacity retries.
+/// `translate_arena(head; &mut arena)` requests grouped append and returns
+/// `Option<CandidateBatch>`: `None` for append, `Some` for legacy publication.
 #[proc_macro]
 pub fn translate_arena(input: TokenStream) -> TokenStream {
     cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |physical: &Physical, structures: &Structures, source: &Sequence, arguments| {
@@ -192,10 +213,14 @@ pub fn translate_arena(input: TokenStream) -> TokenStream {
                 "GPU Sequence translate_arena requires an explicit arena expression",
             ));
         }
-        let arena = syn::parse2::<syn::Expr>(arguments)?;
+        let ArenaArgument { head, arena } = syn::parse2(arguments)?;
         let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
         let analysis = cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
-        cq_gpu_sequence_core::translate_arena(physical, structures, &source, &analysis, &arena)
+        if head {
+            cq_gpu_sequence_core::translate_arena_head(physical, structures, &source, analysis, &arena)
+        } else {
+            cq_gpu_sequence_core::translate_arena(physical, structures, &source, &analysis, &arena)
+        }
     })
     .into()
 }
@@ -246,6 +271,17 @@ mod tests {
     use super::*;
     use cq_lang_structures::provider::CodecId;
     use quote::quote;
+
+    #[test]
+    fn only_a_leading_head_marker_requests_grouped_append() {
+        let plain: ArenaArgument = syn::parse_quote!(head);
+        assert!(!plain.head);
+        let marked: ArenaArgument = syn::parse_quote!(head; &mut *arena);
+        assert!(marked.head);
+        assert_eq!(marked.arena, syn::parse_quote!(&mut *arena));
+        assert!(syn::parse2::<ArenaArgument>(quote!(head;)).is_err());
+        assert!(syn::parse2::<ArenaArgument>(quote!(other; &mut arena)).is_err());
+    }
 
     #[test]
     fn grouped_answer_gate_is_one_checked_diagnostic_expression() {

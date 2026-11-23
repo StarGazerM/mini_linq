@@ -53,6 +53,9 @@ pub enum FoldCompletion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Synchronization {
     CountAndFailure,
+    /// GPU-HeadCursor: count and failure are observed by the enclosing
+    /// publication point, never by this dispatch.
+    HeadCursor,
     RangeOffsets,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -558,6 +561,46 @@ fn strip(operations: &[Step], source: bool, block: usize) -> Strip {
     }
 }
 
+/// Formal rule GPU-HeadCursor: the enclosing binding can own completion of
+/// a raw terminal append only when no subsequent Sequence operation needs
+/// its length, offsets, or partial folds. Intermediate stores stay private.
+fn admits_head_cursor(program: &Program, analysis: &Analysis, dispatch: &crate::Dispatch) -> bool {
+    use publication::{Granularity, PackedKeys, PublicationStorage};
+    let Some((terminal, OutputProtocol::ReservePrevious)) = &analysis.output else {
+        return false;
+    };
+    program.sequence.output == Some(OutputProtocol::ReservePrevious)
+        && dispatch.inner_stores.last() == Some(terminal)
+        && dispatch.concatenation == OutputProtocol::ReservePrevious
+        && dispatch.gpu.as_ref().is_some_and(|execution| {
+            execution.meta == Meta::Resident
+                && execution.capacity == InitialCapacity::PreviousCount
+                && execution.publication == Publication::Rows
+                && execution.offsets == OffsetScan::None
+                && execution.fold == FoldCompletion::Local
+        })
+        && analysis.gpu_publications.get(terminal).is_some_and(|record| {
+            record.arena.is_some() && matches!(&record.storage,
+                PublicationStorage::PackedKeys(PackedKeys { granularity: Granularity::Rows, .. }))
+        })
+}
+
+/// Refine the graded dispatch only at a binding-requested head terminal.
+/// A refusal leaves the ordinary arena protocol untouched.
+pub fn request_head_cursor(program: &Program, analysis: &mut Analysis) -> bool {
+    let Some(index) = analysis.dispatches.iter().position(|dispatch| {
+        admits_head_cursor(program, analysis, dispatch)
+            && dispatch.gpu.as_ref().is_some_and(|execution| matches!(
+                execution.synchronization.as_slice(),
+                [Synchronization::CountAndFailure] | [Synchronization::HeadCursor]
+            ))
+    }) else {
+        return false;
+    };
+    analysis.dispatches[index].gpu.as_mut().unwrap().synchronization[0] = Synchronization::HeadCursor;
+    true
+}
+
 /// GPU-Launch checker: validate supplied launch records against the
 /// checked dispatches without selecting defaults. Any positive implicit strip
 /// is sound; explicit tiles, fold scopes and the output protocol are facts.
@@ -584,6 +627,12 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         // total/failure readback after the producer's count/failure readback.
         // Rows have neither range offsets nor a range readback.
         let (offsets, synchronization): (_, &[Synchronization]) = match &execution.publication {
+            Publication::Rows if execution.synchronization == [Synchronization::HeadCursor] => {
+                if !admits_head_cursor(program, analysis, dispatch) {
+                    return Err(error("GPU-HeadCursor requires a resident raw packed-key terminal"));
+                }
+                (OffsetScan::None, &[Synchronization::HeadCursor])
+            }
             Publication::Rows => (OffsetScan::None, &[Synchronization::CountAndFailure]),
             Publication::DeferredRange { .. } => (
                 OffsetScan::DeviceExclusive,

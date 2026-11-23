@@ -15,12 +15,12 @@ oracle_shared::oracle_programs!(
             structures = [::cq_gpu_datalog::bind_inputs, ::cq_gpu_sequence::bind_runs];
             sequence = ::mini_linq::passes::sequence;
             stage = ::cq_gpu_sequence::stage;
-            decompose = [::cq_gpu_sequence::decompose];
+            decompose = [::cq_gpu_sequence::decompose, ::cq_sequence_rewrites::output(reserve_previous)];
             grade = ::cq_gpu_sequence::machine_grade;
             print = ::cq_gpu_sequence::translate_arena;
         };
         terminals = [::cq_gpu_sequence::translate_arena => batch];
-        round = [::cq_gpu_datalog::bind_round(binding = 5)];
+        round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor)];
         print = ::cq_gpu_datalog::print_rounds;
     }
 );

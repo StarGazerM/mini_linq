@@ -327,16 +327,23 @@ impl UploadChunk {
 
 /// An owned device allocation retaining its allocator, context and stream.
 /// Deallocation is ordered on that stream; there is no host-runtime lifetime.
-/// An immutable range may retain an allocation through `owner` instead of
+/// An immutable range may retain an allocation through its owner instead of
 /// owning its affine token. Range construction is unsafe: the unique writer
 /// must never overwrite a published range, even when the backing buffer grows.
 pub struct Buffer<T: DeviceCopy> {
-    block: Option<DeviceBlock>,
-    owner: Option<Arc<Buffer<T>>>,
-    offset: usize,
+    storage: Storage<T>,
     pool: Arc<Pool>,
     len: usize,
     marker: PhantomData<T>,
+}
+enum Storage<T: DeviceCopy> {
+    Owned(Option<DeviceBlock>),
+    Slice(Arc<Buffer<T>>, usize),
+    Cast {
+        _owner: Arc<dyn std::any::Any + Send + Sync>,
+        ptr: cuda_core::sys::CUdeviceptr,
+        allocation_bytes: usize,
+    },
 }
 impl<T: DeviceCopy> Buffer<T> {
     pub fn zeroed(pool: Arc<Pool>, len: usize) -> Result<Self> {
@@ -376,9 +383,7 @@ impl<T: DeviceCopy> Buffer<T> {
             allocation_error(error)
         })?;
         Ok(Self {
-            block: Some(block),
-            owner: None,
-            offset: 0,
+            storage: Storage::Owned(Some(block)),
             pool,
             len,
             marker: PhantomData,
@@ -457,9 +462,37 @@ impl<T: DeviceCopy> Buffer<T> {
         }
         Ok(Self {
             pool: owner.pool.clone(),
-            block: None,
-            owner: Some(owner),
-            offset,
+            storage: Storage::Slice(owner, offset),
+            len,
+            marker: PhantomData,
+        })
+    }
+    /// View initialized native bytes as `T` without copying. `first` and `len`
+    /// count destination elements. Retains the source's entire owner (including
+    /// dependencies) and uses the source's stream for all reads.
+    ///
+    /// # Safety
+    /// The owner's buffer must remain fixed and immutable for this view's
+    /// lifetime. Its selected bytes must be initialized, valid `T` values in
+    /// native order, ready on its pool stream. This is not a data conversion.
+    pub unsafe fn shared_cast_slice<S: DeviceCopy, O>(
+        owner: Arc<O>, first: usize, len: usize,
+    ) -> Result<Self>
+    where
+        O: AsRef<Buffer<S>> + Send + Sync + 'static,
+    {
+        let source = owner.as_ref().as_ref();
+        let width = size_of::<T>();
+        if width == 0 || first.checked_add(len).is_none_or(|end| end > source.bytes() / width) {
+            return Err("typed device range exceeds source".into());
+        }
+        let ptr = source.cu_deviceptr() + (first * width) as u64;
+        if len != 0 && !ptr.is_multiple_of(align_of::<T>() as u64) {
+            return Err("misaligned typed device range".into());
+        }
+        Ok(Self {
+            pool: source.pool.clone(),
+            storage: Storage::Cast { ptr, allocation_bytes: source.allocated_bytes(), _owner: owner },
             len,
             marker: PhantomData,
         })
@@ -468,9 +501,10 @@ impl<T: DeviceCopy> Buffer<T> {
         self.cu_deviceptr() as *mut T
     }
     pub fn cu_deviceptr(&self) -> cuda_core::sys::CUdeviceptr {
-        match &self.owner {
-            Some(owner) => owner.cu_deviceptr() + (self.offset * std::mem::size_of::<T>()) as u64,
-            None => self.block.as_ref().unwrap().cu_deviceptr(),
+        match &self.storage {
+            Storage::Owned(block) => block.as_ref().unwrap().cu_deviceptr(),
+            Storage::Slice(owner, offset) => owner.cu_deviceptr() + (offset * size_of::<T>()) as u64,
+            Storage::Cast { ptr, .. } => *ptr,
         }
     }
     pub fn len(&self) -> usize {
@@ -488,9 +522,10 @@ impl<T: DeviceCopy> Buffer<T> {
     /// range. Aliases report the same backing bytes and must not be summed
     /// without deduplicating owners. Pool alignment is not included.
     pub fn allocated_bytes(&self) -> usize {
-        match &self.owner {
-            Some(owner) => owner.allocated_bytes(),
-            None => self.block.as_ref().unwrap().size(),
+        match &self.storage {
+            Storage::Owned(block) => block.as_ref().unwrap().size(),
+            Storage::Slice(owner, _) => owner.allocated_bytes(),
+            Storage::Cast { allocation_bytes, .. } => *allocation_bytes,
         }
     }
     pub fn num_bytes(&self) -> usize {
@@ -530,7 +565,8 @@ impl<T: DeviceCopy> Buffer<T> {
 }
 impl<T: DeviceCopy> Drop for Buffer<T> {
     fn drop(&mut self) {
-        if let Some(block) = self.block.take() {
+        if let Storage::Owned(block) = &mut self.storage {
+            let block = block.take().expect("owned device allocation");
             // This owner is the unique holder of the affine allocation token.
             // All library uses are ordered on the retained stream.
             if let Err(rccl_memory::MemoryError::Driver(error)) =
