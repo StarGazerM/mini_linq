@@ -813,3 +813,36 @@ done
 | jython | 17.5376 | **7.0314** | 17.5998 | **7.0598** | **2.494×** | `66b903ac` |
 
 Xalan exact: **all 26 full-tuple output sets match**, digest `081e42b9`; all 16 timing runs exited 0 with the expected digests. Soot is effectively unchanged. Scala's former **7.6–8.5% regression** becomes **3.5–3.7% lower fixpoint time**. In the adaptive scala profile the join scope is **3.173 s** (generated 3.196, always-union 3.939), while total admission sort/unique is **.711 s** (generated .867). Consequently the cheaper producer more than pays for sorting somewhat more than the always-union prototype. Jython still sorts just **3.287 B** `varpointsto` rows instead of **43.372 B**; its adaptive profile is **5.237 s joins + 1.006 s sort/unique**, with a **7.157 s** fixpoint and **18.00 GB** peak device pool (control **38.79 GB**). The table is unprofiled; these profile scopes are separate runs.
+
+## Summary: per class, before vs now vs bound (commit `07c9f483`)
+
+Kernel seconds per rule version from `GPU_DATALOG_PROFILE` (scala unless
+noted): before = `profile-manual5-scala.log` (hand-written VPT_LoadArray@3
+only), now = `final1prof-scala.log` / `final1prof-jython.log`. Bounds are the
+lab's measured kernels on captured rounds or the caps model named.
+
+| class | rule versions | before | now | bound / best lab | what closed the gap |
+|---|---|---:|---:|---|---|
+| A: delta probe, nearly all miss | 136, 143, 145 (virtual dispatch) | 0.80 + 0.46 + 0.46 s | 0.21 + 0.16 + 0.16 s | replay of 136: 0.46-0.64 ms/round vs now 0.51 ms/round (0.209 s / 407) | GPU-RootSelect (no cooperative scans for rows with no match) |
+| A, plan order | 123 cast `@4`, 122 cast `@0` | 0.70 + 0.46 s | 0.17 + 0.03 s | 123: >=10.45 G of 10.93 G children avoidable; 122: zero output | authored orders (`plan-advice.md`) |
+| B: multi-level expansion | 129 VPT_LoadArray@3, 128 @2, 125/126 AIPT_Store | 0.11 + 0.39 + 0.38 + 0.45 s | 0.12 + 0.06 + 0.17 + 0.24 s | 129: 0.36 G probes at the L2 search cap (~16 G/s) + 1.4 GB writes = ~25 ms | orders for 128/125/126; 129 unchanged |
+| C: duplicates, field load | 132 VPT_LoadField@3 | 0.44 s (jython 2.94 s) | 0.23 s (jython 0.25 s) | bitset-union replay 0.6-0.9 ms/round | static load relation first (order) |
+| C: duplicates, assignment | 118/119 VPT_Assign (jython) | 41.98 G candidates; sort/unique 10.19 s | 3.29 G sorted rows; sort/unique 1.01 s | union read+write model 0.8-12.9 ms/round | grouped-union hole with raw fallback |
+
+Whole program (fixpoint, two runs, `final-validate.sh`): scala 4.29 s, soot
+4.86 s, kotlin 4.24 s, jython 4.64 s; SRDatalog 9.44 / 9.93 / 10.52 s live,
+jython 15.10 s published: 2.0-3.3x. Remaining split (profile): scala joins
+2.75 s + sort/unique 0.71 + subtract 0.27 + merge 0.45; jython joins 3.00 s +
+sort/unique 1.01 + subtract 0.21 + merge 0.28.
+
+**Class B decision (measured):** the triangle-style fused kernel was the plan
+for VPT_LoadArray, but after the orders that class is 0.12 + 0.06 s on scala
+(0.04 s jython); a kernel at the ~25 ms bound would save under 0.1 s of
+4.29 s. The largest remaining items are elsewhere:
+- 136/143/145 run the same body three times for three heads (0.52 s scala,
+  1.02 s jython): one body evaluation writing three arenas would remove two
+  of them.
+- AIPT_Store@2/@3 (0.41 s scala), VPT_LoadField@3 (0.23 s scala, 0.25 s
+  jython), VPT_Assign@1 (0.64 s jython).
+- Per-launch fixed cost of survivor dispatches (~100 µs median across 400+
+  rounds per version).
