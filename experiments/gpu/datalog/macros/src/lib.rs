@@ -10,48 +10,50 @@ pub fn device_storage(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// `print_rounds` or `print_rounds(manual("rule@delta" => path, ...))`: the
-/// named rule versions call a hand-written function in place of the generated
-/// hole (`cq_gpu_datalog_core::print::Manual`).
+/// `print_rounds(manual("rule@delta" => path, ...), observe(...))`. Each
+/// section is optional; [`cq_gpu_datalog_core::print::HoleHooks`] documents
+/// the arguments and return type of each hook.
 #[proc_macro]
 pub fn print_rounds(input: TokenStream) -> TokenStream {
     cq_stage::pass::<cq_lang_datalog_round::Program, syn::Expr>(input.into(), |source, args| {
-        cq_gpu_datalog_core::print::compile_with(source, &manual(args)?)
+        cq_gpu_datalog_core::print::compile_with(source, &hooks(args)?)
     })
     .into()
 }
 
-fn manual(args: proc_macro2::TokenStream) -> syn::Result<cq_gpu_datalog_core::print::Manual> {
+fn hooks(args: proc_macro2::TokenStream) -> syn::Result<cq_gpu_datalog_core::print::HoleHooks> {
     use syn::parse::{ParseStream, Parser};
-    let mut manual = cq_gpu_datalog_core::print::Manual::new();
-    if args.is_empty() {
-        return Ok(manual);
-    }
-    let entries = |input: ParseStream| {
-        let name: syn::Ident = input.parse()?;
-        if name != "manual" {
-            return Err(syn::Error::new_spanned(name, "expected manual(\"rule@delta\" => path, ...)"));
-        }
-        let content;
-        syn::parenthesized!(content in input);
-        let mut entries = Vec::new();
-        while !content.is_empty() {
-            let label: syn::LitStr = content.parse()?;
-            content.parse::<syn::Token![=>]>()?;
-            let path: syn::Path = content.parse()?;
-            entries.push((label, path));
-            if !content.is_empty() {
-                content.parse::<syn::Token![,]>()?;
+    let parse = |input: ParseStream| {
+        let mut hooks = cq_gpu_datalog_core::print::HoleHooks::default();
+        while !input.is_empty() {
+            let name: syn::Ident = input.parse()?;
+            let entries = if name == "manual" {
+                &mut hooks.manual
+            } else if name == "observe" {
+                &mut hooks.observe
+            } else {
+                return Err(syn::Error::new_spanned(name, "expected manual(...) or observe(...)"));
+            };
+            let content;
+            syn::parenthesized!(content in input);
+            while !content.is_empty() {
+                let label: syn::LitStr = content.parse()?;
+                content.parse::<syn::Token![=>]>()?;
+                let path: syn::Path = content.parse()?;
+                if entries.insert(label.value(), path).is_some() {
+                    return Err(syn::Error::new_spanned(label, format!("duplicate {name} hook")));
+                }
+                if !content.is_empty() {
+                    content.parse::<syn::Token![,]>()?;
+                }
+            }
+            if !input.is_empty() {
+                input.parse::<syn::Token![,]>()?;
             }
         }
-        Ok(entries)
+        Ok(hooks)
     };
-    for (label, path) in entries.parse2(args)? {
-        if manual.insert(label.value(), path).is_some() {
-            return Err(syn::Error::new_spanned(label, "rule version replaced twice"));
-        }
-    }
-    Ok(manual)
+    parse.parse2(args)
 }
 
 #[proc_macro]

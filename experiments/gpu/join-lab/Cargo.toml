@@ -1,0 +1,15 @@
+[package]
+name = "join-lab"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpu-datalog-runtime = { path = "../datalog-runtime" }
+cq-gpu-runtime = { path = "../printer-runtime" }
+cuda-device.workspace = true
+cuda-core.workspace = true
+cuda-host.workspace = true
+rccl-cub.workspace = true
+rccl-memory.workspace = true
+serde_json.workspace = true

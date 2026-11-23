@@ -1409,7 +1409,22 @@ fold may keep its count, failure, claim-cursor and pool words in its arena's
 resident words
 (GPU-ResidentMeta): they are zero on entry, the last block to finish
 publishes count and failure and re-zeroes them, so a launch attempt neither
-allocates nor clears metadata.
+allocates nor clears metadata. A spread single-chain dispatch whose first step
+expands a radix or run lookup keyed by root columns first runs a select kernel
+(GPU-RootSelect): it decodes only the key columns of each root row, tests
+membership in that lookup's provider over all its runs, and appends the
+positions that match to a position list (one atomic per warp). The dispatch
+reads its root through that list; its domain is the list's device count and
+its spread tile is recomputed from it on the device, so no count is read back.
+A dropped row would have expanded to no children, so the published multiset is
+unchanged; only the order of roots may differ.
+\begin{mathpar}
+\Rule{GPU-RootSelect}{d.\mathsf{partition}=\mathsf{Spread}(m)\quad d\text{ has one chain}\quad
+ \text{its first step expands }\mathsf{lookup}(P,K)\text{, }P\text{ a radix or run provider, }K\text{ root columns}}
+ {\mathsf{roots}(d)=\{\,i<|D|\mid \exists\,\text{run }r\text{ of }P:\ P_r[K(D_i)]\neq\emptyset\,\}\quad
+  \mathsf{tile}=\min(m,\max(1,\lceil|\mathsf{roots}(d)|/g\rceil))\quad
+  \text{the published multiset equals the unselected dispatch's}}
+\end{mathpar}
 GPU-ProgramLaunch records either invocation occupancy (capped by root parts),
 program one-block preparation, or a program resident launch envelope. One-block
 preparation requires the one-part partition. Each kernel owns one optional
@@ -1579,11 +1594,14 @@ change the result.
  {\text{omitting the terminal fence preserves }\textsc{GPU-Arena}}
 \end{mathpar}
 The recorded output protocol \code{reserve\_previous}, accepted only by the arena
-terminal, starts each invocation of a hole with the last validated count of
-that hole as its capacity (zero at first use). Holes whose heads share one
+terminal, starts each invocation of a hole with a capacity hint: at least the
+last validated count of that hole (zero at first use), raised toward twice the
+hole's highest validated count as long as that stays within a small byte
+budget (measured on scala: 1,806 of 20,285 attempts were shortfalls with the
+last count alone, 423 with this hint). Holes whose heads share one
 candidate arena keep separate counts, selected by the recorded Round hole
 index. A keys-only attempt uses its leased arena slot's full row capacity,
-which is at least that count. The remembered count is an
+which is at least that hint. The hint is an
 initial capacity, not a bound: the kernel counts every candidate and writes
 only in bounds; an arithmetic failure aborts (BE-Abort); a capacity shortfall
 discards the attempt and reruns it with the full required capacity against the

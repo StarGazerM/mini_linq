@@ -1724,6 +1724,45 @@ impl Kernel<'_, '_> {
         })
     }
 
+    /// Formal rule GPU-RootSelect: the select kernel's per-row test, `__member_found`
+    /// for the chain's first lookup, when that lookup is a range expansion of
+    /// a radix or run provider keyed by root columns. Only the key columns are
+    /// decoded from `source`. `None` when the chain does not start that way.
+    /// The row planner records the test's parameter uses (the caller scopes them).
+    fn root_select(&mut self, operations: &[Operation], source: &str) -> syn::Result<Option<TokenStream>> {
+        // The root strip's own tile and flatten come first.
+        let Some(Operation::Lookup { provider, keys, membership: false, negated: false, smallest: None }) =
+            operations.iter().find(|operation| !matches!(operation, Operation::Tile | Operation::Flatten))
+        else {
+            return Ok(None);
+        };
+        if self.virtual_range.as_deref() == Some(provider.as_str())
+            || (self.compiler.rows.radix_provider(provider).is_none() && !self.compiler.rows.run_provider(provider))
+        {
+            return Ok(None);
+        }
+        let mut row = DeviceRow::default();
+        let mut declarations = TokenStream::new();
+        let mut live = BTreeSet::new();
+        for key in keys {
+            live.insert(self.compiler.slot(key)?);
+        }
+        for &slot in &live {
+            let id = format_ident!("__code_{slot}");
+            let ty = self.code_type(slot);
+            declarations.extend(quote!(let mut #id: #ty = 0;));
+            row.0.insert(slot, quote!(#id));
+        }
+        let load = self.compiler.rows.source_columns(source, quote!(__position), quote!(__row), Some(&live))?;
+        let load = row.rewrite(load)?;
+        let lookup = row.rewrite(self.compiler.lookup(provider, keys, true)?)?;
+        Ok(Some(quote! {
+            #declarations
+            if __live { #load }
+            #lookup
+        }))
+    }
+
     fn scalar_operations(
         &mut self,
         operations: &[Operation],
@@ -3493,6 +3532,10 @@ fn translate_with_metadata(
         let mut host_domains = Vec::new();
         let mut combine_bodies = Vec::new();
         let mut dispatch_share: Option<ShareSites> = None;
+        // GPU-RootSelect: the select kernel's per-row test, its chain domain,
+        // and the row planner's parameter uses for that test.
+        let mut root_select: Option<(TokenStream, syn::Ident)> = None;
+        let mut select_uses = BTreeSet::new();
         for (chain_index, chain) in chains.iter().enumerate() {
             let domain = format_ident!("__cq_domain_{chain_index}");
             let enabled = format_ident!("__cq_enabled_{chain_index}");
@@ -3594,6 +3637,41 @@ fn translate_with_metadata(
                 compiler
                     .rows
                     .source_columns(&chain.source, quote!(__position), quote!(__row), Some(&live))?
+            };
+            // GPU-RootSelect: a spread single chain whose first step expands
+            // a radix/run lookup keyed by root columns first runs a select
+            // kernel that keeps the root positions with at least one match;
+            // the dispatch's root reads those positions only.
+            let select_test = if chains.len() == 1
+                && chain.stored.is_none()
+                && matches!(execution.partition, cq_lang_sequence::gpu::Partition::Spread { .. })
+            {
+                // The select kernel's uses are the row planner's facts for its
+                // own test; the dispatch keeps its own (and also reads them).
+                let dispatch_uses = compiler.rows.abi_uses();
+                compiler.rows.begin_abi_uses();
+                let test = generator.root_select(&chain.operations, &chain.source)?;
+                select_uses = compiler.rows.abi_uses();
+                for name in &dispatch_uses {
+                    compiler.rows.use_parameter(&format_ident!("{name}"));
+                }
+                test
+            } else {
+                None
+            };
+            let source = if let Some(test) = select_test {
+                for name in ["__cq_select", "__cq_select_count"] {
+                    let id = format_ident!("{name}");
+                    parameters.push(abi_parameter(id.clone(), syn::parse_quote!(*const u32)));
+                    arguments.push(abi_argument(id.clone(), quote!(#id.ptr() as *const u32)));
+                }
+                root_select = Some((test, domain.clone()));
+                quote! {
+                    let __position = *__cq_select.add(__position as usize) as u64;
+                    #source
+                }
+            } else {
+                source
             };
             generator.strips = execution.chains[chain_index]
                 .strips
@@ -3787,8 +3865,21 @@ fn translate_with_metadata(
                     }
                 }
             };
+            // GPU-RootSelect: the root domain is the selected count, and the
+            // spread tile is resized from it (GPU-RootSpread's formula).
+            let select_shadow = match (&root_select, &execution.partition) {
+                (Some(_), cq_lang_sequence::gpu::Partition::Spread { max_rows }) => {
+                    let max_rows = *max_rows as u64;
+                    quote! {
+                        let #domain: u32 = *__cq_select_count;
+                        let #tile: u32 = ((#domain as u64).div_ceil((__blocks as u64).max(1)).clamp(1, #max_rows)) as u32;
+                    }
+                }
+                _ => quote!(),
+            };
             bodies.push(quote! {
                 if #enabled {
+                    #select_shadow
                     let __partial_base = #chain_index * __blocks as usize;
                     #outside_declare
                     #root_loop
@@ -3960,6 +4051,74 @@ fn translate_with_metadata(
                 }
         }, &compiler.rows, launch, shared_u32)?;
         kernels.push(dispatch_abi.definition());
+        // GPU-RootSelect: the select kernel (one warp-aggregated append per
+        // warp of kept root positions) and its launch before the dispatch.
+        let select_launch = if let Some((test, domain)) = &root_select {
+            let name = format_ident!("__cq_sequence_select_{index}_{module_name}");
+            let mut declarations = parameters.clone();
+            let mut call_arguments = arguments.clone();
+            for (declaration, argument) in declarations.iter_mut().zip(call_arguments.iter_mut()) {
+                if declaration.0 == "__cq_select" || declaration.0 == "__cq_select_count" {
+                    declaration.1 = syn::parse_quote!(*mut u32);
+                    let id = &declaration.0;
+                    argument.1 = quote!(#id.ptr());
+                }
+            }
+            let body = quote! {
+                unsafe {
+                    let __lane = ::cuda_device::warp::lane_id();
+                    let __below = ::cuda_device::warp::lanemask_lt();
+                    let __stride = ::cuda_device::thread::gridDim_x() as u64 * 256;
+                    let mut __warp_base = ::cuda_device::thread::blockIdx_x() as u64 * 256
+                        + (::cuda_device::thread::threadIdx_x() - __lane) as u64;
+                    while __warp_base < #domain as u64 {
+                        let __position = __warp_base + __lane as u64;
+                        let __live = __position < #domain as u64;
+                        #test
+                        let __keep = __live && __member_found;
+                        let __ballot = ::cuda_device::warp::ballot_sync(u32::MAX, __keep);
+                        if __ballot != 0 {
+                            let __leader = __ballot.trailing_zeros();
+                            let mut __at = 0u32;
+                            if __lane == __leader {
+                                __at = ::cuda_device::atomic::DeviceAtomicU32::from_ptr(__cq_select_count)
+                                    .fetch_add(__ballot.count_ones(), ::cuda_device::atomic::AtomicOrdering::Relaxed);
+                            }
+                            let __at = ::cuda_device::warp::shuffle_sync(u32::MAX, __at, __leader);
+                            if __keep {
+                                *__cq_select.add((__at + (__ballot & __below).count_ones()) as usize) = __position as u32;
+                            }
+                        }
+                        __warp_base += __stride;
+                    }
+                }
+            };
+            // The row planner's uses for the test, plus the select scalars.
+            let mut kernel_uses = select_uses.clone();
+            kernel_uses.extend([domain.to_string(), "__cq_select".to_owned(), "__cq_select_count".to_owned()]);
+            let abi = CheckedKernel::lower(&name, quote! {
+                #[kernel]
+                #[launch_bounds(256)]
+                #[launch_contract(domain=1,block=(256,1,1))]
+            }, declarations, kernel_uses, body, &compiler.rows, Launch::InvocationOccupancy, 0)?;
+            kernels.push(abi.definition());
+            let probe = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(1,256,0)));
+            let prepare = abi.prepare(quote!(::cuda_core::LaunchConfig1D::new(__cq_select_grid,256,0)));
+            let call = abi.call(quote!(__cq_pool.stream()), quote!(&__cq_select_prepared), quote!(__cq_select_grid), call_arguments)?;
+            quote! {
+                let __cq_select = unsafe { ::cq_gpu_runtime::Buffer::<u32>::uninitialized(__cq_pool.clone(), (#domain as usize).max(1))? };
+                let __cq_select_count = ::cq_gpu_runtime::Buffer::<u32>::zeroed(__cq_pool.clone(), 1)?;
+                {
+                    let __cq_select_probe = #probe?;
+                    let __cq_select_grid = ::cq_gpu_runtime::launch_grid_for_kernel(
+                        __cq_select_probe.function(), (#domain as usize).div_ceil(256).max(1), 256, 0)?;
+                    let __cq_select_prepared = #prepare?;
+                    #call?;
+                }
+            }
+        } else {
+            quote!()
+        };
         let combine_kernel = format_ident!("__cq_sequence_combine_{index}_{module_name}");
         let combine_abi = if whole_reduction {
             let mut combine_uses = output_uses;
@@ -4059,11 +4218,12 @@ fn translate_with_metadata(
         use cq_lang_sequence::gpu::InitialCapacity;
         let initial = match (&execution.capacity, capacity) {
             (InitialCapacity::Zero, _) => quote!(0usize),
-            // Formal rule GPU-ReservePrevious: a recorded previous-count hint is
-            // not a bound; validate full count and failure flags, then replay any
-            // undersized attempt against unchanged inputs before publication.
+            // Formal rule GPU-ReservePrevious: the per-hole capacity hint (the
+            // last validated count, raised toward twice the hole's high-water
+            // mark within a small byte cap) is not a bound. Validate and
+            // replay against unchanged inputs on a miss.
             (InitialCapacity::PreviousCount, _) if arena.is_some() && final_output => {
-                quote!(__cq_arena.previous_count())
+                quote!(__cq_arena.capacity_hint(&__cq_arena_packing))
             }
             (InitialCapacity::PreviousCount, _) => {
                 return Err(error(
@@ -4304,6 +4464,7 @@ fn translate_with_metadata(
         launches.push(quote! {
             #packing_setup
             #(#host_domains)*
+            #select_launch
             #launch_setup
             #partials_setup
             #meta_setup

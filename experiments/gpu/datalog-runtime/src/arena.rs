@@ -8,6 +8,22 @@ use std::{any::Any, sync::Arc};
 /// costs more than allocating it again. The hole's count hint is still kept.
 const RETAINED_SLOT_BYTES: usize = 1 << 30;
 
+// Cap speculative storage, not the live output: a large historical spike must
+// not keep imposing that allocation on every hole in subsequent rounds.
+const SPECULATIVE_SLOT_BYTES: usize = 8 << 20;
+
+// Growth slack above the last count: half of it, at most this many bytes. A
+// growing hole above the speculative cap otherwise fails whenever it grows
+// (jython: 1.65 s of failed attempts); the slack follows the last result, so a
+// past spike does not keep imposing it.
+const GROWTH_SLACK_BYTES: usize = 256 << 20;
+
+#[derive(Clone, Copy, Default)]
+struct HoleCounts {
+    last: usize,
+    high: usize,
+}
+
 /// Reusable storage for generated Sequence terminals on one pool stream.
 ///
 /// A lease exclusively reserves a slot. Published batches keep that slot and
@@ -21,7 +37,7 @@ const RETAINED_SLOT_BYTES: usize = 1 << 30;
 pub struct CandidateArena {
     pool: Arc<Pool>,
     slots: Vec<Arc<Buffer<u64>>>,
-    previous_counts: Vec<usize>,
+    previous_counts: Vec<HoleCounts>,
     hole: usize,
     resident: Option<Arc<Buffer<u32>>>,
 }
@@ -41,21 +57,31 @@ impl CandidateArena {
     /// Select the Round hole whose hint the next terminal reads and records.
     pub fn hole(&mut self, hole: usize) -> &mut Self {
         if self.previous_counts.len() <= hole {
-            self.previous_counts.resize(hole + 1, 0);
+            self.previous_counts.resize(hole + 1, HoleCounts::default());
         }
         self.hole = hole;
         self
     }
-    /// Initial capacity hint for the explicitly recorded reserve_previous protocol:
-    /// the selected hole's last validated count (zero on its first invocation).
-    /// This is not a bound or a live length; every attempt must validate its count.
+    /// The selected hole's last validated count (zero before its first run).
     pub fn previous_count(&self) -> usize {
-        self.previous_counts.get(self.hole).copied().unwrap_or(0)
+        self.previous_counts.get(self.hole).map_or(0, |counts| counts.last)
+    }
+    /// Reserve for growth beyond the high-water mark only within a bounded
+    /// byte budget, and for growth beyond the last count by at most half of it
+    /// within a bounded slack. Always honor the previous result.
+    pub fn capacity_hint(&self, packing: &Packing) -> usize {
+        let Some(counts) = self.previous_counts.get(self.hole) else { return 0 };
+        let word_bytes = packing.word_bits() as usize / 8;
+        let budget_rows = SPECULATIVE_SLOT_BYTES / word_bytes;
+        let slack = (counts.last / 2).min(GROWTH_SLACK_BYTES / word_bytes);
+        (counts.last + slack).max(counts.high.saturating_mul(2).min(budget_rows))
     }
     /// Remember the selected hole's fully validated count, including an empty result.
     pub fn record_count(&mut self, rows: usize) {
         let hole = self.hole;
-        self.hole(hole).previous_counts[hole] = rows;
+        let counts = &mut self.hole(hole).previous_counts[hole];
+        counts.last = rows;
+        counts.high = counts.high.max(rows);
     }
     /// GPU-ResidentMeta: at least `words` resident metadata words, zero on
     /// entry. Each dispatch that uses them must leave every word zero again in
@@ -326,14 +352,24 @@ pub fn concatenate_batches<W: Word>(
     batches: &[CandidateBatch],
 ) -> Result<Buffer<W>> {
     let ranges = batches.iter().map(|batch| (batch, 0, batch.len())).collect::<Vec<_>>();
-    concatenate_ranges(pool, packing, &ranges)
+    concatenate(pool, packing, &ranges, false)
 }
 
-/// [`concatenate_batches`] over `(batch, first row, rows)` ranges.
+/// Read-only admission input over initialized candidate ranges. Unlike the
+/// public concatenation, a single range may share its immutable storage.
 pub(crate) fn concatenate_ranges<W: Word>(
     pool: Arc<Pool>,
     packing: &Packing,
     ranges: &[(&CandidateBatch, usize, usize)],
+) -> Result<Buffer<W>> {
+    concatenate(pool, packing, ranges, true)
+}
+
+fn concatenate<W: Word>(
+    pool: Arc<Pool>,
+    packing: &Packing,
+    ranges: &[(&CandidateBatch, usize, usize)],
+    allow_shared: bool,
 ) -> Result<Buffer<W>> {
     if W::BITS != packing.word_bits() {
         return Err("candidate concatenation word width differs from packing".into());
@@ -361,6 +397,19 @@ pub(crate) fn concatenate_ranges<W: Word>(
     rows.checked_mul(bytes_per_word)
         .ok_or("candidate concatenation byte count overflow")?;
     crate::stats::trace_step(&pool, "admit/concatenate", rows, bytes_per_word);
+    if let [(batch, first, count)] = ranges {
+        if allow_shared && Arc::ptr_eq(&pool, batch.pool()) {
+            // Only share identical native element types (the batch stores
+            // u64 lanes), not a type-punned or differently aligned buffer.
+            if let Some(buffer) = (batch.buffer() as &dyn Any).downcast_ref::<Buffer<W>>() {
+                // SAFETY: finish published an immutable, initialized prefix;
+                // the retained slot cannot be leased again while this view lives.
+                if let Some(view) = unsafe { buffer.shared_subrange(*first, *count)? } {
+                    return Ok(view);
+                }
+            }
+        }
+    }
     // SAFETY: the disjoint copies below initialize exactly the allocated prefix
     // before any subsequent operation on the same stream can consume it.
     let output = unsafe { Buffer::<W>::uninitialized(pool.clone(), rows)? };
@@ -388,6 +437,32 @@ pub(crate) fn concatenate_ranges<W: Word>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admission_subrange_retains_slot_but_public_concatenation_is_owned() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let packing = Packing::new(&[64])?;
+        let mut arena = CandidateArena::new(pool.clone());
+        let lease = arena.reserve(packing.clone(), 8)?;
+        let base = lease.buffer().cu_deviceptr();
+        // SAFETY: the sole writer initializes four lanes on the pool stream.
+        let batch = unsafe {
+            lease.buffer().write_async(&[2, 3, 5, 7])?;
+            lease.finish(4, vec![])?
+        };
+        let view = concatenate_ranges::<u64>(pool.clone(), &packing, &[(&batch, 1, 2)])?;
+        assert_eq!(view.cu_deviceptr(), base + 8);
+        assert!(unsafe { view.shared_subrange(2, 1) }.is_err());
+        let owned = concatenate_batches::<u64>(pool, &packing, std::slice::from_ref(&batch))?;
+        assert_ne!(owned.cu_deviceptr(), base);
+        drop(batch);
+        let next = arena.reserve(packing, 8)?;
+        assert_ne!(next.buffer().cu_deviceptr(), base);
+        drop(arena);
+        assert_eq!(view.to_host()?, [3, 5]);
+        assert_eq!(owned.to_host()?, [2, 3, 5, 7]);
+        Ok(())
+    }
 
     #[test]
     fn row_capacity_uses_native_lanes() {

@@ -307,6 +307,21 @@ impl SetOps<'_> {
             accepted.len() as u32,
             flags.ptr(),
         )?;
+        self.select_flagged(unique, &flags, output)
+    }
+
+    pub(crate) fn subtract_indexed<W: Word>(&self, unique: &SortedBatch<W>, index: &crate::pair_bitmap::Index) -> Result<SortedBatch<W>> {
+        let rows = unique.len();
+        crate::stats::trace_step(self.pool, "subtract/bitmap", rows, std::mem::size_of::<W>() + 4);
+        crate::phases::admission_scope!(c"admit/bitmap-subtract", rows);
+        let flags = unsafe { Buffer::<u32>::uninitialized(self.pool.clone(), rows)? };
+        let output = unsafe { Buffer::<W>::uninitialized(self.pool.clone(), rows)? };
+        index.absent(unique.buffer.ptr().cast(), rows, flags.ptr())?;
+        self.select_flagged(unique, &flags, output)
+    }
+
+    fn select_flagged<W: Word>(&self, unique: &SortedBatch<W>, flags: &Buffer<u32>, output: Buffer<W>) -> Result<SortedBatch<W>> {
+        let rows = unique.len();
         let cub = rccl_cub::cuda::Program::load(self.pool.context())?;
         let launch = cub.on(self.pool.stream())?;
         let mut count = Native::<u64>::new(&self.pool, 1)?;

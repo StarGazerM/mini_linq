@@ -361,9 +361,10 @@ fn tc_emits_resident_waves_admission_and_publication() {
         source.matches("release_cached_scratch").count(),
         program.context.strata.len()
     );
+    // Unused pool storage is trimmed between strata, not after the last one.
     assert_eq!(
         source.matches("release_unused").count(),
-        program.context.strata.len()
+        program.context.strata.len() - 1
     );
     assert!(source.contains("std :: mem :: drop"));
 }

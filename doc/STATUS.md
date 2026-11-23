@@ -8,6 +8,26 @@ reproducible. [PLANNING-REDESIGN Progress/P6b](PLANNING-REDESIGN.md) is the
 newer evidence source; proposals under “Left work” and “Decisions needed”
 are historical, not a replacement for that plan.
 
+**DOOP joins, join lab (2026-11-23, on `668187e7` plus this change):** machine
+caps, real-round captures and per-class kernel labs in
+[`experiments/gpu/join-lab`](../experiments/gpu/join-lab/DESIGN.md) drove five
+engine changes (CHANGELOG): GPU-RootSelect, the capacity hint, admission
+maintenance (membership cache, zero-copy sort input, no final trim), 12
+authored rule-version orders, and a grouped-union `VPT_Assign` hole.
+- `doop-gpu --features manual-joins` fixpoint, two runs each, counts
+  unchanged, xalan exact: scala 4.29 / 4.28 s, soot 4.87 / 4.84 s, kotlin
+  4.23 / 4.25 s, jython 4.64 / 4.63 s (from 8.66, 8.17, 9.04, 20.77 s).
+  SRDatalog: 9.44, 9.93, 10.52 s live; jython 15.10 s published. Jython
+  peak pool 20.2 GB (41.5 before).
+- `srd-doop-gpu` (emitter changes only): scala 9.31 / 9.32 s, soot 6.63 /
+  6.64 s, kotlin 9.38 / 9.42 s.
+- Remaining cost (lab evidence): sort/unique and subtraction run near DRAM
+  bandwidth, so further gains need fewer candidates; per-launch fixed costs
+  of the generated survivor dispatches; the cost planner lacks recursive
+  row/round facts to choose the authored orders itself
+  (`/data/design-notes/join-lab/planner-facts.md`). Not applied: RCCL patch
+  clearing only live radix lookback (jython −0.29 s, scala −0.07 s).
+
 **Hand-written `VPT_LoadArray@3` (2026-11-20, on `ccae0575` plus this
 change):** the join in SRDatalog's plan shape (distinct delta `baseheap`
 first, `heap` attached last, scan balanced over the grid) runs in place of

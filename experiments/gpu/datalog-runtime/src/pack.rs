@@ -4,7 +4,7 @@ use gpu_device_columns::{Buffer, Pool};
 use std::{cell::RefCell, fmt::Debug, ops::RangeInclusive, rc::Rc, sync::Arc};
 
 mod sealed {
-    pub trait Sealed {}
+    pub trait Sealed: 'static {}
     impl Sealed for u64 {}
     impl Sealed for u128 {}
     impl<const L: usize> Sealed for [u64; L] {}

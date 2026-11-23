@@ -615,6 +615,19 @@ registers ptxas picks and halve the resident blocks. Before this, only the
 first expansion was shared (GPU-RootShare), so a small first expansion with a
 large later one ran on one block while the rest of the GPU waited.
 
+A spread single-chain dispatch whose first step expands a radix or run lookup
+keyed by root columns first runs a generated select kernel (GPU-RootSelect):
+it decodes only the key columns of each root row, tests membership in that
+provider, and appends matching positions with one atomic per warp. The
+dispatch then reads its root through that list, with its domain and spread
+tile taken from the device count, so no barrier-heavy expansion scans run for
+rows that expand to nothing. Most DOOP rule versions driven by a large delta
+are of this kind (nearly all delta rows miss). `doop-gpu --features
+manual-joins` emits 66 select kernels; fixpoint scala 8.66 -> 6.42 s, kotlin
+9.04 -> 6.28 s, soot 8.17 -> 7.03 s, jython 20.77 -> 19.54 s (with the
+per-hole capacity hint of GPU-ReservePrevious), counts unchanged. Measurements
+and the lab kernels behind it are in [`join-lab/DESIGN.md`](join-lab/DESIGN.md).
+
 `print_rounds(manual("rule@delta" => path, ...))` replaces the named rule
 versions' generated holes with hand-written functions; the printer passes the
 candidate arena, what each input reads (checked by the function), the scan and
@@ -627,6 +640,36 @@ On scala it scans 0.36 G rows instead of 23.2 G for the same 175 M candidates;
 the rule takes 0.11 s instead of 4.74 s. The generated plan shape is the open
 work: drive a delta from its distinct join keys and expand columns that only
 reach the head last.
+
+It also replaces both versions of `VPT_Assign`
+(`varpointsto(heap, to) :- assign(from, to), varpointsto(heap, from)`,
+[`doop/src/manual_assign.rs`](doop/src/manual_assign.rs)). Within one version a
+repeated `(heap, to)` can only come from different `from` witnesses, so the
+hole groups the delta by its head column and writes the union of the
+witnesses' child ranges (bit fragments ORed per group, large groups split over
+blocks) once per key; the plain expansion is kept for invocations whose raw
+child count is too small for the union to pay (threshold from 1,260 paired
+per-round timings). It publishes the generated plan's support, not its bag;
+admission is set-valued. On jython it writes 1.81 G candidates instead of
+41.98 G: fixpoint 17.57 -> 7.05 s, peak pool 38.8 -> 18.0 GB; scala 5.22 ->
+5.03 s. A manual hole's inputs are positional in layout order, so authored
+orders that reorder layouts must update its `READS` (the strict check rejects
+a mismatch).
+
+`doop-gpu` authors 12 rule-version orders (`plan(...)` in
+[`doop/src/lib.rs`](doop/src/lib.rs); evidence in
+`/data/design-notes/join-lab/plan-advice.md`): e.g. the cast rule probes
+`heapallocation_type` by the bound heap before expanding `supertypeof` (95.65%
+fewer children), and jython's field load starts from the static load
+relation (2.49 s -> 0.28 s). The cost planner keeps the written orders: its
+static evidence has no recursive row or round facts.
+
+Admission maintenance: subtraction tests a capped (2 GiB) exact membership
+cache of committed two-field keys before falling back to run searches;
+single-range candidate batches are sorted from a shared view instead of being
+copied first (132.7 GB less on jython); a hole's capacity hint adds half its
+last count (at most 256 MiB) so growing holes stop rerunning; the final
+stratum no longer trims the pool.
 
 The GPU Structures stage validates target support without inheriting the CPU
 batching policy. GPU batches are selected by Sequence decomposition; explicit

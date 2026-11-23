@@ -474,20 +474,20 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
     varpointsto(heap, var) :-
             assignheapallocation(heap, var, inmethod),
             reachable(inmethod);
-    varpointsto(heap, to) :-
+    VPT_Assign: varpointsto(heap, to) :-
             assign(from, to),
             varpointsto(heap, from);
-    varpointsto(heap, to) :-
+    VPT_AssignLocal: varpointsto(heap, to) :-
             reachable(inmethod),
             assignlocal(from, to, inmethod),
             varpointsto(heap, from);
-    varpointsto(heap, to) :-
+    VPT_Cast: varpointsto(heap, to) :-
             reachable(inmethod),
             assigncast(type_, from, to, inmethod),
             supertypeof(type_, heaptype),
             heapallocation_type(heap, heaptype),
             varpointsto(heap, from);
-    arrayindexpointsto(baseheap, heap) :-
+    AIPT_Store: arrayindexpointsto(baseheap, heap) :-
             reachable(inmethod),
             storearrayindex(from, base, inmethod),
             varpointsto(baseheap, base),
@@ -505,7 +505,7 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             heapallocation_type(baseheap, baseheaptype),
             componenttype(baseheaptype, basecomponenttype),
             supertypeof(type_, basecomponenttype);
-    varpointsto(heap, to) :-
+    VPT_LoadField: varpointsto(heap, to) :-
             reachable(inmethod),
             loadinstancefield(base, signature, to, inmethod),
             varpointsto(baseheap, base),
@@ -524,12 +524,12 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             virtualmethodinvocation_descriptor(invocation, descriptor),
             methodlookup(simplename, descriptor, heaptype, tomethod),
             thisvar(tomethod, this);
-    instancefieldpointsto(heap, fld, baseheap) :-
+    IFPT_Store: instancefieldpointsto(heap, fld, baseheap) :-
             reachable(inmethod),
             storeinstancefield(from, base, fld, inmethod),
             varpointsto(heap, from),
             varpointsto(baseheap, base);
-    staticfieldpointsto(heap, fld) :-
+    SFPT_Store: staticfieldpointsto(heap, fld) :-
             reachable(inmethod),
             storestaticfield(from, fld, inmethod),
             varpointsto(heap, from);
@@ -561,21 +561,21 @@ pub fn $name(facts: $crate::Facts) -> $crate::Results {
             reachable(inmethod),
             staticmethodinvocation(invocation, tomethod, inmethod);
 
-    reachable(tomethod) :-
+    Reachable_SpecialCall: reachable(tomethod) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             specialmethodinvocation_base(invocation, base),
             varpointsto(heap, base),
             methodinvocation_method(invocation, tomethod),
             thisvar(tomethod, this);
-    callgraphedge(invocation, tomethod) :-
+    CallGraphEdge_SpecialCall: callgraphedge(invocation, tomethod) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             specialmethodinvocation_base(invocation, base),
             varpointsto(heap, base),
             methodinvocation_method(invocation, tomethod),
             thisvar(tomethod, this);
-    varpointsto(heap, this) :-
+    VPT_SpecialCall: varpointsto(heap, this) :-
             reachable(inmethod),
             instruction_method(invocation, inmethod),
             specialmethodinvocation_base(invocation, base),

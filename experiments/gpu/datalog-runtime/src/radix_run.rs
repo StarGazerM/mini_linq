@@ -756,6 +756,7 @@ pub struct DeviceRadixRun<W: Word, O: OffsetWord, C: DeviceItemColumns> {
     /// Construction witness, not inferred from C=(): set admission guarantees
     /// unit offsets and disjoint complete keys across all accepted runs.
     full_key_set: bool,
+    pair_cache: crate::pair_bitmap::Cache,
     /// Caller-recorded sort window; native occurrence builders default to the full word.
     active_bits: u32,
     /// The current publication's descriptors, uploaded once on first read and
@@ -783,6 +784,7 @@ impl<W: Word, O: OffsetWord, C: DeviceItemColumns> DeviceRadixRun<W, O, C> {
             #[cfg(feature = "packed-radix")]
             packed: None,
             full_key_set: false,
+            pair_cache: Default::default(),
             active_bits: W::BITS,
             published: Mutex::new(None),
             order,
@@ -1263,7 +1265,7 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
             .as_ref().map_or(0, |snapshot| snapshot.descriptor_bytes());
         #[cfg(feature = "packed-radix")]
         let bytes = bytes + self.packed_set().map_or(0, PackedSet::allocated_bytes);
-        bytes
+        bytes + self.pair_cache.index.as_ref().map_or(0, |cache| cache.bytes())
     }
 
     /// Initialized keys, materialized offsets (if any), and radix directories.
@@ -1311,6 +1313,9 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
                 snapshot.tables.runs().wrapping_add(snapshot.run_count()).cast::<PackedView<W>>()
             });
             return unsafe { set.subtract_batch(unique, views) };
+        }
+        if let Some(index) = &self.pair_cache.index {
+            return self.set_ops().subtract_indexed(&unique, index);
         }
         let accepted = self.runs.iter().map(|run| runs::RunView {
             ptr: run.keys.ptr(), len: run.key_count,
@@ -1381,7 +1386,11 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
                 }
             });
         }
-        self.uncommitted(unique.expect("at least one piece"))
+        let unique = unique.expect("at least one piece");
+        if W::BITS == 64 {
+            self.pair_cache.consider(|| self.len(), unique.len(), packing, order.map(|(columns, _)| columns));
+        }
+        self.uncommitted(unique)
     }
 
     /// Sort and deduplicate complete keys without changing committed state.
@@ -1494,6 +1503,9 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
                 return Ok(());
             }
         }
+        // Retain the original delta only for the optional acceleration cache;
+        // a merged run below can contain much more than just this publication.
+        let cache_delta = self.pair_cache.update_needed().then(|| batch.clone());
         let mut merged = batch;
         let mut keep = self.runs.len();
         while keep > 0 && self.runs[keep - 1].item_count / self.params.ratio < merged.len() {
@@ -1506,6 +1518,24 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
             keep -= 1;
         }
         let segment = Arc::new(self.set_segment(merged)?);
+        if let Some(delta) = cache_delta {
+            // Take first: any failed submission invalidates the shadow index,
+            // while leaving the still-published immutable runs untouched.
+            let index = match self.pair_cache.index.take() {
+                Some(index) => Some(index),
+                None => {
+                    let index = self.pair_cache.begin(&self.pool)?;
+                    if let Some(index) = &index {
+                        for run in &self.runs { index.insert(run.keys.ptr().cast(), run.key_count)?; }
+                    }
+                    index
+                }
+            };
+            if let Some(index) = index {
+                index.insert(delta.buffer().ptr().cast(), delta.len())?;
+                if index.complete()? { self.pair_cache.index = Some(index); }
+            }
+        }
         self.runs.truncate(keep);
         self.runs.push(segment);
         *self.published.get_mut().expect("radix publication cache") = None;
@@ -1521,6 +1551,7 @@ impl<W: Word, O: OffsetWord> DeviceRadixRun<W, O, ()> {
         if !self.pool.shares_memory(batch.buffer().pool()) {
             return Err("set batch memory differs".into());
         }
+        self.pair_cache = Default::default();
         #[cfg(feature = "packed-radix")]
         if let Some(backing) = self.packed.as_deref_mut() {
             if let Some(packing) = backing.packing.get().filter(|_| batch.len() > SMALL_RUN_ROWS) {
@@ -2636,6 +2667,7 @@ impl<K, W: Word + 'static, O: OffsetWord> RadixLayout<K, (), W, O, ()> {
             // sealing and its stream barrier over later fixpoint iterations.
             packed: None,
             full_key_set: true,
+            pair_cache: Default::default(),
             active_bits: snapshot.active_bits,
             published: Mutex::new(None),
             kernels: ItemKernels {
@@ -3924,6 +3956,34 @@ mod set_representation_tests {
             let high = Buffer::from_host(pool.clone(), &[101_u64])?;
             let interval = retained.probe_intervals(&pool, &low, &high, 1)?.to_host()?;
             assert_eq!(interval[0], IntervalProbe { groups: 66, items: 66 });
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pair_cache_is_read_only_until_publication_and_falls_back_exactly() -> Result<()> {
+        let pool = Pool::new(0, 0, 0)?;
+        let sorted = |xs: &[u64]| -> Result<runs::SortedBatch<u64>> {
+            assert!(xs.windows(2).all(|p| p[0] < p[1]));
+            unsafe { runs::SortedBatch::from_sorted(Buffer::from_host(pool.clone(), xs)?, xs.len()) }
+        };
+        for overflow in [2u64, 2 << 8, 8 << 8, 255] { // pages, ranks, major domain, minor domain
+            let mut state = DeviceRadixRun::<u64, u32, ()>::new_set(pool.clone(), PARAMS, 16)?;
+            state.pair_cache.index = Some(crate::pair_bitmap::Index::tiny(&pool)?);
+            unsafe { state.append_sorted(sorted(&[0, 1 << 8 | 1])?)?; }
+            let snapshot = state.snapshot()?;
+            let keys = sorted(&[0, 1, 1 << 8 | 1])?;
+            for _ in 0..2 {
+                assert_eq!(state.uncommitted(keys.clone())?.buffer().to_host()?, [1]);
+            }
+            assert!(state.pair_cache.index.is_some());
+            unsafe { state.append_sorted(sorted(&[overflow])?)?; }
+            assert!(state.pair_cache.index.is_none());
+            assert!(state.uncommitted(sorted(&[overflow])?)?.is_empty());
+            let probe = Buffer::from_host(pool.clone(), &[overflow])?;
+            assert_eq!(snapshot.probe_keys(&pool, &probe, 1)?.to_host()?[0].count, 0);
+            state.replace_sorted(sorted(&[1])?)?;
+            assert_eq!(state.uncommitted(keys.clone())?.buffer().to_host()?, [0, 1 << 8 | 1]);
         }
         Ok(())
     }

@@ -3,6 +3,12 @@
 #[cfg(feature = "manual-joins")]
 pub mod manual;
 
+#[cfg(feature = "manual-joins")]
+pub mod manual_assign;
+
+#[cfg(feature = "capture-joins")]
+mod capture;
+
 /// The dataset's process-global dictionary is the only symbol representation.
 /// Device kernels receive its integer codes and never resolve strings.
 pub struct DoopSymbols;
@@ -24,7 +30,21 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
 macro_rules! engine {
     ($($print:tt)*) => {
         doop_shared::doop_engine!(run, pipeline {
-            incremental = ::cq_datalog::passes::incremental(driver(delta_first););
+            incremental = ::cq_datalog::passes::incremental(
+                driver(delta_first);
+                plan(VPT_Cast, delta(reachable), order(reachable, assigncast, varpointsto, heapallocation_type, supertypeof));
+                plan(VPT_Cast, delta(varpointsto), order(varpointsto, assigncast, reachable, heapallocation_type, supertypeof));
+                plan(AIPT_Store, delta(varpointsto@2), order(varpointsto@2, storearrayindex, reachable, heapallocation_type@5, componenttype, varpointsto@3, heapallocation_type@4, supertypeof));
+                plan(AIPT_Store, delta(varpointsto@3), order(varpointsto@3, storearrayindex, reachable, heapallocation_type@4, varpointsto@2, heapallocation_type@5, componenttype, supertypeof));
+                plan(VPT_LoadArray, delta(varpointsto), order(reachable, loadarrayindex, varpointsto, var_type, heapallocation_type, componenttype, arrayindexpointsto, supertypeof));
+                plan(VPT_AssignLocal, delta(varpointsto), order(reachable, assignlocal, varpointsto));
+                plan(VPT_LoadField, delta(instancefieldpointsto), order(loadinstancefield, reachable, varpointsto, instancefieldpointsto));
+                plan(IFPT_Store, delta(varpointsto@3), order(storeinstancefield, reachable, varpointsto@3, varpointsto@2));
+                plan(SFPT_Store, delta(varpointsto), order(storestaticfield, reachable, varpointsto));
+                plan(Reachable_SpecialCall, delta(varpointsto), order(specialmethodinvocation_base, varpointsto, instruction_method, reachable, methodinvocation_method, thisvar));
+                plan(CallGraphEdge_SpecialCall, delta(varpointsto), order(specialmethodinvocation_base, varpointsto, instruction_method, reachable, methodinvocation_method, thisvar));
+                plan(VPT_SpecialCall, delta(varpointsto), order(specialmethodinvocation_base, varpointsto, instruction_method, reachable, methodinvocation_method, thisvar));
+            );
             storage_rewrites = [::cq_datalog_canonical::canonical(ordered), ::cq_gpu_datalog::device_storage(symbols(IStr => [0] crate::DoopSymbols))];
             cq = pipeline {
                 physical = [::cq_gpu_sequence::capture_constants];
@@ -57,10 +77,34 @@ macro_rules! engine {
     };
 }
 
-#[cfg(not(feature = "manual-joins"))]
+#[cfg(not(any(feature = "manual-joins", feature = "capture-joins")))]
 engine!(::cq_gpu_datalog::print_rounds);
 
-#[cfg(feature = "manual-joins")]
+#[cfg(all(feature = "manual-joins", not(feature = "capture-joins")))]
 engine!(::cq_gpu_datalog::print_rounds(manual(
+    "VPT_Assign@0" => crate::manual_assign::assign_delta,
+    "VPT_Assign@1" => crate::manual_assign::points_delta,
     "VPT_LoadArray@3" => crate::manual::vpt_load_array_delta_index
+)));
+
+// The offline oracle always comes from a generated kernel, even if both
+// features are enabled.
+#[cfg(feature = "capture-joins")]
+engine!(::cq_gpu_datalog::print_rounds(observe(
+    "VPT_LoadArray@3" => crate::capture::observe,
+    "VPT_SpecialCall@3" => crate::capture::observe,
+    "VPT_LoadField@3" => crate::capture::observe,
+    "varpointsto@3" => crate::capture::observe,
+    "VPT_Cast@4" => crate::capture::observe,
+    "VPT_Cast@0" => crate::capture::observe,
+    "Reachable_SpecialCall@3" => crate::capture::observe,
+    "reachable@3" => crate::capture::observe,
+    "CallGraphEdge_SpecialCall@3" => crate::capture::observe,
+    "callgraphedge@3" => crate::capture::observe,
+    "varpointsto@0" => crate::capture::observe,
+    "VPT_Assign@0" => crate::capture::observe,
+    "VPT_Assign@1" => crate::capture::observe,
+    "VPT_AssignLocal@0" => crate::capture::observe,
+    "VPT_LoadField@0" => crate::capture::observe,
+    "VPT_SpecialCall@0" => crate::capture::observe,
 )));

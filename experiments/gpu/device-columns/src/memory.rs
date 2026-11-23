@@ -464,6 +464,22 @@ impl<T: DeviceCopy> Buffer<T> {
             marker: PhantomData,
         })
     }
+    /// Borrow part of an already shared, immutable range, retaining its
+    /// backing allocation directly. An owning buffer returns `None`: a
+    /// borrowed `&Buffer` cannot extend an unshared allocation's lifetime.
+    ///
+    /// # Safety
+    /// As for [`Self::shared_slice`], the range must be initialized and
+    /// remain immutable until all stream-ordered reads of the result finish.
+    pub unsafe fn shared_subrange(&self, offset: usize, len: usize) -> Result<Option<Self>> {
+        if offset.checked_add(len).is_none_or(|end| end > self.len) {
+            return Err("shared subrange exceeds initialized range".into());
+        }
+        let Some(owner) = &self.owner else { return Ok(None) };
+        // The parent range was validated against `owner`, so the composed
+        // offset cannot overflow. The new view drops only this cloned Arc.
+        unsafe { Self::shared_slice(owner.clone(), self.offset + offset, len).map(Some) }
+    }
     pub fn ptr(&self) -> *mut T {
         self.cu_deviceptr() as *mut T
     }

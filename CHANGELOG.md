@@ -13,6 +13,33 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog / DOOP joins (measurements: `experiments/gpu/join-lab/DESIGN.md`).
+  GPU-RootSelect: a spread single-chain dispatch whose first step expands a
+  radix/run lookup keyed by root columns first runs a generated select
+  kernel (key columns only, warp-aggregated append); the dispatch reads its
+  roots through that list with domain and tile from the device count, so
+  rows that expand to nothing pay no cooperative expansion scans (66 select
+  kernels in `doop-gpu`). GPU-ReservePrevious: the capacity hint is at least
+  the last count, raised toward twice the hole's high-water mark within
+  8 MiB, plus half the last count up to 256 MiB (scala failed attempts
+  1,806 -> 423; jython 18.2 -> 17.5 s). Admission: subtraction tests a
+  capped (2 GiB) exact membership cache of committed two-field keys before
+  searching runs; single-range candidate batches sort from a shared buffer
+  view instead of a copy (132.7 GB less on jython); the final stratum no
+  longer trims the pool. `doop-gpu` authors 12 rule-version orders
+  (`plan(...)`, new rule labels in the shared DOOP program), and
+  `--features manual-joins` adds a grouped-union hole for both `VPT_Assign`
+  versions (jython candidates 41.98 G -> 1.81 G; publishes the generated
+  support, not its bag). `print_rounds(observe(...))` and doop
+  `--features capture-joins` record a rule version's inputs per round for
+  the new `experiments/gpu/join-lab` crate (caps, prefilter, probe, replay,
+  dedup, maintenance labs). `doop-gpu --features manual-joins` fixpoint,
+  8.66 -> 4.29 s scala, 8.17 -> 4.87 s soot, 9.04 -> 4.23 s kotlin,
+  20.77 -> 4.64 s jython (SRDatalog live 9.44 / 9.93 / 10.52 s, published
+  jython 15.10 s); jython peak pool 41.5 -> 20.2 GB; counts unchanged,
+  xalan exact. `srd-doop-gpu` (field-flow, emitter changes only): scala
+  10.86 -> 9.31 s, soot 7.30 -> 6.63 s, kotlin 10.75 -> 9.38 s.
+
 - GPU Datalog: hand-written rule holes. `print_rounds` takes
   `manual("rule@delta" => path, ...)` (`cq_gpu_datalog_core::print::Manual`,
   `compile_with`); a named rule version calls `path` with the candidate

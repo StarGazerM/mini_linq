@@ -160,7 +160,7 @@ fn previous_count_is_only_a_hint_and_retained_batches_stay_immutable() -> Result
     )?;
     let mut arena = gpu_datalog_runtime::CandidateArena::new(pool.clone());
     let mut retained = Vec::new();
-    for (rows, attempts) in [(1, 2), (2, 2), (1, 1), (0, 1), (1, 2)] {
+    for (rows, attempts) in [(1, 2), (2, 1), (1, 1), (0, 1), (1, 1)] {
         let delta_rows = vec![(0..rows).map(|x| vec![x, 7]).collect::<Vec<_>>()];
         let delta = relation::<(i32,i32),u64>(
             pool.clone(),

@@ -7,8 +7,10 @@
 //! [`DeviceRadixRun`] is the occurrence-preserving grouped index engine;
 //! [`RadixLayout`] is its typed relational view over one immutable publication.
 pub mod arena;
+pub mod capture;
 pub mod layout;
 pub mod pack;
+mod pair_bitmap;
 #[cfg(feature = "packed-radix")]
 pub mod packed_run;
 pub mod phases;

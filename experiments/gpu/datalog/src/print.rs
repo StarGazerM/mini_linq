@@ -450,16 +450,20 @@ pub(crate) fn reads_environment(cq: &round::cq::Program) -> bool {
 /// committed canonical layout; publication appends fresh rows to every layout.
 /// Constructors consume recorded merge tiles and auxiliary geometry.
 pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
-    compile_with(program, &Manual::new())
+    compile_with(program, &HoleHooks::default())
 }
 
-/// Hand-written replacements of rule holes, keyed `rule@delta` (the
-/// `GPU_DATALOG_PROFILE` label without its hole number). Each path is called
-/// in place of the generated hole function with the candidate arena, a
-/// `&[&str]` naming what each following argument reads (`delta R`,
-/// `R[columns]`, `keys R`), the scan when the rule has one, then the inputs in
-/// declaration order. It returns the hole's `CandidateBatch`.
-pub type Manual = BTreeMap<String, syn::Path>;
+/// Round printer hooks keyed by `rule@delta` (the profile label without `#hole`).
+#[derive(Default)]
+pub struct HoleHooks {
+    /// Replaces the generated hole. Receives the arena, read descriptions,
+    /// optional scan, and inputs in declaration order; returns a `CandidateBatch`.
+    pub manual: BTreeMap<String, syn::Path>,
+    /// Runs before the hole, with `(label, hole, iteration, reads, sources)`.
+    /// Returns `Result<impl FnOnce(usize) -> Result<()>>`; the completion
+    /// callback receives the raw candidate count before admission.
+    pub observe: BTreeMap<String, syn::Path>,
+}
 
 /// `rule@delta` of a rule version: its rule label (or head relation) and the
 /// delta occurrence it drives, `seed` for a seed version.
@@ -475,8 +479,8 @@ fn version_label(program: &Program, variant: usize, head: usize) -> String {
     format!("{label}@{delta}")
 }
 
-/// [`compile`] with the rule holes named in `manual` replaced.
-pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr> {
+/// [`compile`] with optional manual replacements and input observers.
+pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Expr> {
     let packed_aliases = PackedAliases::definitions(program)?;
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
@@ -576,6 +580,7 @@ pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr
     let mut owners = vec![0usize; program.holes.len()];
     let mut scans = BTreeMap::new();
     let mut replaced = BTreeMap::new();
+    let mut observed = BTreeMap::new();
     for stratum in &context.strata {
         for key in &stratum.keys {
             hosts.insert(key.name.to_string(), key.provider.ty.clone());
@@ -591,7 +596,11 @@ pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr
                     format!("{}{:?}", relation_name(layout.relation), layout.columns)
                 }
             });
-            if let Some(path) = manual.get(&version_label(program, rule.variant, rule.head)) {
+            let label = version_label(program, rule.variant, rule.head);
+            if let Some(path) = hooks.observe.get(&label) {
+                observed.insert(rule.hole, (path, label.clone(), scan.clone()));
+            }
+            if let Some(path) = hooks.manual.get(&label) {
                 replaced.insert(rule.hole, (path, scan));
             }
             if let Some(scan) = &rule.scan {
@@ -603,11 +612,11 @@ pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr
             }
         }
     }
-    if let Some(unknown) = manual.keys().find(|key| {
+    if let Some(unknown) = hooks.manual.keys().chain(hooks.observe.keys()).find(|key| {
         !context.strata.iter().flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps))
             .any(|rule| &version_label(program, rule.variant, rule.head) == *key)
     }) {
-        return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("manual hole `{unknown}` names no rule version")));
+        return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("hole hook `{unknown}` names no rule version")));
     }
     // Each hole is a separate function item: rustc type-checks a closure with
     // its enclosing body, so closures would keep the whole program one query.
@@ -631,8 +640,8 @@ pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr
             }
         }
         if !standalone {
-            if replaced.contains_key(&index) {
-                return Err(syn::Error::new(proc_macro2::Span::call_site(), "a manual hole cannot replace a hole reading local variables"));
+            if replaced.contains_key(&index) || observed.contains_key(&index) {
+                return Err(syn::Error::new(proc_macro2::Span::call_site(), "hole hooks require a standalone hole (no local variables)"));
             }
             return Ok(hole.invocation_pipeline()?.start(cq.to_token_stream())?);
         }
@@ -644,26 +653,35 @@ pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr
             None => (quote!(), quote!()),
         };
         let arguments: Vec<_> = parameters.iter().map(|(_, host, _)| quote!(&#host)).collect();
-        // A replaced hole compiles no generated kernel. Its function first
-        // receives what each following input reads, to check the order.
-        if let Some((path, scan)) = replaced.get(&index) {
+        let invocation = if let Some((path, scan)) = replaced.get(&index) {
             let described = scan.iter().cloned().chain(parameters.iter().map(|(_, host, _)| reads[&host.to_string()].clone()));
-            return Ok(quote!(#path(&mut *__cq_gpu_arena, &[#(#described),*], #scan_argument #(#arguments,)*)));
+            quote!(#path(&mut *__cq_gpu_arena, &[#(#described),*], #scan_argument #(#arguments,)*))
+        } else {
+            let invocation = hole.invocation_pipeline()?.start(cq.to_token_stream())?;
+            let arena = &device.relations[owners[index]].arena;
+            let declared = parameters.iter().map(|(parameter, _, ty)| quote!(#parameter: &#ty));
+            hole_items.push(quote!(
+                fn #function(
+                    __cq_gpu_arena: &mut #arena,
+                    #scan_parameter #(#declared,)*
+                ) -> ::gpu_datalog_runtime::CandidateBatch {
+                    #invocation
+                }
+            ));
+            quote!(#function(&mut *__cq_gpu_arena, #scan_argument #(#arguments,)*))
+        };
+        if let Some((path, label, scan)) = observed.get(&index) {
+            let described = scan.iter().cloned().chain(parameters.iter().map(|(_, host, _)| reads[&host.to_string()].clone()));
+            Ok(quote!({
+                let sources: &[&dyn ::gpu_datalog_runtime::capture::RowSource] = &[#scan_argument #(#arguments,)*];
+                let done = #path(#label, #index, __cq_gpu_round, &[#(#described),*], sources)?;
+                let batch = #invocation;
+                done(batch.len())?;
+                batch
+            }))
+        } else {
+            Ok(invocation)
         }
-        let invocation = hole.invocation_pipeline()?.start(cq.to_token_stream())?;
-        let arena = &device.relations[owners[index]].arena;
-        let declared = parameters
-            .iter()
-            .map(|(parameter, _, ty)| quote!(#parameter: &#ty));
-        hole_items.push(quote!(
-            fn #function(
-                __cq_gpu_arena: &mut #arena,
-                #scan_parameter #(#declared,)*
-            ) -> ::gpu_datalog_runtime::CandidateBatch {
-                #invocation
-            }
-        ));
-        Ok(quote!(#function(&mut *__cq_gpu_arena, #scan_argument #(#arguments,)*)))
     })?;
     // Setup and output run through the same partitioned runners as strata, so
     // the program body keeps only the owning locals rather than every
@@ -864,8 +882,9 @@ pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr
             "loop_until_empty" => quote!(loop { if !(#condition) { break; } #step }),
             _ => unreachable!("checked loop"),
         };
-        // Recorded scratch policy: candidate arenas live for the component, and
-        // cached scratch and unused pool storage are released after it.
+        // Trim between strata, but leave the final stratum's free pages in
+        // the pool for output materialization and eventual pool teardown.
+        let trim = (index + 1 < context.strata.len()).then(|| quote!(__cq_gpu_pool.release_unused()?;));
         let arenas = stratum.members.iter().map(|&i| {
             let arena = local("arena", i);
             let (ty, init) = (&device.relations[i].arena, &device.relations[i].arena_init);
@@ -888,7 +907,7 @@ pub fn compile_with(program: &Program, manual: &Manual) -> syn::Result<syn::Expr
                 Ok(())
             })?;
             ::cq_gpu_sequence_runtime::release_cached_scratch(&__cq_gpu_pool);
-            __cq_gpu_pool.release_unused()?;
+            #trim
             #released
         }));
     }

@@ -351,12 +351,12 @@ pub mod kernels {
 const READS: [&str; 8] = [
     "delta arrayindexpointsto",
     "heapallocation_type[0, 1]",
+    "supertypeof[0, 1]",
     "reachable[0]",
     "componenttype[0, 1]",
-    "supertypeof[0, 1]",
     "var_type[0, 1]",
-    "loadarrayindex[0, 1, 2]",
     "varpointsto[0, 1]",
+    "loadarrayindex[0, 1, 2]",
 ];
 
 thread_local! {
@@ -379,12 +379,12 @@ pub fn vpt_load_array_delta_index<KD, WD, KH, WH, KR, WR, KC, WC, KS, WS, KT, WT
     reads: &[&str],
     delta: &RadixLayout<KD, (), WD, u64, ()>,
     hat: &RadixLayout<KH, (), WH, u64, ()>,
+    supertype: &RadixLayout<KS, (), WS, u64, ()>,
     reachable: &RadixLayout<KR, (), WR, u64, ()>,
     component: &RadixLayout<KC, (), WC, u64, ()>,
-    supertype: &RadixLayout<KS, (), WS, u64, ()>,
     var_type: &RadixLayout<KT, (), WT, u64, ()>,
-    load: &RadixLayout<KL, (), WL, u64, ()>,
     points: &RadixLayout<KV, (), WV, u64, ()>,
+    load: &RadixLayout<KL, (), WL, u64, ()>,
 ) -> CandidateBatch
 where
     WD: Copy + Word + 'static,

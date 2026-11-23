@@ -1464,6 +1464,12 @@ positive merge-tile row count and per-family auxiliary block widths.
 The radix merge condition is $\mathrm{older.items}/r<\mathrm{newer.items}$
 (integer division); run-count differences from the former device-run threshold
 are maintenance cost changes, not relation changes.
+Dropping rows found in an accepted run may instead test a membership cache of
+the committed two-field words (a rank directory over the major field and
+bitmap pages over the minor one, under a byte budget), appended at
+publication. The committed runs stay authoritative: the cache answers exactly
+or is discarded (budget, capacity overflow), and then the runs are searched,
+so the fresh batch is the same.
 The current run and permutation kernels require exactly 256 threads;
 unsupported widths are rejected, never adjusted.
 A layout run built from an admitted delta permutes columns of a run whose
