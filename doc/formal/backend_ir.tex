@@ -1398,7 +1398,11 @@ its range again. Without a free slot the owner expands alone. The kernel holds
 one copy of the chain: a block resuming a published range passes once through
 the enclosing levels with every lane dead until it reaches that site, then
 runs its claimed batches. A block therefore no longer exhausts the descendants of the
-roots it claims. Only the assignment
+roots it claims. A shared dispatch without a whole reduction first limits its
+participating blocks to the launch's root count plus 32 helpers (at least one);
+blocks past that cohort return before touching root tickets, busy, hungry or
+finish words, and the count is fixed for the launch, so all participants agree
+on the finishing count. Only the assignment
 of roots and batches to blocks changes; the multiset of published rows is the
 declared partition's. The checker accepts any positive $m$ (the declared
 distributed tile when there is one), an optional expansion share on a spread
@@ -1769,6 +1773,10 @@ and encoded relational operands follow \textsc{GPU-Capture}.
 \Rule{GPU-RadixEncodedProbe}{v_1..v_q\text{ bound leading fields}\quad
  v_i\in\mathrm{dom}(f_i)}
  {[\ell,h]=[\mathsf{enc}(v)\cdot 0^{*},\ \mathsf{enc}(v)\cdot 1^{*}]\text{ formed once; whole-word compares, no }h{+}1}
+\Rule{GPU-RadixExactMember}{q=|K_{\mathrm{physical}}|\quad \ell=h=\mathsf{enc}(v)\quad
+ \mathrm{read}=\mathsf{membership}}
+ {\mathsf{found}\iff \exists i.\ \ell\in\rho_i\quad
+ \text{one exact search per visited run; stop at first hit}}
 \Rule{GPU-RadixSourceBuild}{S_K,S_V\text{ resident sources of }K,V\quad
  \pi\text{ recorded selection or identity}}
  {\mathsf{fromSources}=\mathsf{publish}(\mathsf{pack}_K(S_K\circ\pi),\ \mathsf{lanes}_V(S_V\circ\pi))}

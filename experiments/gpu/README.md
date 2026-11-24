@@ -654,7 +654,17 @@ admission is set-valued. On jython it writes 1.81 G candidates instead of
 41.98 G: fixpoint 17.57 -> 7.05 s, peak pool 38.8 -> 18.0 GB; scala 5.22 ->
 5.03 s. A manual hole's inputs are positional in layout order, so authored
 orders that reorder layouts must update its `READS` (the strict check rejects
-a mismatch).
+a mismatch). Identical delta `from` lists are interned per invocation, so each
+distinct list's union is ORed once (jython assignment kernels 718 -> 272 ms).
+
+The three virtual-dispatch versions (`varpointsto@3`, `reachable@3`,
+`callgraphedge@3`) read the same delta and the same eight-atom prefix
+([`doop/src/manual_dispatch.rs`](doop/src/manual_dispatch.rs)): the first of
+the three holes in a round materializes the prefix witnesses once (three
+`u32` per `methodlookup` witness, snapshot-versioned device hash indexes over
+all input runs), and each hole then projects its head from that buffer; only
+the VPT head expands `thisvar`. The family takes 73 ms instead of 505 ms on
+scala (70 vs 1,032 ms on jython).
 
 `doop-gpu` authors 12 rule-version orders (`plan(...)` in
 [`doop/src/lib.rs`](doop/src/lib.rs); evidence in
@@ -670,6 +680,13 @@ single-range candidate batches are sorted from a shared view instead of being
 copied first (132.7 GB less on jython); a hole's capacity hint adds half its
 last count (at most 256 MiB) so growing holes stop rerunning; the final
 stratum no longer trims the pool.
+
+Generated kernels: a membership test whose bound keys are the complete
+physical key searches each run once for the exact word instead of two
+interval bounds (GPU-RadixExactMember; scala -118 ms, prepared SRD scala
+-492 ms), and a shared dispatch keeps only its root count plus 32 helper
+blocks, so tiny selected domains no longer have hundreds of blocks polling the
+steal queue (95% of sampled warp time on a two-row launch).
 
 The GPU Structures stage validates target support without inheriting the CPU
 batching policy. GPU batches are selected by Sequence decomposition; explicit

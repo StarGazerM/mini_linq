@@ -1269,7 +1269,31 @@ impl<'a> Compiler<'a> {
             });
         }
         let (view, payload, order) = self.rows.provider(provider)?;
-        if self.rows.radix_provider(provider).is_some() {
+        let radix = self.rows.radix_provider(provider).is_some();
+        if membership {
+            // Formal rule GPU-RadixExactMember: a membership test on the complete
+            // physical key searches each run once for the exact word. The
+            // advertised lookup prefix can be shorter than the native physical
+            // key; only a complete key has identical interval ends.
+            let exact = if radix {
+                keys.len() == order.len()
+            } else {
+                self.analysis.gpu_bindings.native.get(provider)
+                    .is_some_and(|p| p.radix.key_types.len() == keys.len())
+            };
+            if exact {
+                let probe = self.radix_probe(provider, keys, None)?;
+                return Ok(quote! {
+                    let mut __member_found = false;
+                    if __live {
+                        #probe
+                        __member_found = __fits && ::gpu_datalog_runtime::radix_run::device::contains(
+                            #view.keys, __low);
+                    }
+                });
+            }
+        }
+        if radix {
             let probe = self.radix_probe(provider, keys, None)?;
             let run = format_ident!("__cq_run_{provider}");
             return Ok(if membership {
@@ -4071,6 +4095,23 @@ fn translate_with_metadata(
             let __abort_slot=__shared.add(40).cast::<u32>();
             #share_prologue
         };
+        // A tiny selected domain cannot feed a full resident grid. Retain a
+        // helper cohort for expansion steals, but keep excess blocks out of
+        // the root-ticket, busy/hungry and last-block atomics. The count is
+        // immutable for this launch, so all blocks agree on the finish count.
+        // Whole reductions still need every block's partial.
+        let share_cohort = (dispatch_share.is_some() && !whole_reduction).then(|| {
+            let roots = if root_select.is_some() {
+                quote!(*__cq_select_count)
+            } else {
+                quote!(if __cq_enabled_0 { __cq_domain_0 } else { 0 })
+            };
+            quote! {
+                let __roots: u32 = #roots;
+                let __blocks = __blocks.min(if __roots == 0 { 1 } else { __roots.saturating_add(32) });
+                if ::cuda_device::thread::blockIdx_x() >= __blocks { return; }
+            }
+        });
         // GPU-ExpansionShare: a stealing block tests the abort word after a
         // range it did not expand itself, so the word starts at zero.
         let share_abort = dispatch_share.as_ref().map(|_| {
@@ -4091,6 +4132,7 @@ fn translate_with_metadata(
             #[launch_contract(domain=1,block=(256,1,1),dynamic_shared_range=(#shared_u32,#shared_u32))]
         }, dispatch_parameters, uses, quote! {
                 unsafe {
+                    #share_cohort
                     #private_cursor
                     #prologue
                     #share_abort

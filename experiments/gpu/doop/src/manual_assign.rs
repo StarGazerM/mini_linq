@@ -52,6 +52,20 @@ unsafe fn ma_reserve(active: bool, total: *mut u32) -> u32 {
     warp::shuffle_u64_sync(MASK, first as u64, 0) as u32 + (mask & warp::lanemask_lt()).count_ones()
 }
 
+/// Inclusive warp prefix and total, for enumerating the children of 32 words.
+#[device]
+fn ma_prefix32(value: u32) -> (u32, u32) {
+    let lane = warp::lane_id();
+    let mut sum = value;
+    let mut step = 1;
+    while step < 32 {
+        let prior = warp::shuffle_u64_sync(MASK, sum as u64, lane.wrapping_sub(step) & 31) as u32;
+        if lane >= step { sum += prior; }
+        step *= 2;
+    }
+    (sum - value, warp::shuffle_u64_sync(MASK, sum as u64, 31) as u32)
+}
+
 #[cuda_device::cuda_module]
 pub mod assign_manual_kernels {
     use super::*;
@@ -566,6 +580,193 @@ pub mod assign_manual_kernels {
         }
     }
 
+    // A row is the exact set of live source IDs of one compact head group.
+    #[kernel] #[launch_bounds(256)] #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn ma_members(edge: *const u64, n: usize, gmap: *const u32, width: usize, members: *mut u32) {
+        unsafe {
+            let (mut i, step) = ma_thread();
+            while i < n {
+                let e = *edge.add(i);
+                if e as u32 != 0 {
+                    let f = (e as u32 - 1) as usize;
+                    let g = (*gmap.add((e >> 32) as usize) - 1) as usize;
+                    DeviceAtomicU32::from_ptr(members.add(g * width + f / 32)).fetch_or(1 << (f % 32), Relaxed);
+                }
+                i += step;
+            }
+        }
+    }
+
+    /// Hashes choose a probe sequence only. Every reuse compares all membership
+    /// words; only the thread that wins a vacant slot allocates a union ID.
+    #[kernel] #[launch_bounds(256)] #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn ma_intern(members: *const u32, groups: usize, width: usize, table: *mut u32, mask: usize,
+                     owner: *mut u32, rank: *mut u32, catalog: *mut u32, count: *mut u32) {
+        unsafe {
+            let (id, stride) = ma_thread();
+            let lane = warp::lane_id();
+            let mut g = id / 32;
+            while g < groups {
+                let row = members.add(g * width);
+                let mut h = 0x811c9dc5u32;
+                let mut k = lane as usize;
+                while k < width {
+                    h = (h ^ *row.add(k)).wrapping_mul(0x01000193);
+                    k += 32;
+                }
+                // Mix lane index before reducing so permuting words across lanes
+                // does not produce identical probe sequences.
+                h = h.wrapping_mul(0x85ebca6b).rotate_left(lane);
+                let mut step = 16;
+                while step != 0 {
+                    h ^= warp::shuffle_xor_u64(h as u64, step) as u32;
+                    step /= 2;
+                }
+                let mut slot = h as usize & mask;
+                loop {
+                    let mut other = 0;
+                    if lane == 0 {
+                        let cell = DeviceAtomicU32::from_ptr(table.add(slot));
+                        other = cell.load(Relaxed);
+                        if other == 0 {
+                            if let Err(old) = cell.compare_exchange(0, g as u32 + 1, Relaxed, Relaxed) {
+                                other = old;
+                            }
+                        }
+                    }
+                    other = warp::shuffle_u64_sync(MASK, other as u64, 0) as u32;
+                    if other == 0 {
+                        if lane == 0 {
+                            let r = DeviceAtomicU32::from_ptr(count).fetch_add(1, Relaxed);
+                            *rank.add(g) = r;
+                            *catalog.add(r as usize) = g as u32;
+                            *owner.add(g) = g as u32;
+                        }
+                        break;
+                    }
+                    let rep = (other - 1) as usize;
+                    let proposed = members.add(rep * width);
+                    let mut equal = true;
+                    let mut k = lane as usize;
+                    while k < width && equal {
+                        equal = *row.add(k) == *proposed.add(k);
+                        k += 32;
+                    }
+                    if warp::ballot_sync(MASK, !equal) == 0 {
+                        if lane == 0 { *owner.add(g) = rep as u32; }
+                        break;
+                    }
+                    slot = (slot + 1) & mask;
+                }
+                g += stride / 32;
+            }
+        }
+    }
+
+    /// Each warp handles 32 possible sources of one representative group.
+    #[kernel] #[launch_bounds(256)] #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn ma_union_reps(members: *const u32, catalog: *const u32, reps: usize, width: usize,
+                         offset: *const u64, length: *const u32, frag: *const u64, words: usize, bits: *mut u32) {
+        unsafe {
+            let (id, stride) = ma_thread();
+            let mut task = id / 32;
+            while task < reps * width {
+                let r = task / width;
+                let k = task % width;
+                let g = *catalog.add(r) as usize;
+                let mut present = *members.add(g * width + k);
+                while present != 0 {
+                    let f = k * 32 + present.trailing_zeros() as usize;
+                    let list = frag.add(*offset.add(f) as usize);
+                    let end = *length.add(f);
+                    let mut j = warp::lane_id();
+                    while j < end {
+                        let v = *list.add(j as usize);
+                        DeviceAtomicU32::from_ptr(bits.add(r * words + (v >> 32) as usize)).fetch_or(v as u32, Relaxed);
+                        j += 32;
+                    }
+                    present &= present - 1;
+                }
+                task += stride / 32;
+            }
+        }
+    }
+
+    /// Two passes over only the representative rows. The first stores one
+    /// local offset per 32-word tile; the second materializes compact children.
+    #[kernel] #[launch_bounds(256)] #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn ma_rep_children(bits: *const u32, reps: usize, words: usize, tiles: usize, counts: *mut u32,
+                           tile_offset: *mut u32, bases: *const u64, wdecode: *const u32, children: *mut u32) {
+        unsafe {
+            let (id, stride) = ma_thread();
+            let lane = warp::lane_id();
+            let mut i = id / 32;
+            while i < reps * tiles {
+                let r = i / tiles;
+                let word = i % tiles * 32 + lane as usize;
+                let mut v = if word < words { *bits.add(r * words + word) } else { 0 };
+                if warp::ballot_sync(MASK, v != 0) != 0 {
+                    let (prefix, total) = ma_prefix32(v.count_ones());
+                    if children.is_null() {
+                        if lane == 0 {
+                            *tile_offset.add(i) = DeviceAtomicU32::from_ptr(counts.add(r)).fetch_add(total, Relaxed);
+                        }
+                    } else if v != 0 {
+                        let mut dest = *bases.add(r) as usize + *tile_offset.add(i) as usize + prefix as usize;
+                        let page = *wdecode.add(word) << 5;
+                        while v != 0 {
+                            *children.add(dest) = page | v.trailing_zeros();
+                            dest += 1;
+                            v &= v - 1;
+                        }
+                    }
+                }
+                i += stride / 32;
+            }
+        }
+    }
+
+    #[kernel] #[launch_bounds(256)] #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn ma_rep_layout(groups: usize, owner: *const u32, rank: *const u32, counts: *const u32,
+                         bases: *mut u64, out_off: *mut u64, totals: *mut u64) {
+        unsafe {
+            let (mut g, stride) = ma_thread();
+            while g < groups {
+                let o = *owner.add(g) as usize;
+                let r = *rank.add(o) as usize;
+                let n = u64::from(*counts.add(r));
+                *out_off.add(g) = DeviceAtomicU64::from_ptr(totals).fetch_add(n, Relaxed);
+                if g == o { *bases.add(r) = DeviceAtomicU64::from_ptr(totals.add(1)).fetch_add(n, Relaxed); }
+                g += stride;
+            }
+        }
+    }
+
+    /// A group's children are already distinct. Replicate coalesced ranges
+    /// rather than scanning another mostly-empty bitmap per output group.
+    #[kernel] #[launch_bounds(256)] #[launch_contract(domain=1,block=(256,1,1))]
+    pub fn ma_copy_groups(groups: usize, owner: *const u32, rank: *const u32, counts: *const u32,
+                          bases: *const u64, out_off: *const u64, children: *const u32,
+                          gdecode: *const u32, rev: bool, out: *mut u64) {
+        unsafe {
+            let mut g = thread::blockIdx_x() as usize;
+            while g < groups {
+                let r = *rank.add(*owner.add(g) as usize) as usize;
+                let head = u64::from(*gdecode.add(g));
+                let src = children.add(*bases.add(r) as usize);
+                let dst = out.add(*out_off.add(g) as usize);
+                let mut i = thread::threadIdx_x() as usize;
+                let len = *counts.add(r) as usize;
+                while i < len {
+                    let c = u64::from(*src.add(i));
+                    *dst.add(i) = if rev { (head << 32) | c } else { (c << 32) | head };
+                    i += 256;
+                }
+                g += thread::gridDim_x() as usize;
+            }
+        }
+    }
+
     /// Decode each set bit to a canonical candidate, respecting the arena capacity.
     #[kernel]
     #[launch_bounds(256)]
@@ -820,6 +1021,64 @@ fn grouped<KD, WD: Copy + Word + 'static, KR, WR: Copy + Word + 'static>(
         let nc = read(&nc)?;
         let (groups, words) = (nc[0] as usize, nc[1] as usize);
         debug_assert!(groups > 0 && words > 0);
+
+        // Interning pays for a second matrix (group × source) to eliminate
+        // repeated fragment visits and publishes. Bound both matrices, as in
+        // the ordinary striped route; fall back if lists turn out dissimilar.
+        const MAX_WORDS: usize = 1 << 26;
+        let width = sources.div_ceil(32);
+        if (estimate >= 50_000_000 || *FORCE_RAW == Some(false))
+            && groups.saturating_mul(width) <= MAX_WORDS
+        {
+            let members = zero(groups * width)?;
+            m.ma_members(stream, &m.prepare_ma_members(cfg(n))?, edges.ptr(), n, gmap.ptr(), width, members.ptr())?;
+            let slots = (groups * 2).next_power_of_two();
+            let table = zero(slots)?;
+            let owner = u32s(groups)?;
+            let rank = u32s(groups)?;
+            let catalog = u32s(groups)?;
+            let count = zero(1)?;
+            m.ma_intern(stream, &m.prepare_ma_intern(cfg(groups * 32))?, members.ptr(), groups, width,
+                        table.ptr(), slots - 1, owner.ptr(), rank.ptr(), catalog.ptr(), count.ptr())?;
+            let reps = read(&count)?[0] as usize;
+            if reps * 2 <= groups && reps.saturating_mul(words) <= MAX_WORDS {
+                let bits = zero(reps * words)?;
+                m.ma_union_reps(stream, &m.prepare_ma_union_reps(cfg(reps * width * 32))?, members.ptr(),
+                                catalog.ptr(), reps, width, off.ptr(), length.ptr(), frag.ptr(), words, bits.ptr())?;
+                let tiles = words.div_ceil(32);
+                let tile_offset = u32s(reps * tiles)?;
+                let counts = zero(reps)?;
+                let bases = u64s(reps)?;
+                let out_off = u64s(groups)?;
+                let totals = Buffer::<u64>::zeroed(pool.clone(), 2)?;
+                let child_kernel = m.prepare_ma_rep_children(cfg(reps * tiles * 32))?;
+                m.ma_rep_children(stream, &child_kernel, bits.ptr(), reps, words, tiles, counts.ptr(),
+                                  tile_offset.ptr(), bases.ptr(), wdecode.ptr(), std::ptr::null_mut())?;
+                m.ma_rep_layout(stream, &m.prepare_ma_rep_layout(cfg(groups))?, groups, owner.ptr(), rank.ptr(),
+                                counts.ptr(), bases.ptr(), out_off.ptr(), totals.ptr())?;
+                let sizes = totals.to_host()?;
+                gpu_datalog_runtime::record_readback();
+                let rows = usize::try_from(sizes[0])?;
+                if rows > u32::MAX as usize {
+                    return Err("assignment candidate count exceeds arena limit".into());
+                }
+                if sizes[1] <= MAX_WORDS as u64 {
+                    let child = u32s(sizes[1] as usize)?;
+                    m.ma_rep_children(stream, &child_kernel, bits.ptr(), reps, words, tiles, counts.ptr(),
+                                      tile_offset.ptr(), bases.ptr(), wdecode.ptr(), child.ptr())?;
+                    let lease = arena.reserve(pack.clone(), rows)?;
+                    m.ma_copy_groups(stream, &m.prepare_ma_copy_groups(cfg(groups * 256))?, groups, owner.ptr(),
+                                     rank.ptr(), counts.ptr(), bases.ptr(), out_off.ptr(), child.ptr(),
+                                     gdecode.ptr(), rev, lease.buffer().ptr())?;
+                    arena.record_count(rows);
+                    if gpu_datalog_runtime::trace_kernels() {
+                        eprintln!("gpu_manual_hole\trule=VPT_Assign@{}\tdelta={n}\tsources={sources}\tread_children={children}\tgroups={groups}\twords={words}\trepresentatives={reps}\trepresentative_children={}\tcandidates={rows}", u8::from(rev), sizes[1]);
+                    }
+                    log("reuse", rows);
+                    return unsafe { lease.finish(rows, owners()) };
+                }
+            }
+        }
 
         // Stripe the group dimension at 256 MiB, with a minimum of one group.
         // A capacity miss does not require a second radix lookup. When the

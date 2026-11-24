@@ -13,6 +13,20 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog / DOOP joins, round 2 (reports `/data/design-notes/join-lab/round2-*.md`).
+  GPU-RadixExactMember: a membership read on the complete physical key
+  searches each run once for the exact word instead of two interval bounds.
+  A shared dispatch keeps only its root count plus 32 helper blocks (tiny
+  selected domains had 95% of sampled warp time polling the steal queue).
+  `doop-gpu --features manual-joins`: the three virtual-dispatch versions
+  share one materialized prefix per round (`doop/src/manual_dispatch.rs`;
+  family 505 -> 73 ms scala, 1,032 -> 70 ms jython), and the `VPT_Assign`
+  union interns identical source lists (718 -> 272 ms jython). Fixpoint, two
+  runs each, counts unchanged, xalan exact, GPU gate passing: scala 4.08 ->
+  3.60 s, soot 4.67 -> 4.11 s, kotlin 4.11 -> 3.47 s, jython 4.51 -> 3.00 s
+  (SRDatalog 9.44 / 9.93 / 10.52 s live, 15.10 s published). `srd-doop-gpu`:
+  scala 8.52 -> 7.94 s, soot 5.42 -> 5.02 s, kotlin 8.47 -> 7.99 s.
+
 - GPU Datalog / DOOP joins (measurements: `experiments/gpu/join-lab/DESIGN.md`).
   GPU-RootSelect: a spread single-chain dispatch whose first step expands a
   radix/run lookup keyed by root columns first runs a generated select
