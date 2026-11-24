@@ -180,6 +180,7 @@ pub fn translate(input: TokenStream) -> TokenStream {
 }
 
 struct ArenaArgument {
+    frontier: bool,
     head: bool,
     arena: syn::Expr,
 }
@@ -187,14 +188,20 @@ struct ArenaArgument {
 impl syn::parse::Parse for ArenaArgument {
     fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
         mod keyword {
+            syn::custom_keyword!(frontier);
             syn::custom_keyword!(head);
+        }
+        let frontier = input.peek(keyword::frontier) && input.peek2(syn::Token![;]);
+        if frontier {
+            input.parse::<keyword::frontier>()?;
+            input.parse::<syn::Token![;]>()?;
         }
         let head = input.peek(keyword::head) && input.peek2(syn::Token![;]);
         if head {
             input.parse::<keyword::head>()?;
             input.parse::<syn::Token![;]>()?;
         }
-        Ok(Self { head, arena: input.parse()? })
+        Ok(Self { frontier, head, arena: input.parse()? })
     }
 }
 
@@ -204,6 +211,8 @@ impl syn::parse::Parse for ArenaArgument {
 /// recorded output protocol still controls counting and capacity retries.
 /// `translate_arena(head; &mut arena)` requests grouped append and returns
 /// `Option<CandidateBatch>`: `None` for append, `Some` for legacy publication.
+/// Prefix either terminal with `frontier;` to require checked two-pass
+/// expansion. An ineligible terminal is an error, not a scheduling fallback.
 #[proc_macro]
 pub fn translate_arena(input: TokenStream) -> TokenStream {
     cq_stage::Sequence::<Physical, Structures, Sequence>::pass::<syn::Expr>(input.into(), |physical: &Physical, structures: &Structures, source: &Sequence, arguments| {
@@ -213,9 +222,12 @@ pub fn translate_arena(input: TokenStream) -> TokenStream {
                 "GPU Sequence translate_arena requires an explicit arena expression",
             ));
         }
-        let ArenaArgument { head, arena } = syn::parse2(arguments)?;
+        let ArenaArgument { frontier, head, arena } = syn::parse2(arguments)?;
         let source = cq_gpu_sequence_core::runs::record_representation(physical, structures, source)?;
-        let analysis = cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
+        let mut analysis = cq_lang_sequence::check_grading(physical, structures, &source, &cq_gpu_sequence_core::machine())?;
+        if frontier {
+            cq_lang_sequence::gpu::request_frontier(&source, &mut analysis)?;
+        }
         if head {
             cq_gpu_sequence_core::translate_arena_head(physical, structures, &source, analysis, &arena)
         } else {
@@ -281,6 +293,22 @@ mod tests {
         assert_eq!(marked.arena, syn::parse_quote!(&mut *arena));
         assert!(syn::parse2::<ArenaArgument>(quote!(head;)).is_err());
         assert!(syn::parse2::<ArenaArgument>(quote!(other; &mut arena)).is_err());
+    }
+
+    #[test]
+    fn frontier_precedes_the_optional_head_and_requires_an_arena() {
+        let bare: ArenaArgument = syn::parse_quote!(frontier);
+        assert!(!bare.frontier && !bare.head);
+        let ordinary: ArenaArgument = syn::parse_quote!(frontier; head);
+        assert!(ordinary.frontier && !ordinary.head);
+        assert_eq!(ordinary.arena, syn::parse_quote!(head));
+        let grouped: ArenaArgument = syn::parse_quote!(frontier; head; &mut arena);
+        assert!(grouped.frontier && grouped.head);
+        assert_eq!(grouped.arena, syn::parse_quote!(&mut arena));
+        for invalid in [quote!(frontier;), quote!(frontier; head;),
+                        quote!(head; frontier; arena), quote!(frontier; frontier; arena)] {
+            assert!(syn::parse2::<ArenaArgument>(invalid).is_err());
+        }
     }
 
     #[test]

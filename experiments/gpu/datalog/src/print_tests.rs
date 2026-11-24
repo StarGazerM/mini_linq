@@ -852,3 +852,41 @@ fn grouped_abi_rejects_cross_epoch_replay_and_arbitrary_expressions() {
         print::compile(&bound).unwrap();
     }
 }
+
+#[test]
+fn frontier_prefixes_only_its_terminal_and_preserves_the_arena_abi() {
+    let (round, binding) = multihead_round(syn::parse_quote!(*y));
+    for head in [false, true] {
+        let args = if head { quote!(binding = #binding, head_cursor) } else { quote!(binding = #binding) };
+        let bound = crate::bindings::compile_with(&round, args).unwrap();
+        let mut hooks = print::HoleHooks::default();
+        hooks.frontier.insert("FirstA@seed".into());
+        if !head {
+            hooks.observe.insert("FirstA@seed".into(), syn::parse_quote!(watch));
+        }
+        let source = print::compile_with(&bound, &hooks).unwrap().to_token_stream().to_string();
+        let expected = if head && std::env::var_os("CQ_EXPANSION_COUNTERS").is_none() {
+            quote!(frontier; head; &mut *__cq_gpu_arena)
+        } else {
+            quote!(frontier; &mut *__cq_gpu_arena)
+        };
+        assert_eq!(source.matches("frontier ;").count(), 1);
+        assert!(source.contains(&expected.to_string()));
+        if !head {
+            assert!(source.contains("watch ("));
+        }
+    }
+}
+
+#[test]
+fn frontier_rejects_unknown_versions_and_manual_replacements() {
+    let (round, binding) = multihead_round(syn::parse_quote!(*y));
+    let bound = crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap();
+    let mut hooks = print::HoleHooks::default();
+    hooks.frontier.insert("Typo@0".into());
+    assert!(print::compile_with(&bound, &hooks).unwrap_err().to_string().contains("`Typo@0` names no rule version"));
+    hooks.frontier.clear();
+    hooks.frontier.insert("FirstA@seed".into());
+    hooks.manual.insert("FirstA@seed".into(), syn::parse_quote!(replace));
+    assert!(print::compile_with(&bound, &hooks).unwrap_err().to_string().contains("`FirstA@seed` cannot be both manual and frontier"));
+}

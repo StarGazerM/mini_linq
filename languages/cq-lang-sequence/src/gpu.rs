@@ -145,6 +145,10 @@ pub enum Share {
     /// batches publishes its expansion state to one of `slots` pool slots;
     /// idle blocks copy the state and claim batches until all are claimed.
     Expansions { slots: usize, min_chunks: usize },
+    /// GPU-FrontierResume: after its first batch, a producer may save an
+    /// expansion with at least `min_chunks` remaining. The second launch
+    /// partitions those saved batches among its blocks.
+    Frontier { slots: usize, min_chunks: usize },
 }
 
 /// Pool slots for published expansions under `Spread`.
@@ -153,6 +157,10 @@ pub const SHARE_SLOTS: usize = 256;
 /// of the expansion state and the claims cost about as much as a few batches,
 /// so only expansions with many batches left pay for them.
 pub const SHARE_MIN_CHUNKS: usize = 32;
+
+// The arena frontier layout uses 256 lengths followed by an aligned u64
+// prefix in the resident pool. This is not the general stealing pool.
+const FRONTIER_SLOTS: usize = 256;
 
 /// Formal rule GPU-Launch: grading records partition, fold completion and
 /// synchronization before emission; target realization owns launch preparation.
@@ -342,13 +350,9 @@ pub(crate) fn derive(
 /// else one block pass of its widest source strip. Folds keep their declared
 /// partition, because block-local fold scopes depend on the root tile.
 fn spread_rows(program: &Program, execution: &Execution, parts: Option<usize>) -> Option<usize> {
-    let fold_free = execution.fold == FoldCompletion::Local
-        && execution
-            .chains
-            .iter()
-            .flat_map(|chain| &chain.strips)
-            .all(|strip| strip.fold.is_none());
-    (program.sequence.roots == crate::Roots::Spread && !execution.chains.is_empty() && fold_free)
+    (program.sequence.roots == crate::Roots::Spread
+        && !execution.chains.is_empty()
+        && fold_free(execution))
         .then(|| {
             parts.unwrap_or_else(|| {
                 let items = execution
@@ -363,6 +367,19 @@ fn spread_rows(program: &Program, execution: &Execution, parts: Option<usize>) -
         })
 }
 
+fn fold_free(execution: &Execution) -> bool {
+    execution.fold == FoldCompletion::Local
+        && execution.chains.iter().flat_map(|chain| &chain.strips)
+            .all(|strip| strip.fold.is_none())
+}
+
+fn expanding_spread(execution: &Execution) -> bool {
+    matches!(
+        (&execution.partition, execution.chains.as_slice()),
+        (Partition::Spread { .. }, [chain]) if chain.strips.len() >= 2
+    )
+}
+
 /// Formal rule GPU-ExpansionShare: a spread single-chain dispatch that expands
 /// at least once may hand any expansion's child batches to other blocks. A
 /// block whose expansion holds more than `min_chunks` batches publishes the
@@ -370,12 +387,10 @@ fn spread_rows(program: &Program, execution: &Execution, parts: Option<usize>) -
 /// pool slots; every batch is claimed exactly once, by the owner or by an idle
 /// block that copied the state, so the published multiset is unchanged.
 fn shared_expansions(execution: &Execution) -> Share {
-    match (&execution.partition, execution.chains.as_slice()) {
-        (Partition::Spread { .. }, [chain]) if chain.strips.len() >= 2 => Share::Expansions {
-            slots: SHARE_SLOTS,
-            min_chunks: SHARE_MIN_CHUNKS,
-        },
-        _ => Share::None,
+    if expanding_spread(execution) {
+        Share::Expansions { slots: SHARE_SLOTS, min_chunks: SHARE_MIN_CHUNKS }
+    } else {
+        Share::None
     }
 }
 
@@ -562,28 +577,41 @@ fn strip(operations: &[Step], source: bool, block: usize) -> Strip {
     }
 }
 
+fn resident_raw_terminal<'a>(
+    program: &Program,
+    analysis: &'a Analysis,
+    dispatch: &crate::Dispatch,
+) -> Option<&'a publication::PublicationRecord> {
+    let (terminal, OutputProtocol::ReservePrevious) = analysis.output.as_ref()? else {
+        return None;
+    };
+    if dispatch.inner_stores.last() != Some(terminal)
+        || program.sequence.output != Some(OutputProtocol::ReservePrevious)
+        || dispatch.concatenation != OutputProtocol::ReservePrevious
+    {
+        return None;
+    }
+    let execution = dispatch.gpu.as_ref()?;
+    if execution.meta != Meta::Resident
+        || execution.capacity != InitialCapacity::PreviousCount
+        || execution.publication != Publication::Rows
+        || execution.offsets != OffsetScan::None
+        || execution.fold != FoldCompletion::Local
+    {
+        return None;
+    }
+    analysis.gpu_publications.get(terminal).filter(|record| record.arena.is_some())
+}
+
 /// Formal rule GPU-HeadCursor: the enclosing binding can own completion of
 /// a raw terminal append only when no subsequent Sequence operation needs
 /// its length, offsets, or partial folds. Intermediate stores stay private.
 fn admits_head_cursor(program: &Program, analysis: &Analysis, dispatch: &crate::Dispatch) -> bool {
     use publication::{Granularity, PackedKeys, PublicationStorage};
-    let Some((terminal, OutputProtocol::ReservePrevious)) = &analysis.output else {
-        return false;
-    };
-    program.sequence.output == Some(OutputProtocol::ReservePrevious)
-        && dispatch.inner_stores.last() == Some(terminal)
-        && dispatch.concatenation == OutputProtocol::ReservePrevious
-        && dispatch.gpu.as_ref().is_some_and(|execution| {
-            execution.meta == Meta::Resident
-                && execution.capacity == InitialCapacity::PreviousCount
-                && execution.publication == Publication::Rows
-                && execution.offsets == OffsetScan::None
-                && execution.fold == FoldCompletion::Local
-        })
-        && analysis.gpu_publications.get(terminal).is_some_and(|record| {
-            record.arena.is_some() && matches!(&record.storage,
-                PublicationStorage::PackedKeys(PackedKeys { granularity: Granularity::Rows, .. }))
-        })
+    resident_raw_terminal(program, analysis, dispatch).is_some_and(|record| {
+        matches!(&record.storage,
+            PublicationStorage::PackedKeys(PackedKeys { granularity: Granularity::Rows, .. }))
+    })
 }
 
 /// Refine the graded dispatch only at a binding-requested head terminal.
@@ -600,6 +628,36 @@ pub fn request_head_cursor(program: &Program, analysis: &mut Analysis) -> bool {
     };
     analysis.dispatches[index].gpu.as_mut().unwrap().synchronization[0] = Synchronization::HeadCursor;
     true
+}
+
+/// Formal rule GPU-FrontierResume: a resident raw terminal with a single
+/// expanding, fold-free spread chain can publish its unfinished intervals
+/// in one launch and resume them before the same arena attempt completes.
+fn admits_frontier(program: &Program, analysis: &Analysis, dispatch: &crate::Dispatch) -> bool {
+    resident_raw_terminal(program, analysis, dispatch).is_some()
+        && program.sequence.roots == crate::Roots::Spread
+        && dispatch.gpu.as_ref().is_some_and(|execution| {
+            expanding_spread(execution) && fold_free(execution)
+        })
+}
+
+/// Refine the graded terminal's expansion share at an explicit arena request.
+/// Unlike grouped append, an unsupported frontier is a translation error.
+pub fn request_frontier(program: &Program, analysis: &mut Analysis) -> syn::Result<()> {
+    let index = analysis.dispatches.iter().position(|dispatch| {
+        dispatch.gpu.as_ref().is_some_and(|execution| {
+            matches!(execution.share, Share::Expansions { slots: FRONTIER_SLOTS, .. })
+        }) && admits_frontier(program, analysis, dispatch)
+    });
+    let Some(index) = index else {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "GPU-FrontierResume requires a resident raw arena terminal with a single expanding, fold-free spread chain and a 256-slot expansion pool",
+        ));
+    };
+    analysis.dispatches[index].gpu.as_mut().unwrap().share =
+        Share::Frontier { slots: FRONTIER_SLOTS, min_chunks: 2 };
+    Ok(())
 }
 
 /// GPU-Launch checker: validate supplied launch records against the
@@ -654,15 +712,10 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         // GPU-RootSpread: the partition kind follows the program's declared
         // roots policy; a fold-bearing dispatch never spreads. Any positive
         // spread bound is sound; a declared distributed tile is a fact.
-        let fold_free = execution.fold == FoldCompletion::Local
-            && execution
-                .chains
-                .iter()
-                .flat_map(|chain| &chain.strips)
-                .all(|strip| strip.fold.is_none());
+        // A frontier uses the same spread invariant as a single-launch share.
         let spreads = program.sequence.roots == crate::Roots::Spread
             && !execution.chains.is_empty()
-            && fold_free;
+            && fold_free(execution);
         let partition = match &execution.partition {
             Partition::Spread { max_rows } => {
                 spreads && *max_rows > 0 && dispatch.parts.is_none_or(|parts| parts == *max_rows)
@@ -678,13 +731,23 @@ pub fn check(program: &Program, analysis: &Analysis) -> syn::Result<()> {
         // is a spread single chain that expands at least once, with between
         // one and 65,536 pool slots and a u32 batch threshold.
         if let Share::Expansions { slots, min_chunks } = execution.share {
-            let shareable = matches!(
-                (&execution.partition, execution.chains.as_slice()),
-                (Partition::Spread { .. }, [chain]) if chain.strips.len() >= 2
-            );
-            if !shareable || !(1..=65_536).contains(&slots) || u32::try_from(min_chunks).is_err() {
+            if !expanding_spread(execution)
+                || !(1..=65_536).contains(&slots)
+                || u32::try_from(min_chunks).is_err()
+            {
                 return Err(error(
                     "expansion sharing requires a spread single-chain dispatch that expands",
+                ));
+            }
+        }
+        if let Share::Frontier { slots, min_chunks } = execution.share {
+            if !admits_frontier(program, analysis, dispatch)
+                || slots != FRONTIER_SLOTS
+                || min_chunks == 0
+                || u32::try_from(min_chunks).is_err()
+            {
+                return Err(error(
+                    "GPU-FrontierResume requires a resident expanding spread arena terminal, a 256-slot pool and a positive u32 batch threshold",
                 ));
             }
         }

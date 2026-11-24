@@ -229,6 +229,35 @@ pub unsafe fn wanted(hungry: *mut u32, headers: *mut u32) -> bool {
     hungry != 0 && hungry > unsafe { published(headers) }.load(AtomicOrdering::Relaxed)
 }
 
+/// Reserve one immutable continuation for a later launch. Saturation leaves
+/// the remaining work with the caller. `used` starts at zero for the pair.
+#[device]
+#[inline(always)]
+pub unsafe fn frontier_slot(used: *mut u32, slots: u32) -> u32 {
+    let used = unsafe { DeviceAtomicU32::from_ptr(used) };
+    let mut old = used.load(AtomicOrdering::Relaxed);
+    while old < slots {
+        match used.compare_exchange(old, old + 1, AtomicOrdering::Relaxed, AtomicOrdering::Relaxed) {
+            Ok(_) => return old,
+            Err(actual) => old = actual,
+        }
+    }
+    u32::MAX - 1
+}
+
+/// Return the descriptor containing weighted batch `work`; only called for
+/// `work < prefix[slots]`. The first grid has completed all descriptor writes.
+#[device]
+#[inline(always)]
+pub unsafe fn frontier_owner(prefix: *const u64, mut slots: u32, work: u64) -> u32 {
+    let mut lo = 0u32;
+    while lo < slots {
+        let m = lo + (slots - lo) / 2;
+        if unsafe { *prefix.add(m as usize + 1) } <= work { lo = m + 1; } else { slots = m; }
+    }
+    lo
+}
+
 thread_local! {
     static BODIES: RefCell<Option<(Arc<Pool>, Buffer<u32>)>> = const { RefCell::new(None) };
 }

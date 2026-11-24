@@ -11,6 +11,9 @@
 //! `translate_arena(head; &mut arena)` requests GPU-HeadCursor. It returns
 //! `None` after a grouped append (or a closed gate), otherwise `Some(batch)`
 //! from the ordinary arena terminal. The binding owns grouped completion.
+//! `translate_arena(frontier; &mut arena)` requires GPU-FrontierResume for
+//! the final dispatch. Use `frontier; head;` to request both refinements.
+//! An ineligible frontier is a translation error.
 
 pub use cq_gpu_sequence_core::runs::record_representation;
 pub use cq_gpu_sequence_core::{

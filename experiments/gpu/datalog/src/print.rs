@@ -11,7 +11,7 @@ use cq_lang_datalog_round::{
 };
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use syn::{Ident, Type};
 
 fn local(kind: &str, index: usize) -> Ident {
@@ -456,6 +456,8 @@ pub fn compile(program: &Program) -> syn::Result<syn::Expr> {
 /// Round printer hooks keyed by `rule@delta` (the profile label without `#hole`).
 #[derive(Default)]
 pub struct HoleHooks {
+    /// Requests GPU-FrontierResume from the generated terminal for each version.
+    pub frontier: BTreeSet<String>,
     /// Replaces the generated hole. Receives the arena, read descriptions,
     /// optional scan, and inputs in declaration order; returns a `CandidateBatch`.
     pub manual: BTreeMap<String, syn::Path>,
@@ -479,7 +481,7 @@ pub(crate) fn version_label(program: &Program, variant: usize, head: usize) -> S
     format!("{label}@{delta}")
 }
 
-/// [`compile`] with optional manual replacements and input observers.
+/// [`compile`] with source-selected frontier plans, manual replacements and input observers.
 pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Expr> {
     let packed_aliases = PackedAliases::definitions(program)?;
     crate::storage::check_device(&program.storage)?;
@@ -581,6 +583,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     let mut scans = BTreeMap::new();
     let mut replaced = BTreeMap::new();
     let mut observed = BTreeMap::new();
+    let mut frontier = BTreeSet::new();
     for stratum in &context.strata {
         for key in &stratum.keys {
             hosts.insert(key.name.to_string(), key.provider.ty.clone());
@@ -599,6 +602,12 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             let label = version_label(program, rule.variant, rule.head);
             let observer = hooks.observe.get(&label);
             let manual = hooks.manual.get(&label);
+            if hooks.frontier.contains(&label) {
+                if manual.is_some() {
+                    return Err(syn::Error::new_spanned(rule, format!("rule version `{label}` cannot be both manual and frontier")));
+                }
+                frontier.insert(rule.hole);
+            }
             if (observer.is_some() || manual.is_some()) && crate::bindings::head_argument(&program.holes[rule.hole]) {
                 return Err(syn::Error::new_spanned(rule, format!(
                     "hole hook `{label}` requires a legacy batch; include \"{label}\" in bind_round's legacy(...) exclusions"
@@ -619,7 +628,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             }
         }
     }
-    if let Some(unknown) = hooks.manual.keys().chain(hooks.observe.keys()).find(|key| {
+    if let Some(unknown) = hooks.manual.keys().chain(hooks.observe.keys()).chain(&hooks.frontier).find(|key| {
         !context.strata.iter().flat_map(|stratum| stratum.seeds.iter().chain(&stratum.steps))
             .any(|rule| &version_label(program, rule.variant, rule.head) == *key)
     }) {
@@ -646,11 +655,20 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
                 }
             }
         }
+        let generate = || {
+            let mut pipeline = hole.invocation_pipeline()?;
+            if frontier.contains(&index) {
+                let terminal = pipeline.passes.last_mut().expect("checked GPU batch terminal");
+                let arena = &terminal.arguments;
+                terminal.arguments = quote!(frontier; #arena);
+            }
+            pipeline.start(cq.to_token_stream())
+        };
         if !standalone {
             if replaced.contains_key(&index) || observed.contains_key(&index) {
                 return Err(syn::Error::new(proc_macro2::Span::call_site(), "hole hooks require a standalone hole (no local variables)"));
             }
-            return Ok(hole.invocation_pipeline()?.start(cq.to_token_stream())?);
+            return generate();
         }
         let function = format_ident!("__cq_gpu_hole_{}", index);
         let (scan_parameter, scan_argument) = match scans.get(&index) {
@@ -664,7 +682,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             let described = scan.iter().cloned().chain(parameters.iter().map(|(_, host, _)| reads[&host.to_string()].clone()));
             quote!(#path(&mut *__cq_gpu_arena, &[#(#described),*], #scan_argument #(#arguments,)*))
         } else {
-            let invocation = hole.invocation_pipeline()?.start(cq.to_token_stream())?;
+            let invocation = generate()?;
             let arena = &device.relations[owners[index]].arena;
             let declared = parameters.iter().map(|(parameter, _, ty)| quote!(#parameter: &#ty));
             let batch = quote!(::gpu_datalog_runtime::CandidateBatch);

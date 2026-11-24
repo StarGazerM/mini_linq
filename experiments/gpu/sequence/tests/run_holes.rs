@@ -213,10 +213,13 @@ fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
     let append = |mut arena: &mut CandidateArena, publish: bool| {
         cq_gpu_sequence_test_macros::planned_head_hole!(reserve_previous gated_native_linear)
     };
+    let resume = |mut arena: &mut CandidateArena, publish: bool| {
+        cq_gpu_sequence_test_macros::planned_head_hole!(frontier; reserve_previous gated_native_linear)
+    };
     if option_env!("CQ_EXPANSION_COUNTERS").is_some() {
         // Diagnostics need a validated count per hole; even this eligible join
         // must publish privately instead of appending to the active group.
-        let result = append(&mut arena, true).unwrap();
+        let result = resume(&mut arena, true).unwrap();
         assert_eq!(bag(result.buffer(), result.len(), result.packing())?, rows[0]);
         assert_eq!(arena.previous_count(), per_hole);
         assert_eq!(append(&mut arena, false).unwrap().len(), 0);
@@ -225,9 +228,8 @@ fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
     }
     for replay in [false, true] {
         let before = gpu_datalog_runtime::readback_count();
-        for _ in 0..2 {
-            assert!(append(&mut arena, true).is_none());
-        }
+        assert!(append(&mut arena, true).is_none());
+        assert!(resume(&mut arena, true).is_none());
         assert_eq!(gpu_datalog_runtime::readback_count(), before);
         assert_eq!(group.read()?, [0, 0, (2 * per_hole) as u32, 0]);
         assert_eq!(gpu_datalog_runtime::readback_count(), before + 1);
@@ -257,7 +259,7 @@ fn head_dispatches_share_count_and_keys_but_not_claim_cursors() -> Result {
             cursor as u64, 0xff, std::mem::size_of::<u32>(), pool.stream().cu_stream(),
         )?;
     }
-    assert!(append(&mut arena, true).is_none());
+    assert!(resume(&mut arena, true).is_none());
     let failed = group.read()?;
     assert_eq!(failed[3], 1);
     // A later hole can use the reset dispatch scratch but cannot clear the

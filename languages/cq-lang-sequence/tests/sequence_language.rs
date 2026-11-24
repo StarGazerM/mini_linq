@@ -1131,14 +1131,14 @@ fn gpu_launch_checker_rejects_duplicate_synchronization() {
     }
 }
 
-#[test]
-fn head_cursor_refines_only_the_checked_raw_terminal() {
+fn gpu_arena_fixture() -> (Program, Analysis) {
     let (mut p, mut analysis) = gpu_launch_fixture(false);
     publication_bounds(&p, &mut analysis);
     let structures = structures::contract::check(&p.physical, &p.structures).unwrap();
     analysis.gpu_publications =
         gpu::publication::derive(&p.physical, &p.program, &structures, &analysis).unwrap();
     assert!(!gpu::request_head_cursor(&p, &mut analysis)); // ordinary count
+    assert!(gpu::request_frontier(&p, &mut analysis).is_err());
     p.sequence.output = Some(OutputProtocol::ReservePrevious);
     analysis.output = Some(("a".into(), OutputProtocol::ReservePrevious));
     let dispatch = &mut analysis.dispatches[0];
@@ -1147,6 +1147,12 @@ fn head_cursor_refines_only_the_checked_raw_terminal() {
     execution.capacity = gpu::InitialCapacity::PreviousCount;
     execution.meta = gpu::Meta::Resident;
     gpu::check(&p, &analysis).unwrap();
+    (p, analysis)
+}
+
+#[test]
+fn head_cursor_refines_only_the_checked_raw_terminal() {
+    let (p, mut analysis) = gpu_arena_fixture();
 
     // A binding request is permission, not a change to every arena dispatch.
     assert_eq!(analysis.dispatches[0].gpu.as_ref().unwrap().synchronization,
@@ -1177,6 +1183,52 @@ fn head_cursor_refines_only_the_checked_raw_terminal() {
         gpu::publication::PublicationStorage::FlatRows(gpu::publication::FlatRows {
             columns: vec!["a".into(), "b".into()], width: 2,
         }));
+}
+
+#[test]
+fn frontier_refines_only_the_checked_expanding_arena_terminal() {
+    let (mut p, mut analysis) = gpu_arena_fixture();
+    p.sequence.roots = Roots::Spread;
+    let execution = analysis.dispatches[0].gpu.as_mut().unwrap();
+    execution.partition = gpu::Partition::Spread { max_rows: 5 };
+    execution.share = gpu::Share::Expansions { slots: 256, min_chunks: 32 };
+    gpu::check(&p, &analysis).unwrap();
+
+    let before = analysis.clone();
+    gpu::request_frontier(&p, &mut analysis).unwrap();
+    let frontier = gpu::Share::Frontier { slots: 256, min_chunks: 2 };
+    assert_eq!(analysis.dispatches[0].gpu.as_ref().unwrap().share, frontier);
+    gpu::check(&p, &analysis).unwrap();
+    assert!(gpu::request_head_cursor(&p, &mut analysis));
+    assert_eq!(analysis.dispatches[0].gpu.as_ref().unwrap().share, frontier);
+    gpu::check(&p, &analysis).unwrap();
+
+    // Both explicit requests and forged records must respect eligibility.
+    let refused = |mutate: fn(&mut Analysis)| {
+        let mut invalid = before.clone();
+        mutate(&mut invalid);
+        assert!(gpu::request_frontier(&p, &mut invalid).unwrap_err().to_string()
+            .contains("GPU-FrontierResume"));
+        invalid.dispatches[0].gpu.as_mut().unwrap().share = frontier;
+        reject_gpu_launch(&p, &invalid);
+    };
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().meta = gpu::Meta::Fresh);
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().partition = gpu::Partition::One);
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().chains[0].strips.truncate(1));
+    refused(|a| a.dispatches[0].gpu.as_mut().unwrap().chains[0].strips[0].fold =
+        Some(gpu::FoldScope::Whole));
+    refused(|a| a.output = Some(("other".into(), OutputProtocol::ReservePrevious)));
+    refused(|a| a.gpu_publications.get_mut("a").unwrap().arena = None);
+
+    for (slots, min_chunks) in [(255, 2), (256, 0)] {
+        let mut forged = before.clone();
+        forged.dispatches[0].gpu.as_mut().unwrap().share = gpu::Share::Frontier { slots, min_chunks };
+        reject_gpu_launch(&p, &forged);
+    }
+    let mut wrong_pool = before;
+    wrong_pool.dispatches[0].gpu.as_mut().unwrap().share =
+        gpu::Share::Expansions { slots: 7, min_chunks: 2 };
+    assert!(gpu::request_frontier(&p, &mut wrong_pool).is_err());
 }
 
 #[test]

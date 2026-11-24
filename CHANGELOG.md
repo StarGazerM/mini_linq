@@ -13,6 +13,16 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog: `print_rounds(frontier("rule@delta", ...))` selects weighted
+  frontier resume for named rule versions (GPU-FrontierResume, formal rule and
+  README): a shared expansion publishes its remaining work weighted by range
+  length and a resume pass rebalances it over the grid instead of leaving a
+  few blocks with the heavy tails. Unknown or ineligible labels and conflicts
+  with `manual(...)` are compile errors; capacity misses keep count-and-replay.
+  `doop-gpu` selects six versions (VPT_Cast@0/@4, AIPT_Store@2/@3,
+  VPT_LoadArray@2, VPT_LoadField@2): scala 3.60 -> 3.40 s, soot 4.11 -> 4.09 s,
+  kotlin 3.47 -> 3.44 s, jython 3.00 -> 2.96 s; counts unchanged, xalan exact.
+
 - GPU Datalog / DOOP joins, round 2 (reports `/data/design-notes/join-lab/round2-*.md`).
   GPU-RadixExactMember: a membership read on the complete physical key
   searches each run once for the exact word instead of two interval bounds.

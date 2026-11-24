@@ -33,7 +33,7 @@ impl gpu_datalog_runtime::SymbolCodec<doop_shared::IStr> for DoopSymbols {
 macro_rules! engine {
     () => { engine!(@emit [] []); };
     ($kind:ident ($($label:literal => $path:path),+ $(,)?)) => {
-        engine!(@emit [, legacy($($label),+)] [($kind($($label => $path),+))]);
+        engine!(@emit [, legacy($($label),+)] [, $kind($($label => $path),+)]);
     };
     (@emit [$($legacy:tt)*] [$($hooks:tt)*]) => {
         doop_shared::doop_engine!(run, pipeline {
@@ -79,7 +79,10 @@ macro_rules! engine {
             };
             terminals = [::cq_gpu_sequence::translate_arena => batch];
             round = [::cq_gpu_datalog::bind_round(binding = 5, head_cursor $($legacy)*)];
-            print = ::cq_gpu_datalog::print_rounds $($hooks)*;
+            print = ::cq_gpu_datalog::print_rounds(
+                frontier("VPT_Cast@0", "VPT_Cast@4", "AIPT_Store@2", "AIPT_Store@3",
+                         "VPT_LoadArray@2", "VPT_LoadField@2") $($hooks)*
+            );
         });
     };
 }

@@ -119,10 +119,15 @@ pub fn h05_sequential_physical_reference(input: TokenStream) -> TokenStream {
 #[path = "../../run_holes.rs"]
 mod run_holes;
 
+enum Terminal {
+    Arena,
+    Head { frontier: bool },
+}
+
 fn arena_hole(
     name: &syn::Ident,
     output: cq_lang_sequence::OutputProtocol,
-    head: bool,
+    request: Terminal,
 ) -> syn::Result<syn::Expr> {
     let run_holes::StructuresStack { mut physical, mut structures } = run_holes::fixture(&name.to_string());
     let normalized = cq_gpu_sequence_core::constants::compile(&physical)?;
@@ -181,13 +186,16 @@ fn arena_hole(
         *capacity = Some(1);
     }
     planned.program.sequence.output = Some(output);
-    if head {
+    if matches!(request, Terminal::Head { .. }) {
         // Exercise the head request with the same root selection and shared
         // expansion that a spread arena dispatch uses without the request.
         planned.program.sequence.roots = cq_lang_sequence::Roots::Spread;
     }
-    let analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
-    if head {
+    let mut analysis = cq_lang_sequence::check_grading(&planned.physical, &planned.structures, &planned.program, &machine)?;
+    if let Terminal::Head { frontier } = request {
+        if frontier {
+            cq_lang_sequence::gpu::request_frontier(&planned.program, &mut analysis)?;
+        }
         return cq_gpu_sequence_core::translate_arena_head(
             &planned.physical, &planned.structures, &planned.program, analysis, &syn::parse_quote!(&mut arena),
         );
@@ -205,7 +213,7 @@ fn arena_hole(
 #[proc_macro]
 pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, false) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, Terminal::Arena) {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -215,7 +223,7 @@ pub fn planned_arena_hole(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn arena_hole_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, false) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::Reserve, Terminal::Arena) {
         Ok(expression) => {
             syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
                 .into_token_stream()
@@ -229,7 +237,7 @@ pub fn arena_hole_source(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, false) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, Terminal::Arena) {
         Ok(expression) => expression.into_token_stream().into(),
         Err(error) => error.into_compile_error().into(),
     }
@@ -239,7 +247,7 @@ pub fn planned_arena_hole_previous(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn arena_hole_previous_source(input: TokenStream) -> TokenStream {
     let name = syn::parse_macro_input!(input as syn::Ident);
-    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, false) {
+    match arena_hole(&name, cq_lang_sequence::OutputProtocol::ReservePrevious, Terminal::Arena) {
         Ok(expression) => {
             syn::LitStr::new(&expression.into_token_stream().to_string(), name.span())
                 .into_token_stream()
@@ -254,9 +262,15 @@ pub fn arena_hole_previous_source(input: TokenStream) -> TokenStream {
 pub fn planned_head_hole(input: TokenStream) -> TokenStream {
     use syn::parse::Parser;
     let parse = |tokens: syn::parse::ParseStream<'_>| {
+        mod kw { syn::custom_keyword!(frontier); }
+        let frontier = tokens.peek(kw::frontier);
+        if frontier {
+            tokens.parse::<kw::frontier>()?;
+            tokens.parse::<syn::Token![;]>()?;
+        }
         let output = tokens.parse::<cq_lang_sequence::OutputProtocol>()?;
         let name = tokens.parse::<syn::Ident>()?;
-        arena_hole(&name, output, true)
+        arena_hole(&name, output, Terminal::Head { frontier })
     };
     match parse.parse(input) {
         Ok(expression) => expression.into_token_stream().into(),

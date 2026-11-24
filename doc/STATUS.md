@@ -16,10 +16,11 @@ membership, and a root-sized share cohort (CHANGELOG).
   4.12 s, kotlin 3.47 / 3.47 s, jython 3.00 / 3.01 s (2.6x, 2.4x, 3.0x, 5.0x
   SRDatalog). `srd-doop-gpu`: scala 7.92 / 7.96 s, soot 5.00 / 5.04 s, kotlin
   7.97 / 8.00 s, below SRDatalog's own 9.44 / 9.93 / 10.52 s.
-- Not yet included (measured, pending integration): weighted frontier resume
-  for six rule versions (scala -256 ms; selection being moved from a build
-  environment variable to a labelled directive), and a single-expansion share
-  guard that removes the 0.3-0.4 s regression on the heavy-split SRD program.
+- Weighted frontier resume (`print_rounds(frontier(...))`, six rule
+  versions), two runs each, counts unchanged, xalan exact: scala 3.40 / 3.42
+  s, soot 4.09 / 4.09 s, kotlin 3.44 / 3.42 s, jython 2.96 / 2.97 s.
+- Pending: a single-expansion share guard that removes the 0.3-0.4 s
+  regression on the heavy-split SRD program.
 
 **DOOP joins, join lab (2026-11-23, on `668187e7` plus this change):** machine
 caps, real-round captures and per-class kernel labs in

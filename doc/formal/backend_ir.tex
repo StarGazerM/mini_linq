@@ -1477,6 +1477,10 @@ raw-candidate programs; checking accepts any legal recorded alternative.
  1\le s\le 65536\quad
  \text{inputs immutable during the launch}}
  {\text{an expansion with more than }k\text{ batches left may publish that range to one of }s\text{ slots; each batch is claimed once by its owner or by a block that copied the published state; a slot is freed only after its claims fail and no block copies it; blocks stop when none is busy; the published multiset is unchanged}}
+\Rule{GPU-FrontierResume}{d.\mathsf{share}=\mathsf{Frontier}(256,k),\ 1\le k<2^{32}\quad
+  \text{one spread fold-free terminal arena chain with resident metadata}\quad
+  \text{inputs immutable through both launches}\quad p_0=0,\ p_{j+1}=p_j+n_j,\ |p|\le257}
+ {\text{after its first batch a producer may transfer its }n_j\ge k\text{ unprocessed batches, with all live parents, range begins, offsets, site and run, to a bounded slot; a full pool continues inline; a second launch partitions }[0,p_{|p|-1})\text{ disjointly and resumes each batch; the same output cursor and failure flag are validated only after both launches; the published bag is unchanged}}
 \Rule{GPU-ResidentMeta}{d.\mathsf{capacity}=\mathsf{PreviousCount}\quad
  d.\mathsf{foldCompletion}=\mathsf{Local}\quad
  \text{the arena's resident words are zero before the launch}}

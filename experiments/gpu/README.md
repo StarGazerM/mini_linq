@@ -615,6 +615,18 @@ registers ptxas picks and halve the resident blocks. Before this, only the
 first expansion was shared (GPU-RootShare), so a small first expansion with a
 large later one ran on one block while the rest of the GPU waited.
 
+`print_rounds(frontier("rule@delta", ...))` selects bounded, two-launch
+expansion for those generated rule versions (`GPU-FrontierResume`), instead
+of asking idle blocks to poll for work. The first launch saves unfinished
+ranges and their live parent values in at most 256 slots; when full, the
+producer finishes inline. The second launch partitions the saved batches
+by remaining length and appends to the same output cursor. Both launches
+must finish before publication; an output-capacity shortfall still uses the
+ordinary replay protocol. Unknown labels, manual replacements of the same
+version, or an ineligible terminal are errors. This balances batch count,
+not the cost of further joins within a batch: DOOP selects six measured
+versions explicitly in [`doop/src/lib.rs`](doop/src/lib.rs).
+
 A spread single-chain dispatch whose first step expands a radix or run lookup
 keyed by root columns first runs a generated select kernel (GPU-RootSelect):
 it decodes only the key columns of each root row, tests membership in that
