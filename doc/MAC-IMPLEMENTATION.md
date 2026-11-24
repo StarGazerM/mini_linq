@@ -262,37 +262,56 @@ canonicalization must use the same lawful provider path. Existing row-by-row
 `.entry(...).or_default().push(...)` emission cannot express the required GPU
 batch finalization without a publication realization change.
 
-## Implementation order and gates
+## Implementation order and gates (revised 2026-11-24)
 
-1. **Lawful immutable Mac provider.** Isolate Metal in a Mac-specific runtime
-   outside the default portable dependency path. Implement complete build and
-   CPU lookup for the explicitly selected key/payload domain; pin ownership and
-   complete GPU work before returning. Check exact outputs against native hash
-   and RadixRun. Measure allocation, encoding, synchronization, payload gather,
-   build, membership and expansion separately, then end-to-end.
-2. **Online flat and binary-carry owner.** Query every intermediate manifest,
-   especially 3/5/6/7 batches, empty/unequal batches and cross-run duplicate keys.
-   Hold partially consumed cursors across append/compaction and writer disposal;
-   the old snapshot must remain exact while the new one sees appended rows.
-   Validate completion/error publication and retirement. The offline eight-batch
-   experiment does not satisfy this gate.
-3. **Feature-local Datalog realization.** Preserve current Round checks and set
-   admission. Test seeds, mutually recursive relations, nonlinear delta–delta
-   cases, overlapping semi-naive variants, duplicate EDB/candidate facts, empty
-   delta replacement and frozen lower-stratum negation against the existing
-   evaluator. Ensure each full/delta layout is maintained once per publication,
-   with no hidden per-hole full rebuild.
-4. **Read-policy and cost selection.** Compare flat versus binary carries using
-   build-plus-probe workloads and memory high-water marks. Include all-level
-   probe cost, compaction amplification, pending/retained generations, batching
-   latency and CPU/GPU shared-memory contention. Do not import M5 coefficients
-   into this M3 experiment. Keep small-update CPU versus GPU placement explicit;
-   no crossover threshold has yet been established by end-to-end query tests.
-5. **Metal-resident query backend, then lifecycle scheduling if justified.**
-   Implement and grade actual Metal primitives; reuse existing finite-query
-   Sequence obligations. A future persistent/async maintenance schedule must
-   explicitly represent its dependencies and lifetimes and obtain separate
-   core-design review. Do not resuscitate the removed GPU Datalog bridge.
+The earlier order (immutable provider, online flat/binary-carry owner, Datalog,
+read-policy selection, Metal backend) is superseded: step 1 is done, the
+online owner exists only for the packed u32/u32 `MacRun`, and the GPU index
+now converges on CUDA's `DeviceRadixRun`/`RadixLayout` (STORAGE §8.2) with the
+per-target memory placement of STORAGE §11. Earlier step gates are kept where
+they still apply.
+
+0. **Baseline (exploration).** Re-measure H09 SF1/SF10 (`metal_h09`) and the
+   parallel CPU configurations on the current base. Profile SF10 per stage to
+   explain the resident query against CUDA's (44 vs 3.6 ms) and the bimodal
+   samples. Add one local gate script (build, workspace tests, H09
+   exactness). Gate: every SF10 cost attributed to a stage. Status: H09,
+   stage profile and gate done ([step 0 baseline](#step-0-baseline-gpu-performance-state-not-the-structure-2026-11-24));
+   the parallel CPU re-measurement waits for a DuckDB CLI on this machine.
+1. **CUDA's layout on Metal (Mac only).** Packed `u64`/`u128`/`[u64; L]` keys,
+   `u32`/`u64` offsets, ≤12 item columns or none, exact radix-prefix directory,
+   ratio-law multi-run publication with snapshots, shared-storage buffers
+   (snapshot upload is a no-op), plus a CPU reader for that directory. Needs
+   multi-lane stable sort, flagged select/unique, width-generic merge-path and
+   the directory kernel in MCCL. Gate: the cases of CUDA's
+   `tests/radix_{run,layout,candidates}.rs` ported and exact against
+   `cq_storage::RadixRun`. Explore: exact-prefix versus spline directory for CPU
+   and GPU reads (matched build + read); multi-lane sort cost at 1M/16M/60M;
+   private versus shared scratch.
+2. **MCCL operators on the shared layout.** Join, semijoin, distinct and the
+   fused chain read typed item columns instead of row-ID gathers; `metal_h09`
+   loses the u32 key domain; packed `MacRun` and its maintained owner retire.
+   Gate: H09 exact at SF1/SF10, no unexplained regression against step 0.
+3. **One target-neutral core with CUDA.** Split `radix_run.rs` into layout,
+   packing, ratio law, snapshot bookkeeping and directory format, with CUDA and
+   Metal backends. Gate (RTX machine): CUDA kernels identical in code,
+   registers and stack; xalan fixpoint unchanged; `tools/gpu_gate.sh` passes.
+4. **Metal code generation.** Spike one H09 kernel through an MSL printer over
+   checked Sequence and through Rust → SPIR-V → MSL, against the handwritten
+   MCCL kernel; then a Metal machine, catalog and translator through the
+   existing `decompose`/`grade`/`print` slots. Gate: advised H09 and H05
+   emitted for Metal, exact against DuckDB.
+5. **Datalog on Mac.** Shared full-key radix sets as CUDA Datalog uses, the
+   checked Round order, no revived bridge. Gate: the earlier Datalog cases
+   (seeds, mutual recursion, nonlinear deltas, duplicate facts, empty deltas,
+   frozen negation), then DOOP xalan exact.
+6. **Placement and cost model.** `calib/` and `model/` decide CPU, GPU or
+   hybrid placement and maintenance policy on unified memory, including the
+   parallel CPU provider results; placement is a recorded target fact. Do not
+   import M5 coefficients.
+
+Steps 2 and 3 both follow step 1; step 4 follows 2, step 5 follows 3, step 6
+follows 4 and 5.
 
 ## Integration verification
 
@@ -2182,3 +2201,68 @@ SF10 at 40.86 ms build, 3.61 ms query and 44.56 ms total
 records 59.31 ms total. Those build/query boundaries are not the resident
 path's: here Lineitem's run is prepared once and excluded, and the three
 check runs are prepared or included per column. No speed ratio is claimed.
+
+## Step 0 baseline: GPU performance state, not the structure (2026-11-24)
+
+Plan step 0 on `mac-cost-model` after the merge of `87eb04a6`. M3 Max, AC
+power, no performance warning recorded. `metal_h09 --runs 7` reproduces the
+11-10 interleaved resident medians (SF1 4.01 ms, SF10 40.40 ms) and adds a
+**warm** series: the resident query back to back after two untimed warmups,
+including the copy of answers into the Rust `Vec`. Answers exact throughout.
+
+| Dataset | Resident, interleaved | Resident, warm | Incl. run builds |
+|---|---:|---:|---:|
+| dbgen SF1 | 4.01 | 2.13 | 11.06 |
+| dbgen SF10 | 40.40 | 17.42 | 43.89 |
+
+The interleaved samples run right after `metal_h09::execute`, about a second
+of mostly CPU completion (SF10). `h09_stages` isolates why: the first fused
+query after a pause pays a ramp, the second is warm again. SF10, seven pairs
+each, first / second query medians in ms:
+
+| Before the query | First | Second | First-query minor faults |
+|---|---:|---:|---:|
+| nothing (warm series) | 14.8 | — | 0 |
+| 0.5 s idle | 18.3 | 16.9 | 0–28 |
+| 2 s CPU spin | 52.4 | 15.9 | 26–27 |
+| 2 s tiny GPU work every 20 ms | 79.8 | 16.1 | 0–1 |
+| 2 s idle | 98.0 | 16.1 | 26–27 |
+
+About 26 CPU minor faults (16 KiB pages) cannot account for 35–80 ms, and
+small GPU commands every 20 ms do not keep the warm state. This is the GPU
+performance-state history already observed in
+[first-touch isolation](#small-workload-history-was-a-separate-confound),
+not allocation or first touch. It explains the 11-10 bimodal SF10 samples.
+SF1 behaves alike: after 2 s idle the first query takes 22.5 ms and the
+second 4.9 ms, still above the warm 1.46 ms, so at SF1 one query does not
+finish the ramp.
+
+Warm SF10 split (`h09_stages`, 11 samples): the fused graph takes 14.8 ms
+and copying 3.26M answers into a `Vec` 2.2 ms. Run as stepwise synchronous
+primitives, the same chain takes join 1.3, PartSupp semijoin 2.2, Orders
+3.0, Supplier 1.75 and distinct 10.8 ms. The stepwise distinct sorts full
+32-bit fields (12 byte passes); the fused one sorts the bounded 55-bit
+composite (7), so the in-graph split is not measured, only bounded: distinct
+is the largest stage. At SF1 the warm fused graph takes 1.46 ms.
+
+Against the CUDA advised query (SF1 1.74 ms, SF10 3.61 ms, RTX 6000 Ada,
+resident data, builds separate): warm Mac is at parity at SF1 (1.46 ms) and
+4.1× slower at SF10 (14.8 ms), not the 11× the interleaved median suggested. Memory
+bandwidth (about 400 vs 960 GB/s) accounts for about 2.4×. The remaining
+SF10 gap is in the distinct and semijoin stages, which steps 1–2 replace.
+Benchmarks of resident GPU work must report warm and post-pause latency
+separately; a query arriving after idle pays the ramp.
+
+Raw: [baseline](../experiments/mac/query-expansion/results/metal-h09-baseline-m3max-20261124.json),
+[SF1 stages](../experiments/mac/query-expansion/results/h09-stages-sf1-m3max-20261124.txt),
+[SF10 stages](../experiments/mac/query-expansion/results/h09-stages-sf10-m3max-20261124.txt).
+`tools/mac_gate.sh [retail_h09 dir]` is the local Mac gate (MCCL bundle,
+workspace build and tests, H03/H09 exactness, optional dbgen Metal H09).
+
+```sh
+D=features/workloads/target/bench/data
+cargo run --release --locked --manifest-path experiments/mac/query-expansion/Cargo.toml \
+  --bin metal_h09 -- --data $D/tpch-1/retail_h09 --data $D/tpch-10/retail_h09 --runs 7
+cargo run --release --locked --manifest-path experiments/mac/query-expansion/Cargo.toml \
+  --bin h09_stages -- $D/tpch-10/retail_h09 11
+```

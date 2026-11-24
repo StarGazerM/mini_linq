@@ -167,6 +167,20 @@ fn measure(context: &MacContext, label: &str, data: &h09::Data, runs: usize) -> 
             }
         }
     }
+    // The interleaved resident samples follow about a second of mostly CPU
+    // work, after which the GPU's performance state has dropped: the first
+    // GPU query pays the ramp. This series runs the resident query back to
+    // back after two untimed warmups, so it measures the warm state only.
+    let mut resident_warm = Vec::with_capacity(runs);
+    for round in 0..runs + 2 {
+        let start = Instant::now();
+        let answers = metal_h09::execute_resident(context, &probes, &index, &resident)?;
+        let warm = ms(start);
+        assert_eq!(answers.len(), expected.len());
+        if round >= 2 {
+            resident_warm.push(warm);
+        }
+    }
     let summary = json!({
         "dataset": label, "lineitem_rows": data.lineitem.len(), "probes": probes.len(),
         "join_pairs": cpu_pairs.len(), "answers": expected.len(), "gpu_build_ms": build_ms,
@@ -174,14 +188,16 @@ fn measure(context: &MacContext, label: &str, data: &h09::Data, runs: usize) -> 
         "cpu_query_ms": median(cpu_query.clone()), "metal_query_ms": median(gpu_query.clone()),
         "cpu_join_ms": median(cpu_join.clone()), "metal_join_ms": median(gpu_join.clone()),
         "resident_query_ms": median(resident_query.clone()),
+        "resident_warm_query_ms": median(resident_warm.clone()),
         "resident_with_builds_ms": median(resident_fresh.clone()),
         "compiled_query_samples": compiled_query,
         "cpu_query_samples": cpu_query, "metal_query_samples": gpu_query,
         "cpu_join_samples": cpu_join, "metal_join_samples": gpu_join,
-        "resident_query_samples": resident_query, "resident_with_builds_samples": resident_fresh,
+        "resident_query_samples": resident_query, "resident_warm_query_samples": resident_warm,
+        "resident_with_builds_samples": resident_fresh,
     });
     println!(
-        "{label}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
+        "{label}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}",
         data.lineitem.len(),
         probes.len(),
         cpu_pairs.len(),
@@ -191,6 +207,7 @@ fn measure(context: &MacContext, label: &str, data: &h09::Data, runs: usize) -> 
         summary["cpu_query_ms"].as_f64().unwrap(),
         summary["metal_query_ms"].as_f64().unwrap(),
         summary["resident_query_ms"].as_f64().unwrap(),
+        summary["resident_warm_query_ms"].as_f64().unwrap(),
         summary["resident_with_builds_ms"].as_f64().unwrap(),
     );
     Ok(summary)
@@ -200,7 +217,7 @@ fn main() -> Result<()> {
     let options = Options::parse()?;
     let context = MacContext::new()?;
     println!(
-        "dataset\tlineitem\tprobes\tpairs\tcpu_join_ms\tmetal_join_ms\tcompiled_query_ms\tcpu_query_ms\tmetal_query_ms\tresident_query_ms\tresident_with_builds_ms"
+        "dataset\tlineitem\tprobes\tpairs\tcpu_join_ms\tmetal_join_ms\tcompiled_query_ms\tcpu_query_ms\tmetal_query_ms\tresident_query_ms\tresident_warm_query_ms\tresident_with_builds_ms"
     );
     let mut records = Vec::new();
     for &n in &options.sizes {

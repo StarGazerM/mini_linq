@@ -1,0 +1,203 @@
+{
+  "architecture": "aarch64",
+  "args": [
+    "./target/release/metal_h09",
+    "--data",
+    "../../features/workloads/target/bench/data/tpch-1/retail_h09",
+    "--data",
+    "../../features/workloads/target/bench/data/tpch-10/retail_h09",
+    "--runs",
+    "7",
+    "--out",
+    "query-expansion/results/metal-h09-baseline-m3max-20261124.json"
+  ],
+  "compiled": "compiled authored default route reading that run through its native l_partkey host read",
+  "correctness": "complete answers equal the compiled default route and sorted; GPU pairs equal CPU pairs exactly, checked untimed before sampling; every sample checks counts",
+  "cpu": "the Metal path's identical host completion, with the Part->Lineitem expansion as CPU row_ids reads of the same run; CPU join stage = row_ids per green part key into (probe ordinal, row ID) pairs",
+  "index": "one GPU-built grouped RadixRun over the retained i64 Lineitem source (l_partkey -> original row ID), built untimed and shared by both paths",
+  "limits": "query times exclude source ingestion and index build; remaining operators and canonicalization run on CPU; synthetic datasets are not dbgen",
+  "metal": "Part/GreenNames prefix on host; Part->Lineitem as one batched Metal join (binary-search ranks, exact u64 offsets, 2048-pair tiles); remaining joins on CPU with the default route's providers; Metal join stage includes probe upload, both synchronous GPU evaluations and pair publication",
+  "order": "alternating CPU-first/Metal-first pairs after two warmup rounds",
+  "resident": "One GPU graph after the join's pair-count readback: Metal join expansion, PartSupp (part key, supplier item), Orders and Supplier-selected-by-Nation semijoins with GPU-resident row counts, then GPU gather, LSD stable radix sort and dedup of (order, part, supplier); only distinct answers return (two host waits per query). The p_name LIKE '%green%' prefilter (unsupported query language) is evaluated once outside timing. resident_query reuses runs prepared once; resident_with_builds includes ingesting and GPU-building those three runs and the host Nation mask",
+  "results": [
+    {
+      "answers": 319402,
+      "compiled_query_ms": 68.56741600000001,
+      "compiled_query_samples": [
+        68.319833,
+        68.56741600000001,
+        68.496333,
+        69.624416,
+        68.73141600000001,
+        69.32125,
+        68.18754200000001
+      ],
+      "cpu_join_ms": 1.0627499999999999,
+      "cpu_join_samples": [
+        1.0627499999999999,
+        1.075708,
+        1.062875,
+        1.0225410000000001,
+        1.132416,
+        1.038125,
+        1.051458
+      ],
+      "cpu_query_ms": 44.649584,
+      "cpu_query_samples": [
+        44.32425,
+        43.937125,
+        44.485416,
+        44.649584,
+        45.098917,
+        45.234625,
+        44.701458
+      ],
+      "dataset": "../../features/workloads/target/bench/data/tpch-1/retail_h09",
+      "gpu_build_ms": 14.002625,
+      "join_pairs": 319402,
+      "lineitem_rows": 6001204,
+      "metal_join_ms": 1.048,
+      "metal_join_samples": [
+        1.036875,
+        1.048,
+        1.495209,
+        1.415959,
+        0.951541,
+        0.955708,
+        1.066333
+      ],
+      "metal_query_ms": 41.515791,
+      "metal_query_samples": [
+        41.515791,
+        42.091291000000005,
+        41.229375,
+        41.749334,
+        41.351625000000006,
+        41.270875,
+        41.664458
+      ],
+      "probes": 10664,
+      "resident_query_ms": 4.006792,
+      "resident_query_samples": [
+        4.006792,
+        3.527833,
+        3.666875,
+        3.647166,
+        4.17375,
+        4.188792,
+        4.0323340000000005
+      ],
+      "resident_warm_query_ms": 2.133834,
+      "resident_warm_query_samples": [
+        2.674375,
+        2.291333,
+        1.732709,
+        2.782875,
+        2.133834,
+        1.733917,
+        1.7149590000000001
+      ],
+      "resident_with_builds_ms": 11.058292000000002,
+      "resident_with_builds_samples": [
+        10.26425,
+        8.782292,
+        11.31675,
+        11.058292000000002,
+        11.258209,
+        8.11075,
+        12.330584
+      ]
+    },
+    {
+      "answers": 3261612,
+      "compiled_query_ms": 2244.497542,
+      "compiled_query_samples": [
+        2218.386625,
+        2203.886417,
+        2243.379167,
+        2244.497542,
+        2257.8395,
+        2253.5772500000003,
+        2293.455666
+      ],
+      "cpu_join_ms": 11.66225,
+      "cpu_join_samples": [
+        11.712250000000001,
+        11.747167,
+        11.586792,
+        11.761583000000002,
+        11.613167,
+        11.639125,
+        11.66225
+      ],
+      "cpu_query_ms": 1071.732083,
+      "cpu_query_samples": [
+        1058.99125,
+        1052.797833,
+        1065.7759170000002,
+        1086.961417,
+        1071.732083,
+        1076.9672079999998,
+        1085.514625
+      ],
+      "dataset": "../../features/workloads/target/bench/data/tpch-10/retail_h09",
+      "gpu_build_ms": 81.816375,
+      "join_pairs": 3261612,
+      "lineitem_rows": 59986042,
+      "metal_join_ms": 2.014875,
+      "metal_join_samples": [
+        1.696834,
+        1.398125,
+        2.133709,
+        2.014875,
+        2.3977500000000003,
+        2.0837920000000003,
+        1.886542
+      ],
+      "metal_query_ms": 1037.265459,
+      "metal_query_samples": [
+        1036.712,
+        1017.3769580000001,
+        1043.312917,
+        1032.837958,
+        1043.632791,
+        1037.265459,
+        1070.632584
+      ],
+      "probes": 108782,
+      "resident_query_ms": 40.397292,
+      "resident_query_samples": [
+        40.397292,
+        28.489917,
+        43.684124999999995,
+        27.868666,
+        45.6095,
+        22.466417,
+        45.778583999999995
+      ],
+      "resident_warm_query_ms": 17.415125,
+      "resident_warm_query_samples": [
+        17.574833,
+        17.415125,
+        17.68425,
+        17.240583,
+        17.636,
+        17.391625,
+        16.810416
+      ],
+      "resident_with_builds_ms": 43.88616699999999,
+      "resident_with_builds_samples": [
+        45.320417,
+        38.225708,
+        46.564833,
+        37.992791999999994,
+        43.88616699999999,
+        43.854333000000004,
+        49.002542000000005
+      ]
+    }
+  ],
+  "runs": 7,
+  "schema": "mccl.metal-join-h09.v1",
+  "warmups": 2
+}
