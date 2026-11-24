@@ -62,6 +62,39 @@ fn program_with_orders(
     .unwrap();
     crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap()
 }
+#[test]
+fn union_project_certificate_is_bound_to_the_rule_and_its_head_positions() {
+    let mut p = program();
+    let inputs = crate::bindings::input_providers(&p).unwrap();
+    let s = &p.context.strata[0];
+    let r = &s.steps[0];
+    let certified = crate::union_project::plans(&p, &inputs);
+    assert_eq!(certified.len(), 1, "only the recursive composition is a union");
+    let mut plan = certified[&r.hole].clone();
+    assert!(plan.witness_second && plan.group_first);
+    let terminal = p.holes[r.hole].pipeline.passes.last_mut().unwrap();
+    let (record, ordinary) = crate::union_project::split(&terminal.arguments).unwrap();
+    assert_eq!(record.as_ref(), Some(&plan));
+    plan.group_first = false;
+    terminal.arguments = quote!(#plan #ordinary);
+    assert!(crate::bindings::check(&p).is_err(), "transposed head must be rejected");
+}
+
+#[test]
+fn union_project_rejects_residual_predicates_and_nonendpoint_heads() {
+    let mut p = program();
+    let inputs = crate::bindings::input_providers(&p).unwrap();
+    let r = p.context.strata[0].steps[0].clone();
+    let original = p.holes[r.hole].cq.query.clone();
+    for bad in [syn::parse_quote!(*y), syn::parse_quote!(*x + 1), syn::parse_quote!(*z)] {
+        p.holes[r.hole].cq.query.head.args[0] = bad;
+        assert!(crate::union_project::UnionProject::recognize(&p, &r, &inputs).is_none());
+    }
+    p.holes[r.hole].cq.query = original;
+    p.holes[r.hole].cq.query.body.push(syn::parse_quote!(where x != z));
+    assert!(crate::union_project::UnionProject::recognize(&p, &r, &inputs).is_none());
+}
+
 
 #[test]
 fn round_shared_marker_cannot_merge_seed_and_step_across_publication() {

@@ -109,6 +109,7 @@ pub struct CandidateArena {
     resident: Option<Arc<Buffer<u32>>>,
     head: Option<HeadAttempt>,
     head_hints: [usize; 2],
+    mixed_head: [bool; 2],
 }
 impl CandidateArena {
     pub fn new(pool: Arc<Pool>) -> Self {
@@ -120,10 +121,14 @@ impl CandidateArena {
             resident: None,
             head: None,
             head_hints: [0; 2],
+            mixed_head: [false; 2],
         }
     }
     pub fn pool(&self) -> &Arc<Pool> {
         &self.pool
+    }
+    pub(super) fn has_head_target(&self) -> bool {
+        self.head.is_some()
     }
     /// Start the sole active head attempt on this arena. Use a distinct group
     /// slot for each head; finish or retry its attempt before reusing the slot.
@@ -138,7 +143,7 @@ impl CandidateArena {
             return Err("candidate head cursor pool or slot differs".into());
         }
         let &hint = self.head_hints.get(phase).ok_or("invalid candidate head phase")?;
-        let lease = self.reserve(packing, hint)?;
+        let lease = self.reserve_ordered(packing, hint, self.mixed_head[phase])?;
         self.head = Some(HeadAttempt {
             words: group.words.clone(), slot, phase, lease, owners: Vec::new(),
         });
@@ -183,7 +188,7 @@ impl CandidateArena {
         drop(buffer);
         head.owners.clear();
         let hint = head_capacity_hint(required, &packing);
-        head.lease = self.reserve(packing, hint)?;
+        head.lease = self.reserve_ordered(packing, hint, self.mixed_head[head.phase])?;
         self.head = Some(head);
         Ok(())
     }
@@ -243,6 +248,12 @@ impl CandidateArena {
     }
     /// Remember the selected hole's fully validated count, including an empty result.
     pub fn record_count(&mut self, rows: usize) {
+        // A detached publication contributes no rows to the shared cursor.
+        // Its shrinking hint must not evict expensive sibling appends from
+        // already-retained capacity. This policy never grows the request.
+        if let Some(head) = &self.head {
+            self.mixed_head[head.phase] = true;
+        }
         let hole = self.hole;
         let counts = &mut self.hole(hole).previous_counts[hole];
         counts.record(rows);
@@ -301,6 +312,7 @@ impl CandidateArena {
         self.slots.clear();
         self.previous_counts.clear();
         self.head_hints = [0; 2];
+        self.mixed_head = [false; 2];
     }
 
     /// Reserve the minimum complete u64 lanes for each row. Native u128 words
@@ -312,13 +324,17 @@ impl CandidateArena {
     /// `GPU_DATALOG_TRACE_MEMORY=1` logs requested and actual backing bytes on
     /// allocation/growth, including failed retries, without device readbacks.
     pub fn reserve(&mut self, packing: Packing, capacity: usize) -> Result<CandidateLease> {
+        self.reserve_ordered(packing, capacity, false)
+    }
+
+    fn reserve_ordered(&mut self, packing: Packing, capacity: usize, largest: bool) -> Result<CandidateLease> {
         let lanes = lane_count(&packing, capacity)?;
         let fitting = self
             .slots
             .iter()
             .enumerate()
             .filter(|(_, slot)| Arc::strong_count(slot) == 1 && slot.len() >= lanes)
-            .min_by_key(|(_, slot)| slot.len())
+            .min_by_key(|(_, slot)| if largest { !slot.len() } else { slot.len() })
             .map(|(index, _)| index);
         let index = match fitting {
             Some(index) => index,

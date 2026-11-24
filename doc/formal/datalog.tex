@@ -1603,6 +1603,23 @@ The printer checks these packets and invokes them without filling arguments.
  \mathrm{last}(h.Q).\mathrm{args}=\code{\&mut *\_\_cq\_gpu\_arena}}
  {\mathrm{print}_{\mathrm{gpu}}\text{ consumes the complete recorded invocation }h.Q}
 \end{mathpar}
+The batch terminal may additionally record a checked pair of physical
+alternatives. Let $D(g,y)$ denote the driver (in either physical order),
+$R(y,m)$ a snapshot with a prefix on $y$, and $\pi$ either permutation of
+the two distinct endpoints. Under set admission only,
+\begin{mathpar}
+\Rule{DL-UnionProject}{g,y,m\text{ distinct}\quad
+ H(\pi(g,m)) \gets D(g,y),R(y,m)\quad
+ H\text{ consumed only by set admission}\quad
+ \text{binding identity, scalar codecs and prefix agree}}
+ {\mathrm{supp}(H)=\{\pi(g,m)\mid
+ m\in\bigcup_{y:(g,y)\in D}\bigcup_{r\in\mathrm{runs}(R)}r[y]\}}
+\end{mathpar}
+The record names both versioned inputs and both column orientations.
+Its implementation samples fanout to select enumeration or exact grouped
+union. Hashing a source list only locates a candidate: representative sharing
+requires equality of every membership word. Sparse-domain fallback and arena
+replay use the same unpublished snapshot. No bag equivalence is claimed.
 \begin{mathpar}
 \Rule{DL-RoundShared}{\forall i.\ q_i=P_i;S_i,\quad P_i\equiv_\alpha P
  \quad \mathrm{epoch}(q_i)=e

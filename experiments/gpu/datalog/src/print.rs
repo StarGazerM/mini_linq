@@ -483,16 +483,19 @@ pub(crate) fn version_label(program: &Program, variant: usize, head: usize) -> S
 
 /// [`compile`] with source-selected frontier plans, manual replacements and input observers.
 pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Expr> {
+    // Expansion instrumentation observes Sequence child and bag-output counts;
+    // like an input hook, it is a consumer in addition to the set terminal.
+    let observes_witnesses = std::env::var_os("CQ_EXPANSION_COUNTERS").is_some();
     let packed_aliases = PackedAliases::definitions(program)?;
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
-    let shared = crate::bindings::checked(program)?;
-    let full_states = FullStates::build(&program.storage)?;
     ensure(
         program.context.observer.is_none(),
         program,
         "GPU Datalog does not support observer callbacks",
     )?;
+    let shared = crate::bindings::checked(program)?;
+    let full_states = FullStates::build(&program.storage)?;
     ensure(
         program.policy.timing == "none",
         program,
@@ -674,12 +677,36 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
         let generate = || {
             let mut pipeline = hole.invocation_pipeline()?;
             let terminal = pipeline.passes.last_mut().expect("checked GPU batch terminal");
-            terminal.arguments = crate::shared::unpack(&terminal.arguments)?.1;
+            let (choice, ordinary) = crate::union_project::split(&crate::shared::unpack(&terminal.arguments)?.1)?;
+            terminal.arguments = ordinary;
             if frontier.contains(&index) {
                 let arena = &terminal.arguments;
                 terminal.arguments = quote!(frontier; #arena);
             }
-            pipeline.start(cq.to_token_stream())
+            let ordinary = pipeline.start(cq.to_token_stream())?;
+            // Input observers also receive the unadmitted candidate count.
+            // That auxiliary consumer distinguishes witnesses, so execute the
+            // ordinary arm even though admission alone would accept the union.
+            if observes_witnesses || observed.contains_key(&index) { return Ok(ordinary); }
+            let Some(plan) = choice else { return Ok(ordinary) };
+            // The checked roles name CQ declarations *after* the scan/host
+            // substitutions. No dependency on the order parameters were printed.
+            let source = |role: &Ident| {
+                cq.declarations.iter().find(|d| d.name == *role)
+                    .and_then(|d| d.value.as_ref()).map(|v| &v.expression)
+                    .ok_or_else(|| syn::Error::new_spanned(role, "missing UnionProject role"))
+            };
+            let (driver, lookup) = (source(&plan.driver)?, source(&plan.lookup)?);
+            let (witness, group) = (plan.witness_second, plan.group_first);
+            let result = if crate::bindings::head_argument(hole) { quote!(Some(batch)) } else { quote!(batch) };
+            syn::parse2(quote!({
+                match ::gpu_datalog_runtime::union_project::execute(
+                    &mut *__cq_gpu_arena, #driver, #lookup, #witness, #group
+                ).expect("checked UnionProject execution") {
+                    Some(batch) => #result,
+                    None => { #ordinary }
+                }
+            }))
         };
         if !standalone {
             if replaced.contains_key(&index) || observed.contains_key(&index) {
@@ -741,6 +768,21 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
         quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
     };
     let mut initialize = Vec::new();
+    let mut union_inventory = Vec::new();
+    for rule in context.strata.iter().flat_map(|s| s.seeds.iter().chain(&s.steps)) {
+        let terminal = program.holes[rule.hole].pipeline.passes.last().expect("checked terminal");
+        let (Some(plan), _) = crate::union_project::split(&crate::shared::unpack(&terminal.arguments)?.1)? else { continue };
+        if observes_witnesses || observed.contains_key(&rule.hole) || replaced.contains_key(&rule.hole) { continue; }
+        let label = version_label(program, rule.variant, rule.head);
+        union_inventory.push(format!("gpu_union_plan\t{label}#{}\tdriver={}\tlookup={}\twitness_col={}\tgroup_head_col={}",
+            rule.hole, plan.driver, plan.lookup, usize::from(plan.witness_second), usize::from(!plan.group_first)));
+    }
+    if !union_inventory.is_empty() {
+        let inventory = union_inventory.join("\n");
+        initialize.push(quote! {
+            if ::gpu_datalog_runtime::trace_kernels() { ::std::eprintln!("{}", #inventory); }
+        });
+    }
     for (index, (layout, record)) in context.layouts.iter().zip(&device.layouts).enumerate() {
         if full_states.owner(index) != index {
             continue;

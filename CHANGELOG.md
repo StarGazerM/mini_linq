@@ -13,6 +13,12 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Datalog: the checked Round batch terminal now records `UnionProject`
+  for binary compositions whose head drops the sole witness. The runtime
+  chooses direct expansion or exact grouped union per invocation, including
+  across multiple radix runs. Ordinary enumeration remains available to
+  count observers and for unsupported coordinate widths or sparse domains.
+
 - GPU Sequence: a recorded expansion share on a chain with one expansion over
   unselected roots (no GPU-RootSelect, not an authored frontier) is printed
   without the steal pool; its roots are distributed directly. The share path

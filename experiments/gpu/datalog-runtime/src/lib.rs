@@ -20,6 +20,7 @@ pub mod radix_run;
 mod runs;
 pub mod shared_prefix;
 mod stats;
+pub mod union_project;
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease, HeadCursors};
 pub use gpu_device_columns::{Buffer, Pool};
 pub use layout::{encode_scalar, PackedField, Scalar, ScalarTuple};

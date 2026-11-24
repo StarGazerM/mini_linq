@@ -3,9 +3,6 @@
 #[cfg(feature = "manual-joins")]
 pub mod manual;
 
-#[cfg(feature = "manual-joins")]
-pub mod manual_assign;
-
 #[cfg(feature = "capture-joins")]
 mod capture;
 
@@ -89,8 +86,6 @@ engine!();
 
 #[cfg(all(feature = "manual-joins", not(feature = "capture-joins")))]
 engine!(manual(
-    "VPT_Assign@0" => crate::manual_assign::assign_delta,
-    "VPT_Assign@1" => crate::manual_assign::points_delta,
     "VPT_LoadArray@3" => crate::manual::vpt_load_array_delta_index
 ));
 
