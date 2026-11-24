@@ -13,6 +13,15 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
 
 ## Unreleased
 
+- GPU Sequence: a recorded expansion share on a chain with one expansion over
+  unselected roots (no GPU-RootSelect, not an authored frontier) is printed
+  without the steal pool; its roots are distributed directly. The share path
+  raised such kernels from 40-48 to 72-80 registers per thread and cost the
+  heavy-split SRD program 0.3-0.4 s (bisect: `/data/design-notes/join-lab/round2-regression.md`).
+  Split SRD fixpoint scala 5.70 -> 5.30 s, soot 4.24 -> 3.95 s (below the
+  per-head branch alone, 5.77 / 4.13 s); doop-gpu unchanged; counts
+  unchanged, xalan exact.
+
 - GPU Datalog: `print_rounds(frontier("rule@delta", ...))` selects weighted
   frontier resume for named rule versions (GPU-FrontierResume, formal rule and
   README): a shared expansion publishes its remaining work weighted by range

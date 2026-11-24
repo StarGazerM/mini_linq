@@ -3773,7 +3773,15 @@ fn translate_with_metadata(
             };
             // GPU-ExpansionShare: the busy and hungry words follow the
             // dispatch's cursor words; the pool starts at the next even word.
-            if let Share::Expansions { slots, min_chunks } | Share::Frontier { slots, min_chunks } = execution.share {
+            // With one uncompacted expansion, distribute the original roots
+            // without a pool of polling helpers. Compaction can concentrate
+            // expensive ranges in a few tiles. Authored frontier relaunches
+            // always need their descriptors, regardless of either condition.
+            let direct = !frontier && execution.chains[chain_index].strips.len() == 2
+                && root_select.is_none();
+            if let Share::Expansions { slots, min_chunks } | Share::Frontier { slots, min_chunks } = execution.share
+                && !direct
+            {
                 let busy = 4 + chains.len();
                 parameters.push(abi_parameter(format_ident!("__cq_share"), syn::parse_quote!(*mut u32)));
                 arguments.push(abi_argument(format_ident!("__cq_share"), quote!(__cq_share)));

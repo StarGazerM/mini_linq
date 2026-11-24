@@ -1402,7 +1402,11 @@ roots it claims. A shared dispatch without a whole reduction first limits its
 participating blocks to the launch's root count plus 32 helpers (at least one);
 blocks past that cohort return before touching root tickets, busy, hungry or
 finish words, and the count is fixed for the launch, so all participants agree
-on the finishing count. Only the assignment
+on the finishing count. A recorded share on a chain with a single expansion
+whose roots are not selected (no GPU-RootSelect) and that is not an authored
+frontier is printed without the pool: its roots are distributed directly,
+since there is no deeper expansion to hand off and the share path raises
+register use (measured 40--48 to 72--80 per thread). Only the assignment
 of roots and batches to blocks changes; the multiset of published rows is the
 declared partition's. The checker accepts any positive $m$ (the declared
 distributed tile when there is one), an optional expansion share on a spread

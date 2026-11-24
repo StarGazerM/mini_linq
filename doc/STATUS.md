@@ -19,8 +19,9 @@ membership, and a root-sized share cohort (CHANGELOG).
 - Weighted frontier resume (`print_rounds(frontier(...))`, six rule
   versions), two runs each, counts unchanged, xalan exact: scala 3.40 / 3.42
   s, soot 4.09 / 4.09 s, kotlin 3.44 / 3.42 s, jython 2.96 / 2.97 s.
-- Pending: a single-expansion share guard that removes the 0.3-0.4 s
-  regression on the heavy-split SRD program.
+- Single-expansion share guard: the heavy-split SRD program (other session's
+  query) returns below the per-head branch alone, scala 5.70 -> 5.30 s, soot
+  4.24 -> 3.95 s; doop-gpu unchanged.
 
 **DOOP joins, join lab (2026-11-23, on `668187e7` plus this change):** machine
 caps, real-round captures and per-class kernel labs in
