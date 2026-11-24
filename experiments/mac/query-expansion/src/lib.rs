@@ -40,7 +40,7 @@ pub mod tpch_runtime {
 /// The default route over [`compiled_h09::PreparedData`]. Lineitem additionally
 /// declares its native `l_partkey` read; evidence is scanned from the authored
 /// declarations, and the pipeline repeats the workload default query's
-/// `structures`/`surface` stages.
+/// `structures` stage (`evidence_query!` appends the shared `surface` stage).
 macro_rules! prepared_default {
     ($d:tt { $($stages:tt)* } [$($extra:path),*] { $($body:tt)* }) => {
         pub(crate) mod prepared {
@@ -57,7 +57,6 @@ macro_rules! prepared_default {
                         default; {
                             $($stages)*
                             structures = [$($extra,)*];
-                            surface = [::cq_ext_aggregate::aggregate, ::cq_ext_correlated::correlated];
                         }
                         struct $d query;
                         relation $d lineitem($d order: $d order_ty, $d part: $d part_ty,
