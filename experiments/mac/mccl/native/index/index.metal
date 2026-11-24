@@ -3,3 +3,4 @@
 #include "maintain.metal"
 #include "relation.metal"
 #include "radix.metal"
+#include "join.metal"

@@ -122,14 +122,11 @@ fn summary(samples: &[Sample]) -> Value {
 }
 fn boundaries(context: &MacContext) -> Result<()> {
     let data = fixtures::h09_boundaries();
-    let mut empty = data.clone();
+    let mut empty = fixtures::h09_boundaries();
     empty.lineitem.clear();
-    let mut no_green = data.clone();
-    no_green
-        .part
-        .iter_mut()
-        .for_each(|(_, name)| *name = "red".into());
-    no_green.lineitem.push((i64::MIN, -1, i64::MAX));
+    let mut no_green_rows = fixtures::h09_boundary_rows();
+    no_green_rows.lineitem.push((i64::MIN, -1, i64::MAX));
+    let no_green = fixtures::h09_no_green(no_green_rows);
     for data in [&data, &empty, &no_green] {
         let expected = oracle(data);
         let source = Prepared::new(context, data)?;
@@ -214,7 +211,7 @@ fn main() -> Result<()> {
         "architecture": std::env::consts::ARCH,
         "order": "alternating CPU-first/GPU-first pairs; first_in_pair records actual order; first contains each provider's first observation",
         "context_setup_ms_excluded":setup_ms,"warmups":2,"runs":options.runs,
-        "query":"unchanged authored H09 CQ compiled through normal positional selection, Sequence and pull; source-bound Lineitem host at declaration slot1; all remaining operators identical",
+        "query":"unchanged authored H09 default route (evidence planning) replayed with Lineitem declaring its native l_partkey read; all remaining operators identical",
         "cpu":"native RadixRun<u32,u32> row-ID index over the same retained i64 source; explicit domain validation included",
         "gpu":"GPU grouping/parallel spline RadixRun, source-bound original row IDs; same concrete host and compiled query function",
         "timing":"contiguous completed wall intervals; build_query reuses one ingested source; ingest_build_query includes fresh preparation/ingestion; query includes remaining CPU index construction, joins, canon and answer collection; source/index/output drop, fixtures, context and validation excluded",

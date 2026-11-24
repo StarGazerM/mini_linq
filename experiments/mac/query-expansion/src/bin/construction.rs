@@ -127,13 +127,9 @@ fn verify_boundaries(
     gpu: &mut Constructor<'_>,
 ) -> Result<()> {
     let boundary = fixtures::h09_boundaries();
-    let mut empty = boundary.clone();
+    let mut empty = fixtures::h09_boundaries();
     empty.lineitem.clear();
-    let mut no_green = boundary.clone();
-    no_green
-        .part
-        .iter_mut()
-        .for_each(|(_, name)| *name = "red".into());
+    let no_green = fixtures::h09_no_green(fixtures::h09_boundary_rows());
     for (label, data) in [
         ("duplicates/extrema", &boundary),
         ("empty", &empty),
@@ -145,7 +141,7 @@ fn verify_boundaries(
         check_compiled(data, &cpu);
         check(&cpu, &gpu);
         if label == "duplicates/extrema" {
-            assert_eq!(cpu.witnesses, 68);
+            assert_eq!(cpu.witnesses, 12);
             assert_eq!(cpu.answers.len(), 4);
         }
         if label == "no-green" {

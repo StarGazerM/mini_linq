@@ -111,7 +111,8 @@ fn main() -> Result<()> {
         result03.answers,
         [(10, 1), (10, 3), (15, -7), (u32::MAX as i64, i64::MAX)]
     );
-    assert_eq!(result03.witnesses, 12);
+    // Customer is a membership read: duplicate BUILDING rows add no witness.
+    assert_eq!(result03.witnesses, 8);
     let result09 = run_h09(&context, "H09/boundaries", &boundary09)?;
     assert_eq!(
         result09.answers,
@@ -122,28 +123,17 @@ fn main() -> Result<()> {
             (300, u32::MAX as i64, -9)
         ]
     );
-    assert_eq!(result09.witnesses, 68);
+    // PartSupp/Orders/Nation are membership reads; Supplier keeps multiplicity.
+    assert_eq!(result09.witnesses, 12);
 
-    let mut empty03 = boundary03.clone();
-    empty03.customer.clear();
-    empty03.orders.clear();
-    empty03.lineitem.clear();
+    let empty03 = fixtures::h03_data(&[], Vec::new(), Vec::new());
     run_h03(&context, "H03/empty", &empty03)?;
-    let mut no_match03 = boundary03.clone();
-    no_match03
-        .customer
-        .iter_mut()
-        .for_each(|(_, segment)| *segment = "AUTOMOBILE".into());
-    run_h03(&context, "H03/no-building", &no_match03)?;
+    run_h03(&context, "H03/no-building", &fixtures::h03_no_building())?;
 
-    let mut empty09 = boundary09.clone();
+    let mut empty09 = fixtures::h09_boundaries();
     empty09.lineitem.clear();
     run_h09(&context, "H09/empty-lineitem", &empty09)?;
-    let mut no_match09 = boundary09.clone();
-    no_match09
-        .part
-        .iter_mut()
-        .for_each(|(_, name)| *name = "red".into());
+    let no_match09 = fixtures::h09_no_green(fixtures::h09_boundary_rows());
     let no_match = run_h09(&context, "H09/no-green", &no_match09)?;
     assert_eq!(no_match.index_builds, 0, "preserve lazy index construction");
     assert_eq!(no_match.indexed_rows, 0);
@@ -153,7 +143,7 @@ fn main() -> Result<()> {
 
     // The authored i64 domain is wider than the GPU key domain. Demonstrate
     // the boundary rather than silently truncating or disguising a fallback.
-    let mut wide03 = boundary03.clone();
+    let mut wide03 = fixtures::h03_boundaries();
     wide03.orders.push((
         i64::MAX,
         1,
@@ -166,10 +156,12 @@ fn main() -> Result<()> {
     assert!(h03::compiled(&wide03).contains(&(i64::MAX, 1)));
     let prepared03 = manual_h03::Prepared::new(&context, &wide03)?;
     assert!(manual_h03::execute(&context, &wide03, &prepared03).is_err());
-    let mut wide09 = boundary09.clone();
-    wide09.part.push((-1, "green".into()));
-    wide09.lineitem.push((100, -1, 7));
-    wide09.partsupp.push((-1, 7));
+    let mut wide_parts = fixtures::H09_BOUNDARY_PARTS.to_vec();
+    wide_parts.push((-1, "green"));
+    let mut wide_rows = fixtures::h09_boundary_rows();
+    wide_rows.lineitem.push((100, -1, 7));
+    wide_rows.partsupp.push((-1, 7));
+    let wide09 = fixtures::h09_data(&wide_parts, wide_rows);
     assert!(h09::compiled(&wide09).contains(&(100, -1, 7)));
     let prepared09 = manual_h09::Prepared::new(&context, &wide09)?;
     assert!(manual_h09::execute(&context, &wide09, &prepared09, &mut MacContext::build).is_err());

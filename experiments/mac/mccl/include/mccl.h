@@ -366,6 +366,70 @@ MCCL_API int mccl_merge_radix_u32(
     mccl_radix_index* out, const mccl_radix_index* older,
     const mccl_radix_index* newer, mlx_stream s);
 
+/*
+ * Exact equi-join of uint32 probes[N] against one completed grouped run.
+ * Publishes uint32 pairs[total,2] = {probe ordinal, item}: every stored
+ * occurrence of every matching probe, ordered by probe ordinal and then by
+ * the run's stable occurrence order. Misses contribute nothing. Counts and
+ * offsets are exact u64; a total above 1<<30 is rejected, never truncated.
+ * Output expansion uses fixed 2048-pair tiles, independent of key fanout.
+ * Synchronous; *pairs is installed only after completion and is unchanged on
+ * error. It must be an official handle distinct from every input.
+ */
+MCCL_API int mccl_radix_join_u32(
+    mlx_array* pairs, const mccl_radix_index* index, mlx_array probes,
+    mlx_stream s);
+
+/*
+ * GPU semijoin of source row IDs against one completed grouped run. rows is
+ * uint32 [N] row IDs, or uint32 [N,2] join pairs whose second column is read.
+ * relation is the int64 [R,C] source those IDs address. A row is kept iff its
+ * key_column value is in the u32 domain and present in index; when
+ * item_column >= 0, that key's group must also contain the item_column value
+ * (scan linear in group size). Publishes kept uint32 row IDs [M] in input
+ * order. An ID >= R is an error, never a silent miss. Synchronous; *out is
+ * installed only after completion and must not alias any input.
+ */
+MCCL_API int mccl_radix_semijoin_u32(
+    mlx_array* out, mlx_array rows, mlx_array relation, int key_column,
+    int item_column, const mccl_radix_index* index, mlx_stream s);
+
+/*
+ * Distinct int64 tuples of the source rows addressed by rows (uint32 [N] row
+ * IDs, or [N,2] join pairs whose second column is read), projected onto
+ * columns[0..column_count), 1 <= column_count <= 4. Publishes int64
+ * [M,column_count] in ascending lexicographic order of the listed columns.
+ * Every projected value must lie in [0,UINT32_MAX]: tuples are sorted by
+ * stable u32 radix passes on the GPU, never narrowed; a wider value or an ID
+ * >= R is an error. Only the distinct count is read back. Synchronous; *out
+ * is installed only after completion and must not alias any input.
+ */
+MCCL_API int mccl_distinct_rows_i64(
+    mlx_array* out, mlx_array rows, mlx_array relation, const int* columns,
+    int column_count, mlx_stream s);
+
+/*
+ * One query pipeline over a source relation with a single host readback:
+ * join probes against join_index (whose items are source row IDs), keep rows
+ * passing every semijoin step in order (step semantics as
+ * mccl_radix_semijoin_u32), then publish distinct tuples as
+ * mccl_distinct_rows_i64 does. Only the join's exact pair count is read back
+ * to size buffers; every intermediate length stays on the GPU and the whole
+ * chain completes in one evaluation. Errors found on the GPU (row ID >= R,
+ * projected value outside u32) are reported after that evaluation.
+ * step_count may be 0. *out is installed only on success.
+ */
+typedef struct mccl_semijoin_step {
+  const mccl_radix_index* index;
+  int key_column;
+  int item_column; /* -1: none */
+} mccl_semijoin_step;
+
+MCCL_API int mccl_radix_join_semijoin_distinct_i64(
+    mlx_array* out, const mccl_radix_index* join_index, mlx_array probes,
+    mlx_array relation, const mccl_semijoin_step* steps, int step_count,
+    const int* columns, int column_count, mlx_stream s);
+
 /* Thread-local message, valid until the next mccl operation on this thread.
  * Empty after a successful operation. The returned pointer must not be freed.
  */

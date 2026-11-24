@@ -1092,6 +1092,37 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   Relocated consumer dependencies retain their directory group's sibling datasets.
   Root default members exclude the five packages whose dev-dependencies enable
   counters; explicit package regression gates retain their instrumented coverage.
+- Mac: revive `experiments/mac/query-expansion` on the current workloads. It
+  compiles the unchanged workload runtime and H03/H09 sources; the prepared
+  H09 host replays the authored default route, adding only Lineitem's native
+  `l_partkey` read. Interned fixtures and the handwritten realizations follow
+  the current default providers.
+- MCCL: add an AOT-compiled batched Metal equi-join over grouped RadixRun:
+  binary-search ranks, exact u64 offsets and fixed 2048-pair tiles that spread
+  hot keys. Totals above 1<<30 are rejected. CQ Mac exposes u32 and
+  source-bound i64 row-ID joins; H09 can run Part→Lineitem on Metal. On dbgen
+  SF1 that expansion is at parity with CPU reads; with identical host
+  completion, whole-query time falls 6–8% (5.8× expansion at 16M rows).
+- MCCL: add a GPU semijoin over row-ID sets (`mccl_radix_semijoin_u32`, CQ Mac
+  `IndexedI64Relation::semijoin`). Metal H09 chains Part→Lineitem with
+  PartSupp, Orders and Supplier⋉Nation checks on the GPU; SF1 falls from 42.6
+  to 16.7 ms with prepared runs (24.1 ms including their builds).
+- MCCL: add GPU distinct tuples over row-ID sets (`mccl_distinct_rows_i64`,
+  CQ Mac `IndexedI64Relation::distinct`): LSD stable radix passes over
+  u32-domain columns, then adjacent dedup; wider values are rejected. Resident
+  Metal H09 gathers, sorts and deduplicates answers on the GPU; with the
+  unsupported `LIKE '%green%'` prefilter evaluated outside timing, SF1 falls
+  from 16.7 to 6.1 ms with prepared runs, and 16M synthetic from 157 to 34 ms.
+- MCCL: semijoin and distinct stages keep row counts on the GPU, and
+  `mccl_radix_join_semijoin_distinct_i64` (CQ Mac
+  `IndexedI64Relation::join_semijoin_distinct`) runs join expansion, semijoin
+  steps and distinct as one GPU graph after the join's pair-count readback.
+  Resident H09 waits on the GPU twice instead of six times: SF1 6.1 → 4.9 ms,
+  16M synthetic 34.1 → 32.1 ms.
+- MCCL: the fused chain's distinct packs projected columns into a composite key
+  whose field widths come from the semijoin runs' `max_key`, and sorts only the
+  occupied bytes (H09: 7 byte passes instead of 12). SF1 4.9 → 4.1 ms; 16M
+  synthetic shows no resolved change within its ±5 ms sample spread.
 
 - GPU Sequence placement keeps descriptor-backed `abi columns` index builds at
   their host publication boundary. It no longer copies whole resident columns

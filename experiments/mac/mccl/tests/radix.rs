@@ -362,3 +362,240 @@ fn retained_arrays_survive_sources_contexts_and_cache_churn() -> Result<()> {
     );
     Ok(())
 }
+
+// Independent nested-loop oracle over the source rows in stable key order.
+fn joined(rows: &[(u32, u32)], probes: &[u32]) -> Vec<[u32; 2]> {
+    let mut sorted = rows.to_vec();
+    sorted.sort_by_key(|row| row.0);
+    probes
+        .iter()
+        .enumerate()
+        .flat_map(|(ordinal, &key)| {
+            sorted
+                .iter()
+                .filter(move |row| row.0 == key)
+                .map(move |row| [ordinal as u32, row.1])
+        })
+        .collect()
+}
+
+fn check_join(gpu: &Gpu, rows: &[(u32, u32)], probes: &[u32]) -> Result<()> {
+    let index = gpu.build_radix_index(&ingest(gpu, rows)?, PAIRS, None)?;
+    let join = gpu.join_radix(&index, &gpu.upload(probes)?)?;
+    let expected = joined(rows, probes);
+    assert_eq!(join.len(), expected.len());
+    assert_eq!(join.pairs(), expected.as_slice());
+    Ok(())
+}
+
+#[test]
+fn gpu_join_matches_nested_loops_with_misses_duplicates_and_extrema() -> Result<()> {
+    let gpu = Gpu::new()?;
+    let rows = batch(8193);
+    let mut probes: Vec<u32> = rows.iter().step_by(3).map(|row| row.0).collect();
+    probes.extend([
+        0,
+        1,
+        0x000f_ffff,
+        0x0010_0000,
+        u32::MAX,
+        u32::MAX - 1,
+        12345,
+    ]);
+    probes.extend(probes.clone().iter().rev());
+    check_join(&gpu, &rows, &probes)?;
+    // Empty run, empty probes, and probes that all miss.
+    check_join(&gpu, &[], &[0, u32::MAX])?;
+    check_join(&gpu, &rows, &[])?;
+    check_join(&gpu, &[(5, 1), (7, 2)], &[4, 6, 8])?;
+    Ok(())
+}
+
+#[test]
+fn gpu_join_spreads_skewed_fanout_across_output_tiles() -> Result<()> {
+    let gpu = Gpu::new()?;
+    // One hot key spans dozens of 2048-pair tiles; small keys border it so
+    // tile owner searches cross probe and tile boundaries in both directions.
+    let mut rows: Vec<(u32, u32)> = (0..100_003).map(|i| (42, i)).collect();
+    rows.extend((0..5000).map(|i| (i % 50, 1_000_000 + i)));
+    let probes = [41, 42, 43, 7, 42, 99, 0, 42];
+    check_join(&gpu, &rows, &probes)?;
+    // Exactly tile-sized and one-past-tile outputs.
+    for len in [2047, 2048, 2049, 4096] {
+        let rows: Vec<_> = (0..len).map(|i| (9, i as u32)).collect();
+        check_join(&gpu, &rows, &[9])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn gpu_join_rejects_other_contexts() -> Result<()> {
+    let gpu = Gpu::new()?;
+    let other = Gpu::new()?;
+    let index = gpu.build_radix_index(&ingest(&gpu, &batch(17))?, PAIRS, None)?;
+    assert!(other.join_radix(&index, &other.upload(&[0])?).is_err());
+    assert!(gpu.join_radix(&index, &other.upload(&[0])?).is_err());
+    Ok(())
+}
+
+#[test]
+fn gpu_semijoin_filters_join_pairs_and_row_sets_like_host_checks() -> Result<()> {
+    use mccl::radix::SemiJoinRows;
+    let gpu = Gpu::new()?;
+    // Source rows [probe key, check key, item]; signed and wide values miss.
+    let rows: Vec<[i64; 3]> = (0..9001i64)
+        .map(|i| {
+            let check = match i % 11 {
+                0 => -1,
+                1 => i64::from(u32::MAX) + 1,
+                _ => i % 97,
+            };
+            [i % 13, check, i % 5]
+        })
+        .collect();
+    let source = gpu.relation_i64(rows.len(), |i| rows[i])?;
+    let by_probe = gpu.build_radix_index(&source, ROW_IDS, None)?;
+    let probes: Vec<u32> = (0..15).collect();
+    let join = gpu.join_radix(&by_probe, &gpu.upload(&probes)?)?;
+    // Run over check keys 0..60: items {0,2} for even keys and {1} for odd.
+    let run_rows: Vec<(u32, u32)> = (0..60u32)
+        .flat_map(|k| {
+            if k % 2 == 0 {
+                vec![(k, 0), (k, 2)]
+            } else {
+                vec![(k, 1)]
+            }
+        })
+        .collect();
+    let run = gpu.build_radix_index(&ingest(&gpu, &run_rows)?, PAIRS, None)?;
+    let joined: Vec<u32> = join.pairs().iter().map(|pair| pair[1]).collect();
+    let present = |row: &[i64; 3]| (0..60).contains(&row[1]);
+    let paired =
+        |row: &[i64; 3]| present(row) && run_rows.contains(&(row[1] as u32, row[2] as u32));
+    let keys = gpu.semijoin_rows(SemiJoinRows::Join(&join), &source, 1, None, &run)?;
+    let expected: Vec<u32> = joined
+        .iter()
+        .copied()
+        .filter(|&r| present(&rows[r as usize]))
+        .collect();
+    assert_eq!(keys.as_slice()?, expected.as_slice());
+    let items = gpu.semijoin_rows(SemiJoinRows::Rows(&keys), &source, 1, Some(2), &run)?;
+    let expected: Vec<u32> = expected
+        .into_iter()
+        .filter(|&r| paired(&rows[r as usize]))
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(items.as_slice()?, expected.as_slice());
+    // Empty inputs, an empty run, and invalid row IDs or columns.
+    let none = gpu.upload(&[])?;
+    assert!(
+        gpu.semijoin_rows(SemiJoinRows::Rows(&none), &source, 1, None, &run)?
+            .is_empty()
+    );
+    let empty = gpu.build_radix_index(&ingest(&gpu, &[])?, PAIRS, None)?;
+    assert!(
+        gpu.semijoin_rows(SemiJoinRows::Rows(&keys), &source, 1, None, &empty)?
+            .is_empty()
+    );
+    let outside = gpu.upload(&[0, rows.len() as u32])?;
+    assert!(
+        gpu.semijoin_rows(SemiJoinRows::Rows(&outside), &source, 1, None, &run)
+            .is_err()
+    );
+    assert!(
+        gpu.semijoin_rows(SemiJoinRows::Rows(&keys), &source, 3, None, &run)
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn gpu_distinct_rows_match_host_sort_dedup() -> Result<()> {
+    use mccl::radix::SemiJoinRows;
+    use std::collections::BTreeSet;
+    let gpu = Gpu::new()?;
+    // Low-cardinality columns force many duplicate tuples; extrema exercise
+    // every radix byte. Column 3 is wide and must never be projected.
+    let rows: Vec<[i64; 4]> = (0..70001i64)
+        .map(|i| {
+            let a = [0, 1, u32::MAX as i64, 1 << 24][(i % 4) as usize];
+            [a, (i * 7919) % 37, (i / 3) % 5, i64::MIN + i]
+        })
+        .collect();
+    let source = gpu.relation_i64(rows.len(), |i| rows[i])?;
+    let oracle = |ids: &[u32], columns: &[usize]| -> Vec<i64> {
+        let set: BTreeSet<Vec<i64>> = ids
+            .iter()
+            .map(|&r| columns.iter().map(|&c| rows[r as usize][c]).collect())
+            .collect();
+        set.into_iter().flatten().collect()
+    };
+    // Unordered row set with repeated IDs; output order follows `columns`.
+    let ids: Vec<u32> = (0..rows.len() as u32).rev().chain(0..5000).collect();
+    let set = gpu.upload(&ids)?;
+    for columns in [&[0usize, 1, 2][..], &[2, 0], &[1], &[2, 1, 0, 2]] {
+        let distinct = gpu.distinct_rows(SemiJoinRows::Rows(&set), &source, columns)?;
+        assert_eq!(distinct.width(), columns.len());
+        assert_eq!(distinct.values(), oracle(&ids, columns).as_slice(), "{columns:?}");
+    }
+    // Join pairs contribute their row column.
+    let by_b = gpu.build_radix_index(&source, IndexSpec { key_column: 1, payload: Payload::RowId }, None)?;
+    let join = gpu.join_radix(&by_b, &gpu.upload(&[3, 36, 99])?)?;
+    let joined: Vec<u32> = join.pairs().iter().map(|&[_, row]| row).collect();
+    let distinct = gpu.distinct_rows(SemiJoinRows::Join(&join), &source, &[0, 2])?;
+    assert_eq!(distinct.values(), oracle(&joined, &[0, 2]).as_slice());
+    // Empty input, then errors: wide values, IDs outside, column arity/range.
+    let none = gpu.upload(&[])?;
+    assert!(gpu.distinct_rows(SemiJoinRows::Rows(&none), &source, &[0])?.is_empty());
+    assert!(gpu.distinct_rows(SemiJoinRows::Rows(&set), &source, &[3]).is_err());
+    let outside = gpu.upload(&[0, rows.len() as u32])?;
+    assert!(gpu.distinct_rows(SemiJoinRows::Rows(&outside), &source, &[0]).is_err());
+    assert!(gpu.distinct_rows(SemiJoinRows::Rows(&set), &source, &[]).is_err());
+    assert!(gpu.distinct_rows(SemiJoinRows::Rows(&set), &source, &[0; 5]).is_err());
+    assert!(gpu.distinct_rows(SemiJoinRows::Rows(&set), &source, &[4]).is_err());
+    Ok(())
+}
+
+#[test]
+fn fused_join_semijoin_distinct_matches_stepwise_calls() -> Result<()> {
+    use mccl::radix::{SemiJoinRows, SemiJoinStep};
+    let gpu = Gpu::new()?;
+    // Source rows [probe key, check key, item, wide]: duplicates and misses.
+    let rows: Vec<[i64; 4]> = (0..40009i64)
+        .map(|i| [i % 97, (i * 31) % 211, i % 13, i64::MIN + i])
+        .collect();
+    let source = gpu.relation_i64(rows.len(), |i| rows[i])?;
+    let by_probe = gpu.build_radix_index(&source, ROW_IDS, None)?;
+    let checks: Vec<(u32, u32)> = (0..211u32).filter(|k| k % 3 != 0).map(|k| (k, k % 13)).collect();
+    let check = gpu.build_radix_index(&ingest(&gpu, &checks)?, PAIRS, None)?;
+    let odd: Vec<(u32, u32)> = (0..13u32).filter(|k| k % 2 == 1).map(|k| (k, 0)).collect();
+    let items = gpu.build_radix_index(&ingest(&gpu, &odd)?, PAIRS, None)?;
+    let probes = gpu.upload(&[5, 96, 500, 5, 0, 40])?;
+    let steps = [
+        SemiJoinStep { index: &check, key_column: 1, item_column: Some(2) },
+        SemiJoinStep { index: &items, key_column: 2, item_column: None },
+    ];
+    // Stepwise reference through the separately tested primitives.
+    let join = gpu.join_radix(&by_probe, &probes)?;
+    let a = gpu.semijoin_rows(SemiJoinRows::Join(&join), &source, 1, Some(2), &check)?;
+    let b = gpu.semijoin_rows(SemiJoinRows::Rows(&a), &source, 2, None, &items)?;
+    assert!(!b.is_empty() && b.len() < join.len());
+    for columns in [&[0usize, 1, 2][..], &[2, 0]] {
+        let expected = gpu.distinct_rows(SemiJoinRows::Rows(&b), &source, columns)?;
+        let fused = gpu.join_semijoin_distinct(&by_probe, &probes, &source, &steps, columns)?;
+        assert_eq!(fused.values(), expected.values(), "{columns:?}");
+    }
+    // No steps: distinct over the whole join.
+    let expected = gpu.distinct_rows(SemiJoinRows::Join(&join), &source, &[1])?;
+    let fused = gpu.join_semijoin_distinct(&by_probe, &probes, &source, &[], &[1])?;
+    assert_eq!(fused.values(), expected.values());
+    // A step that removes everything, and probes that match nothing.
+    let empty = gpu.build_radix_index(&ingest(&gpu, &[])?, PAIRS, None)?;
+    let none = [SemiJoinStep { index: &empty, key_column: 1, item_column: None }];
+    assert!(gpu.join_semijoin_distinct(&by_probe, &probes, &source, &none, &[0])?.is_empty());
+    let misses = gpu.upload(&[1000, 2000])?;
+    assert!(gpu.join_semijoin_distinct(&by_probe, &misses, &source, &steps, &[0])?.is_empty());
+    // Deferred GPU errors still surface: a wide projected column.
+    assert!(gpu.join_semijoin_distinct(&by_probe, &probes, &source, &steps, &[3]).is_err());
+    Ok(())
+}

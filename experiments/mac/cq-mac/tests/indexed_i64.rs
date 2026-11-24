@@ -195,3 +195,58 @@ fn borrowed_payloads_and_cursors_survive_owner_drop_and_allocator_churn() {
         assert_eq!(retained.row_ids(7).unwrap().collect::<Vec<_>>(), [0, 2]);
     }
 }
+
+#[test]
+fn gpu_row_id_join_matches_host_lookups_and_treats_wide_probes_as_misses() {
+    let context = MacContext::new().unwrap();
+    let rows = (0..4099)
+        .map(|i| [i as i64, (i % 61) as i64 * 3, -(i as i64)])
+        .chain([[7, i64::from(u32::MAX), 8]])
+        .collect::<Vec<_>>();
+    let source = context.relation_i64(rows.len(), |i| rows[i]).unwrap();
+    let gpu = context.prepare_radix_i64::<1>(&source).unwrap();
+    // Wide probes interleave valid ones so the ordinal remapping is exercised.
+    let probes = [
+        -1,
+        0,
+        i64::from(u32::MAX),
+        i64::from(u32::MAX) + 1,
+        3,
+        4,
+        i64::MIN,
+        180,
+        0,
+    ];
+    let expected = probes
+        .iter()
+        .enumerate()
+        .flat_map(|(ordinal, &key)| {
+            gpu.row_ids(key)
+                .into_iter()
+                .flatten()
+                .map(move |row_id| (ordinal as u32, row_id))
+        })
+        .collect::<Vec<_>>();
+    let join = gpu.join_row_ids(&context, &probes).unwrap();
+    assert_eq!(join.len(), expected.len());
+    assert_eq!(join.pairs().collect::<Vec<_>>(), expected);
+    let in_domain = gpu.join_row_ids(&context, &[3, 0]).unwrap();
+    assert_eq!(
+        in_domain.pairs().collect::<Vec<_>>(),
+        [3, 0]
+            .iter()
+            .enumerate()
+            .flat_map(|(ordinal, &key)| gpu
+                .row_ids(key)
+                .unwrap()
+                .map(move |row| (ordinal as u32, row)))
+            .collect::<Vec<_>>()
+    );
+    let cpu = context.prepare_radix_i64_on_cpu::<1>(&source).unwrap();
+    assert!(cpu.join_row_ids(&context, &probes).is_err());
+    let other = MacContext::new().unwrap();
+    assert_eq!(
+        gpu.join_row_ids(&other, &probes).unwrap_err(),
+        MacError::ContextMismatch
+    );
+}

@@ -1,0 +1,89 @@
+{
+  "architecture": "aarch64",
+  "args": [
+    "experiments/mac/target/release/metal_h09",
+    "--data",
+    "features/workloads/target/bench/data/tpch-10/retail_h09",
+    "--runs",
+    "5",
+    "--out",
+    "experiments/mac/query-expansion/results/metal-packed-h09-sf10-m3max-20261110.json"
+  ],
+  "compiled": "compiled authored default route reading that run through its native l_partkey host read",
+  "correctness": "complete answers equal the compiled default route and sorted; GPU pairs equal CPU pairs exactly, checked untimed before sampling; every sample checks counts",
+  "cpu": "the Metal path's identical host completion, with the Part->Lineitem expansion as CPU row_ids reads of the same run; CPU join stage = row_ids per green part key into (probe ordinal, row ID) pairs",
+  "index": "one GPU-built grouped RadixRun over the retained i64 Lineitem source (l_partkey -> original row ID), built untimed and shared by both paths",
+  "limits": "query times exclude source ingestion and index build; remaining operators and canonicalization run on CPU; synthetic datasets are not dbgen",
+  "metal": "Part/GreenNames prefix on host; Part->Lineitem as one batched Metal join (binary-search ranks, exact u64 offsets, 2048-pair tiles); remaining joins on CPU with the default route's providers; Metal join stage includes probe upload, both synchronous GPU evaluations and pair publication",
+  "order": "alternating CPU-first/Metal-first pairs after two warmup rounds",
+  "resident": "One GPU graph after the join's pair-count readback: Metal join expansion, PartSupp (part key, supplier item), Orders and Supplier-selected-by-Nation semijoins with GPU-resident row counts, then GPU gather, LSD stable radix sort and dedup of (order, part, supplier); only distinct answers return (two host waits per query). The p_name LIKE '%green%' prefilter (unsupported query language) is evaluated once outside timing. resident_query reuses runs prepared once; resident_with_builds includes ingesting and GPU-building those three runs and the host Nation mask",
+  "results": [
+    {
+      "answers": 3261612,
+      "compiled_query_ms": 2134.066833,
+      "compiled_query_samples": [
+        2118.180625,
+        2140.306125,
+        2134.066833,
+        2125.1295,
+        2175.450875
+      ],
+      "cpu_join_ms": 11.690249999999999,
+      "cpu_join_samples": [
+        11.801292,
+        11.690249999999999,
+        11.796875,
+        11.512792000000001,
+        11.598875
+      ],
+      "cpu_query_ms": 1063.65675,
+      "cpu_query_samples": [
+        1066.148833,
+        1060.6354170000002,
+        1060.997667,
+        1063.65675,
+        1077.3195
+      ],
+      "dataset": "features/workloads/target/bench/data/tpch-10/retail_h09",
+      "gpu_build_ms": 88.702709,
+      "join_pairs": 3261612,
+      "lineitem_rows": 59986042,
+      "metal_join_ms": 1.7474159999999999,
+      "metal_join_samples": [
+        1.7474159999999999,
+        1.5276669999999999,
+        1.8245,
+        1.591791,
+        2.106834
+      ],
+      "metal_query_ms": 1036.238667,
+      "metal_query_samples": [
+        1055.990875,
+        1034.637458,
+        1036.238667,
+        1024.681375,
+        1037.820167
+      ],
+      "probes": 108782,
+      "resident_query_ms": 44.109708,
+      "resident_query_samples": [
+        51.312583000000004,
+        25.736833,
+        45.84525,
+        26.085458999999997,
+        44.109708
+      ],
+      "resident_with_builds_ms": 45.089708,
+      "resident_with_builds_samples": [
+        45.466167,
+        40.047708,
+        45.089708,
+        43.728042,
+        48.112292000000004
+      ]
+    }
+  ],
+  "runs": 5,
+  "schema": "mccl.metal-join-h09.v1",
+  "warmups": 2
+}

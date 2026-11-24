@@ -1,9 +1,9 @@
 //! GPU-built grouped RadixRun using the native storage reader verbatim.
 use super::{IndexSpec, MAX_ROWS, MacContext, MacError, Payload, Relation, platform};
 use cq_storage::{
-    IndexRead, RadixRun, RadixRunReadState, RadixRunView, RadixSplineMetadata, RadixSplinePoint,
-    RunCursor,
+    RadixRun, RadixRunReadState, RadixRunView, RadixSplineMetadata, RadixSplinePoint, RunCursor,
 };
+pub use mccl::radix::RadixJoin;
 use std::{fmt, rc::Rc};
 
 struct Completed {
@@ -346,6 +346,257 @@ impl MacContext {
             .merge_radix_indexes(&older.inner.index, &newer.inner.index)
             .map(MacRadixRun::completed)
             .map_err(platform::error)
+    }
+
+    /// Exact batched equi-join of `probes` against `run`, executed on the GPU.
+    /// Pairs are `[probe ordinal, item]` in probe order, then stored
+    /// occurrence order. Totals above [`MAX_ROWS`] are rejected, not truncated.
+    pub fn join_radix(&self, run: &MacRadixRun, probes: &[u32]) -> Result<RadixJoin, MacError> {
+        if !run.inner.index.belongs_to(&self.inner.0) {
+            return Err(MacError::ContextMismatch);
+        }
+        if probes.len() > MAX_ROWS {
+            return Err(MacError::CapacityExceeded);
+        }
+        let probes = self.inner.0.upload(probes).map_err(platform::error)?;
+        self.inner
+            .0
+            .join_radix(&run.inner.index, &probes)
+            .map_err(platform::error)
+    }
+}
+
+/// Completed GPU join of i64 probe keys against a source-bound grouped run.
+#[derive(Debug)]
+pub struct RowIdJoin {
+    join: RadixJoin,
+    /// Caller probe ordinal of each uploaded probe; `None` when every probe
+    /// was in the u32 key domain and ordinals coincide.
+    ordinals: Option<Vec<u32>>,
+}
+
+impl RowIdJoin {
+    pub fn len(&self) -> usize {
+        self.join.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.join.is_empty()
+    }
+
+    /// `(probe ordinal, source row ID)` in probe order, then source chronology.
+    pub fn pairs(&self) -> impl ExactSizeIterator<Item = (u32, u32)> + '_ {
+        self.join.pairs().iter().map(|&[probe, row_id]| {
+            let probe = self
+                .ordinals
+                .as_ref()
+                .map_or(probe, |ordinals| ordinals[probe as usize]);
+            (probe, row_id)
+        })
+    }
+}
+
+impl<const KEY_COLUMN: usize> IndexedI64Relation<KEY_COLUMN> {
+    /// Original source row IDs matching each probe, joined on the GPU.
+    ///
+    /// Requires the GPU-built index. As with [`Self::row_ids`], probes outside
+    /// the u32 key domain are exact misses; they are never narrowed or uploaded.
+    pub fn join_row_ids(
+        &self,
+        context: &MacContext,
+        probes: &[i64],
+    ) -> Result<RowIdJoin, MacError> {
+        let SourceIndex::Gpu(run) = &self.inner.index else {
+            return Err(MacError::CommandFailed(
+                "GPU join requires a GPU-built source index".into(),
+            ));
+        };
+        if probes.len() > MAX_ROWS {
+            return Err(MacError::CapacityExceeded);
+        }
+        let mut keys = Vec::with_capacity(probes.len());
+        let mut ordinals: Option<Vec<u32>> = None;
+        for (ordinal, &probe) in probes.iter().enumerate() {
+            match u32::try_from(probe) {
+                Ok(key) => {
+                    if let Some(ordinals) = &mut ordinals {
+                        ordinals.push(ordinal as u32);
+                    }
+                    keys.push(key);
+                }
+                Err(_) => {
+                    ordinals.get_or_insert_with(|| (0..ordinal as u32).collect());
+                }
+            }
+        }
+        Ok(RowIdJoin {
+            join: context.join_radix(run, &keys)?,
+            ordinals,
+        })
+    }
+}
+
+/// Source row IDs kept on the GPU by [`IndexedI64Relation::semijoin`].
+pub struct GpuRows {
+    rows: mccl::U32Array,
+}
+
+impl GpuRows {
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
+    /// Kept original row IDs, in input order.
+    pub fn row_ids(&self) -> Result<&[u32], MacError> {
+        self.rows.as_slice().map_err(platform::error)
+    }
+}
+
+/// Rows entering a GPU semijoin: a row-ID join's matches or earlier kept rows.
+#[derive(Clone, Copy)]
+pub enum GpuRowsInput<'a> {
+    Join(&'a RowIdJoin),
+    Rows(&'a GpuRows),
+}
+
+impl<const KEY_COLUMN: usize> IndexedI64Relation<KEY_COLUMN> {
+    /// Keep this source's rows whose `key_column` value occurs in `run`; with
+    /// `item_column`, that key's group must contain the row's `item_column`
+    /// value. Runs on the GPU over full-width i64 fields; values outside u32
+    /// are misses. Chained filters never copy row IDs back to the host.
+    pub fn semijoin(
+        &self,
+        context: &MacContext,
+        input: GpuRowsInput<'_>,
+        key_column: usize,
+        item_column: Option<usize>,
+        run: &MacRadixRun,
+    ) -> Result<GpuRows, MacError> {
+        let gpu = &context.inner.0;
+        if !self.inner.source.inner.belongs_to(gpu) || !run.inner.index.belongs_to(gpu) {
+            return Err(MacError::ContextMismatch);
+        }
+        gpu.semijoin_rows(
+            input.rows(),
+            &self.inner.source.inner,
+            key_column,
+            item_column,
+            &run.inner.index,
+        )
+        .map(|rows| GpuRows { rows })
+        .map_err(platform::error)
+    }
+}
+
+impl<'a> GpuRowsInput<'a> {
+    fn rows(self) -> mccl::radix::SemiJoinRows<'a> {
+        match self {
+            GpuRowsInput::Join(join) => mccl::radix::SemiJoinRows::Join(&join.join),
+            GpuRowsInput::Rows(rows) => mccl::radix::SemiJoinRows::Rows(&rows.rows),
+        }
+    }
+}
+
+/// Distinct `W`-column tuples from [`IndexedI64Relation::distinct`], in
+/// ascending lexicographic order. Zero-copy view of the GPU result.
+pub struct GpuTuples<const W: usize> {
+    tuples: mccl::radix::DistinctRows,
+}
+
+impl<const W: usize> GpuTuples<W> {
+    pub fn len(&self) -> usize {
+        self.tuples.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tuples.is_empty()
+    }
+
+    pub fn tuples(&self) -> &[[i64; W]] {
+        let (tuples, rest) = self.tuples.values().as_chunks::<W>();
+        debug_assert!(rest.is_empty());
+        tuples
+    }
+}
+
+impl<const KEY_COLUMN: usize> IndexedI64Relation<KEY_COLUMN> {
+    /// Distinct full-width tuples of the input rows' `columns`, sorted and
+    /// deduplicated on the GPU; only the answers return. Every projected value
+    /// must lie in the u32 domain: a wider value is an error, never narrowed.
+    pub fn distinct<const W: usize>(
+        &self,
+        context: &MacContext,
+        input: GpuRowsInput<'_>,
+        columns: [usize; W],
+    ) -> Result<GpuTuples<W>, MacError> {
+        let gpu = &context.inner.0;
+        if !self.inner.source.inner.belongs_to(gpu) {
+            return Err(MacError::ContextMismatch);
+        }
+        gpu.distinct_rows(input.rows(), &self.inner.source.inner, &columns)
+            .map(|tuples| GpuTuples { tuples })
+            .map_err(platform::error)
+    }
+}
+
+/// One GPU semijoin of [`IndexedI64Relation::join_semijoin_distinct`].
+#[derive(Clone, Copy)]
+pub struct GpuSemiJoin<'a> {
+    pub key_column: usize,
+    pub item_column: Option<usize>,
+    pub run: &'a MacRadixRun,
+}
+
+impl<const KEY_COLUMN: usize> IndexedI64Relation<KEY_COLUMN> {
+    /// [`Self::join_row_ids`], then each [`Self::semijoin`] in order, then
+    /// [`Self::distinct`], as one GPU graph: only the join's pair count is read
+    /// back on the host before the answers. Probes outside the u32 key domain
+    /// are exact misses, never narrowed.
+    pub fn join_semijoin_distinct<const W: usize>(
+        &self,
+        context: &MacContext,
+        probes: &[i64],
+        steps: &[GpuSemiJoin<'_>],
+        columns: [usize; W],
+    ) -> Result<GpuTuples<W>, MacError> {
+        let gpu = &context.inner.0;
+        let SourceIndex::Gpu(run) = &self.inner.index else {
+            return Err(MacError::CommandFailed(
+                "GPU join requires a GPU-built source index".into(),
+            ));
+        };
+        if !self.inner.source.inner.belongs_to(gpu)
+            || !run.inner.index.belongs_to(gpu)
+            || steps.iter().any(|step| !step.run.inner.index.belongs_to(gpu))
+        {
+            return Err(MacError::ContextMismatch);
+        }
+        if probes.len() > MAX_ROWS {
+            return Err(MacError::CapacityExceeded);
+        }
+        let keys: Vec<u32> = probes.iter().filter_map(|&p| u32::try_from(p).ok()).collect();
+        let keys = gpu.upload(&keys).map_err(platform::error)?;
+        let steps: Vec<_> = steps
+            .iter()
+            .map(|step| mccl::radix::SemiJoinStep {
+                index: &step.run.inner.index,
+                key_column: step.key_column,
+                item_column: step.item_column,
+            })
+            .collect();
+        gpu.join_semijoin_distinct(
+            &run.inner.index,
+            &keys,
+            &self.inner.source.inner,
+            &steps,
+            &columns,
+        )
+        .map(|tuples| GpuTuples { tuples })
+        .map_err(platform::error)
     }
 }
 

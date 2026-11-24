@@ -1,6 +1,5 @@
 use cq_storage::{
-    AdaptiveKeySet, Build, ExactMembership, HashIndex, I64Codec, IndexRead, JoinFilterPredicate,
-    ReadPredicate,
+    Build, CodeDomain, DenseMembership, ExactMembership, JoinFilterPredicate, ReadPredicate,
 };
 use std::{
     collections::HashSet,
@@ -43,13 +42,15 @@ pub fn execute(
 ) -> Result<crate::ManualResult<crate::h03::Answer>, Box<dyn Error>> {
     let cutoff = crate::tpch_runtime::date("1995-03-15");
 
-    // Expanded r2: CPU Customer(customer_key -> ()), after the string predicate.
-    // Retain every occurrence: membership reduces Orders, but the final lookup
-    // must still enumerate duplicate Customer witnesses before canon.
-    let customers: HashIndex<'_, i64, ()> = HashIndex::build(
+    // Customer(customer_key, "BUILDING"): the literal is encoded once through
+    // the column's dictionary domain; an absent value matches no code.
+    let building = data.dictionaries.domain("c_mktsegment").exact("BUILDING");
+    // The current default route reads Customer only as membership: it supplies
+    // no output beyond its key, so duplicate Customer rows add no witness.
+    let customers = <DenseMembership<i64, 16777216> as Build<_>>::build(
         data.customer
             .iter()
-            .filter(|(_, segment)| segment == "BUILDING")
+            .filter(|(_, segment)| *segment == building)
             .map(|(customer_key, _)| (*customer_key, ())),
     );
 
@@ -78,12 +79,12 @@ pub fn execute(
     )?;
     let indexed_rows = orders.len();
 
-    // Preserve the expanded optional r4 join filter, including its unknown
-    // population argument (None), rather than substituting source row count.
-    // Distinct keys come from exactly the selected r3 build, never raw Orders.
-    let join_filter = cq_storage::selective_build(distinct_order_keys.len(), None).then(|| {
-        AdaptiveKeySet::<i64, I64Codec, 67108864>::from_keys(distinct_order_keys, I64Codec)
-    });
+    // The recorded Lineitem join filter: built only when the selected Orders
+    // keys are at most 35% of the Orders population (IF-JoinFilterAbandon).
+    // Distinct keys come from exactly the selected build, never raw Orders.
+    let join_filter =
+        cq_storage::selective_build(distinct_order_keys.len(), prepared.source.len(), 35)
+            .then(|| DenseMembership::<i64, 67108864>::from_dense_keys(distinct_order_keys));
     let predicate = JoinFilterPredicate(join_filter.as_ref());
 
     let mut result = crate::ManualResult {
@@ -107,7 +108,7 @@ pub fn execute(
         for row_id in orders.lookup(&key) {
             let customer_key = &numeric[row_id as usize * 3 + 1];
             result.payload_gathers += 1;
-            for () in customers.lookup(customer_key) {
+            if customers.contains(customer_key) {
                 result.witnesses += 1;
                 let answer = (*order_key, *customer_key);
                 if seen.insert(answer) {

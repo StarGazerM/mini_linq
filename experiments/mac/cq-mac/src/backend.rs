@@ -6,7 +6,10 @@ use std::fmt;
 #[path = "radix.rs"]
 mod radix;
 #[cfg(target_os = "macos")]
-pub use radix::{IndexedI64Relation, MacRadixRun};
+pub use radix::{
+    GpuRows, GpuRowsInput, GpuSemiJoin, GpuTuples, IndexedI64Relation, MacRadixRun, RadixJoin,
+    RowIdJoin,
+};
 
 /// Conservative bound for padded radix/scan/merge grids and u32 offsets.
 /// Individual allocations must also fit the selected device's buffer limit.

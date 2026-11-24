@@ -1,5 +1,6 @@
-//! Explicit prepared Lineitem binding for the unchanged authored H09 query.
-//! CPU/GPU placement changes construction only; query() has one concrete host type.
+//! Explicit prepared Lineitem binding for the unchanged authored H09 default route.
+//! CPU/GPU placement changes construction only; one replayed query body reads
+//! the prepared host through its declared native `l_partkey` read.
 use crate::{h09, manual_h09::Prepared};
 use cq_mac::{IndexedI64Relation, MacContext, MacError};
 use cq_storage::{
@@ -40,6 +41,11 @@ impl PreparedIndex {
     pub fn indexed_rows(&self) -> usize {
         self.lineitem.as_ref().map_or(0, IndexedI64Relation::len)
     }
+
+    /// The source-bound Lineitem index, absent without green-part demand.
+    pub fn lineitem(&self) -> Option<&IndexedI64Relation<1>> {
+        self.lineitem.as_ref()
+    }
 }
 
 #[cfg(test)]
@@ -49,10 +55,30 @@ struct Reads {
     probes: std::cell::Cell<usize>,
 }
 
-struct LineitemHost<'a> {
+pub(crate) struct LineitemHost<'a> {
     index: Option<&'a IndexedI64Relation<1>>,
     #[cfg(test)]
     reads: &'a Reads,
+}
+
+impl LineitemHost<'_> {
+    /// The authored body binds `data.lineitem.as_slice()`; the prepared host
+    /// is already the borrowed relation value.
+    pub(crate) fn as_slice(&self) -> &Self {
+        self
+    }
+}
+
+/// Inputs of the replayed default route: the pinned prepared Lineitem host and
+/// the caller's ordinary slices for every other relation.
+pub(crate) struct PreparedData<'a> {
+    pub(crate) lineitem: &'a LineitemHost<'a>,
+    pub(crate) partsupp: &'a Vec<h09::PartSupp>,
+    pub(crate) part: &'a Vec<h09::Part>,
+    pub(crate) supplier: &'a Vec<h09::Supplier>,
+    pub(crate) orders: &'a Vec<h09::Orders>,
+    pub(crate) nation: &'a Vec<h09::Nation>,
+    pub(crate) green_names: &'a Vec<(cq_load::StringCode,)>,
 }
 
 impl<'a> Rows for &'a LineitemHost<'_> {
@@ -68,7 +94,7 @@ impl<'a> Rows for &'a LineitemHost<'_> {
 }
 
 #[derive(Clone, Copy)]
-struct LineitemRead<'a> {
+pub(crate) struct LineitemRead<'a> {
     index: Option<&'a IndexedI64Relation<1>>,
     #[cfg(test)]
     reads: &'a Reads,
@@ -86,7 +112,7 @@ impl<'a> IndexedColumn<1> for &'a LineitemHost<'_> {
 }
 
 #[derive(Clone, Copy)]
-struct Payload<'a> {
+pub(crate) struct Payload<'a> {
     order: &'a i64,
     supplier: &'a i64,
 }
@@ -98,7 +124,7 @@ impl<'a> Columns for Payload<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct PayloadCursor<'a> {
+pub(crate) struct PayloadCursor<'a> {
     values: &'a [i64],
     ids: Option<RunCursor<'a, u32>>,
 }
@@ -142,22 +168,22 @@ impl cq_storage::ExactMembership<(i64,)> for LineitemRead<'_> {
 
 // One compiled function for both construction choices, not two handwritten joins.
 #[inline(never)]
-#[allow(non_snake_case)]
 fn query(data: &h09::Data, lineitem: &LineitemHost<'_>) -> Vec<h09::Answer> {
-    h09::with_hosts!(
+    h09::prepared::execute(&PreparedData {
         lineitem,
-        data.partsupp.as_slice(),
-        data.part.as_slice(),
-        data.supplier.as_slice(),
-        data.orders.as_slice(),
-        data.nation.as_slice(),
-    )
+        partsupp: &data.partsupp,
+        part: &data.part,
+        supplier: &data.supplier,
+        orders: &data.orders,
+        nation: &data.nation,
+        green_names: &data.green_names,
+    })
 }
 
 /// The Lineitem relation is the pinned prepared source, not data.lineitem.
-/// All other relations and the opaque Part predicate retain the authored query.
+/// All other relations and the loader's GreenNames retain the authored query.
 pub fn execute(data: &h09::Data, index: &PreparedIndex) -> Result<Vec<h09::Answer>, MacError> {
-    if index.lineitem.is_none() && data.part.iter().any(|(_, name)| name.contains("green")) {
+    if index.lineitem.is_none() && crate::manual_h09::has_green_demand(data) {
         return Err(MacError::CommandFailed(
             "H09 prepared source has no green-part demand".into(),
         ));
@@ -185,12 +211,10 @@ mod tests {
     #[test]
     fn compiled_h09_uses_bound_column_index_without_fallback_and_preserves_wide_payloads() {
         let context = MacContext::new().unwrap();
-        let mut data = fixtures::h09_boundaries();
         // Out-of-domain probe keys are absent, not narrowed into a real key.
-        data.part.extend([
-            (-1, "green absent".into()),
-            (u32::MAX as i64 + 1, "green absent".into()),
-        ]);
+        let mut parts = fixtures::H09_BOUNDARY_PARTS.to_vec();
+        parts.extend([(-1, "green absent"), (u32::MAX as i64 + 1, "green absent")]);
+        let mut data = fixtures::h09_data(&parts, fixtures::h09_boundary_rows());
         let expected = canonical(h09::compiled(&data));
         let source = Prepared::new(&context, &data).unwrap();
         let cpu = build(&context, &source, Construction::Cpu).unwrap();
@@ -200,6 +224,7 @@ mod tests {
         // Payloads must still come from the pinned shared source, not this vector.
         data.lineitem.clear();
         cq_mac::memory::clear_cache().unwrap();
+        let green_parts = crate::manual_h09::green_parts(&data).count();
         for index in [cpu, gpu] {
             let reads = Reads::default();
             let host = LineitemHost {
@@ -212,13 +237,7 @@ mod tests {
                 0,
                 "prepared source was rebuilt through a fallback scan"
             );
-            assert_eq!(
-                reads.probes.get(),
-                data.part
-                    .iter()
-                    .filter(|(_, name)| name.contains("green"))
-                    .count()
-            );
+            assert_eq!(reads.probes.get(), green_parts);
             assert!(expected.contains(&(-1, 3, i64::MAX)));
             assert_eq!(canonical(execute(&data, &index).unwrap()), expected);
         }
@@ -227,25 +246,29 @@ mod tests {
     #[test]
     fn compiled_h09_handles_empty_sources_and_no_demand_without_ingesting_invalid_rows() {
         let context = MacContext::new().unwrap();
-        let mut data = fixtures::h09_boundaries();
-        data.lineitem.clear();
+        let mut rows = fixtures::h09_boundary_rows();
+        rows.lineitem.clear();
+        let data = fixtures::h09_data(fixtures::H09_BOUNDARY_PARTS, rows.clone());
         let source = Prepared::new(&context, &data).unwrap();
         for mode in [Construction::Cpu, Construction::Gpu] {
             let index = build(&context, &source, mode).unwrap();
             assert!(execute(&data, &index).unwrap().is_empty());
         }
-        data.part
-            .iter_mut()
-            .for_each(|(_, name)| *name = "red".into());
-        data.lineitem.push((i64::MIN, -1, i64::MAX));
+        let red: Vec<_> = fixtures::H09_BOUNDARY_PARTS
+            .iter()
+            .map(|&(key, _)| (key, "red"))
+            .collect();
+        rows.lineitem.push((i64::MIN, -1, i64::MAX));
+        let data = fixtures::h09_data(&red, rows.clone());
         let source = Prepared::new(&context, &data).unwrap();
         assert_eq!(source.source_bytes(), 0);
+        let mut demanded = red.clone();
+        demanded.push((1, "green"));
+        let demanded = fixtures::h09_data(&demanded, rows);
         for mode in [Construction::Cpu, Construction::Gpu] {
             let index = build(&context, &source, mode).unwrap();
             assert!(execute(&data, &index).unwrap().is_empty());
-            data.part.push((1, "green".into()));
-            assert!(execute(&data, &index).is_err());
-            data.part.pop();
+            assert!(execute(&demanded, &index).is_err());
         }
     }
 }

@@ -14,9 +14,12 @@
 pub mod backend;
 pub mod maintained;
 
-pub use backend::{IndexSpec, MacContext, MacError, MacRun, Payload, Relation, RunCursor};
 #[cfg(target_os = "macos")]
-pub use backend::{IndexedI64Relation, MacRadixRun};
+pub use backend::{
+    GpuRows, GpuRowsInput, GpuSemiJoin, GpuTuples, IndexedI64Relation, MacRadixRun, RadixJoin,
+    RowIdJoin,
+};
+pub use backend::{IndexSpec, MacContext, MacError, MacRun, Payload, Relation, RunCursor};
 pub use maintained::{MaintainedIndex, MaintenancePolicy, Snapshot, SnapshotCursor};
 
 /// Process-wide MLX allocator controls; this provider owns no separate cache.

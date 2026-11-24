@@ -3,14 +3,17 @@
 Status: this tree has MCCL/MLX shared-source construction, immutable CPU reads,
 and online flat/binary-carry snapshots for its existing packed u32/u32 provider.
 It also has an explicitly selected **GPU-built grouped RadixRun**, including
-parallel spline construction, stable grouped merge, and an opt-in compiled H09
-binding using the native CPU reader. See
+parallel spline construction, stable grouped merge, an opt-in compiled H09
+binding using the native CPU reader, and a **batched Metal equi-join** over
+grouped runs. See
 [compiled H09](#explicit-compiled-h09-integration-2026-10-27),
-[GPU-built RadixRun](#gpu-built-radixrun-2026-10-27), and the
+[GPU-built RadixRun](#gpu-built-radixrun-2026-10-27),
+[current-tree revival](#current-tree-hybrid-revival-2026-11-02),
+[Metal grouped join](#metal-grouped-join-2026-11-02), and the
 [shared-relation input cutover](#shared-relation-input-cutover) for current APIs.
 Wider GPU index keys, Datalog publication integration, automatic placement and
-a Metal query backend remain separate work. Earlier measurement sections and
-command blocks retain their historical boundaries.
+a compiler-emitted Metal query backend remain separate work. Earlier
+measurement sections and command blocks retain their historical boundaries.
 
 Evidence provenance: historical numerical results below are preserved from
 this document at repository snapshot `7e187597` (2026-11-02), with the original
@@ -1920,3 +1923,262 @@ were updated for the explicit-column contract. CQ Mac strict Clippy passed;
 the query-expansion check reports only its existing `manual_h09` callback
 type-complexity warning. No automatic placement or maintained-owner migration
 is implied by this opt-in compiled H09 path.
+
+## Current-tree hybrid revival (2026-11-02)
+
+`experiments/mac/query-expansion` had stopped compiling against the current
+workloads (82 errors: the removed `retail_kernel!` shell, `StringCode` inputs,
+the three-argument `selective_build`). It now compiles the unchanged workload
+runtime (`features/workloads/src/tpch_runtime.rs`, via `#[path]`) and the
+unchanged H03/H09 sources with every authored configuration. `h03::compiled`
+and `h09::compiled` are the authored `default` route, which now plans from
+recorded TPC-H evidence.
+
+The prepared H09 path no longer copies the query. A thin override of the
+workload `configuration!` macro records a replay of the default route's own
+stages, Structures rewrites and authored body; `h09::prepared` re-expands that
+body over `compiled_h09::PreparedData`. Its `query!` scans evidence from the
+authored declarations and compiles the same tokens with one change: Lineitem
+declares `host [l_partkey] reads [exact, membership]`. Expansion shows the
+default route's Lineitem `HashIndex` fallback replaced by
+`dispatch::seek(ColumnHost::<_, 1>)`; every other provider and the join order are
+identical. The regression test still observes zero Lineitem scans and one probe
+per green part.
+
+Fixtures intern strings exactly as the loaders do (`Dictionaries`, and
+`GreenNames` from `dictionary_where`). The handwritten H03/H09 realizations
+follow the current default providers: H03 Customer and H09 PartSupp/Orders/
+Nation are membership reads, so duplicate rows there no longer add witnesses
+(boundary witnesses 12→8 for H03, 68→12 for H09; answers unchanged). H03's
+join filter follows the recorded abandon policy, `selective_build(kept,
+Orders.len(), 35)`, over a `DenseMembership<i64, 67108864>`.
+
+Verification: query-expansion tests 6/6, CQ Mac tests 21/21. The manual
+executable matched exact answers for boundaries, empty, no-demand, scaled and
+wide-domain cases. `compiled_h09 --sizes 65539,1048579 --runs 3` matched exact
+answers; at 1M rows the compiled query over either index took about 60 ms,
+versus 107 ms recorded on 2026-10-27. That reflects the current default
+route's membership plan, not a provider change.
+
+## Metal grouped join (2026-11-02)
+
+MCCL now executes a batched exact equi-join against a completed grouped run:
+
+```rust
+let join = gpu.join_radix(&index, &gpu.upload(&probe_keys)?)?;
+for &[probe, item] in join.pairs() { /* probe order, then stored order */ }
+```
+
+`native/index/join.metal` is compiled ahead of time into `mccl.metallib`, like
+every other index kernel, and is loaded through the existing SIMD32/256-thread
+checks. One synchronous call runs two MLX primitives:
+
+1. `join_probe_counts` binary-searches each probe over the distinct keys and
+   writes its rank and occurrence count; a dedicated u64 multi-level scan
+   (`join_scan_blocks_u64`, Hillis–Steele in threadgroup memory, no 64-bit
+   SIMD reductions) turns counts into exact offsets with the total last.
+2. After reading that total, `join_expand` assigns fixed 2048-pair tiles to
+   threadgroups. Each tile bounds its owners by two searches over the offsets,
+   so one hot key spreads over many threadgroups instead of one thread.
+
+Totals above 1<<30 pairs are rejected, never truncated; the output handle is
+installed only after completion. Pairs are `[probe ordinal, item]` and own
+their storage. In CQ Mac, `MacContext::join_radix` uploads u32 probes, and
+`IndexedI64Relation::join_row_ids` joins i64 probes against a GPU-built
+source-bound run: out-of-u32 probes are exact misses with remapped ordinals,
+and CPU-built indexes are rejected. Tests compare against independent
+nested-loop oracles, including misses, duplicates, u32 extrema, empty runs and
+probes, a 100,003-occurrence hot key and 2047/2048/2049/4096-pair tile edges.
+
+`metal_h09::execute` keeps the Part/GreenNames prefix on the host, runs
+Part→Lineitem as one Metal join, gathers full-width i64 rows by original row
+ID, and completes the remaining operators on the CPU with the default route's
+providers, sorting and deduplicating like its canonicalization.
+`execute_on_cpu` runs the identical completion over CPU `row_ids` reads of the
+same run, isolating the expansion's placement from host-code differences.
+
+M3 Max, AC power, no thermal/performance warning, two warmup rounds and seven
+alternating samples per path. The run is built once on the GPU, untimed and
+shared by every path. Medians in milliseconds:
+
+| Dataset | Lineitem | Probes | Pairs | CPU join | Metal join | Compiled query | CPU completion | Metal completion |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Synthetic | 1,048,579 | 10,923 | 349,537 | 0.708 | 1.052 | 59.535 | 41.114 | 38.829 |
+| Synthetic | 4,194,307 | 43,691 | 1,398,113 | 3.020 | 1.237 | 348.932 | 212.507 | 196.111 |
+| Synthetic | 16,777,219 | 174,763 | 5,592,417 | 12.319 | 2.117 | 1,639.345 | 961.600 | 889.807 |
+| dbgen SF1 | 6,001,215 | 10,664 | 319,404 | 1.141 | 1.069 | 70.393 | 45.287 | 42.635 |
+
+The isolated expansion includes probe upload, both synchronous GPU evaluations
+and pair publication. It is at parity on SF1 (319K pairs) and faster from
+about 1.4M pairs: 2.4× at 4M rows and 5.8× at 16M. With identical host
+completion, Metal reduces whole-query time by 6–8%. The remaining CPU
+operators dominate. The gap between the compiled route and the handwritten
+completion is host code, not GPU work, and must not be attributed to Metal.
+Raw samples: [Metal join H09](../experiments/mac/query-expansion/results/metal-join-h09-m3max-20261102.json).
+
+```sh
+cmake --build experiments/mac/mccl/build/native --parallel 8
+cargo run --release --manifest-path experiments/mac/query-expansion/Cargo.toml \
+  --bin metal_h09 -- --sizes 1048579,4194307,16777219 \
+  --data features/workloads/target/bench/data/tpch-1/retail_h09 --runs 7
+```
+
+## GPU-resident H09 post-join checks (2026-11-02)
+
+A profile of the Metal-join path on SF1 put the join at 1.5 of 41 ms; the
+remaining time was PartSupp/Orders lookup builds (13.6 ms), row gathers plus
+checks (17.0 ms) and sort/dedup (7.2 ms). MCCL now has
+`mccl_radix_semijoin_u32` (`join_semi_flags`/scan/`join_semi_scatter`): it
+keeps source row IDs, given as join pairs or an earlier row set, whose i64
+key (and optional item within the key's group) occurs in a grouped run. IDs
+outside the relation are errors; values outside u32 are misses. CQ Mac exposes
+it as `IndexedI64Relation::semijoin` over `GpuRows`/`GpuRowsInput`.
+
+`metal_h09::execute_resident` chains the Metal join, PartSupp (part key with
+supplier item), Orders, and Supplier keys selected by a host Nation mask, all
+on GPU row-ID sets. Answers are distinct, so Supplier multiplicity is not
+needed. Only surviving IDs return; gather, sort and dedup stay on the host.
+Runs need u32 keys; `Resident::prepare` rejects wider keys. Medians (ms, M3
+Max, 7 samples, answers exact; results in
+`results/metal-resident-h09-m3max-20261102.json`):
+
+| Dataset | Host completion, Metal join | Resident, runs prepared | Resident incl. run builds |
+|---|---:|---:|---:|
+| synthetic 1,048,579 | 38.3 | 10.0 | 14.9 |
+| synthetic 4,194,307 | 192.9 | 40.0 | 50.4 |
+| synthetic 16,777,219 | 883.7 | 157.1 | 180.2 |
+| dbgen SF1 | 42.6 | 16.7 | 24.1 |
+
+The comparison is not the same host code: the resident path also replaces
+per-query CPU provider builds. Opaque Rust stays on the host; a
+compiler-emitted Metal target should generate these kernels from checked
+Sequence.
+
+## GPU answer gather, sort and dedup (2026-11-10)
+
+`mccl_distinct_rows_i64` (CQ Mac `IndexedI64Relation::distinct`) publishes
+the distinct full-width tuples of a row-ID set or join pairs, projected onto
+one to four columns, in ascending lexicographic order. Each LSD pass gathers
+one column as the key of a `{key, row}` pair (`distinct_gather_key`) and
+reuses MCCL's stable u32 pair radix sort; adjacent equal tuples are flagged,
+scanned and scattered as int64 rows. Projected values must lie in the u32
+domain, which makes u32 order equal to i64 order. Wider values and IDs
+outside the relation are errors, never narrowed. Only the distinct count is
+read back. Tests compare against a host `BTreeSet` oracle with heavy
+duplication, u32 extrema, repeated and unordered IDs, join-pair input, and
+empty and error inputs.
+
+`metal_h09::execute_resident` now ends with
+`distinct(…, [0, 1, 2])` (order, part, supplier), so only answers return.
+It takes the green Part keys as input: Q9's `p_name LIKE '%green%'` is
+outside the supported query language, so the prefilter (`green_parts`, a
+full Part scan against `GreenNames`) is evaluated once and excluded from the
+measured query. It cost about 3 ms per SF1 query when it was included.
+Medians (ms, M3 Max, 7 samples, answers exact; results in
+`results/metal-distinct-h09-m3max-20261110.json`):
+
+| Dataset | Resident, host gather/sort (11-02, incl. prefilter) | Resident, GPU distinct | Incl. run builds |
+|---|---:|---:|---:|
+| synthetic 1,048,579 | 10.0 | 5.4 | 10.8 |
+| synthetic 4,194,307 | 40.0 | 12.9 | 18.6 |
+| synthetic 16,777,219 | 157.1 | 34.1 | 41.8 |
+| dbgen SF1 | 16.7 | 6.1 | 13.2 |
+
+The SF1 dataset was regenerated since 11-02 (6,001,204 Lineitem rows rather
+than 6,001,215; 319,402 pairs rather than 319,404). A stage profile (SF1 /
+16M, ms): join 1.2 / 1.4, three semijoins 2.0 / 5.1, distinct 2.9 / 9.7,
+tuple copy 0.3 / 2.8. Each synchronous call has roughly 0.4–1 ms fixed cost;
+the query made six.
+
+## One GPU graph per resident H09 query (2026-11-10)
+
+The semijoin and distinct kernels now read each row set's live length from
+a one-element GPU count buffer written by the producing stage. Buffers are
+sized by an upper bound, and flags past the live length are zero, so
+`prefix[capacity]` is the exact count. The distinct sorts use MCCL's existing
+dynamic-count radix passes. The standalone `mccl_radix_semijoin_u32` and
+`mccl_distinct_rows_i64` keep their contracts by seeding that buffer on the
+host.
+
+`mccl_radix_join_semijoin_distinct_i64` (`Gpu::join_semijoin_distinct`, CQ
+Mac `IndexedI64Relation::join_semijoin_distinct` with `GpuSemiJoin` steps)
+evaluates the join count, reads back only the exact pair count that sizes
+every buffer, then encodes expansion, every semijoin step and the distinct as
+one primitive. Row-ID and u32-domain violations are recorded on the GPU and
+reported after that single evaluation. A resident H09 query now waits on the
+GPU twice instead of six times. The mccl test checks the fused result against
+the stepwise primitives, including no steps, a step that removes everything,
+probes with no matches, and a deferred wide-value error.
+
+Medians (ms, M3 Max, 7 samples, answers exact, prefilter excluded; results in
+`results/metal-chain-h09-m3max-20261110.json`):
+
+| Dataset | Six host waits | One graph | Incl. run builds |
+|---|---:|---:|---:|
+| synthetic 1,048,579 | 5.4 | 4.0 | 9.0 |
+| synthetic 4,194,307 | 12.9 | 11.8 | 17.4 |
+| synthetic 16,777,219 | 34.1 | 32.1 | 41.0 |
+| dbgen SF1 | 6.1 | 4.9 | 12.1 |
+
+The saving is 1.1–2.0 ms, below the 0.4–1 ms × 4 estimated from tiny calls.
+Those calls also paid fixed encoder and allocation costs that remain inside the
+fused primitive. Next: fewer distinct sort passes (at SF1, supplier, part and
+order keys need 14, 18 and 23 bits of the 96 sorted).
+
+## Bounded composite sort keys for the fused distinct (2026-11-10)
+
+The GPU pair sort now takes a byte count. The distinct packs its projected
+columns into one composite key, first column most significant, and sorts
+LSD over 32-bit slices of it. Each slice sorts only the bytes the composite
+occupies. A column's field width is 32 bits unless proven smaller. In
+`mccl_radix_join_semijoin_distinct_i64`, a column that some semijoin step keys
+on can only hold that run's keys, so the smallest such `max_key` sets its
+width. That bound is exact metadata already on the host, so no readback is
+added. A value outside its field sets the deferred u32-domain error and is
+never truncated. `mccl_distinct_rows_i64` keeps full widths: 3 × 32 bits is 12
+byte passes as before.
+
+H09 packs (order, part, supplier) into 23 + 18 + 14 = 55 bits at SF1 and
+22 + 20 + 9 = 51 bits for 16M synthetic. That means 2 gathers and 7 byte passes
+instead of 3 and 12. Medians (ms, M3 Max, 7 samples, answers exact; results
+in `results/metal-packed-h09-m3max-20261110.json`):
+
+| Dataset | One graph, full widths | Bounded composite | Incl. run builds |
+|---|---:|---:|---:|
+| synthetic 1,048,579 | 4.0 | 3.4 | 9.2 |
+| synthetic 4,194,307 | 11.8 | 9.9 | 16.9 |
+| synthetic 16,777,219 | 32.1 | 33.2 | 39.9 |
+| dbgen SF1 | 4.9 | 4.1 | 11.2 |
+
+At 16M the samples span 26.7–36.5 ms, and an 11-sample rerun gave 33.7 ms,
+so no gain is resolved there despite the same pass reduction. Something other
+than sort passes dominates at that size; it is unmeasured. Capacity-sized
+temporaries allocated per query are a candidate, not a finding.
+
+## SF10 (2026-11-10)
+
+dbgen SF10 was generated with `cargo xtask bench --tpch --sf 10 --query
+retail_h09 --config default --runs 1`, with `DUCKDB_CLI` set to a local DuckDB
+v1.5.5 CLI, the version recorded for SF1. It holds 59,986,042 Lineitem rows,
+108,782 green parts, 3,261,612 join pairs and 3,261,612 answers, validated
+against DuckDB. That xtask run measured the CPU default route at 8,218 ms and
+DuckDB at 1,475 ms (16 threads) or 2,447 ms (1 thread).
+`metal_h09 --runs 5` (ms, M3 Max, answers exact; results in
+`results/metal-packed-h09-sf10-m3max-20261110.json`):
+
+| CPU join | Metal join | Compiled query | Host completion, Metal join | Resident one graph | Incl. run builds |
+|---:|---:|---:|---:|---:|---:|
+| 11.69 | 1.75 | 2,134 | 1,036 | 44.1 | 45.1 |
+
+The isolated Part→Lineitem expansion is 6.7× faster on Metal at 3.26M pairs,
+consistent with the synthetic scaling. Resident samples are bimodal
+(25.7, 26.1, 44.1, 45.8, 51.3 ms), and adding run builds does not raise the
+median. Per-query variance therefore dominates at this size, and its source is
+unmeasured, as for 16M synthetic.
+
+For orientation only: the CUDA advised route on an RTX 6000 Ada records H09
+SF10 at 40.86 ms build, 3.61 ms query and 44.56 ms total
+(`experiments/gpu/compare/performance_comparison.tsv`). The 2026-11-02 bench
+records 59.31 ms total. Those build/query boundaries are not the resident
+path's: here Lineitem's run is prepared once and excluded, and the three
+check runs are prepared or included per column. No speed ratio is claimed.

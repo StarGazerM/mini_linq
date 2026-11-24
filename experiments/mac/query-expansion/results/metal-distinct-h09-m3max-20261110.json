@@ -1,0 +1,339 @@
+{
+  "architecture": "aarch64",
+  "args": [
+    "experiments/mac/target/release/metal_h09",
+    "--sizes",
+    "1048579,4194307,16777219",
+    "--data",
+    "features/workloads/target/bench/data/tpch-1/retail_h09",
+    "--runs",
+    "7",
+    "--out",
+    "experiments/mac/query-expansion/results/metal-distinct-h09-m3max-20261110.json"
+  ],
+  "compiled": "compiled authored default route reading that run through its native l_partkey host read",
+  "correctness": "complete answers equal the compiled default route and sorted; GPU pairs equal CPU pairs exactly, checked untimed before sampling; every sample checks counts",
+  "cpu": "the Metal path's identical host completion, with the Part->Lineitem expansion as CPU row_ids reads of the same run; CPU join stage = row_ids per green part key into (probe ordinal, row ID) pairs",
+  "index": "one GPU-built grouped RadixRun over the retained i64 Lineitem source (l_partkey -> original row ID), built untimed and shared by both paths",
+  "limits": "query times exclude source ingestion and index build; remaining operators and canonicalization run on CPU; synthetic datasets are not dbgen",
+  "metal": "Part/GreenNames prefix on host; Part->Lineitem as one batched Metal join (binary-search ranks, exact u64 offsets, 2048-pair tiles); remaining joins on CPU with the default route's providers; Metal join stage includes probe upload, both synchronous GPU evaluations and pair publication",
+  "order": "alternating CPU-first/Metal-first pairs after two warmup rounds",
+  "resident": "Metal join plus PartSupp (part key, supplier item), Orders and Supplier-selected-by-Nation semijoins chained on GPU row-ID sets, then GPU gather, LSD stable radix sort and dedup of (order, part, supplier); only distinct answers return. The p_name LIKE '%green%' prefilter (unsupported query language) is evaluated once outside timing. resident_query reuses runs prepared once; resident_with_builds includes ingesting and GPU-building those three runs and the host Nation mask",
+  "results": [
+    {
+      "answers": 261754,
+      "compiled_query_ms": 58.342,
+      "compiled_query_samples": [
+        58.342,
+        57.875,
+        58.503083999999994,
+        58.43525,
+        58.306416999999996,
+        57.945083000000004,
+        58.523584
+      ],
+      "cpu_join_ms": 0.565916,
+      "cpu_join_samples": [
+        0.556209,
+        0.572666,
+        0.580792,
+        0.554375,
+        0.560959,
+        0.5672919999999999,
+        0.565916
+      ],
+      "cpu_query_ms": 40.312584,
+      "cpu_query_samples": [
+        39.857917,
+        40.772125,
+        40.638625,
+        39.967333,
+        40.382875,
+        39.976417,
+        40.312584
+      ],
+      "dataset": "synthetic-1048579",
+      "gpu_build_ms": 8.0625,
+      "join_pairs": 349537,
+      "lineitem_rows": 1048579,
+      "metal_join_ms": 1.38425,
+      "metal_join_samples": [
+        1.407583,
+        1.6522080000000001,
+        0.997917,
+        0.9698340000000001,
+        0.984541,
+        1.38425,
+        1.48825
+      ],
+      "metal_query_ms": 37.888875000000006,
+      "metal_query_samples": [
+        38.262249999999995,
+        37.878917,
+        38.532583,
+        37.795958999999996,
+        37.888875000000006,
+        37.789125,
+        37.947916
+      ],
+      "probes": 10923,
+      "resident_query_ms": 5.369375,
+      "resident_query_samples": [
+        6.1047080000000005,
+        5.242875,
+        6.404791,
+        4.323417,
+        6.3801250000000005,
+        5.203791,
+        5.369375
+      ],
+      "resident_with_builds_ms": 10.771125,
+      "resident_with_builds_samples": [
+        11.466458000000001,
+        9.652042,
+        10.936916,
+        7.35,
+        10.236708,
+        12.009041,
+        10.771125
+      ]
+    },
+    {
+      "answers": 1046995,
+      "compiled_query_ms": 333.010167,
+      "compiled_query_samples": [
+        333.556417,
+        332.395916,
+        335.27299999999997,
+        337.52491699999996,
+        331.560291,
+        332.863584,
+        333.010167
+      ],
+      "cpu_join_ms": 2.6757500000000003,
+      "cpu_join_samples": [
+        2.7390000000000003,
+        2.6757500000000003,
+        2.661833,
+        2.6715,
+        2.708917,
+        2.695875,
+        2.630542
+      ],
+      "cpu_query_ms": 209.14325,
+      "cpu_query_samples": [
+        209.150334,
+        208.97375000000002,
+        209.361167,
+        209.61254100000002,
+        209.041417,
+        208.498291,
+        209.14325
+      ],
+      "dataset": "synthetic-4194307",
+      "gpu_build_ms": 7.866,
+      "join_pairs": 1398113,
+      "lineitem_rows": 4194307,
+      "metal_join_ms": 1.559334,
+      "metal_join_samples": [
+        1.559334,
+        1.1208749999999998,
+        2.06625,
+        1.597416,
+        1.14375,
+        1.6243340000000002,
+        1.208292
+      ],
+      "metal_query_ms": 192.26529200000002,
+      "metal_query_samples": [
+        191.67754100000002,
+        191.52625,
+        192.26529200000002,
+        191.602417,
+        192.614709,
+        194.35399999999998,
+        194.102041
+      ],
+      "probes": 43691,
+      "resident_query_ms": 12.909125000000001,
+      "resident_query_samples": [
+        14.609291,
+        10.63825,
+        12.769417,
+        12.909125000000001,
+        13.737833,
+        12.110292,
+        15.406834
+      ],
+      "resident_with_builds_ms": 18.598208000000003,
+      "resident_with_builds_samples": [
+        17.974708,
+        23.791083,
+        15.385584000000001,
+        18.598208000000003,
+        21.205125,
+        18.666792,
+        18.227375000000002
+      ]
+    },
+    {
+      "answers": 4188149,
+      "compiled_query_ms": 1745.093292,
+      "compiled_query_samples": [
+        1716.73925,
+        1745.093292,
+        1743.7598749999997,
+        1740.312667,
+        1753.025208,
+        1767.67725,
+        1767.998416
+      ],
+      "cpu_join_ms": 10.625667,
+      "cpu_join_samples": [
+        10.789458,
+        10.223666,
+        10.625667,
+        10.6825,
+        10.528167,
+        10.431790999999999,
+        10.691417
+      ],
+      "cpu_query_ms": 965.4166250000001,
+      "cpu_query_samples": [
+        950.392333,
+        963.739708,
+        972.983583,
+        964.233333,
+        965.4166250000001,
+        967.653208,
+        969.584708
+      ],
+      "dataset": "synthetic-16777219",
+      "gpu_build_ms": 30.321125000000002,
+      "join_pairs": 5592417,
+      "lineitem_rows": 16777219,
+      "metal_join_ms": 2.113959,
+      "metal_join_samples": [
+        2.142458,
+        2.1241250000000003,
+        2.038084,
+        1.70675,
+        2.113959,
+        2.033875,
+        2.173916
+      ],
+      "metal_query_ms": 887.615625,
+      "metal_query_samples": [
+        870.603083,
+        889.816625,
+        884.7356659999999,
+        877.166792,
+        887.615625,
+        892.8551249999999,
+        893.611375
+      ],
+      "probes": 174763,
+      "resident_query_ms": 34.112875,
+      "resident_query_samples": [
+        35.145167,
+        30.785375000000002,
+        42.06675,
+        30.396917,
+        38.9905,
+        34.112875,
+        31.247416
+      ],
+      "resident_with_builds_ms": 41.779709,
+      "resident_with_builds_samples": [
+        43.669792,
+        37.229625000000006,
+        42.939708,
+        37.252624999999995,
+        41.779709,
+        37.06225,
+        43.301125000000006
+      ]
+    },
+    {
+      "answers": 319402,
+      "compiled_query_ms": 70.621458,
+      "compiled_query_samples": [
+        70.681375,
+        70.43900000000001,
+        70.666584,
+        71.243541,
+        70.621458,
+        70.569958,
+        70.347875
+      ],
+      "cpu_join_ms": 1.099791,
+      "cpu_join_samples": [
+        1.078,
+        1.105125,
+        1.102834,
+        1.099791,
+        1.129667,
+        1.0753329999999999,
+        1.0972499999999998
+      ],
+      "cpu_query_ms": 45.916625,
+      "cpu_query_samples": [
+        45.561208,
+        46.393834000000005,
+        45.916625,
+        46.155042,
+        45.849542,
+        45.954791,
+        45.742416
+      ],
+      "dataset": "features/workloads/target/bench/data/tpch-1/retail_h09",
+      "gpu_build_ms": 11.654916,
+      "join_pairs": 319402,
+      "lineitem_rows": 6001204,
+      "metal_join_ms": 1.389833,
+      "metal_join_samples": [
+        0.6792499999999999,
+        1.3807909999999999,
+        1.389833,
+        0.989458,
+        1.4357499999999999,
+        1.4805000000000001,
+        1.455833
+      ],
+      "metal_query_ms": 42.616375,
+      "metal_query_samples": [
+        42.926875,
+        41.97425,
+        42.3635,
+        42.754334,
+        48.090959000000005,
+        42.459790999999996,
+        42.616375
+      ],
+      "probes": 10664,
+      "resident_query_ms": 6.137084,
+      "resident_query_samples": [
+        5.3565000000000005,
+        6.137084,
+        6.901916999999999,
+        6.577334,
+        5.844875,
+        5.992500000000001,
+        6.711959
+      ],
+      "resident_with_builds_ms": 13.176625000000001,
+      "resident_with_builds_samples": [
+        13.599292,
+        12.416083,
+        12.876417,
+        13.606625000000001,
+        12.421790999999999,
+        13.234042,
+        13.176625000000001
+      ]
+    }
+  ],
+  "runs": 7,
+  "schema": "mccl.metal-join-h09.v1",
+  "warmups": 2
+}

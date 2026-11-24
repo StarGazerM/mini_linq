@@ -4,8 +4,8 @@
 use std::{fmt, mem::size_of, ptr, rc::Rc, slice};
 
 use crate::{
-    clear_mlx_error, ffi, index::MAX_ROWS, mlx_failure, mlx_status, native_status, Error, Gpu,
-    Result, StreamInner, U32Array,
+    Error, Gpu, Result, StreamInner, U32Array, clear_mlx_error, ffi, index::MAX_ROWS, mlx_failure,
+    mlx_status, native_status,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,7 +249,7 @@ impl Gpu {
             Payload::RowId => -1,
             Payload::Column(column) if column < relation.columns() => column as i32,
             Payload::Column(_) => {
-                return Err(Error("index payload column is outside the relation".into()))
+                return Err(Error("index payload column is outside the relation".into()));
             }
         };
         if let Some(mask) = selection {

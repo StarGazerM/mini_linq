@@ -5,7 +5,7 @@
 //! No private pool or implicit wired-memory budget is introduced. Applications
 //! should coordinate limit changes and restore prior limits when appropriate.
 
-use crate::{clear_mlx_error, ffi, mlx_status, Result};
+use crate::{Result, clear_mlx_error, ffi, mlx_status};
 
 /// MLX allocator accounting in bytes, shared by all contexts in this process.
 #[derive(Clone, Copy, Debug)]

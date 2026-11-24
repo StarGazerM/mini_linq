@@ -4,7 +4,7 @@
 use std::{
     cell::RefCell,
     error::Error as StdError,
-    ffi::{c_char, c_int, c_void, CStr},
+    ffi::{CStr, c_char, c_int, c_void},
     fmt, ptr,
     rc::Rc,
     sync::Once,
@@ -40,6 +40,13 @@ mod ffi {
     }
 
     #[repr(C)]
+    pub struct SemiJoinStep {
+        pub index: *const RadixIndex,
+        pub key_column: c_int,
+        pub item_column: c_int,
+    }
+
+    #[repr(C)]
     pub struct RadixIndex {
         pub keys: Array,
         pub offsets: Array,
@@ -57,6 +64,7 @@ mod ffi {
     // mlx/c/array.h at the commit pinned by CMake: MLX_UINT32 = 3.
     pub const UINT32: c_int = 3;
     pub const UINT64: c_int = 4;
+    pub const INT64: c_int = 8;
     extern "C" {
         pub fn mlx_set_error_handler(
             handler: Option<unsafe extern "C" fn(*const c_char, *mut c_void)>,
@@ -183,6 +191,40 @@ mod ffi {
             out: *mut RadixIndex,
             older: *const RadixIndex,
             newer: *const RadixIndex,
+            stream: Stream,
+        ) -> c_int;
+        pub fn mccl_radix_join_u32(
+            pairs: *mut Array,
+            index: *const RadixIndex,
+            probes: Array,
+            stream: Stream,
+        ) -> c_int;
+        pub fn mccl_radix_semijoin_u32(
+            out: *mut Array,
+            rows: Array,
+            relation: Array,
+            key_column: c_int,
+            item_column: c_int,
+            index: *const RadixIndex,
+            stream: Stream,
+        ) -> c_int;
+        pub fn mccl_distinct_rows_i64(
+            out: *mut Array,
+            rows: Array,
+            relation: Array,
+            columns: *const c_int,
+            column_count: c_int,
+            stream: Stream,
+        ) -> c_int;
+        pub fn mccl_radix_join_semijoin_distinct_i64(
+            out: *mut Array,
+            join_index: *const RadixIndex,
+            probes: Array,
+            relation: Array,
+            steps: *const SemiJoinStep,
+            step_count: c_int,
+            columns: *const c_int,
+            column_count: c_int,
             stream: Stream,
         ) -> c_int;
         pub fn mccl_last_error() -> *const c_char;

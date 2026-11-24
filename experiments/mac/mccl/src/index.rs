@@ -8,9 +8,8 @@
 use std::{fmt, iter::FusedIterator, mem::MaybeUninit, ptr::NonNull, rc::Rc, slice};
 
 use crate::{
-    clear_mlx_error, ffi, mlx_failure, mlx_status, native_status,
+    Error, Gpu, Result, StreamInner, clear_mlx_error, ffi, mlx_failure, mlx_status, native_status,
     relation::{Dtype, IndexSpec, Payload, Relation},
-    Error, Gpu, Result, StreamInner,
 };
 
 mod cpu_radix;

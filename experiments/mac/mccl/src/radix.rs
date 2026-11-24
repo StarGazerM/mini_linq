@@ -7,6 +7,7 @@
 //! arrays and their originating context, including after sources and Gpu drop.
 
 use std::{
+    ffi::c_int,
     fmt,
     mem::{align_of, offset_of, size_of},
     ptr::NonNull,
@@ -15,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    Error, Gpu, Result, StreamInner, clear_mlx_error, ffi,
+    Error, Gpu, Result, StreamInner, U32Array, clear_mlx_error, ffi,
     index::MAX_ROWS,
     mlx_failure, native_status,
     relation::{IndexSpec, Relation},
@@ -183,6 +184,119 @@ impl RadixIndex {
     }
 }
 
+struct PairsArray(ffi::Array);
+
+impl Drop for PairsArray {
+    fn drop(&mut self) {
+        if !self.0.ctx.is_null() {
+            unsafe { ffi::mlx_array_free(self.0) };
+        }
+    }
+}
+
+/// Completed pairs of a batched GPU join against one grouped run.
+///
+/// Each pair is `[probe ordinal, item]`, ordered by probe ordinal and then by
+/// the run's stable occurrence order. The pairs own their storage; they do not
+/// pin the probed run. Thread-affine like the context they retain.
+pub struct RadixJoin {
+    // Free the array before releasing the context it retains.
+    _pairs: PairsArray,
+    _stream: Rc<StreamInner>,
+    data: NonNull<[u32; 2]>,
+    len: usize,
+}
+
+impl fmt::Debug for RadixJoin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RadixJoin")
+            .field("pairs", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RadixJoin {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    pub fn pairs(&self) -> &[[u32; 2]] {
+        unsafe { slice::from_raw_parts(self.data.as_ptr(), self.len) }
+    }
+}
+
+/// Row IDs entering a GPU semijoin: a join's pairs (their row column) or a
+/// previously filtered row set. Both stay in GPU-visible storage.
+#[derive(Clone, Copy)]
+pub enum SemiJoinRows<'a> {
+    Join(&'a RadixJoin),
+    Rows(&'a U32Array),
+}
+
+/// One semijoin of [`Gpu::join_semijoin_distinct`]: keep rows whose
+/// `key_column` occurs in `index` (and, with `item_column`, whose value is in
+/// that key's group).
+#[derive(Clone, Copy)]
+pub struct SemiJoinStep<'a> {
+    pub index: &'a RadixIndex,
+    pub key_column: usize,
+    pub item_column: Option<usize>,
+}
+
+fn distinct_columns(relation: &Relation, columns: &[usize]) -> Result<Vec<c_int>> {
+    columns
+        .iter()
+        .map(|&column| {
+            c_int::try_from(column)
+                .ok()
+                .filter(|_| column < relation.columns())
+                .ok_or_else(|| Error("distinct rows column is outside the relation".into()))
+        })
+        .collect()
+}
+
+/// Completed distinct int64 tuples from [`Gpu::distinct_rows`], row-major and
+/// in ascending lexicographic order. Owns its storage; thread-affine.
+pub struct DistinctRows {
+    // Free the array before releasing the context it retains.
+    _rows: PairsArray,
+    _stream: Rc<StreamInner>,
+    data: NonNull<i64>,
+    len: usize,
+    width: usize,
+}
+
+impl DistinctRows {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Projected columns per tuple.
+    #[inline]
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// All tuples, row-major: `len() * width()` values.
+    #[inline]
+    pub fn values(&self) -> &[i64] {
+        unsafe { slice::from_raw_parts(self.data.as_ptr(), self.len * self.width) }
+    }
+}
+
 // Check metadata only, never scan array contents. The native synchronous ABI
 // guarantees these shapes describe fully initialized, contiguous owning views.
 fn check_array(array: ffi::Array, dtype: i32, shape: &[usize]) -> Result<()> {
@@ -291,6 +405,229 @@ impl Gpu {
             "merge radix indexes",
         )?;
         self.publish_radix_index(arrays)
+    }
+
+    /// Exact equi-join of `probes` against `index`, executed on the GPU.
+    ///
+    /// Probes are ranked by binary search over the distinct keys, exact u64
+    /// output offsets are scanned on the device, and expansion uses fixed
+    /// output tiles independent of per-key fanout. A pair count above 1<<30 is
+    /// rejected rather than truncated. Synchronous: the result is complete.
+    pub fn join_radix(&self, index: &RadixIndex, probes: &U32Array) -> Result<RadixJoin> {
+        if !index.belongs_to(self) {
+            return Err(Error(
+                "radix index belongs to a different GPU context".into(),
+            ));
+        }
+        self.check_context(probes)?;
+        let mut pairs = PairsArray(unsafe { ffi::mlx_array_new() });
+        native_status(
+            unsafe {
+                ffi::mccl_radix_join_u32(
+                    &mut pairs.0,
+                    &index.inner.arrays.0,
+                    probes.raw,
+                    self.stream.0,
+                )
+            },
+            "join radix index",
+        )?;
+        clear_mlx_error();
+        if pairs.0.ctx.is_null() || unsafe { ffi::mlx_array_ndim(pairs.0) } != 2 {
+            return Err(Error("radix join output has invalid dimensions".into()));
+        }
+        let len = usize::try_from(unsafe { ffi::mlx_array_dim(pairs.0, 0) })
+            .ok()
+            .filter(|&len| len <= MAX_ROWS)
+            .ok_or_else(|| Error("radix join output has invalid length".into()))?;
+        check_array(pairs.0, ffi::UINT32, &[len, 2])?;
+        let data = ready_pointer(
+            unsafe { ffi::mlx_array_data_uint32(pairs.0) }.cast::<[u32; 2]>(),
+            len,
+        )?;
+        Ok(RadixJoin {
+            _pairs: pairs,
+            _stream: Rc::clone(&self.stream),
+            data,
+            len,
+        })
+    }
+
+    /// Keep the source row IDs whose `key_column` value occurs in `index`;
+    /// with `item_column`, that key's group must also contain the row's
+    /// `item_column` value. Values outside u32 are misses. Runs on the GPU and
+    /// returns kept IDs in input order; an ID outside `relation` is an error.
+    pub fn semijoin_rows(
+        &self,
+        rows: SemiJoinRows<'_>,
+        relation: &Relation,
+        key_column: usize,
+        item_column: Option<usize>,
+        index: &RadixIndex,
+    ) -> Result<U32Array> {
+        let raw_rows = self.semijoin_input(rows)?;
+        if !relation.belongs_to(self) || !index.belongs_to(self) {
+            return Err(Error(
+                "semijoin input belongs to a different GPU context".into(),
+            ));
+        }
+        let column = |column: usize| {
+            c_int::try_from(column)
+                .ok()
+                .filter(|_| column < relation.columns())
+                .ok_or_else(|| Error("semijoin column is outside the relation".into()))
+        };
+        let key_column = column(key_column)?;
+        let item_column = item_column.map(column).transpose()?.unwrap_or(-1);
+        let mut out = self.output(0);
+        native_status(
+            unsafe {
+                ffi::mccl_radix_semijoin_u32(
+                    &mut out.raw,
+                    raw_rows,
+                    relation.raw(),
+                    key_column,
+                    item_column,
+                    &index.inner.arrays.0,
+                    self.stream.0,
+                )
+            },
+            "semijoin radix index",
+        )?;
+        clear_mlx_error();
+        if out.raw.ctx.is_null() || unsafe { ffi::mlx_array_ndim(out.raw) } != 1 {
+            return Err(Error("semijoin output has invalid dimensions".into()));
+        }
+        out.len = unsafe { ffi::mlx_array_size(out.raw) };
+        check_array(out.raw, ffi::UINT32, &[out.len])?;
+        Ok(out)
+    }
+
+    /// Distinct tuples of the rows' `columns`, sorted lexicographically on the
+    /// GPU; only the result is published. Every projected value must lie in
+    /// the u32 domain (an error otherwise, never narrowed); 1 to 4 columns.
+    pub fn distinct_rows(
+        &self,
+        rows: SemiJoinRows<'_>,
+        relation: &Relation,
+        columns: &[usize],
+    ) -> Result<DistinctRows> {
+        let raw_rows = self.semijoin_input(rows)?;
+        if !relation.belongs_to(self) {
+            return Err(Error(
+                "distinct rows relation belongs to a different GPU context".into(),
+            ));
+        }
+        let columns = distinct_columns(relation, columns)?;
+        let mut out = PairsArray(unsafe { ffi::mlx_array_new() });
+        native_status(
+            unsafe {
+                ffi::mccl_distinct_rows_i64(
+                    &mut out.0,
+                    raw_rows,
+                    relation.raw(),
+                    columns.as_ptr(),
+                    columns.len() as c_int,
+                    self.stream.0,
+                )
+            },
+            "distinct rows",
+        )?;
+        self.publish_distinct(out, columns.len())
+    }
+
+    /// Join `probes` against `join_index` (whose items are `relation` row
+    /// IDs), keep rows passing every semijoin step in order, and return the
+    /// distinct tuples of `columns`, all as one GPU graph. Only the join's pair
+    /// count is read back on the host; step and column semantics match
+    /// [`Self::semijoin_rows`] and [`Self::distinct_rows`].
+    pub fn join_semijoin_distinct(
+        &self,
+        join_index: &RadixIndex,
+        probes: &U32Array,
+        relation: &Relation,
+        steps: &[SemiJoinStep<'_>],
+        columns: &[usize],
+    ) -> Result<DistinctRows> {
+        self.check_context(probes)?;
+        if !join_index.belongs_to(self)
+            || !relation.belongs_to(self)
+            || steps.iter().any(|step| !step.index.belongs_to(self))
+        {
+            return Err(Error(
+                "join chain input belongs to a different GPU context".into(),
+            ));
+        }
+        let column = |column: usize| {
+            c_int::try_from(column)
+                .ok()
+                .filter(|_| column < relation.columns())
+                .ok_or_else(|| Error("semijoin column is outside the relation".into()))
+        };
+        let steps = steps
+            .iter()
+            .map(|step| {
+                Ok(ffi::SemiJoinStep {
+                    index: &step.index.inner.arrays.0,
+                    key_column: column(step.key_column)?,
+                    item_column: step.item_column.map(column).transpose()?.unwrap_or(-1),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let columns = distinct_columns(relation, columns)?;
+        let mut out = PairsArray(unsafe { ffi::mlx_array_new() });
+        native_status(
+            unsafe {
+                ffi::mccl_radix_join_semijoin_distinct_i64(
+                    &mut out.0,
+                    &join_index.inner.arrays.0,
+                    probes.raw,
+                    relation.raw(),
+                    steps.as_ptr(),
+                    steps.len() as c_int,
+                    columns.as_ptr(),
+                    columns.len() as c_int,
+                    self.stream.0,
+                )
+            },
+            "join, semijoin and distinct",
+        )?;
+        self.publish_distinct(out, columns.len())
+    }
+
+    fn publish_distinct(&self, out: PairsArray, width: usize) -> Result<DistinctRows> {
+        clear_mlx_error();
+        if out.0.ctx.is_null() || unsafe { ffi::mlx_array_ndim(out.0) } != 2 {
+            return Err(Error("distinct rows output has invalid dimensions".into()));
+        }
+        let len = usize::try_from(unsafe { ffi::mlx_array_dim(out.0, 0) })
+            .ok()
+            .filter(|&len| len <= MAX_ROWS)
+            .ok_or_else(|| Error("distinct rows output has invalid length".into()))?;
+        check_array(out.0, ffi::INT64, &[len, width])?;
+        let data = ready_pointer(unsafe { ffi::mlx_array_data_int64(out.0) }, len * width)?;
+        Ok(DistinctRows {
+            _rows: out,
+            _stream: Rc::clone(&self.stream),
+            data,
+            len,
+            width,
+        })
+    }
+
+    fn semijoin_input(&self, rows: SemiJoinRows<'_>) -> Result<ffi::Array> {
+        match rows {
+            SemiJoinRows::Join(join) => {
+                if !Rc::ptr_eq(&join._stream, &self.stream) {
+                    return Err(Error("join belongs to a different GPU context".into()));
+                }
+                Ok(join._pairs.0)
+            }
+            SemiJoinRows::Rows(rows) => {
+                self.check_context(rows)?;
+                Ok(rows.raw)
+            }
+        }
     }
 
     fn publish_radix_index(&self, arrays: Arrays) -> Result<RadixIndex> {

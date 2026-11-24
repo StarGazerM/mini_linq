@@ -538,9 +538,11 @@ std::vector<mx::array> allocate_scan(
 
 void encode_scan(
     std::vector<mx::array>& levels, mx::metal::Device& device,
-    mx::metal::CommandEncoder& encoder) {
-  auto* scan = index_kernel(device, "sort_scan_blocks");
-  auto* add = index_kernel(device, "sort_add_block_offsets");
+    mx::metal::CommandEncoder& encoder,
+    const char* scan_kernel = "sort_scan_blocks",
+    const char* add_kernel = "sort_add_block_offsets") {
+  auto* scan = index_kernel(device, scan_kernel);
+  auto* add = index_kernel(device, add_kernel);
   const size_t depth = levels.size() - 1;
   for (size_t level = 0; level < depth; ++level) {
     const auto n = static_cast<uint32_t>(levels[level].size());
@@ -563,10 +565,12 @@ void encode_scan(
   }
 }
 
+// Stable LSD sort of {key, payload} pairs over the key's low `bytes` bytes
+// (1..4). Higher key bytes must be zero, or the order they imply is ignored.
 void encode_sort(
     const mx::array& input, mx::array& out,
     mx::metal::Device& device, mx::metal::CommandEncoder& encoder,
-    const mx::array* metadata = nullptr) {
+    const mx::array* metadata = nullptr, uint32_t bytes = 4) {
   const bool dynamic = metadata != nullptr;
   const auto tile = index_tile(device,
       dynamic ? "sort_scatter_dynamic_byte8" : "sort_scatter_byte8",
@@ -579,9 +583,10 @@ void encode_sort(
   auto scratch = allocate_leaf(out.shape(), device);
   encoder.add_temporary(scratch);
   auto levels = allocate_scan(tiles * 256, device, encoder);
-  for (uint32_t pass = 0; pass < 4; ++pass) {
-    const auto& source = pass == 0 ? input : (pass % 2 == 0 ? out : scratch);
-    auto& destination = pass % 2 == 0 ? scratch : out;
+  for (uint32_t pass = 0; pass < bytes; ++pass) {
+    // Alternate so the final pass writes `out`, never the input.
+    auto& destination = (bytes - 1 - pass) % 2 == 0 ? out : scratch;
+    const auto& source = pass == 0 ? input : ((bytes - pass) % 2 == 0 ? out : scratch);
     const uint32_t args[] = {capacity, static_cast<uint32_t>(tiles), pass * 8};
     encoder.set_compute_pipeline_state(histogram);
     encoder.set_input_array(source, 0);
@@ -1854,6 +1859,517 @@ void publish_radix(mccl_radix_index* out, std::vector<mx::array>& graph) {
   out->search_error = static_cast<uint32_t>(meta[6]);
 }
 
+constexpr size_t kJoinTile = 2048; // Must match join_expand in join.metal.
+
+// Probe ranks/counts, then the exact exclusive u64 output offsets in place.
+class RadixJoinCountOperation final : public mx::Primitive {
+ public:
+  explicit RadixJoinCountOperation(mx::Stream stream) : mx::Primitive(stream) {}
+  const char* name() const override { return "McclRadixJoinCountU32"; }
+  void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
+    throw std::runtime_error("mccl radix join requires a GPU stream");
+  }
+  void eval_gpu(
+      const std::vector<mx::array>& inputs,
+      std::vector<mx::array>& outputs) override {
+    auto& device = validate_index_device(stream());
+    for (const auto& input : inputs) {
+      if (!input.flags().row_contiguous) {
+        throw std::invalid_argument("mccl radix join inputs must be contiguous");
+      }
+    }
+    for (auto& output : outputs) allocate_storage(output);
+    auto& encoder = mx::metal::get_command_encoder(stream());
+    const auto& probes = inputs[0];
+    const auto& keys = inputs[1];
+    const auto& offsets = inputs[2];
+    auto& ranks = outputs[0];
+    auto& prefix = outputs[1];
+    // offsets always holds its terminal entry; empty arrays bind it as a
+    // never-dereferenced dummy.
+    const auto bindable = [&](const mx::array& a) -> const mx::array& {
+      return a.size() == 0 ? offsets : a;
+    };
+    const uint32_t args[] = {
+        static_cast<uint32_t>(probes.size()), static_cast<uint32_t>(keys.size())};
+    encoder.set_compute_pipeline_state(index_kernel(device, "join_probe_counts"));
+    encoder.set_input_array(bindable(probes), 0);
+    encoder.set_input_array(bindable(keys), 1);
+    encoder.set_input_array(offsets, 2);
+    encoder.set_output_array(ranks.size() == 0 ? prefix : ranks, 3);
+    encoder.set_output_array(prefix, 4);
+    encoder.set_bytes(args, 2, 5);
+    dispatch(encoder, ceil_div(prefix.size(), kThreads));
+    std::vector<mx::array> levels{prefix};
+    size_t length = prefix.size();
+    do {
+      length = ceil_div(length, kTile);
+      levels.push_back(allocate_leaf({static_cast<int>(length)}, device, mx::uint64));
+      encoder.add_temporary(levels.back());
+    } while (length > 1);
+    encode_scan(
+        levels, device, encoder, "join_scan_blocks_u64", "join_add_block_offsets_u64");
+  }
+};
+
+// args: total outputs (<= 2^30), probes. inputs: prefix, ranks, offsets, items.
+void encode_join_expand(
+    const std::vector<mx::array>& inputs, mx::array& pairs, size_t total, size_t probes,
+    mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  const uint32_t args[] = {static_cast<uint32_t>(total), static_cast<uint32_t>(probes)};
+  encoder.set_compute_pipeline_state(index_kernel(device, "join_expand"));
+  encoder.set_input_array(inputs[0], 0);
+  encoder.set_input_array(inputs[1], 1);
+  encoder.set_input_array(inputs[2], 2);
+  encoder.set_input_array(inputs[3], 3);
+  encoder.set_output_array(pairs, 4);
+  encoder.set_bytes(args, 2, 5);
+  dispatch(encoder, ceil_div(total, kJoinTile));
+}
+
+// A capacity-sized u32 row-ID set read with stride/offset (join pairs read
+// their row column). Its live length is count[0], written on the GPU by the
+// producing stage, so chained stages never wait on a host readback.
+struct RowSet {
+  const mx::array* rows;
+  uint32_t stride;
+  uint32_t offset;
+  const mx::array* count;
+  uint32_t capacity;
+};
+
+// A one-element count written through the shared mapping before encoding.
+mx::array count_leaf(
+    uint32_t value, mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  auto leaf = allocate_leaf({1}, device);
+  leaf.data<uint32_t>()[0] = value;
+  encoder.add_temporary(leaf);
+  return leaf;
+}
+
+mx::array flag_prefix(
+    uint32_t capacity, mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  auto prefix = allocate_leaf({static_cast<int>(capacity + 1)}, device);
+  encoder.add_temporary(prefix);
+  return prefix;
+}
+
+void scan_flags(
+    mx::array& prefix, mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  std::vector<mx::array> levels{prefix};
+  size_t length = prefix.size();
+  do {
+    length = ceil_div(length, kTile);
+    levels.push_back(allocate_leaf({static_cast<int>(length)}, device));
+    encoder.add_temporary(levels.back());
+  } while (length > 1);
+  encode_scan(levels, device, encoder);
+}
+
+void clear_invalid(
+    mx::array& invalid, mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  encoder.set_compute_pipeline_state(index_kernel(device, "distinct_clear"));
+  encoder.set_output_array(invalid, 0);
+  dispatch(encoder, 1);
+}
+
+struct SemiJoinStage {
+  uint32_t key_column;
+  uint32_t item_column; // UINT32_MAX: none
+  uint32_t key_count;
+};
+
+// Keep rows whose key (and optional item) occurs in a grouped run. Writes
+// kept rows (capacity-sized, input order) and kept_count[0]; invalid[0] is
+// set by a row ID outside the relation.
+void encode_semijoin(
+    const RowSet& in, const mx::array& relation, const mx::array& keys,
+    const mx::array& offsets, const mx::array& items, SemiJoinStage stage,
+    mx::array& kept, mx::array& kept_count, mx::array& invalid,
+    mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  const uint32_t capacity = in.capacity;
+  auto prefix = flag_prefix(capacity, device, encoder);
+  // Empty arrays may have no Metal buffer; their bounds prevent any access.
+  const auto bindable = [&](const mx::array& a) -> const mx::array& {
+    return a.size() == 0 ? prefix : a;
+  };
+  const std::array<uint32_t, 8> args{
+      capacity, in.stride, in.offset, static_cast<uint32_t>(relation.shape(1)),
+      stage.key_column, stage.item_column, stage.key_count,
+      static_cast<uint32_t>(relation.shape(0))};
+  encoder.set_compute_pipeline_state(index_kernel(device, "join_semi_flags"));
+  encoder.set_input_array(bindable(*in.rows), 0);
+  encoder.set_input_array(bindable(relation), 1);
+  encoder.set_input_array(bindable(keys), 2);
+  encoder.set_input_array(offsets, 3);
+  encoder.set_input_array(bindable(items), 4);
+  encoder.set_output_array(prefix, 5);
+  encoder.set_output_array(invalid, 6);
+  encoder.set_bytes(args.data(), args.size(), 7);
+  encoder.set_input_array(*in.count, 8);
+  dispatch(encoder, ceil_div(capacity + 1, kThreads));
+  scan_flags(prefix, device, encoder);
+  const uint32_t scatter[] = {capacity, in.stride, in.offset};
+  encoder.set_compute_pipeline_state(index_kernel(device, "join_semi_scatter"));
+  encoder.set_input_array(bindable(*in.rows), 0);
+  encoder.set_input_array(prefix, 1);
+  encoder.set_output_array(kept.size() == 0 ? kept_count : kept, 2);
+  encoder.set_bytes(scatter, 3, 3);
+  encoder.set_output_array(kept_count, 4);
+  dispatch(encoder, ceil_div(std::max<uint32_t>(capacity, 1), kThreads));
+}
+
+constexpr size_t kMaxDistinctColumns = 4; // Must match distinct_* in join.metal.
+using DistinctTuple = std::array<uint32_t, 3 + kMaxDistinctColumns>;
+// Bit width of each tuple column's field; 32 unless a bound is proven.
+using DistinctWidths = std::array<uint32_t, kMaxDistinctColumns>;
+
+constexpr DistinctWidths kFullWidths{32, 32, 32, 32};
+
+// Distinct int64 tuples of the live rows. Columns are packed into one
+// composite key (first column most significant, each in its proven width),
+// which is sorted by LSD stable passes over 32-bit slices, visiting only the
+// bytes the composite occupies. Writes out (capacity-sized) and
+// distinct_count[0]; invalid {row outside relation, value outside its field}.
+void encode_distinct(
+    const RowSet& in, const mx::array& relation, DistinctTuple tuple,
+    const DistinctWidths& widths, mx::array& out, mx::array& distinct_count,
+    mx::array& invalid, mx::metal::Device& device, mx::metal::CommandEncoder& encoder) {
+  const uint32_t capacity = in.capacity;
+  tuple[0] = capacity;
+  auto prefix = flag_prefix(capacity, device, encoder);
+  const auto bindable = [&](const mx::array& a) -> const mx::array& {
+    return a.size() == 0 ? prefix : a;
+  };
+  auto gathered = allocate_leaf({static_cast<int>(capacity), 2}, device);
+  auto sorted = allocate_leaf({static_cast<int>(capacity), 2}, device);
+  encoder.add_temporary(gathered);
+  encoder.add_temporary(sorted);
+  // args: capacity, stride, offset, columns, source_rows, slice_lo, count,
+  // then {column, width, lo} per column; the last column is least significant.
+  std::array<uint32_t, 7 + 3 * kMaxDistinctColumns> args{
+      capacity, in.stride, in.offset, static_cast<uint32_t>(relation.shape(1)),
+      static_cast<uint32_t>(relation.shape(0)), 0, tuple[2]};
+  uint32_t bits = 0;
+  for (uint32_t k = tuple[2]; k-- > 0;) {
+    args[7 + 3 * k] = tuple[3 + k];
+    args[8 + 3 * k] = widths[k];
+    args[9 + 3 * k] = bits;
+    bits += widths[k];
+  }
+  if (capacity != 0) {
+    auto* gather = index_kernel(device, "distinct_gather_key");
+    // At least one slice runs, so a zero-width composite still validates rows.
+    for (uint32_t lo = 0; lo == 0 || lo < bits; lo += 32) {
+      const bool first = lo == 0;
+      args[1] = first ? in.stride : 2u;
+      args[2] = first ? in.offset : 1u;
+      args[5] = lo;
+      encoder.set_compute_pipeline_state(gather);
+      encoder.set_input_array(first ? *in.rows : sorted, 0);
+      encoder.set_input_array(bindable(relation), 1);
+      encoder.set_output_array(gathered, 2);
+      encoder.set_output_array(invalid, 3);
+      encoder.set_bytes(args.data(), args.size(), 4);
+      encoder.set_input_array(*in.count, 5);
+      dispatch(encoder, ceil_div(capacity, kThreads));
+      const uint32_t slice = std::min<uint32_t>(32, bits - lo);
+      // The dynamic sort reads the live length from count[0].
+      encode_sort(gathered, sorted, device, encoder, in.count,
+          std::max<uint32_t>(1, (slice + 7) / 8));
+    }
+  }
+  encoder.set_compute_pipeline_state(index_kernel(device, "distinct_flags"));
+  encoder.set_input_array(bindable(sorted), 0);
+  encoder.set_input_array(bindable(relation), 1);
+  encoder.set_output_array(prefix, 2);
+  encoder.set_bytes(tuple.data(), tuple.size(), 3);
+  encoder.set_input_array(*in.count, 4);
+  dispatch(encoder, ceil_div(capacity + 1, kThreads));
+  scan_flags(prefix, device, encoder);
+  encoder.set_compute_pipeline_state(index_kernel(device, "distinct_scatter"));
+  encoder.set_input_array(bindable(sorted), 0);
+  encoder.set_input_array(prefix, 1);
+  encoder.set_input_array(bindable(relation), 2);
+  encoder.set_output_array(out.size() == 0 ? distinct_count : out, 3);
+  encoder.set_bytes(tuple.data(), tuple.size(), 4);
+  encoder.set_output_array(distinct_count, 5);
+  dispatch(encoder, ceil_div(std::max<uint32_t>(capacity, 1), kThreads));
+}
+
+void require_contiguous(const std::vector<mx::array>& inputs, const char* what) {
+  for (const auto& input : inputs) {
+    if (!input.flags().row_contiguous) {
+      throw std::invalid_argument(std::string("mccl ") + what + " inputs must be contiguous");
+    }
+  }
+}
+
+// inputs: rows, relation, keys, offsets, items.
+// outputs: kept rows (capacity n), kept count [1], invalid [2].
+class RadixSemiJoinOperation final : public mx::Primitive {
+ public:
+  RadixSemiJoinOperation(
+      mx::Stream stream, uint32_t stride, uint32_t offset, SemiJoinStage stage)
+      : mx::Primitive(stream), stride_(stride), offset_(offset), stage_(stage) {}
+  const char* name() const override { return "McclRadixSemiJoinU32"; }
+  void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
+    throw std::runtime_error("mccl radix semijoin requires a GPU stream");
+  }
+  void eval_gpu(
+      const std::vector<mx::array>& inputs,
+      std::vector<mx::array>& outputs) override {
+    auto& device = validate_index_device(stream());
+    require_contiguous(inputs, "radix semijoin");
+    for (auto& output : outputs) allocate_storage(output);
+    auto& encoder = mx::metal::get_command_encoder(stream());
+    clear_invalid(outputs[2], device, encoder);
+    const auto n = static_cast<uint32_t>(inputs[0].shape(0));
+    auto count = count_leaf(n, device, encoder);
+    encode_semijoin(
+        {&inputs[0], stride_, offset_, &count, n}, inputs[1], inputs[2], inputs[3],
+        inputs[4], stage_, outputs[0], outputs[1], outputs[2], device, encoder);
+  }
+ private:
+  uint32_t stride_;
+  uint32_t offset_;
+  SemiJoinStage stage_;
+};
+
+// inputs: rows, relation. outputs: tuples (capacity n), count [1], invalid [2].
+class DistinctRowsOperation final : public mx::Primitive {
+ public:
+  DistinctRowsOperation(
+      mx::Stream stream, uint32_t stride, uint32_t offset, DistinctTuple tuple)
+      : mx::Primitive(stream), stride_(stride), offset_(offset), tuple_(tuple) {}
+  const char* name() const override { return "McclDistinctRowsI64"; }
+  void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
+    throw std::runtime_error("mccl distinct rows requires a GPU stream");
+  }
+  void eval_gpu(
+      const std::vector<mx::array>& inputs,
+      std::vector<mx::array>& outputs) override {
+    auto& device = validate_index_device(stream());
+    require_contiguous(inputs, "distinct rows");
+    for (auto& output : outputs) allocate_storage(output);
+    auto& encoder = mx::metal::get_command_encoder(stream());
+    clear_invalid(outputs[2], device, encoder);
+    const auto n = static_cast<uint32_t>(inputs[0].shape(0));
+    auto count = count_leaf(n, device, encoder);
+    encode_distinct(
+        {&inputs[0], stride_, offset_, &count, n}, inputs[1], tuple_, kFullWidths,
+        outputs[0], outputs[1], outputs[2], device, encoder);
+  }
+ private:
+  uint32_t stride_;
+  uint32_t offset_;
+  DistinctTuple tuple_;
+};
+
+// Join expansion, chained semijoins and distinct tuples as one GPU graph:
+// every intermediate length stays on the device. inputs: join prefix, ranks,
+// join offsets, join items, relation, then keys/offsets/items per stage.
+// outputs: tuples (capacity total), count [1], invalid [2].
+class JoinChainOperation final : public mx::Primitive {
+ public:
+  JoinChainOperation(
+      mx::Stream stream, size_t total, size_t probes,
+      std::vector<SemiJoinStage> stages, DistinctTuple tuple, DistinctWidths widths)
+      : mx::Primitive(stream), total_(total), probes_(probes),
+        stages_(std::move(stages)), tuple_(tuple), widths_(widths) {}
+  const char* name() const override { return "McclJoinSemiJoinDistinct"; }
+  void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
+    throw std::runtime_error("mccl join chain requires a GPU stream");
+  }
+  void eval_gpu(
+      const std::vector<mx::array>& inputs,
+      std::vector<mx::array>& outputs) override {
+    auto& device = validate_index_device(stream());
+    require_contiguous(inputs, "join chain");
+    for (auto& output : outputs) allocate_storage(output);
+    auto& encoder = mx::metal::get_command_encoder(stream());
+    clear_invalid(outputs[2], device, encoder);
+    const auto capacity = static_cast<uint32_t>(total_);
+    auto pairs = allocate_leaf({static_cast<int>(capacity), 2}, device);
+    encoder.add_temporary(pairs);
+    encode_join_expand(inputs, pairs, total_, probes_, device, encoder);
+    // Stable storage for every stage's rows/count: RowSet holds pointers.
+    std::vector<mx::array> rows;
+    std::vector<mx::array> counts;
+    rows.reserve(stages_.size());
+    counts.reserve(stages_.size() + 1);
+    counts.push_back(count_leaf(capacity, device, encoder));
+    RowSet current{&pairs, 2, 1, &counts.back(), capacity};
+    const auto& relation = inputs[4];
+    for (size_t s = 0; s < stages_.size(); ++s) {
+      rows.push_back(allocate_leaf({static_cast<int>(capacity)}, device));
+      counts.push_back(allocate_leaf({1}, device));
+      encoder.add_temporary(rows.back());
+      encoder.add_temporary(counts.back());
+      encode_semijoin(
+          current, relation, inputs[5 + 3 * s], inputs[6 + 3 * s], inputs[7 + 3 * s],
+          stages_[s], rows.back(), counts.back(), outputs[2], device, encoder);
+      current = {&rows.back(), 1, 0, &counts.back(), capacity};
+    }
+    encode_distinct(current, relation, tuple_, widths_, outputs[0], outputs[1],
+        outputs[2], device, encoder);
+  }
+ private:
+  size_t total_;
+  size_t probes_;
+  std::vector<SemiJoinStage> stages_;
+  DistinctTuple tuple_;
+  DistinctWidths widths_;
+};
+
+// Fixed output tiles: fanout skew spreads across threadgroups.
+class RadixJoinExpandOperation final : public mx::Primitive {
+ public:
+  RadixJoinExpandOperation(mx::Stream stream, size_t total, size_t probes)
+      : mx::Primitive(stream), total_(total), probes_(probes) {}
+  const char* name() const override { return "McclRadixJoinExpandU32"; }
+  void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
+    throw std::runtime_error("mccl radix join requires a GPU stream");
+  }
+  void eval_gpu(
+      const std::vector<mx::array>& inputs,
+      std::vector<mx::array>& outputs) override {
+    auto& device = validate_index_device(stream());
+    for (const auto& input : inputs) {
+      if (!input.flags().row_contiguous) {
+        throw std::invalid_argument("mccl radix join inputs must be contiguous");
+      }
+    }
+    allocate_storage(outputs[0]);
+    if (total_ == 0) return;
+    encode_join_expand(inputs, outputs[0], total_, probes_, device,
+        mx::metal::get_command_encoder(stream()));
+  }
+ private:
+  size_t total_;
+  size_t probes_;
+};
+
+// Probe ranks and exact u64 output offsets, evaluated: the one host readback
+// that sizes every later buffer. Returns {ranks, prefix}; total is prefix[n].
+std::vector<mx::array> count_join(
+    const mccl_radix_index* index, const mx::array& keys, mx::Stream s,
+    mx::metal::Device& device, uint64_t& total) {
+  if (keys.ndim() != 1 || keys.dtype() != mx::uint32) {
+    throw std::invalid_argument("mccl radix join probes must have shape [N] and dtype uint32");
+  }
+  const size_t n = keys.size();
+  if (n > kMaxPairRows) {
+    throw std::invalid_argument("mccl radix join probe count exceeds 1<<30");
+  }
+  validate_capacity(n, device);
+  validate_capacity(n + 1, device, sizeof(uint64_t));
+  auto counted = mx::array::make_arrays(
+      {{static_cast<int>(n)}, {static_cast<int>(n + 1)}}, {mx::uint32, mx::uint64},
+      std::make_shared<RadixJoinCountOperation>(s),
+      {keys, mlx_array_get_(index->keys), mlx_array_get_(index->offsets)});
+  mx::eval(counted);
+  // The exclusive scan's terminal entry is the exact pair count.
+  total = counted[1].data<uint64_t>()[n];
+  if (total > kMaxPairRows) {
+    throw std::invalid_argument(
+        "mccl radix join output exceeds 1<<30 pairs: " + std::to_string(total));
+  }
+  validate_capacity(total * 2, device);
+  return counted;
+}
+
+void validate_relation_i64(const mx::array& source, const char* what) {
+  if (source.ndim() != 2 || source.dtype() != mx::int64) {
+    throw std::invalid_argument(std::string("mccl ") + what +
+        " relation must be int64 [rows,columns]");
+  }
+  if (static_cast<size_t>(source.shape(0)) > kMaxPairRows) {
+    throw std::invalid_argument(std::string("mccl ") + what + " relation exceeds 1<<30 rows");
+  }
+}
+
+// Row IDs [N] or join pairs [N,2] (row column read) over an int64 relation.
+struct RowsInput {
+  uint32_t stride;
+  uint32_t offset;
+};
+
+RowsInput validate_rows_input(const mx::array& ids, const mx::array& source, const char* what) {
+  const bool pairs = ids.ndim() == 2 && ids.shape(1) == 2;
+  if (ids.dtype() != mx::uint32 || !(ids.ndim() == 1 || pairs)) {
+    throw std::invalid_argument(std::string("mccl ") + what +
+        " rows must be uint32 [N] or [N,2] pairs");
+  }
+  validate_relation_i64(source, what);
+  if (static_cast<size_t>(ids.shape(0)) > kMaxPairRows) {
+    throw std::invalid_argument(std::string("mccl ") + what + " row count exceeds 1<<30");
+  }
+  return {pairs ? 2u : 1u, pairs ? 1u : 0u};
+}
+
+SemiJoinStage semijoin_stage(
+    const mx::array& source, int key_column, int item_column,
+    const mccl_radix_index* index) {
+  const int columns = source.shape(1);
+  if (key_column < 0 || key_column >= columns || item_column < -1 ||
+      item_column >= columns) {
+    throw std::invalid_argument("mccl radix semijoin column is outside the relation");
+  }
+  return {static_cast<uint32_t>(key_column),
+          item_column < 0 ? UINT32_MAX : static_cast<uint32_t>(item_column),
+          static_cast<uint32_t>(index->key_count)};
+}
+
+DistinctTuple distinct_tuple(
+    const mx::array& source, const int* columns, int column_count, size_t capacity,
+    mx::metal::Device& device) {
+  if (!columns || column_count < 1 ||
+      column_count > static_cast<int>(kMaxDistinctColumns)) {
+    throw std::invalid_argument("mccl distinct rows needs 1 to 4 columns");
+  }
+  DistinctTuple tuple{};
+  for (int k = 0; k < column_count; ++k) {
+    if (columns[k] < 0 || columns[k] >= source.shape(1)) {
+      throw std::invalid_argument("mccl distinct rows column is outside the relation");
+    }
+    tuple[3 + k] = static_cast<uint32_t>(columns[k]);
+  }
+  validate_capacity(capacity + 1, device);
+  validate_capacity(capacity * 2, device);
+  validate_capacity(capacity * column_count, device, sizeof(int64_t));
+  tuple[1] = static_cast<uint32_t>(source.shape(1));
+  tuple[2] = static_cast<uint32_t>(column_count);
+  return tuple;
+}
+
+// Deferred GPU validation flags: {row ID outside relation, value outside u32}.
+void check_invalid(const mx::array& invalid, const char* what) {
+  const auto* flags = invalid.data<uint32_t>();
+  if (flags[0] != 0) {
+    throw std::invalid_argument(std::string("mccl ") + what +
+        " row ID is outside the relation");
+  }
+  if (flags[1] != 0) {
+    throw std::invalid_argument(std::string("mccl ") + what +
+        " value is outside the u32 domain");
+  }
+}
+
+// Install only after successful completion; errors leave *out unchanged.
+void install(mlx_array* out, mx::array result) {
+  if (out->ctx) *static_cast<mx::array*>(out->ctx) = std::move(result);
+  else out->ctx = new mx::array(std::move(result));
+}
+
+// Evaluated distinct-tuple graph {tuples, count, invalid} → published prefix.
+mx::array publish_distinct(std::vector<mx::array>& graph, int column_count, const char* what) {
+  mx::eval(graph);
+  check_invalid(graph[2], what);
+  const uint32_t distinct = graph[1].data<uint32_t>()[0];
+  return radix_prefix(graph[0], {static_cast<int>(distinct), column_count});
+}
+
 } // namespace
 
 extern "C" int mccl_build_relation_radix_u32(
@@ -1894,5 +2410,176 @@ extern "C" int mccl_merge_radix_u32(
          mlx_array_get_(newer->offsets), mlx_array_get_(newer->items)},
         true, rows, capacity, s);
     publish_radix(out, graph);
+  });
+}
+
+extern "C" int mccl_radix_join_u32(
+    mlx_array* pairs, const mccl_radix_index* index, mlx_array probes,
+    mlx_stream stream) {
+  return capture_error([&] {
+    if (!pairs) throw std::invalid_argument("mccl radix join output must not be null");
+    const auto s = validate_stream(stream);
+    auto& device = validate_index_device(s);
+    validate_completed_radix(index, device);
+    if (!probes.ctx) throw std::invalid_argument("mccl radix join probes are missing");
+    if (pairs->ctx) {
+      auto inputs = radix_inputs(index);
+      inputs.push_back(probes);
+      for (auto input : inputs) {
+        if (pairs->ctx == input.ctx) {
+          throw std::invalid_argument("mccl radix join output must not alias its inputs");
+        }
+      }
+    }
+    uint64_t total = 0;
+    auto counted = count_join(index, mlx_array_get_(probes), s, device, total);
+    std::vector<mx::array> expanded{mx::array(
+        mx::Shape{static_cast<int>(total), 2}, mx::uint32,
+        std::make_shared<RadixJoinExpandOperation>(s, total, counted[0].size()),
+        {counted[1], counted[0], mlx_array_get_(index->offsets),
+         mlx_array_get_(index->items)})};
+    mx::eval(expanded);
+    install(pairs, std::move(expanded[0]));
+  });
+}
+
+extern "C" int mccl_radix_semijoin_u32(
+    mlx_array* out, mlx_array rows, mlx_array relation, int key_column,
+    int item_column, const mccl_radix_index* index, mlx_stream stream) {
+  return capture_error([&] {
+    if (!out) throw std::invalid_argument("mccl radix semijoin output must not be null");
+    const auto s = validate_stream(stream);
+    auto& device = validate_index_device(s);
+    validate_completed_radix(index, device);
+    if (!rows.ctx || !relation.ctx) {
+      throw std::invalid_argument("mccl radix semijoin inputs are missing");
+    }
+    if (out->ctx) {
+      auto inputs = radix_inputs(index);
+      inputs.push_back(rows);
+      inputs.push_back(relation);
+      for (auto input : inputs) {
+        if (out->ctx == input.ctx) {
+          throw std::invalid_argument("mccl radix semijoin output must not alias its inputs");
+        }
+      }
+    }
+    const auto& ids = mlx_array_get_(rows);
+    const auto& source = mlx_array_get_(relation);
+    const auto input = validate_rows_input(ids, source, "radix semijoin");
+    const auto stage = semijoin_stage(source, key_column, item_column, index);
+    const size_t n = ids.shape(0);
+    validate_capacity(n + 1, device);
+    auto graph = mx::array::make_arrays(
+        {{static_cast<int>(n)}, {1}, {2}}, {mx::uint32, mx::uint32, mx::uint32},
+        std::make_shared<RadixSemiJoinOperation>(s, input.stride, input.offset, stage),
+        {ids, source, mlx_array_get_(index->keys), mlx_array_get_(index->offsets),
+         mlx_array_get_(index->items)});
+    mx::eval(graph);
+    check_invalid(graph[2], "radix semijoin");
+    const uint32_t kept = graph[1].data<uint32_t>()[0];
+    install(out, radix_prefix(graph[0], {static_cast<int>(kept)}));
+  });
+}
+
+extern "C" int mccl_distinct_rows_i64(
+    mlx_array* out, mlx_array rows, mlx_array relation, const int* columns,
+    int column_count, mlx_stream stream) {
+  return capture_error([&] {
+    if (!out) throw std::invalid_argument("mccl distinct rows output must not be null");
+    const auto s = validate_stream(stream);
+    auto& device = validate_index_device(s);
+    if (!rows.ctx || !relation.ctx) {
+      throw std::invalid_argument("mccl distinct rows inputs are missing");
+    }
+    if (out->ctx && (out->ctx == rows.ctx || out->ctx == relation.ctx)) {
+      throw std::invalid_argument("mccl distinct rows output must not alias its inputs");
+    }
+    const auto& ids = mlx_array_get_(rows);
+    const auto& source = mlx_array_get_(relation);
+    const auto input = validate_rows_input(ids, source, "distinct rows");
+    const size_t n = ids.shape(0);
+    const auto tuple = distinct_tuple(source, columns, column_count, n, device);
+    auto graph = mx::array::make_arrays(
+        {{static_cast<int>(n), column_count}, {1}, {2}},
+        {mx::int64, mx::uint32, mx::uint32},
+        std::make_shared<DistinctRowsOperation>(s, input.stride, input.offset, tuple),
+        {ids, source});
+    install(out, publish_distinct(graph, column_count, "distinct rows"));
+  });
+}
+
+extern "C" int mccl_radix_join_semijoin_distinct_i64(
+    mlx_array* out, const mccl_radix_index* join_index, mlx_array probes,
+    mlx_array relation, const mccl_semijoin_step* steps, int step_count,
+    const int* columns, int column_count, mlx_stream stream) {
+  return capture_error([&] {
+    if (!out) throw std::invalid_argument("mccl join chain output must not be null");
+    const auto s = validate_stream(stream);
+    auto& device = validate_index_device(s);
+    validate_completed_radix(join_index, device);
+    if (!probes.ctx || !relation.ctx) {
+      throw std::invalid_argument("mccl join chain inputs are missing");
+    }
+    if (step_count < 0 || (step_count > 0 && !steps)) {
+      throw std::invalid_argument("mccl join chain steps are missing");
+    }
+    std::vector<mlx_array> handles = radix_inputs(join_index);
+    handles.push_back(probes);
+    handles.push_back(relation);
+    const auto& source = mlx_array_get_(relation);
+    validate_relation_i64(source, "join chain");
+    std::vector<SemiJoinStage> stages;
+    std::vector<mx::array> inputs;
+    for (int k = 0; k < step_count; ++k) {
+      validate_completed_radix(steps[k].index, device);
+      stages.push_back(
+          semijoin_stage(source, steps[k].key_column, steps[k].item_column, steps[k].index));
+      const auto step = radix_inputs(steps[k].index);
+      handles.insert(handles.end(), step.begin(), step.end());
+    }
+    for (auto handle : handles) {
+      if (out->ctx && out->ctx == handle.ctx) {
+        throw std::invalid_argument("mccl join chain output must not alias its inputs");
+      }
+    }
+    uint64_t total = 0;
+    auto counted = count_join(join_index, mlx_array_get_(probes), s, device, total);
+    const auto tuple = distinct_tuple(source, columns, column_count, total, device);
+    // A kept row's key column holds a key of every step run keyed on it, so
+    // that run's max_key bounds the column; the field needs only its bits.
+    DistinctWidths widths = kFullWidths;
+    for (int c = 0; c < column_count; ++c) {
+      uint64_t bound = UINT32_MAX;
+      for (int k = 0; k < step_count; ++k) {
+        if (steps[k].key_column == columns[c] && steps[k].index->rows != 0) {
+          bound = std::min(bound, steps[k].index->max_key);
+        }
+      }
+      widths[c] = bound == 0 ? 0 : 64 - static_cast<uint32_t>(__builtin_clzll(bound));
+    }
+    validate_capacity(total + 1, device);
+    if (total == 0) {
+      // No pairs: the published empty prefix needs no GPU work.
+      mx::array empty({0, column_count}, mx::int64, nullptr, {});
+      allocate_storage(empty);
+      empty.set_status(mx::array::Status::available);
+      install(out, std::move(empty));
+      return;
+    }
+    inputs = {counted[1], counted[0], mlx_array_get_(join_index->offsets),
+              mlx_array_get_(join_index->items), source};
+    for (int k = 0; k < step_count; ++k) {
+      inputs.push_back(mlx_array_get_(steps[k].index->keys));
+      inputs.push_back(mlx_array_get_(steps[k].index->offsets));
+      inputs.push_back(mlx_array_get_(steps[k].index->items));
+    }
+    auto graph = mx::array::make_arrays(
+        {{static_cast<int>(total), column_count}, {1}, {2}},
+        {mx::int64, mx::uint32, mx::uint32},
+        std::make_shared<JoinChainOperation>(
+            s, total, counted[0].size(), std::move(stages), tuple, widths),
+        std::move(inputs));
+    install(out, publish_distinct(graph, column_count, "join chain"));
   });
 }

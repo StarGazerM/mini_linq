@@ -5,7 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cq_storage::{Build, HashIndex, IndexRead};
+use cq_storage::{
+    AdaptiveMembership, Build, DenseMembership, ExactMembership, HashIndex, IndexRead,
+};
 
 /// Full-width Lineitem storage shared by all executions and index projections.
 pub struct Prepared {
@@ -13,12 +15,26 @@ pub struct Prepared {
     pub ingestion: Duration,
 }
 
+/// Part keys whose interned name is in the loader's `GreenNames` relation.
+pub fn green_parts(data: &crate::h09::Data) -> impl Iterator<Item = i64> + '_ {
+    let green: HashSet<_> = data.green_names.iter().map(|(name,)| *name).collect();
+    data.part
+        .iter()
+        .filter(move |(_, name)| green.contains(name))
+        .map(|(part_key, _)| *part_key)
+}
+
+/// Whether the Part/GreenNames prefix demands any Lineitem probe.
+pub(crate) fn has_green_demand(data: &crate::h09::Data) -> bool {
+    green_parts(data).next().is_some()
+}
+
 impl Prepared {
     pub fn new(
         context: &cq_mac::MacContext,
         data: &crate::h09::Data,
     ) -> Result<Self, Box<dyn Error>> {
-        if !data.part.iter().any(|(_, name)| name.contains("green")) {
+        if !has_green_demand(data) {
             return Ok(Self {
                 source: None,
                 ingestion: Duration::ZERO,
@@ -80,13 +96,9 @@ pub fn execute(
         witnesses: 0,
     };
 
-    // The opaque Part predicate precedes every join in the expansion. Peeking
-    // demands only its first match, so an empty green selection never builds.
-    let mut green_parts = data
-        .part
-        .iter()
-        .filter(|(_, name)| name.contains("green"))
-        .peekable();
+    // The Part/GreenNames join precedes every other join. Peeking demands only
+    // its first match, so an empty green selection never builds.
+    let mut green_parts = green_parts(data).peekable();
     if green_parts.peek().is_none() {
         return Ok(Execution {
             result,
@@ -94,8 +106,8 @@ pub fn execute(
         });
     }
 
-    // Expanded r2: GPU projection reads the retained full numeric Lineitem.
-    // Original source row IDs retain wide signed order/supplier payloads.
+    // The Lineitem part-key read: GPU projection over the retained full numeric
+    // Lineitem. Original source row IDs retain wide signed order/supplier payloads.
     let source = prepared.source.as_ref().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -117,37 +129,41 @@ pub fn execute(
     result.index_builds = 1;
     result.indexed_rows = lineitem.len();
 
-    // Expanded r4/r6/r8/r10 remain deferred host HashIndexes. Composite keys
-    // stay (i64, i64), and every stored occurrence remains a separate witness.
-    let partsupp = HashIndex::build(data.partsupp.iter().map(|&key| (key, ())));
-    let orders = HashIndex::build(data.orders.iter().map(|&(order_key,)| (order_key, ())));
+    // The current default route's remaining providers: PartSupp, Orders and
+    // Nation are membership reads; Supplier is the only multiplicity-preserving
+    // index, supplying its i32 nation key. Composite keys stay (i64, i64).
+    let partsupp = <AdaptiveMembership<(i64, i64), 16777216> as Build<_>>::build(
+        data.partsupp.iter().map(|&key| (key, ())),
+    );
+    let orders = <DenseMembership<i64, 16777216> as Build<_>>::build(
+        data.orders.iter().map(|&(order_key,)| (order_key, ())),
+    );
     let supplier = HashIndex::build(data.supplier.iter().copied());
-    let nation = HashIndex::build(data.nation.iter().map(|&(nation_key,)| (nation_key, ())));
+    let nation = <DenseMembership<i32, 16777216> as Build<_>>::build(
+        data.nation.iter().map(|&(nation_key,)| (nation_key, ())),
+    );
     let mut seen = HashSet::new();
 
-    for &(part_key, _) in green_parts {
+    for part_key in green_parts {
         let key = gpu_part_key(part_key, "Part.p_partkey")?;
         result.index_probes += 1;
-        // r2 exact lookup reads the completed shared buffer on the CPU.
+        // The exact lookup reads the completed shared buffer on the CPU.
         for row_id in lineitem.lookup(&key) {
             let offset = row_id as usize * 3;
             let (order_key, source_part_key, supplier_key) =
                 (numeric[offset], numeric[offset + 1], numeric[offset + 2]);
             result.payload_gathers += 1;
-            // r4: retain all composite PartSupp occurrences, not membership.
-            for () in partsupp.lookup(&(source_part_key, supplier_key)) {
-                // r6: retain all matching Orders occurrences.
-                for () in orders.lookup(&order_key) {
-                    // r8: preserve the original i32 nation-key payload.
-                    for nation_key in supplier.lookup(&supplier_key) {
-                        // r10: retain all matching Nation occurrences.
-                        for () in nation.lookup(&nation_key) {
-                            result.witnesses += 1;
-                            let answer = (order_key, part_key, supplier_key);
-                            if seen.insert(answer) {
-                                result.answers.push(answer);
-                            }
-                        }
+            if !partsupp.contains(&(source_part_key, supplier_key)) || !orders.contains(&order_key)
+            {
+                continue;
+            }
+            // Preserve the original i32 nation-key payload and its multiplicity.
+            for nation_key in supplier.lookup(&supplier_key) {
+                if nation.contains(&nation_key) {
+                    result.witnesses += 1;
+                    let answer = (order_key, part_key, supplier_key);
+                    if seen.insert(answer) {
+                        result.answers.push(answer);
                     }
                 }
             }
