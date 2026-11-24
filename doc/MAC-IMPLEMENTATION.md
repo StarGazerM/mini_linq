@@ -287,7 +287,10 @@ they still apply.
    `tests/radix_{run,layout,candidates}.rs` ported and exact against
    `cq_storage::RadixRun`. Explore: exact-prefix versus spline directory for CPU
    and GPU reads (matched build + read); multi-lane sort cost at 1M/16M/60M;
-   private versus shared scratch.
+   private versus shared scratch. Status: 1a, one-run build, done
+   ([word runs](#step-1a-cuda-word-runs-on-metal-2026-11-24)); next 1b, item
+   columns through the stable order and ratio-law multi-run snapshots, then
+   1c CPU reader and probes, 1d the ported CUDA cases and measurements.
 2. **MCCL operators on the shared layout.** Join, semijoin, distinct and the
    fused chain read typed item columns instead of row-ID gathers; `metal_h09`
    loses the u32 key domain; packed `MacRun` and its maintained owner retire.
@@ -2266,3 +2269,36 @@ cargo run --release --locked --manifest-path experiments/mac/query-expansion/Car
 cargo run --release --locked --manifest-path experiments/mac/query-expansion/Cargo.toml \
   --bin h09_stages -- $D/tpch-10/retail_h09 11
 ```
+
+## Step 1a: CUDA word runs on Metal (2026-11-24)
+
+`mccl_build_word_run` (Rust `Gpu::build_word_run`, `mccl::words`) builds one
+run in `DeviceRadixRun`'s layout from keys of 1–8 u64 lanes, stored
+least-significant lane first (CUDA `u64`, `u128`) or most-significant first
+(`[u64; L]`). It publishes, in shared storage the CPU reads in place:
+distinct keys in that lane layout, `u32` or `u64` group offsets with the
+terminal row count, the stable occurrence order (source row per occurrence;
+item columns are gathered through it) and the exact radix-prefix directory:
+`directory[b]` is the first slot whose top `radix_bits` bits of
+`key − min`, at the span's resolution, are at least `b`, as CUDA's
+`device::prefix`/`build_directory`.
+
+Construction (`native/index/words.metal`): LSD over the active 32-bit slices,
+each gathered through the previous stable order and sorted by MCCL's stable
+byte radix passes (only occupied bytes of the last slice), so equal keys keep
+source order like CUDA's `runs::stable_order`; then group-head flags over all
+lanes, one exclusive scan, scatter of distinct keys, offsets and the order, and
+the directory by per-bucket lower-bound search. One readback (the group
+count) per build, as CUDA. Differences from CUDA, all explicit errors: at most
+8 lanes, `radix_bits` ≤ 30 (CUDA 32), rows ≤ 2^30 (CUDA `u32::MAX`); an empty
+build returns `None` (CUDA publishes nothing for an empty delta). Bits at or
+above `active_bits` must be zero, unchecked as in CUDA.
+
+`mccl/tests/words.rs` checks against a host oracle (stable index sort on the
+full key, grouping, and the directory definition evaluated in 512-bit
+integers): 1/2/3/8 lanes in both layouts, 1–20,001 rows with zeros, all-ones
+lanes and heavy duplicates, `u32`/`u64` offsets, directory bits 0/4/8/12,
+sorted/reversed/all-equal/single-key inputs, 40-of-64 active bits, zero active
+bits, and parameter rejection. Build cost is not measured yet: the current
+entry copies host keys into a new array, which would confound it; 1b builds
+keys from resident relation columns first.

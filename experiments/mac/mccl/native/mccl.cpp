@@ -2583,3 +2583,185 @@ extern "C" int mccl_radix_join_semijoin_distinct_i64(
     install(out, publish_distinct(graph, column_count, "join chain"));
   });
 }
+
+namespace {
+
+// CUDA DeviceRadixRun layout (GPU-RadixRun): keys of `lanes` u64 words.
+constexpr uint32_t kMaxWordLanes = 8;      // Must match words.metal.
+constexpr uint32_t kMaxWordRadixBits = 30; // Directory entries index a uint grid.
+
+struct WordRunShape {
+  uint32_t lanes, ms_first, active_bits, radix_bits, offset_bytes;
+};
+
+mx::Dtype offset_dtype(uint32_t offset_bytes) {
+  return offset_bytes == 4 ? mx::uint32 : mx::uint64;
+}
+
+size_t word_directory_entries(uint32_t radix_bits) {
+  return radix_bits == 0 ? 0 : (size_t{1} << radix_bits) + 1;
+}
+
+// inputs: keys uint64 [n, lanes]. outputs: distinct keys [n, lanes] (prefix
+// key_count), offsets [n + 1] (prefix key_count + 1), stable order uint32
+// [n], directory [entries], meta uint64 [2] = {key_count, n}.
+class WordRunOperation final : public mx::Primitive {
+ public:
+  WordRunOperation(mx::Stream stream, WordRunShape shape)
+      : mx::Primitive(stream), shape_(shape) {}
+  const char* name() const override { return "McclWordRun"; }
+  void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
+    throw std::runtime_error("mccl word runs require a GPU stream");
+  }
+  void eval_gpu(
+      const std::vector<mx::array>& inputs,
+      std::vector<mx::array>& outputs) override {
+    auto& device = validate_index_device(stream());
+    require_contiguous(inputs, "word run");
+    for (auto& output : outputs) allocate_storage(output);
+    auto& encoder = mx::metal::get_command_encoder(stream());
+    const auto& keys = inputs[0];
+    const auto n = static_cast<uint32_t>(keys.shape(0));
+    const bool wide = shape_.offset_bytes == 8;
+    auto gathered = allocate_leaf({static_cast<int>(n), 2}, device);
+    auto sorted = allocate_leaf({static_cast<int>(n), 2}, device);
+    encoder.add_temporary(gathered);
+    encoder.add_temporary(sorted);
+    // LSD over the active 32-bit slices: each pass gathers one slice through
+    // the previous stable order and sorts it stably, so ties keep source order.
+    const uint32_t slices = (shape_.active_bits + 31) / 32;
+    auto* gather = index_kernel(device, "words_gather_slice");
+    for (uint32_t slice = 0; slice == 0 || slice < slices; ++slice) {
+      const uint32_t args[] = {n, shape_.lanes, shape_.ms_first, slice, slice == 0};
+      encoder.set_compute_pipeline_state(gather);
+      encoder.set_input_array(keys, 0);
+      encoder.set_input_array(sorted, 1);
+      encoder.set_output_array(gathered, 2);
+      encoder.set_bytes(args, 5, 3);
+      dispatch(encoder, ceil_div(n, kThreads));
+      if (slices == 0) {
+        // No active bits: one key, identity order.
+        sorted = gathered;
+        break;
+      }
+      const uint32_t bits = std::min<uint32_t>(32, shape_.active_bits - slice * 32);
+      encode_sort(gathered, sorted, device, encoder, nullptr, (bits + 7) / 8);
+    }
+    auto prefix = flag_prefix(n, device, encoder);
+    const uint32_t group_args[] = {n, shape_.lanes};
+    encoder.set_compute_pipeline_state(index_kernel(device, "words_group_flags"));
+    encoder.set_input_array(keys, 0);
+    encoder.set_input_array(sorted, 1);
+    encoder.set_output_array(prefix, 2);
+    encoder.set_bytes(group_args, 2, 3);
+    dispatch(encoder, ceil_div(n + 1, kThreads));
+    scan_flags(prefix, device, encoder);
+    encoder.set_compute_pipeline_state(index_kernel(device,
+        wide ? "words_group_scatter_o64" : "words_group_scatter_o32"));
+    encoder.set_input_array(keys, 0);
+    encoder.set_input_array(sorted, 1);
+    encoder.set_input_array(prefix, 2);
+    encoder.set_output_array(outputs[0], 3);
+    encoder.set_output_array(outputs[1], 4);
+    encoder.set_output_array(outputs[2], 5);
+    encoder.set_output_array(outputs[4], 6);
+    encoder.set_bytes(group_args, 2, 7);
+    dispatch(encoder, ceil_div(n, kThreads));
+    if (shape_.radix_bits != 0) {
+      const auto entries = word_directory_entries(shape_.radix_bits);
+      const uint32_t args[] = {shape_.lanes, shape_.ms_first, shape_.radix_bits};
+      encoder.set_compute_pipeline_state(index_kernel(device,
+          wide ? "words_directory_o64" : "words_directory_o32"));
+      encoder.set_input_array(outputs[0], 0);
+      encoder.set_input_array(outputs[4], 1);
+      encoder.set_output_array(outputs[3], 2);
+      encoder.set_bytes(args, 3, 3);
+      dispatch(encoder, ceil_div(entries, kThreads));
+    }
+  }
+ private:
+  WordRunShape shape_;
+};
+
+std::array<mlx_array*, 4> word_run_handles(mccl_word_run* run) {
+  return {&run->keys, &run->offsets, &run->order, &run->directory};
+}
+
+} // namespace
+
+extern "C" int mccl_build_word_run(
+    mccl_word_run* out, mlx_array keys, uint32_t lanes, int ms_first,
+    uint32_t active_bits, uint32_t radix_bits, uint32_t offset_bytes,
+    mlx_stream stream) {
+  return capture_error([&] {
+    if (!out) throw std::invalid_argument("mccl word run output must not be null");
+    if (!keys.ctx) throw std::invalid_argument("mccl word run keys are missing");
+    const auto s = validate_stream(stream);
+    auto& device = validate_index_device(s);
+    const auto handles = word_run_handles(out);
+    for (size_t i = 0; i < handles.size(); ++i) {
+      if (handles[i]->ctx && handles[i]->ctx == keys.ctx) {
+        throw std::invalid_argument("mccl word run outputs must not alias the keys");
+      }
+      for (size_t j = 0; j < i; ++j) {
+        if (handles[i]->ctx && handles[i]->ctx == handles[j]->ctx) {
+          throw std::invalid_argument("mccl word run output handles must be distinct");
+        }
+      }
+    }
+    if (lanes == 0 || lanes > kMaxWordLanes) {
+      throw std::invalid_argument("mccl word run lanes must be 1..8");
+    }
+    if (active_bits > lanes * 64) {
+      throw std::invalid_argument("mccl word run active bits exceed the key word");
+    }
+    if (radix_bits > kMaxWordRadixBits) {
+      throw std::invalid_argument("mccl word run directory bits must be at most 30");
+    }
+    if (offset_bytes != 4 && offset_bytes != 8) {
+      throw std::invalid_argument("mccl word run offsets must be 4 or 8 bytes");
+    }
+    const auto& source = mlx_array_get_(keys);
+    if (source.ndim() != 2 || source.dtype() != mx::uint64 ||
+        static_cast<uint32_t>(source.shape(1)) != lanes) {
+      throw std::invalid_argument("mccl word run keys must be uint64 [rows, lanes]");
+    }
+    const auto rows = static_cast<size_t>(source.shape(0));
+    if (rows == 0) {
+      throw std::invalid_argument("mccl word run needs rows; an empty build publishes nothing");
+    }
+    if (rows > kMaxPairRows) {
+      throw std::invalid_argument("mccl word run rows exceed 1<<30");
+    }
+    validate_capacity(rows * lanes, device, sizeof(uint64_t));
+    validate_capacity(rows + 1, device, offset_bytes);
+    const auto entries = word_directory_entries(radix_bits);
+    validate_capacity(entries, device, offset_bytes);
+    const WordRunShape shape{lanes, uint32_t(ms_first != 0), active_bits, radix_bits, offset_bytes};
+    const auto n = static_cast<int>(rows);
+    auto graph = mx::array::make_arrays(
+        {{n, static_cast<int>(lanes)}, {n + 1}, {n}, {static_cast<int>(entries)}, {2}},
+        {mx::uint64, offset_dtype(offset_bytes), mx::uint32, offset_dtype(offset_bytes), mx::uint64},
+        std::make_shared<WordRunOperation>(s, shape),
+        {mx::contiguous(source, false, s)});
+    mx::eval(graph);
+    const auto* meta = graph[4].data<uint64_t>();
+    if (meta[1] != rows || meta[0] == 0 || meta[0] > rows) {
+      throw std::runtime_error("mccl GPU word run metadata exceeds output capacity");
+    }
+    const auto key_count = static_cast<int>(meta[0]);
+    mx::array result[] = {
+        radix_prefix(graph[0], {key_count, static_cast<int>(lanes)}),
+        radix_prefix(graph[1], {key_count + 1}),
+        radix_prefix(graph[2], {n}),
+        radix_prefix(graph[3], {static_cast<int>(entries)})};
+    for (size_t i = 0; i < handles.size(); ++i) install(handles[i], std::move(result[i]));
+    out->rows = rows;
+    out->key_count = meta[0];
+    out->lanes = lanes;
+    out->ms_first = shape.ms_first;
+    out->active_bits = active_bits;
+    out->radix_bits = radix_bits;
+    out->offset_bytes = offset_bytes;
+  });
+}

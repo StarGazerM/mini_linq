@@ -78,6 +78,7 @@ add_custom_command(
     "${CMAKE_CURRENT_SOURCE_DIR}/native/index/relation.metal"
     "${CMAKE_CURRENT_SOURCE_DIR}/native/index/radix.metal"
     "${CMAKE_CURRENT_SOURCE_DIR}/native/index/join.metal"
+    "${CMAKE_CURRENT_SOURCE_DIR}/native/index/words.metal"
   VERBATIM)
 add_custom_target(mccl_metallib DEPENDS "${MCCL_METALLIB}")
 

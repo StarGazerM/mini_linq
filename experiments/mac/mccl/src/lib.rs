@@ -14,6 +14,7 @@ pub mod index;
 pub mod memory;
 pub mod radix;
 pub mod relation;
+pub mod words;
 
 mod ffi {
     use super::{c_char, c_int, c_void};
@@ -61,6 +62,21 @@ mod ffi {
         pub shift: u32,
         pub search_error: u32,
     }
+    #[repr(C)]
+    pub struct WordRun {
+        pub keys: Array,
+        pub offsets: Array,
+        pub order: Array,
+        pub directory: Array,
+        pub rows: usize,
+        pub key_count: usize,
+        pub lanes: u32,
+        pub ms_first: u32,
+        pub active_bits: u32,
+        pub radix_bits: u32,
+        pub offset_bytes: u32,
+    }
+
     // mlx/c/array.h at the commit pinned by CMake: MLX_UINT32 = 3.
     pub const UINT32: c_int = 3;
     pub const UINT64: c_int = 4;
@@ -225,6 +241,16 @@ mod ffi {
             step_count: c_int,
             columns: *const c_int,
             column_count: c_int,
+            stream: Stream,
+        ) -> c_int;
+        pub fn mccl_build_word_run(
+            out: *mut WordRun,
+            keys: Array,
+            lanes: u32,
+            ms_first: c_int,
+            active_bits: u32,
+            radix_bits: u32,
+            offset_bytes: u32,
             stream: Stream,
         ) -> c_int;
         pub fn mccl_last_error() -> *const c_char;

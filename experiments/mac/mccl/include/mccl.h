@@ -430,6 +430,39 @@ MCCL_API int mccl_radix_join_semijoin_distinct_i64(
     mlx_array relation, const mccl_semijoin_step* steps, int step_count,
     const int* columns, int column_count, mlx_stream s);
 
+/*
+ * One run in CUDA's DeviceRadixRun layout (GPU-RadixRun, STORAGE §8.2).
+ * keys is uint64 [rows, lanes]: each key is `lanes` 64-bit words, stored
+ * least-significant lane first (ms_first = 0: CUDA u64/u128) or most-
+ * significant first (ms_first = 1: CUDA [u64; L]). Keys order as unsigned
+ * multi-word integers. Bits at or above active_bits must be zero (only the
+ * active bits are sorted; unchecked, as CUDA's narrow sort contract).
+ *
+ * Publishes, all immutable and complete:
+ *   keys      uint64 [key_count, lanes], strictly increasing, same lane layout;
+ *   offsets   [key_count + 1] of offset_bytes (4: uint32, 8: uint64), group
+ *             starts in stable order, terminal entry rows;
+ *   order     uint32 [rows]: source row of each stable occurrence; equal keys
+ *             keep source order. Item columns are gathered through it;
+ *   directory [2^radix_bits + 1] of offset_bytes, or [0] when radix_bits is
+ *             0: directory[b] is the first slot whose prefix (top radix_bits
+ *             bits of key - min at the span's resolution) is at least b.
+ * Limits: 1 <= lanes <= 8, rows in 1..1<<30, radix_bits <= 30. An empty
+ * build is rejected: callers publish nothing for an empty delta. Synchronous;
+ * outputs must be distinct from each other and from keys, and are installed
+ * only on success.
+ */
+typedef struct mccl_word_run {
+  mlx_array keys, offsets, order, directory;
+  size_t rows, key_count;
+  uint32_t lanes, ms_first, active_bits, radix_bits, offset_bytes;
+} mccl_word_run;
+
+MCCL_API int mccl_build_word_run(
+    mccl_word_run* out, mlx_array keys, uint32_t lanes, int ms_first,
+    uint32_t active_bits, uint32_t radix_bits, uint32_t offset_bytes,
+    mlx_stream s);
+
 /* Thread-local message, valid until the next mccl operation on this thread.
  * Empty after a successful operation. The returned pointer must not be freed.
  */

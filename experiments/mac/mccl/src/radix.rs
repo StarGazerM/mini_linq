@@ -299,7 +299,7 @@ impl DistinctRows {
 
 // Check metadata only, never scan array contents. The native synchronous ABI
 // guarantees these shapes describe fully initialized, contiguous owning views.
-fn check_array(array: ffi::Array, dtype: i32, shape: &[usize]) -> Result<()> {
+pub(crate) fn check_array(array: ffi::Array, dtype: i32, shape: &[usize]) -> Result<()> {
     let elements = shape.iter().product::<usize>();
     if array.ctx.is_null()
         || unsafe { ffi::mlx_array_dtype(array) } != dtype
@@ -329,7 +329,7 @@ fn check_array(array: ffi::Array, dtype: i32, shape: &[usize]) -> Result<()> {
     Ok(())
 }
 
-fn ready_pointer<T>(pointer: *const T, len: usize) -> Result<NonNull<T>> {
+pub(crate) fn ready_pointer<T>(pointer: *const T, len: usize) -> Result<NonNull<T>> {
     if len == 0 {
         return Ok(NonNull::dangling());
     }
