@@ -5,7 +5,7 @@ fn program() -> cq_lang_datalog_round::Program {
     program_with_symbols(syn::parse_quote!(i32), quote!())
 }
 
-fn program_with_symbols(
+pub(crate) fn program_with_symbols(
     ty: syn::Type,
     symbols: proc_macro2::TokenStream,
 ) -> cq_lang_datalog_round::Program {
@@ -61,6 +61,17 @@ fn program_with_orders(
     )
     .unwrap();
     crate::bindings::compile_with(&round, quote!(binding = #binding)).unwrap()
+}
+
+#[test]
+fn round_shared_marker_cannot_merge_seed_and_step_across_publication() {
+    let mut p = program_with_symbols(syn::parse_quote!(u32), quote!());
+    for h in &mut p.holes {
+        let pass = h.pipeline.passes.last_mut().unwrap();
+        let arena = &pass.arguments;
+        pass.arguments = quote!(round_shared(0,2); #arena);
+    }
+    assert!(crate::bindings::check(&p).unwrap_err().to_string().contains("RoundShared"));
 }
 
 #[test]

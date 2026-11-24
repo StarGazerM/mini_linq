@@ -669,14 +669,15 @@ orders that reorder layouts must update its `READS` (the strict check rejects
 a mismatch). Identical delta `from` lists are interned per invocation, so each
 distinct list's union is ORed once (jython assignment kernels 718 -> 272 ms).
 
-The three virtual-dispatch versions (`varpointsto@3`, `reachable@3`,
-`callgraphedge@3`) read the same delta and the same eight-atom prefix
-([`doop/src/manual_dispatch.rs`](doop/src/manual_dispatch.rs)): the first of
-the three holes in a round materializes the prefix witnesses once (three
-`u32` per `methodlookup` witness, snapshot-versioned device hash indexes over
-all input runs), and each hole then projects its head from that buffer; only
-the VPT head expands `thisvar`. The family takes 73 ms instead of 505 ms on
-scala (70 vs 1,032 ms on jython).
+`bind_round` records `round_shared(leader, depth)` when multiple pure rule
+versions in the same publication epoch share a versioned, alpha-equivalent
+positive prefix. The checker resolves the actual scan/layout hosts, column
+permutations, codecs, changing occurrence, projections, and remaining suffix
+of each branch. The GPU printer materializes live `u32` columns once per
+witness, without deduplication; branches keep their original head arenas and
+admission. For the eight-atom virtual-dispatch prefix this stores `(heap,
+invocation, target)` per `methodlookup` witness. Only the VPT branch expands
+`thisvar`, including zero or multiple matches. No source hook is required.
 
 `doop-gpu` authors 12 rule-version orders (`plan(...)` in
 [`doop/src/lib.rs`](doop/src/lib.rs); evidence in

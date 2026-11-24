@@ -255,7 +255,7 @@ fn arena_argument(head: bool) -> TokenStream {
 
 pub(crate) fn head_argument(hole: &Hole) -> bool {
     hole.pipeline.passes.last().is_some_and(|terminal| {
-        terminal.arguments.to_string() == arena_argument(true).to_string()
+        crate::shared::unpack(&terminal.arguments).is_ok_and(|(_,arena)| arena.to_string() == arena_argument(true).to_string())
     })
 }
 
@@ -328,6 +328,15 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
     } else {
         BTreeSet::new()
     };
+    let mut shared = BTreeMap::new();
+    let symbols = crate::storage::Symbols::from_program(&source.storage)?;
+    for groups in crate::shared::plan(source,&excluded,&symbols).into_values() {
+        for group in groups {
+            let first = group.holes().next().expect("nonempty RoundShared branches");
+            let cut = group.cut();
+            shared.extend(group.holes().map(|i| (i,quote!(round_shared(#first,#cut);))));
+        }
+    }
     for (i, hole) in target.holes.iter_mut().enumerate() {
         ensure(
             hole.interface == HoleInterface::Batch,
@@ -362,7 +371,9 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
             &terminal.path,
             "GPU batch terminal already has arguments",
         )?;
-        terminal.arguments = arena_argument(selected.contains(&i));
+        let marker = shared.get(&i);
+        let arena = arena_argument(selected.contains(&i));
+        terminal.arguments = quote!(#marker #arena);
     }
     round::check_rewrite(source, &target)?;
     check(&target)?;
@@ -373,6 +384,10 @@ pub fn compile_with(source: &Program, arguments: TokenStream) -> syn::Result<Pro
 /// providers, the declared owner contains exactly the input-layout packet and
 /// the terminal contains its complete arena argument.
 pub fn check(program: &Program) -> syn::Result<()> {
+    checked(program).map(drop)
+}
+
+pub(crate) fn checked(program: &Program) -> syn::Result<crate::shared::Phases> {
     for (stratum, providers) in program.context.strata.iter().zip(key_providers(program)?) {
         for (key, provider) in stratum.keys.iter().zip(providers) {
             ensure(
@@ -426,11 +441,11 @@ pub fn check(program: &Program) -> syn::Result<()> {
         )?;
         ensure(
             hole.pipeline.passes.last().is_some_and(|terminal| {
-                terminal.arguments.to_string() == arena_argument(false).to_string() || head_argument(hole)
+                crate::shared::unpack(&terminal.arguments).is_ok_and(|(_,args)| args.to_string() == arena_argument(false).to_string() || args.to_string() == arena_argument(true).to_string())
             }),
             hole,
             "GPU batch invocation differs from its recorded arena argument",
         )?;
     }
-    Ok(())
+    crate::shared::check(program)
 }

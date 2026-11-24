@@ -32,6 +32,10 @@ measurements use [planning progress](doc/PLANNING-REDESIGN.md#progress).
   VPT_LoadArray@2, VPT_LoadField@2): scala 3.60 -> 3.40 s, soot 4.11 -> 4.09 s,
   kotlin 3.47 -> 3.44 s, jython 3.00 -> 2.96 s; counts unchanged, xalan exact.
 
+- GPU Datalog: `DL-RoundShared` records and checks multi-head prefix sharing
+  over matching versioned reads in a publication epoch. Generated per-head
+  suffix kernels replace the hand-written virtual-dispatch hooks.
+
 - GPU Datalog / DOOP joins, round 2 (reports `/data/design-notes/join-lab/round2-*.md`).
   GPU-RadixExactMember: a membership read on the complete physical key
   searches each run once for the exact word instead of two interval bounds.

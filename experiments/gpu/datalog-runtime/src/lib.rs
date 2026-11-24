@@ -18,6 +18,7 @@ pub mod phases;
 mod publish;
 pub mod radix_run;
 mod runs;
+pub mod shared_prefix;
 mod stats;
 pub use arena::{concatenate_batches, CandidateArena, CandidateBatch, CandidateLease, HeadCursors};
 pub use gpu_device_columns::{Buffer, Pool};

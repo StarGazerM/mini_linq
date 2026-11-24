@@ -19,9 +19,20 @@ const SPECULATIVE_SLOT_BYTES: usize = 8 << 20;
 const GROWTH_SLACK_BYTES: usize = 256 << 20;
 
 #[derive(Clone, Copy, Default)]
-struct HoleCounts {
+pub(crate) struct HoleCounts {
     last: usize,
     high: usize,
+}
+impl HoleCounts {
+    pub(crate) fn hint(&self, row_bytes: usize) -> usize {
+        let budget_rows = SPECULATIVE_SLOT_BYTES / row_bytes;
+        let slack = (self.last / 2).min(GROWTH_SLACK_BYTES / row_bytes);
+        (self.last + slack).max(self.high.saturating_mul(2).min(budget_rows))
+    }
+    pub(crate) fn record(&mut self, rows: usize) {
+        self.last = rows;
+        self.high = self.high.max(rows);
+    }
 }
 
 /// Grow a validated head count by 50%, but spend at most 64 MiB on speculative
@@ -228,16 +239,13 @@ impl CandidateArena {
     pub fn capacity_hint(&self, packing: &Packing) -> usize {
         let Some(counts) = self.previous_counts.get(self.hole) else { return 0 };
         let word_bytes = packing.word_bits() as usize / 8;
-        let budget_rows = SPECULATIVE_SLOT_BYTES / word_bytes;
-        let slack = (counts.last / 2).min(GROWTH_SLACK_BYTES / word_bytes);
-        (counts.last + slack).max(counts.high.saturating_mul(2).min(budget_rows))
+        counts.hint(word_bytes)
     }
     /// Remember the selected hole's fully validated count, including an empty result.
     pub fn record_count(&mut self, rows: usize) {
         let hole = self.hole;
         let counts = &mut self.hole(hole).previous_counts[hole];
-        counts.last = rows;
-        counts.high = counts.high.max(rows);
+        counts.record(rows);
     }
     /// GPU-ResidentMeta: at least `words` resident metadata words, zero on
     /// entry. Each dispatch that uses them must leave every word zero again in

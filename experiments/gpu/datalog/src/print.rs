@@ -486,7 +486,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     let packed_aliases = PackedAliases::definitions(program)?;
     crate::storage::check_device(&program.storage)?;
     round::contract::check(program)?;
-    crate::bindings::check(program)?;
+    let shared = crate::bindings::checked(program)?;
     let full_states = FullStates::build(&program.storage)?;
     ensure(
         program.context.observer.is_none(),
@@ -634,6 +634,21 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     }) {
         return Err(syn::Error::new(proc_macro2::Span::call_site(), format!("hole hook `{unknown}` names no rule version")));
     }
+    let excluded: BTreeSet<_> = replaced.keys().chain(observed.keys()).chain(&frontier).copied().collect();
+    let heads = program.holes.iter().enumerate().filter(|(_,h)| crate::bindings::head_argument(h)).map(|(i,_)| i).collect();
+    let mut shared_epochs = BTreeMap::new();
+    let mut shared_sinks = BTreeMap::new();
+    for (epoch,groups) in shared {
+        let (mut state,mut prepare) = (TokenStream::new(),TokenStream::new());
+        for group in groups {
+            if group.holes().any(|i| excluded.contains(&i)) { continue; }
+            let (defs,producer,sinks) = crate::shared::lower(&group,&heads);
+            state.extend(defs);
+            prepare.extend(producer);
+            shared_sinks.extend(sinks);
+        }
+        shared_epochs.insert(epoch,(state,prepare));
+    }
     // Each hole is a separate function item: rustc type-checks a closure with
     // its enclosing body, so closures would keep the whole program one query.
     // A hole whose query reads a local of the code around `datalog!` keeps the
@@ -643,6 +658,7 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
     let holes = cq_datalog_print::splice_with(program, |hole| {
         let index = hole_index;
         hole_index += 1;
+        if let Some(sink) = shared_sinks.remove(&index) { return Ok(sink); }
         let standalone = !reads_environment(&hole.cq);
         let mut cq = hole.cq.clone();
         let mut parameters = Vec::new();
@@ -657,8 +673,9 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
         }
         let generate = || {
             let mut pipeline = hole.invocation_pipeline()?;
+            let terminal = pipeline.passes.last_mut().expect("checked GPU batch terminal");
+            terminal.arguments = crate::shared::unpack(&terminal.arguments)?.1;
             if frontier.contains(&index) {
-                let terminal = pipeline.passes.last_mut().expect("checked GPU batch terminal");
                 let arena = &terminal.arguments;
                 terminal.arguments = quote!(frontier; #arena);
             }
@@ -888,9 +905,9 @@ pub fn compile_with(program: &Program, hooks: &HoleHooks) -> syn::Result<syn::Ex
             quote!(::cq_gpu_sequence_runtime::__codegen::#partition::run)
         };
         let (stratum_runner, seed_runner, step_runner) = (runner(0), runner(1), runner(2));
-        let (seed_groups, seed) = phase(program, &full_states, index, round::schedule::SEED, &holes)?;
+        let (seed_groups, seed) = phase(program, &full_states, index, round::schedule::SEED, &holes, &shared_epochs)?;
         let seed = quote!(#seed_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #seed Ok(()) })?;);
-        let (step_groups, step) = phase(program, &full_states, index, round::schedule::STEP, &holes)?;
+        let (step_groups, step) = phase(program, &full_states, index, round::schedule::STEP, &holes, &shared_epochs)?;
         let step = quote!(#step_runner(#[inline] || -> ::gpu_datalog_runtime::Result<()> { #step Ok(()) })?;);
         let lengths = stratum
             .termination
@@ -1083,6 +1100,7 @@ fn phase(
     index: usize,
     phase: &str,
     holes: &[TokenStream],
+    shared: &BTreeMap<(usize,&str,usize),(TokenStream,TokenStream)>,
 ) -> syn::Result<(TokenStream, TokenStream)> {
     let context = &program.context;
     let device = device(program);
@@ -1104,6 +1122,10 @@ fn phase(
     let mut groups = TokenStream::new();
     let mut steps = Vec::new();
     for (point, epoch) in crate::bindings::epochs(stratum, schedule, phase).into_iter().enumerate() {
+        let shared_prepare = shared.get(&(index,phase,point)).map(|(defs,prepare)| {
+            groups.extend(defs.clone());
+            prepare
+        });
         let mut slots = BTreeMap::new();
         let mut functions = Vec::new();
         let mut launches = Vec::new();
@@ -1239,14 +1261,15 @@ fn phase(
             }
         }
         if slots.is_empty() {
-            steps.push(quote!({ #(#launches)* }));
+            steps.push(quote!({ #shared_prepare #(#launches)* }));
         } else {
             let group = format_ident!("__cq_gpu_{}_group_{}", phase, point);
             let heads = slots.len();
             groups.extend(quote! {
                 let #group = ::gpu_datalog_runtime::HeadCursors::new(__cq_gpu_pool.clone(), #heads)?;
             });
-            steps.push(head_attempts(&group, &slots, phase, &functions, &launches, &replays));
+            let attempts = head_attempts(&group, &slots, phase, &functions, &launches, &replays);
+            steps.push(quote!({ #shared_prepare #attempts }));
         }
         for transaction in epoch.publications {
             steps.push(admit_publish(program, full_states, index, transaction, phase)?);
