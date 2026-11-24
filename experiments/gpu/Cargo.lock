@@ -1782,7 +1782,7 @@ dependencies = [
 [[package]]
 name = "rccl-cub"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=d05b07b7c98c17d70b0ef4e8be885c219c0463ab#d05b07b7c98c17d70b0ef4e8be885c219c0463ab"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=317e8bf11936af91533e5da16370b9eac7bb81a2#317e8bf11936af91533e5da16370b9eac7bb81a2"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1793,7 +1793,7 @@ dependencies = [
 [[package]]
 name = "rccl-memory"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=d05b07b7c98c17d70b0ef4e8be885c219c0463ab#d05b07b7c98c17d70b0ef4e8be885c219c0463ab"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=317e8bf11936af91533e5da16370b9eac7bb81a2#317e8bf11936af91533e5da16370b9eac7bb81a2"
 dependencies = [
  "cuda-core",
  "cuda-device",
@@ -1803,7 +1803,7 @@ dependencies = [
 [[package]]
 name = "rccl-thrust"
 version = "0.1.0"
-source = "git+https://github.com/StarGazerM/rccl.git?rev=d05b07b7c98c17d70b0ef4e8be885c219c0463ab#d05b07b7c98c17d70b0ef4e8be885c219c0463ab"
+source = "git+https://github.com/StarGazerM/rccl.git?rev=317e8bf11936af91533e5da16370b9eac7bb81a2#317e8bf11936af91533e5da16370b9eac7bb81a2"
 dependencies = [
  "cuda-core",
  "cuda-device",
